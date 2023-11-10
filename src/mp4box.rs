@@ -127,22 +127,6 @@ pub enum ItemProperty {
     Unknown(String),
 }
 
-impl ItemProperty {
-    pub fn ispe(&self) -> Option<&ImageSpatialExtents> {
-        match self {
-            ItemProperty::ImageSpatialExtents(ispe) => Some(&ispe),
-            _ => None,
-        }
-    }
-
-    pub fn av1C(&self) -> Option<&CodecConfiguration> {
-        match self {
-            ItemProperty::CodecConfiguration(av1C) => Some(&av1C),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Default)]
 pub struct ItemPropertyAssociation {
     version: u8,

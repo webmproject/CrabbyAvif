@@ -156,9 +156,22 @@ struct AvifItem {
     progressive: bool,
 }
 
-macro_rules! property_type {
-    ($a:ident) => {
-        |x| matches!(x, ItemProperty::$a(_))
+macro_rules! find_property {
+    ($self:ident, $a:ident) => {
+        $self
+            .properties
+            .iter()
+            .find(|x| matches!(x, ItemProperty::$a(_)))
+    };
+}
+
+macro_rules! find_properties {
+    ($self:ident, $a:ident) => {
+        $self
+            .properties
+            .iter()
+            .filter(|x| matches!(x, ItemProperty::$a(_)))
+            .collect()
     };
 }
 
@@ -172,15 +185,8 @@ impl AvifItem {
         true
     }
 
-    fn find_property<Filter>(&self, filter: Filter) -> Option<&ItemProperty>
-    where
-        Filter: FnMut(&&ItemProperty) -> bool,
-    {
-        self.properties.iter().find(filter)
-    }
-
     fn operating_point(&self) -> u8 {
-        match self.find_property(property_type!(OperatingPointSelector)) {
+        match find_property!(self, OperatingPointSelector) {
             Some(a1op) => match a1op {
                 ItemProperty::OperatingPointSelector(operating_point) => *operating_point,
                 _ => 0, // not reached.
@@ -189,17 +195,67 @@ impl AvifItem {
         }
     }
 
-    fn is_auxiliary_alpha(&self) -> bool {
-        let auxC = self
-            .properties
-            .iter()
-            .find(|x| matches!(x, ItemProperty::AuxiliaryType(_)));
-        if auxC.is_none() {
-            return false;
+    fn harvest_ispe(&mut self) -> bool {
+        if self.size == 0 {
+            return true;
         }
-        match auxC.unwrap() {
-            ItemProperty::AuxiliaryType(aux_type) => is_alpha_urn(aux_type),
-            _ => false, // not reached.
+        if self.has_unsupported_essential_property {
+            // An essential property isn't supported by libavif. Ignore.
+            return true;
+        }
+
+        let is_grid = self.item_type == "grid";
+        if self.item_type != "av01" && !is_grid {
+            // probably exif or some other data.
+            return true;
+        }
+        match find_property!(self, ImageSpatialExtents) {
+            Some(property) => match property {
+                ItemProperty::ImageSpatialExtents(x) => {
+                    self.width = x.width;
+                    self.height = x.height;
+                    if self.width == 0 || self.height == 0 {
+                        println!("item id has invalid size.");
+                        return false;
+                    }
+                }
+                _ => return false, // not reached.
+            },
+            None => {
+                // No ispe was found.
+                if self.is_auxiliary_alpha() {
+                    // TODO: provide a strict flag to bypass this check.
+                    println!("alpha auxiliary image is missing mandatory ispe");
+                    return false;
+                } else {
+                    println!("item id is missing mandatory ispe property");
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn av1C(&self) -> Option<&CodecConfiguration> {
+        match find_property!(self, CodecConfiguration) {
+            Some(property) => match property {
+                ItemProperty::CodecConfiguration(av1C) => Some(&av1C),
+                _ => None, // not reached.
+            },
+            None => None,
+        }
+    }
+
+    fn is_auxiliary_alpha(&self) -> bool {
+        match find_property!(self, AuxiliaryType) {
+            Some(auxC) => match auxC {
+                ItemProperty::AuxiliaryType(aux_type) => {
+                    aux_type == "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha"
+                        || aux_type == "urn:mpeg:hevc:2015:auxid:1"
+                }
+                _ => false, // not reached.
+            },
+            None => false,
         }
     }
 
@@ -215,15 +271,16 @@ impl AvifItem {
                 _ => false,
             })
             .collect();
-        if nclx_properties.is_empty() || nclx_properties.len() > 1 {
-            return Err(nclx_properties.len() > 1);
-        }
-        match nclx_properties[0] {
-            ItemProperty::ColorInformation(colr) => match colr {
-                ColorInformation::Nclx(nclx) => Ok(&nclx),
+        match nclx_properties.len() {
+            0 => Err(false),
+            1 => match nclx_properties[0] {
+                ItemProperty::ColorInformation(colr) => match colr {
+                    ColorInformation::Nclx(nclx) => Ok(&nclx),
+                    _ => Err(false), // not reached.
+                },
                 _ => Err(false), // not reached.
             },
-            _ => Err(false), // not reached.
+            _ => Err(true), // multiple nclx were found.
         }
     }
 
@@ -233,21 +290,22 @@ impl AvifItem {
             .iter()
             .filter(|x| match x {
                 ItemProperty::ColorInformation(colr) => match colr {
-                    ColorInformation::Nclx(_) => true,
+                    ColorInformation::Icc(_) => true,
                     _ => false,
                 },
                 _ => false,
             })
             .collect();
-        if icc_properties.is_empty() || icc_properties.len() > 1 {
-            return Err(icc_properties.len() > 1);
-        }
-        match icc_properties[0] {
-            ItemProperty::ColorInformation(colr) => match colr {
-                ColorInformation::Icc(icc) => Ok(&icc),
+        match icc_properties.len() {
+            0 => Err(false),
+            1 => match icc_properties[0] {
+                ItemProperty::ColorInformation(colr) => match colr {
+                    ColorInformation::Icc(icc) => Ok(&icc),
+                    _ => Err(false), // not reached.
+                },
                 _ => Err(false), // not reached.
             },
-            _ => Err(false), // not reached.
+            _ => Err(true), // multiple icc were found.
         }
     }
 }
@@ -372,57 +430,6 @@ fn construct_avif_items(meta: &MetaBox) -> Result<HashMap<u32, AvifItem>, &str> 
         }
     }
     Ok(avif_items)
-}
-
-fn is_alpha_urn(aux_type: &String) -> bool {
-    aux_type == "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha"
-        || aux_type == "urn:mpeg:hevc:2015:auxid:1"
-}
-
-fn harvest_ispe(avif_items: &mut HashMap<u32, AvifItem>) -> bool {
-    println!("=== harvesting ispe ===");
-    for (id, item) in &mut avif_items.iter_mut() {
-        if item.size == 0 {
-            continue;
-        }
-        if item.has_unsupported_essential_property {
-            // An essential property isn't supported by libavif. Ignore.
-            continue;
-        }
-
-        let is_grid = item.item_type == "grid";
-        if item.item_type != "av01" && !is_grid {
-            // probably exif or some other data.
-            continue;
-        }
-        let ispe_properties: Vec<_> = item
-            .properties
-            .iter()
-            .filter(|x| matches!(x, ItemProperty::ImageSpatialExtents(_)))
-            .collect();
-        if ispe_properties.len() > 0 {
-            let ispe = ispe_properties[0].ispe().unwrap();
-            item.width = ispe.width;
-            item.height = ispe.height;
-            if item.width == 0 || item.height == 0 {
-                println!("item id has invalid size.");
-                return false;
-            }
-            // TODO: check if dimensions are too large.
-        } else {
-            // No ispe was found.
-            if item.is_auxiliary_alpha() {
-                // TODO: provide a strict flag to bypass this check.
-                println!("alpha auxiliary image is missing mandatory ispe");
-                return false;
-            } else {
-                println!("item id is missing mandatory ispe property");
-                return false;
-            }
-        }
-    }
-    println!("=== done harvesting ispe ===");
-    true
 }
 
 fn should_skip_decoder_item(item: &AvifItem) -> bool {
@@ -588,7 +595,12 @@ impl AvifDecoder {
                 return None;
             }
         };
-        harvest_ispe(&mut self.avif_items);
+        for (id, item) in &mut self.avif_items {
+            if !item.harvest_ispe() {
+                println!("failed to harvest ispe");
+                return None;
+            }
+        }
         println!("{:#?}", self.avif_items);
 
         // Build the decoder input.
@@ -722,17 +734,12 @@ impl AvifDecoder {
         // TODO: if cicp was not found, harvest it from the seq hdr.
 
         // TODO: copy info from av1c. avifReadCodecConfigProperty.
-        let av1C_properties: Vec<_> = items[0]
-            .unwrap()
-            .properties
-            .iter()
-            .filter(|x| matches!(x, ItemProperty::CodecConfiguration(_)))
-            .collect();
-        if av1C_properties.is_empty() {
+        let av1C = items[0].unwrap().av1C();
+        if av1C.is_none() {
             println!("missing av1C");
             return None;
         }
-        let av1C = av1C_properties[0].av1C().unwrap();
+        let av1C = av1C.unwrap();
         if av1C.monochrome {
             self.image.yuv_format = 0;
         } else {
