@@ -156,6 +156,12 @@ struct AvifItem {
     progressive: bool,
 }
 
+macro_rules! item_property {
+    ($a:pat) => {
+        |x| matches!(x, $a)
+    };
+}
+
 impl AvifItem {
     fn read_and_parse(&self) -> bool {
         // TODO: this function also has to extract codec type.
@@ -166,17 +172,20 @@ impl AvifItem {
         true
     }
 
+    fn find_property<Filter>(&self, filter: Filter) -> Option<&ItemProperty>
+    where
+        Filter: FnMut(&&ItemProperty) -> bool,
+    {
+        self.properties.iter().find(filter)
+    }
+
     fn operating_point(&self) -> u8 {
-        let a1op = self
-            .properties
-            .iter()
-            .find(|x| matches!(x, ItemProperty::OperatingPointSelector(_)));
-        if a1op.is_none() {
-            return 0; // default operating point.
-        }
-        match a1op.unwrap() {
-            ItemProperty::OperatingPointSelector(operating_point) => *operating_point,
-            _ => 0, // not reached.
+        match self.find_property(item_property!(ItemProperty::OperatingPointSelector(_))) {
+            Some(a1op) => match a1op {
+                ItemProperty::OperatingPointSelector(operating_point) => *operating_point,
+                _ => 0, // not reached.
+            },
+            None => 0, // default operating point.
         }
     }
 
@@ -212,6 +221,30 @@ impl AvifItem {
         match nclx_properties[0] {
             ItemProperty::ColorInformation(colr) => match colr {
                 ColorInformation::Nclx(nclx) => Ok(&nclx),
+                _ => Err(false), // not reached.
+            },
+            _ => Err(false), // not reached.
+        }
+    }
+
+    fn icc(&self) -> Result<&Icc, bool> {
+        let icc_properties: Vec<_> = self
+            .properties
+            .iter()
+            .filter(|x| match x {
+                ItemProperty::ColorInformation(colr) => match colr {
+                    ColorInformation::Nclx(_) => true,
+                    _ => false,
+                },
+                _ => false,
+            })
+            .collect();
+        if icc_properties.is_empty() || icc_properties.len() > 1 {
+            return Err(icc_properties.len() > 1);
+        }
+        match icc_properties[0] {
+            ItemProperty::ColorInformation(colr) => match colr {
+                ColorInformation::Icc(icc) => Ok(&icc),
                 _ => Err(false), // not reached.
             },
             _ => Err(false), // not reached.
@@ -672,25 +705,16 @@ impl AvifDecoder {
                 }
             }
         }
-        let icc_properties: Vec<_> = items[0]
-            .unwrap()
-            .properties
-            .iter()
-            .filter(|x| match x {
-                ItemProperty::ColorInformation(colr) => match colr {
-                    ColorInformation::Icc(_) => true,
-                    _ => false,
-                },
-                _ => false,
-            })
-            .collect();
-        println!("{:#?}", icc_properties);
-        if !icc_properties.is_empty() {
-            if icc_properties.len() > 1 {
-                println!("multiple nclx were found");
-                return None;
+        match items[0].unwrap().icc() {
+            Ok(icc) => {
+                // TODO: attach icc to self.image.
             }
-            // TODO: attach icc to the self.image.
+            Err(multiple_icc_found) => {
+                if multiple_icc_found {
+                    println!("multiple icc were found");
+                    return None;
+                }
+            }
         }
 
         // TODO: clli, pasp, clap, irot, imir

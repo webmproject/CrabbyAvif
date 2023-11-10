@@ -135,16 +135,6 @@ impl ItemProperty {
         }
     }
 
-    pub fn nclx(&self) -> Option<&Nclx> {
-        match self {
-            ItemProperty::ColorInformation(colr) => match colr {
-                ColorInformation::Nclx(nclx) => Some(&nclx),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
     pub fn av1C(&self) -> Option<&CodecConfiguration> {
         match self {
             ItemProperty::CodecConfiguration(av1C) => Some(&av1C),

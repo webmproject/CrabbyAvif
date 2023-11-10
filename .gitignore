@@ -1,2 +1,4 @@
 /target
 /Cargo.lock
+/match_stats.csv
+/out_comparison.txt
