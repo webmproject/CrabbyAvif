@@ -156,9 +156,9 @@ struct AvifItem {
     progressive: bool,
 }
 
-macro_rules! item_property {
-    ($a:pat) => {
-        |x| matches!(x, $a)
+macro_rules! property_type {
+    ($a:ident) => {
+        |x| matches!(x, ItemProperty::$a(_))
     };
 }
 
@@ -180,7 +180,7 @@ impl AvifItem {
     }
 
     fn operating_point(&self) -> u8 {
-        match self.find_property(item_property!(ItemProperty::OperatingPointSelector(_))) {
+        match self.find_property(property_type!(OperatingPointSelector)) {
             Some(a1op) => match a1op {
                 ItemProperty::OperatingPointSelector(operating_point) => *operating_point,
                 _ => 0, // not reached.
