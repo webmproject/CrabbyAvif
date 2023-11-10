@@ -1,0 +1,14 @@
+fox 422 files have wrong subsampling in the av1C box.
+
+avifdec shows different yuv sampleing with --info and actual decoding.
+
+===
+
+Chimera file in Netflix/avis is missing pitm box. It fails in libavif when trying to decode with source as pitm.
+
+===
+
+libavif: Add source option to avifdec?
+
+
+===

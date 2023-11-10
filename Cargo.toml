@@ -1,0 +1,12 @@
+[package]
+name = "rust-libavif"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+build = "src/build.rs"
+
+[dependencies]
+byteorder = "1.5.0"
+exitcode = "1.1.2"
