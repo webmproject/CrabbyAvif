@@ -8,7 +8,10 @@ use crate::mp4box::ItemProperty::ImageSpatialExtents;
 use crate::mp4box::*;
 use crate::stream::*;
 
-#[derive(Debug, Default, Copy, Clone)]
+use derivative::Derivative;
+
+#[derive(Derivative, Default)]
+#[derivative(Debug)]
 pub struct AvifImage {
     pub width: u32,
     pub height: u32,
@@ -37,11 +40,13 @@ pub struct AvifImage {
     // exif, xmp.
 
     // gainmap.
+    #[derivative(Debug = "ignore")]
+    plane_buffers: [Vec<u8>; 4],
 }
 
 #[derive(Debug)]
 pub struct AvifPlane {
-    pub data: *mut u8,
+    pub data: *const u8,
     pub width: u32,
     pub height: u32,
     pub row_bytes: u32,
@@ -67,6 +72,12 @@ impl AvifImage {
                 }
             }
             let stride_index: usize = if plane == 0 { 0 } else { 1 };
+            // let plane_data;
+            // if self.image_owns_yuv_planes {
+            //     plane_data = plane_buffer[plane].as_ptr();
+            // } else {
+            //     plane_data = self.yuv_planes[plane].unwrap();
+            // }
             return Some(AvifPlane {
                 data: self.yuv_planes[plane].unwrap(),
                 width: plane_width,
@@ -85,6 +96,67 @@ impl AvifImage {
             row_bytes: self.alpha_row_bytes,
             pixel_size,
         });
+    }
+
+    fn allocate_planes(&mut self) -> bool {
+        // TODO: this function should take category parameter.
+        // TODO : assumes 444. do other stuff.
+        let pixel_size: u32 = if self.depth == 8 { 1 } else { 2 };
+        let plane_size = (self.width * self.height * pixel_size) as usize;
+        for plane_index in 0usize..3 {
+            self.plane_buffers[plane_index].reserve(plane_size);
+            self.plane_buffers[plane_index].resize(plane_size, 0);
+            self.yuv_row_bytes[plane_index] = self.width * pixel_size;
+            self.yuv_planes[plane_index] = Some(self.plane_buffers[plane_index].as_mut_ptr());
+        }
+        self.image_owns_yuv_planes = true;
+        true
+    }
+
+    fn copy_from_tile(
+        &mut self,
+        tile: &AvifImage,
+        tile_info: &AvifTileInfo,
+        tile_index: u32,
+        category: usize,
+    ) -> bool {
+        let first_tile = tile_index == 0;
+        // TODO: validate if tiles match first tile.
+        let row_index = tile_index / tile_info.grid.columns;
+        let column_index = tile_index % tile_info.grid.columns;
+        println!("copying tile {row_index} {column_index}");
+
+        if category == 0 {
+            for plane_index in 0usize..3 {
+                let src_plane = tile.plane(plane_index);
+                if src_plane.is_none() {
+                    continue;
+                }
+                let src_plane = src_plane.unwrap();
+                let src_byte_count: usize =
+                    (src_plane.width * src_plane.pixel_size).try_into().unwrap();
+                let dst_row_bytes = self.yuv_row_bytes[plane_index];
+                //let dst_grid_start = src_byte_count * column_index;
+                for y in 0..src_plane.height {
+                    let src_stride_offset: isize = (y * src_plane.row_bytes).try_into().unwrap();
+                    let ptr = unsafe { src_plane.data.offset(src_stride_offset) };
+                    let pixels = unsafe { std::slice::from_raw_parts(ptr, src_byte_count) };
+                    let dst_stride_offset: usize = (y * dst_row_bytes) as usize;
+                    let dst_end_offset: usize = dst_stride_offset + src_byte_count;
+                    let mut dst_slice =
+                        &mut self.plane_buffers[plane_index][dst_stride_offset..dst_end_offset];
+                    if y == 0 {
+                        println!(
+                            "src slice len: {} dst_slice_len: {}",
+                            pixels.len(),
+                            dst_slice.len()
+                        );
+                    }
+                    dst_slice.copy_from_slice(pixels);
+                }
+            }
+        }
+        true
     }
 }
 
@@ -116,6 +188,7 @@ pub struct AvifDecoder {
     alpha_present: bool,
     image_index: i32,
     avif_items: HashMap<u32, AvifItem>,
+    //yuv_plane_buffer: [Vec<u8>; 3],
 }
 
 #[derive(Debug, Default)]
@@ -611,6 +684,7 @@ fn generate_tiles(
             }
             grid_item_ids.push(*dimg_id);
         }
+        // TODO: check if there are enough grids.
         avif_items
             .get_mut(&item_id)
             .unwrap()
@@ -848,6 +922,7 @@ impl AvifDecoder {
             return None;
         }
         let av1C = av1C.unwrap();
+        self.image.depth = av1C.depth();
         if av1C.monochrome {
             self.image.yuv_format = 0;
         } else {
@@ -897,8 +972,18 @@ impl AvifDecoder {
     }
 
     fn decode_tiles(&mut self, image_index: usize) -> bool {
-        for (category, tiles) in self.tiles.iter_mut().enumerate() {
-            for tile in tiles {
+        //for (category, tiles) in self.tiles.iter_mut().enumerate() {
+        for category in 0usize..3 {
+            let grid = &self.tile_info[category].grid;
+            let is_grid = grid.rows > 0 && grid.columns > 0;
+            if is_grid {
+                // allocate grid planes.
+                if !self.image.allocate_planes() {
+                    println!("failed to allocate image for grid image");
+                    return false;
+                }
+            }
+            for (tile_index, tile) in self.tiles[category].iter_mut().enumerate() {
                 let sample = &tile.input.samples[image_index];
                 let payload_start: usize = sample.data_offset as usize;
                 let payload_size: usize = sample.size as usize;
@@ -912,9 +997,16 @@ impl AvifDecoder {
                 // TODO: convert alpha from limited range to full range.
                 // TODO: scale tile to match output dimension.
 
-                let grid = &self.tile_info[category].grid;
-                if grid.rows > 0 && grid.columns > 0 {
-                    // TODO: grid path.
+                if is_grid {
+                    println!("GRID!!");
+                    // TODO: make sure all tiles decoded properties match.
+                    // Need to figure out a way to do it with proper borrows.
+                    self.image.copy_from_tile(
+                        &tile.image,
+                        &self.tile_info[category],
+                        tile_index as u32,
+                        category,
+                    );
                 } else {
                     // Non grid path, steal planes from the only tile.
 

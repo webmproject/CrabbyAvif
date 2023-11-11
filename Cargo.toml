@@ -10,3 +10,4 @@ build = "src/build.rs"
 [dependencies]
 byteorder = "1.5.0"
 exitcode = "1.1.2"
+derivative = "2.2.0"

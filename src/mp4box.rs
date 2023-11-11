@@ -66,6 +66,18 @@ pub struct CodecConfiguration {
     pub chroma_sample_position: u8,
 }
 
+impl CodecConfiguration {
+    pub fn depth(&self) -> u8 {
+        match self.twelve_bit {
+            true => 12,
+            false => match (self.high_bitdepth) {
+                true => 10,
+                false => 8,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Icc {
     offset: u64,

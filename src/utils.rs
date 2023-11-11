@@ -41,7 +41,10 @@ pub fn y4m_write(filename: &String, image: &AvifImage) -> bool {
             0 => "Cmono12 XYSCSS=400",
             _ => return false,
         },
-        _ => return false,
+        _ => {
+            println!("image depth is invalid: {}", image.depth);
+            return false;
+        }
     };
     let y4m_color_range = if image.full_range {
         "XCOLORRANGE=FULL"
