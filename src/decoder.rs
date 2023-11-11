@@ -21,11 +21,11 @@ pub struct AvifImage {
     pub full_range: bool,
     pub chroma_sample_position: u8,
 
-    pub yuv_planes: [Option<*mut u8>; 3],
+    pub yuv_planes: [Option<*const u8>; 3],
     pub yuv_row_bytes: [u32; 3], // TODO: named constant
     pub image_owns_yuv_planes: bool,
 
-    pub alpha_plane: Option<*mut u8>,
+    pub alpha_plane: Option<*const u8>,
     pub alpha_row_bytes: u32,
     pub image_owns_alpha_plane: bool,
     pub alpha_premultiplied: bool,
@@ -107,7 +107,7 @@ impl AvifImage {
             self.plane_buffers[plane_index].reserve(plane_size);
             self.plane_buffers[plane_index].resize(plane_size, 0);
             self.yuv_row_bytes[plane_index] = self.width * pixel_size;
-            self.yuv_planes[plane_index] = Some(self.plane_buffers[plane_index].as_mut_ptr());
+            self.yuv_planes[plane_index] = Some(self.plane_buffers[plane_index].as_ptr());
         }
         self.image_owns_yuv_planes = true;
         true
@@ -120,8 +120,6 @@ impl AvifImage {
         tile_index: u32,
         category: usize,
     ) -> bool {
-        let first_tile = tile_index == 0;
-        // TODO: validate if tiles match first tile.
         let row_index = tile_index / tile_info.grid.columns;
         let column_index = tile_index % tile_info.grid.columns;
         println!("copying tile {row_index} {column_index}");
