@@ -176,12 +176,52 @@ macro_rules! find_properties {
 }
 
 impl AvifItem {
-    fn read_and_parse(&self) -> bool {
+    fn data_offset(&self) -> u64 {
+        self.extents[0].offset as u64
+    }
+
+    fn read_and_parse(&self, data: &Vec<u8>, grid: &mut AvifGrid) -> bool {
         // TODO: this function also has to extract codec type.
         if self.item_type != "grid" {
             return true;
         }
-        // TODO: read grid info.
+        let mut stream = IStream {
+            // TODO: learn to store references in struct.
+            data: data.clone(),
+            offset: self.data_offset() as usize,
+        };
+        println!("grid stream: {:#?}", stream.offset);
+        // unsigned int(8) version = 0;
+        let version = stream.read_u8();
+        if version != 0 {
+            println!("unsupported version for grid");
+            return false;
+        }
+        // unsigned int(8) flags;
+        let flags = stream.read_u8();
+        // unsigned int(8) rows_minus_one;
+        grid.rows = stream.read_u8() as u32;
+        grid.rows += 1;
+        // unsigned int(8) columns_minus_one;
+        grid.columns = stream.read_u8() as u32;
+        grid.columns += 1;
+        if (flags & 1) == 1 {
+            // unsigned int(32) output_width;
+            grid.width = stream.read_u32();
+            // unsigned int(32) output_height;
+            grid.height = stream.read_u32();
+        } else {
+            // unsigned int(16) output_width;
+            grid.width = stream.read_u16() as u32;
+            // unsigned int(16) output_height;
+            grid.height = stream.read_u16() as u32;
+        }
+        if grid.width == 0 || grid.height == 0 {
+            println!("invalid dimensions in grid box");
+            return false;
+        }
+        println!("grid: {:#?}", grid);
+        // TODO: check for too large of a grid.
         true
     }
 
@@ -334,7 +374,7 @@ fn construct_avif_items(meta: &MetaBox) -> Result<HashMap<u32, AvifItem>, &str> 
         if !avif_item.extents.is_empty() {
             return Err("item already has extents.");
         }
-        // TODO: infer idat stored once construction method is implemented.
+        avif_item.offset_relative_to_idat = item.construction_method == 1;
         // TODO: handle overflows in the addition below.
         for extent in &item.extents {
             avif_item.extents.push(ItemLocationExtent {
@@ -439,27 +479,24 @@ fn should_skip_decoder_item(item: &AvifItem) -> bool {
         || item.thumbnail_for_id != 0
 }
 
-fn find_color_item(avif_items: &HashMap<u32, AvifItem>, primary_item_id: u32) -> Option<&AvifItem> {
+fn find_color_item(avif_items: &HashMap<u32, AvifItem>, primary_item_id: u32) -> u32 {
     if primary_item_id == 0 {
-        return None;
+        return 0;
     }
     // TODO: perhaps this can be an idiomatic oneliner ?
-    for (_, item) in avif_items.iter() {
+    for (_, item) in avif_items {
         if should_skip_decoder_item(item) {
             continue;
         }
         if item.id == primary_item_id {
-            return Some(item);
+            return item.id;
         }
     }
-    None
+    0
 }
 
-fn find_alpha_item<'a>(
-    avif_items: &'a HashMap<u32, AvifItem>,
-    color_item: &AvifItem,
-) -> Option<&'a AvifItem> {
-    for (_, item) in avif_items.iter() {
+fn find_alpha_item(avif_items: &HashMap<u32, AvifItem>, color_item: &AvifItem) -> u32 {
+    for (_, item) in avif_items {
         if should_skip_decoder_item(item) {
             continue;
         }
@@ -469,13 +506,13 @@ fn find_alpha_item<'a>(
         if !item.is_auxiliary_alpha() {
             continue;
         }
-        return Some(item);
+        return item.id;
     }
     if color_item.item_type != "grid" {
-        return None;
+        return 0;
     }
     // TODO: If color item is a grid, check if there is an alpha channel which is represented as an auxl item to each color tile item.
-    None
+    0
 }
 
 #[derive(Debug, Default)]
@@ -529,11 +566,59 @@ fn create_tile(item: &AvifItem) -> Option<AvifTile> {
     Some(tile)
 }
 
-fn generate_tiles(item: &AvifItem, info: &AvifTileInfo, category: usize) -> Option<Vec<AvifTile>> {
+fn generate_tiles(
+    avif_items: &mut HashMap<u32, AvifItem>,
+    item_id: u32,
+    info: &AvifTileInfo,
+    category: usize,
+) -> Option<Vec<AvifTile>> {
     let mut tiles: Vec<AvifTile> = Vec::new();
     if info.grid.rows > 0 && info.grid.columns > 0 {
-        // TODO: grid tiles.
+        println!("grid###: {:#?}", info.grid);
+        let mut grid_item_ids: Vec<u32> = Vec::new();
+        let mut first_av1C: CodecConfiguration = Default::default();
+        // Collect all the dimg items.
+        for (dimg_id, dimg_item) in &mut *avif_items {
+            if dimg_item.dimg_for_id != item_id {
+                continue;
+            }
+            if dimg_item.item_type != "av01" {
+                println!("invalid item_type in dimg grid");
+                return None;
+            }
+            if dimg_item.has_unsupported_essential_property {
+                println!(
+                    "Grid image contains tile with an unsupported property marked as essential"
+                );
+                return None;
+            }
+            let tile = create_tile(dimg_item);
+            if tile.is_none() {
+                return None;
+            }
+            let mut tile = tile.unwrap();
+            tile.input.category = category as u8;
+            tiles.push(tile);
+
+            if tiles.len() == 1 {
+                // Adopt the configuration property of the first tile.
+                let dimg_av1C = dimg_item.av1C();
+                if dimg_av1C.is_none() {
+                    println!("dimg is missing dimg_av1C");
+                    return None;
+                }
+                first_av1C = dimg_av1C.unwrap().clone();
+            }
+            grid_item_ids.push(*dimg_id);
+        }
+        avif_items
+            .get_mut(&item_id)
+            .unwrap()
+            .properties
+            .push(ItemProperty::CodecConfiguration(first_av1C));
+        println!("grid item ids: {:#?}", grid_item_ids);
     } else {
+        let item = avif_items.get(&item_id).unwrap();
         if item.size == 0 {
             return None;
         }
@@ -621,7 +706,8 @@ impl AvifDecoder {
         }
 
         // 0 color, 1 alpha, 2 gainmap
-        let mut items: [Option<&AvifItem>; 3] = [None; 3];
+        //let mut items: [Option<&AvifItem>; 3] = [None, None, None];
+        let mut item_ids: [u32; 3] = [0; 3];
 
         match self.source {
             AvifDecoderSource::Tracks => {
@@ -629,23 +715,36 @@ impl AvifDecoder {
             }
             AvifDecoderSource::PrimaryItem => {
                 // Mandatory color item.
-                items[0] = find_color_item(&self.avif_items, avif_boxes.meta.primary_item_id);
-                if items[0].is_none() {
+                item_ids[0] = find_color_item(&self.avif_items, avif_boxes.meta.primary_item_id);
+                if item_ids[0] == 0 {
                     println!("primary color item not found.");
                     return None;
                 }
-                println!("color item: {:#?}", items[0].unwrap());
-                if !items[0].unwrap().read_and_parse() {
+                if !self
+                    .avif_items
+                    .get_mut(&item_ids[0])
+                    .unwrap()
+                    .read_and_parse(&self.data, &mut self.tile_info[0].grid)
+                {
                     println!("failed to read_and_parse color item");
                     return None;
                 }
 
                 // Optional alpha auxiliary item
-                items[1] = find_alpha_item(&self.avif_items, items[0].unwrap());
-                if items[1].is_some() && !items[1].unwrap().read_and_parse() {
+                item_ids[1] =
+                    find_alpha_item(&self.avif_items, self.avif_items.get(&item_ids[0]).unwrap());
+                if item_ids[1] != 0
+                    && !self
+                        .avif_items
+                        .get_mut(&item_ids[1])
+                        .unwrap()
+                        .read_and_parse(&self.data, &mut self.tile_info[1].grid)
+                {
                     println!("failed to read_and_parse alpha item");
                     return None;
                 }
+
+                println!("item ids: {:#?}", item_ids);
 
                 // TODO: gainmap item.
 
@@ -654,20 +753,27 @@ impl AvifDecoder {
                 self.image_index = -1;
                 //self.image_count = 1;
                 // TODO: image timing for avis.
-                for (index, item) in items.iter_mut().enumerate() {
-                    if item.is_none() {
+                for (index, item_id) in item_ids.iter().enumerate() {
+                    if *item_id == 0 {
                         continue;
                     }
-                    let item = item.unwrap();
-                    if index == 1 && item.width == 0 && item.height == 0 {
-                        // NON-STANDARD: Alpha subimage does not have an ispe
-                        // property; adopt width/height from color item.
-                        // TODO: need to assert for strict flag.
-                        // item.width = items[0].unwrap().width;
-                        // item.height = items[0].unwrap().height;
-                        // TODO: make this work. some mut problem.
+                    {
+                        let item = self.avif_items.get(&item_id).unwrap();
+                        if index == 1 && item.width == 0 && item.height == 0 {
+                            // NON-STANDARD: Alpha subimage does not have an ispe
+                            // property; adopt width/height from color item.
+                            // TODO: need to assert for strict flag.
+                            // item.width = items[0].unwrap().width;
+                            // item.height = items[0].unwrap().height;
+                            // TODO: make this work. some mut problem.
+                        }
                     }
-                    let tiles = generate_tiles(item, &self.tile_info[index], index);
+                    let tiles = generate_tiles(
+                        &mut self.avif_items,
+                        *item_id,
+                        &self.tile_info[index],
+                        index,
+                    );
                     if tiles.is_none() {
                         println!("Failed to generate_tiles");
                         return None;
@@ -679,9 +785,10 @@ impl AvifDecoder {
                 println!("{:#?}", self.tiles);
                 println!("$$$=====");
 
-                self.image.width = items[0].unwrap().width;
-                self.image.height = items[0].unwrap().height;
-                self.alpha_present = items[1].is_some();
+                let color_item = self.avif_items.get(&item_ids[0]).unwrap();
+                self.image.width = color_item.width;
+                self.image.height = color_item.height;
+                self.alpha_present = item_ids[1] != 0;
                 // alphapremultiplied.
             }
             _ => {}
@@ -700,10 +807,11 @@ impl AvifDecoder {
             }
         }
 
+        let color_item = self.avif_items.get(&item_ids[0]).unwrap();
         // Find and adopt all colr boxes "at most one for a given value of
         // colour type" (HEIF 6.5.5.1, from Amendment 3) Accept one of each
         // type, and bail out if more than one of a given type is provided.
-        match items[0].unwrap().nclx() {
+        match color_item.nclx() {
             Ok(nclx) => {
                 self.image.color_primaries = nclx.color_primaries;
                 self.image.transfer_characteristics = nclx.transfer_characteristics;
@@ -717,7 +825,7 @@ impl AvifDecoder {
                 }
             }
         }
-        match items[0].unwrap().icc() {
+        match color_item.icc() {
             Ok(icc) => {
                 // TODO: attach icc to self.image.
             }
@@ -734,7 +842,7 @@ impl AvifDecoder {
         // TODO: if cicp was not found, harvest it from the seq hdr.
 
         // TODO: copy info from av1c. avifReadCodecConfigProperty.
-        let av1C = items[0].unwrap().av1C();
+        let av1C = color_item.av1C();
         if av1C.is_none() {
             println!("missing av1C");
             return None;
@@ -779,7 +887,7 @@ impl AvifDecoder {
                     }
                     let item = item.unwrap();
                     // TODO: account for merged extent ?
-                    sample.data_offset = item.extents[0].offset;
+                    sample.data_offset = item.data_offset();
                 } else {
                     // TODO: handle tracks.
                 }
@@ -831,6 +939,8 @@ impl AvifDecoder {
             // Nothing has been parsed yet.
             return None;
         }
+
+        println!("tiles: {:#?}", self.tiles);
 
         let next_image_index = self.image_index + 1;
         if !self.create_codecs() {

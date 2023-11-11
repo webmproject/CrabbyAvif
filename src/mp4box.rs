@@ -25,6 +25,7 @@ pub struct ItemLocationExtent {
 #[derive(Debug, Default)]
 pub struct ItemLocationEntry {
     pub item_id: u32,
+    pub construction_method: u8,
     pub base_offset: u64,
     pub extent_count: u16,
     pub extents: Vec<ItemLocationExtent>,
@@ -278,7 +279,16 @@ impl MP4Box {
                 return Err("Invalid item id.");
             }
             if version == 1 || version == 2 {
-                // do some stuff. for idat i think.
+                // unsigned int(12) reserved = 0;
+                // unsigned int(4) construction_method;
+                stream.skip(1);
+                let mut byte = stream.get_bitreader();
+                byte.read(4);
+                entry.construction_method = byte.read(4);
+                // 0: file, 1: idat.
+                if entry.construction_method != 0 && entry.construction_method != 1 {
+                    return Err("unknown construction_method");
+                }
             }
             // unsigned int(16) data_reference_index;
             stream.skip(2);
