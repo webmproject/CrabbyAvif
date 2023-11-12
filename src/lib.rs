@@ -2,17 +2,23 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 
-pub mod decoder;
-pub mod utils;
-mod mp4box;
-mod stream;
 mod bindings;
 mod dav1d;
+pub mod decoder;
+mod mp4box;
+mod stream;
+pub mod utils;
+
+macro_rules! println {
+    ($($rest:tt)*) => {
+        #[cfg(debug_assertions)]
+        std::println!($($rest)*)
+    }
+}
 
 // use crate::decoder::*;
 // use crate::mp4box::*;
 // use crate::stream::*;
-
 
 // // TODO: learn to store references in struct and change this to a vec reference.
 // pub fn avifparse(data : Vec<u8>) -> bool {
@@ -21,7 +27,7 @@ mod dav1d;
 //         offset : 0,
 //     };
 //     let avif_boxes = MP4Box::parse(&mut stream);
-    
+
 //     let avif_items = match construct_avif_items(&avif_boxes.meta) {
 //         Ok(items) => items,
 //         Err(err) => {
@@ -30,7 +36,6 @@ mod dav1d;
 //         }
 //     };
 //     println!("{:#?}", avif_items);
-
 
 //     let primary_item = avif_items.get(&avif_boxes.meta.primary_item_id).unwrap();
 //     let extent = &primary_item.extents[0];
