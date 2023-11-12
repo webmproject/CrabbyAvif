@@ -120,9 +120,9 @@ impl AvifImage {
         tile_index: u32,
         category: usize,
     ) -> bool {
-        let row_index = tile_index / tile_info.grid.columns;
-        let column_index = tile_index % tile_info.grid.columns;
-        println!("copying tile {row_index} {column_index}");
+        let row_index: usize = (tile_index / tile_info.grid.columns) as usize;
+        let column_index: usize = (tile_index % tile_info.grid.columns) as usize;
+        println!("copying tile {tile_index} {row_index} {column_index}");
 
         if category == 0 {
             for plane_index in 0usize..3 {
@@ -134,12 +134,21 @@ impl AvifImage {
                 let src_byte_count: usize =
                     (src_plane.width * src_plane.pixel_size).try_into().unwrap();
                 let dst_row_bytes = self.yuv_row_bytes[plane_index];
-                //let dst_grid_start = src_byte_count * column_index;
+
+                let mut dst_base_offset: usize = 0;
+                dst_base_offset += row_index * ((src_plane.height * dst_row_bytes) as usize);
+                dst_base_offset +=
+                    column_index * ((src_plane.width * src_plane.pixel_size) as usize);
+                println!("dst base_offset: {dst_base_offset}");
+
                 for y in 0..src_plane.height {
                     let src_stride_offset: isize = (y * src_plane.row_bytes).try_into().unwrap();
                     let ptr = unsafe { src_plane.data.offset(src_stride_offset) };
                     let pixels = unsafe { std::slice::from_raw_parts(ptr, src_byte_count) };
-                    let dst_stride_offset: usize = (y * dst_row_bytes) as usize;
+                    let dst_stride_offset: usize = dst_base_offset + ((y * dst_row_bytes) as usize);
+                    // if plane_index == 0 {
+                    //     println!("y: {y} offset: {dst_stride_offset}");
+                    // }
                     let dst_end_offset: usize = dst_stride_offset + src_byte_count;
                     let mut dst_slice =
                         &mut self.plane_buffers[plane_index][dst_stride_offset..dst_end_offset];
@@ -209,7 +218,6 @@ struct AvifItem {
     id: u32,
     item_type: String,
     size: usize,
-    offset_relative_to_idat: bool,
     width: u32,
     height: u32,
     content_type: String,
@@ -445,11 +453,15 @@ fn construct_avif_items(meta: &MetaBox) -> Result<HashMap<u32, AvifItem>, &str> 
         if !avif_item.extents.is_empty() {
             return Err("item already has extents.");
         }
-        avif_item.offset_relative_to_idat = item.construction_method == 1;
+        let base_offset: u64 = if item.construction_method == 1 {
+            meta.idat.offset as u64
+        } else {
+            0
+        };
         // TODO: handle overflows in the addition below.
         for extent in &item.extents {
             avif_item.extents.push(ItemLocationExtent {
-                offset: item.base_offset + extent.offset,
+                offset: base_offset + item.base_offset + extent.offset,
                 length: extent.length,
             });
             avif_item.size += extent.length as usize;
@@ -621,7 +633,7 @@ fn create_tile(item: &AvifItem) -> Option<AvifTile> {
     tile.height = item.height;
     tile.operating_point = item.operating_point();
     tile.image = AvifImage::default();
-    // TODO: do all the layer stuff in avifCodecDecodeInputFillFromDecoderItem.
+    // TODO: do all the layer stuff (a1op and lsel) in avifCodecDecodeInputFillFromDecoderItem.
     // Typical case: Use the entire item's payload for a single frame output
     let sample = AvifDecodeSample {
         data_offset: 0,
@@ -639,6 +651,7 @@ fn create_tile(item: &AvifItem) -> Option<AvifTile> {
 
 fn generate_tiles(
     avif_items: &mut HashMap<u32, AvifItem>,
+    iinf: &Vec<ItemInfo>,
     item_id: u32,
     info: &AvifTileInfo,
     category: usize,
@@ -649,7 +662,14 @@ fn generate_tiles(
         let mut grid_item_ids: Vec<u32> = Vec::new();
         let mut first_av1C: CodecConfiguration = Default::default();
         // Collect all the dimg items.
-        for (dimg_id, dimg_item) in &mut *avif_items {
+        // Cannot directly iterate through avif_items here directly because HashMap is not ordered.
+        for item_info in iinf {
+            let dimg_item = avif_items.get(&item_info.item_id);
+            if dimg_item.is_none() {
+                println!("invalid item");
+                return None;
+            }
+            let dimg_item = dimg_item.unwrap();
             if dimg_item.dimg_for_id != item_id {
                 continue;
             }
@@ -680,8 +700,9 @@ fn generate_tiles(
                 }
                 first_av1C = dimg_av1C.unwrap().clone();
             }
-            grid_item_ids.push(*dimg_id);
+            grid_item_ids.push(item_info.item_id);
         }
+        println!("grid item itds: {:#?}", grid_item_ids);
         // TODO: check if there are enough grids.
         avif_items
             .get_mut(&item_id)
@@ -689,6 +710,9 @@ fn generate_tiles(
             .properties
             .push(ItemProperty::CodecConfiguration(first_av1C));
         println!("grid item ids: {:#?}", grid_item_ids);
+        for item in iinf.iter() {
+            println!("item id: {}", item.item_id);
+        }
     } else {
         let item = avif_items.get(&item_id).unwrap();
         if item.size == 0 {
@@ -842,6 +866,7 @@ impl AvifDecoder {
                     }
                     let tiles = generate_tiles(
                         &mut self.avif_items,
+                        &avif_boxes.meta.iinf,
                         *item_id,
                         &self.tile_info[index],
                         index,

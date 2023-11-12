@@ -175,12 +175,19 @@ pub struct ItemReference {
 }
 
 #[derive(Debug, Default)]
+pub struct ItemData {
+    pub size: u64,
+    pub offset: usize,
+}
+
+#[derive(Debug, Default)]
 pub struct MetaBox {
     pub iinf: Vec<ItemInfo>,
     pub iloc: ItemLocationBox,
     pub primary_item_id: u32,
     pub iprp: ItemPropertyBox,
     pub iref: Vec<ItemReference>,
+    pub idat: ItemData,
 }
 
 #[derive(Debug, Default)]
@@ -315,7 +322,6 @@ impl MP4Box {
                 // ::      unsigned int(index_size*8) extent_index;
                 // ::  }
 
-                println!("offset size: {}", iloc.offset_size);
                 // unsigned int(offset_size*8) extent_offset;
                 extent.offset = stream.read_uxx(iloc.offset_size);
                 // unsigned int(length_size*8) extent_length;
@@ -844,12 +850,22 @@ impl MP4Box {
                 }
             }
         }
-        println!("{:#?}", iref);
         let bytes_read = stream.offset - start_offset;
         let remaining_size: u64 = orig_size - (bytes_read as u64);
         println!("end of iref, skiping {remaining_size} bytes");
         stream.skip(remaining_size.try_into().unwrap());
         Ok(iref)
+    }
+
+    fn parse_idat(stream: &mut IStream, size: u64) -> Result<ItemData, &str> {
+        // TODO: check if multiple idats were seen for this meta box.
+        if size == 0 {
+            return Err("Invalid idat size");
+        }
+        Ok(ItemData {
+            size: size,
+            offset: stream.offset,
+        })
     }
 
     fn parse_meta(stream: &mut IStream, mut size: u64) -> MetaBox {
@@ -920,6 +936,15 @@ impl MP4Box {
                         Ok(iref) => iref,
                         Err(err) => {
                             println!("Parsing iref failed: {err}");
+                            return empty;
+                        }
+                    }
+                }
+                "idat" => {
+                    meta.idat = match Self::parse_idat(stream, header.size) {
+                        Ok(idat) => idat,
+                        Err(err) => {
+                            println!("Parsing idat failed: {err}");
                             return empty;
                         }
                     }
