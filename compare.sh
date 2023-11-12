@@ -28,7 +28,7 @@ do
     echo -n "${c_run},"
 
     # run rust binary
-    $RUST_AVIFDEC "${file}" "${rust_out}" > /dev/null 2>&1
+    $RUST_AVIFDEC "${file}" "${rust_out}" --no-png > /dev/null 2>&1
     rust_run=$?
     echo "${rust_run}"
 
