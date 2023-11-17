@@ -99,18 +99,28 @@ impl AvifImage {
         });
     }
 
-    fn allocate_planes(&mut self) -> bool {
-        // TODO: this function should take category parameter.
+    fn allocate_planes(&mut self, category: usize) -> bool {
         // TODO : assumes 444. do other stuff.
         let pixel_size: u32 = if self.depth == 8 { 1 } else { 2 };
         let plane_size = (self.width * self.height * pixel_size) as usize;
-        for plane_index in 0usize..3 {
-            self.plane_buffers[plane_index].reserve(plane_size);
-            self.plane_buffers[plane_index].resize(plane_size, 0);
-            self.yuv_row_bytes[plane_index] = self.width * pixel_size;
-            self.yuv_planes[plane_index] = Some(self.plane_buffers[plane_index].as_ptr());
+        if category == 0 {
+            for plane_index in 0usize..3 {
+                self.plane_buffers[plane_index].reserve(plane_size);
+                self.plane_buffers[plane_index].resize(plane_size, 0);
+                self.yuv_row_bytes[plane_index] = self.width * pixel_size;
+                self.yuv_planes[plane_index] = Some(self.plane_buffers[plane_index].as_ptr());
+            }
+            self.image_owns_yuv_planes = true;
+        } else if category == 1 {
+            self.plane_buffers[3].reserve(plane_size);
+            self.plane_buffers[3].resize(plane_size, 255);
+            self.alpha_row_bytes = self.width * pixel_size;
+            self.alpha_plane = Some(self.plane_buffers[3].as_ptr());
+            self.image_owns_alpha_plane = true;
+        } else {
+            println!("unknown category {category}. cannot allocate.");
+            return false;
         }
-        self.image_owns_yuv_planes = true;
         true
     }
 
@@ -125,61 +135,66 @@ impl AvifImage {
         let column_index: usize = (tile_index % tile_info.grid.columns) as usize;
         println!("copying tile {tile_index} {row_index} {column_index}");
 
-        if category == 0 {
-            for plane_index in 0usize..3 {
-                let src_plane = tile.plane(plane_index);
-                if src_plane.is_none() {
-                    continue;
-                }
-                let src_plane = src_plane.unwrap();
-                let src_width_to_copy;
-                // If this is the last tile column, clamp to left over width.
-                if (column_index as u32) == tile_info.grid.columns - 1 {
-                    let width_so_far = src_plane.width * (column_index as u32);
-                    // TODO: does self.width need to be accounted for subsampling?
-                    src_width_to_copy = self.width - width_so_far;
-                } else {
-                    src_width_to_copy = src_plane.width;
-                }
-                let src_byte_count: usize = (src_width_to_copy * src_plane.pixel_size)
-                    .try_into()
-                    .unwrap();
-                let dst_row_bytes = self.yuv_row_bytes[plane_index];
+        let plane_range = if category == 1 { 3usize..4 } else { 0usize..3 };
+        // TODO: what about gainmap category?
 
-                let mut dst_base_offset: usize = 0;
-                dst_base_offset += row_index * ((src_plane.height * dst_row_bytes) as usize);
-                dst_base_offset +=
-                    column_index * ((src_plane.width * src_plane.pixel_size) as usize);
-                //println!("dst base_offset: {dst_base_offset}");
+        for plane_index in plane_range {
+            println!("plane_index {plane_index}");
+            let src_plane = tile.plane(plane_index);
+            if src_plane.is_none() {
+                continue;
+            }
+            let src_plane = src_plane.unwrap();
+            let src_width_to_copy;
+            // If this is the last tile column, clamp to left over width.
+            if (column_index as u32) == tile_info.grid.columns - 1 {
+                let width_so_far = src_plane.width * (column_index as u32);
+                // TODO: does self.width need to be accounted for subsampling?
+                src_width_to_copy = self.width - width_so_far;
+            } else {
+                src_width_to_copy = src_plane.width;
+            }
+            let src_byte_count: usize = (src_width_to_copy * src_plane.pixel_size)
+                .try_into()
+                .unwrap();
+            let dst_row_bytes = if plane_index < 3 {
+                self.yuv_row_bytes[plane_index]
+            } else {
+                self.alpha_row_bytes
+            };
 
-                let src_height_to_copy;
-                // If this is the last tile row, clamp to left over height.
-                if (row_index as u32) == tile_info.grid.rows - 1 {
-                    let height_so_far = src_plane.height * (row_index as u32);
-                    // TODO: does self.height need to be accounted for subsampling?
-                    src_height_to_copy = self.height - height_so_far;
-                } else {
-                    src_height_to_copy = src_plane.height;
+            let mut dst_base_offset: usize = 0;
+            dst_base_offset += row_index * ((src_plane.height * dst_row_bytes) as usize);
+            dst_base_offset += column_index * ((src_plane.width * src_plane.pixel_size) as usize);
+            //println!("dst base_offset: {dst_base_offset}");
+
+            let src_height_to_copy;
+            // If this is the last tile row, clamp to left over height.
+            if (row_index as u32) == tile_info.grid.rows - 1 {
+                let height_so_far = src_plane.height * (row_index as u32);
+                // TODO: does self.height need to be accounted for subsampling?
+                src_height_to_copy = self.height - height_so_far;
+            } else {
+                src_height_to_copy = src_plane.height;
+            }
+
+            for y in 0..src_height_to_copy {
+                let src_stride_offset: isize = (y * src_plane.row_bytes).try_into().unwrap();
+                let ptr = unsafe { src_plane.data.offset(src_stride_offset) };
+                let pixels = unsafe { std::slice::from_raw_parts(ptr, src_byte_count) };
+                let dst_stride_offset: usize = dst_base_offset + ((y * dst_row_bytes) as usize);
+                let dst_end_offset: usize = dst_stride_offset + src_byte_count;
+
+                let mut dst_slice =
+                    &mut self.plane_buffers[plane_index][dst_stride_offset..dst_end_offset];
+                if y == 0 {
+                    println!(
+                        "src slice len: {} dst_slice_len: {}",
+                        pixels.len(),
+                        dst_slice.len()
+                    );
                 }
-
-                for y in 0..src_height_to_copy {
-                    let src_stride_offset: isize = (y * src_plane.row_bytes).try_into().unwrap();
-                    let ptr = unsafe { src_plane.data.offset(src_stride_offset) };
-                    let pixels = unsafe { std::slice::from_raw_parts(ptr, src_byte_count) };
-                    let dst_stride_offset: usize = dst_base_offset + ((y * dst_row_bytes) as usize);
-                    let dst_end_offset: usize = dst_stride_offset + src_byte_count;
-
-                    let mut dst_slice =
-                        &mut self.plane_buffers[plane_index][dst_stride_offset..dst_end_offset];
-                    if y == 0 {
-                        println!(
-                            "src slice len: {} dst_slice_len: {}",
-                            pixels.len(),
-                            dst_slice.len()
-                        );
-                    }
-                    dst_slice.copy_from_slice(pixels);
-                }
+                dst_slice.copy_from_slice(pixels);
             }
         }
         true
@@ -1146,7 +1161,7 @@ impl AvifDecoder {
             let is_grid = grid.rows > 0 && grid.columns > 0;
             if is_grid {
                 // allocate grid planes.
-                if !self.image.allocate_planes() {
+                if !self.image.allocate_planes(category) {
                     println!("failed to allocate image for grid image");
                     return false;
                 }
