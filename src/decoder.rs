@@ -136,6 +136,7 @@ impl AvifImage {
                 // If this is the last tile column, clamp to left over width.
                 if (column_index as u32) == tile_info.grid.columns - 1 {
                     let width_so_far = src_plane.width * (column_index as u32);
+                    // TODO: does self.width need to be accounted for subsampling?
                     src_width_to_copy = self.width - width_so_far;
                 } else {
                     src_width_to_copy = src_plane.width;
@@ -155,6 +156,7 @@ impl AvifImage {
                 // If this is the last tile row, clamp to left over height.
                 if (row_index as u32) == tile_info.grid.rows - 1 {
                     let height_so_far = src_plane.height * (row_index as u32);
+                    // TODO: does self.height need to be accounted for subsampling?
                     src_height_to_copy = self.height - height_so_far;
                 } else {
                     src_height_to_copy = src_plane.height;
