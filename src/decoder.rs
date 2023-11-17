@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
+use std::ops::Range;
 
 use crate::dav1d::*;
 use crate::mp4box::ItemProperty::AuxiliaryType;
@@ -631,6 +632,19 @@ struct AvifDecodeSample {
     data: Option<Vec<u8>>,
 }
 
+impl AvifDecodeSample {
+    pub fn data_range(&self) -> Range<usize> {
+        match &self.data {
+            Some(data) => 0..data.len(),
+            None => {
+                let start: usize = self.data_offset as usize;
+                let size: usize = self.size as usize;
+                start..start + size
+            }
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct AvifDecodeInput {
     samples: Vec<AvifDecodeSample>,
@@ -1121,15 +1135,11 @@ impl AvifDecoder {
             }
             for (tile_index, tile) in self.tiles[category].iter_mut().enumerate() {
                 let sample = &tile.input.samples[image_index];
-                let sample_payload: &[u8];
-                match &sample.data {
-                    Some(data) => sample_payload = &data[..],
-                    None => {
-                        let payload_start: usize = sample.data_offset as usize;
-                        let payload_size: usize = sample.size as usize;
-                        sample_payload = &self.data[payload_start..payload_start + payload_size];
-                    }
-                }
+                let data_range = sample.data_range();
+                let sample_payload = match &sample.data {
+                    Some(data) => &data[data_range],
+                    None => &self.data[data_range],
+                };
                 if !tile.codec.get_next_image(
                     sample_payload,
                     sample.spatial_id,
