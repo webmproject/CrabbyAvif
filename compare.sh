@@ -13,7 +13,7 @@ echo -n "" > $stats
 AVIFDEC="avifdec"
 RUST_AVIFDEC="/Users/vigneshv/code/rust_pg/rust-libavif/target/debug/rust-libavif"
 
-for file in $(find ${dir} -iname "*.avif");
+for file in $(find ${dir} -iname "*.avif" | sort);
 do
     bname=$(basename ${file});
     no_extn=${bname%.*};
