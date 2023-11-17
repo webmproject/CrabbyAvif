@@ -135,7 +135,7 @@ pub enum ItemProperty {
     ImageMirror(u8),
     OperatingPointSelector(u8),
     LayerSelector(u16),
-    AV1LayeredImageIndexing([u32; 3]),
+    AV1LayeredImageIndexing([usize; 3]),
     ContentLightLevelInformation(ContentLightLevelInformation),
     Unknown(String),
 }
@@ -555,12 +555,12 @@ impl MP4Box {
         }
         // unsigned int(1) large_size;
         let large_size = byte.read(1) == 1;
-        let mut layer_sizes: [u32; 3] = [0; 3];
+        let mut layer_sizes: [usize; 3] = [0; 3];
         for layer_size in &mut layer_sizes {
             if large_size {
-                *layer_size = stream.read_u32();
+                *layer_size = stream.read_u32() as usize;
             } else {
-                *layer_size = stream.read_u16().into();
+                *layer_size = stream.read_u16() as usize;
             }
         }
         Some(ItemProperty::AV1LayeredImageIndexing(layer_sizes))

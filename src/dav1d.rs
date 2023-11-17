@@ -44,6 +44,7 @@ impl Dav1d {
     pub fn get_next_image(
         &mut self,
         av1_payload: &[u8],
+        spatial_id: u8,
         image: &mut AvifImage,
         category: usize,
     ) -> bool {
@@ -95,9 +96,14 @@ impl Dav1d {
                     return false;
                 } else {
                     // Got a picture.
-                    // TODO: layer selection.
-                    got_picture = true;
-                    break;
+                    let frame_spatial_id = (*next_frame.frame_hdr).spatial_id as u8;
+                    if spatial_id != 0xFF && spatial_id != frame_spatial_id {
+                        // layer selection: skip this unwanted layer.
+                        dav1d_picture_unref(&mut next_frame);
+                    } else {
+                        got_picture = true;
+                        break;
+                    }
                 }
             }
             if !data.data.is_null() {

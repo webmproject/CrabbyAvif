@@ -365,6 +365,26 @@ impl AvifItem {
         }
     }
 
+    fn a1lx(&self) -> Option<&[usize; 3]> {
+        match find_property!(self, AV1LayeredImageIndexing) {
+            Some(property) => match property {
+                ItemProperty::AV1LayeredImageIndexing(a1lx) => Some(&a1lx),
+                _ => None, // not reached.
+            },
+            None => None,
+        }
+    }
+
+    fn lsel(&self) -> Option<u16> {
+        match find_property!(self, LayerSelector) {
+            Some(property) => match property {
+                ItemProperty::LayerSelector(lsel) => Some(*lsel),
+                _ => None, // not reached.
+            },
+            None => None,
+        }
+    }
+
     fn is_auxiliary_alpha(&self) -> bool {
         match find_property!(self, AuxiliaryType) {
             Some(auxC) => match auxC {
@@ -608,6 +628,7 @@ struct AvifDecodeSample {
     size: usize,
     spatial_id: u8,
     sync: bool,
+    data: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Default)]
@@ -634,18 +655,90 @@ fn create_tile(item: &AvifItem) -> Option<AvifTile> {
     tile.operating_point = item.operating_point();
     tile.image = AvifImage::default();
     // TODO: do all the layer stuff (a1op and lsel) in avifCodecDecodeInputFillFromDecoderItem.
-    // Typical case: Use the entire item's payload for a single frame output
-    let sample = AvifDecodeSample {
-        data_offset: 0,
-        item_id: item.id,
-        offset: 0,
-        size: item.size,
-        // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel
-        // value for "do not filter by spatial_id"
-        spatial_id: 0xff,
-        sync: true,
-    };
-    tile.input.samples.push(sample);
+    let mut layer_sizes: [usize; 4] = [0; 4];
+    let mut layer_count = 0;
+    let a1lx = item.a1lx();
+    if a1lx.is_some() {
+        let a1lx = a1lx.unwrap();
+        println!("item size: {} a1lx: {:#?}", item.size, a1lx);
+        let mut remaining_size: usize = item.size;
+        for i in 0usize..3 {
+            layer_count += 1;
+            if a1lx[i] > 0 {
+                // >= instead of > because there must be room for the last layer
+                if a1lx[i] >= remaining_size {
+                    println!("a1lx layer index [{i}] does not fit in item size");
+                    return None;
+                }
+                layer_sizes[i] = a1lx[i];
+                remaining_size -= a1lx[i];
+            } else {
+                layer_sizes[i] = remaining_size;
+                remaining_size = 0;
+                break;
+            }
+        }
+        if remaining_size > 0 {
+            assert!(layer_count == 3);
+            layer_count += 1;
+            layer_sizes[3] = remaining_size;
+        }
+        println!("layer count: {layer_count} layer_sizes: {:#?}", layer_sizes);
+    }
+    let lsel = item.lsel();
+    // TODO: account for progressive (avifCodecDecodeInputFillFromDecoderItem).
+    if lsel.is_some() && lsel.unwrap() != 0xFFFF {
+        // Layer selection. This requires that the underlying AV1 codec decodes all layers,
+        // and then only returns the requested layer as a single frame. To the user of libavif,
+        // this appears to be a single frame.
+        tile.input.all_layers = true;
+        let mut sample_size: usize = 0;
+        let layer_id = lsel.unwrap();
+        if layer_count > 0 {
+            // TODO: test this with a case?
+            println!("im here");
+            return None;
+            // Optimization: If we're selecting a layer that doesn't require
+            // the entire image's payload (hinted via the a1lx box).
+            if layer_id >= layer_count {
+                println!("lsel layer index not found in a1lx.");
+                return None;
+            }
+            let layer_id_plus_1: usize = (layer_id + 1) as usize;
+            for i in 0usize..layer_id_plus_1 {
+                sample_size += layer_sizes[i];
+            }
+        } else {
+            // This layer payload subsection is not known. Use the whole payload.
+            sample_size = item.size;
+        }
+        let sample = AvifDecodeSample {
+            data_offset: 0,
+            item_id: item.id,
+            offset: 0,
+            size: sample_size,
+            spatial_id: lsel.unwrap() as u8,
+            sync: true,
+            data: None,
+        };
+        tile.input.samples.push(sample);
+    } else if (false) {
+        // TODO: case for progressive and allow progressive.
+    } else {
+        // Typical case: Use the entire item's payload for a single frame output
+        let sample = AvifDecodeSample {
+            data_offset: 0,
+            item_id: item.id,
+            offset: 0,
+            size: item.size,
+            // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel
+            // value for "do not filter by spatial_id"
+            spatial_id: 0xff,
+            sync: true,
+            data: None,
+        };
+        tile.input.samples.push(sample);
+    }
     Some(tile)
 }
 
@@ -976,6 +1069,10 @@ impl AvifDecoder {
     fn prepare_samples(&mut self, image_index: usize) -> bool {
         for tiles in &mut self.tiles {
             for tile in tiles {
+                if tile.input.samples.len() <= image_index {
+                    println!("sample for index {image_index} not found.");
+                    return false;
+                }
                 let sample = &mut tile.input.samples[image_index];
                 if sample.item_id != 0 {
                     // Data comes from an item.
@@ -984,8 +1081,24 @@ impl AvifDecoder {
                         return false;
                     }
                     let item = item.unwrap();
-                    // TODO: account for merged extent ?
-                    sample.data_offset = item.data_offset();
+                    if item.extents.len() > 1 {
+                        println!("item has multiple extents");
+                        if sample.data.is_none() {
+                            let mut data: Vec<u8> = Vec::new();
+                            data.reserve(item.size);
+                            for extent in &item.extents {
+                                let extent_start: usize = extent.offset as usize;
+                                let extent_size: usize = extent.length as usize;
+                                let extent_payload =
+                                    &self.data[extent_start..extent_start + extent_size];
+                                data.extend_from_slice(extent_payload);
+                            }
+                            println!("merged size: {}", data.len());
+                            sample.data = Some(data);
+                        }
+                    } else {
+                        sample.data_offset = item.data_offset();
+                    }
                 } else {
                     // TODO: handle tracks.
                 }
@@ -1008,13 +1121,21 @@ impl AvifDecoder {
             }
             for (tile_index, tile) in self.tiles[category].iter_mut().enumerate() {
                 let sample = &tile.input.samples[image_index];
-                let payload_start: usize = sample.data_offset as usize;
-                let payload_size: usize = sample.size as usize;
-                let sample_payload = &self.data[payload_start..payload_start + payload_size];
-                if !tile
-                    .codec
-                    .get_next_image(sample_payload, &mut tile.image, category)
-                {
+                let sample_payload: &[u8];
+                match &sample.data {
+                    Some(data) => sample_payload = &data[..],
+                    None => {
+                        let payload_start: usize = sample.data_offset as usize;
+                        let payload_size: usize = sample.size as usize;
+                        sample_payload = &self.data[payload_start..payload_start + payload_size];
+                    }
+                }
+                if !tile.codec.get_next_image(
+                    sample_payload,
+                    sample.spatial_id,
+                    &mut tile.image,
+                    category,
+                ) {
                     return false;
                 }
                 // TODO: convert alpha from limited range to full range.
