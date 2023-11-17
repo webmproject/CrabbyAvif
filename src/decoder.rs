@@ -132,25 +132,41 @@ impl AvifImage {
                     continue;
                 }
                 let src_plane = src_plane.unwrap();
-                let src_byte_count: usize =
-                    (src_plane.width * src_plane.pixel_size).try_into().unwrap();
+                let src_width_to_copy;
+                // If this is the last tile column, clamp to left over width.
+                if (column_index as u32) == tile_info.grid.columns - 1 {
+                    let width_so_far = src_plane.width * (column_index as u32);
+                    src_width_to_copy = self.width - width_so_far;
+                } else {
+                    src_width_to_copy = src_plane.width;
+                }
+                let src_byte_count: usize = (src_width_to_copy * src_plane.pixel_size)
+                    .try_into()
+                    .unwrap();
                 let dst_row_bytes = self.yuv_row_bytes[plane_index];
 
                 let mut dst_base_offset: usize = 0;
                 dst_base_offset += row_index * ((src_plane.height * dst_row_bytes) as usize);
                 dst_base_offset +=
                     column_index * ((src_plane.width * src_plane.pixel_size) as usize);
-                println!("dst base_offset: {dst_base_offset}");
+                //println!("dst base_offset: {dst_base_offset}");
 
-                for y in 0..src_plane.height {
+                let src_height_to_copy;
+                // If this is the last tile row, clamp to left over height.
+                if (row_index as u32) == tile_info.grid.rows - 1 {
+                    let height_so_far = src_plane.height * (row_index as u32);
+                    src_height_to_copy = self.height - height_so_far;
+                } else {
+                    src_height_to_copy = src_plane.height;
+                }
+
+                for y in 0..src_height_to_copy {
                     let src_stride_offset: isize = (y * src_plane.row_bytes).try_into().unwrap();
                     let ptr = unsafe { src_plane.data.offset(src_stride_offset) };
                     let pixels = unsafe { std::slice::from_raw_parts(ptr, src_byte_count) };
                     let dst_stride_offset: usize = dst_base_offset + ((y * dst_row_bytes) as usize);
-                    // if plane_index == 0 {
-                    //     println!("y: {y} offset: {dst_stride_offset}");
-                    // }
                     let dst_end_offset: usize = dst_stride_offset + src_byte_count;
+
                     let mut dst_slice =
                         &mut self.plane_buffers[plane_index][dst_stride_offset..dst_end_offset];
                     if y == 0 {
