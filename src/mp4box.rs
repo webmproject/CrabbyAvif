@@ -1395,6 +1395,68 @@ impl MP4Box {
         true
     }
 
+    fn parse_elst(stream: &mut IStream, track: &mut AvifTrack, mut size: u64) -> bool {
+        let (version, flags) = stream.read_version_and_flags();
+        size -= 4;
+        if (flags & 1) == 0 {
+            track.is_repeating = false;
+            stream.skip(size as usize);
+            return true;
+        }
+        track.is_repeating = true;
+        // unsigned int(32) entry_count;
+        let entry_count = stream.read_u32();
+        if entry_count != 1 {
+            println!("elst has entry_count != 1");
+            return false;
+        }
+        size -= 4;
+        if version == 1 {
+            // unsigned int(64) segment_duration;
+            track.segment_duration = stream.read_u64();
+            size -= 8;
+        } else if version == 0 {
+            // unsigned int(32) segment_duration;
+            track.segment_duration = stream.read_u32() as u64;
+            size -= 4;
+        } else {
+            println!("unsupported version in elst");
+            return false;
+        }
+        if track.segment_duration == 0 {
+            println!("invalid value for segment_duration (0)");
+            return false;
+        }
+        stream.skip(size as usize);
+        true
+    }
+
+    fn parse_edts(stream: &mut IStream, track: &mut AvifTrack, mut size: u64) -> bool {
+        // TODO: add uniqueness check.
+        let mut elst_seen = false;
+        while size > 0 {
+            let header = Self::parse_header(stream);
+            size -= header.full_size;
+            match header.box_type.as_str() {
+                "elst" => {
+                    if elst_seen {
+                        println!("more than one elst was found");
+                        return false;
+                    }
+                    if !Self::parse_elst(stream, track, header.size) {
+                        return false;
+                    }
+                    elst_seen = true;
+                }
+                _ => {
+                    println!("skipping box {}", header.box_type);
+                    stream.skip(header.size.try_into().unwrap());
+                }
+            }
+        }
+        elst_seen
+    }
+
     fn parse_trak(stream: &mut IStream, mut size: u64) -> Option<AvifTrack> {
         let mut track: AvifTrack = Default::default();
         println!("parsing trak size: {size}");
@@ -1417,8 +1479,12 @@ impl MP4Box {
                         return None;
                     }
                 }
+                "edts" => {
+                    if !Self::parse_edts(stream, &mut track, header.size) {
+                        return None;
+                    }
+                }
                 _ => {
-                    // TODO: edts.
                     // TODO: track meta can be ignored? probably not becuase of xmp/exif.
                     println!("skipping box {}", header.box_type);
                     stream.skip(header.size.try_into().unwrap());
@@ -1475,6 +1541,7 @@ impl MP4Box {
                             panic!("error parsing moov");
                         }
                     }
+                    //println!("tracks: {:#?}", avif_boxes.moov.tracks);
                     break;
                 }
                 _ => {
