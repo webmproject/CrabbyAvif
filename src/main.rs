@@ -25,13 +25,18 @@ fn main() {
         println!("parse failed!");
         std::process::exit(1);
     }
+
+    let mut y4m: rust_libavif::utils::Y4MWriter = Default::default();
+    y4m.filename = args[2].clone();
+
     let image = decoder.next_image();
     println!("image after decode: {:#?}", image);
     if image.is_none() {
         println!("next_image failed!");
         std::process::exit(1);
     }
-    let ret = rust_libavif::utils::y4m_write(&args[2], image.unwrap());
+
+    let ret = y4m.write_frame(image.unwrap());
     if !ret {
         println!("error writing y4m file");
         std::process::exit(1);
