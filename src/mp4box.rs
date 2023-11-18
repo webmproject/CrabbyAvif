@@ -242,6 +242,15 @@ impl SampleTable {
         }
         0
     }
+
+    pub fn get_properties(&self) -> Option<&Vec<ItemProperty>> {
+        for sample_description in &self.sample_descriptions {
+            if sample_description.format == "av01" {
+                return Some(&sample_description.properties);
+            }
+        }
+        None
+    }
 }
 
 #[derive(Debug, Default)]

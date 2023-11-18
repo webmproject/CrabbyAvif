@@ -228,9 +228,11 @@ pub struct AvifDecoder {
     tiles: [Vec<AvifTile>; 3],
     alpha_present: bool,
     image_index: i32,
+    pub image_count: u32,
+    pub timescale: u32,
+    pub duration_in_timescales: u64,
     avif_items: HashMap<u32, AvifItem>,
     tracks: Vec<AvifTrack>,
-    //yuv_plane_buffer: [Vec<u8>; 3],
 }
 
 #[derive(Debug, Default)]
@@ -432,55 +434,66 @@ impl AvifItem {
             None => false,
         }
     }
+}
 
-    fn nclx(&self) -> Result<&Nclx, bool> {
-        let nclx_properties: Vec<_> = self
-            .properties
-            .iter()
-            .filter(|x| match x {
-                ItemProperty::ColorInformation(colr) => match colr {
-                    ColorInformation::Nclx(_) => true,
-                    _ => false,
-                },
+fn find_nclx(properties: &Vec<ItemProperty>) -> Result<&Nclx, bool> {
+    let nclx_properties: Vec<_> = properties
+        .iter()
+        .filter(|x| match x {
+            ItemProperty::ColorInformation(colr) => match colr {
+                ColorInformation::Nclx(_) => true,
                 _ => false,
-            })
-            .collect();
-        match nclx_properties.len() {
-            0 => Err(false),
-            1 => match nclx_properties[0] {
-                ItemProperty::ColorInformation(colr) => match colr {
-                    ColorInformation::Nclx(nclx) => Ok(&nclx),
-                    _ => Err(false), // not reached.
-                },
+            },
+            _ => false,
+        })
+        .collect();
+    match nclx_properties.len() {
+        0 => Err(false),
+        1 => match nclx_properties[0] {
+            ItemProperty::ColorInformation(colr) => match colr {
+                ColorInformation::Nclx(nclx) => Ok(&nclx),
                 _ => Err(false), // not reached.
             },
-            _ => Err(true), // multiple nclx were found.
-        }
+            _ => Err(false), // not reached.
+        },
+        _ => Err(true), // multiple nclx were found.
     }
+}
 
-    fn icc(&self) -> Result<&Icc, bool> {
-        let icc_properties: Vec<_> = self
-            .properties
-            .iter()
-            .filter(|x| match x {
-                ItemProperty::ColorInformation(colr) => match colr {
-                    ColorInformation::Icc(_) => true,
-                    _ => false,
-                },
+fn find_icc(properties: &Vec<ItemProperty>) -> Result<&Icc, bool> {
+    let icc_properties: Vec<_> = properties
+        .iter()
+        .filter(|x| match x {
+            ItemProperty::ColorInformation(colr) => match colr {
+                ColorInformation::Icc(_) => true,
                 _ => false,
-            })
-            .collect();
-        match icc_properties.len() {
-            0 => Err(false),
-            1 => match icc_properties[0] {
-                ItemProperty::ColorInformation(colr) => match colr {
-                    ColorInformation::Icc(icc) => Ok(&icc),
-                    _ => Err(false), // not reached.
-                },
+            },
+            _ => false,
+        })
+        .collect();
+    match icc_properties.len() {
+        0 => Err(false),
+        1 => match icc_properties[0] {
+            ItemProperty::ColorInformation(colr) => match colr {
+                ColorInformation::Icc(icc) => Ok(&icc),
                 _ => Err(false), // not reached.
             },
-            _ => Err(true), // multiple icc were found.
-        }
+            _ => Err(false), // not reached.
+        },
+        _ => Err(true), // multiple icc were found.
+    }
+}
+
+fn find_av1C(properties: &Vec<ItemProperty>) -> Option<&CodecConfiguration> {
+    match properties
+        .iter()
+        .find(|x| matches!(x, ItemProperty::CodecConfiguration(_)))
+    {
+        Some(property) => match property {
+            ItemProperty::CodecConfiguration(av1C) => Some(&av1C),
+            _ => None, // not reached.
+        },
+        None => None,
     }
 }
 
@@ -659,7 +672,7 @@ struct AvifDecodeSample {
     // owns_data
     // partial_data
     item_id: u32,
-    offset: u64,
+    offset: u64, // TODO: probably don't need offset and data offset.
     size: usize,
     spatial_id: u8,
     sync: bool,
@@ -671,7 +684,7 @@ impl AvifDecodeSample {
         match &self.data {
             Some(data) => 0..data.len(),
             None => {
-                let start: usize = self.data_offset as usize;
+                let start: usize = (self.data_offset + self.offset) as usize;
                 let size: usize = self.size as usize;
                 start..start + size
             }
@@ -998,10 +1011,7 @@ impl AvifDecoder {
             _ => {}
         }
 
-        // 0 color, 1 alpha, 2 gainmap
-        //let mut items: [Option<&AvifItem>; 3] = [None, None, None];
-        let mut item_ids: [u32; 3] = [0; 3];
-
+        let color_properties: &Vec<ItemProperty>;
         match self.source {
             AvifDecoderSource::Tracks => {
                 let mut color_track_index: Option<usize> = None;
@@ -1038,10 +1048,14 @@ impl AvifDecoder {
                     println!("color track not found");
                     return None;
                 }
-                let color_track_index = color_track_index.unwrap();
-                println!("color_track_index: {color_track_index}");
-
-                // TODO: set color_properties for nclx, icc, av1C search.
+                let color_track = &self.tracks[color_track_index.unwrap()];
+                let color_properties_op =
+                    color_track.sample_table.as_ref().unwrap().get_properties();
+                if color_properties_op.is_none() {
+                    println!("color properties not found");
+                    return None;
+                }
+                color_properties = color_properties_op.unwrap();
 
                 // TODO: exif/xmp from meta.
 
@@ -1065,7 +1079,7 @@ impl AvifDecoder {
                     if !track.sample_table.as_ref().unwrap().has_av1_sample() {
                         continue;
                     }
-                    if track.aux_for_id == self.tracks[color_track_index].id {
+                    if track.aux_for_id == color_track.id {
                         // Found the alpha track.
                         alpha_track_index = Some(track_index);
                         break;
@@ -1073,12 +1087,47 @@ impl AvifDecoder {
                 }
                 println!("alpha_track_index: {:#?}", alpha_track_index);
 
-                let color_tile = create_tile_from_track(&self.tracks[color_track_index]);
+                let color_tile = create_tile_from_track(&color_track);
+                if color_tile.is_none() {
+                    println!("failed to create color tile");
+                    return None;
+                }
                 println!("color_tile: {:#?}", color_tile);
+                self.tile_info[0].tile_count = 1;
+                self.tiles[0].push(color_tile.unwrap());
 
-                panic!("failing in tracks");
+                if alpha_track_index.is_some() {
+                    let alpha_track = &self.tracks[alpha_track_index.unwrap()];
+                    let alpha_tile = create_tile_from_track(alpha_track);
+                    if alpha_tile.is_none() {
+                        println!("failed to create color tile");
+                        return None;
+                    }
+                    println!("alpha_tile: {:#?}", alpha_tile);
+                    self.tile_info[1].tile_count = 1;
+                    self.tiles[1].push(alpha_tile.unwrap());
+                    self.alpha_present = true;
+                    self.image.alpha_premultiplied = color_track.prem_by_id == alpha_track.id;
+                }
+
+                self.image_index = -1;
+                self.image_count = self.tiles[0][0].input.samples.len() as u32;
+                self.timescale = color_track.media_timescale;
+                self.duration_in_timescales = color_track.media_duration;
+                // TODO: add self.duration.
+                // TODO: add self.repetition_count.
+                // TODO: self.image timing.
+
+                println!("image_count: {}", self.image_count);
+                println!("timescale: {}", self.timescale);
+                println!("duration_in_timescales: {}", self.duration_in_timescales);
+
+                self.image.width = color_track.width;
+                self.image.height = color_track.height;
             }
             AvifDecoderSource::PrimaryItem => {
+                // 0 color, 1 alpha, 2 gainmap
+                let mut item_ids: [u32; 3] = [0; 3];
                 // Mandatory color item.
                 item_ids[0] = find_color_item(&self.avif_items, avif_boxes.meta.primary_item_id);
                 if item_ids[0] == 0 {
@@ -1116,8 +1165,11 @@ impl AvifDecoder {
                 // TODO: find exif or xmp metadata.
 
                 self.image_index = -1;
-                //self.image_count = 1;
-                // TODO: image timing for avis.
+                self.image_count = 1;
+                self.timescale = 1;
+                self.duration_in_timescales = 1;
+                // TODO: duration, imagetiming.
+
                 for (index, item_id) in item_ids.iter().enumerate() {
                     if *item_id == 0 {
                         continue;
@@ -1156,8 +1208,11 @@ impl AvifDecoder {
                 self.image.height = color_item.height;
                 self.alpha_present = item_ids[1] != 0;
                 // alphapremultiplied.
+
+                // This borrow has to be in the end of this branch.
+                color_properties = &self.avif_items.get(&item_ids[0]).unwrap().properties;
             }
-            _ => {}
+            _ => return None, // not reached.
         }
 
         // Check validity of samples.
@@ -1173,11 +1228,11 @@ impl AvifDecoder {
             }
         }
 
-        let color_item = self.avif_items.get(&item_ids[0]).unwrap();
         // Find and adopt all colr boxes "at most one for a given value of
         // colour type" (HEIF 6.5.5.1, from Amendment 3) Accept one of each
         // type, and bail out if more than one of a given type is provided.
-        match color_item.nclx() {
+        //match color_item.nclx() {
+        match find_nclx(color_properties) {
             Ok(nclx) => {
                 self.image.color_primaries = nclx.color_primaries;
                 self.image.transfer_characteristics = nclx.transfer_characteristics;
@@ -1191,7 +1246,7 @@ impl AvifDecoder {
                 }
             }
         }
-        match color_item.icc() {
+        match find_icc(color_properties) {
             Ok(icc) => {
                 // TODO: attach icc to self.image.
             }
@@ -1208,7 +1263,7 @@ impl AvifDecoder {
         // TODO: if cicp was not found, harvest it from the seq hdr.
 
         // TODO: copy info from av1c. avifReadCodecConfigProperty.
-        let av1C = color_item.av1C();
+        let av1C = find_av1C(color_properties);
         if av1C.is_none() {
             println!("missing av1C");
             return None;
