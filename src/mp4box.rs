@@ -204,6 +204,12 @@ pub struct SampleToChunk {
 }
 
 #[derive(Debug, Default)]
+pub struct SampleDescription {
+    format: String,
+    properties: Vec<ItemProperty>,
+}
+
+#[derive(Debug, Default)]
 pub struct SampleTable {
     pub chunk_offsets: Vec<u64>,
     pub sample_to_chunk: Vec<SampleToChunk>,
@@ -213,6 +219,7 @@ pub struct SampleTable {
     pub all_samples_size: u32,
     pub sync_samples: Vec<u32>,
     pub time_to_sample: Vec<TimeToSample>,
+    pub sample_descriptions: Vec<SampleDescription>,
 }
 
 #[derive(Debug, Default)]
@@ -1061,7 +1068,6 @@ impl MP4Box {
 
         // TODO: check if track dims are too large.
 
-        println!("track after tkhd: {:#?}", track);
         true
     }
 
@@ -1207,6 +1213,35 @@ impl MP4Box {
         true
     }
 
+    fn parse_stsd(stream: &mut IStream, sample_table: &mut SampleTable) -> bool {
+        // TODO: version must be 0.
+        let (_version, _flags) = stream.read_version_and_flags();
+        // unsigned int(32) entry_count;
+        let entry_count = stream.read_u32();
+        sample_table
+            .sample_descriptions
+            .reserve(entry_count as usize);
+        for i in 0..entry_count {
+            let header = Self::parse_header(stream);
+            let mut stsd: SampleDescription = Default::default();
+            stsd.format = header.box_type.clone();
+            if stsd.format == "av01" {
+                // Skip 78 bytes for visual sample entry size.
+                stream.skip(78);
+                // TODO: check subtraction is ok.
+                match Self::parse_ipco(stream, header.size - 78) {
+                    Ok(properties) => stsd.properties = properties,
+                    Err(err) => {
+                        println!("{}", err);
+                        return false;
+                    }
+                }
+            }
+            sample_table.sample_descriptions.push(stsd);
+        }
+        true
+    }
+
     fn parse_stbl(stream: &mut IStream, track: &mut AvifTrack, mut size: u64) -> bool {
         if track.sample_table.is_some() {
             println!("duplciate stbl for track.");
@@ -1247,6 +1282,11 @@ impl MP4Box {
                         return false;
                     }
                 }
+                "stsd" => {
+                    if !Self::parse_stsd(stream, &mut sample_table) {
+                        return false;
+                    }
+                }
                 _ => {
                     println!("skipping box {}", header.box_type);
                     stream.skip(header.size.try_into().unwrap());
@@ -1254,8 +1294,6 @@ impl MP4Box {
             }
         }
         track.sample_table = Some(sample_table);
-
-        println!("track after stbl: {:#?}", track);
         true
     }
 
@@ -1299,7 +1337,7 @@ impl MP4Box {
                 }
             }
         }
-        false
+        true
     }
 
     fn parse_trak(stream: &mut IStream, mut size: u64) -> Option<AvifTrack> {
@@ -1325,6 +1363,7 @@ impl MP4Box {
                     stream.skip(header.size.try_into().unwrap());
                 }
             }
+            println!("track after {}: {:#?}", header.box_type, track);
         }
         Some(track)
     }
