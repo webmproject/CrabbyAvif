@@ -1403,7 +1403,7 @@ impl AvifDecoder {
             return None;
         }
 
-        println!("tiles: {:#?}", self.tiles);
+        //println!("tiles: {:#?}", self.tiles);
 
         let next_image_index = self.image_index + 1;
         if !self.create_codecs() {

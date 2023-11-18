@@ -75,6 +75,7 @@ impl Y4MWriter {
             Err(e) => return false,
             _ => {}
         }
+        self.header_written = true;
         true
     }
 

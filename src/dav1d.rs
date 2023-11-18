@@ -19,6 +19,9 @@ fn dav1d_error(err: u32) -> i32 {
 
 impl Dav1d {
     pub fn initialize(&mut self, operating_point: u8, all_layers: bool) -> bool {
+        if self.context.is_some() {
+            return true;
+        }
         let mut settings_uninit: MaybeUninit<Dav1dSettings> = unsafe { MaybeUninit::uninit() };
         unsafe { dav1d_default_settings(settings_uninit.as_mut_ptr()) };
         let mut settings = unsafe { settings_uninit.assume_init() };
