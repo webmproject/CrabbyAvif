@@ -191,6 +191,12 @@ pub struct MetaBox {
 }
 
 #[derive(Debug, Default)]
+pub struct TimeToSample {
+    sample_count: u32,
+    sample_delta: u32,
+}
+
+#[derive(Debug, Default)]
 pub struct SampleToChunk {
     first_chunk: u32,
     samples_per_chunk: u32,
@@ -206,6 +212,7 @@ pub struct SampleTable {
     // TODO: candidate for rust enum ?
     pub all_samples_size: u32,
     pub sync_samples: Vec<u32>,
+    pub time_to_sample: Vec<TimeToSample>,
 }
 
 #[derive(Debug, Default)]
@@ -1183,6 +1190,23 @@ impl MP4Box {
         true
     }
 
+    fn parse_stts(stream: &mut IStream, sample_table: &mut SampleTable) -> bool {
+        // TODO: version must be 0.
+        let (_version, _flags) = stream.read_version_and_flags();
+        // unsigned int(32) entry_count;
+        let entry_count = stream.read_u32();
+        sample_table.time_to_sample.reserve(entry_count as usize);
+        for i in 0..entry_count {
+            let mut stts: TimeToSample = Default::default();
+            // unsigned int(32) sample_count;
+            stts.sample_count = stream.read_u32();
+            // unsigned int(32) sample_delta;
+            stts.sample_delta = stream.read_u32();
+            sample_table.time_to_sample.push(stts);
+        }
+        true
+    }
+
     fn parse_stbl(stream: &mut IStream, track: &mut AvifTrack, mut size: u64) -> bool {
         if track.sample_table.is_some() {
             println!("duplciate stbl for track.");
@@ -1215,6 +1239,11 @@ impl MP4Box {
                 }
                 "stss" => {
                     if !Self::parse_stss(stream, &mut sample_table) {
+                        return false;
+                    }
+                }
+                "stts" => {
+                    if !Self::parse_stts(stream, &mut sample_table) {
                         return false;
                     }
                 }
