@@ -229,6 +229,7 @@ pub struct AvifDecoder {
     alpha_present: bool,
     image_index: i32,
     avif_items: HashMap<u32, AvifItem>,
+    tracks: Vec<AvifTrack>,
     //yuv_plane_buffer: [Vec<u8>; 3],
 }
 
@@ -789,6 +790,61 @@ fn create_tile(item: &AvifItem) -> Option<AvifTile> {
     Some(tile)
 }
 
+fn create_tile_from_track(track: &AvifTrack) -> Option<AvifTile> {
+    let mut tile = AvifTile::default();
+    tile.width = track.width;
+    tile.height = track.height;
+    tile.operating_point = 0; // No way to set operating point via tracks
+
+    // TODO: implement the imagecount check in avifCodecDecodeInputFillFromSampleTable.
+
+    let mut sample_size_index = 0;
+    let sample_table = &track.sample_table.as_ref().unwrap();
+    for (chunk_index, chunk_offset) in sample_table.chunk_offsets.iter().enumerate() {
+        // Figure out how many samples are in this chunk.
+        let sample_count = sample_table.get_sample_count_of_chunk(chunk_index);
+        if sample_count == 0 {
+            println!("chunk with 0 samples found");
+            return None;
+        }
+
+        let mut sample_offset = *chunk_offset;
+        for sample_index in 0..sample_count {
+            let mut sample_size = sample_table.all_samples_size;
+            if sample_size == 0 {
+                if sample_size_index >= sample_table.sample_sizes.len() {
+                    println!("not enough sampel sizes in the table");
+                    return None;
+                }
+                sample_size = sample_table.sample_sizes[sample_size_index];
+            }
+            let sample = AvifDecodeSample {
+                data_offset: 0,
+                item_id: 0,
+                offset: sample_offset,
+                size: sample_size as usize,
+                // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel
+                // value for "do not filter by spatial_id"
+                spatial_id: 0xff,
+                // Assume first sample is always sync (in case stss box was missing).
+                sync: tile.input.samples.is_empty(),
+                data: None,
+            };
+            tile.input.samples.push(sample);
+            // TODO: verify if sample size math can be done here.
+            sample_offset += sample_size as u64;
+            sample_size_index += 1;
+        }
+    }
+    for sync_sample_number in &sample_table.sync_samples {
+        let index: usize = (*sync_sample_number - 1) as usize; // sample_table.sync_samples is 1-based.
+        if index < tile.input.samples.len() {
+            tile.input.samples[index].sync = true;
+        }
+    }
+    Some(tile)
+}
+
 fn generate_tiles(
     avif_items: &mut HashMap<u32, AvifItem>,
     iinf: &Vec<ItemInfo>,
@@ -909,6 +965,7 @@ impl AvifDecoder {
             offset: 0,
         };
         let avif_boxes = MP4Box::parse(&mut stream);
+        self.tracks = avif_boxes.moov.tracks;
         self.avif_items = match construct_avif_items(&avif_boxes.meta) {
             Ok(items) => items,
             Err(err) => {
@@ -947,7 +1004,79 @@ impl AvifDecoder {
 
         match self.source {
             AvifDecoderSource::Tracks => {
-                // TODO: implement.
+                let mut color_track_index: Option<usize> = None;
+                // Find primary color track.
+                // TODO: move this to a function.
+                for (track_index, track) in self.tracks.iter().enumerate() {
+                    if track.sample_table.is_none() {
+                        continue;
+                    }
+                    if track.id == 0 {
+                        // trak box might be missing a tkhd box inside, skip it.
+                        continue;
+                    }
+                    if track
+                        .sample_table
+                        .as_ref()
+                        .unwrap()
+                        .chunk_offsets
+                        .is_empty()
+                    {
+                        continue;
+                    }
+                    if !track.sample_table.as_ref().unwrap().has_av1_sample() {
+                        continue;
+                    }
+                    if track.aux_for_id != 0 {
+                        continue;
+                    }
+                    // Found the color track.
+                    color_track_index = Some(track_index);
+                    break;
+                }
+                if color_track_index.is_none() {
+                    println!("color track not found");
+                    return None;
+                }
+                let color_track_index = color_track_index.unwrap();
+                println!("color_track_index: {color_track_index}");
+
+                // TODO: set color_properties for nclx, icc, av1C search.
+
+                // TODO: exif/xmp from meta.
+
+                let mut alpha_track_index: Option<usize> = None;
+                for (track_index, track) in self.tracks.iter().enumerate() {
+                    if track.sample_table.is_none() {
+                        continue;
+                    }
+                    if track.id == 0 {
+                        continue;
+                    }
+                    if track
+                        .sample_table
+                        .as_ref()
+                        .unwrap()
+                        .chunk_offsets
+                        .is_empty()
+                    {
+                        continue;
+                    }
+                    if !track.sample_table.as_ref().unwrap().has_av1_sample() {
+                        continue;
+                    }
+                    if track.aux_for_id == self.tracks[color_track_index].id {
+                        // Found the alpha track.
+                        alpha_track_index = Some(track_index);
+                        break;
+                    }
+                }
+                println!("alpha_track_index: {:#?}", alpha_track_index);
+
+                let color_tile = create_tile_from_track(&self.tracks[color_track_index]);
+                println!("color_tile: {:#?}", color_tile);
+
+                panic!("failing in tracks");
             }
             AvifDecoderSource::PrimaryItem => {
                 // Mandatory color item.

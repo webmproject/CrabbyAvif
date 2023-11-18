@@ -12,7 +12,7 @@ fn main() {
     }
 
     let settings = AvifDecoderSettings {
-        source: AvifDecoderSource::PrimaryItem,
+        source: AvifDecoderSource::Auto,
         ignore_exif: false,
         ignore_icc: false,
     };

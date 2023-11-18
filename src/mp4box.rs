@@ -222,6 +222,28 @@ pub struct SampleTable {
     pub sample_descriptions: Vec<SampleDescription>,
 }
 
+impl SampleTable {
+    pub fn has_av1_sample(&self) -> bool {
+        // TODO: replace with vector find.
+        for sample_description in &self.sample_descriptions {
+            if sample_description.format == "av01" {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // returns the number of samples in the chunk.
+    pub fn get_sample_count_of_chunk(&self, chunk_index: usize) -> u32 {
+        for entry in self.sample_to_chunk.iter().rev() {
+            if (entry.first_chunk as usize) <= chunk_index + 1 {
+                return entry.samples_per_chunk;
+            }
+        }
+        0
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct AvifTrack {
     pub id: u32,
@@ -1358,13 +1380,15 @@ impl MP4Box {
                     }
                 }
                 _ => {
-                    // TODO: track meta can be ignored?
+                    // TODO: tref, edts.
+                    // TODO: track meta can be ignored? probably not becuase of xmp/exif.
                     println!("skipping box {}", header.box_type);
                     stream.skip(header.size.try_into().unwrap());
                 }
             }
             println!("track after {}: {:#?}", header.box_type, track);
         }
+        // TODO: compute repetition count here.
         Some(track)
     }
 
@@ -1385,7 +1409,7 @@ impl MP4Box {
                 }
             }
         }
-        None // Some(moov)
+        Some(moov)
     }
 
     pub fn parse(stream: &mut IStream) -> AvifBoxes {
