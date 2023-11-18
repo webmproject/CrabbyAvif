@@ -205,6 +205,7 @@ pub struct SampleTable {
     // If this is non-zero, sampleSizes will be empty and all samples will be this size.
     // TODO: candidate for rust enum ?
     pub all_samples_size: u32,
+    pub sync_samples: Vec<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -1151,7 +1152,6 @@ impl MP4Box {
     fn parse_stsz(stream: &mut IStream, sample_table: &mut SampleTable) -> bool {
         // TODO: version must be 0.
         let (_version, _flags) = stream.read_version_and_flags();
-
         // unsigned int(32) sample_size;
         sample_table.all_samples_size = stream.read_u32();
         // unsigned int(32) sample_count;
@@ -1165,6 +1165,20 @@ impl MP4Box {
             // unsigned int(32) entry_size;
             let entry_size = stream.read_u32();
             sample_table.sample_sizes.push(entry_size);
+        }
+        true
+    }
+
+    fn parse_stss(stream: &mut IStream, sample_table: &mut SampleTable) -> bool {
+        // TODO: version must be 0.
+        let (_version, _flags) = stream.read_version_and_flags();
+        // unsigned int(32) entry_count;
+        let entry_count = stream.read_u32();
+        sample_table.sync_samples.reserve(entry_count as usize);
+        for i in 0..entry_count {
+            // unsigned int(32) sample_number;
+            let sample_number = stream.read_u32();
+            sample_table.sync_samples.push(sample_number);
         }
         true
     }
@@ -1196,6 +1210,11 @@ impl MP4Box {
                 }
                 "stsz" => {
                     if !Self::parse_stsz(stream, &mut sample_table) {
+                        return false;
+                    }
+                }
+                "stss" => {
+                    if !Self::parse_stss(stream, &mut sample_table) {
                         return false;
                     }
                 }
