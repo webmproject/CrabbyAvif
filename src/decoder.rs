@@ -1199,9 +1199,6 @@ impl AvifDecoder {
                     self.tiles[index] = tiles.unwrap();
                     // TODO: validate item properties.
                 }
-                println!("^^^=====");
-                println!("{:#?}", self.tiles);
-                println!("$$$=====");
 
                 let color_item = self.avif_items.get(&item_ids[0]).unwrap();
                 self.image.width = color_item.width;

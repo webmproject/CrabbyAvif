@@ -1371,6 +1371,30 @@ impl MP4Box {
         true
     }
 
+    fn parse_tref(stream: &mut IStream, track: &mut AvifTrack, mut size: u64) -> bool {
+        while size > 0 {
+            let header = Self::parse_header(stream);
+            size -= header.full_size;
+            match header.box_type.as_str() {
+                "auxl" => {
+                    // unsigned int(32) track_IDs[];
+                    track.aux_for_id = stream.read_u32(); // Use the first one.
+                    stream.skip((header.size - 4) as usize); // Skip the rest.
+                }
+                "prem" => {
+                    // unsigned int(32) track_IDs[];
+                    track.prem_by_id = stream.read_u32(); // Use the first one.
+                    stream.skip((header.size - 4) as usize); // Skip the rest.
+                }
+                _ => {
+                    println!("skipping box {}", header.box_type);
+                    stream.skip(header.size.try_into().unwrap());
+                }
+            }
+        }
+        true
+    }
+
     fn parse_trak(stream: &mut IStream, mut size: u64) -> Option<AvifTrack> {
         let mut track: AvifTrack = Default::default();
         println!("parsing trak size: {size}");
@@ -1388,8 +1412,13 @@ impl MP4Box {
                         return None;
                     }
                 }
+                "tref" => {
+                    if !Self::parse_tref(stream, &mut track, header.size) {
+                        return None;
+                    }
+                }
                 _ => {
-                    // TODO: tref, edts.
+                    // TODO: edts.
                     // TODO: track meta can be ignored? probably not becuase of xmp/exif.
                     println!("skipping box {}", header.box_type);
                     stream.skip(header.size.try_into().unwrap());
