@@ -191,9 +191,48 @@ pub struct MetaBox {
 }
 
 #[derive(Debug, Default)]
+pub struct SampleToChunk {
+    first_chunk: u32,
+    samples_per_chunk: u32,
+    sample_description_index: u32,
+}
+
+#[derive(Debug, Default)]
+pub struct SampleTable {
+    pub chunk_offsets: Vec<u64>,
+    pub sample_to_chunk: Vec<SampleToChunk>,
+    pub sample_sizes: Vec<u32>,
+    // If this is non-zero, sampleSizes will be empty and all samples will be this size.
+    // TODO: candidate for rust enum ?
+    pub all_samples_size: u32,
+}
+
+#[derive(Debug, Default)]
+pub struct AvifTrack {
+    pub id: u32,
+    pub aux_for_id: u32,
+    pub prem_by_id: u32,
+    pub media_timescale: u32,
+    pub media_duration: u64,
+    pub track_duration: u64,
+    pub segment_duration: u64,
+    pub is_repeating: bool,
+    pub repetition_count: i32,
+    pub width: u32,
+    pub height: u32,
+    pub sample_table: Option<SampleTable>,
+}
+
+#[derive(Debug, Default)]
+pub struct MovieBox {
+    pub tracks: Vec<AvifTrack>,
+}
+
+#[derive(Debug, Default)]
 pub struct AvifBoxes {
     pub ftyp: FileTypeBox,
     pub meta: MetaBox,
+    pub moov: MovieBox,
 }
 
 pub struct MP4Box {}
@@ -964,6 +1003,304 @@ impl MP4Box {
         meta
     }
 
+    fn parse_tkhd(stream: &mut IStream, track: &mut AvifTrack) -> bool {
+        let (version, _flags) = stream.read_version_and_flags();
+        if version == 1 {
+            // unsigned int(64) creation_time;
+            stream.skip_u64();
+            // unsigned int(64) modification_time;
+            stream.skip_u64();
+            // unsigned int(32) track_ID;
+            track.id = stream.read_u32();
+            // const unsigned int(32) reserved = 0;
+            stream.skip_u32();
+            // unsigned int(64) duration;
+            track.track_duration = stream.read_u64();
+        } else if version == 0 {
+            // unsigned int(32) creation_time;
+            stream.skip_u32();
+            // unsigned int(32) modification_time;
+            stream.skip_u32();
+            // unsigned int(32) track_ID;
+            track.id = stream.read_u32();
+            // const unsigned int(32) reserved = 0;
+            stream.skip_u32();
+            // unsigned int(32) duration;
+            track.track_duration = stream.read_u32() as u64;
+        } else {
+            println!("unsupported version in trak");
+            return false;
+        }
+
+        // Skip the following 52 bytes.
+        // const unsigned int(32)[2] reserved = 0;
+        // template int(16) layer = 0;
+        // template int(16) alternate_group = 0;
+        // template int(16) volume = {if track_is_audio 0x0100 else 0};
+        // const unsigned int(16) reserved = 0;
+        // template int(32)[9] matrix= { 0x00010000,0,0,0,0x00010000,0,0,0,0x40000000 }; // unity matrix
+        stream.skip(52);
+
+        // unsigned int(32) width;
+        track.width = stream.read_u32() >> 16;
+        // unsigned int(32) height;
+        track.height = stream.read_u32() >> 16;
+
+        if track.width == 0 || track.height == 0 {
+            println!("invalid track dimensions");
+            return false;
+        }
+
+        // TODO: check if track dims are too large.
+
+        println!("track after tkhd: {:#?}", track);
+        true
+    }
+
+    fn parse_mdhd(stream: &mut IStream, track: &mut AvifTrack) -> bool {
+        let (version, _flags) = stream.read_version_and_flags();
+        if version == 1 {
+            // unsigned int(64) creation_time;
+            stream.skip_u64();
+            // unsigned int(64) modification_time;
+            stream.skip_u64();
+            // unsigned int(32) timescale;
+            track.media_timescale = stream.read_u32();
+            // unsigned int(64) duration;
+            track.media_duration = stream.read_u64();
+        } else if version == 0 {
+            // unsigned int(32) creation_time;
+            stream.skip_u32();
+            // unsigned int(32) modification_time;
+            stream.skip_u32();
+            // unsigned int(32) timescale;
+            track.media_timescale = stream.read_u32();
+            // unsigned int(32) duration;
+            track.media_duration = stream.read_u32() as u64;
+        } else {
+            println!("unsupported version in mdhd");
+            return false;
+        }
+
+        // Skip the following 4 bytes.
+        // bit(1) pad = 0;
+        // unsigned int(5)[3] language; // ISO-639-2/T language code
+        // unsigned int(16) pre_defined = 0;
+        stream.skip(4);
+
+        println!("track after mdhd: {:#?}", track);
+        true
+    }
+
+    fn parse_stco(
+        stream: &mut IStream,
+        sample_table: &mut SampleTable,
+        large_offset: bool,
+    ) -> bool {
+        // TODO: version must be 0.
+        let (_version, _flags) = stream.read_version_and_flags();
+        // unsigned int(32) entry_count;
+        let entry_count = stream.read_u32();
+        sample_table.chunk_offsets.reserve(entry_count as usize);
+        for i in 0..entry_count {
+            let chunk_offset: u64;
+            if large_offset {
+                // TODO: this comment is wrong in libavif.
+                // unsigned int(64) chunk_offset;
+                chunk_offset = stream.read_u64();
+            } else {
+                // unsigned int(32) chunk_offset;
+                chunk_offset = stream.read_u32() as u64;
+            }
+            sample_table.chunk_offsets.push(chunk_offset);
+        }
+        true
+    }
+
+    fn parse_stsc(stream: &mut IStream, sample_table: &mut SampleTable) -> bool {
+        // TODO: version must be 0.
+        let (_version, _flags) = stream.read_version_and_flags();
+        // unsigned int(32) entry_count;
+        let entry_count = stream.read_u32();
+        sample_table.sample_to_chunk.reserve(entry_count as usize);
+        for i in 0..entry_count {
+            let mut stsc: SampleToChunk = Default::default();
+            // unsigned int(32) first_chunk;
+            stsc.first_chunk = stream.read_u32();
+            // unsigned int(32) samples_per_chunk;
+            stsc.samples_per_chunk = stream.read_u32();
+            // unsigned int(32) sample_description_index;
+            stsc.sample_description_index = stream.read_u32();
+
+            if i == 0 {
+                if stsc.first_chunk != 1 {
+                    println!("stsc does not begin with chunk 1.");
+                    return false;
+                }
+            } else {
+                if stsc.first_chunk <= sample_table.sample_to_chunk.last().unwrap().first_chunk {
+                    println!("stsc chunks are not strictly increasing.");
+                    return false;
+                }
+            }
+            sample_table.sample_to_chunk.push(stsc);
+        }
+        true
+    }
+
+    fn parse_stsz(stream: &mut IStream, sample_table: &mut SampleTable) -> bool {
+        // TODO: version must be 0.
+        let (_version, _flags) = stream.read_version_and_flags();
+
+        // unsigned int(32) sample_size;
+        sample_table.all_samples_size = stream.read_u32();
+        // unsigned int(32) sample_count;
+        let sample_count = stream.read_u32();
+
+        if sample_table.all_samples_size > 0 {
+            return true;
+        }
+        sample_table.sample_sizes.reserve(sample_count as usize);
+        for i in 0..sample_count {
+            // unsigned int(32) entry_size;
+            let entry_size = stream.read_u32();
+            sample_table.sample_sizes.push(entry_size);
+        }
+        true
+    }
+
+    fn parse_stbl(stream: &mut IStream, track: &mut AvifTrack, mut size: u64) -> bool {
+        if track.sample_table.is_some() {
+            println!("duplciate stbl for track.");
+            return false;
+        }
+        let mut sample_table: SampleTable = Default::default();
+        while size > 0 {
+            let header = Self::parse_header(stream);
+            size -= header.full_size;
+            match header.box_type.as_str() {
+                "stco" => {
+                    if !Self::parse_stco(stream, &mut sample_table, false) {
+                        return false;
+                    }
+                }
+                "co64" => {
+                    if !Self::parse_stco(stream, &mut sample_table, true) {
+                        return false;
+                    }
+                }
+                "stsc" => {
+                    if !Self::parse_stsc(stream, &mut sample_table) {
+                        return false;
+                    }
+                }
+                "stsz" => {
+                    if !Self::parse_stsz(stream, &mut sample_table) {
+                        return false;
+                    }
+                }
+                _ => {
+                    println!("skipping box {}", header.box_type);
+                    stream.skip(header.size.try_into().unwrap());
+                }
+            }
+        }
+        track.sample_table = Some(sample_table);
+
+        println!("track after stbl: {:#?}", track);
+        true
+    }
+
+    fn parse_minf(stream: &mut IStream, track: &mut AvifTrack, mut size: u64) -> bool {
+        while size > 0 {
+            let header = Self::parse_header(stream);
+            size -= header.full_size;
+            match header.box_type.as_str() {
+                "stbl" => {
+                    if !Self::parse_stbl(stream, track, header.size) {
+                        return false;
+                    }
+                }
+                _ => {
+                    println!("skipping box {}", header.box_type);
+                    stream.skip(header.size.try_into().unwrap());
+                }
+            }
+        }
+        true
+    }
+
+    fn parse_mdia(stream: &mut IStream, track: &mut AvifTrack, mut size: u64) -> bool {
+        while size > 0 {
+            let header = Self::parse_header(stream);
+            size -= header.full_size;
+            match header.box_type.as_str() {
+                "mdhd" => {
+                    if !Self::parse_mdhd(stream, track) {
+                        return false;
+                    }
+                }
+                "minf" => {
+                    if !Self::parse_minf(stream, track, header.size) {
+                        return false;
+                    }
+                }
+                _ => {
+                    println!("skipping box {}", header.box_type);
+                    stream.skip(header.size.try_into().unwrap());
+                }
+            }
+        }
+        false
+    }
+
+    fn parse_trak(stream: &mut IStream, mut size: u64) -> Option<AvifTrack> {
+        let mut track: AvifTrack = Default::default();
+        println!("parsing trak size: {size}");
+        while size > 0 {
+            let header = Self::parse_header(stream);
+            size -= header.full_size;
+            match header.box_type.as_str() {
+                "tkhd" => {
+                    if !Self::parse_tkhd(stream, &mut track) {
+                        return None;
+                    }
+                }
+                "mdia" => {
+                    if !Self::parse_mdia(stream, &mut track, header.size) {
+                        return None;
+                    }
+                }
+                _ => {
+                    // TODO: track meta can be ignored?
+                    println!("skipping box {}", header.box_type);
+                    stream.skip(header.size.try_into().unwrap());
+                }
+            }
+        }
+        Some(track)
+    }
+
+    fn parse_moov(stream: &mut IStream, mut size: u64) -> Option<MovieBox> {
+        println!("parsing moov size: {size}");
+        let mut moov: MovieBox = Default::default();
+        while size > 0 {
+            let header = Self::parse_header(stream);
+            size -= header.full_size;
+            match header.box_type.as_str() {
+                "trak" => match Self::parse_trak(stream, header.size) {
+                    Some(trak) => moov.tracks.push(trak),
+                    None => return None,
+                },
+                _ => {
+                    println!("skipping box {}", header.box_type);
+                    stream.skip(header.size.try_into().unwrap());
+                }
+            }
+        }
+        None // Some(moov)
+    }
+
     pub fn parse(stream: &mut IStream) -> AvifBoxes {
         let mut ftyp_seen = false;
         let mut avif_boxes: AvifBoxes = Default::default();
@@ -979,10 +1316,19 @@ impl MP4Box {
                 "meta" => {
                     avif_boxes.meta = MP4Box::parse_meta(stream, header.size);
                     meta_seen = true;
+                    //break;
+                }
+                "moov" => {
+                    match MP4Box::parse_moov(stream, header.size) {
+                        Some(moov) => avif_boxes.moov = moov,
+                        None => {
+                            // TODO: lol panic.
+                            panic!("error parsing moov");
+                        }
+                    }
                     break;
                 }
                 _ => {
-                    // TODO: handle moov for animations.
                     println!("unknown box: {}", header.box_type);
                     break;
                 }

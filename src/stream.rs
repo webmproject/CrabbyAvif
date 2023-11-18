@@ -59,6 +59,14 @@ impl IStream {
         BigEndian::read_u64(self.get_slice(8))
     }
 
+    pub fn skip_u32(&mut self) {
+        self.skip(4);
+    }
+
+    pub fn skip_u64(&mut self) {
+        self.skip(8);
+    }
+
     pub fn read_string(&mut self, size: usize) -> String {
         String::from_utf8(self.get_vec(size)).unwrap()
     }
