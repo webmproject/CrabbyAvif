@@ -26,7 +26,16 @@ fn main() {
         std::process::exit(1);
     }
 
+    println!("\n^^^ decoder public properties ^^^");
+    println!("image_count: {}", decoder.image_count);
+    println!("timescale: {}", decoder.timescale);
+    println!("duration_in_timescales: {}", decoder.duration_in_timescales);
+    println!("duration: {}", decoder.duration);
+    println!("repetition_count: {}", decoder.repetition_count);
+    println!("$$$ end decoder public properties $$$\n");
+
     let image_count = decoder.image_count;
+    //let image_count = 1;
     let mut y4m: rust_libavif::utils::Y4MWriter = Default::default();
     y4m.filename = args[2].clone();
 

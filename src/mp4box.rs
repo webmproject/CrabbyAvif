@@ -1460,6 +1460,7 @@ impl MP4Box {
     fn parse_trak(stream: &mut IStream, mut size: u64) -> Option<AvifTrack> {
         let mut track: AvifTrack = Default::default();
         println!("parsing trak size: {size}");
+        let mut edts_seen = false;
         while size > 0 {
             let header = Self::parse_header(stream);
             size -= header.full_size;
@@ -1483,6 +1484,7 @@ impl MP4Box {
                     if !Self::parse_edts(stream, &mut track, header.size) {
                         return None;
                     }
+                    edts_seen = true;
                 }
                 _ => {
                     // TODO: track meta can be ignored? probably not becuase of xmp/exif.
@@ -1492,7 +1494,45 @@ impl MP4Box {
             }
             println!("track after {}: {:#?}", header.box_type, track);
         }
-        // TODO: compute repetition count here.
+        if edts_seen {
+            if track.track_duration == u64::MAX {
+                // If isRepeating is true and the track duration is
+                // unknown/indefinite, then set the repetition count to
+                // infinite(Section 9.6.1 of ISO/IEC 23008-12 Part 12).
+                track.repetition_count = -1;
+            } else {
+                // Section 9.6.1. of ISO/IEC 23008-12 Part 12: 1, the entire
+                // edit list is repeated a sufficient number of times to
+                // equal the track duration.
+                //
+                // Since libavif uses repetitionCount (which is 0-based), we
+                // subtract the value by 1 to derive the number of
+                // repetitions.
+                assert!(track.segment_duration != 0);
+                // We specifically check for trackDuration == 0 here and not
+                // when it is actually read in order to accept files which
+                // inadvertently has a trackDuration of 0 without any edit
+                // lists.
+                if track.track_duration == 0 {
+                    println!("invalid track duration 0");
+                    return None;
+                }
+                let remainder = if track.track_duration % track.segment_duration != 0 {
+                    1u64
+                } else {
+                    0u64
+                };
+                let repetition_count: u64 =
+                    (track.track_duration / track.segment_duration) + remainder - 1u64;
+                if repetition_count > (i32::MAX as u64) {
+                    track.repetition_count = -1;
+                } else {
+                    track.repetition_count = repetition_count as i32;
+                }
+            }
+        } else {
+            track.repetition_count = -2;
+        }
         Some(track)
     }
 

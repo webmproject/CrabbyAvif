@@ -231,6 +231,8 @@ pub struct AvifDecoder {
     pub image_count: u32,
     pub timescale: u32,
     pub duration_in_timescales: u64,
+    pub duration: f64,
+    pub repetition_count: i32,
     avif_items: HashMap<u32, AvifItem>,
     tracks: Vec<AvifTrack>,
 }
@@ -1114,8 +1116,12 @@ impl AvifDecoder {
                 self.image_count = self.tiles[0][0].input.samples.len() as u32;
                 self.timescale = color_track.media_timescale;
                 self.duration_in_timescales = color_track.media_duration;
-                // TODO: add self.duration.
-                // TODO: add self.repetition_count.
+                if self.timescale != 0 {
+                    self.duration = (self.duration_in_timescales as f64) / (self.timescale as f64);
+                } else {
+                    self.duration = 0.0;
+                }
+                self.repetition_count = color_track.repetition_count;
                 // TODO: self.image timing.
 
                 println!("image_count: {}", self.image_count);
