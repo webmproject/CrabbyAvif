@@ -35,7 +35,6 @@ fn main() {
     println!("$$$ end decoder public properties $$$\n");
 
     let image_count = decoder.image_count;
-    //let image_count = 1;
     let mut y4m: rust_libavif::utils::Y4MWriter = Default::default();
     y4m.filename = args[2].clone();
 

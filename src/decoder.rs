@@ -670,11 +670,10 @@ fn find_alpha_item(avif_items: &HashMap<u32, AvifItem>, color_item: &AvifItem) -
 
 #[derive(Debug, Default)]
 struct AvifDecodeSample {
-    data_offset: u64,
     // owns_data
     // partial_data
     item_id: u32,
-    offset: u64, // TODO: probably don't need offset and data offset.
+    offset: u64,
     size: usize,
     spatial_id: u8,
     sync: bool,
@@ -686,7 +685,7 @@ impl AvifDecodeSample {
         match &self.data {
             Some(data) => 0..data.len(),
             None => {
-                let start: usize = (self.data_offset + self.offset) as usize;
+                let start: usize = self.offset as usize;
                 let size: usize = self.size as usize;
                 start..start + size
             }
@@ -776,7 +775,6 @@ fn create_tile(item: &AvifItem) -> Option<AvifTile> {
             sample_size = item.size;
         }
         let sample = AvifDecodeSample {
-            data_offset: 0,
             item_id: item.id,
             offset: 0,
             size: sample_size,
@@ -790,7 +788,6 @@ fn create_tile(item: &AvifItem) -> Option<AvifTile> {
     } else {
         // Typical case: Use the entire item's payload for a single frame output
         let sample = AvifDecodeSample {
-            data_offset: 0,
             item_id: item.id,
             offset: 0,
             size: item.size,
@@ -834,7 +831,6 @@ fn create_tile_from_track(track: &AvifTrack) -> Option<AvifTile> {
                 sample_size = sample_table.sample_sizes[sample_size_index];
             }
             let sample = AvifDecodeSample {
-                data_offset: 0,
                 item_id: 0,
                 offset: sample_offset,
                 size: sample_size as usize,
@@ -1331,7 +1327,7 @@ impl AvifDecoder {
                             sample.data = Some(data);
                         }
                     } else {
-                        sample.data_offset = item.data_offset();
+                        sample.offset = item.data_offset();
                     }
                 } else {
                     // TODO: handle tracks.
