@@ -36,3 +36,42 @@ impl PixelFormat {
         }
     }
 }
+
+#[derive(Debug, Default, PartialEq, Copy, Clone)]
+pub enum AvifError {
+    #[default]
+    Ok,
+    UnknownError,
+    InvalidFtyp,
+    NoContent,
+    NoYuvFormatSelected,
+    ReformatFailed,
+    UnsupportedDepth,
+    EncodeColorFailed,
+    EncodeAlphaFailed,
+    BmffParseFailed, // TODO: this can contain an error string?
+    MissingImageItem,
+    DecodeColorFailed,
+    DecodeAlphaFailed,
+    ColorAlphaSizeMismatch,
+    IspeSizeMismatch,
+    NoCodecAvailable,
+    NoImagesRemaining,
+    InvalidExifPayload,
+    InvalidImageGrid,
+    InvalidCodecSpecificOption,
+    TruncatedData,
+    IoNotSet,
+    IoError,
+    WaitingOnIo,
+    InvalidArgument,
+    NotImplemented,
+    OutOfMemory,
+    CannotChangeSetting,
+    IncompatibleImage,
+    EncodeGainMapFailed,
+    DecodeGainMapFailed,
+    InvalidToneMappedImage,
+}
+
+pub type AvifResult<T> = Result<T, AvifError>;

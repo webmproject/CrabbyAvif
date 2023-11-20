@@ -692,7 +692,7 @@ struct AvifDecodeSample {
 }
 
 impl AvifDecodeSample {
-    pub fn data<'a>(&'a self, io: &'a mut Box<impl AvifDecoderIO + ?Sized>) -> Result<&[u8], i32> {
+    pub fn data<'a>(&'a self, io: &'a mut Box<impl AvifDecoderIO + ?Sized>) -> AvifResult<&[u8]> {
         match &self.data_buffer {
             Some(data_buffer) => Ok(&data_buffer),
             None => io.read(self.offset, self.size),
@@ -991,7 +991,10 @@ impl AvifDecoder {
             println!("io is not set");
             return None;
         }
-        let avif_boxes = MP4Box::parse(&mut self.io.as_mut().unwrap());
+        let avif_boxes = match MP4Box::parse(&mut self.io.as_mut().unwrap()) {
+            Ok(x) => x,
+            Err(err) => return None,
+        };
         self.tracks = avif_boxes.moov.tracks;
         self.avif_items = match construct_avif_items(&avif_boxes.meta) {
             Ok(items) => items,
