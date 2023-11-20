@@ -18,7 +18,13 @@ fn main() {
     };
     let mut decoder: AvifDecoder = Default::default();
     decoder.settings = settings;
-    decoder.set_io_file(&args[1]);
+    match decoder.set_io_file(&args[1]) {
+        Ok(_) => {}
+        Err(err) => {
+            println!("failed to set file io: {:#?}", err);
+            std::process::exit(1);
+        }
+    };
     let image = match decoder.parse() {
         Ok(x) => x,
         Err(err) => {

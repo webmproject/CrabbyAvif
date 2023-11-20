@@ -31,13 +31,10 @@ pub struct AvifDecoderFileIO {
 }
 
 impl AvifDecoderFileIO {
-    pub fn create(filename: &String) -> Option<AvifDecoderFileIO> {
-        let file = File::open(filename);
-        if !file.is_ok() {
-            return None;
-        }
-        Some(AvifDecoderFileIO {
-            file: Some(file.unwrap()),
+    pub fn create(filename: &String) -> AvifResult<AvifDecoderFileIO> {
+        let file = File::open(filename).or(Err(AvifError::IoError))?;
+        Ok(AvifDecoderFileIO {
+            file: Some(file),
             buffer: Vec::new(),
         })
     }

@@ -366,19 +366,19 @@ impl AvifItem {
         }
     }
 
-    fn harvest_ispe(&mut self) -> bool {
+    fn harvest_ispe(&mut self) -> AvifResult<()> {
         if self.size == 0 {
-            return true;
+            return Ok(());
         }
         if self.has_unsupported_essential_property {
             // An essential property isn't supported by libavif. Ignore.
-            return true;
+            return Ok(());
         }
 
         let is_grid = self.item_type == "grid";
         if self.item_type != "av01" && !is_grid {
             // probably exif or some other data.
-            return true;
+            return Ok(());
         }
         match find_property!(self, ImageSpatialExtents) {
             Some(property) => match property {
@@ -387,24 +387,24 @@ impl AvifItem {
                     self.height = x.height;
                     if self.width == 0 || self.height == 0 {
                         println!("item id has invalid size.");
-                        return false;
+                        return Err(AvifError::BmffParseFailed);
                     }
                 }
-                _ => return false, // not reached.
+                _ => return Err(AvifError::UnknownError), // not reached.
             },
             None => {
                 // No ispe was found.
                 if self.is_auxiliary_alpha() {
                     // TODO: provide a strict flag to bypass this check.
                     println!("alpha auxiliary image is missing mandatory ispe");
-                    return false;
+                    return Err(AvifError::BmffParseFailed);
                 } else {
                     println!("item id is missing mandatory ispe property");
-                    return false;
+                    return Err(AvifError::BmffParseFailed);
                 }
             }
         }
-        true
+        Ok(())
     }
 
     fn av1C(&self) -> Option<&CodecConfiguration> {
@@ -642,9 +642,9 @@ fn should_skip_decoder_item(item: &AvifItem) -> bool {
         || item.thumbnail_for_id != 0
 }
 
-fn find_color_item(avif_items: &HashMap<u32, AvifItem>, primary_item_id: u32) -> u32 {
+fn find_color_item(avif_items: &HashMap<u32, AvifItem>, primary_item_id: u32) -> AvifResult<u32> {
     if primary_item_id == 0 {
-        return 0;
+        return Err(AvifError::NoContent);
     }
     // TODO: perhaps this can be an idiomatic oneliner ?
     for (_, item) in avif_items {
@@ -652,13 +652,13 @@ fn find_color_item(avif_items: &HashMap<u32, AvifItem>, primary_item_id: u32) ->
             continue;
         }
         if item.id == primary_item_id {
-            return item.id;
+            return Ok(item.id);
         }
     }
-    0
+    return Err(AvifError::NoContent);
 }
 
-fn find_alpha_item(avif_items: &HashMap<u32, AvifItem>, color_item: &AvifItem) -> u32 {
+fn find_alpha_item(avif_items: &HashMap<u32, AvifItem>, color_item: &AvifItem) -> Option<u32> {
     for (_, item) in avif_items {
         if should_skip_decoder_item(item) {
             continue;
@@ -669,13 +669,13 @@ fn find_alpha_item(avif_items: &HashMap<u32, AvifItem>, color_item: &AvifItem) -
         if !item.is_auxiliary_alpha() {
             continue;
         }
-        return item.id;
+        return Some(item.id);
     }
     if color_item.item_type != "grid" {
-        return 0;
+        return Some(0);
     }
     // TODO: If color item is a grid, check if there is an alpha channel which is represented as an auxl item to each color tile item.
-    0
+    Some(0)
 }
 
 #[derive(Debug, Default)]
@@ -717,7 +717,7 @@ struct AvifTile {
     codec: Dav1d,
 }
 
-fn create_tile(item: &AvifItem) -> Option<AvifTile> {
+fn create_tile(item: &AvifItem) -> AvifResult<AvifTile> {
     let mut tile = AvifTile::default();
     tile.width = item.width;
     tile.height = item.height;
@@ -737,7 +737,7 @@ fn create_tile(item: &AvifItem) -> Option<AvifTile> {
                 // >= instead of > because there must be room for the last layer
                 if a1lx[i] >= remaining_size {
                     println!("a1lx layer index [{i}] does not fit in item size");
-                    return None;
+                    return Err(AvifError::BmffParseFailed);
                 }
                 layer_sizes[i] = a1lx[i];
                 remaining_size -= a1lx[i];
@@ -765,13 +765,12 @@ fn create_tile(item: &AvifItem) -> Option<AvifTile> {
         let layer_id = lsel.unwrap();
         if layer_count > 0 {
             // TODO: test this with a case?
-            println!("im here");
-            return None;
+            panic!("im here");
             // Optimization: If we're selecting a layer that doesn't require
             // the entire image's payload (hinted via the a1lx box).
             if layer_id >= layer_count {
                 println!("lsel layer index not found in a1lx.");
-                return None;
+                return Err(AvifError::InvalidImageGrid);
             }
             let layer_id_plus_1: usize = (layer_id + 1) as usize;
             for i in 0usize..layer_id_plus_1 {
@@ -806,10 +805,10 @@ fn create_tile(item: &AvifItem) -> Option<AvifTile> {
         };
         tile.input.samples.push(sample);
     }
-    Some(tile)
+    Ok(tile)
 }
 
-fn create_tile_from_track(track: &AvifTrack) -> Option<AvifTile> {
+fn create_tile_from_track(track: &AvifTrack) -> AvifResult<AvifTile> {
     let mut tile = AvifTile::default();
     tile.width = track.width;
     tile.height = track.height;
@@ -824,7 +823,7 @@ fn create_tile_from_track(track: &AvifTrack) -> Option<AvifTile> {
         let sample_count = sample_table.get_sample_count_of_chunk(chunk_index);
         if sample_count == 0 {
             println!("chunk with 0 samples found");
-            return None;
+            return Err(AvifError::BmffParseFailed);
         }
 
         let mut sample_offset = *chunk_offset;
@@ -833,7 +832,7 @@ fn create_tile_from_track(track: &AvifTrack) -> Option<AvifTile> {
             if sample_size == 0 {
                 if sample_size_index >= sample_table.sample_sizes.len() {
                     println!("not enough sampel sizes in the table");
-                    return None;
+                    return Err(AvifError::BmffParseFailed);
                 }
                 sample_size = sample_table.sample_sizes[sample_size_index];
             }
@@ -860,7 +859,7 @@ fn create_tile_from_track(track: &AvifTrack) -> Option<AvifTile> {
             tile.input.samples[index].sync = true;
         }
     }
-    Some(tile)
+    Ok(tile)
 }
 
 fn generate_tiles(
@@ -869,7 +868,7 @@ fn generate_tiles(
     item_id: u32,
     info: &AvifTileInfo,
     category: usize,
-) -> Option<Vec<AvifTile>> {
+) -> AvifResult<Vec<AvifTile>> {
     let mut tiles: Vec<AvifTile> = Vec::new();
     if info.grid.rows > 0 && info.grid.columns > 0 {
         println!("grid###: {:#?}", info.grid);
@@ -878,69 +877,51 @@ fn generate_tiles(
         // Collect all the dimg items.
         // Cannot directly iterate through avif_items here directly because HashMap is not ordered.
         for item_info in iinf {
-            let dimg_item = avif_items.get(&item_info.item_id);
-            if dimg_item.is_none() {
-                println!("invalid item");
-                return None;
-            }
-            let dimg_item = dimg_item.unwrap();
+            let dimg_item = avif_items
+                .get(&item_info.item_id)
+                .ok_or(AvifError::InvalidImageGrid)?;
             if dimg_item.dimg_for_id != item_id {
                 continue;
             }
             if dimg_item.item_type != "av01" {
                 println!("invalid item_type in dimg grid");
-                return None;
+                return Err(AvifError::InvalidImageGrid);
             }
             if dimg_item.has_unsupported_essential_property {
                 println!(
                     "Grid image contains tile with an unsupported property marked as essential"
                 );
-                return None;
+                return Err(AvifError::InvalidImageGrid);
             }
-            let tile = create_tile(dimg_item);
-            if tile.is_none() {
-                return None;
-            }
-            let mut tile = tile.unwrap();
+            let mut tile = create_tile(dimg_item)?;
             tile.input.category = category as u8;
             tiles.push(tile);
 
             if tiles.len() == 1 {
                 // Adopt the configuration property of the first tile.
-                let dimg_av1C = dimg_item.av1C();
-                if dimg_av1C.is_none() {
-                    println!("dimg is missing dimg_av1C");
-                    return None;
-                }
-                first_av1C = dimg_av1C.unwrap().clone();
+                first_av1C = dimg_item.av1C().ok_or(AvifError::BmffParseFailed)?.clone();
             }
             grid_item_ids.push(item_info.item_id);
         }
-        println!("grid item itds: {:#?}", grid_item_ids);
         // TODO: check if there are enough grids.
         avif_items
             .get_mut(&item_id)
-            .unwrap()
+            .ok_or(AvifError::InvalidImageGrid)?
             .properties
             .push(ItemProperty::CodecConfiguration(first_av1C));
         println!("grid item ids: {:#?}", grid_item_ids);
-        for item in iinf.iter() {
-            println!("item id: {}", item.item_id);
-        }
     } else {
-        let item = avif_items.get(&item_id).unwrap();
+        let item = avif_items
+            .get(&item_id)
+            .ok_or(AvifError::MissingImageItem)?;
         if item.size == 0 {
-            return None;
+            return Err(AvifError::MissingImageItem);
         }
-        let tile = create_tile(item);
-        if tile.is_none() {
-            return None;
-        }
-        let mut tile = tile.unwrap();
+        let mut tile = create_tile(item)?;
         tile.input.category = category as u8;
         tiles.push(tile);
     }
-    Some(tiles)
+    Ok(tiles)
 }
 
 fn steal_planes(dst: &mut AvifImage, src: &mut AvifImage, category: usize) {
@@ -972,18 +953,14 @@ fn steal_planes(dst: &mut AvifImage, src: &mut AvifImage, category: usize) {
 }
 
 impl AvifDecoder {
-    pub fn set_io_file(&mut self, filename: &String) -> bool {
-        let io = AvifDecoderFileIO::create(filename);
-        if io.is_none() {
-            return false;
-        }
-        self.io = Some(Box::new(io.unwrap()));
-        true
+    pub fn set_io_file(&mut self, filename: &String) -> AvifResult<()> {
+        self.io = Some(Box::new(AvifDecoderFileIO::create(filename)?));
+        Ok(())
     }
 
-    pub fn set_io(&mut self, io: Box<dyn AvifDecoderIO>) -> bool {
+    pub fn set_io(&mut self, io: Box<dyn AvifDecoderIO>) -> AvifResult<()> {
         self.io = Some(io);
-        true
+        Ok(())
     }
 
     pub fn parse(&mut self) -> AvifResult<&AvifImage> {
@@ -994,30 +971,27 @@ impl AvifDecoder {
         self.tracks = avif_boxes.moov.tracks;
         self.avif_items = construct_avif_items(&avif_boxes.meta)?;
         for (id, item) in &mut self.avif_items {
-            if !item.harvest_ispe() {
-                // TODO: this function must return result.
-                println!("failed to harvest ispe");
-                return Err(AvifError::BmffParseFailed);
-            }
+            item.harvest_ispe()?;
         }
         println!("{:#?}", self.avif_items);
 
-        // Build the decoder input.
-        self.source = self.settings.source;
-        match self.settings.source {
-            AvifDecoderSource::Auto => {
-                // Decide the source based on the major brand.
-                if avif_boxes.ftyp.major_brand == "avis" {
-                    self.source = AvifDecoderSource::Tracks;
-                } else if avif_boxes.ftyp.major_brand == "avif" {
-                    self.source = AvifDecoderSource::PrimaryItem;
-                } else {
-                    // TODO: add a else if for if track count > 0, then use tracks.
-                    self.source = AvifDecoderSource::PrimaryItem;
+        self.source = match self.settings.source {
+            // Decide the source based on the major brand.
+            AvifDecoderSource::Auto => match avif_boxes.ftyp.major_brand.as_str() {
+                "avis" => AvifDecoderSource::Tracks,
+                "avif" => AvifDecoderSource::PrimaryItem,
+                // TODO: add a else if for if track count > 0, then use tracks.
+                _ => {
+                    if self.tracks.is_empty() {
+                        AvifDecoderSource::PrimaryItem
+                    } else {
+                        AvifDecoderSource::Tracks
+                    }
                 }
-            }
-            _ => {}
-        }
+            },
+            AvifDecoderSource::Tracks => AvifDecoderSource::Tracks,
+            AvifDecoderSource::PrimaryItem => AvifDecoderSource::PrimaryItem,
+        };
 
         let color_properties: &Vec<ItemProperty>;
         match self.source {
@@ -1057,13 +1031,12 @@ impl AvifDecoder {
                     return Err(AvifError::NoContent);
                 }
                 let color_track = &self.tracks[color_track_index.unwrap()];
-                let color_properties_op =
-                    color_track.sample_table.as_ref().unwrap().get_properties();
-                if color_properties_op.is_none() {
-                    println!("color properties not found");
-                    return Err(AvifError::BmffParseFailed);
-                }
-                color_properties = color_properties_op.unwrap();
+                color_properties = color_track
+                    .sample_table
+                    .as_ref()
+                    .unwrap()
+                    .get_properties()
+                    .ok_or(AvifError::BmffParseFailed)?;
 
                 // TODO: exif/xmp from meta.
 
@@ -1095,26 +1068,15 @@ impl AvifDecoder {
                 }
                 println!("alpha_track_index: {:#?}", alpha_track_index);
 
-                let color_tile = create_tile_from_track(&color_track);
-                if color_tile.is_none() {
-                    // TODO: return result from prev func.
-                    println!("failed to create color tile");
-                    return Err(AvifError::BmffParseFailed);
-                }
-                println!("color_tile: {:#?}", color_tile);
+                self.tiles[0].push(create_tile_from_track(&color_track)?);
+                println!("color_tile: {:#?}", self.tiles[0]);
                 self.tile_info[0].tile_count = 1;
-                self.tiles[0].push(color_tile.unwrap());
 
                 if alpha_track_index.is_some() {
                     let alpha_track = &self.tracks[alpha_track_index.unwrap()];
-                    let alpha_tile = create_tile_from_track(alpha_track);
-                    if alpha_tile.is_none() {
-                        println!("failed to create color tile");
-                        return Err(AvifError::BmffParseFailed);
-                    }
-                    println!("alpha_tile: {:#?}", alpha_tile);
+                    self.tiles[1].push(create_tile_from_track(alpha_track)?);
+                    println!("alpha_tile: {:#?}", self.tiles[1]);
                     self.tile_info[1].tile_count = 1;
-                    self.tiles[1].push(alpha_tile.unwrap());
                     self.alpha_present = true;
                     self.image.alpha_premultiplied = color_track.prem_by_id == alpha_track.id;
                 }
@@ -1142,11 +1104,7 @@ impl AvifDecoder {
                 // 0 color, 1 alpha, 2 gainmap
                 let mut item_ids: [u32; 3] = [0; 3];
                 // Mandatory color item.
-                item_ids[0] = find_color_item(&self.avif_items, avif_boxes.meta.primary_item_id);
-                if item_ids[0] == 0 {
-                    println!("primary color item not found.");
-                    return Err(AvifError::NoContent);
-                }
+                item_ids[0] = find_color_item(&self.avif_items, avif_boxes.meta.primary_item_id)?;
                 self.avif_items
                     .get_mut(&item_ids[0])
                     .unwrap()
@@ -1154,7 +1112,8 @@ impl AvifDecoder {
 
                 // Optional alpha auxiliary item
                 item_ids[1] =
-                    find_alpha_item(&self.avif_items, self.avif_items.get(&item_ids[0]).unwrap());
+                    find_alpha_item(&self.avif_items, self.avif_items.get(&item_ids[0]).unwrap())
+                        .unwrap_or(0);
                 if item_ids[1] != 0 {
                     self.avif_items
                         .get_mut(&item_ids[1])
@@ -1191,18 +1150,13 @@ impl AvifDecoder {
                             // TODO: make this work. some mut problem.
                         }
                     }
-                    let tiles = generate_tiles(
+                    self.tiles[index] = generate_tiles(
                         &mut self.avif_items,
                         &avif_boxes.meta.iinf,
                         *item_id,
                         &self.tile_info[index],
                         index,
-                    );
-                    if tiles.is_none() {
-                        println!("Failed to generate_tiles");
-                        return Err(AvifError::BmffParseFailed);
-                    }
-                    self.tiles[index] = tiles.unwrap();
+                    )?;
                     // TODO: validate item properties.
                 }
 

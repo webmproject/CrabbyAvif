@@ -12,3 +12,5 @@ libavif: Add source option to avifdec?
 
 
 ===
+
+replace all safe unwrap() calls with unwrap_unchecked().
