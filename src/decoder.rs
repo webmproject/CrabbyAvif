@@ -1160,7 +1160,6 @@ impl AvifDecoder {
 
         // TODO: if cicp was not found, harvest it from the seq hdr.
 
-        // TODO: copy info from av1c. avifReadCodecConfigProperty.
         let av1C = find_av1C(color_properties).ok_or(AvifError::BmffParseFailed)?;
         self.image.depth = av1C.depth();
         if av1C.monochrome {
