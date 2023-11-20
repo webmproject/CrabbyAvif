@@ -280,6 +280,10 @@ impl AvifTrack {
     pub fn is_color(&self) -> bool {
         return self.is_aux(0); // If aux_for_id is 0, then it is the color track.
     }
+
+    pub fn get_properties(&self) -> Option<&Vec<ItemProperty>> {
+        self.sample_table.as_ref()?.get_properties()
+    }
 }
 
 #[derive(Debug, Default)]

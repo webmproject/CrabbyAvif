@@ -996,48 +996,30 @@ impl AvifDecoder {
         let color_properties: &Vec<ItemProperty>;
         match self.source {
             AvifDecoderSource::Tracks => {
-                let mut color_track_index: Option<usize> = None;
-                // Find primary color track.
-                for (track_index, track) in self.tracks.iter().enumerate() {
-                    if track.is_color() {
-                        color_track_index = Some(track_index);
-                        break;
-                    }
-                }
-                if color_track_index.is_none() {
-                    println!("color track not found");
-                    return Err(AvifError::NoContent);
-                }
-                let color_track = &self.tracks[color_track_index.unwrap()];
+                let color_track = self
+                    .tracks
+                    .iter()
+                    .find(|x| x.is_color())
+                    .ok_or(AvifError::NoContent)?;
                 color_properties = color_track
-                    .sample_table
-                    .as_ref()
-                    .unwrap()
                     .get_properties()
                     .ok_or(AvifError::BmffParseFailed)?;
 
                 // TODO: exif/xmp from meta.
 
-                let mut alpha_track_index: Option<usize> = None;
-                for (track_index, track) in self.tracks.iter().enumerate() {
-                    if track.is_aux(color_track.id) {
-                        alpha_track_index = Some(track_index);
-                        break;
-                    }
-                }
-                println!("alpha_track_index: {:#?}", alpha_track_index);
-
                 self.tiles[0].push(create_tile_from_track(&color_track)?);
                 println!("color_tile: {:#?}", self.tiles[0]);
                 self.tile_info[0].tile_count = 1;
 
-                if alpha_track_index.is_some() {
-                    let alpha_track = &self.tracks[alpha_track_index.unwrap()];
-                    self.tiles[1].push(create_tile_from_track(alpha_track)?);
-                    println!("alpha_tile: {:#?}", self.tiles[1]);
-                    self.tile_info[1].tile_count = 1;
-                    self.alpha_present = true;
-                    self.image.alpha_premultiplied = color_track.prem_by_id == alpha_track.id;
+                match self.tracks.iter().find(|x| x.is_aux(color_track.id)) {
+                    Some(alpha_track) => {
+                        self.tiles[1].push(create_tile_from_track(alpha_track)?);
+                        println!("alpha_tile: {:#?}", self.tiles[1]);
+                        self.tile_info[1].tile_count = 1;
+                        self.alpha_present = true;
+                        self.image.alpha_premultiplied = color_track.prem_by_id == alpha_track.id;
+                    }
+                    None => {}
                 }
 
                 self.image_index = -1;
