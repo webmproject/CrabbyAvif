@@ -265,6 +265,23 @@ pub struct AvifTrack {
     elst_seen: bool,
 }
 
+impl AvifTrack {
+    pub fn is_aux(&self, primary_track_id: u32) -> bool {
+        if self.sample_table.is_none() || self.id == 0 {
+            return false;
+        }
+        let sample_table = self.sample_table.as_ref().unwrap();
+        if sample_table.chunk_offsets.is_empty() || !sample_table.has_av1_sample() {
+            return false;
+        }
+        self.aux_for_id == primary_track_id
+    }
+
+    pub fn is_color(&self) -> bool {
+        return self.is_aux(0); // If aux_for_id is 0, then it is the color track.
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct MovieBox {
     pub tracks: Vec<AvifTrack>,

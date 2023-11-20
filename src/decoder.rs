@@ -998,33 +998,11 @@ impl AvifDecoder {
             AvifDecoderSource::Tracks => {
                 let mut color_track_index: Option<usize> = None;
                 // Find primary color track.
-                // TODO: move this to a function.
                 for (track_index, track) in self.tracks.iter().enumerate() {
-                    if track.sample_table.is_none() {
-                        continue;
+                    if track.is_color() {
+                        color_track_index = Some(track_index);
+                        break;
                     }
-                    if track.id == 0 {
-                        // trak box might be missing a tkhd box inside, skip it.
-                        continue;
-                    }
-                    if track
-                        .sample_table
-                        .as_ref()
-                        .unwrap()
-                        .chunk_offsets
-                        .is_empty()
-                    {
-                        continue;
-                    }
-                    if !track.sample_table.as_ref().unwrap().has_av1_sample() {
-                        continue;
-                    }
-                    if track.aux_for_id != 0 {
-                        continue;
-                    }
-                    // Found the color track.
-                    color_track_index = Some(track_index);
-                    break;
                 }
                 if color_track_index.is_none() {
                     println!("color track not found");
@@ -1042,26 +1020,7 @@ impl AvifDecoder {
 
                 let mut alpha_track_index: Option<usize> = None;
                 for (track_index, track) in self.tracks.iter().enumerate() {
-                    if track.sample_table.is_none() {
-                        continue;
-                    }
-                    if track.id == 0 {
-                        continue;
-                    }
-                    if track
-                        .sample_table
-                        .as_ref()
-                        .unwrap()
-                        .chunk_offsets
-                        .is_empty()
-                    {
-                        continue;
-                    }
-                    if !track.sample_table.as_ref().unwrap().has_av1_sample() {
-                        continue;
-                    }
-                    if track.aux_for_id == color_track.id {
-                        // Found the alpha track.
+                    if track.is_aux(color_track.id) {
                         alpha_track_index = Some(track_index);
                         break;
                     }
