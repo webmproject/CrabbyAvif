@@ -302,7 +302,7 @@ impl MP4Box {
         let major_brand = stream.read_string(4)?;
         let minor_version = stream.read_u32()?;
         let mut compatible_brands: Vec<String> = Vec::new();
-        while !stream.done() {
+        while stream.has_bytes_left() {
             // TODO: check if remaining size is a multiple of 4.
             compatible_brands.push(stream.read_string(4)?);
         }
@@ -664,7 +664,7 @@ impl MP4Box {
     #[allow(non_snake_case)]
     fn parse_ipco(stream: &mut IStream) -> AvifResult<Vec<ItemProperty>> {
         let mut properties: Vec<ItemProperty> = Vec::new();
-        while !stream.done() {
+        while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
             match header.box_type.as_str() {
@@ -764,7 +764,7 @@ impl MP4Box {
             }
         }
         // Parse ipma boxes.
-        while !stream.done() {
+        while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
             if header.box_type != "ipma" {
                 println!("Found non ipma box in iprp");
@@ -863,7 +863,7 @@ impl MP4Box {
         let mut iref: Vec<ItemReference> = Vec::new();
         // versions > 1 are not supported. ignore them.
         if version <= 1 {
-            while !stream.done() {
+            while stream.has_bytes_left() {
                 let header = Self::parse_header(stream)?;
                 let from_item_id: u32;
                 if version == 0 {
@@ -906,7 +906,7 @@ impl MP4Box {
 
     fn parse_idat(stream: &mut IStream) -> AvifResult<Vec<u8>> {
         // TODO: check if multiple idats were seen for this meta box.
-        if stream.done() {
+        if !stream.has_bytes_left() {
             println!("Invalid idat size");
             return Err(AvifError::BmffParseFailed);
         }
@@ -925,7 +925,7 @@ impl MP4Box {
 
         // TODO: add box unique checks.
 
-        while !stream.done() {
+        while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
             if first_box {
                 if header.box_type != "hdlr" {
@@ -1179,7 +1179,7 @@ impl MP4Box {
             return Err(AvifError::BmffParseFailed);
         }
         let mut sample_table: SampleTable = Default::default();
-        while !stream.done() {
+        while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
             match header.box_type.as_str() {
@@ -1198,7 +1198,7 @@ impl MP4Box {
     }
 
     fn parse_minf(stream: &mut IStream, track: &mut AvifTrack) -> AvifResult<()> {
-        while !stream.done() {
+        while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
             match header.box_type.as_str() {
@@ -1210,7 +1210,7 @@ impl MP4Box {
     }
 
     fn parse_mdia(stream: &mut IStream, track: &mut AvifTrack) -> AvifResult<()> {
-        while !stream.done() {
+        while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
             match header.box_type.as_str() {
@@ -1223,7 +1223,7 @@ impl MP4Box {
     }
 
     fn parse_tref(stream: &mut IStream, track: &mut AvifTrack) -> AvifResult<()> {
-        while !stream.done() {
+        while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
             match header.box_type.as_str() {
@@ -1280,7 +1280,7 @@ impl MP4Box {
 
     fn parse_edts(stream: &mut IStream, track: &mut AvifTrack) -> AvifResult<()> {
         // TODO: add uniqueness check.
-        while !stream.done() {
+        while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
             match header.box_type.as_str() {
@@ -1299,7 +1299,7 @@ impl MP4Box {
         let mut track: AvifTrack = Default::default();
         println!("parsing trak size: {}", stream.bytes_left());
         let mut edts_seen = false;
-        while !stream.done() {
+        while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
             match header.box_type.as_str() {
@@ -1356,7 +1356,7 @@ impl MP4Box {
     fn parse_moov(stream: &mut IStream) -> AvifResult<MovieBox> {
         println!("parsing moov size: {}", stream.bytes_left());
         let mut moov: MovieBox = Default::default();
-        while !stream.done() {
+        while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
             match header.box_type.as_str() {

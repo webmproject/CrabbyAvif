@@ -50,8 +50,8 @@ impl IStream<'_> {
         self.data.len() - self.offset
     }
 
-    pub fn done(&self) -> bool {
-        self.bytes_left() == 0
+    pub fn has_bytes_left(&self) -> bool {
+        self.bytes_left() > 0
     }
 
     pub fn get_slice(&mut self, size: usize) -> AvifResult<&[u8]> {
