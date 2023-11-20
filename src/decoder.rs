@@ -304,17 +304,18 @@ impl AvifItem {
         self.extents[0].offset as u64
     }
 
-    fn read_and_parse(&self, io: &mut Box<dyn AvifDecoderIO>, grid: &mut AvifGrid) -> bool {
+    fn read_and_parse(
+        &self,
+        io: &mut Box<dyn AvifDecoderIO>,
+        grid: &mut AvifGrid,
+    ) -> AvifResult<()> {
         // TODO: this function also has to extract codec type.
         if self.item_type != "grid" {
-            return true;
+            return Ok(());
         }
         // TODO: handle multiple extents.
         let mut io_data = match self.idat.is_empty() {
-            true => match io.read(self.data_offset(), self.size) {
-                Ok(data) => data,
-                Err(err) => return false,
-            },
+            true => io.read(self.data_offset(), self.size)?,
             false => {
                 // TODO: assumes idat offset is 0.
                 self.idat.as_slice()
@@ -322,37 +323,37 @@ impl AvifItem {
         };
         let mut stream = IStream::create(io_data);
         // unsigned int(8) version = 0;
-        let version = stream.read_u8();
+        let version = stream.read_u8()?;
         if version != 0 {
             println!("unsupported version for grid");
-            return false;
+            return Err(AvifError::InvalidImageGrid);
         }
         // unsigned int(8) flags;
-        let flags = stream.read_u8();
+        let flags = stream.read_u8()?;
         // unsigned int(8) rows_minus_one;
-        grid.rows = stream.read_u8() as u32;
+        grid.rows = stream.read_u8()? as u32;
         grid.rows += 1;
         // unsigned int(8) columns_minus_one;
-        grid.columns = stream.read_u8() as u32;
+        grid.columns = stream.read_u8()? as u32;
         grid.columns += 1;
         if (flags & 1) == 1 {
             // unsigned int(32) output_width;
-            grid.width = stream.read_u32();
+            grid.width = stream.read_u32()?;
             // unsigned int(32) output_height;
-            grid.height = stream.read_u32();
+            grid.height = stream.read_u32()?;
         } else {
             // unsigned int(16) output_width;
-            grid.width = stream.read_u16() as u32;
+            grid.width = stream.read_u16()? as u32;
             // unsigned int(16) output_height;
-            grid.height = stream.read_u16() as u32;
+            grid.height = stream.read_u16()? as u32;
         }
         if grid.width == 0 || grid.height == 0 {
             println!("invalid dimensions in grid box");
-            return false;
+            return Err(AvifError::InvalidImageGrid);
         }
         println!("grid: {:#?}", grid);
         // TODO: check for too large of a grid.
-        true
+        Ok(())
     }
 
     fn operating_point(&self) -> u8 {
@@ -1155,11 +1156,12 @@ impl AvifDecoder {
                     println!("primary color item not found.");
                     return None;
                 }
-                if !self
+                if self
                     .avif_items
                     .get_mut(&item_ids[0])
                     .unwrap()
                     .read_and_parse(&mut self.io.as_mut().unwrap(), &mut self.tile_info[0].grid)
+                    .is_err()
                 {
                     println!("failed to read_and_parse color item");
                     return None;
@@ -1169,11 +1171,12 @@ impl AvifDecoder {
                 item_ids[1] =
                     find_alpha_item(&self.avif_items, self.avif_items.get(&item_ids[0]).unwrap());
                 if item_ids[1] != 0
-                    && !self
+                    && self
                         .avif_items
                         .get_mut(&item_ids[1])
                         .unwrap()
                         .read_and_parse(&mut self.io.as_mut().unwrap(), &mut self.tile_info[1].grid)
+                        .is_err()
                 {
                     println!("failed to read_and_parse alpha item");
                     return None;
