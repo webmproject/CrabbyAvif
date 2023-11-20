@@ -219,7 +219,7 @@ pub struct AvifDecoderSettings {
     pub ignore_icc: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct AvifDecoder {
     pub settings: AvifDecoderSettings,
     image: AvifImage,
@@ -236,7 +236,9 @@ pub struct AvifDecoder {
     pub repetition_count: i32,
     avif_items: HashMap<u32, AvifItem>,
     tracks: Vec<AvifTrack>,
-    io: AvifDecoderFileIO,
+    // To replicate the C-API, we need to keep this optional. Otherwise this
+    // could be part of the initialization.
+    io: Option<Box<dyn AvifDecoderIO>>,
 }
 
 #[derive(Debug, Default)]
@@ -301,7 +303,7 @@ impl AvifItem {
         self.extents[0].offset as u64
     }
 
-    fn read_and_parse(&self, io: &mut impl AvifDecoderIO, grid: &mut AvifGrid) -> bool {
+    fn read_and_parse(&self, io: &mut Box<dyn AvifDecoderIO>, grid: &mut AvifGrid) -> bool {
         // TODO: this function also has to extract codec type.
         if self.item_type != "grid" {
             return true;
@@ -689,7 +691,7 @@ struct AvifDecodeSample {
 }
 
 impl AvifDecodeSample {
-    pub fn data<'a>(&'a self, io: &'a mut impl AvifDecoderIO) -> Result<&[u8], i32> {
+    pub fn data<'a>(&'a self, io: &'a mut Box<impl AvifDecoderIO + ?Sized>) -> Result<&[u8], i32> {
         match &self.data_buffer {
             Some(data_buffer) => Ok(&data_buffer),
             None => io.read(self.offset, self.size),
@@ -974,12 +976,16 @@ impl AvifDecoder {
         if io.is_none() {
             return false;
         }
-        self.io = io.unwrap();
+        self.io = Some(Box::new(io.unwrap()));
         true
     }
 
     pub fn parse(&mut self) -> Option<&AvifImage> {
-        let avif_boxes = MP4Box::parse(&mut self.io);
+        if self.io.is_none() {
+            println!("io is not set");
+            return None;
+        }
+        let avif_boxes = MP4Box::parse(&mut self.io.as_mut().unwrap());
         self.tracks = avif_boxes.moov.tracks;
         self.avif_items = match construct_avif_items(&avif_boxes.meta) {
             Ok(items) => items,
@@ -1144,7 +1150,7 @@ impl AvifDecoder {
                     .avif_items
                     .get_mut(&item_ids[0])
                     .unwrap()
-                    .read_and_parse(&mut self.io, &mut self.tile_info[0].grid)
+                    .read_and_parse(&mut self.io.as_mut().unwrap(), &mut self.tile_info[0].grid)
                 {
                     println!("failed to read_and_parse color item");
                     return None;
@@ -1158,7 +1164,7 @@ impl AvifDecoder {
                         .avif_items
                         .get_mut(&item_ids[1])
                         .unwrap()
-                        .read_and_parse(&mut self.io, &mut self.tile_info[1].grid)
+                        .read_and_parse(&mut self.io.as_mut().unwrap(), &mut self.tile_info[1].grid)
                 {
                     println!("failed to read_and_parse alpha item");
                     return None;
@@ -1323,8 +1329,9 @@ impl AvifDecoder {
                             data.reserve(item.size);
                             for extent in &item.extents {
                                 // TODO: extent.length usize cast safety?
+                                let io = self.io.as_mut().unwrap();
                                 let extent_payload =
-                                    match self.io.read(extent.offset, extent.length as usize) {
+                                    match io.read(extent.offset, extent.length as usize) {
                                         Ok(payload) => payload,
                                         Err(e) => return false,
                                     };
@@ -1358,7 +1365,8 @@ impl AvifDecoder {
             }
             for (tile_index, tile) in self.tiles[category].iter_mut().enumerate() {
                 let sample = &tile.input.samples[image_index];
-                let sample_payload = match sample.data(&mut self.io) {
+                let io = &mut self.io.as_mut().unwrap();
+                let sample_payload = match sample.data(io) {
                     Ok(payload) => payload,
                     Err(e) => return false,
                 };
@@ -1403,6 +1411,9 @@ impl AvifDecoder {
     }
 
     pub fn next_image(&mut self) -> Option<&AvifImage> {
+        if self.io.is_none() {
+            return None;
+        }
         if self.tiles[0].is_empty() && self.tiles[1].is_empty() && self.tiles[2].is_empty() {
             // Nothing has been parsed yet.
             return None;

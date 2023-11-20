@@ -1531,7 +1531,7 @@ impl MP4Box {
         Some(moov)
     }
 
-    pub fn parse(io: &mut impl AvifDecoderIO) -> AvifBoxes {
+    pub fn parse(io: &mut Box<dyn AvifDecoderIO>) -> AvifBoxes {
         let mut ftyp_seen = false;
         let mut avif_boxes: AvifBoxes = Default::default();
         let mut meta_seen = false;
