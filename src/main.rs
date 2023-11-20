@@ -19,13 +19,14 @@ fn main() {
     let mut decoder: AvifDecoder = Default::default();
     decoder.settings = settings;
     decoder.set_io_file(&args[1]);
-    let image = decoder.parse();
+    let image = match decoder.parse() {
+        Ok(x) => x,
+        Err(err) => {
+            println!("decoder.parse failed: {:#?}", err);
+            std::process::exit(1);
+        }
+    };
     println!("image after parse: {:#?}", image);
-
-    if image.is_none() {
-        println!("parse failed!");
-        std::process::exit(1);
-    }
 
     println!("\n^^^ decoder public properties ^^^");
     println!("image_count: {}", decoder.image_count);

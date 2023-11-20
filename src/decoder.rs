@@ -521,7 +521,7 @@ fn read_file(filename: &String) -> Vec<u8> {
 
 // This design is not final. It's possible to do this in the same loop where boxes are parsed. But it
 // seems a little cleaner to do this after the fact.
-fn construct_avif_items(meta: &MetaBox) -> Result<HashMap<u32, AvifItem>, &str> {
+fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
     let mut avif_items: HashMap<u32, AvifItem> = HashMap::new();
     for item in &meta.iinf {
         let mut avif_item: AvifItem = Default::default();
@@ -534,7 +534,8 @@ fn construct_avif_items(meta: &MetaBox) -> Result<HashMap<u32, AvifItem>, &str> 
         // TODO: Make sure item id exists before unwrapping.
         let avif_item = avif_items.get_mut(&item.item_id).unwrap();
         if !avif_item.extents.is_empty() {
-            return Err("item already has extents.");
+            println!("item already has extents.");
+            return Err(AvifError::BmffParseFailed);
         }
         if item.construction_method == 1 {
             avif_item.idat = meta.idat.clone();
@@ -554,7 +555,8 @@ fn construct_avif_items(meta: &MetaBox) -> Result<HashMap<u32, AvifItem>, &str> 
         if avif_item.ipma_seen {
             // TODO: ipma_seen can be a local hashmap or set here instea of being in the
             // struct as it is only used for this validation.
-            return Err("item has duplictate ipma.");
+            println!("item has duplictate ipma.");
+            return Err(AvifError::BmffParseFailed);
         }
         avif_item.ipma_seen = true;
         for (property_index_ref, essential_ref) in &association.associations {
@@ -570,7 +572,8 @@ fn construct_avif_items(meta: &MetaBox) -> Result<HashMap<u32, AvifItem>, &str> 
                     property_index,
                     meta.iprp.properties.len()
                 );
-                return Err("invalid property_index in ipma.");
+                println!("invalid property_index in ipma.");
+                return Err(AvifError::BmffParseFailed);
             }
             // property_index is 1-indexed.
             let property = meta.iprp.properties[property_index - 1].clone();
@@ -608,11 +611,9 @@ fn construct_avif_items(meta: &MetaBox) -> Result<HashMap<u32, AvifItem>, &str> 
         }
     }
     for (reference_index, reference) in meta.iref.iter().enumerate() {
-        let item = avif_items.get_mut(&reference.from_item_id);
-        if item.is_none() {
-            return Err("invalid from_item_id in iref");
-        }
-        let item = item.unwrap();
+        let item = avif_items
+            .get_mut(&reference.from_item_id)
+            .ok_or(AvifError::BmffParseFailed)?;
         match reference.reference_type.as_str() {
             "thmb" => item.thumbnail_for_id = reference.to_item_id,
             "auxl" => item.aux_for_id = reference.to_item_id,
@@ -620,11 +621,9 @@ fn construct_avif_items(meta: &MetaBox) -> Result<HashMap<u32, AvifItem>, &str> 
             "prem" => item.prem_by_id = reference.to_item_id,
             "dimg" => {
                 // derived images refer in the opposite direction.
-                let dimg_item = avif_items.get_mut(&reference.to_item_id);
-                if dimg_item.is_none() {
-                    return Err("invalid to_item_id in iref");
-                }
-                let dimg_item = dimg_item.unwrap();
+                let dimg_item = avif_items
+                    .get_mut(&reference.to_item_id)
+                    .ok_or(AvifError::BmffParseFailed)?;
                 dimg_item.dimg_for_id = reference.from_item_id;
                 dimg_item.dimg_index = reference_index as u32;
             }
@@ -987,27 +986,18 @@ impl AvifDecoder {
         true
     }
 
-    pub fn parse(&mut self) -> Option<&AvifImage> {
+    pub fn parse(&mut self) -> AvifResult<&AvifImage> {
         if self.io.is_none() {
-            println!("io is not set");
-            return None;
+            return Err(AvifError::IoNotSet);
         }
-        let avif_boxes = match MP4Box::parse(&mut self.io.as_mut().unwrap()) {
-            Ok(x) => x,
-            Err(err) => return None,
-        };
+        let avif_boxes = MP4Box::parse(&mut self.io.as_mut().unwrap())?;
         self.tracks = avif_boxes.moov.tracks;
-        self.avif_items = match construct_avif_items(&avif_boxes.meta) {
-            Ok(items) => items,
-            Err(err) => {
-                println!("failed to construct_avif_items: {err}");
-                return None;
-            }
-        };
+        self.avif_items = construct_avif_items(&avif_boxes.meta)?;
         for (id, item) in &mut self.avif_items {
             if !item.harvest_ispe() {
+                // TODO: this function must return result.
                 println!("failed to harvest ispe");
-                return None;
+                return Err(AvifError::BmffParseFailed);
             }
         }
         println!("{:#?}", self.avif_items);
@@ -1064,14 +1054,14 @@ impl AvifDecoder {
                 }
                 if color_track_index.is_none() {
                     println!("color track not found");
-                    return None;
+                    return Err(AvifError::NoContent);
                 }
                 let color_track = &self.tracks[color_track_index.unwrap()];
                 let color_properties_op =
                     color_track.sample_table.as_ref().unwrap().get_properties();
                 if color_properties_op.is_none() {
                     println!("color properties not found");
-                    return None;
+                    return Err(AvifError::BmffParseFailed);
                 }
                 color_properties = color_properties_op.unwrap();
 
@@ -1107,8 +1097,9 @@ impl AvifDecoder {
 
                 let color_tile = create_tile_from_track(&color_track);
                 if color_tile.is_none() {
+                    // TODO: return result from prev func.
                     println!("failed to create color tile");
-                    return None;
+                    return Err(AvifError::BmffParseFailed);
                 }
                 println!("color_tile: {:#?}", color_tile);
                 self.tile_info[0].tile_count = 1;
@@ -1119,7 +1110,7 @@ impl AvifDecoder {
                     let alpha_tile = create_tile_from_track(alpha_track);
                     if alpha_tile.is_none() {
                         println!("failed to create color tile");
-                        return None;
+                        return Err(AvifError::BmffParseFailed);
                     }
                     println!("alpha_tile: {:#?}", alpha_tile);
                     self.tile_info[1].tile_count = 1;
@@ -1154,34 +1145,25 @@ impl AvifDecoder {
                 item_ids[0] = find_color_item(&self.avif_items, avif_boxes.meta.primary_item_id);
                 if item_ids[0] == 0 {
                     println!("primary color item not found.");
-                    return None;
+                    return Err(AvifError::NoContent);
                 }
-                if self
-                    .avif_items
+                self.avif_items
                     .get_mut(&item_ids[0])
                     .unwrap()
-                    .read_and_parse(&mut self.io.as_mut().unwrap(), &mut self.tile_info[0].grid)
-                    .is_err()
-                {
-                    println!("failed to read_and_parse color item");
-                    return None;
-                }
+                    .read_and_parse(&mut self.io.as_mut().unwrap(), &mut self.tile_info[0].grid)?;
 
                 // Optional alpha auxiliary item
                 item_ids[1] =
                     find_alpha_item(&self.avif_items, self.avif_items.get(&item_ids[0]).unwrap());
-                if item_ids[1] != 0
-                    && self
-                        .avif_items
+                if item_ids[1] != 0 {
+                    self.avif_items
                         .get_mut(&item_ids[1])
                         .unwrap()
-                        .read_and_parse(&mut self.io.as_mut().unwrap(), &mut self.tile_info[1].grid)
-                        .is_err()
-                {
-                    println!("failed to read_and_parse alpha item");
-                    return None;
+                        .read_and_parse(
+                            &mut self.io.as_mut().unwrap(),
+                            &mut self.tile_info[1].grid,
+                        )?;
                 }
-
                 println!("item ids: {:#?}", item_ids);
 
                 // TODO: gainmap item.
@@ -1218,7 +1200,7 @@ impl AvifDecoder {
                     );
                     if tiles.is_none() {
                         println!("Failed to generate_tiles");
-                        return None;
+                        return Err(AvifError::BmffParseFailed);
                     }
                     self.tiles[index] = tiles.unwrap();
                     // TODO: validate item properties.
@@ -1233,7 +1215,7 @@ impl AvifDecoder {
                 // This borrow has to be in the end of this branch.
                 color_properties = &self.avif_items.get(&item_ids[0]).unwrap().properties;
             }
-            _ => return None, // not reached.
+            _ => return Err(AvifError::UnknownError), // not reached.
         }
 
         // Check validity of samples.
@@ -1242,7 +1224,7 @@ impl AvifDecoder {
                 for sample in &tile.input.samples {
                     if sample.size == 0 {
                         println!("sample has invalid size.");
-                        return None;
+                        return Err(AvifError::BmffParseFailed);
                     }
                     // TODO: iostats?
                 }
@@ -1263,7 +1245,7 @@ impl AvifDecoder {
             Err(multiple_nclx_found) => {
                 if multiple_nclx_found {
                     println!("multiple nclx were found");
-                    return None;
+                    return Err(AvifError::BmffParseFailed);
                 }
             }
         }
@@ -1274,7 +1256,7 @@ impl AvifDecoder {
             Err(multiple_icc_found) => {
                 if multiple_icc_found {
                     println!("multiple icc were found");
-                    return None;
+                    return Err(AvifError::BmffParseFailed);
                 }
             }
         }
@@ -1284,12 +1266,7 @@ impl AvifDecoder {
         // TODO: if cicp was not found, harvest it from the seq hdr.
 
         // TODO: copy info from av1c. avifReadCodecConfigProperty.
-        let av1C = find_av1C(color_properties);
-        if av1C.is_none() {
-            println!("missing av1C");
-            return None;
-        }
-        let av1C = av1C.unwrap();
+        let av1C = find_av1C(color_properties).ok_or(AvifError::BmffParseFailed)?;
         self.image.depth = av1C.depth();
         if av1C.monochrome {
             self.image.yuv_format = PixelFormat::Monochrome;
@@ -1304,7 +1281,7 @@ impl AvifDecoder {
         }
         self.image.chroma_sample_position = av1C.chroma_sample_position;
 
-        Some(&self.image)
+        Ok(&self.image)
     }
 
     fn create_codecs(&mut self) -> bool {
