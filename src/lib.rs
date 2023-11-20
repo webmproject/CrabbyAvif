@@ -5,6 +5,7 @@ use std::io::prelude::*;
 mod bindings;
 mod dav1d;
 pub mod decoder;
+pub mod io;
 mod mp4box;
 mod stream;
 pub mod utils;

@@ -1,12 +1,6 @@
 use byteorder::{BigEndian, ByteOrder};
 
 #[derive(Debug)]
-pub struct IStream {
-    pub data: Vec<u8>,
-    pub offset: usize,
-}
-
-#[derive(Debug)]
 pub struct BitReader {
     byte: u8,
     offset: u8,
@@ -21,9 +15,32 @@ impl BitReader {
     }
 }
 
-impl IStream {
-    fn done(&self) -> bool {
-        self.offset >= self.data.len()
+#[derive(Debug)]
+pub struct IStream<'a> {
+    pub data: &'a [u8],
+    pub offset: usize,
+}
+
+impl IStream<'_> {
+    pub fn create(data: &[u8]) -> IStream {
+        IStream { data, offset: 0 }
+    }
+
+    pub fn sub_stream(&mut self, size: usize) -> IStream {
+        let offset = self.offset;
+        self.offset += size;
+        IStream {
+            data: &self.data[offset..self.offset],
+            offset: 0,
+        }
+    }
+
+    pub fn bytes_left(&self) -> usize {
+        self.data.len() - self.offset
+    }
+
+    pub fn done(&self) -> bool {
+        self.bytes_left() == 0
     }
 
     fn get_slice(&mut self, size: usize) -> &[u8] {

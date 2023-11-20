@@ -21,6 +21,7 @@ fn main() {
     decoder.set_file(&args[1]);
     let image = decoder.parse();
     println!("image after parse: {:#?}", image);
+
     if image.is_none() {
         println!("parse failed!");
         std::process::exit(1);

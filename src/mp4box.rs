@@ -1,5 +1,6 @@
 use std::io::prelude::*;
 
+use crate::io::*;
 use crate::stream::*;
 
 #[derive(Debug)]
@@ -292,26 +293,24 @@ impl MP4Box {
         if size == 1 {
             size = stream.read_u64();
         }
-
-        // if uuid, skip 16.
-
+        if box_type == "uuid" {
+            stream.skip(16);
+        }
         let bytes_read: u64 = (stream.offset - start_offset).try_into().unwrap();
         BoxHeader {
             box_type,
-            size: size - bytes_read, // do overflow check for bytes_read?
+            size: size - bytes_read, // TODO: do overflow check for bytes_read?
             full_size: size,
         }
     }
 
-    fn parse_ftyp(stream: &mut IStream, size: u64) -> FileTypeBox {
+    fn parse_ftyp(stream: &mut IStream) -> FileTypeBox {
         let major_brand = stream.read_string(4);
         let minor_version = stream.read_u32();
-        let mut remaining_size = size - 8;
         let mut compatible_brands: Vec<String> = Vec::new();
-        while remaining_size > 0 {
+        while !stream.done() {
             // TODO: check if remaining size is a multiple of 4.
             compatible_brands.push(stream.read_string(4));
-            remaining_size -= 4;
         }
         FileTypeBox {
             major_brand,
@@ -342,12 +341,14 @@ impl MP4Box {
         true
     }
 
-    fn parse_iloc(stream: &mut IStream, size: u64) -> Result<ItemLocationBox, &str> {
+    // TODO: result error type fix.
+    fn parse_iloc(stream: &mut IStream) -> Result<ItemLocationBox, i32> {
         let start_offset = stream.offset;
         println!("iloc start: {start_offset}");
         let (version, _flags) = stream.read_version_and_flags();
         if version > 2 {
-            return Err("Invalid version in iloc.");
+            println!("Invalid version in iloc.");
+            return Err(-1);
         }
         let mut iloc: ItemLocationBox = Default::default();
         let mut bit_reader = stream.get_bitreader();
@@ -359,7 +360,8 @@ impl MP4Box {
         // unsigned int(4) base_offset_size;
         iloc.base_offset_size = bit_reader.read(4);
         if (version == 1 || version == 2) && iloc.base_offset_size != 0 {
-            return Err("Invalid base_offset_size in iloc.");
+            println!("Invalid base_offset_size in iloc.");
+            return Err(-1);
         }
         // unsigned int(4) reserved; The last 4 bits left in the bit_reader.
         let item_count: u32;
@@ -380,7 +382,8 @@ impl MP4Box {
                 entry.item_id = stream.read_u32();
             }
             if entry.item_id == 0 {
-                return Err("Invalid item id.");
+                println!("Invalid item id.");
+                return Err(-1);
             }
             if version == 1 || version == 2 {
                 // unsigned int(12) reserved = 0;
@@ -391,7 +394,8 @@ impl MP4Box {
                 entry.construction_method = byte.read(4);
                 // 0: file, 1: idat.
                 if entry.construction_method != 0 && entry.construction_method != 1 {
-                    return Err("unknown construction_method");
+                    println!("unknown construction_method");
+                    return Err(-1);
                 }
             }
             // unsigned int(16) data_reference_index;
@@ -417,10 +421,7 @@ impl MP4Box {
             iloc.items.push(entry);
         }
 
-        let bytes_read = stream.offset - start_offset;
-        let remaining_size: u64 = size - (bytes_read as u64);
-        println!("end of iloc, skiping {remaining_size} bytes");
-        stream.skip(remaining_size.try_into().unwrap());
+        println!("end of iloc, skiping {} bytes", stream.bytes_left());
         Ok(iloc)
     }
 
@@ -463,9 +464,7 @@ impl MP4Box {
     }
 
     #[allow(non_snake_case)]
-    fn parse_av1C(stream: &mut IStream, size: u64) -> Option<ItemProperty> {
-        let start_offset = stream.offset;
-
+    fn parse_av1C(stream: &mut IStream) -> Option<ItemProperty> {
         // unsigned int (1) marker = 1;
         // unsigned int (7) version = 1;
         let mut byte = stream.get_bitreader();
@@ -511,22 +510,20 @@ impl MP4Box {
         // }
         // unsigned int(8) configOBUs[];
         // We skip all these.
-        let bytes_read = stream.offset - start_offset;
-        let remaining_size: u64 = size - (bytes_read as u64);
-        println!("end of av1C, skiping {remaining_size} bytes");
-        stream.skip(remaining_size.try_into().unwrap());
+        println!("end of av1C, skiping {} bytes", stream.bytes_left());
         Some(ItemProperty::CodecConfiguration(av1C))
     }
 
-    fn parse_colr(stream: &mut IStream, mut size: u64) -> Option<ItemProperty> {
+    fn parse_colr(stream: &mut IStream) -> Option<ItemProperty> {
         // unsigned int(32) colour_type;
         let color_type = stream.read_string(4);
-        size -= 4;
         if color_type == "rICC" || color_type == "prof" {
             let mut icc: Icc = Default::default();
             // TODO: perhaps this can be a slice or something?
-            icc.offset = stream.offset.try_into().unwrap();
-            icc.size = size.try_into().unwrap();
+            // TODO: this offset is relative. needs to be absolute.
+            // TODO: maybe just clone the data?
+            icc.offset = stream.offset as u64;
+            icc.size = stream.bytes_left();
             return Some(ItemProperty::ColorInformation(ColorInformation::Icc(icc)));
         }
         if color_type == "nclx" {
@@ -661,70 +658,69 @@ impl MP4Box {
     }
 
     #[allow(non_snake_case)]
-    fn parse_ipco(stream: &mut IStream, mut size: u64) -> Result<Vec<ItemProperty>, &str> {
+    fn parse_ipco(stream: &mut IStream) -> Result<Vec<ItemProperty>, i32> {
         let mut properties: Vec<ItemProperty> = Vec::new();
-        while size > 0 {
+        while !stream.done() {
             let header = Self::parse_header(stream);
-            size -= header.full_size;
+            let mut sub_stream = stream.sub_stream(header.size as usize);
             match header.box_type.as_str() {
                 "ispe" => {
-                    properties.push(Self::parse_ispe(stream));
+                    properties.push(Self::parse_ispe(&mut sub_stream));
                 }
-                "pixi" => match Self::parse_pixi(stream) {
+                "pixi" => match Self::parse_pixi(&mut sub_stream) {
                     Some(pixi) => properties.push(pixi),
-                    None => return Err("Parsing pixi failed"),
+                    None => return Err(-1),
                 },
-                "av1C" => match Self::parse_av1C(stream, header.size) {
+                "av1C" => match Self::parse_av1C(&mut sub_stream) {
                     Some(av1C) => properties.push(av1C),
-                    None => return Err("Parsing av1C failed"),
+                    None => return Err(-2),
                 },
-                "colr" => match Self::parse_colr(stream, header.size) {
+                "colr" => match Self::parse_colr(&mut sub_stream) {
                     Some(colr) => properties.push(colr),
-                    None => return Err("Parsing colr failed"),
+                    None => return Err(-3),
                 },
                 "pasp" => {
-                    properties.push(Self::parse_pasp(stream));
+                    properties.push(Self::parse_pasp(&mut sub_stream));
                 }
                 "auxC" => {
-                    properties.push(Self::parse_auxC(stream));
+                    properties.push(Self::parse_auxC(&mut sub_stream));
                 }
                 "clap" => {
-                    properties.push(Self::parse_clap(stream));
+                    properties.push(Self::parse_clap(&mut sub_stream));
                 }
-                "irot" => match Self::parse_irot(stream) {
+                "irot" => match Self::parse_irot(&mut sub_stream) {
                     Some(irot) => properties.push(irot),
-                    None => return Err("Parsing irot failed"),
+                    None => return Err(-4),
                 },
-                "imir" => match Self::parse_imir(stream) {
+                "imir" => match Self::parse_imir(&mut sub_stream) {
                     Some(imir) => properties.push(imir),
-                    None => return Err("Parsing imir failed"),
+                    None => return Err(-5),
                 },
-                "a1op" => match Self::parse_a1op(stream) {
+                "a1op" => match Self::parse_a1op(&mut sub_stream) {
                     Some(a1op) => properties.push(a1op),
-                    None => return Err("Parsing a1op failed"),
+                    None => return Err(-6),
                 },
-                "lsel" => match Self::parse_lsel(stream) {
+                "lsel" => match Self::parse_lsel(&mut sub_stream) {
                     Some(lsel) => properties.push(lsel),
-                    None => return Err("Parsing lsel failed"),
+                    None => return Err(-7),
                 },
-                "a1lx" => match Self::parse_a1lx(stream) {
+                "a1lx" => match Self::parse_a1lx(&mut sub_stream) {
                     Some(a1lx) => properties.push(a1lx),
-                    None => return Err("Parsing a1lx failed"),
+                    None => return Err(-8),
                 },
                 "clli" => {
-                    properties.push(Self::parse_clli(stream));
+                    properties.push(Self::parse_clli(&mut sub_stream));
                 }
                 _ => {
                     println!("adding unknown property {}", header.box_type);
                     properties.push(ItemProperty::Unknown(header.box_type));
-                    stream.skip(header.size.try_into().unwrap());
                 }
             }
         }
         Ok(properties)
     }
 
-    fn parse_ipma(stream: &mut IStream) -> Result<Vec<ItemPropertyAssociation>, &str> {
+    fn parse_ipma(stream: &mut IStream) -> Result<Vec<ItemPropertyAssociation>, i32> {
         let (version, flags) = stream.read_version_and_flags();
         // unsigned int(32) entry_count;
         let entry_count = stream.read_u32();
@@ -745,10 +741,12 @@ impl MP4Box {
                 entry.item_id = stream.read_u32();
             }
             if entry.item_id == 0 {
-                return Err("invalid item id in ipma");
+                println!("invalid item id in ipma");
+                return Err(-1);
             }
             if entry.item_id <= previous_item_id {
-                return Err("ipma item ids are not ordered by increasing id");
+                println!("ipma item ids are not ordered by increasing id");
+                return Err(-1);
             }
             previous_item_id = entry.item_id;
             // unsigned int(8) association_count;
@@ -772,51 +770,51 @@ impl MP4Box {
         Ok(ipma)
     }
 
-    fn parse_iprp(stream: &mut IStream, mut size: u64) -> Result<ItemPropertyBox, &str> {
-        let orig_size = size;
-        let start_offset = stream.offset;
-        println!("iprp start: {start_offset}");
+    fn parse_iprp(stream: &mut IStream) -> Result<ItemPropertyBox, i32> {
+        println!("iprp start: {}", stream.offset);
         let header = Self::parse_header(stream);
         if header.box_type != "ipco" {
-            return Err("First box in iprp is not ipco");
+            println!("First box in iprp is not ipco");
+            return Err(-1);
         }
         let mut iprp: ItemPropertyBox = Default::default();
-
-        match Self::parse_ipco(stream, header.size) {
-            Ok(properties) => {
-                iprp.properties = properties;
-            }
-            Err(err) => {
-                // TODO: re-using err here results in some weird borrow checker error:
-                // https://old.reddit.com/r/rust/comments/qi3ye9/why_does_returning_a_value_mess_with_borrows/
-                return Err("ipco parsing failed");
-            }
-        }
-        size -= header.full_size;
-        while size > 0 {
-            let header = Self::parse_header(stream);
-            size -= header.full_size;
-            if header.box_type != "ipma" {
-                return Err("Found non ipma box in iprp");
-            }
-            match Self::parse_ipma(stream) {
-                Ok(mut ipma) => iprp.associations.append(&mut ipma),
+        // Parse ipco box.
+        {
+            let mut sub_stream = stream.sub_stream(header.size as usize);
+            match Self::parse_ipco(&mut sub_stream) {
+                Ok(properties) => {
+                    iprp.properties = properties;
+                }
                 Err(err) => {
                     // TODO: re-using err here results in some weird borrow checker error:
-                    return Err("ipma parsing failed");
+                    // https://old.reddit.com/r/rust/comments/qi3ye9/why_does_returning_a_value_mess_with_borrows/
+                    println!("ipco parsing failed");
+                    return Err(-1);
                 }
             }
         }
-
-        let bytes_read = stream.offset - start_offset;
-        let remaining_size: u64 = orig_size - (bytes_read as u64);
-        println!("end of iprp, skiping {remaining_size} bytes");
-        stream.skip(remaining_size.try_into().unwrap());
-
+        // Parse ipma boxes.
+        while !stream.done() {
+            let header = Self::parse_header(stream);
+            if header.box_type != "ipma" {
+                println!("Found non ipma box in iprp");
+                return Err(-1);
+            }
+            let mut sub_stream = stream.sub_stream(header.size as usize);
+            match Self::parse_ipma(&mut sub_stream) {
+                Ok(mut ipma) => iprp.associations.append(&mut ipma),
+                Err(err) => {
+                    // TODO: re-using err here results in some weird borrow checker error:
+                    println!("ipma parsing failed");
+                    return Err(-1);
+                }
+            }
+        }
+        println!("end of iprp, skiping {} bytes", stream.bytes_left());
         Ok(iprp)
     }
 
-    fn parse_iinf(stream: &mut IStream, size: u64) -> Result<Vec<ItemInfo>, &str> {
+    fn parse_iinf(stream: &mut IStream) -> Result<Vec<ItemInfo>, i32> {
         let start_offset = stream.offset;
         let (version, _flags) = stream.read_version_and_flags();
         let entry_count: u32;
@@ -831,11 +829,13 @@ impl MP4Box {
         for _i in 0..entry_count {
             let header = Self::parse_header(stream);
             if header.box_type != "infe" {
-                return Err("Found non infe box in iinf");
+                println!("Found non infe box in iinf");
+                return Err(-1);
             }
             let (version, _flags) = stream.read_version_and_flags();
             if version != 2 && version != 3 {
-                return Err("infe box version 2 or 3 expected.");
+                println!("infe box version 2 or 3 expected.");
+                return Err(-1);
             }
 
             // TODO: check flags. ISO/IEC 23008-12:2017, Section 9.2 says:
@@ -859,7 +859,8 @@ impl MP4Box {
                 entry.item_id = stream.read_u32();
             }
             if entry.item_id == 0 {
-                return Err("Invalid item id found in infe");
+                println!("Invalid item id found in infe");
+                return Err(-1);
             }
             // unsigned int(16) item_protection_index;
             entry.item_protection_index = stream.read_u16();
@@ -882,26 +883,18 @@ impl MP4Box {
             }
             iinf.push(entry);
         }
-        // TODO: this skip may not be necessary.
-        let bytes_read = stream.offset - start_offset;
-        let remaining_size: u64 = size - (bytes_read as u64);
-        println!("end of iinf, skiping {remaining_size} bytes");
-        stream.skip(remaining_size.try_into().unwrap());
+        println!("end of iinf, skiping {} bytes", stream.bytes_left());
         Ok(iinf)
     }
 
-    fn parse_iref(stream: &mut IStream, mut size: u64) -> Result<Vec<ItemReference>, &str> {
-        let orig_size = size;
+    fn parse_iref(stream: &mut IStream) -> Result<Vec<ItemReference>, i32> {
         let start_offset = stream.offset;
         let (version, _flags) = stream.read_version_and_flags();
-        size -= 4;
         let mut iref: Vec<ItemReference> = Vec::new();
         // versions > 1 are not supported. ignore them.
         if version <= 1 {
-            while size > 0 {
+            while !stream.done() {
                 let header = Self::parse_header(stream);
-                size -= header.full_size;
-
                 let from_item_id: u32;
                 if version == 0 {
                     // unsigned int(16) from_item_ID;
@@ -911,7 +904,8 @@ impl MP4Box {
                     from_item_id = stream.read_u32();
                 }
                 if from_item_id == 0 {
-                    return Err("invalid from_item_id in iref");
+                    println!("invalid from_item_id in iref");
+                    return Err(-1);
                 }
                 // unsigned int(16) reference_count;
                 let reference_count = stream.read_u16();
@@ -925,7 +919,8 @@ impl MP4Box {
                         to_item_id = stream.read_u32();
                     }
                     if to_item_id == 0 {
-                        return Err("invalid to_item_id in iref");
+                        println!("invalid to_item_id in iref");
+                        return Err(-1);
                     }
                     iref.push(ItemReference {
                         from_item_id,
@@ -935,53 +930,51 @@ impl MP4Box {
                 }
             }
         }
-        let bytes_read = stream.offset - start_offset;
-        let remaining_size: u64 = orig_size - (bytes_read as u64);
-        println!("end of iref, skiping {remaining_size} bytes");
-        stream.skip(remaining_size.try_into().unwrap());
+        println!("end of iref, skiping {} bytes", stream.bytes_left());
         Ok(iref)
     }
 
-    fn parse_idat(stream: &mut IStream, size: u64) -> Result<ItemData, &str> {
+    fn parse_idat(stream: &mut IStream) -> Result<ItemData, i32> {
         // TODO: check if multiple idats were seen for this meta box.
-        if size == 0 {
-            return Err("Invalid idat size");
+        if stream.done() {
+            println!("Invalid idat size");
+            return Err(-1);
         }
         Ok(ItemData {
-            size: size,
+            size: stream.bytes_left() as u64,
+            // TODO: this is wrong, the offset is relative. must be absolute.
             offset: stream.offset,
         })
     }
 
-    fn parse_meta(stream: &mut IStream, mut size: u64) -> MetaBox {
-        println!("parsing meta size: {size}");
+    fn parse_meta(stream: &mut IStream) -> MetaBox {
+        println!("parsing meta size: {}", stream.data.len());
         // TODO: version must be 0.
         let (_version, _flags) = stream.read_version_and_flags();
-        size -= 4;
         let mut first_box = true;
         let mut meta: MetaBox = Default::default();
         let empty: MetaBox = Default::default();
 
         // TODO: add box unique checks.
 
-        while size > 0 {
+        while !stream.done() {
             let header = Self::parse_header(stream);
-            size -= header.full_size;
-            //println!("{:#?}", header);
             if first_box {
                 if header.box_type != "hdlr" {
                     println!("first box in meta is not hdlr");
                     return empty;
                 }
-                if !Self::parse_hdlr(stream) {
+                let mut sub_stream = stream.sub_stream(header.size as usize);
+                if !Self::parse_hdlr(&mut sub_stream) {
                     return empty;
                 }
                 first_box = false;
                 continue;
             }
+            let mut sub_stream = stream.sub_stream(header.size as usize);
             match header.box_type.as_str() {
                 "iloc" => {
-                    meta.iloc = match Self::parse_iloc(stream, header.size) {
+                    meta.iloc = match Self::parse_iloc(&mut sub_stream) {
                         Ok(iloc) => iloc,
                         Err(err) => {
                             println!("Parsing iloc failed: {err}");
@@ -990,7 +983,7 @@ impl MP4Box {
                     };
                 }
                 "pitm" => {
-                    meta.primary_item_id = match Self::parse_pitm(stream) {
+                    meta.primary_item_id = match Self::parse_pitm(&mut sub_stream) {
                         Some(item_id) => item_id,
                         None => {
                             println!("Error parsing pitm box.");
@@ -999,7 +992,7 @@ impl MP4Box {
                     }
                 }
                 "iprp" => {
-                    meta.iprp = match Self::parse_iprp(stream, header.size) {
+                    meta.iprp = match Self::parse_iprp(&mut sub_stream) {
                         Ok(iprp) => iprp,
                         Err(err) => {
                             println!("Parsing iprp failed: {err}");
@@ -1008,7 +1001,7 @@ impl MP4Box {
                     };
                 }
                 "iinf" => {
-                    meta.iinf = match Self::parse_iinf(stream, header.size) {
+                    meta.iinf = match Self::parse_iinf(&mut sub_stream) {
                         Ok(iinf) => iinf,
                         Err(err) => {
                             println!("Parsing iinf failed: {err}");
@@ -1017,7 +1010,7 @@ impl MP4Box {
                     };
                 }
                 "iref" => {
-                    meta.iref = match Self::parse_iref(stream, header.size) {
+                    meta.iref = match Self::parse_iref(&mut sub_stream) {
                         Ok(iref) => iref,
                         Err(err) => {
                             println!("Parsing iref failed: {err}");
@@ -1026,7 +1019,7 @@ impl MP4Box {
                     }
                 }
                 "idat" => {
-                    meta.idat = match Self::parse_idat(stream, header.size) {
+                    meta.idat = match Self::parse_idat(&mut sub_stream) {
                         Ok(idat) => idat,
                         Err(err) => {
                             println!("Parsing idat failed: {err}");
@@ -1035,11 +1028,12 @@ impl MP4Box {
                     }
                 }
                 _ => {
-                    // TODO: handle idat.
                     println!("skipping box {}", header.box_type);
-                    stream.skip(header.size.try_into().unwrap());
                 }
             }
+            println!("=== meta after {}", header.box_type);
+            println!("{:#?}", meta);
+            println!("=== meta end after {}", header.box_type);
         }
         if first_box {
             // The meta box must not be empty (it must contain at least a hdlr box).
@@ -1260,7 +1254,8 @@ impl MP4Box {
                 // Skip 78 bytes for visual sample entry size.
                 stream.skip(78);
                 // TODO: check subtraction is ok.
-                match Self::parse_ipco(stream, header.size - 78) {
+                let mut sub_stream = stream.sub_stream((header.size - 78) as usize);
+                match Self::parse_ipco(&mut sub_stream) {
                     Ok(properties) => stsd.properties = properties,
                     Err(err) => {
                         println!("{}", err);
@@ -1273,54 +1268,53 @@ impl MP4Box {
         true
     }
 
-    fn parse_stbl(stream: &mut IStream, track: &mut AvifTrack, mut size: u64) -> bool {
+    fn parse_stbl(stream: &mut IStream, track: &mut AvifTrack) -> bool {
         if track.sample_table.is_some() {
             println!("duplciate stbl for track.");
             return false;
         }
         let mut sample_table: SampleTable = Default::default();
-        while size > 0 {
+        while !stream.done() {
             let header = Self::parse_header(stream);
-            size -= header.full_size;
+            let mut sub_stream = stream.sub_stream(header.size as usize);
             match header.box_type.as_str() {
                 "stco" => {
-                    if !Self::parse_stco(stream, &mut sample_table, false) {
+                    if !Self::parse_stco(&mut sub_stream, &mut sample_table, false) {
                         return false;
                     }
                 }
                 "co64" => {
-                    if !Self::parse_stco(stream, &mut sample_table, true) {
+                    if !Self::parse_stco(&mut sub_stream, &mut sample_table, true) {
                         return false;
                     }
                 }
                 "stsc" => {
-                    if !Self::parse_stsc(stream, &mut sample_table) {
+                    if !Self::parse_stsc(&mut sub_stream, &mut sample_table) {
                         return false;
                     }
                 }
                 "stsz" => {
-                    if !Self::parse_stsz(stream, &mut sample_table) {
+                    if !Self::parse_stsz(&mut sub_stream, &mut sample_table) {
                         return false;
                     }
                 }
                 "stss" => {
-                    if !Self::parse_stss(stream, &mut sample_table) {
+                    if !Self::parse_stss(&mut sub_stream, &mut sample_table) {
                         return false;
                     }
                 }
                 "stts" => {
-                    if !Self::parse_stts(stream, &mut sample_table) {
+                    if !Self::parse_stts(&mut sub_stream, &mut sample_table) {
                         return false;
                     }
                 }
                 "stsd" => {
-                    if !Self::parse_stsd(stream, &mut sample_table) {
+                    if !Self::parse_stsd(&mut sub_stream, &mut sample_table) {
                         return false;
                     }
                 }
                 _ => {
                     println!("skipping box {}", header.box_type);
-                    stream.skip(header.size.try_into().unwrap());
                 }
             }
         }
@@ -1328,79 +1322,74 @@ impl MP4Box {
         true
     }
 
-    fn parse_minf(stream: &mut IStream, track: &mut AvifTrack, mut size: u64) -> bool {
-        while size > 0 {
+    fn parse_minf(stream: &mut IStream, track: &mut AvifTrack) -> bool {
+        while !stream.done() {
             let header = Self::parse_header(stream);
-            size -= header.full_size;
+            let mut sub_stream = stream.sub_stream(header.size as usize);
             match header.box_type.as_str() {
                 "stbl" => {
-                    if !Self::parse_stbl(stream, track, header.size) {
+                    if !Self::parse_stbl(&mut sub_stream, track) {
                         return false;
                     }
                 }
                 _ => {
                     println!("skipping box {}", header.box_type);
-                    stream.skip(header.size.try_into().unwrap());
                 }
             }
         }
         true
     }
 
-    fn parse_mdia(stream: &mut IStream, track: &mut AvifTrack, mut size: u64) -> bool {
-        while size > 0 {
+    fn parse_mdia(stream: &mut IStream, track: &mut AvifTrack) -> bool {
+        while !stream.done() {
             let header = Self::parse_header(stream);
-            size -= header.full_size;
+            let mut sub_stream = stream.sub_stream(header.size as usize);
             match header.box_type.as_str() {
                 "mdhd" => {
-                    if !Self::parse_mdhd(stream, track) {
+                    if !Self::parse_mdhd(&mut sub_stream, track) {
                         return false;
                     }
                 }
                 "minf" => {
-                    if !Self::parse_minf(stream, track, header.size) {
+                    if !Self::parse_minf(&mut sub_stream, track) {
                         return false;
                     }
                 }
                 _ => {
                     println!("skipping box {}", header.box_type);
-                    stream.skip(header.size.try_into().unwrap());
                 }
             }
         }
         true
     }
 
-    fn parse_tref(stream: &mut IStream, track: &mut AvifTrack, mut size: u64) -> bool {
-        while size > 0 {
+    fn parse_tref(stream: &mut IStream, track: &mut AvifTrack) -> bool {
+        while !stream.done() {
             let header = Self::parse_header(stream);
-            size -= header.full_size;
+            let mut sub_stream = stream.sub_stream(header.size as usize);
             match header.box_type.as_str() {
                 "auxl" => {
                     // unsigned int(32) track_IDs[];
-                    track.aux_for_id = stream.read_u32(); // Use the first one.
-                    stream.skip((header.size - 4) as usize); // Skip the rest.
+                    // Use only the first one and skip the rest.
+                    track.aux_for_id = sub_stream.read_u32();
                 }
                 "prem" => {
                     // unsigned int(32) track_IDs[];
-                    track.prem_by_id = stream.read_u32(); // Use the first one.
-                    stream.skip((header.size - 4) as usize); // Skip the rest.
+                    // Use only the first one and skip the rest.
+                    track.prem_by_id = sub_stream.read_u32();
                 }
                 _ => {
                     println!("skipping box {}", header.box_type);
-                    stream.skip(header.size.try_into().unwrap());
                 }
             }
         }
         true
     }
 
-    fn parse_elst(stream: &mut IStream, track: &mut AvifTrack, mut size: u64) -> bool {
+    fn parse_elst(stream: &mut IStream, track: &mut AvifTrack) -> bool {
         let (version, flags) = stream.read_version_and_flags();
-        size -= 4;
         if (flags & 1) == 0 {
             track.is_repeating = false;
-            stream.skip(size as usize);
             return true;
         }
         track.is_repeating = true;
@@ -1410,15 +1399,12 @@ impl MP4Box {
             println!("elst has entry_count != 1");
             return false;
         }
-        size -= 4;
         if version == 1 {
             // unsigned int(64) segment_duration;
             track.segment_duration = stream.read_u64();
-            size -= 8;
         } else if version == 0 {
             // unsigned int(32) segment_duration;
             track.segment_duration = stream.read_u32() as u64;
-            size -= 4;
         } else {
             println!("unsupported version in elst");
             return false;
@@ -1427,61 +1413,59 @@ impl MP4Box {
             println!("invalid value for segment_duration (0)");
             return false;
         }
-        stream.skip(size as usize);
         true
     }
 
-    fn parse_edts(stream: &mut IStream, track: &mut AvifTrack, mut size: u64) -> bool {
+    fn parse_edts(stream: &mut IStream, track: &mut AvifTrack) -> bool {
         // TODO: add uniqueness check.
         let mut elst_seen = false;
-        while size > 0 {
+        while !stream.done() {
             let header = Self::parse_header(stream);
-            size -= header.full_size;
+            let mut sub_stream = stream.sub_stream(header.size as usize);
             match header.box_type.as_str() {
                 "elst" => {
                     if elst_seen {
                         println!("more than one elst was found");
                         return false;
                     }
-                    if !Self::parse_elst(stream, track, header.size) {
+                    if !Self::parse_elst(&mut sub_stream, track) {
                         return false;
                     }
                     elst_seen = true;
                 }
                 _ => {
                     println!("skipping box {}", header.box_type);
-                    stream.skip(header.size.try_into().unwrap());
                 }
             }
         }
         elst_seen
     }
 
-    fn parse_trak(stream: &mut IStream, mut size: u64) -> Option<AvifTrack> {
+    fn parse_trak(stream: &mut IStream) -> Option<AvifTrack> {
         let mut track: AvifTrack = Default::default();
-        println!("parsing trak size: {size}");
+        println!("parsing trak size: {}", stream.bytes_left());
         let mut edts_seen = false;
-        while size > 0 {
+        while !stream.done() {
             let header = Self::parse_header(stream);
-            size -= header.full_size;
+            let mut sub_stream = stream.sub_stream(header.size as usize);
             match header.box_type.as_str() {
                 "tkhd" => {
-                    if !Self::parse_tkhd(stream, &mut track) {
+                    if !Self::parse_tkhd(&mut sub_stream, &mut track) {
                         return None;
                     }
                 }
                 "mdia" => {
-                    if !Self::parse_mdia(stream, &mut track, header.size) {
+                    if !Self::parse_mdia(&mut sub_stream, &mut track) {
                         return None;
                     }
                 }
                 "tref" => {
-                    if !Self::parse_tref(stream, &mut track, header.size) {
+                    if !Self::parse_tref(&mut sub_stream, &mut track) {
                         return None;
                     }
                 }
                 "edts" => {
-                    if !Self::parse_edts(stream, &mut track, header.size) {
+                    if !Self::parse_edts(&mut sub_stream, &mut track) {
                         return None;
                     }
                     edts_seen = true;
@@ -1489,10 +1473,9 @@ impl MP4Box {
                 _ => {
                     // TODO: track meta can be ignored? probably not becuase of xmp/exif.
                     println!("skipping box {}", header.box_type);
-                    stream.skip(header.size.try_into().unwrap());
                 }
             }
-            println!("track after {}: {:#?}", header.box_type, track);
+            //println!("track after {}: {:#?}", header.box_type, track);
         }
         if edts_seen {
             if track.track_duration == u64::MAX {
@@ -1536,59 +1519,92 @@ impl MP4Box {
         Some(track)
     }
 
-    fn parse_moov(stream: &mut IStream, mut size: u64) -> Option<MovieBox> {
-        println!("parsing moov size: {size}");
+    fn parse_moov(stream: &mut IStream) -> Option<MovieBox> {
+        println!("parsing moov size: {}", stream.bytes_left());
         let mut moov: MovieBox = Default::default();
-        while size > 0 {
+        while !stream.done() {
             let header = Self::parse_header(stream);
-            size -= header.full_size;
+            let mut sub_stream = stream.sub_stream(header.size as usize);
             match header.box_type.as_str() {
-                "trak" => match Self::parse_trak(stream, header.size) {
+                "trak" => match Self::parse_trak(&mut sub_stream) {
                     Some(trak) => moov.tracks.push(trak),
                     None => return None,
                 },
                 _ => {
                     println!("skipping box {}", header.box_type);
-                    stream.skip(header.size.try_into().unwrap());
                 }
             }
         }
         Some(moov)
     }
 
-    pub fn parse(stream: &mut IStream) -> AvifBoxes {
+    pub fn parse(io: &mut impl AvifDecoderIO) -> AvifBoxes {
         let mut ftyp_seen = false;
         let mut avif_boxes: AvifBoxes = Default::default();
         let mut meta_seen = false;
+        let mut parse_offset: u64 = 0;
         loop {
-            let header = MP4Box::parse_header(stream);
-            println!("{:#?}", header);
-            match header.box_type.as_str() {
-                "ftyp" => {
-                    avif_boxes.ftyp = MP4Box::parse_ftyp(stream, header.size);
-                    ftyp_seen = true;
-                }
-                "meta" => {
-                    avif_boxes.meta = MP4Box::parse_meta(stream, header.size);
-                    meta_seen = true;
-                    //break;
-                }
-                "moov" => {
-                    match MP4Box::parse_moov(stream, header.size) {
-                        Some(moov) => avif_boxes.moov = moov,
-                        None => {
-                            // TODO: lol panic.
-                            panic!("error parsing moov");
-                        }
+            // Read just enough to get the next box header (32 bytes).
+            let header_data = match io.read(parse_offset, 32) {
+                Ok(data) => {
+                    if data.len() == 0 {
+                        // If we got AVIF_RESULT_OK from the reader but received
+                        // 0 bytes, we've reached the end of the file with no
+                        // errors. Hooray!
+                        break;
                     }
-                    //println!("tracks: {:#?}", avif_boxes.moov.tracks);
-                    break;
+                    data
+                }
+                Err(err) => return avif_boxes,
+            };
+            let mut header_stream = IStream::create(header_data);
+
+            let header = MP4Box::parse_header(&mut header_stream);
+            println!("{:#?}", header);
+            parse_offset += header_stream.offset as u64;
+
+            // Read the rest of the box if necessary.
+            match header.box_type.as_str() {
+                "ftyp" | "meta" | "moov" => {
+                    // TODO: check overflow of header.size to usize cast.
+                    let box_data = match io.read(parse_offset, header.size as usize) {
+                        Ok(data) => {
+                            if data.len() != header.size as usize {
+                                println!("truncated data");
+                                return avif_boxes;
+                            }
+                            data
+                        }
+                        Err(err) => return avif_boxes,
+                    };
+                    let mut box_stream = IStream::create(box_data);
+                    match header.box_type.as_str() {
+                        "ftyp" => {
+                            avif_boxes.ftyp = MP4Box::parse_ftyp(&mut box_stream);
+                            ftyp_seen = true;
+                        }
+                        "meta" => {
+                            avif_boxes.meta = MP4Box::parse_meta(&mut box_stream);
+                            meta_seen = true;
+                            println!("{:#?}", avif_boxes);
+                        }
+                        "moov" => {
+                            match MP4Box::parse_moov(&mut box_stream) {
+                                Some(moov) => avif_boxes.moov = moov,
+                                None => {
+                                    // TODO: lol panic.
+                                    panic!("error parsing moov");
+                                }
+                            }
+                        }
+                        _ => {} // Not reached.
+                    }
                 }
                 _ => {
-                    println!("unknown box: {}", header.box_type);
-                    break;
+                    println!("skipping box: {}", header.box_type);
                 }
             }
+            parse_offset += header.size;
         }
         println!("{:#?}", avif_boxes);
         avif_boxes

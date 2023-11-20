@@ -4,11 +4,13 @@ use std::io::prelude::*;
 use std::ops::Range;
 
 use crate::dav1d::*;
+use crate::io::*;
 use crate::mp4box::ItemProperty::AuxiliaryType;
 use crate::mp4box::ItemProperty::ImageSpatialExtents;
 use crate::mp4box::*;
 use crate::stream::*;
 
+// TODO: needed only for debug to AvifImage. Can be removed it AvifIMage does not have to be debug printable.
 use derivative::Derivative;
 
 #[derive(Derivative, Default)]
@@ -221,7 +223,6 @@ pub struct AvifDecoderSettings {
 pub struct AvifDecoder {
     pub settings: AvifDecoderSettings,
     image: AvifImage,
-    data: Vec<u8>,
     codec: Dav1d,
     source: AvifDecoderSource,
     tile_info: [AvifTileInfo; 3],
@@ -235,6 +236,7 @@ pub struct AvifDecoder {
     pub repetition_count: i32,
     avif_items: HashMap<u32, AvifItem>,
     tracks: Vec<AvifTrack>,
+    io: AvifDecoderFileIO,
 }
 
 #[derive(Debug, Default)]
@@ -298,17 +300,17 @@ impl AvifItem {
         self.extents[0].offset as u64
     }
 
-    fn read_and_parse(&self, data: &Vec<u8>, grid: &mut AvifGrid) -> bool {
+    fn read_and_parse(&self, io: &mut impl AvifDecoderIO, grid: &mut AvifGrid) -> bool {
         // TODO: this function also has to extract codec type.
         if self.item_type != "grid" {
             return true;
         }
-        let mut stream = IStream {
-            // TODO: learn to store references in struct.
-            data: data.clone(),
-            offset: self.data_offset() as usize,
+        // TODO: handle multiple extents.
+        let mut io_data = match io.read(self.data_offset(), self.size) {
+            Ok(data) => data,
+            Err(err) => return false,
         };
-        println!("grid stream: {:#?}", stream.offset);
+        let mut stream = IStream::create(io_data);
         // unsigned int(8) version = 0;
         let version = stream.read_u8();
         if version != 0 {
@@ -677,18 +679,15 @@ struct AvifDecodeSample {
     size: usize,
     spatial_id: u8,
     sync: bool,
-    data: Option<Vec<u8>>,
+    // TODO: these two can be some enum?
+    data_buffer: Option<Vec<u8>>,
 }
 
 impl AvifDecodeSample {
-    pub fn data_range(&self) -> Range<usize> {
-        match &self.data {
-            Some(data) => 0..data.len(),
-            None => {
-                let start: usize = self.offset as usize;
-                let size: usize = self.size as usize;
-                start..start + size
-            }
+    pub fn data<'a>(&'a self, io: &'a mut impl AvifDecoderIO) -> Result<&[u8], i32> {
+        match &self.data_buffer {
+            Some(data_buffer) => Ok(&data_buffer),
+            None => io.read(self.offset, self.size),
         }
     }
 }
@@ -780,7 +779,7 @@ fn create_tile(item: &AvifItem) -> Option<AvifTile> {
             size: sample_size,
             spatial_id: lsel.unwrap() as u8,
             sync: true,
-            data: None,
+            data_buffer: None,
         };
         tile.input.samples.push(sample);
     } else if (false) {
@@ -795,7 +794,7 @@ fn create_tile(item: &AvifItem) -> Option<AvifTile> {
             // value for "do not filter by spatial_id"
             spatial_id: 0xff,
             sync: true,
-            data: None,
+            data_buffer: None,
         };
         tile.input.samples.push(sample);
     }
@@ -839,7 +838,7 @@ fn create_tile_from_track(track: &AvifTrack) -> Option<AvifTile> {
                 spatial_id: 0xff,
                 // Assume first sample is always sync (in case stss box was missing).
                 sync: tile.input.samples.is_empty(),
-                data: None,
+                data_buffer: None,
             };
             tile.input.samples.push(sample);
             // TODO: verify if sample size math can be done here.
@@ -965,17 +964,17 @@ fn steal_planes(dst: &mut AvifImage, src: &mut AvifImage, category: usize) {
 }
 
 impl AvifDecoder {
-    pub fn set_file(&mut self, filename: &String) {
-        self.data = read_file(filename);
+    pub fn set_file(&mut self, filename: &String) -> bool {
+        let io = AvifDecoderFileIO::create(filename);
+        if io.is_none() {
+            return false;
+        }
+        self.io = io.unwrap();
+        true
     }
 
     pub fn parse(&mut self) -> Option<&AvifImage> {
-        let mut stream = IStream {
-            // TODO: learn to store references in struct.
-            data: self.data.clone(),
-            offset: 0,
-        };
-        let avif_boxes = MP4Box::parse(&mut stream);
+        let avif_boxes = MP4Box::parse(&mut self.io);
         self.tracks = avif_boxes.moov.tracks;
         self.avif_items = match construct_avif_items(&avif_boxes.meta) {
             Ok(items) => items,
@@ -1140,7 +1139,7 @@ impl AvifDecoder {
                     .avif_items
                     .get_mut(&item_ids[0])
                     .unwrap()
-                    .read_and_parse(&self.data, &mut self.tile_info[0].grid)
+                    .read_and_parse(&mut self.io, &mut self.tile_info[0].grid)
                 {
                     println!("failed to read_and_parse color item");
                     return None;
@@ -1154,7 +1153,7 @@ impl AvifDecoder {
                         .avif_items
                         .get_mut(&item_ids[1])
                         .unwrap()
-                        .read_and_parse(&self.data, &mut self.tile_info[1].grid)
+                        .read_and_parse(&mut self.io, &mut self.tile_info[1].grid)
                 {
                     println!("failed to read_and_parse alpha item");
                     return None;
@@ -1297,6 +1296,7 @@ impl AvifDecoder {
     }
 
     fn prepare_samples(&mut self, image_index: usize) -> bool {
+        // TODO: this function can probably be moved into AvifDecodeSample.data().
         for tiles in &mut self.tiles {
             for tile in tiles {
                 if tile.input.samples.len() <= image_index {
@@ -1313,18 +1313,20 @@ impl AvifDecoder {
                     let item = item.unwrap();
                     if item.extents.len() > 1 {
                         println!("item has multiple extents");
-                        if sample.data.is_none() {
+                        if sample.data_buffer.is_none() {
                             let mut data: Vec<u8> = Vec::new();
                             data.reserve(item.size);
                             for extent in &item.extents {
-                                let extent_start: usize = extent.offset as usize;
-                                let extent_size: usize = extent.length as usize;
+                                // TODO: extent.length usize cast safety?
                                 let extent_payload =
-                                    &self.data[extent_start..extent_start + extent_size];
+                                    match self.io.read(extent.offset, extent.length as usize) {
+                                        Ok(payload) => payload,
+                                        Err(e) => return false,
+                                    };
                                 data.extend_from_slice(extent_payload);
                             }
                             println!("merged size: {}", data.len());
-                            sample.data = Some(data);
+                            sample.data_buffer = Some(data);
                         }
                     } else {
                         sample.offset = item.data_offset();
@@ -1351,10 +1353,9 @@ impl AvifDecoder {
             }
             for (tile_index, tile) in self.tiles[category].iter_mut().enumerate() {
                 let sample = &tile.input.samples[image_index];
-                let data_range = sample.data_range();
-                let sample_payload = match &sample.data {
-                    Some(data) => &data[data_range],
-                    None => &self.data[data_range],
+                let sample_payload = match sample.data(&mut self.io) {
+                    Ok(payload) => payload,
+                    Err(e) => return false,
                 };
                 if !tile.codec.get_next_image(
                     sample_payload,
