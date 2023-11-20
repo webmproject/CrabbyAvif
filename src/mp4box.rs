@@ -6,7 +6,6 @@ use crate::*;
 
 #[derive(Debug)]
 struct BoxHeader {
-    full_size: u64,
     size: u64,
     box_type: String,
 }
@@ -283,7 +282,7 @@ pub struct MP4Box {}
 impl MP4Box {
     fn parse_header(stream: &mut IStream) -> AvifResult<BoxHeader> {
         let start_offset = stream.offset;
-        let mut size: u64 = stream.read_u32().into();
+        let mut size: u64 = stream.read_u32() as u64;
         let box_type = stream.read_string(4);
         println!("box_type: {}", box_type);
         if size == 1 {
@@ -292,11 +291,10 @@ impl MP4Box {
         if box_type == "uuid" {
             stream.skip(16);
         }
-        let bytes_read: u64 = (stream.offset - start_offset).try_into().unwrap();
+        size -= (stream.offset - start_offset) as u64;
         Ok(BoxHeader {
             box_type,
-            size: size - bytes_read, // TODO: do overflow check for bytes_read?
-            full_size: size,
+            size, // TODO: check if size will fit in usize.
         })
     }
 
@@ -364,7 +362,7 @@ impl MP4Box {
         let item_count: u32;
         if version < 2 {
             // unsigned int(16) item_count;
-            item_count = stream.read_u16().into();
+            item_count = stream.read_u16() as u32;
         } else {
             // unsigned int(32) item_count;
             item_count = stream.read_u32();
@@ -373,7 +371,7 @@ impl MP4Box {
             let mut entry: ItemLocationEntry = Default::default();
             if version < 2 {
                 // unsigned int(16) item_ID;
-                entry.item_id = stream.read_u16().into();
+                entry.item_id = stream.read_u16() as u32;
             } else {
                 // unsigned int(32) item_ID;
                 entry.item_id = stream.read_u32();
@@ -707,7 +705,7 @@ impl MP4Box {
             //   be at most one association box for each item_ID, in any ItemPropertyAssociation box.
             if version < 1 {
                 // unsigned int(16) item_ID;
-                entry.item_id = stream.read_u16().into();
+                entry.item_id = stream.read_u16() as u32;
             } else {
                 // unsigned int(32) item_ID;
                 entry.item_id = stream.read_u32();
@@ -728,9 +726,9 @@ impl MP4Box {
                 let mut byte = stream.get_bitreader();
                 let essential = byte.read(1) == 1;
                 // unsigned int(7 or 15) property_index;
-                let mut property_index: u16 = byte.read(7).into();
+                let mut property_index: u16 = byte.read(7) as u16;
                 if (flags & 0x1) == 1 {
-                    let property_index_lsb: u16 = stream.read_u8().into();
+                    let property_index_lsb: u16 = stream.read_u8() as u16;
                     property_index <<= 8;
                     property_index |= property_index_lsb;
                 }
@@ -792,7 +790,7 @@ impl MP4Box {
         let entry_count: u32;
         if version == 0 {
             // unsigned int(16) entry_count;
-            entry_count = stream.read_u16().into();
+            entry_count = stream.read_u16() as u32;
         } else {
             // unsigned int(32) entry_count;
             entry_count = stream.read_u32();
@@ -825,7 +823,7 @@ impl MP4Box {
             let mut entry: ItemInfo = Default::default();
             if version == 2 {
                 // unsigned int(16) item_ID;
-                entry.item_id = stream.read_u16().into();
+                entry.item_id = stream.read_u16() as u32;
             } else {
                 // unsigned int(16) item_ID;
                 entry.item_id = stream.read_u32();
@@ -870,7 +868,7 @@ impl MP4Box {
                 let from_item_id: u32;
                 if version == 0 {
                     // unsigned int(16) from_item_ID;
-                    from_item_id = stream.read_u16().into();
+                    from_item_id = stream.read_u16() as u32;
                 } else {
                     // unsigned int(32) from_item_ID;
                     from_item_id = stream.read_u32();
@@ -885,7 +883,7 @@ impl MP4Box {
                     let to_item_id: u32;
                     if version == 0 {
                         // unsigned int(16) to_item_ID;
-                        to_item_id = stream.read_u16().into();
+                        to_item_id = stream.read_u16() as u32;
                     } else {
                         // unsigned int(32) to_item_ID;
                         to_item_id = stream.read_u32();
