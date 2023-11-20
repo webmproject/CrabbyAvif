@@ -176,19 +176,13 @@ pub struct ItemReference {
 }
 
 #[derive(Debug, Default)]
-pub struct ItemData {
-    pub size: u64,
-    pub offset: usize,
-}
-
-#[derive(Debug, Default)]
 pub struct MetaBox {
     pub iinf: Vec<ItemInfo>,
     pub iloc: ItemLocationBox,
     pub primary_item_id: u32,
     pub iprp: ItemPropertyBox,
     pub iref: Vec<ItemReference>,
-    pub idat: ItemData,
+    pub idat: Vec<u8>,
 }
 
 #[derive(Debug, Default)]
@@ -934,17 +928,16 @@ impl MP4Box {
         Ok(iref)
     }
 
-    fn parse_idat(stream: &mut IStream) -> Result<ItemData, i32> {
+    fn parse_idat(stream: &mut IStream) -> Result<Vec<u8>, i32> {
         // TODO: check if multiple idats were seen for this meta box.
         if stream.done() {
             println!("Invalid idat size");
             return Err(-1);
         }
-        Ok(ItemData {
-            size: stream.bytes_left() as u64,
-            // TODO: this is wrong, the offset is relative. must be absolute.
-            offset: stream.offset,
-        })
+        let mut idat: Vec<u8> = Vec::new();
+        idat.reserve(stream.bytes_left());
+        idat.extend_from_slice(stream.get_slice(stream.bytes_left()));
+        Ok(idat)
     }
 
     fn parse_meta(stream: &mut IStream) -> MetaBox {

@@ -43,7 +43,7 @@ impl IStream<'_> {
         self.bytes_left() == 0
     }
 
-    fn get_slice(&mut self, size: usize) -> &[u8] {
+    pub fn get_slice(&mut self, size: usize) -> &[u8] {
         let offset_start = self.offset;
         self.offset += size;
         &self.data[offset_start..offset_start + size]

@@ -274,6 +274,7 @@ struct AvifItem {
     has_unsupported_essential_property: bool,
     ipma_seen: bool,
     progressive: bool,
+    idat: Vec<u8>,
 }
 
 macro_rules! find_property {
@@ -306,9 +307,15 @@ impl AvifItem {
             return true;
         }
         // TODO: handle multiple extents.
-        let mut io_data = match io.read(self.data_offset(), self.size) {
-            Ok(data) => data,
-            Err(err) => return false,
+        let mut io_data = match self.idat.is_empty() {
+            true => match io.read(self.data_offset(), self.size) {
+                Ok(data) => data,
+                Err(err) => return false,
+            },
+            false => {
+                // TODO: assumes idat offset is 0.
+                self.idat.as_slice()
+            }
         };
         let mut stream = IStream::create(io_data);
         // unsigned int(8) version = 0;
@@ -525,15 +532,13 @@ fn construct_avif_items(meta: &MetaBox) -> Result<HashMap<u32, AvifItem>, &str> 
         if !avif_item.extents.is_empty() {
             return Err("item already has extents.");
         }
-        let base_offset: u64 = if item.construction_method == 1 {
-            meta.idat.offset as u64
-        } else {
-            0
-        };
+        if item.construction_method == 1 {
+            avif_item.idat = meta.idat.clone();
+        }
         // TODO: handle overflows in the addition below.
         for extent in &item.extents {
             avif_item.extents.push(ItemLocationExtent {
-                offset: base_offset + item.base_offset + extent.offset,
+                offset: item.base_offset + extent.offset,
                 length: extent.length,
             });
             avif_item.size += extent.length as usize;
