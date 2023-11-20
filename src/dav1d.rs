@@ -1,5 +1,6 @@
 use crate::bindings::*;
 use crate::decoder::AvifImage;
+use crate::PixelFormat;
 use std::mem::MaybeUninit;
 
 #[derive(Debug, Default)]
@@ -132,7 +133,13 @@ impl Dav1d {
             image.height = dav1d_picture.p.h as u32;
             image.depth = dav1d_picture.p.bpc as u8;
 
-            image.yuv_format = dav1d_picture.p.layout as u8;
+            image.yuv_format = match dav1d_picture.p.layout {
+                0 => PixelFormat::Monochrome,
+                1 => PixelFormat::Yuv420,
+                2 => PixelFormat::Yuv422,
+                3 => PixelFormat::Yuv444,
+                _ => PixelFormat::None,
+            };
             let seq_hdr = unsafe { (*dav1d_picture.seq_hdr) };
             image.full_range = seq_hdr.color_range != 0;
             image.chroma_sample_position = seq_hdr.chr as u8;
@@ -142,8 +149,7 @@ impl Dav1d {
             image.matrix_coefficients = seq_hdr.mtrx as u16;
 
             // TODO: call image freeplanes.
-            let plane_count = if image.yuv_format == 0 { 1 } else { 3 };
-            for plane in 0usize..plane_count {
+            for plane in 0usize..image.yuv_format.plane_count() {
                 image.yuv_planes[plane] = Some(dav1d_picture.data[plane] as *const u8);
                 let stride_index = if plane == 0 { 0 } else { 1 };
                 image.yuv_row_bytes[plane] = dav1d_picture.stride[stride_index] as u32;

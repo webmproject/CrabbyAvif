@@ -1,4 +1,5 @@
 use crate::decoder::AvifImage;
+use crate::*;
 use std::fs::File;
 use std::io::prelude::*;
 
@@ -18,13 +19,13 @@ impl Y4MWriter {
         let has_alpha = image.alpha_plane.is_some() && image.alpha_row_bytes > 0;
         self.write_alpha = false;
 
-        if has_alpha && (image.depth != 8 || image.yuv_format != 3) {
+        if has_alpha && (image.depth != 8 || image.yuv_format != PixelFormat::Yuv444) {
             println!("WARNING: writing alpha is currently only supported in 8bpc YUV444, ignoring alpha channel");
         }
 
         let y4m_format = match image.depth {
             8 => match image.yuv_format {
-                3 => {
+                PixelFormat::Yuv444 => {
                     if has_alpha {
                         self.write_alpha = true;
                         "C444alpha XYSCSS=444"
@@ -32,24 +33,24 @@ impl Y4MWriter {
                         "C444 XYSCSS=444"
                     }
                 }
-                2 => "C422 XYSCSS=422",
-                1 => "C420jpeg XYSCSS=420JPEG",
-                0 => "Cmono XYSCSS=400",
-                _ => return false,
+                PixelFormat::Yuv422 => "C422 XYSCSS=422",
+                PixelFormat::Yuv420 => "C420jpeg XYSCSS=420JPEG",
+                PixelFormat::Monochrome => "Cmono XYSCSS=400",
+                PixelFormat::None => return false,
             },
             10 => match image.yuv_format {
-                3 => "C444p10 XYSCSS=444P10",
-                2 => "C422p10 XYSCSS=422P10",
-                1 => "C420p10 XYSCSS=420P10",
-                0 => "Cmono10 XYSCSS=400",
-                _ => return false,
+                PixelFormat::Yuv444 => "C444p10 XYSCSS=444P10",
+                PixelFormat::Yuv422 => "C422p10 XYSCSS=422P10",
+                PixelFormat::Yuv420 => "C420p10 XYSCSS=420P10",
+                PixelFormat::Monochrome => "Cmono10 XYSCSS=400",
+                PixelFormat::None => return false,
             },
             12 => match image.yuv_format {
-                3 => "C444p12 XYSCSS=444P12",
-                2 => "C422p12 XYSCSS=422P12",
-                1 => "C420p12 XYSCSS=420P12",
-                0 => "Cmono12 XYSCSS=400",
-                _ => return false,
+                PixelFormat::Yuv444 => "C444p12 XYSCSS=444P12",
+                PixelFormat::Yuv422 => "C422p12 XYSCSS=422P12",
+                PixelFormat::Yuv420 => "C420p12 XYSCSS=420P12",
+                PixelFormat::Monochrome => "Cmono12 XYSCSS=400",
+                PixelFormat::None => return false,
             },
             _ => {
                 println!("image depth is invalid: {}", image.depth);

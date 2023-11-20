@@ -9,6 +9,7 @@ use crate::mp4box::ItemProperty::AuxiliaryType;
 use crate::mp4box::ItemProperty::ImageSpatialExtents;
 use crate::mp4box::*;
 use crate::stream::*;
+use crate::*;
 
 // TODO: needed only for debug to AvifImage. Can be removed it AvifIMage does not have to be debug printable.
 use derivative::Derivative;
@@ -20,7 +21,7 @@ pub struct AvifImage {
     pub height: u32,
     pub depth: u8,
 
-    pub yuv_format: u8,
+    pub yuv_format: PixelFormat,
     pub full_range: bool,
     pub chroma_sample_position: u8,
 
@@ -67,10 +68,10 @@ impl AvifImage {
             let mut plane_width = self.width;
             let mut plane_height = self.height;
             if plane > 0 {
-                if self.yuv_format == 1 {
+                if self.yuv_format == PixelFormat::Yuv420 {
                     plane_width = (plane_width + 1) / 2;
                     plane_height = (plane_height + 1) / 2;
-                } else if self.yuv_format == 2 {
+                } else if self.yuv_format == PixelFormat::Yuv422 {
                     plane_width = (plane_width + 1) / 2;
                 }
             }
@@ -971,12 +972,17 @@ fn steal_planes(dst: &mut AvifImage, src: &mut AvifImage, category: usize) {
 }
 
 impl AvifDecoder {
-    pub fn set_file(&mut self, filename: &String) -> bool {
+    pub fn set_io_file(&mut self, filename: &String) -> bool {
         let io = AvifDecoderFileIO::create(filename);
         if io.is_none() {
             return false;
         }
         self.io = Some(Box::new(io.unwrap()));
+        true
+    }
+
+    pub fn set_io(&mut self, io: Box<dyn AvifDecoderIO>) -> bool {
+        self.io = Some(io);
         true
     }
 
@@ -1280,14 +1286,14 @@ impl AvifDecoder {
         let av1C = av1C.unwrap();
         self.image.depth = av1C.depth();
         if av1C.monochrome {
-            self.image.yuv_format = 0;
+            self.image.yuv_format = PixelFormat::Monochrome;
         } else {
             if av1C.chroma_subsampling_x == 1 && av1C.chroma_subsampling_y == 1 {
-                self.image.yuv_format = 1;
+                self.image.yuv_format = PixelFormat::Yuv420;
             } else if (av1C.chroma_subsampling_x == 1) {
-                self.image.yuv_format = 2;
+                self.image.yuv_format = PixelFormat::Yuv422;
             } else {
-                self.image.yuv_format = 3;
+                self.image.yuv_format = PixelFormat::Yuv444;
             }
         }
         self.image.chroma_sample_position = av1C.chroma_sample_position;

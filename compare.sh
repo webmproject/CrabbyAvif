@@ -1,6 +1,7 @@
 #! /bin/bash
 
 dir="/Users/vigneshv/code/av1-avif/testFiles"
+#dir="/Users/vigneshv/code/libavif/tests/data"
 
 c_dir="/tmp/gold"
 rust_dir="/tmp/actual"

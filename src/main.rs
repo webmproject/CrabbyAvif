@@ -18,7 +18,7 @@ fn main() {
     };
     let mut decoder: AvifDecoder = Default::default();
     decoder.settings = settings;
-    decoder.set_file(&args[1]);
+    decoder.set_io_file(&args[1]);
     let image = decoder.parse();
     println!("image after parse: {:#?}", image);
 

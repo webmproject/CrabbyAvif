@@ -50,7 +50,6 @@ impl AvifDecoderIO for AvifDecoderFileIO {
             return Err(-1);
         }
         let available_size: usize = (file_size - offset) as usize;
-        println!("available_size: {available_size}");
         let size_to_read: usize = if size > available_size {
             available_size
         } else {
@@ -73,7 +72,6 @@ impl AvifDecoderIO for AvifDecoderFileIO {
         } else {
             self.buffer.resize(0, 0);
         }
-        println!("### size_to_read: {size_to_read}");
         Ok(self.buffer.as_slice())
     }
 
