@@ -1429,7 +1429,6 @@ impl MP4Box {
                         "meta" => {
                             avif_boxes.meta = MP4Box::parse_meta(&mut box_stream)?;
                             meta_seen = true;
-                            println!("{:#?}", avif_boxes);
                         }
                         "moov" => {
                             avif_boxes.tracks = MP4Box::parse_moov(&mut box_stream)?;
@@ -1443,7 +1442,7 @@ impl MP4Box {
             }
             parse_offset += header.size;
         }
-        println!("{:#?}", avif_boxes);
+        //println!("{:#?}", avif_boxes);
         Ok(avif_boxes)
     }
 
@@ -1451,7 +1450,7 @@ impl MP4Box {
         let mut stream = IStream::create(data);
         let header = MP4Box::parse_header(&mut stream)?;
         let ftyp = Self::parse_ftyp(&mut stream)?;
-        println!("ftyp: {:#?}", ftyp);
+        //println!("ftyp: {:#?}", ftyp);
         Ok(ftyp.is_avif())
     }
 }

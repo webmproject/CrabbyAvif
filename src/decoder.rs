@@ -965,7 +965,7 @@ impl AvifDecoder {
         for (id, item) in &mut self.avif_items {
             item.harvest_ispe(self.settings.strictness.alpha_ispe_required())?;
         }
-        println!("{:#?}", self.avif_items);
+        //println!("{:#?}", self.avif_items);
 
         self.source = match self.settings.source {
             // Decide the source based on the major brand.
@@ -1000,13 +1000,13 @@ impl AvifDecoder {
                 // TODO: exif/xmp from meta.
 
                 self.tiles[0].push(create_tile_from_track(&color_track)?);
-                println!("color_tile: {:#?}", self.tiles[0]);
+                //println!("color_tile: {:#?}", self.tiles[0]);
                 self.tile_info[0].tile_count = 1;
 
                 match self.tracks.iter().find(|x| x.is_aux(color_track.id)) {
                     Some(alpha_track) => {
                         self.tiles[1].push(create_tile_from_track(alpha_track)?);
-                        println!("alpha_tile: {:#?}", self.tiles[1]);
+                        //println!("alpha_tile: {:#?}", self.tiles[1]);
                         self.tile_info[1].tile_count = 1;
                         self.alpha_present = true;
                         self.image.alpha_premultiplied = color_track.prem_by_id == alpha_track.id;

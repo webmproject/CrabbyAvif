@@ -10,6 +10,9 @@ use libc::size_t;
 use crate::decoder::*;
 use crate::AvifError;
 use crate::AvifResult;
+use crate::AvifStrictness;
+use crate::AvifStrictnessFlag;
+use crate::PixelFormat;
 
 #[repr(C)]
 pub struct avifROData {
@@ -59,10 +62,142 @@ pub const AVIF_TRUE: c_int = 1;
 pub const AVIF_FALSE: c_int = 0;
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Debug)]
+pub enum avifPixelFormat {
+    AVIF_PIXEL_FORMAT_NONE,
+    AVIF_PIXEL_FORMAT_YUV444,
+    AVIF_PIXEL_FORMAT_YUV422,
+    AVIF_PIXEL_FORMAT_YUV420,
+    AVIF_PIXEL_FORMAT_YUV400,
+    AVIF_PIXEL_FORMAT_COUNT,
+}
+
+impl From<PixelFormat> for avifPixelFormat {
+    fn from(format: PixelFormat) -> Self {
+        match format {
+            PixelFormat::None => Self::AVIF_PIXEL_FORMAT_NONE,
+            PixelFormat::Yuv444 => Self::AVIF_PIXEL_FORMAT_YUV444,
+            PixelFormat::Yuv422 => Self::AVIF_PIXEL_FORMAT_YUV422,
+            PixelFormat::Yuv420 => Self::AVIF_PIXEL_FORMAT_YUV420,
+            PixelFormat::Monochrome => Self::AVIF_PIXEL_FORMAT_YUV400,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug)]
+enum avifRange {
+    AVIF_RANGE_LIMITED = 0,
+    AVIF_RANGE_FULL = 1,
+}
+
+impl From<bool> for avifRange {
+    fn from(full_range: bool) -> Self {
+        match full_range {
+            true => Self::AVIF_RANGE_FULL,
+            false => Self::AVIF_RANGE_LIMITED,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug)]
+enum avifChromaSamplePosition {
+    AVIF_CHROMA_SAMPLE_POSITION_UNKNOWN = 0,
+    AVIF_CHROMA_SAMPLE_POSITION_VERTICAL = 1,
+    AVIF_CHROMA_SAMPLE_POSITION_COLOCATED = 2,
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct avifImage {
+    width: u32,
+    height: u32,
+    depth: u32,
+
+    yuvFormat: avifPixelFormat,
+    yuvRange: avifRange,
+    yuvChromaSamplePosition: avifChromaSamplePosition,
+    yuvPlanes: [*mut u8; 3],
+    yuvRowBytes: [u32; 3],
+    imageOwnsYUVPlanes: avifBool,
+
+    alphaPlane: *mut u8,
+    alphaRowBytes: u32,
+    imageOwnsAlphaPlane: avifBool,
+    alphaPremultiplied: avifBool,
+    // avifRWData icc;
+    // avifColorPrimaries colorPrimaries;
+    // avifTransferCharacteristics transferCharacteristics;
+    // avifMatrixCoefficients matrixCoefficients;
+    // avifContentLightLevelInformationBox clli;
+    // avifTransformFlags transformFlags;
+    // avifPixelAspectRatioBox pasp;
+    // avifCleanApertureBox clap;
+    // avifImageRotation irot;
+    // avifImageMirror imir;
+    // avifRWData exif;
+    // avifRWData xmp;
+    // avifGainMap gainMap;
+}
+
+impl Default for avifImage {
+    fn default() -> Self {
+        avifImage {
+            width: 0,
+            height: 0,
+            depth: 0,
+            yuvFormat: avifPixelFormat::AVIF_PIXEL_FORMAT_NONE,
+            yuvRange: avifRange::AVIF_RANGE_FULL,
+            yuvChromaSamplePosition: avifChromaSamplePosition::AVIF_CHROMA_SAMPLE_POSITION_UNKNOWN,
+            yuvPlanes: [std::ptr::null_mut(); 3],
+            yuvRowBytes: [0; 3],
+            imageOwnsYUVPlanes: AVIF_FALSE,
+            alphaPlane: std::ptr::null_mut(),
+            alphaRowBytes: 0,
+            imageOwnsAlphaPlane: AVIF_FALSE,
+            alphaPremultiplied: AVIF_FALSE,
+        }
+    }
+}
+
+impl From<&AvifImage> for avifImage {
+    fn from(image: &AvifImage) -> Self {
+        let mut dst_image = Self::default();
+        dst_image.width = image.width;
+        dst_image.height = image.height;
+        dst_image.depth = image.depth as u32;
+        dst_image.yuvFormat = image.yuv_format.into();
+        dst_image.yuvRange = image.full_range.into();
+        //dst_image.yuvChromaSamplePosition: avifChromaSamplePosition,
+        for i in 0usize..3 {
+            if image.yuv_planes[i].is_none() {
+                continue;
+            }
+            dst_image.yuvPlanes[i] = image.yuv_planes[i].unwrap() as *mut u8;
+            dst_image.yuvRowBytes[i] = image.yuv_row_bytes[i];
+        }
+        if image.alpha_plane.is_some() {
+            dst_image.alphaPlane = image.alpha_plane.unwrap() as *mut u8;
+            dst_image.alphaRowBytes = image.alpha_row_bytes;
+            dst_image.alphaPremultiplied = image.alpha_premultiplied as avifBool;
+        }
+        dst_image
+    }
+}
+
+pub const AVIF_STRICT_DISABLED: u32 = 0;
+pub const AVIF_STRICT_PIXI_REQUIRED: u32 = (1 << 0);
+pub const AVIF_STRICT_CLAP_VALID: u32 = (1 << 1);
+pub const AVIF_STRICT_ALPHA_ISPE_REQUIRED: u32 = (1 << 2);
+pub const AVIF_STRICT_ENABLED: u32 =
+    AVIF_STRICT_PIXI_REQUIRED | AVIF_STRICT_CLAP_VALID | AVIF_STRICT_ALPHA_ISPE_REQUIRED;
+pub type avifStrictFlags = u32;
+
+#[repr(C)]
 pub struct avifDecoder {
     // avifCodecChoice codecChoice;
-    pub maxThreads: c_int,
+    pub maxThreads: i32,
     //avifDecoderSource requestedSource;
     pub allowIncremental: avifBool,
     pub allowProgressive: avifBool,
@@ -71,25 +206,20 @@ pub struct avifDecoder {
     // uint32_t imageSizeLimit;
     // uint32_t imageDimensionLimit;
     // uint32_t imageCountLimit;
-    // avifStrictFlags strictFlags;
+    pub strictFlags: avifStrictFlags,
 
     // Output params.
-
-    // avifImage * image;
-    pub imageIndex: c_int,
-    pub imageCount: c_int,
+    pub image: *mut avifImage,
+    pub imageIndex: i32,
+    pub imageCount: i32,
     // avifProgressiveState progressiveState; // See avifProgressiveState declaration
     // avifImageTiming imageTiming;           //
-    // uint64_t timescale;                    // timescale of the media (Hz)
-    // double duration;                       // duration of a single playback of the image sequence in seconds
-    //                                        // (durationInTimescales / timescale)
-    // uint64_t durationInTimescales;         // duration of a single playback of the image sequence in "timescales"
-    // int repetitionCount;                   // number of times the sequence has to be repeated. This can also be one of
-    //                                        // AVIF_REPETITION_COUNT_INFINITE or AVIF_REPETITION_COUNT_UNKNOWN. Essentially, if
-    //                                        // repetitionCount is a non-negative integer `n`, then the image sequence should be
-    //                                        // played back `n + 1` times.
+    pub timescale: u64,
+    pub duration: f64,
+    pub durationInTimescales: u64,
+    pub repetitionCount: i32,
 
-    //avifBool alphaPresent;
+    pub alphaPresent: avifBool,
 
     //avifIOStats ioStats;
 
@@ -104,7 +234,33 @@ pub struct avifDecoder {
     // avifBool enableParsingGainMapMetadata;
     // avifBool ignoreColorAndAlpha;
     // avifBool imageSequenceTrackPresent;
+
+    // TODO: maybe wrap these fields in a private data kind of field?
     rust_decoder: Box<AvifDecoder>,
+    image_object: avifImage,
+}
+
+impl Default for avifDecoder {
+    fn default() -> Self {
+        Self {
+            maxThreads: 1,
+            allowIncremental: AVIF_FALSE,
+            allowProgressive: AVIF_FALSE,
+            ignoreExif: AVIF_FALSE,
+            ignoreXMP: AVIF_FALSE,
+            strictFlags: AVIF_STRICT_ENABLED,
+            image: std::ptr::null_mut(),
+            imageIndex: -1,
+            imageCount: 0,
+            timescale: 0,
+            duration: 0.0,
+            durationInTimescales: 0,
+            repetitionCount: 0,
+            alphaPresent: AVIF_FALSE,
+            rust_decoder: Box::new(AvifDecoder::default()),
+            image_object: avifImage::default(),
+        }
+    }
 }
 
 fn to_avifBool(val: bool) -> avifBool {
@@ -144,16 +300,71 @@ pub unsafe extern "C" fn avifDecoderSetIOFile(
     to_avifResult(&rust_decoder.set_io_file(&filename))
 }
 
+impl From<&avifDecoder> for AvifDecoderSettings {
+    fn from(decoder: &avifDecoder) -> Self {
+        let strictness = if decoder.strictFlags == AVIF_STRICT_DISABLED {
+            AvifStrictness::None
+        } else if decoder.strictFlags == AVIF_STRICT_ENABLED {
+            AvifStrictness::All
+        } else {
+            let mut flags: Vec<AvifStrictnessFlag> = Vec::new();
+            if (decoder.strictFlags & AVIF_STRICT_PIXI_REQUIRED) != 0 {
+                flags.push(AvifStrictnessFlag::PixiRequired);
+            }
+            if (decoder.strictFlags & AVIF_STRICT_CLAP_VALID) != 0 {
+                flags.push(AvifStrictnessFlag::ClapValid);
+            }
+            if (decoder.strictFlags & AVIF_STRICT_ALPHA_ISPE_REQUIRED) != 0 {
+                flags.push(AvifStrictnessFlag::AlphaIspeRequired);
+            }
+            AvifStrictness::SpecificInclude(flags)
+        };
+        Self {
+            strictness,
+            ..Self::default()
+        }
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResult {
     let rust_decoder = &mut (*decoder).rust_decoder;
+    rust_decoder.settings = (&(*decoder)).into();
+
+    println!("settings: {:#?}", rust_decoder.settings);
+
     let res = rust_decoder.parse();
-    let retval = to_avifResult(&res);
-    if retval != avifResult::AVIF_RESULT_OK {
-        return retval;
+    if !res.is_ok() {
+        return to_avifResult(&res);
     }
+
+    // Copy image.
+    (*decoder).image_object = res.unwrap().into();
+
+    // Copy decoder.
     (*decoder).imageCount = rust_decoder.image_count as i32;
-    retval
+    (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
+
+    return avifResult::AVIF_RESULT_OK;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avifResult {
+    let rust_decoder = &mut (*decoder).rust_decoder;
+
+    let res = rust_decoder.next_image();
+    if res.is_none() {
+        return avifResult::AVIF_RESULT_UNKNOWN_ERROR;
+    }
+
+    // Copy image.
+    (*decoder).image_object = res.unwrap().into();
+
+    // Copy decoder.
+    (*decoder).imageCount = rust_decoder.image_count as i32;
+    (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
+
+    return avifResult::AVIF_RESULT_OK;
 }
 
 #[no_mangle]
