@@ -76,12 +76,6 @@ impl AvifImage {
                 }
             }
             let stride_index: usize = if plane == 0 { 0 } else { 1 };
-            // let plane_data;
-            // if self.image_owns_yuv_planes {
-            //     plane_data = plane_buffer[plane].as_ptr();
-            // } else {
-            //     plane_data = self.yuv_planes[plane].unwrap();
-            // }
             return Some(AvifPlane {
                 data: self.yuv_planes[plane].unwrap(),
                 width: plane_width,
@@ -968,7 +962,7 @@ impl AvifDecoder {
             return Err(AvifError::IoNotSet);
         }
         let avif_boxes = MP4Box::parse(&mut self.io.as_mut().unwrap())?;
-        self.tracks = avif_boxes.moov.tracks;
+        self.tracks = avif_boxes.tracks;
         self.avif_items = construct_avif_items(&avif_boxes.meta)?;
         for (id, item) in &mut self.avif_items {
             item.harvest_ispe()?;

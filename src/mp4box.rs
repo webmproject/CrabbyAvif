@@ -287,15 +287,10 @@ impl AvifTrack {
 }
 
 #[derive(Debug, Default)]
-pub struct MovieBox {
-    pub tracks: Vec<AvifTrack>,
-}
-
-#[derive(Debug, Default)]
 pub struct AvifBoxes {
     pub ftyp: FileTypeBox,
     pub meta: MetaBox,
-    pub moov: MovieBox,
+    pub tracks: Vec<AvifTrack>,
 }
 
 pub struct MP4Box {}
@@ -1374,18 +1369,18 @@ impl MP4Box {
         Ok(track)
     }
 
-    fn parse_moov(stream: &mut IStream) -> AvifResult<MovieBox> {
+    fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<AvifTrack>> {
         println!("parsing moov size: {}", stream.bytes_left());
-        let mut moov: MovieBox = Default::default();
+        let mut tracks: Vec<AvifTrack> = Vec::new();
         while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
             match header.box_type.as_str() {
-                "trak" => moov.tracks.push(Self::parse_trak(&mut sub_stream)?),
+                "trak" => tracks.push(Self::parse_trak(&mut sub_stream)?),
                 _ => println!("skipping box {}", header.box_type),
             }
         }
-        Ok(moov)
+        Ok(tracks)
     }
 
     pub fn parse(io: &mut Box<dyn AvifDecoderIO>) -> AvifResult<AvifBoxes> {
@@ -1425,7 +1420,7 @@ impl MP4Box {
                             println!("{:#?}", avif_boxes);
                         }
                         "moov" => {
-                            avif_boxes.moov = MP4Box::parse_moov(&mut box_stream)?;
+                            avif_boxes.tracks = MP4Box::parse_moov(&mut box_stream)?;
                         }
                         _ => {} // Not reached.
                     }
