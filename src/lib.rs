@@ -2,13 +2,18 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 
+/// cbindgen:ignore
 mod bindings;
+/// cbindgen:ignore
 mod dav1d;
 pub mod decoder;
 pub mod io;
 mod mp4box;
 mod stream;
 pub mod utils;
+
+#[cfg(feature = "capi")]
+pub mod capi;
 
 macro_rules! println {
     ($($rest:tt)*) => {

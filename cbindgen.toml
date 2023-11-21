@@ -1,0 +1,4 @@
+language = "C"
+include_guard = "AVIF_H"
+tab_width = 4
+style = "type"
