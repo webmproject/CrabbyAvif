@@ -443,6 +443,13 @@ impl AvifItem {
             None => false,
         }
     }
+
+    fn should_skip(&self) -> bool {
+        self.size == 0
+            || self.has_unsupported_essential_property
+            || (self.item_type != "av01" && self.item_type != "grid")
+            || self.thumbnail_for_id != 0
+    }
 }
 
 fn find_nclx(properties: &Vec<ItemProperty>) -> Result<&Nclx, bool> {
@@ -629,42 +636,14 @@ fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
     Ok(avif_items)
 }
 
-fn should_skip_decoder_item(item: &AvifItem) -> bool {
-    item.size == 0
-        || item.has_unsupported_essential_property
-        || (item.item_type != "av01" && item.item_type != "grid")
-        || item.thumbnail_for_id != 0
-}
-
-fn find_color_item(avif_items: &HashMap<u32, AvifItem>, primary_item_id: u32) -> AvifResult<u32> {
-    if primary_item_id == 0 {
-        return Err(AvifError::NoContent);
-    }
-    // TODO: perhaps this can be an idiomatic oneliner ?
-    for (_, item) in avif_items {
-        if should_skip_decoder_item(item) {
-            continue;
-        }
-        if item.id == primary_item_id {
-            return Ok(item.id);
-        }
-    }
-    return Err(AvifError::NoContent);
-}
-
 fn find_alpha_item(avif_items: &HashMap<u32, AvifItem>, color_item: &AvifItem) -> Option<u32> {
-    for (_, item) in avif_items {
-        if should_skip_decoder_item(item) {
-            continue;
-        }
-        if item.aux_for_id != color_item.id {
-            continue;
-        }
-        if !item.is_auxiliary_alpha() {
-            continue;
-        }
-        return Some(item.id);
-    }
+    match avif_items
+        .iter()
+        .find(|x| !x.1.should_skip() && x.1.aux_for_id == color_item.id && x.1.is_auxiliary_alpha())
+    {
+        Some(item) => return Some(*item.0),
+        None => {} // Do nothing.
+    };
     if color_item.item_type != "grid" {
         return Some(0);
     }
@@ -1038,26 +1017,26 @@ impl AvifDecoder {
             AvifDecoderSource::PrimaryItem => {
                 // 0 color, 1 alpha, 2 gainmap
                 let mut item_ids: [u32; 3] = [0; 3];
+
                 // Mandatory color item.
-                item_ids[0] = find_color_item(&self.avif_items, avif_boxes.meta.primary_item_id)?;
-                self.avif_items
-                    .get_mut(&item_ids[0])
-                    .unwrap()
-                    .read_and_parse(&mut self.io.as_mut().unwrap(), &mut self.tile_info[0].grid)?;
+                item_ids[0] = *self
+                    .avif_items
+                    .iter()
+                    .find(|x| {
+                        !x.1.should_skip()
+                            && x.1.id != 0
+                            && x.1.id == avif_boxes.meta.primary_item_id
+                    })
+                    .ok_or(AvifError::NoContent)?
+                    .0;
+                self.read_and_parse_item(item_ids[0], 0)?;
 
                 // Optional alpha auxiliary item
                 item_ids[1] =
                     find_alpha_item(&self.avif_items, self.avif_items.get(&item_ids[0]).unwrap())
                         .unwrap_or(0);
-                if item_ids[1] != 0 {
-                    self.avif_items
-                        .get_mut(&item_ids[1])
-                        .unwrap()
-                        .read_and_parse(
-                            &mut self.io.as_mut().unwrap(),
-                            &mut self.tile_info[1].grid,
-                        )?;
-                }
+                self.read_and_parse_item(item_ids[1], 1)?;
+
                 println!("item ids: {:#?}", item_ids);
 
                 // TODO: gainmap item.
@@ -1170,6 +1149,16 @@ impl AvifDecoder {
         self.image.chroma_sample_position = av1C.chroma_sample_position;
 
         Ok(&self.image)
+    }
+
+    fn read_and_parse_item(&mut self, item_id: u32, index: usize) -> AvifResult<()> {
+        if item_id == 0 {
+            return Ok(());
+        }
+        self.avif_items.get(&item_id).unwrap().read_and_parse(
+            &mut self.io.as_mut().unwrap(),
+            &mut self.tile_info[index as usize].grid,
+        )
     }
 
     fn create_codecs(&mut self) -> bool {
