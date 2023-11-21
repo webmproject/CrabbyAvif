@@ -212,6 +212,24 @@ pub struct AvifDecoderSettings {
     pub source: AvifDecoderSource,
     pub ignore_exif: bool,
     pub ignore_icc: bool,
+    pub strictness: AvifStrictness,
+}
+
+impl AvifStrictness {
+    pub fn alpha_ispe_required(&self) -> bool {
+        match self {
+            AvifStrictness::All => true,
+            AvifStrictness::SpecificInclude(flags) => flags
+                .iter()
+                .find(|x| matches!(x, AvifStrictnessFlag::AlphaIspeRequired))
+                .is_some(),
+            AvifStrictness::SpecificExclude(flags) => flags
+                .iter()
+                .find(|x| matches!(x, AvifStrictnessFlag::AlphaIspeRequired))
+                .is_none(),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -360,7 +378,7 @@ impl AvifItem {
         }
     }
 
-    fn harvest_ispe(&mut self) -> AvifResult<()> {
+    fn harvest_ispe(&mut self, alpha_ispe_required: bool) -> AvifResult<()> {
         if self.size == 0 {
             return Ok(());
         }
@@ -389,9 +407,10 @@ impl AvifItem {
             None => {
                 // No ispe was found.
                 if self.is_auxiliary_alpha() {
-                    // TODO: provide a strict flag to bypass this check.
-                    println!("alpha auxiliary image is missing mandatory ispe");
-                    return Err(AvifError::BmffParseFailed);
+                    if alpha_ispe_required {
+                        println!("alpha auxiliary image is missing mandatory ispe");
+                        return Err(AvifError::BmffParseFailed);
+                    }
                 } else {
                     println!("item id is missing mandatory ispe property");
                     return Err(AvifError::BmffParseFailed);
@@ -944,7 +963,7 @@ impl AvifDecoder {
         self.tracks = avif_boxes.tracks;
         self.avif_items = construct_avif_items(&avif_boxes.meta)?;
         for (id, item) in &mut self.avif_items {
-            item.harvest_ispe()?;
+            item.harvest_ispe(self.settings.strictness.alpha_ispe_required())?;
         }
         println!("{:#?}", self.avif_items);
 

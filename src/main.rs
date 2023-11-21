@@ -2,6 +2,7 @@ use std::env;
 use std::process::Command;
 
 use rust_libavif::decoder::*;
+use rust_libavif::*;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -15,6 +16,7 @@ fn main() {
         source: AvifDecoderSource::Auto,
         ignore_exif: false,
         ignore_icc: false,
+        strictness: AvifStrictness::None,
     };
     let mut decoder: AvifDecoder = Default::default();
     decoder.settings = settings;

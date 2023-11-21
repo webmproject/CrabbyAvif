@@ -75,3 +75,19 @@ pub enum AvifError {
 }
 
 pub type AvifResult<T> = Result<T, AvifError>;
+
+#[derive(Debug)]
+pub enum AvifStrictnessFlag {
+    PixiRequired,
+    ClapValid,
+    AlphaIspeRequired,
+}
+
+#[derive(Debug, Default)]
+pub enum AvifStrictness {
+    None,
+    #[default]
+    All,
+    SpecificInclude(Vec<AvifStrictnessFlag>),
+    SpecificExclude(Vec<AvifStrictnessFlag>),
+}
