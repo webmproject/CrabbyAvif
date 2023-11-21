@@ -195,10 +195,28 @@ pub const AVIF_STRICT_ENABLED: u32 =
 pub type avifStrictFlags = u32;
 
 #[repr(C)]
+#[derive(Copy, Clone)]
+pub enum avifDecoderSource {
+    AVIF_DECODER_SOURCE_AUTO,
+    AVIF_DECODER_SOURCE_PRIMARY_ITEM,
+    AVIF_DECODER_SOURCE_TRACKS,
+}
+
+impl From<avifDecoderSource> for AvifDecoderSource {
+    fn from(source: avifDecoderSource) -> Self {
+        match source {
+            avifDecoderSource::AVIF_DECODER_SOURCE_AUTO => AvifDecoderSource::Auto,
+            avifDecoderSource::AVIF_DECODER_SOURCE_PRIMARY_ITEM => AvifDecoderSource::PrimaryItem,
+            avifDecoderSource::AVIF_DECODER_SOURCE_TRACKS => AvifDecoderSource::Tracks,
+        }
+    }
+}
+
+#[repr(C)]
 pub struct avifDecoder {
     // avifCodecChoice codecChoice;
     pub maxThreads: i32,
-    //avifDecoderSource requestedSource;
+    pub requestedSource: avifDecoderSource,
     pub allowIncremental: avifBool,
     pub allowProgressive: avifBool,
     pub ignoreExif: avifBool,
@@ -244,6 +262,7 @@ impl Default for avifDecoder {
     fn default() -> Self {
         Self {
             maxThreads: 1,
+            requestedSource: avifDecoderSource::AVIF_DECODER_SOURCE_AUTO,
             allowIncremental: AVIF_FALSE,
             allowProgressive: AVIF_FALSE,
             ignoreExif: AVIF_FALSE,
@@ -300,6 +319,16 @@ pub unsafe extern "C" fn avifDecoderSetIOFile(
     to_avifResult(&rust_decoder.set_io_file(&filename))
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn avifDecoderSetSource(
+    decoder: *mut avifDecoder,
+    source: avifDecoderSource,
+) -> avifResult {
+    (*decoder).requestedSource = source;
+    // TODO: should decoder be reset here in case this is called after parse?
+    avifResult::AVIF_RESULT_OK
+}
+
 impl From<&avifDecoder> for AvifDecoderSettings {
     fn from(decoder: &avifDecoder) -> Self {
         let strictness = if decoder.strictFlags == AVIF_STRICT_DISABLED {
@@ -320,6 +349,7 @@ impl From<&avifDecoder> for AvifDecoderSettings {
             AvifStrictness::SpecificInclude(flags)
         };
         Self {
+            source: decoder.requestedSource.into(),
             strictness,
             ..Self::default()
         }
