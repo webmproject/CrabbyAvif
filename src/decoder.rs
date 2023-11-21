@@ -1321,4 +1321,11 @@ impl AvifDecoder {
         // TODO provide timing info for tracks.
         Some(&self.image)
     }
+
+    pub fn peek_compatible_file_type(data: &[u8]) -> bool {
+        match MP4Box::peek_compatible_file_type(data) {
+            Ok(x) => x,
+            Err(err) => false,
+        }
+    }
 }

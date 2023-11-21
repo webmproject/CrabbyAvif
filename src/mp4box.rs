@@ -17,6 +17,18 @@ pub struct FileTypeBox {
     compatible_brands: Vec<String>,
 }
 
+impl FileTypeBox {
+    pub fn is_avif(&self) -> bool {
+        if self.major_brand == "avif" || self.major_brand == "avis" {
+            return true;
+        }
+        self.compatible_brands
+            .iter()
+            .find(|x| x.as_str() == "avif" || x.as_str() == "avis")
+            .is_some()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct ItemLocationExtent {
     pub offset: u64,
@@ -1433,5 +1445,13 @@ impl MP4Box {
         }
         println!("{:#?}", avif_boxes);
         Ok(avif_boxes)
+    }
+
+    pub fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
+        let mut stream = IStream::create(data);
+        let header = MP4Box::parse_header(&mut stream)?;
+        let ftyp = Self::parse_ftyp(&mut stream)?;
+        println!("ftyp: {:#?}", ftyp);
+        Ok(ftyp.is_avif())
     }
 }
