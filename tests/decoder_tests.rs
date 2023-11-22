@@ -36,7 +36,8 @@ fn alpha_no_ispe() {
         AvifStrictness::SpecificExclude(vec![AvifStrictnessFlag::AlphaIspeRequired]);
     let res = decoder.parse();
     assert!(res.is_ok());
-    assert!(decoder.alpha_present);
+    let info = res.unwrap();
+    assert!(info.alpha_present);
     let res = decoder.next_image();
     assert!(res.is_ok());
     let image = res.unwrap();
@@ -51,7 +52,8 @@ fn animated_image() {
     let mut decoder = get_decoder("colors-animated-8bpc.avif");
     let res = decoder.parse();
     assert!(res.is_ok());
-    assert!(!decoder.alpha_present);
+    let info = res.unwrap();
+    assert!(!info.alpha_present);
     //assert!(!decoder.image_sequence_track_present);
     assert_eq!(decoder.image_count, 5);
     assert_eq!(decoder.repetition_count, 0);
@@ -67,7 +69,8 @@ fn animated_image_with_source_set_to_primary_item() {
     decoder.settings.source = decoder::AvifDecoderSource::PrimaryItem;
     let res = decoder.parse();
     assert!(res.is_ok());
-    assert!(!decoder.alpha_present);
+    let info = res.unwrap();
+    assert!(!info.alpha_present);
     //assert!(!decoder.image_sequence_track_present);
     // imageCount is expected to be 1 because we are using primary item as the
     // preferred source.

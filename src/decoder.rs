@@ -14,9 +14,8 @@ use crate::*;
 // TODO: needed only for debug to AvifImage. Can be removed it AvifIMage does not have to be debug printable.
 use derivative::Derivative;
 
-#[derive(Derivative, Default)]
-#[derivative(Debug)]
-pub struct AvifImage {
+#[derive(Default, Debug)]
+pub struct AvifImageInfo {
     pub width: u32,
     pub height: u32,
     pub depth: u8,
@@ -25,13 +24,7 @@ pub struct AvifImage {
     pub full_range: bool,
     pub chroma_sample_position: u8,
 
-    pub yuv_planes: [Option<*const u8>; 3],
-    pub yuv_row_bytes: [u32; 3], // TODO: named constant
-    pub image_owns_yuv_planes: bool,
-
-    pub alpha_plane: Option<*const u8>,
-    pub alpha_row_bytes: u32,
-    pub image_owns_alpha_plane: bool,
+    pub alpha_present: bool,
     pub alpha_premultiplied: bool,
 
     pub icc: u8, //Option<Vec<u8>>,
@@ -39,6 +32,21 @@ pub struct AvifImage {
     pub color_primaries: u16,
     pub transfer_characteristics: u16,
     pub matrix_coefficients: u16,
+}
+
+#[derive(Derivative, Default)]
+#[derivative(Debug)]
+pub struct AvifImage {
+    pub info: AvifImageInfo,
+
+    pub yuv_planes: [Option<*const u8>; 3],
+    pub yuv_row_bytes: [u32; 3], // TODO: named constant
+    pub image_owns_yuv_planes: bool,
+
+    pub alpha_plane: Option<*const u8>,
+    pub alpha_row_bytes: u32,
+    pub image_owns_alpha_plane: bool,
+
     // some more boxes. clli, transformations. pasp, clap, irot, imir.
 
     // exif, xmp.
@@ -60,18 +68,18 @@ pub struct AvifPlane {
 impl AvifImage {
     pub fn plane(&self, plane: usize) -> Option<AvifPlane> {
         assert!(plane < 4);
-        let pixel_size = if self.depth == 8 { 1 } else { 2 };
+        let pixel_size = if self.info.depth == 8 { 1 } else { 2 };
         if plane < 3 {
             if self.yuv_planes[plane].is_none() {
                 return None;
             }
-            let mut plane_width = self.width;
-            let mut plane_height = self.height;
+            let mut plane_width = self.info.width;
+            let mut plane_height = self.info.height;
             if plane > 0 {
-                if self.yuv_format == PixelFormat::Yuv420 {
+                if self.info.yuv_format == PixelFormat::Yuv420 {
                     plane_width = (plane_width + 1) / 2;
                     plane_height = (plane_height + 1) / 2;
-                } else if self.yuv_format == PixelFormat::Yuv422 {
+                } else if self.info.yuv_format == PixelFormat::Yuv422 {
                     plane_width = (plane_width + 1) / 2;
                 }
             }
@@ -89,8 +97,8 @@ impl AvifImage {
         }
         return Some(AvifPlane {
             data: self.alpha_plane.unwrap(),
-            width: self.width,
-            height: self.height,
+            width: self.info.width,
+            height: self.info.height,
             row_bytes: self.alpha_row_bytes,
             pixel_size,
         });
@@ -98,20 +106,20 @@ impl AvifImage {
 
     fn allocate_planes(&mut self, category: usize) -> AvifResult<()> {
         // TODO : assumes 444. do other stuff.
-        let pixel_size: u32 = if self.depth == 8 { 1 } else { 2 };
-        let plane_size = (self.width * self.height * pixel_size) as usize;
+        let pixel_size: u32 = if self.info.depth == 8 { 1 } else { 2 };
+        let plane_size = (self.info.width * self.info.height * pixel_size) as usize;
         if category == 0 {
             for plane_index in 0usize..3 {
                 self.plane_buffers[plane_index].reserve(plane_size);
                 self.plane_buffers[plane_index].resize(plane_size, 0);
-                self.yuv_row_bytes[plane_index] = self.width * pixel_size;
+                self.yuv_row_bytes[plane_index] = self.info.width * pixel_size;
                 self.yuv_planes[plane_index] = Some(self.plane_buffers[plane_index].as_ptr());
             }
             self.image_owns_yuv_planes = true;
         } else if category == 1 {
             self.plane_buffers[3].reserve(plane_size);
             self.plane_buffers[3].resize(plane_size, 255);
-            self.alpha_row_bytes = self.width * pixel_size;
+            self.alpha_row_bytes = self.info.width * pixel_size;
             self.alpha_plane = Some(self.plane_buffers[3].as_ptr());
             self.image_owns_alpha_plane = true;
         } else {
@@ -147,7 +155,7 @@ impl AvifImage {
             if (column_index as u32) == tile_info.grid.columns - 1 {
                 let width_so_far = src_plane.width * (column_index as u32);
                 // TODO: does self.width need to be accounted for subsampling?
-                src_width_to_copy = self.width - width_so_far;
+                src_width_to_copy = self.info.width - width_so_far;
             } else {
                 src_width_to_copy = src_plane.width;
             }
@@ -170,7 +178,7 @@ impl AvifImage {
             if (row_index as u32) == tile_info.grid.rows - 1 {
                 let height_so_far = src_plane.height * (row_index as u32);
                 // TODO: does self.height need to be accounted for subsampling?
-                src_height_to_copy = self.height - height_so_far;
+                src_height_to_copy = self.info.height - height_so_far;
             } else {
                 src_height_to_copy = src_plane.height;
             }
@@ -239,7 +247,6 @@ pub struct AvifDecoder {
     source: AvifDecoderSource,
     tile_info: [AvifTileInfo; 3],
     tiles: [Vec<AvifTile>; 3],
-    pub alpha_present: bool,
     image_index: i32,
     pub image_count: u32,
     pub timescale: u32,
@@ -955,7 +962,7 @@ impl AvifDecoder {
         Ok(())
     }
 
-    pub fn parse(&mut self) -> AvifResult<&AvifImage> {
+    pub fn parse(&mut self) -> AvifResult<&AvifImageInfo> {
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
         }
@@ -1008,8 +1015,9 @@ impl AvifDecoder {
                         self.tiles[1].push(create_tile_from_track(alpha_track)?);
                         //println!("alpha_tile: {:#?}", self.tiles[1]);
                         self.tile_info[1].tile_count = 1;
-                        self.alpha_present = true;
-                        self.image.alpha_premultiplied = color_track.prem_by_id == alpha_track.id;
+                        self.image.info.alpha_present = true;
+                        self.image.info.alpha_premultiplied =
+                            color_track.prem_by_id == alpha_track.id;
                     }
                     None => {}
                 }
@@ -1030,8 +1038,8 @@ impl AvifDecoder {
                 println!("timescale: {}", self.timescale);
                 println!("duration_in_timescales: {}", self.duration_in_timescales);
 
-                self.image.width = color_track.width;
-                self.image.height = color_track.height;
+                self.image.info.width = color_track.width;
+                self.image.info.height = color_track.height;
             }
             AvifDecoderSource::PrimaryItem => {
                 // 0 color, 1 alpha, 2 gainmap
@@ -1094,9 +1102,9 @@ impl AvifDecoder {
                 }
 
                 let color_item = self.avif_items.get(&item_ids[0]).unwrap();
-                self.image.width = color_item.width;
-                self.image.height = color_item.height;
-                self.alpha_present = item_ids[1] != 0;
+                self.image.info.width = color_item.width;
+                self.image.info.height = color_item.height;
+                self.image.info.alpha_present = item_ids[1] != 0;
                 // alphapremultiplied.
 
                 // This borrow has to be in the end of this branch.
@@ -1124,10 +1132,10 @@ impl AvifDecoder {
         //match color_item.nclx() {
         match find_nclx(color_properties) {
             Ok(nclx) => {
-                self.image.color_primaries = nclx.color_primaries;
-                self.image.transfer_characteristics = nclx.transfer_characteristics;
-                self.image.matrix_coefficients = nclx.matrix_coefficients;
-                self.image.full_range = nclx.full_range;
+                self.image.info.color_primaries = nclx.color_primaries;
+                self.image.info.transfer_characteristics = nclx.transfer_characteristics;
+                self.image.info.matrix_coefficients = nclx.matrix_coefficients;
+                self.image.info.full_range = nclx.full_range;
             }
             Err(multiple_nclx_found) => {
                 if multiple_nclx_found {
@@ -1153,21 +1161,21 @@ impl AvifDecoder {
         // TODO: if cicp was not found, harvest it from the seq hdr.
 
         let av1C = find_av1C(color_properties).ok_or(AvifError::BmffParseFailed)?;
-        self.image.depth = av1C.depth();
+        self.image.info.depth = av1C.depth();
         if av1C.monochrome {
-            self.image.yuv_format = PixelFormat::Monochrome;
+            self.image.info.yuv_format = PixelFormat::Monochrome;
         } else {
             if av1C.chroma_subsampling_x == 1 && av1C.chroma_subsampling_y == 1 {
-                self.image.yuv_format = PixelFormat::Yuv420;
+                self.image.info.yuv_format = PixelFormat::Yuv420;
             } else if (av1C.chroma_subsampling_x == 1) {
-                self.image.yuv_format = PixelFormat::Yuv422;
+                self.image.info.yuv_format = PixelFormat::Yuv422;
             } else {
-                self.image.yuv_format = PixelFormat::Yuv444;
+                self.image.info.yuv_format = PixelFormat::Yuv444;
             }
         }
-        self.image.chroma_sample_position = av1C.chroma_sample_position;
+        self.image.info.chroma_sample_position = av1C.chroma_sample_position;
 
-        Ok(&self.image)
+        Ok(&self.image.info)
     }
 
     fn read_and_parse_item(&mut self, item_id: u32, index: usize) -> AvifResult<()> {
@@ -1337,10 +1345,10 @@ impl AvifDecoder {
                 } else {
                     // Non grid path, steal planes from the only tile.
                     if category == 0 {
-                        self.image.width = tile.image.width;
-                        self.image.height = tile.image.height;
-                        self.image.depth = tile.image.depth;
-                        self.image.yuv_format = tile.image.yuv_format;
+                        self.image.info.width = tile.image.info.width;
+                        self.image.info.height = tile.image.info.height;
+                        self.image.info.depth = tile.image.info.depth;
+                        self.image.info.yuv_format = tile.image.info.yuv_format;
                     } else if category == 1 {
                         // check width height mismatch.
                     }

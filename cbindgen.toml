@@ -2,3 +2,7 @@ language = "C"
 include_guard = "AVIF_H"
 tab_width = 4
 style = "type"
+
+[enum]
+prefix_with_name = true
+rename_variants = "ScreamingSnakeCase"

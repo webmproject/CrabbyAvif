@@ -23,38 +23,38 @@ pub struct avifROData {
 #[repr(C)]
 #[derive(PartialEq)]
 pub enum avifResult {
-    AVIF_RESULT_OK = 0,
-    AVIF_RESULT_UNKNOWN_ERROR = 1,
-    AVIF_RESULT_INVALID_FTYP = 2,
-    AVIF_RESULT_NO_CONTENT = 3,
-    AVIF_RESULT_NO_YUV_FORMAT_SELECTED = 4,
-    AVIF_RESULT_REFORMAT_FAILED = 5,
-    AVIF_RESULT_UNSUPPORTED_DEPTH = 6,
-    AVIF_RESULT_ENCODE_COLOR_FAILED = 7,
-    AVIF_RESULT_ENCODE_ALPHA_FAILED = 8,
-    AVIF_RESULT_BMFF_PARSE_FAILED = 9,
-    AVIF_RESULT_MISSING_IMAGE_ITEM = 10,
-    AVIF_RESULT_DECODE_COLOR_FAILED = 11,
-    AVIF_RESULT_DECODE_ALPHA_FAILED = 12,
-    AVIF_RESULT_COLOR_ALPHA_SIZE_MISMATCH = 13,
-    AVIF_RESULT_ISPE_SIZE_MISMATCH = 14,
-    AVIF_RESULT_NO_CODEC_AVAILABLE = 15,
-    AVIF_RESULT_NO_IMAGES_REMAINING = 16,
-    AVIF_RESULT_INVALID_EXIF_PAYLOAD = 17,
-    AVIF_RESULT_INVALID_IMAGE_GRID = 18,
-    AVIF_RESULT_INVALID_CODEC_SPECIFIC_OPTION = 19,
-    AVIF_RESULT_TRUNCATED_DATA = 20,
-    AVIF_RESULT_IO_NOT_SET = 21,
-    AVIF_RESULT_IO_ERROR = 22,
-    AVIF_RESULT_WAITING_ON_IO = 23,
-    AVIF_RESULT_INVALID_ARGUMENT = 24,
-    AVIF_RESULT_NOT_IMPLEMENTED = 25,
-    AVIF_RESULT_OUT_OF_MEMORY = 26,
-    AVIF_RESULT_CANNOT_CHANGE_SETTING = 27,
-    AVIF_RESULT_INCOMPATIBLE_IMAGE = 28,
-    AVIF_RESULT_ENCODE_GAIN_MAP_FAILED = 29,
-    AVIF_RESULT_DECODE_GAIN_MAP_FAILED = 30,
-    AVIF_RESULT_INVALID_TONE_MAPPED_IMAGE = 31,
+    Ok,
+    UnknownError,
+    InvalidFtyp,
+    NoContent,
+    NoYuvFormatSelected,
+    ReformatFailed,
+    UnsupportedDepth,
+    EncodeColorFailed,
+    EncodeAlphaFailed,
+    BmffParseFailed,
+    MissingImageItem,
+    DecodeColorFailed,
+    DecodeAlphaFailed,
+    ColorAlphaSizeMismatch,
+    IspeSizeMismatch,
+    NoCodecAvailable,
+    NoImagesRemaining,
+    InvalidExifPayload,
+    InvalidImageGrid,
+    InvalidCodecSpecificOption,
+    TruncatedData,
+    IoNotSet,
+    IoError,
+    WaitingOnIo,
+    InvalidArgument,
+    NotImplemented,
+    OutOfMemory,
+    CannotChangeSetting,
+    IncompatibleImage,
+    EncodeGainMapFailed,
+    DecodeGainMapFailed,
+    InvalidToneMappedImage,
 }
 
 pub type avifBool = c_int;
@@ -64,22 +64,21 @@ pub const AVIF_FALSE: c_int = 0;
 #[repr(C)]
 #[derive(Debug)]
 pub enum avifPixelFormat {
-    AVIF_PIXEL_FORMAT_NONE,
-    AVIF_PIXEL_FORMAT_YUV444,
-    AVIF_PIXEL_FORMAT_YUV422,
-    AVIF_PIXEL_FORMAT_YUV420,
-    AVIF_PIXEL_FORMAT_YUV400,
-    AVIF_PIXEL_FORMAT_COUNT,
+    None,
+    Yuv444,
+    Yuv422,
+    Yuv420,
+    Yuv400,
+    Count,
 }
 
 impl From<PixelFormat> for avifPixelFormat {
     fn from(format: PixelFormat) -> Self {
         match format {
-            PixelFormat::None => Self::AVIF_PIXEL_FORMAT_NONE,
-            PixelFormat::Yuv444 => Self::AVIF_PIXEL_FORMAT_YUV444,
-            PixelFormat::Yuv422 => Self::AVIF_PIXEL_FORMAT_YUV422,
-            PixelFormat::Yuv420 => Self::AVIF_PIXEL_FORMAT_YUV420,
-            PixelFormat::Monochrome => Self::AVIF_PIXEL_FORMAT_YUV400,
+            PixelFormat::Yuv444 => Self::Yuv444,
+            PixelFormat::Yuv422 => Self::Yuv422,
+            PixelFormat::Yuv420 => Self::Yuv420,
+            PixelFormat::Monochrome => Self::Yuv400,
         }
     }
 }
@@ -87,15 +86,15 @@ impl From<PixelFormat> for avifPixelFormat {
 #[repr(C)]
 #[derive(Debug)]
 enum avifRange {
-    AVIF_RANGE_LIMITED = 0,
-    AVIF_RANGE_FULL = 1,
+    LIMITED = 0,
+    FULL = 1,
 }
 
 impl From<bool> for avifRange {
     fn from(full_range: bool) -> Self {
         match full_range {
-            true => Self::AVIF_RANGE_FULL,
-            false => Self::AVIF_RANGE_LIMITED,
+            true => Self::FULL,
+            false => Self::LIMITED,
         }
     }
 }
@@ -103,9 +102,9 @@ impl From<bool> for avifRange {
 #[repr(C)]
 #[derive(Debug)]
 enum avifChromaSamplePosition {
-    AVIF_CHROMA_SAMPLE_POSITION_UNKNOWN = 0,
-    AVIF_CHROMA_SAMPLE_POSITION_VERTICAL = 1,
-    AVIF_CHROMA_SAMPLE_POSITION_COLOCATED = 2,
+    UNKNOWN = 0,
+    VERTICAL = 1,
+    COLOCATED = 2,
 }
 
 #[repr(C)]
@@ -147,9 +146,9 @@ impl Default for avifImage {
             width: 0,
             height: 0,
             depth: 0,
-            yuvFormat: avifPixelFormat::AVIF_PIXEL_FORMAT_NONE,
-            yuvRange: avifRange::AVIF_RANGE_FULL,
-            yuvChromaSamplePosition: avifChromaSamplePosition::AVIF_CHROMA_SAMPLE_POSITION_UNKNOWN,
+            yuvFormat: avifPixelFormat::None,
+            yuvRange: avifRange::FULL,
+            yuvChromaSamplePosition: avifChromaSamplePosition::UNKNOWN,
             yuvPlanes: [std::ptr::null_mut(); 3],
             yuvRowBytes: [0; 3],
             imageOwnsYUVPlanes: AVIF_FALSE,
@@ -161,15 +160,23 @@ impl Default for avifImage {
     }
 }
 
+impl From<&AvifImageInfo> for avifImage {
+    fn from(info: &AvifImageInfo) -> Self {
+        let mut dst_image = avifImage::default();
+        dst_image.width = info.width;
+        dst_image.height = info.height;
+        dst_image.depth = info.depth as u32;
+        dst_image.yuvFormat = info.yuv_format.into();
+        dst_image.yuvRange = info.full_range.into();
+        //dst_image.yuvChromaSamplePosition: avifChromaSamplePosition,
+        dst_image.alphaPremultiplied = info.alpha_premultiplied as avifBool;
+        dst_image
+    }
+}
+
 impl From<&AvifImage> for avifImage {
     fn from(image: &AvifImage) -> Self {
-        let mut dst_image = Self::default();
-        dst_image.width = image.width;
-        dst_image.height = image.height;
-        dst_image.depth = image.depth as u32;
-        dst_image.yuvFormat = image.yuv_format.into();
-        dst_image.yuvRange = image.full_range.into();
-        //dst_image.yuvChromaSamplePosition: avifChromaSamplePosition,
+        let mut dst_image: avifImage = (&image.info).into();
         for i in 0usize..3 {
             if image.yuv_planes[i].is_none() {
                 continue;
@@ -180,7 +187,6 @@ impl From<&AvifImage> for avifImage {
         if image.alpha_plane.is_some() {
             dst_image.alphaPlane = image.alpha_plane.unwrap() as *mut u8;
             dst_image.alphaRowBytes = image.alpha_row_bytes;
-            dst_image.alphaPremultiplied = image.alpha_premultiplied as avifBool;
         }
         dst_image
     }
@@ -197,17 +203,17 @@ pub type avifStrictFlags = u32;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub enum avifDecoderSource {
-    AVIF_DECODER_SOURCE_AUTO,
-    AVIF_DECODER_SOURCE_PRIMARY_ITEM,
-    AVIF_DECODER_SOURCE_TRACKS,
+    Auto,
+    PrimaryItem,
+    Tracks,
 }
 
 impl From<avifDecoderSource> for AvifDecoderSource {
     fn from(source: avifDecoderSource) -> Self {
         match source {
-            avifDecoderSource::AVIF_DECODER_SOURCE_AUTO => AvifDecoderSource::Auto,
-            avifDecoderSource::AVIF_DECODER_SOURCE_PRIMARY_ITEM => AvifDecoderSource::PrimaryItem,
-            avifDecoderSource::AVIF_DECODER_SOURCE_TRACKS => AvifDecoderSource::Tracks,
+            avifDecoderSource::Auto => AvifDecoderSource::Auto,
+            avifDecoderSource::PrimaryItem => AvifDecoderSource::PrimaryItem,
+            avifDecoderSource::Tracks => AvifDecoderSource::Tracks,
         }
     }
 }
@@ -262,7 +268,7 @@ impl Default for avifDecoder {
     fn default() -> Self {
         Self {
             maxThreads: 1,
-            requestedSource: avifDecoderSource::AVIF_DECODER_SOURCE_AUTO,
+            requestedSource: avifDecoderSource::Auto,
             allowIncremental: AVIF_FALSE,
             allowProgressive: AVIF_FALSE,
             ignoreExif: AVIF_FALSE,
@@ -292,8 +298,8 @@ fn to_avifBool(val: bool) -> avifBool {
 
 fn to_avifResult<T>(res: &AvifResult<T>) -> avifResult {
     match res {
-        Ok(x) => avifResult::AVIF_RESULT_OK,
-        Err(err) => avifResult::AVIF_RESULT_UNKNOWN_ERROR,
+        Ok(x) => avifResult::Ok,
+        Err(err) => avifResult::UnknownError, // TODO: convert to proper error.
     }
 }
 
@@ -326,7 +332,7 @@ pub unsafe extern "C" fn avifDecoderSetSource(
 ) -> avifResult {
     (*decoder).requestedSource = source;
     // TODO: should decoder be reset here in case this is called after parse?
-    avifResult::AVIF_RESULT_OK
+    avifResult::Ok
 }
 
 impl From<&avifDecoder> for AvifDecoderSettings {
@@ -368,13 +374,13 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
         return to_avifResult(&res);
     }
 
-    // Copy image.
+    // Copy image info.
     (*decoder).image_object = res.unwrap().into();
     // Copy decoder properties.
     (*decoder).imageCount = rust_decoder.image_count as i32;
     (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
 
-    return avifResult::AVIF_RESULT_OK;
+    avifResult::Ok
 }
 
 #[no_mangle]
@@ -392,7 +398,7 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
     (*decoder).imageCount = rust_decoder.image_count as i32;
     (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
 
-    return avifResult::AVIF_RESULT_OK;
+    avifResult::Ok
 }
 
 #[no_mangle]

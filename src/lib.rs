@@ -24,10 +24,9 @@ macro_rules! println {
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum PixelFormat {
-    #[default]
-    None,
     Yuv444,
     Yuv422,
+    #[default]
     Yuv420,
     Monochrome,
 }
@@ -35,7 +34,6 @@ pub enum PixelFormat {
 impl PixelFormat {
     pub fn plane_count(&self) -> usize {
         match self {
-            PixelFormat::None => 0,
             PixelFormat::Monochrome => 1,
             PixelFormat::Yuv420 | PixelFormat::Yuv422 | PixelFormat::Yuv444 => 3,
         }
