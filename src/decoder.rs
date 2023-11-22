@@ -251,6 +251,7 @@ pub struct AvifDecoder {
     // To replicate the C-API, we need to keep this optional. Otherwise this
     // could be part of the initialization.
     io: Option<Box<dyn AvifDecoderIO>>,
+    codecs: Vec<Dav1d>,
 }
 
 #[derive(Debug, Default)]
@@ -705,7 +706,7 @@ struct AvifTile {
     operating_point: u8,
     image: AvifImage,
     input: AvifDecodeInput,
-    codec: Dav1d,
+    codec_index: usize,
 }
 
 fn create_tile(item: &AvifItem) -> AvifResult<AvifTile> {
@@ -1179,12 +1180,83 @@ impl AvifDecoder {
         )
     }
 
-    fn create_codecs(&mut self) -> AvifResult<()> {
-        // TODO: share codecs for grid, etc.
-        for tiles in &mut self.tiles {
+    fn can_use_single_codec(&self) -> bool {
+        let total_tile_count = self.tiles[0].len() + self.tiles[1].len() + self.tiles[2].len();
+        if total_tile_count == 1 {
+            return true;
+        }
+        if self.image_count != 1 {
+            return false;
+        }
+        let mut image_buffers = 0;
+        let mut stolen_image_buffers = 0;
+        for category in 0usize..3 {
+            if self.tile_info[category].tile_count > 0 {
+                image_buffers += 1;
+            }
+            if self.tile_info[category].tile_count > 1 {
+                stolen_image_buffers += 1;
+            }
+        }
+        if stolen_image_buffers > 0 && image_buffers > 1 {
+            // Stealing will cause problems. So we need separate codec instances.
+            return false;
+        }
+        let operating_point = self.tiles[0][0].operating_point;
+        let all_layers = self.tiles[0][0].input.all_layers;
+        for tiles in &self.tiles {
             for tile in tiles {
-                tile.codec
-                    .initialize(tile.operating_point, tile.input.all_layers)?;
+                if tile.operating_point != operating_point || tile.input.all_layers != all_layers {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn create_codec(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
+        let mut codec = Dav1d::default();
+        codec.initialize(operating_point, all_layers)?;
+        self.codecs.push(codec);
+        Ok(())
+    }
+
+    fn create_codecs(&mut self) -> AvifResult<()> {
+        if matches!(self.source, AvifDecoderSource::Tracks) {
+            // In this case, we will use at most two codec instances (one for
+            // the color planes and one for the alpha plane). Gain maps are
+            // not supported.
+            self.create_codec(
+                self.tiles[0][0].operating_point,
+                self.tiles[0][0].input.all_layers,
+            )?;
+            self.tiles[0][0].codec_index = 0;
+            if !self.tiles[1].is_empty() {
+                self.create_codec(
+                    self.tiles[1][0].operating_point,
+                    self.tiles[1][0].input.all_layers,
+                )?;
+                self.tiles[1][0].codec_index = 1;
+            }
+        } else {
+            if self.can_use_single_codec() {
+                self.create_codec(
+                    self.tiles[0][0].operating_point,
+                    self.tiles[0][0].input.all_layers,
+                )?;
+                for tiles in &mut self.tiles {
+                    for tile in tiles {
+                        tile.codec_index = 0;
+                    }
+                }
+            } else {
+                for category in 0usize..3 {
+                    for tile_index in 0..self.tiles[category].len() {
+                        let tile = &self.tiles[category][tile_index];
+                        self.create_codec(tile.operating_point, tile.input.all_layers)?;
+                        self.tiles[category][tile_index].codec_index = self.codecs.len() - 1;
+                    }
+                }
             }
         }
         Ok(())
@@ -1240,12 +1312,15 @@ impl AvifDecoder {
             for (tile_index, tile) in self.tiles[category].iter_mut().enumerate() {
                 let sample = &tile.input.samples[image_index];
                 let io = &mut self.io.as_mut().unwrap();
-                tile.codec.get_next_image(
-                    sample.data(io)?,
-                    sample.spatial_id,
-                    &mut tile.image,
-                    category,
-                )?;
+                {
+                    let codec = &mut self.codecs[tile.codec_index];
+                    codec.get_next_image(
+                        sample.data(io)?,
+                        sample.spatial_id,
+                        &mut tile.image,
+                        category,
+                    )?;
+                }
 
                 // TODO: convert alpha from limited range to full range.
                 // TODO: scale tile to match output dimension.
@@ -1285,7 +1360,11 @@ impl AvifDecoder {
             return Err(AvifError::NoContent);
         }
         let next_image_index = self.image_index + 1;
-        self.create_codecs()?;
+        if next_image_index == 0 {
+            // TODO: this may accidentally create more when nth image is added.
+            // so make sure this function is called only once.
+            self.create_codecs()?;
+        }
         self.prepare_samples(next_image_index as usize)?;
         self.decode_tiles(next_image_index as usize)?;
         self.image_index = next_image_index;

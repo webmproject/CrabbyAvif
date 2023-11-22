@@ -25,59 +25,61 @@ fn main() {
         println!("Usage: {} <input_avif> <output> [--no-png]", args[0]);
         std::process::exit(1);
     }
+    let mut image_count = 0;
+    {
+        let settings = AvifDecoderSettings {
+            source: AvifDecoderSource::Auto,
+            ignore_exif: false,
+            ignore_icc: false,
+            strictness: AvifStrictness::None,
+        };
+        let mut decoder: AvifDecoder = Default::default();
+        decoder.settings = settings;
+        match decoder.set_io_file(&args[1]) {
+            Ok(_) => {}
+            Err(err) => {
+                println!("failed to set file io: {:#?}", err);
+                std::process::exit(1);
+            }
+        };
+        let image = match decoder.parse() {
+            Ok(x) => x,
+            Err(err) => {
+                println!("decoder.parse failed: {:#?}", err);
+                std::process::exit(1);
+            }
+        };
+        println!("image after parse: {:#?}", image);
 
-    let settings = AvifDecoderSettings {
-        source: AvifDecoderSource::Auto,
-        ignore_exif: false,
-        ignore_icc: false,
-        strictness: AvifStrictness::None,
-    };
-    let mut decoder: AvifDecoder = Default::default();
-    decoder.settings = settings;
-    match decoder.set_io_file(&args[1]) {
-        Ok(_) => {}
-        Err(err) => {
-            println!("failed to set file io: {:#?}", err);
-            std::process::exit(1);
+        println!("\n^^^ decoder public properties ^^^");
+        println!("image_count: {}", decoder.image_count);
+        println!("timescale: {}", decoder.timescale);
+        println!("duration_in_timescales: {}", decoder.duration_in_timescales);
+        println!("duration: {}", decoder.duration);
+        println!("repetition_count: {}", decoder.repetition_count);
+        println!("$$$ end decoder public properties $$$\n");
+
+        image_count = decoder.image_count;
+        //image_count = 1;
+        let mut y4m: rust_libavif::utils::Y4MWriter = Default::default();
+        y4m.filename = args[2].clone();
+
+        for _i in 0..image_count {
+            let image = decoder.next_image();
+            println!("image after decode: {:#?}", image);
+            if image.is_err() {
+                println!("next_image failed! {:#?}", image);
+                std::process::exit(1);
+            }
+
+            let ret = y4m.write_frame(image.unwrap());
+            if !ret {
+                println!("error writing y4m file");
+                std::process::exit(1);
+            }
         }
-    };
-    let image = match decoder.parse() {
-        Ok(x) => x,
-        Err(err) => {
-            println!("decoder.parse failed: {:#?}", err);
-            std::process::exit(1);
-        }
-    };
-    println!("image after parse: {:#?}", image);
-
-    println!("\n^^^ decoder public properties ^^^");
-    println!("image_count: {}", decoder.image_count);
-    println!("timescale: {}", decoder.timescale);
-    println!("duration_in_timescales: {}", decoder.duration_in_timescales);
-    println!("duration: {}", decoder.duration);
-    println!("repetition_count: {}", decoder.repetition_count);
-    println!("$$$ end decoder public properties $$$\n");
-
-    let image_count = decoder.image_count;
-    //let image_count = 1;
-    let mut y4m: rust_libavif::utils::Y4MWriter = Default::default();
-    y4m.filename = args[2].clone();
-
-    for _i in 0..image_count {
-        let image = decoder.next_image();
-        println!("image after decode: {:#?}", image);
-        if image.is_err() {
-            println!("next_image failed! {:#?}", image);
-            std::process::exit(1);
-        }
-
-        let ret = y4m.write_frame(image.unwrap());
-        if !ret {
-            println!("error writing y4m file");
-            std::process::exit(1);
-        }
+        println!("wrote {} frames into {}", image_count, args[2]);
     }
-    println!("wrote {} frames into {}", image_count, args[2]);
     if args.len() == 3 {
         if image_count <= 1 {
             let ffmpeg_infile = format!("{}", args[2]);
