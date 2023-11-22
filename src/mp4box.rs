@@ -243,13 +243,10 @@ pub struct SampleTable {
 
 impl SampleTable {
     pub fn has_av1_sample(&self) -> bool {
-        // TODO: replace with vector find.
-        for sample_description in &self.sample_descriptions {
-            if sample_description.format == "av01" {
-                return true;
-            }
-        }
-        return false;
+        self.sample_descriptions
+            .iter()
+            .find(|x| x.format == "av01")
+            .is_some()
     }
 
     // returns the number of samples in the chunk.
@@ -263,12 +260,13 @@ impl SampleTable {
     }
 
     pub fn get_properties(&self) -> Option<&Vec<ItemProperty>> {
-        for sample_description in &self.sample_descriptions {
-            if sample_description.format == "av01" {
-                return Some(&sample_description.properties);
-            }
-        }
-        None
+        Some(
+            &self
+                .sample_descriptions
+                .iter()
+                .find(|x| x.format == "av01")?
+                .properties,
+        )
     }
 }
 
