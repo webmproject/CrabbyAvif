@@ -1339,7 +1339,10 @@ impl MP4Box {
                 _ => println!("skipping box {}", header.box_type),
             }
         }
-        if track.elst_seen {
+        println!("track: {:#?}", track);
+        if !track.elst_seen {
+            track.repetition_count = -2;
+        } else if track.is_repeating {
             if track.track_duration == u64::MAX {
                 // If isRepeating is true and the track duration is
                 // unknown/indefinite, then set the repetition count to
@@ -1376,7 +1379,7 @@ impl MP4Box {
                 }
             }
         } else {
-            track.repetition_count = -2;
+            track.repetition_count = 0;
         }
         Ok(track)
     }

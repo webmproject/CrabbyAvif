@@ -240,7 +240,7 @@ pub struct AvifDecoder {
     source: AvifDecoderSource,
     tile_info: [AvifTileInfo; 3],
     tiles: [Vec<AvifTile>; 3],
-    alpha_present: bool,
+    pub alpha_present: bool,
     image_index: i32,
     pub image_count: u32,
     pub timescale: u32,
