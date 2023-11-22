@@ -10,7 +10,7 @@ struct BoxHeader {
     box_type: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FileTypeBox {
     pub major_brand: String,
     minor_version: u32,
@@ -41,7 +41,7 @@ impl FileTypeBox {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ItemLocationExtent {
     pub offset: u64,
     pub length: u64,
@@ -66,7 +66,7 @@ pub struct ItemLocationBox {
 
 const MAX_PLANE_COUNT: usize = 4;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ImageSpatialExtents {
     pub width: u32,
     pub height: u32,
@@ -123,13 +123,13 @@ pub enum ColorInformation {
     Nclx(Nclx),
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct PixelAspectRatio {
     h_spacing: u32,
     v_spacing: u32,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ClearAperture {
     width_n: u32,
     width_d: u32,
@@ -141,7 +141,7 @@ pub struct ClearAperture {
     vert_off_d: u32,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ContentLightLevelInformation {
     max_cll: u16,
     max_pall: u16,
@@ -189,7 +189,7 @@ pub struct ItemPropertyBox {
     pub associations: Vec<ItemPropertyAssociation>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ItemReference {
     // Read this reference as "{from_item_id} is a {reference_type} for
     // {to_item_id}" (except for dimg where it is in the opposite
@@ -209,13 +209,13 @@ pub struct MetaBox {
     pub idat: Vec<u8>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TimeToSample {
     sample_count: u32,
     sample_delta: u32,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SampleToChunk {
     first_chunk: u32,
     samples_per_chunk: u32,
@@ -308,14 +308,14 @@ impl AvifTrack {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AvifBoxes {
     pub ftyp: FileTypeBox,
     pub meta: MetaBox,
     pub tracks: Vec<AvifTrack>,
 }
 
-pub struct MP4Box {}
+pub struct MP4Box;
 
 impl MP4Box {
     fn parse_header(stream: &mut IStream) -> AvifResult<BoxHeader> {
@@ -383,7 +383,7 @@ impl MP4Box {
             println!("Invalid version in iloc.");
             return Err(AvifError::BmffParseFailed);
         }
-        let mut iloc: ItemLocationBox = Default::default();
+        let mut iloc = ItemLocationBox::default();
         let mut bit_reader = stream.get_bitreader()?;
         // unsigned int(4) offset_size;
         iloc.offset_size = bit_reader.read(4);
@@ -406,7 +406,7 @@ impl MP4Box {
             item_count = stream.read_u32()?;
         }
         for _i in 0..item_count {
-            let mut entry: ItemLocationEntry = Default::default();
+            let mut entry = ItemLocationEntry::default();
             if version < 2 {
                 // unsigned int(16) item_ID;
                 entry.item_id = stream.read_u16()? as u32;
@@ -438,17 +438,17 @@ impl MP4Box {
             // unsigned int(16) extent_count;
             entry.extent_count = stream.read_u16()?;
             for _j in 0..entry.extent_count {
-                let mut extent: ItemLocationExtent = Default::default();
                 // If extent_index is ever supported, this spec must be implemented here:
                 // ::  if (((version == 1) || (version == 2)) && (index_size > 0)) {
                 // ::      unsigned int(index_size*8) extent_index;
                 // ::  }
-
-                // unsigned int(offset_size*8) extent_offset;
-                extent.offset = stream.read_uxx(iloc.offset_size)?;
-                // unsigned int(length_size*8) extent_length;
-                // TODO: this comment is incorrect in libavif.
-                extent.length = stream.read_uxx(iloc.length_size)?;
+                let extent = ItemLocationExtent {
+                    // unsigned int(offset_size*8) extent_offset;
+                    offset: stream.read_uxx(iloc.offset_size)?,
+                    // unsigned int(length_size*8) extent_length;
+                    // TODO: this comment is incorrect in libavif.
+                    length: stream.read_uxx(iloc.length_size)?,
+                };
                 entry.extents.push(extent);
             }
             iloc.items.push(entry);
@@ -485,7 +485,7 @@ impl MP4Box {
     fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
         // TODO: enforce version 0.
         let (_version, _flags) = stream.read_version_and_flags()?;
-        let mut pixi: PixelInformation = Default::default();
+        let mut pixi = PixelInformation::default();
         // unsigned int (8) num_channels;
         pixi.plane_count = stream.read_u8()?;
         if usize::from(pixi.plane_count) > MAX_PLANE_COUNT {
@@ -514,7 +514,7 @@ impl MP4Box {
             println!("Invalid version in av1C");
             return Err(AvifError::BmffParseFailed);
         }
-        let mut av1C: CodecConfiguration = Default::default();
+        let mut av1C = CodecConfiguration::default();
         // unsigned int(3) seq_profile;
         // unsigned int(5) seq_level_idx_0;
         byte = stream.get_bitreader()?;
@@ -554,7 +554,7 @@ impl MP4Box {
         // unsigned int(32) colour_type;
         let color_type = stream.read_string(4)?;
         if color_type == "rICC" || color_type == "prof" {
-            let mut icc: Icc = Default::default();
+            let mut icc = Icc::default();
             // TODO: perhaps this can be a slice or something?
             // TODO: this offset is relative. needs to be absolute.
             // TODO: maybe just clone the data?
@@ -565,7 +565,7 @@ impl MP4Box {
             ))));
         }
         if color_type == "nclx" {
-            let mut nclx: Nclx = Default::default();
+            let mut nclx = Nclx::default();
             // unsigned int(16) colour_primaries;
             nclx.color_primaries = stream.read_u16()?;
             // unsigned int(16) transfer_characteristics;
@@ -588,11 +588,12 @@ impl MP4Box {
     }
 
     fn parse_pasp(stream: &mut IStream) -> AvifResult<ItemProperty> {
-        let mut pasp: PixelAspectRatio = Default::default();
-        // unsigned int(32) hSpacing;
-        pasp.h_spacing = stream.read_u32()?;
-        // unsigned int(32) vSpacing;
-        pasp.v_spacing = stream.read_u32()?;
+        let pasp = PixelAspectRatio {
+            // unsigned int(32) hSpacing;
+            h_spacing: stream.read_u32()?,
+            // unsigned int(32) vSpacing;
+            v_spacing: stream.read_u32()?,
+        };
         Ok(ItemProperty::PixelAspectRatio(pasp))
     }
 
@@ -606,23 +607,24 @@ impl MP4Box {
     }
 
     fn parse_clap(stream: &mut IStream) -> AvifResult<ItemProperty> {
-        let mut clap: ClearAperture = Default::default();
-        // unsigned int(32) cleanApertureWidthN;
-        clap.width_n = stream.read_u32()?;
-        // unsigned int(32) cleanApertureWidthD;
-        clap.width_d = stream.read_u32()?;
-        // unsigned int(32) cleanApertureHeightN;
-        clap.height_n = stream.read_u32()?;
-        // unsigned int(32) cleanApertureHeightD;
-        clap.height_d = stream.read_u32()?;
-        // unsigned int(32) horizOffN;
-        clap.horiz_off_n = stream.read_u32()?;
-        // unsigned int(32) horizOffD;
-        clap.horiz_off_d = stream.read_u32()?;
-        // unsigned int(32) vertOffN;
-        clap.vert_off_n = stream.read_u32()?;
-        // unsigned int(32) vertOffD;
-        clap.vert_off_d = stream.read_u32()?;
+        let clap = ClearAperture {
+            // unsigned int(32) cleanApertureWidthN;
+            width_n: stream.read_u32()?,
+            // unsigned int(32) cleanApertureWidthD;
+            width_d: stream.read_u32()?,
+            // unsigned int(32) cleanApertureHeightN;
+            height_n: stream.read_u32()?,
+            // unsigned int(32) cleanApertureHeightD;
+            height_d: stream.read_u32()?,
+            // unsigned int(32) horizOffN;
+            horiz_off_n: stream.read_u32()?,
+            // unsigned int(32) horizOffD;
+            horiz_off_d: stream.read_u32()?,
+            // unsigned int(32) vertOffN;
+            vert_off_n: stream.read_u32()?,
+            // unsigned int(32) vertOffD;
+            vert_off_d: stream.read_u32()?,
+        };
         Ok(ItemProperty::ClearAperture(clap))
     }
 
@@ -691,11 +693,12 @@ impl MP4Box {
     }
 
     fn parse_clli(stream: &mut IStream) -> AvifResult<ItemProperty> {
-        let mut clli: ContentLightLevelInformation = Default::default();
-        // unsigned int(16) max_content_light_level
-        clli.max_cll = stream.read_u16()?;
-        // unsigned int(16) max_pic_average_light_level
-        clli.max_pall = stream.read_u16()?;
+        let clli = ContentLightLevelInformation {
+            // unsigned int(16) max_content_light_level
+            max_cll: stream.read_u16()?,
+            // unsigned int(16) max_pic_average_light_level
+            max_pall: stream.read_u16()?,
+        };
         Ok(ItemProperty::ContentLightLevelInformation(clli))
     }
 
@@ -735,7 +738,7 @@ impl MP4Box {
         let mut previous_item_id = 0; // TODO: there is no need for this. can simply look up the vector.
         let mut ipma: Vec<ItemPropertyAssociation> = Vec::new();
         for _i in 0..entry_count {
-            let mut entry: ItemPropertyAssociation = Default::default();
+            let mut entry = ItemPropertyAssociation::default();
             entry.version = version;
             entry.flags = flags;
             // ISO/IEC 23008-12, First edition, 2017-12, Section 9.3.1:
@@ -785,7 +788,7 @@ impl MP4Box {
             println!("First box in iprp is not ipco");
             return Err(AvifError::BmffParseFailed);
         }
-        let mut iprp: ItemPropertyBox = Default::default();
+        let mut iprp = ItemPropertyBox::default();
         // Parse ipco box.
         {
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
@@ -858,7 +861,7 @@ impl MP4Box {
             //
             // See also Section 6.4.2.
 
-            let mut entry: ItemInfo = Default::default();
+            let mut entry = ItemInfo::default();
             if version == 2 {
                 // unsigned int(16) item_ID;
                 entry.item_id = stream.read_u16()? as u32;
@@ -959,7 +962,7 @@ impl MP4Box {
         // TODO: version must be 0.
         let (_version, _flags) = stream.read_version_and_flags()?;
         let mut first_box = true;
-        let mut meta: MetaBox = Default::default();
+        let mut meta = MetaBox::default();
 
         // TODO: add box unique checks.
 
@@ -1112,14 +1115,14 @@ impl MP4Box {
         let entry_count = stream.read_u32()?;
         sample_table.sample_to_chunk.reserve(entry_count as usize);
         for i in 0..entry_count {
-            let mut stsc: SampleToChunk = Default::default();
-            // unsigned int(32) first_chunk;
-            stsc.first_chunk = stream.read_u32()?;
-            // unsigned int(32) samples_per_chunk;
-            stsc.samples_per_chunk = stream.read_u32()?;
-            // unsigned int(32) sample_description_index;
-            stsc.sample_description_index = stream.read_u32()?;
-
+            let stsc = SampleToChunk {
+                // unsigned int(32) first_chunk;
+                first_chunk: stream.read_u32()?,
+                // unsigned int(32) samples_per_chunk;
+                samples_per_chunk: stream.read_u32()?,
+                // unsigned int(32) sample_description_index;
+                sample_description_index: stream.read_u32()?,
+            };
             if i == 0 {
                 if stsc.first_chunk != 1 {
                     println!("stsc does not begin with chunk 1.");
@@ -1177,11 +1180,12 @@ impl MP4Box {
         let entry_count = stream.read_u32()?;
         sample_table.time_to_sample.reserve(entry_count as usize);
         for i in 0..entry_count {
-            let mut stts: TimeToSample = Default::default();
-            // unsigned int(32) sample_count;
-            stts.sample_count = stream.read_u32()?;
-            // unsigned int(32) sample_delta;
-            stts.sample_delta = stream.read_u32()?;
+            let stts = TimeToSample {
+                // unsigned int(32) sample_count;
+                sample_count: stream.read_u32()?,
+                // unsigned int(32) sample_delta;
+                sample_delta: stream.read_u32()?,
+            };
             sample_table.time_to_sample.push(stts);
         }
         Ok(())
@@ -1197,7 +1201,7 @@ impl MP4Box {
             .reserve(entry_count as usize);
         for i in 0..entry_count {
             let header = Self::parse_header(stream)?;
-            let mut stsd: SampleDescription = Default::default();
+            let mut stsd = SampleDescription::default();
             stsd.format = header.box_type.clone();
             if stsd.format == "av01" {
                 // Skip 78 bytes for visual sample entry size.
@@ -1216,7 +1220,7 @@ impl MP4Box {
             println!("duplciate stbl for track.");
             return Err(AvifError::BmffParseFailed);
         }
-        let mut sample_table: SampleTable = Default::default();
+        let mut sample_table = SampleTable::default();
         while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
@@ -1334,7 +1338,7 @@ impl MP4Box {
     }
 
     fn parse_trak(stream: &mut IStream) -> AvifResult<AvifTrack> {
-        let mut track: AvifTrack = Default::default();
+        let mut track = AvifTrack::default();
         println!("parsing trak size: {}", stream.bytes_left());
         let mut edts_seen = false;
         while stream.has_bytes_left() {
