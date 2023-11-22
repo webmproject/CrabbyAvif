@@ -18,14 +18,26 @@ pub struct FileTypeBox {
 }
 
 impl FileTypeBox {
-    pub fn is_avif(&self) -> bool {
-        if self.major_brand == "avif" || self.major_brand == "avis" {
+    fn has_brand(&self, brand: &str) -> bool {
+        if self.major_brand.as_str() == brand {
             return true;
         }
         self.compatible_brands
             .iter()
-            .find(|x| x.as_str() == "avif" || x.as_str() == "avis")
+            .find(|x| x.as_str() == brand)
             .is_some()
+    }
+
+    pub fn is_avif(&self) -> bool {
+        self.has_brand("avif") || self.has_brand("avis")
+    }
+
+    pub fn needs_meta(&self) -> bool {
+        self.has_brand("avif")
+    }
+
+    pub fn needs_moov(&self) -> bool {
+        self.has_brand("avis")
     }
 }
 
@@ -1399,9 +1411,9 @@ impl MP4Box {
     }
 
     pub fn parse(io: &mut Box<dyn AvifDecoderIO>) -> AvifResult<AvifBoxes> {
-        let mut ftyp_seen = false;
-        let mut avif_boxes: AvifBoxes = Default::default();
-        let mut meta_seen = false;
+        let mut ftyp: Option<FileTypeBox> = None;
+        let mut meta: Option<MetaBox> = None;
+        let mut tracks: Option<Vec<AvifTrack>> = None;
         let mut parse_offset: u64 = 0;
         loop {
             // Read just enough to get the next box header (32 bytes).
@@ -1426,17 +1438,26 @@ impl MP4Box {
                     let mut box_stream = IStream::create(box_data);
                     match header.box_type.as_str() {
                         "ftyp" => {
-                            avif_boxes.ftyp = MP4Box::parse_ftyp(&mut box_stream)?;
-                            ftyp_seen = true;
+                            ftyp = Some(MP4Box::parse_ftyp(&mut box_stream)?);
+                            if !ftyp.as_ref().unwrap().is_avif() {
+                                return Err(AvifError::InvalidFtyp);
+                            }
                         }
-                        "meta" => {
-                            avif_boxes.meta = MP4Box::parse_meta(&mut box_stream)?;
-                            meta_seen = true;
-                        }
+                        "meta" => meta = Some(MP4Box::parse_meta(&mut box_stream)?),
                         "moov" => {
-                            avif_boxes.tracks = MP4Box::parse_moov(&mut box_stream)?;
+                            tracks = Some(MP4Box::parse_moov(&mut box_stream)?);
+                            // decoder.image_sequence_track_present = true;
                         }
                         _ => {} // Not reached.
+                    }
+                    if ftyp.is_some() {
+                        let ftyp = ftyp.as_ref().unwrap();
+                        if (!ftyp.needs_meta() || meta.is_some())
+                            && (!ftyp.needs_moov() || tracks.is_some())
+                        {
+                            // Enough information has been parsed to consider parse a success.
+                            break;
+                        }
                     }
                 }
                 _ => {
@@ -1445,8 +1466,18 @@ impl MP4Box {
             }
             parse_offset += header.size;
         }
-        //println!("{:#?}", avif_boxes);
-        Ok(avif_boxes)
+        if ftyp.is_none() {
+            return Err(AvifError::InvalidFtyp);
+        }
+        let ftyp = ftyp.unwrap();
+        if (ftyp.needs_meta() && meta.is_none()) || (ftyp.needs_moov() && tracks.is_none()) {
+            return Err(AvifError::TruncatedData);
+        }
+        Ok(AvifBoxes {
+            ftyp,
+            meta: meta.unwrap_or_default(),
+            tracks: tracks.unwrap_or_default(),
+        })
     }
 
     pub fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
