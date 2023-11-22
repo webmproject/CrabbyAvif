@@ -979,7 +979,6 @@ impl AvifDecoder {
             AvifDecoderSource::Auto => match avif_boxes.ftyp.major_brand.as_str() {
                 "avis" => AvifDecoderSource::Tracks,
                 "avif" => AvifDecoderSource::PrimaryItem,
-                // TODO: add a else if for if track count > 0, then use tracks.
                 _ => {
                     if self.tracks.is_empty() {
                         AvifDecoderSource::PrimaryItem
@@ -1162,17 +1161,17 @@ impl AvifDecoder {
 
         let av1C = find_av1C(color_properties).ok_or(AvifError::BmffParseFailed)?;
         self.image.info.depth = av1C.depth();
-        if av1C.monochrome {
-            self.image.info.yuv_format = PixelFormat::Monochrome;
+        self.image.info.yuv_format = if av1C.monochrome {
+            PixelFormat::Monochrome
         } else {
             if av1C.chroma_subsampling_x == 1 && av1C.chroma_subsampling_y == 1 {
-                self.image.info.yuv_format = PixelFormat::Yuv420;
+                PixelFormat::Yuv420
             } else if (av1C.chroma_subsampling_x == 1) {
-                self.image.info.yuv_format = PixelFormat::Yuv422;
+                PixelFormat::Yuv422
             } else {
-                self.image.info.yuv_format = PixelFormat::Yuv444;
+                PixelFormat::Yuv444
             }
-        }
+        };
         self.image.info.chroma_sample_position = av1C.chroma_sample_position;
 
         Ok(&self.image.info)
