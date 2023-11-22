@@ -11,7 +11,10 @@ pub struct Dav1d {
     picture: Option<Dav1dPicture>,
 }
 
-unsafe extern "C" fn avif_dav1d_free_callback(buf: *const u8, cookie: *mut ::std::os::raw::c_void) {
+unsafe extern "C" fn avif_dav1d_free_callback(
+    _buf: *const u8,
+    _cookie: *mut ::std::os::raw::c_void,
+) {
     // do nothing. the data is owned by the decoder.
 }
 
@@ -25,7 +28,7 @@ impl Dav1d {
         if self.context.is_some() {
             return Ok(()); // Already initialized.
         }
-        let mut settings_uninit: MaybeUninit<Dav1dSettings> = unsafe { MaybeUninit::uninit() };
+        let mut settings_uninit: MaybeUninit<Dav1dSettings> = MaybeUninit::uninit();
         unsafe { dav1d_default_settings(settings_uninit.as_mut_ptr()) };
         let mut settings = unsafe { settings_uninit.assume_init() };
         settings.max_frame_delay = 1;
@@ -57,7 +60,7 @@ impl Dav1d {
         if self.context.is_none() {
             self.initialize(0, true)?;
         }
-        let mut got_picture = false;
+        let got_picture;
         let av1_payload_len = av1_payload.len();
         println!("paylaoad len: {av1_payload_len}");
         unsafe {
@@ -127,7 +130,7 @@ impl Dav1d {
         }
 
         let dav1d_picture = &self.picture.unwrap();
-        if (category == 0) {
+        if category == 0 {
             // if image dimensinos/yuv format does not match, deallocate the image.
             image.info.width = dav1d_picture.p.w as u32;
             image.info.height = dav1d_picture.p.h as u32;
@@ -140,7 +143,7 @@ impl Dav1d {
                 3 => PixelFormat::Yuv444,
                 _ => PixelFormat::Yuv420, // not reached.
             };
-            let seq_hdr = unsafe { (*dav1d_picture.seq_hdr) };
+            let seq_hdr = unsafe { *dav1d_picture.seq_hdr };
             image.info.full_range = seq_hdr.color_range != 0;
             image.info.chroma_sample_position = seq_hdr.chr as u8;
 
@@ -172,7 +175,7 @@ impl Dav1d {
             image.alpha_plane = Some(dav1d_picture.data[0] as *const u8);
             image.alpha_row_bytes = dav1d_picture.stride[0] as u32;
             image.image_owns_alpha_plane = false;
-            let seq_hdr = unsafe { (*dav1d_picture.seq_hdr) };
+            let seq_hdr = unsafe { *dav1d_picture.seq_hdr };
             image.info.full_range = seq_hdr.color_range != 0;
         }
         Ok(())

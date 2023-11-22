@@ -1,12 +1,7 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::prelude::*;
-use std::ops::Range;
 
 use crate::dav1d::*;
 use crate::io::*;
-use crate::mp4box::ItemProperty::AuxiliaryType;
-use crate::mp4box::ItemProperty::ImageSpatialExtents;
 use crate::mp4box::*;
 use crate::stream::*;
 use crate::*;
@@ -83,7 +78,6 @@ impl AvifImage {
                     plane_width = (plane_width + 1) / 2;
                 }
             }
-            let stride_index: usize = if plane == 0 { 0 } else { 1 };
             return Some(AvifPlane {
                 data: self.yuv_planes[plane].unwrap(),
                 width: plane_width,
@@ -190,7 +184,7 @@ impl AvifImage {
                 let dst_stride_offset: usize = dst_base_offset + ((y * dst_row_bytes) as usize);
                 let dst_end_offset: usize = dst_stride_offset + src_byte_count;
 
-                let mut dst_slice =
+                let dst_slice =
                     &mut self.plane_buffers[plane_index][dst_stride_offset..dst_end_offset];
                 if y == 0 {
                     println!(
@@ -243,7 +237,6 @@ impl AvifStrictness {
 pub struct AvifDecoder {
     pub settings: AvifDecoderSettings,
     image: AvifImage,
-    codec: Dav1d,
     source: AvifDecoderSource,
     tile_info: [AvifTileInfo; 3],
     tiles: [Vec<AvifTile>; 3],
@@ -272,6 +265,7 @@ struct AvifGrid {
 #[derive(Debug, Default)]
 struct AvifTileInfo {
     tile_count: u32,
+    #[allow(unused)]
     decoded_tile_count: u32,
     grid: AvifGrid,
 }
@@ -295,6 +289,7 @@ struct AvifItem {
     prem_by_id: u32,
     has_unsupported_essential_property: bool,
     ipma_seen: bool,
+    #[allow(unused)]
     progressive: bool,
     idat: Vec<u8>,
 }
@@ -305,16 +300,6 @@ macro_rules! find_property {
             .properties
             .iter()
             .find(|x| matches!(x, ItemProperty::$a(_)))
-    };
-}
-
-macro_rules! find_properties {
-    ($self:ident, $a:ident) => {
-        $self
-            .properties
-            .iter()
-            .filter(|x| matches!(x, ItemProperty::$a(_)))
-            .collect()
     };
 }
 
@@ -333,7 +318,7 @@ impl AvifItem {
             return Ok(());
         }
         // TODO: handle multiple extents.
-        let mut io_data = match self.idat.is_empty() {
+        let io_data = match self.idat.is_empty() {
             true => io.read(self.data_offset(), self.size)?,
             false => {
                 // TODO: assumes idat offset is 0.
@@ -427,6 +412,7 @@ impl AvifItem {
         Ok(())
     }
 
+    #[allow(non_snake_case)]
     fn av1C(&self) -> Option<&CodecConfiguration> {
         match find_property!(self, CodecConfiguration) {
             Some(property) => match property {
@@ -457,6 +443,7 @@ impl AvifItem {
         }
     }
 
+    #[allow(non_snake_case)]
     fn is_auxiliary_alpha(&self) -> bool {
         match find_property!(self, AuxiliaryType) {
             Some(auxC) => match auxC {
@@ -526,6 +513,7 @@ fn find_icc(properties: &Vec<ItemProperty>) -> Result<&Icc, bool> {
     }
 }
 
+#[allow(non_snake_case)]
 fn find_av1C(properties: &Vec<ItemProperty>) -> Option<&CodecConfiguration> {
     match properties
         .iter()
@@ -537,13 +525,6 @@ fn find_av1C(properties: &Vec<ItemProperty>) -> Option<&CodecConfiguration> {
         },
         None => None,
     }
-}
-
-fn read_file(filename: &String) -> Vec<u8> {
-    let mut file = File::open(filename).expect("file not found");
-    let mut data: Vec<u8> = Vec::new();
-    let _ = file.read_to_end(&mut data);
-    data
 }
 
 // This design is not final. It's possible to do this in the same loop where boxes are parsed. But it
@@ -764,7 +745,10 @@ fn create_tile(item: &AvifItem) -> AvifResult<AvifTile> {
         let layer_id = lsel.unwrap();
         if layer_count > 0 {
             // TODO: test this with a case?
-            panic!("im here");
+            if true {
+                println!("in lsel case!");
+                return Err(AvifError::InvalidImageGrid);
+            }
             // Optimization: If we're selecting a layer that doesn't require
             // the entire image's payload (hinted via the a1lx box).
             if layer_id >= layer_count {
@@ -788,7 +772,7 @@ fn create_tile(item: &AvifItem) -> AvifResult<AvifTile> {
             data_buffer: None,
         };
         tile.input.samples.push(sample);
-    } else if (false) {
+    } else if false {
         // TODO: case for progressive and allow progressive.
     } else {
         // Typical case: Use the entire item's payload for a single frame output
@@ -826,7 +810,7 @@ fn create_tile_from_track(track: &AvifTrack) -> AvifResult<AvifTile> {
         }
 
         let mut sample_offset = *chunk_offset;
-        for sample_index in 0..sample_count {
+        for _ in 0..sample_count {
             let mut sample_size = sample_table.all_samples_size;
             if sample_size == 0 {
                 if sample_size_index >= sample_table.sample_sizes.len() {
@@ -861,6 +845,7 @@ fn create_tile_from_track(track: &AvifTrack) -> AvifResult<AvifTile> {
     Ok(tile)
 }
 
+#[allow(non_snake_case)]
 fn generate_tiles(
     avif_items: &mut HashMap<u32, AvifItem>,
     iinf: &Vec<ItemInfo>,
@@ -962,6 +947,7 @@ impl AvifDecoder {
         Ok(())
     }
 
+    #[allow(non_snake_case)]
     pub fn parse(&mut self) -> AvifResult<&AvifImageInfo> {
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
@@ -969,7 +955,7 @@ impl AvifDecoder {
         let avif_boxes = MP4Box::parse(&mut self.io.as_mut().unwrap())?;
         self.tracks = avif_boxes.tracks;
         self.avif_items = construct_avif_items(&avif_boxes.meta)?;
-        for (id, item) in &mut self.avif_items {
+        for (_id, item) in &mut self.avif_items {
             item.harvest_ispe(self.settings.strictness.alpha_ispe_required())?;
         }
         //println!("{:#?}", self.avif_items);
@@ -1144,7 +1130,7 @@ impl AvifDecoder {
             }
         }
         match find_icc(color_properties) {
-            Ok(icc) => {
+            Ok(_icc) => {
                 // TODO: attach icc to self.image.
             }
             Err(multiple_icc_found) => {
@@ -1166,7 +1152,7 @@ impl AvifDecoder {
         } else {
             if av1C.chroma_subsampling_x == 1 && av1C.chroma_subsampling_y == 1 {
                 PixelFormat::Yuv420
-            } else if (av1C.chroma_subsampling_x == 1) {
+            } else if av1C.chroma_subsampling_x == 1 {
                 PixelFormat::Yuv422
             } else {
                 PixelFormat::Yuv444
@@ -1382,7 +1368,7 @@ impl AvifDecoder {
     pub fn peek_compatible_file_type(data: &[u8]) -> bool {
         match MP4Box::peek_compatible_file_type(data) {
             Ok(x) => x,
-            Err(err) => false,
+            Err(_) => false,
         }
     }
 }

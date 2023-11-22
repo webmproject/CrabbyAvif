@@ -25,7 +25,7 @@ fn main() {
         println!("Usage: {} <input_avif> <output> [--no-png]", args[0]);
         std::process::exit(1);
     }
-    let mut image_count = 0;
+    let image_count;
     {
         let settings = AvifDecoderSettings {
             source: AvifDecoderSource::Auto,

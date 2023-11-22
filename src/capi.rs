@@ -1,3 +1,6 @@
+#![allow(non_snake_case)]
+#![allow(non_camel_case_types)]
+
 use std::os::raw::c_char;
 use std::os::raw::c_int;
 
@@ -8,7 +11,6 @@ use std::slice;
 use libc::size_t;
 
 use crate::decoder::*;
-use crate::AvifError;
 use crate::AvifResult;
 use crate::AvifStrictness;
 use crate::AvifStrictnessFlag;
@@ -102,9 +104,9 @@ impl From<bool> for avifRange {
 #[repr(C)]
 #[derive(Debug)]
 enum avifChromaSamplePosition {
-    UNKNOWN = 0,
-    VERTICAL = 1,
-    COLOCATED = 2,
+    Unknown = 0,
+    Vertical = 1,
+    Colocated = 2,
 }
 
 #[repr(C)]
@@ -148,7 +150,7 @@ impl Default for avifImage {
             depth: 0,
             yuvFormat: avifPixelFormat::None,
             yuvRange: avifRange::FULL,
-            yuvChromaSamplePosition: avifChromaSamplePosition::UNKNOWN,
+            yuvChromaSamplePosition: avifChromaSamplePosition::Unknown,
             yuvPlanes: [std::ptr::null_mut(); 3],
             yuvRowBytes: [0; 3],
             imageOwnsYUVPlanes: AVIF_FALSE,
@@ -193,9 +195,9 @@ impl From<&AvifImage> for avifImage {
 }
 
 pub const AVIF_STRICT_DISABLED: u32 = 0;
-pub const AVIF_STRICT_PIXI_REQUIRED: u32 = (1 << 0);
-pub const AVIF_STRICT_CLAP_VALID: u32 = (1 << 1);
-pub const AVIF_STRICT_ALPHA_ISPE_REQUIRED: u32 = (1 << 2);
+pub const AVIF_STRICT_PIXI_REQUIRED: u32 = 1 << 0;
+pub const AVIF_STRICT_CLAP_VALID: u32 = 1 << 1;
+pub const AVIF_STRICT_ALPHA_ISPE_REQUIRED: u32 = 1 << 2;
 pub const AVIF_STRICT_ENABLED: u32 =
     AVIF_STRICT_PIXI_REQUIRED | AVIF_STRICT_CLAP_VALID | AVIF_STRICT_ALPHA_ISPE_REQUIRED;
 pub type avifStrictFlags = u32;
@@ -298,8 +300,8 @@ fn to_avifBool(val: bool) -> avifBool {
 
 fn to_avifResult<T>(res: &AvifResult<T>) -> avifResult {
     match res {
-        Ok(x) => avifResult::Ok,
-        Err(err) => avifResult::UnknownError, // TODO: convert to proper error.
+        Ok(_) => avifResult::Ok,
+        Err(_err) => avifResult::UnknownError, // TODO: convert to proper error.
     }
 }
 

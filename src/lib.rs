@@ -1,7 +1,3 @@
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::prelude::*;
-
 /// cbindgen:ignore
 mod bindings;
 /// cbindgen:ignore
@@ -14,13 +10,6 @@ pub mod utils;
 
 #[cfg(feature = "capi")]
 pub mod capi;
-
-macro_rules! println {
-    ($($rest:tt)*) => {
-        #[cfg(debug_assertions)]
-        std::println!($($rest)*)
-    }
-}
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum PixelFormat {

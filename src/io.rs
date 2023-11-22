@@ -1,22 +1,7 @@
 use crate::AvifError;
 use crate::AvifResult;
 use std::fs::File;
-use std::io::prelude::*;
 use std::os::unix::fs::FileExt; // TODO: what happens when this is compiled for windows?
-
-pub struct AvifIOData {
-    data: *const u8,
-    size: usize,
-}
-
-impl AvifIOData {
-    pub fn empty() -> AvifIOData {
-        AvifIOData {
-            data: std::ptr::null(),
-            size: 0,
-        }
-    }
-}
 
 pub trait AvifDecoderIO {
     fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]>;

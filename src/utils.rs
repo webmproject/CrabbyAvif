@@ -70,7 +70,7 @@ impl Y4MWriter {
         }
         self.file = Some(file.unwrap());
         match self.file.as_ref().unwrap().write_all(header.as_bytes()) {
-            Err(e) => return false,
+            Err(_) => return false,
             _ => {}
         }
         self.header_written = true;
@@ -88,7 +88,7 @@ impl Y4MWriter {
             .unwrap()
             .write_all(frame_marker.as_bytes())
         {
-            Err(e) => return false,
+            Err(_) => return false,
             _ => {}
         }
         let plane_count = if self.write_alpha { 4 } else { 3 };
@@ -108,7 +108,7 @@ impl Y4MWriter {
                 let ptr = unsafe { avif_plane.data.offset(stride_offset) };
                 let pixels = unsafe { std::slice::from_raw_parts(ptr, byte_count) };
                 match self.file.as_ref().unwrap().write_all(pixels) {
-                    Err(e) => return false,
+                    Err(_) => return false,
                     _ => {}
                 }
             }

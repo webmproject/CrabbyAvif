@@ -1,5 +1,3 @@
-use std::io::prelude::*;
-
 use crate::io::*;
 use crate::stream::*;
 use crate::*;
@@ -13,6 +11,7 @@ struct BoxHeader {
 #[derive(Debug)]
 pub struct FileTypeBox {
     pub major_brand: String,
+    #[allow(unused)]
     minor_version: u32,
     compatible_brands: Vec<String>,
 }
@@ -95,7 +94,7 @@ impl CodecConfiguration {
     pub fn depth(&self) -> u8 {
         match self.twelve_bit {
             true => 12,
-            false => match (self.high_bitdepth) {
+            false => match self.high_bitdepth {
                 true => 10,
                 false => 8,
             },
@@ -104,6 +103,7 @@ impl CodecConfiguration {
 }
 
 #[derive(Debug, Default, Clone)]
+#[allow(unused)]
 pub struct Icc {
     offset: u64,
     size: usize,
@@ -118,18 +118,21 @@ pub struct Nclx {
 }
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub enum ColorInformation {
     Icc(Icc),
     Nclx(Nclx),
 }
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct PixelAspectRatio {
     h_spacing: u32,
     v_spacing: u32,
 }
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct ClearAperture {
     width_n: u32,
     width_d: u32,
@@ -142,6 +145,7 @@ pub struct ClearAperture {
 }
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct ContentLightLevelInformation {
     max_cll: u16,
     max_pall: u16,
@@ -210,6 +214,7 @@ pub struct MetaBox {
 }
 
 #[derive(Debug)]
+#[allow(unused)]
 pub struct TimeToSample {
     sample_count: u32,
     sample_delta: u32,
@@ -219,6 +224,7 @@ pub struct TimeToSample {
 pub struct SampleToChunk {
     first_chunk: u32,
     samples_per_chunk: u32,
+    #[allow(unused)]
     sample_description_index: u32,
 }
 
@@ -826,7 +832,6 @@ impl MP4Box {
     }
 
     fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
-        let start_offset = stream.offset;
         let (version, _flags) = stream.read_version_and_flags()?;
         let entry_count: u32;
         if version == 0 {
@@ -899,7 +904,6 @@ impl MP4Box {
     }
 
     fn parse_iref(stream: &mut IStream) -> AvifResult<Vec<ItemReference>> {
-        let start_offset = stream.offset;
         let (version, _flags) = stream.read_version_and_flags()?;
         let mut iref: Vec<ItemReference> = Vec::new();
         // versions > 1 are not supported. ignore them.
@@ -920,7 +924,7 @@ impl MP4Box {
                 }
                 // unsigned int(16) reference_count;
                 let reference_count = stream.read_u16()?;
-                for reference_index in 0..reference_count {
+                for _ in 0..reference_count {
                     let to_item_id: u32;
                     if version == 0 {
                         // unsigned int(16) to_item_ID;
@@ -1093,7 +1097,7 @@ impl MP4Box {
         // unsigned int(32) entry_count;
         let entry_count = stream.read_u32()?;
         sample_table.chunk_offsets.reserve(entry_count as usize);
-        for i in 0..entry_count {
+        for _ in 0..entry_count {
             let chunk_offset: u64;
             if large_offset {
                 // TODO: this comment is wrong in libavif.
@@ -1151,7 +1155,7 @@ impl MP4Box {
             return Ok(());
         }
         sample_table.sample_sizes.reserve(sample_count as usize);
-        for i in 0..sample_count {
+        for _ in 0..sample_count {
             // unsigned int(32) entry_size;
             let entry_size = stream.read_u32()?;
             sample_table.sample_sizes.push(entry_size);
@@ -1165,7 +1169,7 @@ impl MP4Box {
         // unsigned int(32) entry_count;
         let entry_count = stream.read_u32()?;
         sample_table.sync_samples.reserve(entry_count as usize);
-        for i in 0..entry_count {
+        for _ in 0..entry_count {
             // unsigned int(32) sample_number;
             let sample_number = stream.read_u32()?;
             sample_table.sync_samples.push(sample_number);
@@ -1179,7 +1183,7 @@ impl MP4Box {
         // unsigned int(32) entry_count;
         let entry_count = stream.read_u32()?;
         sample_table.time_to_sample.reserve(entry_count as usize);
-        for i in 0..entry_count {
+        for _ in 0..entry_count {
             let stts = TimeToSample {
                 // unsigned int(32) sample_count;
                 sample_count: stream.read_u32()?,
@@ -1199,7 +1203,7 @@ impl MP4Box {
         sample_table
             .sample_descriptions
             .reserve(entry_count as usize);
-        for i in 0..entry_count {
+        for _ in 0..entry_count {
             let header = Self::parse_header(stream)?;
             let mut stsd = SampleDescription::default();
             stsd.format = header.box_type.clone();
@@ -1340,7 +1344,6 @@ impl MP4Box {
     fn parse_trak(stream: &mut IStream) -> AvifResult<AvifTrack> {
         let mut track = AvifTrack::default();
         println!("parsing trak size: {}", stream.bytes_left());
-        let mut edts_seen = false;
         while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
@@ -1485,6 +1488,9 @@ impl MP4Box {
     pub fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
         let mut stream = IStream::create(data);
         let header = MP4Box::parse_header(&mut stream)?;
+        if header.box_type != "ftyp" {
+            return Ok(false);
+        }
         let ftyp = Self::parse_ftyp(&mut stream)?;
         //println!("ftyp: {:#?}", ftyp);
         Ok(ftyp.is_avif())
