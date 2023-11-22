@@ -1,5 +1,7 @@
 use crate::bindings::*;
 use crate::decoder::AvifImage;
+use crate::AvifError;
+use crate::AvifResult;
 use crate::PixelFormat;
 use std::mem::MaybeUninit;
 
@@ -19,9 +21,9 @@ fn dav1d_error(err: u32) -> i32 {
 }
 
 impl Dav1d {
-    pub fn initialize(&mut self, operating_point: u8, all_layers: bool) -> bool {
+    pub fn initialize(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
         if self.context.is_some() {
-            return true;
+            return Ok(()); // Already initialized.
         }
         let mut settings_uninit: MaybeUninit<Dav1dSettings> = unsafe { MaybeUninit::uninit() };
         unsafe { dav1d_default_settings(settings_uninit.as_mut_ptr()) };
@@ -31,18 +33,18 @@ impl Dav1d {
         // settings.frame_size_limit = xx;
         settings.operating_point = operating_point as i32;
         settings.all_layers = if all_layers { 1 } else { 0 };
-        //println!("{:#?}", settings);
 
         unsafe {
             let mut dec = MaybeUninit::uninit();
             let ret = dav1d_open(dec.as_mut_ptr(), &settings);
             if ret != 0 {
-                // TODO: carry forward the error.
-                return false;
+                // TODO: carry forward the error within the enum as a string.
+                // Here and elsewhere in this file.
+                return Err(AvifError::UnknownError);
             }
             self.context = Some(dec.assume_init());
         }
-        true
+        Ok(())
     }
 
     pub fn get_next_image(
@@ -51,11 +53,9 @@ impl Dav1d {
         spatial_id: u8,
         image: &mut AvifImage,
         category: usize,
-    ) -> bool {
+    ) -> AvifResult<()> {
         if self.context.is_none() {
-            if !self.initialize(0, true) {
-                return false;
-            }
+            self.initialize(0, true)?;
         }
         let mut got_picture = false;
         let av1_payload_len = av1_payload.len();
@@ -71,7 +71,7 @@ impl Dav1d {
             );
             println!("dav1d_data_wrap returned {res}");
             if res != 0 {
-                return false;
+                return Err(AvifError::UnknownError);
             }
             let mut next_frame: Dav1dPicture = std::mem::zeroed();
             loop {
@@ -81,7 +81,7 @@ impl Dav1d {
                     // TODO: need to handle the error macros better.
                     if res < 0 && res != dav1d_error(EAGAIN) {
                         dav1d_data_unref(&mut data);
-                        return false;
+                        return Err(AvifError::UnknownError);
                     }
                 }
 
@@ -92,12 +92,12 @@ impl Dav1d {
                     if !data.data.is_null() {
                         continue;
                     }
-                    return false;
+                    return Err(AvifError::UnknownError);
                 } else if res < 0 {
                     if !data.data.is_null() {
                         dav1d_data_unref(&mut data);
                     }
-                    return false;
+                    return Err(AvifError::UnknownError);
                 } else {
                     // Got a picture.
                     let frame_spatial_id = (*next_frame.frame_hdr).spatial_id as u8;
@@ -175,7 +175,7 @@ impl Dav1d {
             let seq_hdr = unsafe { (*dav1d_picture.seq_hdr) };
             image.full_range = seq_hdr.color_range != 0;
         }
-        true
+        Ok(())
     }
 }
 

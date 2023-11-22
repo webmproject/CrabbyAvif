@@ -364,14 +364,13 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
     println!("settings: {:#?}", rust_decoder.settings);
 
     let res = rust_decoder.parse();
-    if !res.is_ok() {
+    if res.is_err() {
         return to_avifResult(&res);
     }
 
     // Copy image.
     (*decoder).image_object = res.unwrap().into();
-
-    // Copy decoder.
+    // Copy decoder properties.
     (*decoder).imageCount = rust_decoder.image_count as i32;
     (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
 
@@ -383,14 +382,13 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
     let rust_decoder = &mut (*decoder).rust_decoder;
 
     let res = rust_decoder.next_image();
-    if res.is_none() {
-        return avifResult::AVIF_RESULT_UNKNOWN_ERROR;
+    if res.is_err() {
+        return to_avifResult(&res);
     }
 
     // Copy image.
     (*decoder).image_object = res.unwrap().into();
-
-    // Copy decoder.
+    // Copy decoder properties.
     (*decoder).imageCount = rust_decoder.image_count as i32;
     (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
 

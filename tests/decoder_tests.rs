@@ -38,7 +38,7 @@ fn alpha_no_ispe() {
     assert!(res.is_ok());
     assert!(decoder.alpha_present);
     let res = decoder.next_image();
-    assert!(res.is_some());
+    assert!(res.is_ok());
     let image = res.unwrap();
     let alpha_plane = image.plane(3);
     assert!(alpha_plane.is_some());
@@ -56,7 +56,7 @@ fn animated_image() {
     assert_eq!(decoder.image_count, 5);
     assert_eq!(decoder.repetition_count, 0);
     for _ in 0..5 {
-        assert!(decoder.next_image().is_some());
+        assert!(decoder.next_image().is_ok());
     }
 }
 
@@ -74,8 +74,8 @@ fn animated_image_with_source_set_to_primary_item() {
     assert_eq!(decoder.image_count, 1);
     assert_eq!(decoder.repetition_count, 0);
     // Get the first (and only) image.
-    assert!(decoder.next_image().is_some());
+    assert!(decoder.next_image().is_ok());
     // Subsequent calls should not return anything since there is only one
     // image in the preferred source.
-    assert!(decoder.next_image().is_none());
+    assert!(decoder.next_image().is_err());
 }

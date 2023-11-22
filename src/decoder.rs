@@ -96,7 +96,7 @@ impl AvifImage {
         });
     }
 
-    fn allocate_planes(&mut self, category: usize) -> bool {
+    fn allocate_planes(&mut self, category: usize) -> AvifResult<()> {
         // TODO : assumes 444. do other stuff.
         let pixel_size: u32 = if self.depth == 8 { 1 } else { 2 };
         let plane_size = (self.width * self.height * pixel_size) as usize;
@@ -116,9 +116,9 @@ impl AvifImage {
             self.image_owns_alpha_plane = true;
         } else {
             println!("unknown category {category}. cannot allocate.");
-            return false;
+            return Err(AvifError::UnknownError);
         }
-        true
+        Ok(())
     }
 
     fn copy_from_tile(
@@ -127,7 +127,7 @@ impl AvifImage {
         tile_info: &AvifTileInfo,
         tile_index: u32,
         category: usize,
-    ) -> bool {
+    ) {
         let row_index: usize = (tile_index / tile_info.grid.columns) as usize;
         let column_index: usize = (tile_index % tile_info.grid.columns) as usize;
         println!("copying tile {tile_index} {row_index} {column_index}");
@@ -194,7 +194,6 @@ impl AvifImage {
                 dst_slice.copy_from_slice(pixels);
             }
         }
-        true
     }
 }
 
@@ -1180,49 +1179,44 @@ impl AvifDecoder {
         )
     }
 
-    fn create_codecs(&mut self) -> bool {
+    fn create_codecs(&mut self) -> AvifResult<()> {
         // TODO: share codecs for grid, etc.
         for tiles in &mut self.tiles {
             for tile in tiles {
                 tile.codec
-                    .initialize(tile.operating_point, tile.input.all_layers);
+                    .initialize(tile.operating_point, tile.input.all_layers)?;
             }
         }
-        true
+        Ok(())
     }
 
-    fn prepare_samples(&mut self, image_index: usize) -> bool {
+    fn prepare_samples(&mut self, image_index: usize) -> AvifResult<()> {
         // TODO: this function can probably be moved into AvifDecodeSample.data().
         for tiles in &mut self.tiles {
             for tile in tiles {
                 if tile.input.samples.len() <= image_index {
                     println!("sample for index {image_index} not found.");
-                    return false;
+                    return Err(AvifError::NoImagesRemaining);
                 }
                 let sample = &mut tile.input.samples[image_index];
                 if sample.item_id != 0 {
                     // Data comes from an item.
-                    let item = self.avif_items.get(&sample.item_id);
-                    if item.is_none() {
-                        return false;
-                    }
-                    let item = item.unwrap();
+                    let item = self
+                        .avif_items
+                        .get(&sample.item_id)
+                        .ok_or(AvifError::BmffParseFailed)?;
                     if item.extents.len() > 1 {
-                        println!("item has multiple extents");
+                        // Item has multiple extents, merge them into a contiguous buffer.
                         if sample.data_buffer.is_none() {
                             let mut data: Vec<u8> = Vec::new();
                             data.reserve(item.size);
                             for extent in &item.extents {
-                                // TODO: extent.length usize cast safety?
                                 let io = self.io.as_mut().unwrap();
-                                let extent_payload =
-                                    match io.read(extent.offset, extent.length as usize) {
-                                        Ok(payload) => payload,
-                                        Err(e) => return false,
-                                    };
-                                data.extend_from_slice(extent_payload);
+                                // TODO: extent.length usize cast safety?
+                                data.extend_from_slice(
+                                    io.read(extent.offset, extent.length as usize)?,
+                                );
                             }
-                            println!("merged size: {}", data.len());
                             sample.data_buffer = Some(data);
                         }
                     } else {
@@ -1233,41 +1227,30 @@ impl AvifDecoder {
                 }
             }
         }
-        true
+        Ok(())
     }
 
-    fn decode_tiles(&mut self, image_index: usize) -> bool {
-        //for (category, tiles) in self.tiles.iter_mut().enumerate() {
+    fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
         for category in 0usize..3 {
             let grid = &self.tile_info[category].grid;
             let is_grid = grid.rows > 0 && grid.columns > 0;
             if is_grid {
-                // allocate grid planes.
-                if !self.image.allocate_planes(category) {
-                    println!("failed to allocate image for grid image");
-                    return false;
-                }
+                self.image.allocate_planes(category)?;
             }
             for (tile_index, tile) in self.tiles[category].iter_mut().enumerate() {
                 let sample = &tile.input.samples[image_index];
                 let io = &mut self.io.as_mut().unwrap();
-                let sample_payload = match sample.data(io) {
-                    Ok(payload) => payload,
-                    Err(e) => return false,
-                };
-                if !tile.codec.get_next_image(
-                    sample_payload,
+                tile.codec.get_next_image(
+                    sample.data(io)?,
                     sample.spatial_id,
                     &mut tile.image,
                     category,
-                ) {
-                    return false;
-                }
+                )?;
+
                 // TODO: convert alpha from limited range to full range.
                 // TODO: scale tile to match output dimension.
 
                 if is_grid {
-                    println!("GRID!!");
                     // TODO: make sure all tiles decoded properties match.
                     // Need to figure out a way to do it with proper borrows.
                     self.image.copy_from_tile(
@@ -1278,7 +1261,6 @@ impl AvifDecoder {
                     );
                 } else {
                     // Non grid path, steal planes from the only tile.
-
                     if category == 0 {
                         self.image.width = tile.image.width;
                         self.image.height = tile.image.height;
@@ -1292,34 +1274,23 @@ impl AvifDecoder {
                 }
             }
         }
-        true
+        Ok(())
     }
 
-    pub fn next_image(&mut self) -> Option<&AvifImage> {
+    pub fn next_image(&mut self) -> AvifResult<&AvifImage> {
         if self.io.is_none() {
-            return None;
+            return Err(AvifError::IoNotSet);
         }
-        if self.tiles[0].is_empty() && self.tiles[1].is_empty() && self.tiles[2].is_empty() {
-            // Nothing has been parsed yet.
-            return None;
+        if self.tiles[0].is_empty() {
+            return Err(AvifError::NoContent);
         }
-
-        //println!("tiles: {:#?}", self.tiles);
-
         let next_image_index = self.image_index + 1;
-        if !self.create_codecs() {
-            return None;
-        }
-        if !self.prepare_samples(next_image_index as usize) {
-            return None;
-        }
-        if !self.decode_tiles(next_image_index as usize) {
-            return None;
-        }
-
+        self.create_codecs()?;
+        self.prepare_samples(next_image_index as usize)?;
+        self.decode_tiles(next_image_index as usize)?;
         self.image_index = next_image_index;
         // TODO provide timing info for tracks.
-        Some(&self.image)
+        Ok(&self.image)
     }
 
     pub fn peek_compatible_file_type(data: &[u8]) -> bool {
