@@ -18,3 +18,4 @@ capi = []
 
 [package.metadata.capi.header]
 name = "avif"
+subdirectory = "avif"

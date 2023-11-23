@@ -6,7 +6,7 @@ set(CMAKE_C_COMPILER "clang")
 set(CMAKE_CXX_COMPILER "clang++")
 
 set(GTEST_INCLUDE_DIR "/Users/vigneshv/code/libavif/ext/googletest/googletest/include")
-set(RUST_LIBAVIF_INCLUDE_DIR "/Users/vigneshv/code/rust_pg/rust-libavif/c_build/usr/include/rust_libavif")
+set(RUST_LIBAVIF_INCLUDE_DIR "/Users/vigneshv/code/rust_pg/rust-libavif/c_build/usr/include/")
 
 set(GTEST_LIBRARIES "/Users/vigneshv/code/libavif/ext/googletest/build/lib/libgtest.a")
 set(GTEST_MAIN_LIBRARIES "/Users/vigneshv/code/libavif/ext/googletest/build/lib/libgtest_main.a")

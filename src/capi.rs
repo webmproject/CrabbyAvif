@@ -11,6 +11,7 @@ use std::slice;
 use libc::size_t;
 
 use crate::decoder::*;
+use crate::AvifError;
 use crate::AvifResult;
 use crate::AvifStrictness;
 use crate::AvifStrictnessFlag;
@@ -57,6 +58,45 @@ pub enum avifResult {
     EncodeGainMapFailed,
     DecodeGainMapFailed,
     InvalidToneMappedImage,
+}
+
+impl From<&AvifError> for avifResult {
+    fn from(err: &AvifError) -> Self {
+        match err {
+            AvifError::Ok => avifResult::Ok,
+            AvifError::UnknownError => avifResult::UnknownError,
+            AvifError::InvalidFtyp => avifResult::InvalidFtyp,
+            AvifError::NoContent => avifResult::NoContent,
+            AvifError::NoYuvFormatSelected => avifResult::NoYuvFormatSelected,
+            AvifError::ReformatFailed => avifResult::ReformatFailed,
+            AvifError::UnsupportedDepth => avifResult::UnsupportedDepth,
+            AvifError::EncodeColorFailed => avifResult::EncodeColorFailed,
+            AvifError::EncodeAlphaFailed => avifResult::EncodeAlphaFailed,
+            AvifError::BmffParseFailed => avifResult::BmffParseFailed,
+            AvifError::MissingImageItem => avifResult::MissingImageItem,
+            AvifError::DecodeColorFailed => avifResult::DecodeColorFailed,
+            AvifError::DecodeAlphaFailed => avifResult::DecodeAlphaFailed,
+            AvifError::ColorAlphaSizeMismatch => avifResult::ColorAlphaSizeMismatch,
+            AvifError::IspeSizeMismatch => avifResult::IspeSizeMismatch,
+            AvifError::NoCodecAvailable => avifResult::NoCodecAvailable,
+            AvifError::NoImagesRemaining => avifResult::NoImagesRemaining,
+            AvifError::InvalidExifPayload => avifResult::InvalidExifPayload,
+            AvifError::InvalidImageGrid => avifResult::InvalidImageGrid,
+            AvifError::InvalidCodecSpecificOption => avifResult::InvalidCodecSpecificOption,
+            AvifError::TruncatedData => avifResult::TruncatedData,
+            AvifError::IoNotSet => avifResult::IoNotSet,
+            AvifError::IoError => avifResult::IoError,
+            AvifError::WaitingOnIo => avifResult::WaitingOnIo,
+            AvifError::InvalidArgument => avifResult::InvalidArgument,
+            AvifError::NotImplemented => avifResult::NotImplemented,
+            AvifError::OutOfMemory => avifResult::OutOfMemory,
+            AvifError::CannotChangeSetting => avifResult::CannotChangeSetting,
+            AvifError::IncompatibleImage => avifResult::IncompatibleImage,
+            AvifError::EncodeGainMapFailed => avifResult::EncodeGainMapFailed,
+            AvifError::DecodeGainMapFailed => avifResult::DecodeGainMapFailed,
+            AvifError::InvalidToneMappedImage => avifResult::InvalidToneMappedImage,
+        }
+    }
 }
 
 pub type avifBool = c_int;
@@ -301,7 +341,10 @@ fn to_avifBool(val: bool) -> avifBool {
 fn to_avifResult<T>(res: &AvifResult<T>) -> avifResult {
     match res {
         Ok(_) => avifResult::Ok,
-        Err(_err) => avifResult::UnknownError, // TODO: convert to proper error.
+        Err(err) => {
+            let res: avifResult = err.into();
+            res
+        }
     }
 }
 
@@ -377,8 +420,12 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
     }
 
     // Copy image info.
-    (*decoder).image_object = res.unwrap().into();
-    // Copy decoder properties.
+    let info = res.unwrap();
+    (*decoder).image_object = info.into();
+
+    // Copy decoder properties. Properties from |info| must be copied first to
+    // not mess with the borrow checker.
+    (*decoder).alphaPresent = to_avifBool(info.alpha_present);
     (*decoder).imageCount = rust_decoder.image_count as i32;
     (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
 
@@ -395,8 +442,12 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
     }
 
     // Copy image.
-    (*decoder).image_object = res.unwrap().into();
-    // Copy decoder properties.
+    let image = res.unwrap();
+    (*decoder).image_object = image.into();
+
+    // Copy decoder properties. Properties from |image.info| must be copied first to
+    // not mess with the borrow checker.
+    (*decoder).alphaPresent = to_avifBool(image.info.alpha_present);
     (*decoder).imageCount = rust_decoder.image_count as i32;
     (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
 
