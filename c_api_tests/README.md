@@ -1,3 +1,10 @@
 ## C++ tests copied from libavif.
 
-* avifalphanoispetest.cc - Copied as-is.
+### Copied as is
+
+* avifalphanoispetest.cc
+* avifanimationtest.cc
+
+### Copied with changes
+
+* ...

@@ -27,6 +27,10 @@ pub struct AvifImageInfo {
     pub color_primaries: u16,
     pub transfer_characteristics: u16,
     pub matrix_coefficients: u16,
+
+    // TODO: these can go in a "global" image info struct. which can then
+    // contain an AvifImageInfo as well.
+    pub image_sequence_track_present: bool,
 }
 
 #[derive(Derivative, Default)]
@@ -958,6 +962,7 @@ impl AvifDecoder {
         for (_id, item) in &mut self.avif_items {
             item.harvest_ispe(self.settings.strictness.alpha_ispe_required())?;
         }
+        self.image.info.image_sequence_track_present = !self.tracks.is_empty();
         //println!("{:#?}", self.avif_items);
 
         self.source = match self.settings.source {

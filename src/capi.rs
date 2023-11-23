@@ -311,7 +311,7 @@ pub struct avifDecoder {
     // avifBool enableDecodingGainMap;
     // avifBool enableParsingGainMapMetadata;
     // avifBool ignoreColorAndAlpha;
-    // avifBool imageSequenceTrackPresent;
+    pub imageSequenceTrackPresent: avifBool,
 
     // TODO: maybe wrap these fields in a private data kind of field?
     rust_decoder: Box<AvifDecoder>,
@@ -336,6 +336,7 @@ impl Default for avifDecoder {
             durationInTimescales: 0,
             repetitionCount: 0,
             alphaPresent: AVIF_FALSE,
+            imageSequenceTrackPresent: AVIF_FALSE,
             rust_decoder: Box::new(AvifDecoder::default()),
             image_object: avifImage::default(),
         }
@@ -438,6 +439,7 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
     // Copy decoder properties. Properties from |info| must be copied first to
     // not mess with the borrow checker.
     (*decoder).alphaPresent = to_avifBool(info.alpha_present);
+    (*decoder).imageSequenceTrackPresent = to_avifBool(info.image_sequence_track_present);
     (*decoder).imageCount = rust_decoder.image_count as i32;
     (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
 
@@ -460,6 +462,7 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
     // Copy decoder properties. Properties from |image.info| must be copied first to
     // not mess with the borrow checker.
     (*decoder).alphaPresent = to_avifBool(image.info.alpha_present);
+    (*decoder).imageSequenceTrackPresent = to_avifBool(image.info.image_sequence_track_present);
     (*decoder).imageCount = rust_decoder.image_count as i32;
     (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
 
