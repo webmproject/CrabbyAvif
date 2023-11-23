@@ -15,6 +15,7 @@ use crate::AvifError;
 use crate::AvifResult;
 use crate::AvifStrictness;
 use crate::AvifStrictnessFlag;
+use crate::ChromaSamplePosition;
 use crate::PixelFormat;
 
 #[repr(C)]
@@ -149,6 +150,16 @@ enum avifChromaSamplePosition {
     Colocated = 2,
 }
 
+impl From<ChromaSamplePosition> for avifChromaSamplePosition {
+    fn from(chroma_sample_position: ChromaSamplePosition) -> Self {
+        match chroma_sample_position {
+            ChromaSamplePosition::Unknown => avifChromaSamplePosition::Unknown,
+            ChromaSamplePosition::Vertical => avifChromaSamplePosition::Vertical,
+            ChromaSamplePosition::Colocated => avifChromaSamplePosition::Colocated,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Debug)]
 pub struct avifImage {
@@ -204,15 +215,16 @@ impl Default for avifImage {
 
 impl From<&AvifImageInfo> for avifImage {
     fn from(info: &AvifImageInfo) -> Self {
-        let mut dst_image = avifImage::default();
-        dst_image.width = info.width;
-        dst_image.height = info.height;
-        dst_image.depth = info.depth as u32;
-        dst_image.yuvFormat = info.yuv_format.into();
-        dst_image.yuvRange = info.full_range.into();
-        //dst_image.yuvChromaSamplePosition: avifChromaSamplePosition,
-        dst_image.alphaPremultiplied = info.alpha_premultiplied as avifBool;
-        dst_image
+        avifImage {
+            width: info.width,
+            height: info.height,
+            depth: info.depth as u32,
+            yuvFormat: info.yuv_format.into(),
+            yuvRange: info.full_range.into(),
+            yuvChromaSamplePosition: info.chroma_sample_position.into(),
+            alphaPremultiplied: info.alpha_premultiplied as avifBool,
+            ..Self::default()
+        }
     }
 }
 

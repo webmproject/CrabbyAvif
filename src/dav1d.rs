@@ -145,7 +145,7 @@ impl Dav1d {
             };
             let seq_hdr = unsafe { *dav1d_picture.seq_hdr };
             image.info.full_range = seq_hdr.color_range != 0;
-            image.info.chroma_sample_position = seq_hdr.chr as u8;
+            image.info.chroma_sample_position = (seq_hdr.chr as u8).into();
 
             image.info.color_primaries = seq_hdr.pri as u16;
             image.info.transfer_characteristics = seq_hdr.trc as u16;

@@ -87,7 +87,7 @@ pub struct CodecConfiguration {
     pub monochrome: bool,
     pub chroma_subsampling_x: u8,
     pub chroma_subsampling_y: u8,
-    pub chroma_sample_position: u8,
+    pub chroma_sample_position: ChromaSamplePosition,
 }
 
 impl CodecConfiguration {
@@ -541,7 +541,7 @@ impl MP4Box {
         av1C.monochrome = byte.read(1) == 1;
         av1C.chroma_subsampling_x = byte.read(1);
         av1C.chroma_subsampling_y = byte.read(1);
-        av1C.chroma_sample_position = byte.read(2);
+        av1C.chroma_sample_position = byte.read(2).into();
 
         // unsigned int(3) reserved = 0;
         // unsigned int(1) initial_presentation_delay_present;

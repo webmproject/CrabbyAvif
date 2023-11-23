@@ -30,6 +30,25 @@ impl PixelFormat {
 }
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
+pub enum ChromaSamplePosition {
+    #[default]
+    Unknown = 0,
+    Vertical = 1,
+    Colocated = 2,
+}
+
+impl From<u8> for ChromaSamplePosition {
+    fn from(chroma_sample_position: u8) -> Self {
+        match chroma_sample_position {
+            0 => ChromaSamplePosition::Unknown,
+            1 => ChromaSamplePosition::Vertical,
+            2 => ChromaSamplePosition::Colocated,
+            _ => ChromaSamplePosition::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum AvifError {
     #[default]
     Ok,

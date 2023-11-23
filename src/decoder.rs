@@ -17,7 +17,7 @@ pub struct AvifImageInfo {
 
     pub yuv_format: PixelFormat,
     pub full_range: bool,
-    pub chroma_sample_position: u8,
+    pub chroma_sample_position: ChromaSamplePosition,
 
     pub alpha_present: bool,
     pub alpha_premultiplied: bool,
