@@ -3,3 +3,5 @@
 /match_stats.csv
 /out_comparison.txt
 /.DS_Store
+/c_build
+/c_api_tests/build

@@ -82,3 +82,23 @@ fn animated_image_with_source_set_to_primary_item() {
     // image in the preferred source.
     assert!(decoder.next_image().is_err());
 }
+
+// From avifdecodetest.cc
+#[test]
+fn color_grid_alpha_no_grid() {
+    // Test case from https://github.com/AOMediaCodec/libavif/issues/1203.
+    let mut decoder = get_decoder("color_grid_alpha_nogrid.avif");
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let info = res.unwrap();
+    // TODO: this assertion has to be reversed once such files are supported.
+    // assert!(info.alpha_present);
+    // assert!(!decoder.image_sequence_track_present);
+    let res = decoder.next_image();
+    assert!(res.is_ok());
+    // TODO: these assertions has to be reversed once such files are supported.
+    let image = res.unwrap();
+    let alpha_plane = image.plane(3);
+    assert!(!alpha_plane.is_some());
+    //assert!(alpha_plane.unwrap().row_bytes > 0);
+}
