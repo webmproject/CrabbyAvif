@@ -33,6 +33,35 @@ pub struct AvifImageInfo {
     pub image_sequence_track_present: bool,
 }
 
+impl AvifImageInfo {
+    // TODO: replace plane_index with an enum.
+    pub fn height(&self, plane_index: usize) -> usize {
+        assert!(plane_index <= 3);
+        if plane_index == 0 || plane_index == 3 {
+            // Y and Alpha planes are never subsampled.
+            return self.height as usize;
+        }
+        match self.yuv_format {
+            PixelFormat::Yuv444 | PixelFormat::Yuv422 | PixelFormat::Monochrome => {
+                self.height as usize
+            }
+            PixelFormat::Yuv420 => (self.height as usize + 1) / 2,
+        }
+    }
+
+    pub fn width(&self, plane_index: usize) -> usize {
+        assert!(plane_index <= 3);
+        if plane_index == 0 || plane_index == 3 {
+            // Y and Alpha planes are never subsampled.
+            return self.width as usize;
+        }
+        match self.yuv_format {
+            PixelFormat::Yuv444 | PixelFormat::Monochrome => self.width as usize,
+            PixelFormat::Yuv420 | PixelFormat::Yuv422 => (self.width as usize + 1) / 2,
+        }
+    }
+}
+
 #[derive(Derivative, Default)]
 #[derivative(Debug)]
 pub struct AvifImage {
@@ -55,9 +84,11 @@ pub struct AvifImage {
     plane_buffers: [Vec<u8>; 4],
 }
 
-#[derive(Debug)]
-pub struct AvifPlane {
-    pub data: *const u8,
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct AvifPlane<'a> {
+    #[derivative(Debug = "ignore")]
+    pub data: &'a [u8],
     pub width: u32,
     pub height: u32,
     pub row_bytes: u32,
@@ -82,8 +113,15 @@ impl AvifImage {
                     plane_width = (plane_width + 1) / 2;
                 }
             }
+            println!(
+                "plane: {plane} plane_height: {plane_height} computted height: {}",
+                self.info.height(plane)
+            );
+            let plane_size: usize = self.info.height(plane) * self.yuv_row_bytes[plane] as usize;
+            let data =
+                unsafe { std::slice::from_raw_parts(self.yuv_planes[plane].unwrap(), plane_size) };
             return Some(AvifPlane {
-                data: self.yuv_planes[plane].unwrap(),
+                data,
                 width: plane_width,
                 height: plane_height,
                 row_bytes: self.yuv_row_bytes[plane],
@@ -93,8 +131,10 @@ impl AvifImage {
         if self.alpha_plane.is_none() {
             return None;
         }
+        let plane_size: usize = self.info.height(3) * self.alpha_row_bytes as usize;
+        let data = unsafe { std::slice::from_raw_parts(self.alpha_plane.unwrap(), plane_size) };
         return Some(AvifPlane {
-            data: self.alpha_plane.unwrap(),
+            data,
             width: self.info.width,
             height: self.info.height,
             row_bytes: self.alpha_row_bytes,
@@ -152,11 +192,11 @@ impl AvifImage {
             // If this is the last tile column, clamp to left over width.
             if (column_index as u32) == tile_info.grid.columns - 1 {
                 let width_so_far = src_plane.width * (column_index as u32);
-                // TODO: does self.width need to be accounted for subsampling?
-                src_width_to_copy = self.info.width - width_so_far;
+                src_width_to_copy = self.info.width(plane_index) as u32 - width_so_far;
             } else {
                 src_width_to_copy = src_plane.width;
             }
+            println!("src_width_to_copy: {src_width_to_copy}");
             let src_byte_count: usize = (src_width_to_copy * src_plane.pixel_size)
                 .try_into()
                 .unwrap();
@@ -175,16 +215,15 @@ impl AvifImage {
             // If this is the last tile row, clamp to left over height.
             if (row_index as u32) == tile_info.grid.rows - 1 {
                 let height_so_far = src_plane.height * (row_index as u32);
-                // TODO: does self.height need to be accounted for subsampling?
-                src_height_to_copy = self.info.height - height_so_far;
+                src_height_to_copy = self.info.height(plane_index) as u32 - height_so_far;
             } else {
                 src_height_to_copy = src_plane.height;
             }
 
+            println!("src_height_to_copy: {src_height_to_copy}");
             for y in 0..src_height_to_copy {
-                let src_stride_offset: isize = (y * src_plane.row_bytes).try_into().unwrap();
-                let ptr = unsafe { src_plane.data.offset(src_stride_offset) };
-                let pixels = unsafe { std::slice::from_raw_parts(ptr, src_byte_count) };
+                let src_stride_offset: usize = (y * src_plane.row_bytes).try_into().unwrap()
+                let pixels = &src_plane.data[src_stride_offset..src_stride_offset + src_byte_count];
                 let dst_stride_offset: usize = dst_base_offset + ((y * dst_row_bytes) as usize);
                 let dst_end_offset: usize = dst_stride_offset + src_byte_count;
 

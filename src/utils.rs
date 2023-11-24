@@ -103,10 +103,9 @@ impl Y4MWriter {
                 .try_into()
                 .unwrap();
             for y in 0..avif_plane.height {
-                let stride_offset: isize = (y * avif_plane.row_bytes).try_into().unwrap();
-                //println!("{y}: {stride_offset}");
-                let ptr = unsafe { avif_plane.data.offset(stride_offset) };
-                let pixels = unsafe { std::slice::from_raw_parts(ptr, byte_count) };
+                let stride_offset: usize = (y * avif_plane.row_bytes).try_into().unwrap();
+                //println!("{y}: {stride_offset} plane_height: {}", avif_plane.height);
+                let pixels = &avif_plane.data[stride_offset..stride_offset + byte_count];
                 match self.file.as_ref().unwrap().write_all(pixels) {
                     Err(_) => return false,
                     _ => {}
