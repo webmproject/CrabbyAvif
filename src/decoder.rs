@@ -6,7 +6,8 @@ use crate::mp4box::*;
 use crate::stream::*;
 use crate::*;
 
-// TODO: needed only for debug to AvifImage. Can be removed it AvifIMage does not have to be debug printable.
+// TODO: needed only for debug to AvifImage and AvifPlane. Can be removed it
+// those do not have to be debug printable.
 use derivative::Derivative;
 
 #[derive(Default, Debug)]

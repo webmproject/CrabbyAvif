@@ -38,6 +38,7 @@ fn alpha_no_ispe() {
     assert!(res.is_ok());
     let info = res.unwrap();
     assert!(info.alpha_present);
+    assert!(!info.image_sequence_track_present);
     let res = decoder.next_image();
     assert!(res.is_ok());
     let image = res.unwrap();
@@ -54,7 +55,7 @@ fn animated_image() {
     assert!(res.is_ok());
     let info = res.unwrap();
     assert!(!info.alpha_present);
-    //assert!(!info.image_sequence_track_present);
+    assert!(info.image_sequence_track_present);
     assert_eq!(decoder.image_count, 5);
     assert_eq!(decoder.repetition_count, 0);
     for _ in 0..5 {
@@ -71,7 +72,8 @@ fn animated_image_with_source_set_to_primary_item() {
     assert!(res.is_ok());
     let info = res.unwrap();
     assert!(!info.alpha_present);
-    //assert!(!info.image_sequence_track_present);
+    // This will be reported as true irrespective of the preferred source.
+    assert!(info.image_sequence_track_present);
     // imageCount is expected to be 1 because we are using primary item as the
     // preferred source.
     assert_eq!(decoder.image_count, 1);
@@ -93,7 +95,7 @@ fn color_grid_alpha_no_grid() {
     let info = res.unwrap();
     // TODO: this assertion has to be reversed once such files are supported.
     assert!(!info.alpha_present);
-    //assert!(!info.image_sequence_track_present);
+    assert!(!info.image_sequence_track_present);
     let res = decoder.next_image();
     assert!(res.is_ok());
     // TODO: these assertions has to be reversed once such files are supported.
