@@ -15,7 +15,7 @@ unsafe extern "C" fn avif_dav1d_free_callback(
     _buf: *const u8,
     _cookie: *mut ::std::os::raw::c_void,
 ) {
-    // do nothing. the data is owned by the decoder.
+    // Do nothing. The buffers are owned by the decoder.
 }
 
 fn dav1d_error(err: u32) -> i32 {

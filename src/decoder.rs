@@ -95,33 +95,21 @@ pub struct AvifPlane<'a> {
 impl AvifImage {
     pub fn plane(&self, plane: usize) -> Option<AvifPlane> {
         assert!(plane < 4);
-        let pixel_size = if self.info.depth == 8 { 1 } else { 2 };
         if self.planes[plane].is_none() {
             return None;
         }
-        let mut plane_width = self.info.width;
-        let mut plane_height = self.info.height;
-        if plane > 0 {
-            if self.info.yuv_format == PixelFormat::Yuv420 {
-                plane_width = (plane_width + 1) / 2;
-                plane_height = (plane_height + 1) / 2;
-            } else if self.info.yuv_format == PixelFormat::Yuv422 {
-                plane_width = (plane_width + 1) / 2;
-            }
-        }
-        println!(
-            "plane: {plane} plane_height: {plane_height} computted height: {}",
-            self.info.height(plane)
-        );
-        let plane_size: usize = self.info.height(plane) * self.row_bytes[plane] as usize;
+        let pixel_size = if self.info.depth == 8 { 1 } else { 2 };
+        let height = self.info.height(plane);
+        let row_bytes = self.row_bytes[plane] as usize;
+        let plane_size = height * row_bytes;
         let data = unsafe { std::slice::from_raw_parts(self.planes[plane].unwrap(), plane_size) };
-        return Some(AvifPlane {
+        Some(AvifPlane {
             data,
-            width: plane_width,
-            height: plane_height,
-            row_bytes: self.row_bytes[plane],
+            width: self.info.width(plane) as u32,
+            height: height as u32,
+            row_bytes: row_bytes as u32,
             pixel_size,
-        });
+        })
     }
 
     fn allocate_planes(&mut self, category: usize) -> AvifResult<()> {
