@@ -16,17 +16,18 @@ impl Y4MWriter {
         if self.header_written {
             return true;
         }
-        let has_alpha = image.alpha_plane.is_some() && image.alpha_row_bytes > 0;
         self.write_alpha = false;
 
-        if has_alpha && (image.info.depth != 8 || image.info.yuv_format != PixelFormat::Yuv444) {
+        if image.info.alpha_present
+            && (image.info.depth != 8 || image.info.yuv_format != PixelFormat::Yuv444)
+        {
             println!("WARNING: writing alpha is currently only supported in 8bpc YUV444, ignoring alpha channel");
         }
 
         let y4m_format = match image.info.depth {
             8 => match image.info.yuv_format {
                 PixelFormat::Yuv444 => {
-                    if has_alpha {
+                    if image.info.alpha_present {
                         self.write_alpha = true;
                         "C444alpha XYSCSS=444"
                     } else {

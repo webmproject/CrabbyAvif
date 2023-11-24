@@ -153,11 +153,11 @@ impl Dav1d {
 
             // TODO: call image freeplanes.
             for plane in 0usize..image.info.yuv_format.plane_count() {
-                image.yuv_planes[plane] = Some(dav1d_picture.data[plane] as *const u8);
+                image.planes[plane] = Some(dav1d_picture.data[plane] as *const u8);
                 let stride_index = if plane == 0 { 0 } else { 1 };
-                image.yuv_row_bytes[plane] = dav1d_picture.stride[stride_index] as u32;
+                image.row_bytes[plane] = dav1d_picture.stride[stride_index] as u32;
             }
-            image.image_owns_yuv_planes = false;
+            image.image_owns_planes = false;
         } else if category == 1 {
             /*
             if image.width != (dav1d_picture.p.w as u32)
@@ -172,8 +172,8 @@ impl Dav1d {
             image.info.height = dav1d_picture.p.h as u32;
             image.info.depth = dav1d_picture.p.bpc as u8;
             // TODO: call image freeplanes.
-            image.alpha_plane = Some(dav1d_picture.data[0] as *const u8);
-            image.alpha_row_bytes = dav1d_picture.stride[0] as u32;
+            image.planes[3] = Some(dav1d_picture.data[0] as *const u8);
+            image.row_bytes[3] = dav1d_picture.stride[0] as u32;
             image.image_owns_alpha_plane = false;
             let seq_hdr = unsafe { *dav1d_picture.seq_hdr };
             image.info.full_range = seq_hdr.color_range != 0;

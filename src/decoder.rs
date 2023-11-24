@@ -67,12 +67,9 @@ impl AvifImageInfo {
 pub struct AvifImage {
     pub info: AvifImageInfo,
 
-    pub yuv_planes: [Option<*const u8>; 3],
-    pub yuv_row_bytes: [u32; 3], // TODO: named constant
-    pub image_owns_yuv_planes: bool,
-
-    pub alpha_plane: Option<*const u8>,
-    pub alpha_row_bytes: u32,
+    pub planes: [Option<*const u8>; 4],
+    pub row_bytes: [u32; 4], // TODO: named constant
+    pub image_owns_planes: bool,
     pub image_owns_alpha_plane: bool,
 
     // some more boxes. clli, transformations. pasp, clap, irot, imir.
@@ -99,45 +96,30 @@ impl AvifImage {
     pub fn plane(&self, plane: usize) -> Option<AvifPlane> {
         assert!(plane < 4);
         let pixel_size = if self.info.depth == 8 { 1 } else { 2 };
-        if plane < 3 {
-            if self.yuv_planes[plane].is_none() {
-                return None;
-            }
-            let mut plane_width = self.info.width;
-            let mut plane_height = self.info.height;
-            if plane > 0 {
-                if self.info.yuv_format == PixelFormat::Yuv420 {
-                    plane_width = (plane_width + 1) / 2;
-                    plane_height = (plane_height + 1) / 2;
-                } else if self.info.yuv_format == PixelFormat::Yuv422 {
-                    plane_width = (plane_width + 1) / 2;
-                }
-            }
-            println!(
-                "plane: {plane} plane_height: {plane_height} computted height: {}",
-                self.info.height(plane)
-            );
-            let plane_size: usize = self.info.height(plane) * self.yuv_row_bytes[plane] as usize;
-            let data =
-                unsafe { std::slice::from_raw_parts(self.yuv_planes[plane].unwrap(), plane_size) };
-            return Some(AvifPlane {
-                data,
-                width: plane_width,
-                height: plane_height,
-                row_bytes: self.yuv_row_bytes[plane],
-                pixel_size,
-            });
-        }
-        if self.alpha_plane.is_none() {
+        if self.planes[plane].is_none() {
             return None;
         }
-        let plane_size: usize = self.info.height(3) * self.alpha_row_bytes as usize;
-        let data = unsafe { std::slice::from_raw_parts(self.alpha_plane.unwrap(), plane_size) };
+        let mut plane_width = self.info.width;
+        let mut plane_height = self.info.height;
+        if plane > 0 {
+            if self.info.yuv_format == PixelFormat::Yuv420 {
+                plane_width = (plane_width + 1) / 2;
+                plane_height = (plane_height + 1) / 2;
+            } else if self.info.yuv_format == PixelFormat::Yuv422 {
+                plane_width = (plane_width + 1) / 2;
+            }
+        }
+        println!(
+            "plane: {plane} plane_height: {plane_height} computted height: {}",
+            self.info.height(plane)
+        );
+        let plane_size: usize = self.info.height(plane) * self.row_bytes[plane] as usize;
+        let data = unsafe { std::slice::from_raw_parts(self.planes[plane].unwrap(), plane_size) };
         return Some(AvifPlane {
             data,
-            width: self.info.width,
-            height: self.info.height,
-            row_bytes: self.alpha_row_bytes,
+            width: plane_width,
+            height: plane_height,
+            row_bytes: self.row_bytes[plane],
             pixel_size,
         });
     }
@@ -150,15 +132,15 @@ impl AvifImage {
             for plane_index in 0usize..3 {
                 self.plane_buffers[plane_index].reserve(plane_size);
                 self.plane_buffers[plane_index].resize(plane_size, 0);
-                self.yuv_row_bytes[plane_index] = self.info.width * pixel_size;
-                self.yuv_planes[plane_index] = Some(self.plane_buffers[plane_index].as_ptr());
+                self.row_bytes[plane_index] = self.info.width * pixel_size;
+                self.planes[plane_index] = Some(self.plane_buffers[plane_index].as_ptr());
             }
-            self.image_owns_yuv_planes = true;
+            self.image_owns_planes = true;
         } else if category == 1 {
             self.plane_buffers[3].reserve(plane_size);
             self.plane_buffers[3].resize(plane_size, 255);
-            self.alpha_row_bytes = self.info.width * pixel_size;
-            self.alpha_plane = Some(self.plane_buffers[3].as_ptr());
+            self.row_bytes[3] = self.info.width * pixel_size;
+            self.planes[3] = Some(self.plane_buffers[3].as_ptr());
             self.image_owns_alpha_plane = true;
         } else {
             println!("unknown category {category}. cannot allocate.");
@@ -200,12 +182,7 @@ impl AvifImage {
             let src_byte_count: usize = (src_width_to_copy * src_plane.pixel_size)
                 .try_into()
                 .unwrap();
-            let dst_row_bytes = if plane_index < 3 {
-                self.yuv_row_bytes[plane_index]
-            } else {
-                self.alpha_row_bytes
-            };
-
+            let dst_row_bytes = self.row_bytes[plane_index];
             let mut dst_base_offset: usize = 0;
             dst_base_offset += row_index * ((src_plane.height * dst_row_bytes) as usize);
             dst_base_offset += column_index * ((src_plane.width * src_plane.pixel_size) as usize);
@@ -222,7 +199,7 @@ impl AvifImage {
 
             println!("src_height_to_copy: {src_height_to_copy}");
             for y in 0..src_height_to_copy {
-                let src_stride_offset: usize = (y * src_plane.row_bytes).try_into().unwrap()
+                let src_stride_offset: usize = (y * src_plane.row_bytes).try_into().unwrap();
                 let pixels = &src_plane.data[src_stride_offset..src_stride_offset + src_byte_count];
                 let dst_stride_offset: usize = dst_base_offset + ((y * dst_row_bytes) as usize);
                 let dst_end_offset: usize = dst_stride_offset + src_byte_count;
@@ -954,24 +931,24 @@ fn generate_tiles(
 fn steal_planes(dst: &mut AvifImage, src: &mut AvifImage, category: usize) {
     match category {
         0 => {
-            dst.yuv_planes[0] = src.yuv_planes[0];
-            dst.yuv_planes[1] = src.yuv_planes[1];
-            dst.yuv_planes[2] = src.yuv_planes[2];
-            dst.yuv_row_bytes[0] = src.yuv_row_bytes[0];
-            dst.yuv_row_bytes[1] = src.yuv_row_bytes[1];
-            dst.yuv_row_bytes[2] = src.yuv_row_bytes[2];
-            src.yuv_planes[0] = None;
-            src.yuv_planes[1] = None;
-            src.yuv_planes[2] = None;
-            src.yuv_row_bytes[0] = 0;
-            src.yuv_row_bytes[1] = 0;
-            src.yuv_row_bytes[2] = 0;
+            dst.planes[0] = src.planes[0];
+            dst.planes[1] = src.planes[1];
+            dst.planes[2] = src.planes[2];
+            dst.row_bytes[0] = src.row_bytes[0];
+            dst.row_bytes[1] = src.row_bytes[1];
+            dst.row_bytes[2] = src.row_bytes[2];
+            src.planes[0] = None;
+            src.planes[1] = None;
+            src.planes[2] = None;
+            src.row_bytes[0] = 0;
+            src.row_bytes[1] = 0;
+            src.row_bytes[2] = 0;
         }
         1 => {
-            dst.alpha_plane = src.alpha_plane;
-            dst.alpha_row_bytes = src.alpha_row_bytes;
-            src.alpha_plane = None;
-            src.alpha_row_bytes = 0;
+            dst.planes[3] = src.planes[3];
+            dst.row_bytes[3] = src.row_bytes[3];
+            src.planes[3] = None;
+            src.row_bytes[3] = 0;
         }
         _ => {
             // do nothing.
