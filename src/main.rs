@@ -32,6 +32,7 @@ fn main() {
             ignore_exif: false,
             ignore_icc: false,
             strictness: AvifStrictness::None,
+            allow_progressive: false,
         };
         let mut decoder: AvifDecoder = Default::default();
         decoder.settings = settings;

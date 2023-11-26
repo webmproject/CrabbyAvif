@@ -97,9 +97,46 @@ fn color_grid_alpha_no_grid() {
     assert!(!info.image_sequence_track_present);
     let res = decoder.next_image();
     assert!(res.is_ok());
-    // TODO: these assertions has to be reversed once such files are supported.
     let image = res.unwrap();
     let alpha_plane = image.plane(3);
     assert!(alpha_plane.is_some());
     assert!(alpha_plane.unwrap().row_bytes > 0);
+}
+
+// From avifprogressivetest.cc
+#[test_case::test_case("progressive_dimension_change.avif", 2, 256, 256; "progressive_dimension_change")]
+#[test_case::test_case("progressive_layered_grid.avif", 2, 512, 256; "progressive_layered_grid")]
+#[test_case::test_case("progressive_quality_change.avif", 2, 256, 256; "progressive_quality_change")]
+#[test_case::test_case("progressive_same_layers.avif", 4, 256, 256; "progressive_same_layers")]
+fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
+    let mut decoder = get_decoder(filename);
+
+    decoder.settings.allow_progressive = false;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let info = res.unwrap();
+    assert!(matches!(
+        info.progressive_state,
+        AvifProgressiveState::Available
+    ));
+
+    decoder.settings.allow_progressive = true;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let info = res.unwrap();
+    assert!(matches!(
+        info.progressive_state,
+        AvifProgressiveState::Active
+    ));
+    assert_eq!(info.width, width);
+    assert_eq!(info.height, height);
+    assert_eq!(decoder.image_count, layer_count);
+    for _ in 0..decoder.image_count {
+        let res = decoder.next_image();
+        assert!(res.is_ok());
+        // let _image = res.unwrap();
+        // TODO: Check width and height after scaling is implemented.
+        // assert_eq!(image.info.width, width);
+        // assert_eq!(image.info.height, height);
+    }
 }

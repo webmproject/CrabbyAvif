@@ -32,6 +32,8 @@ pub struct AvifImageInfo {
     // TODO: these can go in a "global" image info struct. which can then
     // contain an AvifImageInfo as well.
     pub image_sequence_track_present: bool,
+
+    pub progressive_state: AvifProgressiveState,
 }
 
 impl AvifImageInfo {
@@ -223,6 +225,7 @@ pub struct AvifDecoderSettings {
     pub ignore_exif: bool,
     pub ignore_icc: bool,
     pub strictness: AvifStrictness,
+    pub allow_progressive: bool,
 }
 
 impl AvifStrictness {
@@ -692,7 +695,7 @@ struct AvifTile {
     codec_index: usize,
 }
 
-fn create_tile(item: &AvifItem) -> AvifResult<AvifTile> {
+fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifTile> {
     let mut tile = AvifTile::default();
     tile.width = item.width;
     tile.height = item.height;
@@ -702,6 +705,7 @@ fn create_tile(item: &AvifItem) -> AvifResult<AvifTile> {
     let mut layer_sizes: [usize; 4] = [0; 4];
     let mut layer_count = 0;
     let a1lx = item.a1lx();
+    let has_a1lx = a1lx.is_some();
     if a1lx.is_some() {
         let a1lx = a1lx.unwrap();
         println!("item size: {} a1lx: {:#?}", item.size, a1lx);
@@ -730,7 +734,10 @@ fn create_tile(item: &AvifItem) -> AvifResult<AvifTile> {
         println!("layer count: {layer_count} layer_sizes: {:#?}", layer_sizes);
     }
     let lsel = item.lsel();
-    // TODO: account for progressive (avifCodecDecodeInputFillFromDecoderItem).
+    // Progressive images offer layers via the a1lxProp, but don't specify a
+    // layer selection with lsel.
+    item.progressive = has_a1lx && (lsel.is_none() || lsel.unwrap() == 0xFFFF);
+    println!("PROGRESSIVE: {}", item.progressive);
     if lsel.is_some() && lsel.unwrap() != 0xFFFF {
         // Layer selection. This requires that the underlying AV1 codec decodes all layers,
         // and then only returns the requested layer as a single frame. To the user of libavif,
@@ -767,8 +774,27 @@ fn create_tile(item: &AvifItem) -> AvifResult<AvifTile> {
             data_buffer: None,
         };
         tile.input.samples.push(sample);
-    } else if false {
-        // TODO: case for progressive and allow progressive.
+    } else if item.progressive && allow_progressive {
+        // Progressive image. Decode all layers and expose them all to the
+        // user.
+
+        // TODO: check image count limit.
+
+        tile.input.all_layers = true;
+        let mut offset = 0;
+        for i in 0usize..layer_count as usize {
+            let sample = AvifDecodeSample {
+                item_id: item.id,
+                offset,
+                size: layer_sizes[i],
+                spatial_id: 0xff,
+                sync: i == 0, // Assume all layers depend on the first layer.
+                data_buffer: None,
+            };
+            tile.input.samples.push(sample);
+            offset += layer_sizes[i] as u64;
+        }
+        println!("input samples: {:#?}", tile.input.samples);
     } else {
         // Typical case: Use the entire item's payload for a single frame output
         let sample = AvifDecodeSample {
@@ -923,7 +949,7 @@ impl AvifDecoder {
         )
     }
 
-    fn generate_tiles(&self, item_id: u32, category: usize) -> AvifResult<Vec<AvifTile>> {
+    fn generate_tiles(&mut self, item_id: u32, category: usize) -> AvifResult<Vec<AvifTile>> {
         let mut tiles: Vec<AvifTile> = Vec::new();
         let item = self
             .avif_items
@@ -936,20 +962,34 @@ impl AvifDecoder {
                 return Err(AvifError::InvalidImageGrid);
             }
             println!("grid###: {:#?}", grid);
-            for grid_item_id in &item.grid_item_ids {
+            let grid_item_ids = item.grid_item_ids.clone();
+            for grid_item_id in &grid_item_ids {
                 let grid_item = self
                     .avif_items
-                    .get(grid_item_id)
+                    .get_mut(grid_item_id)
                     .ok_or(AvifError::InvalidImageGrid)?;
-                let mut tile = create_tile(grid_item)?;
+                let mut tile = create_tile(grid_item, self.settings.allow_progressive)?;
                 tile.input.category = category as u8;
                 tiles.push(tile);
+            }
+
+            if category == 0 && self.avif_items.get(&grid_item_ids[0]).unwrap().progressive {
+                // Propagate the progressive status to the top-level grid item.
+                let item = self
+                    .avif_items
+                    .get_mut(&item_id)
+                    .ok_or(AvifError::MissingImageItem)?;
+                item.progressive = true;
             }
         } else {
             if item.size == 0 {
                 return Err(AvifError::MissingImageItem);
             }
-            let mut tile = create_tile(item)?;
+            let item = self
+                .avif_items
+                .get_mut(&item_id)
+                .ok_or(AvifError::MissingImageItem)?;
+            let mut tile = create_tile(item, self.settings.allow_progressive)?;
             tile.input.category = category as u8;
             tiles.push(tile);
         }
@@ -991,6 +1031,7 @@ impl AvifDecoder {
                 return Err(AvifError::InvalidImageGrid);
             }
             if is_first {
+                // Adopt the configuration property of the first tile.
                 first_av1C = dimg_item.av1C().ok_or(AvifError::BmffParseFailed)?.clone();
                 is_first = false;
             }
@@ -1005,7 +1046,6 @@ impl AvifDecoder {
             println!("Expected number of tiles not found");
             return Err(AvifError::InvalidImageGrid);
         }
-        // Adopt the configuration property of the first tile.
         let item = self
             .avif_items
             .get_mut(&item_id)
@@ -1168,6 +1208,15 @@ impl AvifDecoder {
                 self.image.info.height = color_item.height;
                 self.image.info.alpha_present = item_ids[1] != 0;
                 // alphapremultiplied.
+
+                if color_item.progressive {
+                    self.image.info.progressive_state = AvifProgressiveState::Available;
+                    let sample_count = self.tiles[0][0].input.samples.len();
+                    if sample_count > 1 {
+                        self.image.info.progressive_state = AvifProgressiveState::Active;
+                        self.image_count = sample_count as u32;
+                    }
+                }
 
                 // This borrow has to be in the end of this branch.
                 color_properties = &self.avif_items.get(&item_ids[0]).unwrap().properties;

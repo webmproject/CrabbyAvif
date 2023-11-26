@@ -102,3 +102,11 @@ pub enum AvifStrictness {
     SpecificInclude(Vec<AvifStrictnessFlag>),
     SpecificExclude(Vec<AvifStrictnessFlag>),
 }
+
+#[derive(Debug, Default)]
+pub enum AvifProgressiveState {
+    #[default]
+    Unavailable,
+    Available,
+    Active,
+}

@@ -1,5 +1,3 @@
-//use test_case::test_case;
-
 use rust_libavif::*;
 
 const TEST_DATA_PATH: &str = "/Users/vigneshv/code/av1-avif/testFiles";
