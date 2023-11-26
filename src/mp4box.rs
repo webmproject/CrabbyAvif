@@ -798,17 +798,7 @@ impl MP4Box {
         // Parse ipco box.
         {
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
-            match Self::parse_ipco(&mut sub_stream) {
-                Ok(properties) => {
-                    iprp.properties = properties;
-                }
-                Err(err) => {
-                    // TODO: re-using err here results in some weird borrow checker error:
-                    // https://old.reddit.com/r/rust/comments/qi3ye9/why_does_returning_a_value_mess_with_borrows/
-                    println!("ipco parsing failed");
-                    return Err(err);
-                }
-            }
+            iprp.properties = Self::parse_ipco(&mut sub_stream)?;
         }
         // Parse ipma boxes.
         while stream.has_bytes_left() {
@@ -818,14 +808,8 @@ impl MP4Box {
                 return Err(AvifError::BmffParseFailed);
             }
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
-            match Self::parse_ipma(&mut sub_stream) {
-                Ok(mut ipma) => iprp.associations.append(&mut ipma),
-                Err(err) => {
-                    // TODO: re-using err here results in some weird borrow checker error:
-                    println!("ipma parsing failed");
-                    return Err(err);
-                }
-            }
+            iprp.associations
+                .append(&mut Self::parse_ipma(&mut sub_stream)?);
         }
         println!("end of iprp, skiping {} bytes", stream.bytes_left());
         Ok(iprp)
