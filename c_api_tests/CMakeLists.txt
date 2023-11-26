@@ -24,3 +24,4 @@ endmacro()
 
 add_avif_gtest(avifalphanoispetest)
 add_avif_gtest(avifanimationtest)
+add_avif_gtest(avifdecodetest)

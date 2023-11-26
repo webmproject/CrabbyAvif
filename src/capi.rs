@@ -232,15 +232,15 @@ impl From<&AvifImage> for avifImage {
     fn from(image: &AvifImage) -> Self {
         let mut dst_image: avifImage = (&image.info).into();
         for i in 0usize..3 {
-            if image.yuv_planes[i].is_none() {
+            if image.planes[i].is_none() {
                 continue;
             }
-            dst_image.yuvPlanes[i] = image.yuv_planes[i].unwrap() as *mut u8;
-            dst_image.yuvRowBytes[i] = image.yuv_row_bytes[i];
+            dst_image.yuvPlanes[i] = image.planes[i].unwrap() as *mut u8;
+            dst_image.yuvRowBytes[i] = image.row_bytes[i];
         }
-        if image.alpha_plane.is_some() {
-            dst_image.alphaPlane = image.alpha_plane.unwrap() as *mut u8;
-            dst_image.alphaRowBytes = image.alpha_row_bytes;
+        if image.planes[3].is_some() {
+            dst_image.alphaPlane = image.planes[3].unwrap() as *mut u8;
+            dst_image.alphaRowBytes = image.row_bytes[3];
         }
         dst_image
     }

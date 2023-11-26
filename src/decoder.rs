@@ -147,13 +147,13 @@ impl AvifImage {
     ) {
         let row_index: usize = (tile_index / tile_info.grid.columns) as usize;
         let column_index: usize = (tile_index % tile_info.grid.columns) as usize;
-        println!("copying tile {tile_index} {row_index} {column_index}");
+        //println!("copying tile {tile_index} {row_index} {column_index}");
 
         let plane_range = if category == 1 { 3usize..4 } else { 0usize..3 };
         // TODO: what about gainmap category?
 
         for plane_index in plane_range {
-            println!("plane_index {plane_index}");
+            //println!("plane_index {plane_index}");
             let src_plane = tile.plane(plane_index);
             if src_plane.is_none() {
                 continue;
@@ -167,7 +167,7 @@ impl AvifImage {
             } else {
                 src_width_to_copy = src_plane.width;
             }
-            println!("src_width_to_copy: {src_width_to_copy}");
+            //println!("src_width_to_copy: {src_width_to_copy}");
             let src_byte_count: usize = (src_width_to_copy * src_plane.pixel_size)
                 .try_into()
                 .unwrap();
@@ -186,7 +186,7 @@ impl AvifImage {
                 src_height_to_copy = src_plane.height;
             }
 
-            println!("src_height_to_copy: {src_height_to_copy}");
+            //println!("src_height_to_copy: {src_height_to_copy}");
             for y in 0..src_height_to_copy {
                 let src_stride_offset: usize = (y * src_plane.row_bytes).try_into().unwrap();
                 let pixels = &src_plane.data[src_stride_offset..src_stride_offset + src_byte_count];
@@ -195,13 +195,13 @@ impl AvifImage {
 
                 let dst_slice =
                     &mut self.plane_buffers[plane_index][dst_stride_offset..dst_end_offset];
-                if y == 0 {
-                    println!(
-                        "src slice len: {} dst_slice_len: {}",
-                        pixels.len(),
-                        dst_slice.len()
-                    );
-                }
+                // if y == 0 {
+                //     println!(
+                //         "src slice len: {} dst_slice_len: {}",
+                //         pixels.len(),
+                //         dst_slice.len()
+                //     );
+                // }
                 dst_slice.copy_from_slice(pixels);
             }
         }
@@ -263,7 +263,7 @@ pub struct AvifDecoder {
     codecs: Vec<Dav1d>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Copy, Clone)]
 struct AvifGrid {
     rows: u32,
     columns: u32,
@@ -301,6 +301,7 @@ struct AvifItem {
     #[allow(unused)]
     progressive: bool,
     idat: Vec<u8>,
+    grid_item_ids: Vec<u32>,
 }
 
 macro_rules! find_property {
@@ -652,21 +653,6 @@ fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
     Ok(avif_items)
 }
 
-fn find_alpha_item(avif_items: &HashMap<u32, AvifItem>, color_item: &AvifItem) -> Option<u32> {
-    match avif_items
-        .iter()
-        .find(|x| !x.1.should_skip() && x.1.aux_for_id == color_item.id && x.1.is_auxiliary_alpha())
-    {
-        Some(item) => return Some(*item.0),
-        None => {} // Do nothing.
-    };
-    if color_item.item_type != "grid" {
-        return Some(0);
-    }
-    // TODO: If color item is a grid, check if there is an alpha channel which is represented as an auxl item to each color tile item.
-    Some(0)
-}
-
 #[derive(Debug, Default)]
 struct AvifDecodeSample {
     // owns_data
@@ -854,69 +840,6 @@ fn create_tile_from_track(track: &AvifTrack) -> AvifResult<AvifTile> {
     Ok(tile)
 }
 
-#[allow(non_snake_case)]
-fn generate_tiles(
-    avif_items: &mut HashMap<u32, AvifItem>,
-    iinf: &Vec<ItemInfo>,
-    item_id: u32,
-    info: &AvifTileInfo,
-    category: usize,
-) -> AvifResult<Vec<AvifTile>> {
-    let mut tiles: Vec<AvifTile> = Vec::new();
-    if info.grid.rows > 0 && info.grid.columns > 0 {
-        println!("grid###: {:#?}", info.grid);
-        let mut grid_item_ids: Vec<u32> = Vec::new();
-        let mut first_av1C: CodecConfiguration = Default::default();
-        // Collect all the dimg items.
-        // Cannot directly iterate through avif_items here directly because HashMap is not ordered.
-        for item_info in iinf {
-            let dimg_item = avif_items
-                .get(&item_info.item_id)
-                .ok_or(AvifError::InvalidImageGrid)?;
-            if dimg_item.dimg_for_id != item_id {
-                continue;
-            }
-            if dimg_item.item_type != "av01" {
-                println!("invalid item_type in dimg grid");
-                return Err(AvifError::InvalidImageGrid);
-            }
-            if dimg_item.has_unsupported_essential_property {
-                println!(
-                    "Grid image contains tile with an unsupported property marked as essential"
-                );
-                return Err(AvifError::InvalidImageGrid);
-            }
-            let mut tile = create_tile(dimg_item)?;
-            tile.input.category = category as u8;
-            tiles.push(tile);
-
-            if tiles.len() == 1 {
-                // Adopt the configuration property of the first tile.
-                first_av1C = dimg_item.av1C().ok_or(AvifError::BmffParseFailed)?.clone();
-            }
-            grid_item_ids.push(item_info.item_id);
-        }
-        // TODO: check if there are enough grids.
-        avif_items
-            .get_mut(&item_id)
-            .ok_or(AvifError::InvalidImageGrid)?
-            .properties
-            .push(ItemProperty::CodecConfiguration(first_av1C));
-        println!("grid item ids: {:#?}", grid_item_ids);
-    } else {
-        let item = avif_items
-            .get(&item_id)
-            .ok_or(AvifError::MissingImageItem)?;
-        if item.size == 0 {
-            return Err(AvifError::MissingImageItem);
-        }
-        let mut tile = create_tile(item)?;
-        tile.input.category = category as u8;
-        tiles.push(tile);
-    }
-    Ok(tiles)
-}
-
 fn steal_planes(dst: &mut AvifImage, src: &mut AvifImage, category: usize) {
     match category {
         0 => {
@@ -953,6 +876,143 @@ impl AvifDecoder {
 
     pub fn set_io(&mut self, io: Box<dyn AvifDecoderIO>) -> AvifResult<()> {
         self.io = Some(io);
+        Ok(())
+    }
+
+    fn find_alpha_item(&self, color_item_index: u32) -> (u32, Option<AvifItem>) {
+        let color_item = self.avif_items.get(&color_item_index).unwrap();
+        match self.avif_items.iter().find(|x| {
+            !x.1.should_skip() && x.1.aux_for_id == color_item.id && x.1.is_auxiliary_alpha()
+        }) {
+            Some(item) => return (*item.0, None),
+            None => {} // Do nothing.
+        };
+        if color_item.item_type != "grid" || color_item.grid_item_ids.is_empty() {
+            return (0, None);
+        }
+        // If color item is a grid, check if there is an alpha channel which is
+        // represented as an auxl item to each color tile item.
+        let mut alpha_item_indices: Vec<u32> = Vec::new();
+        for color_grid_item_id in &color_item.grid_item_ids {
+            let mut seen_alpha = false;
+            for (auxl_item_id, auxl_item) in &self.avif_items {
+                if auxl_item.aux_for_id == *color_grid_item_id && auxl_item.is_auxiliary_alpha() {
+                    if seen_alpha {
+                        return (0, None);
+                    }
+                    alpha_item_indices.push(*auxl_item_id);
+                    seen_alpha = true;
+                }
+            }
+            if !seen_alpha {
+                // TODO: This must be an error.
+                return (0, None);
+            }
+        }
+        assert!(color_item.grid_item_ids.len() == alpha_item_indices.len());
+        (
+            0,
+            Some(AvifItem {
+                id: 1000, // TODO: max + 1.
+                item_type: String::from("grid"),
+                width: color_item.width,
+                height: color_item.height,
+                grid_item_ids: alpha_item_indices,
+                ..AvifItem::default()
+            }),
+        )
+    }
+
+    fn generate_tiles(&self, item_id: u32, category: usize) -> AvifResult<Vec<AvifTile>> {
+        let mut tiles: Vec<AvifTile> = Vec::new();
+        let item = self
+            .avif_items
+            .get(&item_id)
+            .ok_or(AvifError::MissingImageItem)?;
+        if !item.grid_item_ids.is_empty() {
+            let grid = &self.tile_info[category].grid;
+            if grid.rows == 0 || grid.columns == 0 {
+                println!("multiple dimg items were found but image is not grid.");
+                return Err(AvifError::InvalidImageGrid);
+            }
+            println!("grid###: {:#?}", grid);
+            for grid_item_id in &item.grid_item_ids {
+                let grid_item = self
+                    .avif_items
+                    .get(grid_item_id)
+                    .ok_or(AvifError::InvalidImageGrid)?;
+                let mut tile = create_tile(grid_item)?;
+                tile.input.category = category as u8;
+                tiles.push(tile);
+            }
+        } else {
+            if item.size == 0 {
+                return Err(AvifError::MissingImageItem);
+            }
+            let mut tile = create_tile(item)?;
+            tile.input.category = category as u8;
+            tiles.push(tile);
+        }
+        Ok(tiles)
+    }
+
+    #[allow(non_snake_case)]
+    fn populate_grid_item_ids(
+        &mut self,
+        iinf: &Vec<ItemInfo>,
+        item_id: u32,
+        category: usize,
+    ) -> AvifResult<()> {
+        if self.avif_items.get(&item_id).unwrap().item_type != "grid" {
+            return Ok(());
+        }
+        let mut grid_item_ids: Vec<u32> = Vec::new();
+        let mut first_av1C = CodecConfiguration::default();
+        let mut is_first = true;
+        // Collect all the dimg items. Cannot directly iterate
+        // through avif_items here directly because HashMap is
+        // not ordered.
+        for item_info in iinf {
+            let dimg_item = self
+                .avif_items
+                .get(&item_info.item_id)
+                .ok_or(AvifError::InvalidImageGrid)?;
+            if dimg_item.dimg_for_id != item_id {
+                continue;
+            }
+            if dimg_item.item_type != "av01" {
+                println!("invalid item_type in dimg grid");
+                return Err(AvifError::InvalidImageGrid);
+            }
+            if dimg_item.has_unsupported_essential_property {
+                println!(
+                    "Grid image contains tile with an unsupported property marked as essential"
+                );
+                return Err(AvifError::InvalidImageGrid);
+            }
+            if is_first {
+                first_av1C = dimg_item.av1C().ok_or(AvifError::BmffParseFailed)?.clone();
+                is_first = false;
+            }
+            grid_item_ids.push(item_info.item_id);
+        }
+        println!(
+            "### category {category} grid item ids: {:#?}",
+            grid_item_ids
+        );
+        let grid_count = self.tile_info[category].grid.rows * self.tile_info[category].grid.columns;
+        if grid_item_ids.len() as u32 != grid_count {
+            println!("Expected number of tiles not found");
+            return Err(AvifError::InvalidImageGrid);
+        }
+        // Adopt the configuration property of the first tile.
+        let item = self
+            .avif_items
+            .get_mut(&item_id)
+            .ok_or(AvifError::InvalidImageGrid)?;
+        item.properties
+            .push(ItemProperty::CodecConfiguration(first_av1C));
+        item.grid_item_ids = grid_item_ids;
         Ok(())
     }
 
@@ -1052,12 +1112,25 @@ impl AvifDecoder {
                     .ok_or(AvifError::NoContent)?
                     .0;
                 self.read_and_parse_item(item_ids[0], 0)?;
+                self.populate_grid_item_ids(&avif_boxes.meta.iinf, item_ids[0], 0)?;
 
                 // Optional alpha auxiliary item
-                item_ids[1] =
-                    find_alpha_item(&self.avif_items, self.avif_items.get(&item_ids[0]).unwrap())
-                        .unwrap_or(0);
-                self.read_and_parse_item(item_ids[1], 1)?;
+                let (alpha_item_id, alpha_item) = self.find_alpha_item(item_ids[0]);
+                if alpha_item_id != 0 {
+                    item_ids[1] = alpha_item_id;
+                    self.read_and_parse_item(item_ids[1], 1)?;
+                    self.populate_grid_item_ids(&avif_boxes.meta.iinf, item_ids[1], 1)?;
+                } else if alpha_item.is_some() {
+                    // Alpha item was made up and not part of the input. Make
+                    // it part of the items array.
+                    let alpha_item = alpha_item.unwrap();
+                    item_ids[1] = alpha_item.id;
+                    self.tile_info[1].grid = self.tile_info[0].grid;
+                    self.avif_items.insert(item_ids[1], alpha_item);
+                } else {
+                    // No alpha channel.
+                    item_ids[1] = 0;
+                }
 
                 println!("item ids: {:#?}", item_ids);
 
@@ -1086,13 +1159,7 @@ impl AvifDecoder {
                             // TODO: make this work. some mut problem.
                         }
                     }
-                    self.tiles[index] = generate_tiles(
-                        &mut self.avif_items,
-                        &avif_boxes.meta.iinf,
-                        *item_id,
-                        &self.tile_info[index],
-                        index,
-                    )?;
+                    self.tiles[index] = self.generate_tiles(*item_id, index)?;
                     // TODO: validate item properties.
                 }
 
@@ -1173,13 +1240,13 @@ impl AvifDecoder {
         Ok(&self.image.info)
     }
 
-    fn read_and_parse_item(&mut self, item_id: u32, index: usize) -> AvifResult<()> {
+    fn read_and_parse_item(&mut self, item_id: u32, category: usize) -> AvifResult<()> {
         if item_id == 0 {
             return Ok(());
         }
         self.avif_items.get(&item_id).unwrap().read_and_parse(
             &mut self.io.as_mut().unwrap(),
-            &mut self.tile_info[index as usize].grid,
+            &mut self.tile_info[category as usize].grid,
         )
     }
 
