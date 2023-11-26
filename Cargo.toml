@@ -11,7 +11,12 @@ build = "src/build.rs"
 byteorder = "1.5.0"
 exitcode = "1.1.2"
 derivative = "2.2.0"
+# TODO: this is needed for capi only.
 libc = "0.2"
+# TODO: make this test only.
+test-case = "*"
+# TODO: make this test only.
+seq-macro = "*"
 
 [features]
 capi = []
