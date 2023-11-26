@@ -103,7 +103,7 @@ pub enum AvifStrictness {
     SpecificExclude(Vec<AvifStrictnessFlag>),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Copy, Clone)]
 pub enum AvifProgressiveState {
     #[default]
     Unavailable,

@@ -12,6 +12,7 @@ use libc::size_t;
 
 use crate::decoder::*;
 use crate::AvifError;
+use crate::AvifProgressiveState;
 use crate::AvifResult;
 use crate::AvifStrictness;
 use crate::AvifStrictnessFlag;
@@ -273,6 +274,24 @@ impl From<avifDecoderSource> for AvifDecoderSource {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone)]
+pub enum avifProgressiveState {
+    Unavailable,
+    Available,
+    Active,
+}
+
+impl From<AvifProgressiveState> for avifProgressiveState {
+    fn from(progressive_state: AvifProgressiveState) -> Self {
+        match progressive_state {
+            AvifProgressiveState::Unavailable => avifProgressiveState::Unavailable,
+            AvifProgressiveState::Available => avifProgressiveState::Available,
+            AvifProgressiveState::Active => avifProgressiveState::Active,
+        }
+    }
+}
+
+#[repr(C)]
 pub struct avifDecoder {
     // avifCodecChoice codecChoice;
     pub maxThreads: i32,
@@ -290,8 +309,8 @@ pub struct avifDecoder {
     pub image: *mut avifImage,
     pub imageIndex: i32,
     pub imageCount: i32,
-    // avifProgressiveState progressiveState; // See avifProgressiveState declaration
-    // avifImageTiming imageTiming;           //
+    pub progressiveState: avifProgressiveState,
+    // avifImageTiming imageTiming;
     pub timescale: u64,
     pub duration: f64,
     pub durationInTimescales: u64,
@@ -331,6 +350,7 @@ impl Default for avifDecoder {
             image: std::ptr::null_mut(),
             imageIndex: -1,
             imageCount: 0,
+            progressiveState: avifProgressiveState::Unavailable,
             timescale: 0,
             duration: 0.0,
             durationInTimescales: 0,
@@ -415,6 +435,7 @@ impl From<&avifDecoder> for AvifDecoderSettings {
         Self {
             source: decoder.requestedSource.into(),
             strictness,
+            allow_progressive: decoder.allowProgressive == AVIF_TRUE,
             ..Self::default()
         }
     }
@@ -440,6 +461,7 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
     // not mess with the borrow checker.
     (*decoder).alphaPresent = to_avifBool(info.alpha_present);
     (*decoder).imageSequenceTrackPresent = to_avifBool(info.image_sequence_track_present);
+    (*decoder).progressiveState = info.progressive_state.into();
     (*decoder).imageCount = rust_decoder.image_count as i32;
     (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
 
@@ -463,6 +485,7 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
     // not mess with the borrow checker.
     (*decoder).alphaPresent = to_avifBool(image.info.alpha_present);
     (*decoder).imageSequenceTrackPresent = to_avifBool(image.info.image_sequence_track_present);
+    (*decoder).progressiveState = image.info.progressive_state.into();
     (*decoder).imageCount = rust_decoder.image_count as i32;
     (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
 
