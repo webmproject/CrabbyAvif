@@ -1187,7 +1187,10 @@ impl MP4Box {
             if stsd.format == "av01" {
                 // Skip 78 bytes for visual sample entry size.
                 stream.skip(78)?;
-                // TODO: check subtraction is ok.
+                if header.size <= 78 {
+                    println!("Not enough bytes to parse stsd");
+                    return Err(AvifError::BmffParseFailed);
+                }
                 let mut sub_stream = stream.sub_stream((header.size - 78) as usize)?;
                 stsd.properties = Self::parse_ipco(&mut sub_stream)?;
             }
@@ -1302,7 +1305,13 @@ impl MP4Box {
     }
 
     fn parse_edts(stream: &mut IStream, track: &mut AvifTrack) -> AvifResult<()> {
-        // TODO: add uniqueness check.
+        if track.elst_seen {
+            // This function always exits with track.elst_seen set to true. So
+            // it is sufficient to check track.elst_seen to verify the
+            // uniqueness of the edts box.
+            println!("multiple edts boxes found for track.");
+            return Err(AvifError::BmffParseFailed);
+        }
         while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
             let mut sub_stream = stream.sub_stream(header.size as usize)?;

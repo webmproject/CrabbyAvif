@@ -101,6 +101,7 @@ impl IStream<'_> {
     }
 
     pub fn read_uxx(&mut self, xx: u8) -> AvifResult<u64> {
+        // TODO: implement uxx for other values of xx.
         let value: u64;
         if xx == 0 {
             value = 0;
@@ -124,7 +125,6 @@ impl IStream<'_> {
     }
 
     pub fn read_version_and_flags(&mut self) -> AvifResult<(u8, u32)> {
-        // TODO: this must also add an option to enforce version.
         let version = self.read_u8()?;
         let flags = self.read_u24()?;
         Ok((version, flags))
