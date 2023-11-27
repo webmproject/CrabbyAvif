@@ -130,6 +130,17 @@ impl IStream<'_> {
         Ok((version, flags))
     }
 
+    pub fn read_and_enforce_version_and_flags(
+        &mut self,
+        enforced_version: u8,
+    ) -> AvifResult<(u8, u32)> {
+        let (version, flags) = self.read_version_and_flags()?;
+        if version != enforced_version {
+            return Err(AvifError::BmffParseFailed);
+        }
+        Ok((version, flags))
+    }
+
     pub fn skip(&mut self, size: usize) -> AvifResult<()> {
         self.check(size)?;
         self.offset += size;

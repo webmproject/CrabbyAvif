@@ -358,8 +358,7 @@ impl MP4Box {
     }
 
     fn parse_hdlr(stream: &mut IStream) -> AvifResult<()> {
-        // TODO: version must be 0.
-        let (_version, _flags) = stream.read_version_and_flags()?;
+        let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         // unsigned int(32) pre_defined = 0;
         let predefined = stream.read_u32()?;
         if predefined != 0 {
@@ -477,8 +476,7 @@ impl MP4Box {
     }
 
     fn parse_ispe(stream: &mut IStream) -> AvifResult<ItemProperty> {
-        // TODO: enforce version 0.
-        let (_version, _flags) = stream.read_version_and_flags()?;
+        let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         let ispe = ImageSpatialExtents {
             // unsigned int(32) image_width;
             width: stream.read_u32()?,
@@ -489,8 +487,7 @@ impl MP4Box {
     }
 
     fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
-        // TODO: enforce version 0.
-        let (_version, _flags) = stream.read_version_and_flags()?;
+        let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         let mut pixi = PixelInformation::default();
         // unsigned int (8) num_channels;
         pixi.plane_count = stream.read_u8()?;
@@ -605,8 +602,7 @@ impl MP4Box {
 
     #[allow(non_snake_case)]
     fn parse_auxC(stream: &mut IStream) -> AvifResult<ItemProperty> {
-        // TODO: enforce version 0.
-        let (_version, _flags) = stream.read_version_and_flags()?;
+        let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         // string aux_type;
         let auxiliary_type = stream.read_c_string()?;
         Ok(ItemProperty::AuxiliaryType(auxiliary_type))
@@ -947,8 +943,7 @@ impl MP4Box {
 
     fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
         println!("parsing meta size: {}", stream.data.len());
-        // TODO: version must be 0.
-        let (_version, _flags) = stream.read_version_and_flags()?;
+        let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         let mut first_box = true;
         let mut meta = MetaBox::default();
 
@@ -1076,8 +1071,7 @@ impl MP4Box {
         sample_table: &mut SampleTable,
         large_offset: bool,
     ) -> AvifResult<()> {
-        // TODO: version must be 0.
-        let (_version, _flags) = stream.read_version_and_flags()?;
+        let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         // unsigned int(32) entry_count;
         let entry_count = stream.read_u32()?;
         sample_table.chunk_offsets.reserve(entry_count as usize);
@@ -1097,8 +1091,7 @@ impl MP4Box {
     }
 
     fn parse_stsc(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
-        // TODO: version must be 0.
-        let (_version, _flags) = stream.read_version_and_flags()?;
+        let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         // unsigned int(32) entry_count;
         let entry_count = stream.read_u32()?;
         sample_table.sample_to_chunk.reserve(entry_count as usize);
@@ -1128,8 +1121,7 @@ impl MP4Box {
     }
 
     fn parse_stsz(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
-        // TODO: version must be 0.
-        let (_version, _flags) = stream.read_version_and_flags()?;
+        let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         // unsigned int(32) sample_size;
         sample_table.all_samples_size = stream.read_u32()?;
         // unsigned int(32) sample_count;
@@ -1148,8 +1140,7 @@ impl MP4Box {
     }
 
     fn parse_stss(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
-        // TODO: version must be 0.
-        let (_version, _flags) = stream.read_version_and_flags()?;
+        let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         // unsigned int(32) entry_count;
         let entry_count = stream.read_u32()?;
         sample_table.sync_samples.reserve(entry_count as usize);
@@ -1162,8 +1153,7 @@ impl MP4Box {
     }
 
     fn parse_stts(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
-        // TODO: version must be 0.
-        let (_version, _flags) = stream.read_version_and_flags()?;
+        let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         // unsigned int(32) entry_count;
         let entry_count = stream.read_u32()?;
         sample_table.time_to_sample.reserve(entry_count as usize);
@@ -1180,8 +1170,7 @@ impl MP4Box {
     }
 
     fn parse_stsd(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
-        // TODO: version must be 0.
-        let (_version, _flags) = stream.read_version_and_flags()?;
+        let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         // unsigned int(32) entry_count;
         let entry_count = stream.read_u32()?;
         sample_table
