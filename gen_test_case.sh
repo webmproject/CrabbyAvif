@@ -1,7 +1,7 @@
 #!/bin/bash
 
 dir="/Users/vigneshv/code/av1-avif/testFiles"
-subdir="Link-U"
+subdir="Xiph"
 tmpfile="/tmp/avifdec_output.txt"
 
 (
