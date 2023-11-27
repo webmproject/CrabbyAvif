@@ -1528,10 +1528,8 @@ impl MP4Box {
                 bits.skip(32)?;
                 // equal_picture_interval
                 if bits.read_bool()? {
-                    let num_ticks_per_picture: u32 = 0; // TODO: read uvlc
-                    if num_ticks_per_picture == 0xFFFFFFFF {
-                        return Err(AvifError::BmffParseFailed);
-                    }
+                    // num_ticks_per_picture
+                    bits.skip_uvlc()?;
                 }
                 // decoder_model_info_present_flag
                 decoder_model_info_present = bits.read_bool()?;
