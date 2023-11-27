@@ -3,27 +3,6 @@ use crate::AvifResult;
 use byteorder::{BigEndian, ByteOrder};
 
 #[derive(Debug)]
-pub struct BitReader {
-    byte: u8,
-    offset: u8,
-}
-
-impl BitReader {
-    pub fn read(&mut self, n: u8) -> u8 {
-        assert!(n <= 8);
-        let shift: u8 = 8 - n - self.offset;
-        let mask: u8 = (1 << n) - 1;
-        self.offset += n;
-        (self.byte >> shift) & mask
-    }
-
-    pub fn skip(&mut self, n: u8) {
-        assert!(n <= 8);
-        self.offset += n;
-    }
-}
-
-#[derive(Debug)]
 pub struct IBitStream<'a> {
     pub data: &'a [u8],
     pub bit_offset: usize,
@@ -225,11 +204,5 @@ impl IStream<'_> {
         }
         println!("uleb value did not terminate after 8 bytes");
         Err(AvifError::BmffParseFailed)
-    }
-
-    // TODO: rename this function and bitreader struct.
-    pub fn get_bitreader(&mut self) -> AvifResult<BitReader> {
-        let byte = self.read_u8()?;
-        Ok(BitReader { byte, offset: 0 })
     }
 }

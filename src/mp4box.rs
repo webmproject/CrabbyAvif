@@ -412,19 +412,18 @@ impl MP4Box {
             return Err(AvifError::BmffParseFailed);
         }
         let mut iloc = ItemLocationBox::default();
-        let mut bit_reader = stream.get_bitreader()?;
+        let mut bits = stream.sub_bit_stream(2)?;
         // unsigned int(4) offset_size;
-        iloc.offset_size = bit_reader.read(4);
+        iloc.offset_size = bits.read(4)? as u8;
         // unsigned int(4) length_size;
-        iloc.length_size = bit_reader.read(4);
-        bit_reader = stream.get_bitreader()?;
+        iloc.length_size = bits.read(4)? as u8;
         // unsigned int(4) base_offset_size;
-        iloc.base_offset_size = bit_reader.read(4);
+        iloc.base_offset_size = bits.read(4)? as u8;
         if (version == 1 || version == 2) && iloc.base_offset_size != 0 {
             println!("Invalid base_offset_size in iloc.");
             return Err(AvifError::BmffParseFailed);
         }
-        // unsigned int(4) reserved; The last 4 bits left in the bit_reader.
+        // unsigned int(4) reserved; The last 4 bits left in the bits.
         let item_count: u32;
         if version < 2 {
             // unsigned int(16) item_count;
@@ -450,9 +449,9 @@ impl MP4Box {
                 // unsigned int(12) reserved = 0;
                 // unsigned int(4) construction_method;
                 stream.skip(1)?;
-                let mut byte = stream.get_bitreader()?;
-                byte.read(4);
-                entry.construction_method = byte.read(4);
+                let mut bits = stream.sub_bit_stream(1)?;
+                bits.read(4)?;
+                entry.construction_method = bits.read(4)? as u8;
                 // 0: file, 1: idat.
                 if entry.construction_method != 0 && entry.construction_method != 1 {
                     println!("unknown construction_method");
@@ -528,13 +527,13 @@ impl MP4Box {
     fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
         // unsigned int (1) marker = 1;
         // unsigned int (7) version = 1;
-        let mut byte = stream.get_bitreader()?;
-        let marker = byte.read(1);
+        let mut bits = stream.sub_bit_stream(3)?;
+        let marker = bits.read(1)?;
         if marker != 1 {
             println!("Invalid marker in av1C");
             return Err(AvifError::BmffParseFailed);
         }
-        let version = byte.read(7);
+        let version = bits.read(7)?;
         if version != 1 {
             println!("Invalid version in av1C");
             return Err(AvifError::BmffParseFailed);
@@ -542,9 +541,8 @@ impl MP4Box {
         let mut av1C = CodecConfiguration::default();
         // unsigned int(3) seq_profile;
         // unsigned int(5) seq_level_idx_0;
-        byte = stream.get_bitreader()?;
-        av1C.seq_profile = byte.read(3);
-        av1C.seq_level_idx0 = byte.read(5);
+        av1C.seq_profile = bits.read(3)? as u8;
+        av1C.seq_level_idx0 = bits.read(5)? as u8;
 
         // unsigned int(1) seq_tier_0;
         // unsigned int(1) high_bitdepth;
@@ -553,14 +551,13 @@ impl MP4Box {
         // unsigned int(1) chroma_subsampling_x;
         // unsigned int(1) chroma_subsampling_y;
         // unsigned int(2) chroma_sample_position;
-        byte = stream.get_bitreader()?;
-        av1C.seq_tier0 = byte.read(1);
-        av1C.high_bitdepth = byte.read(1) == 1;
-        av1C.twelve_bit = byte.read(1) == 1;
-        av1C.monochrome = byte.read(1) == 1;
-        av1C.chroma_subsampling_x = byte.read(1);
-        av1C.chroma_subsampling_y = byte.read(1);
-        av1C.chroma_sample_position = byte.read(2).into();
+        av1C.seq_tier0 = bits.read(1)? as u8;
+        av1C.high_bitdepth = bits.read_bool()?;
+        av1C.twelve_bit = bits.read_bool()?;
+        av1C.monochrome = bits.read_bool()?;
+        av1C.chroma_subsampling_x = bits.read(1)? as u8;
+        av1C.chroma_subsampling_y = bits.read(1)? as u8;
+        av1C.chroma_sample_position = (bits.read(2)? as u8).into();
 
         // unsigned int(3) reserved = 0;
         // unsigned int(1) initial_presentation_delay_present;
@@ -599,9 +596,9 @@ impl MP4Box {
             nclx.matrix_coefficients = stream.read_u16()?;
             // unsigned int(1) full_range_flag;
             // unsigned int(7) reserved = 0;
-            let mut byte = stream.get_bitreader()?;
-            nclx.full_range = byte.read(1) == 1;
-            if byte.read(7) != 0 {
+            let mut bits = stream.sub_bit_stream(1)?;
+            nclx.full_range = bits.read_bool()?;
+            if bits.read(7)? != 0 {
                 println!("colr box contains invalid reserve bits");
                 return Err(AvifError::BmffParseFailed);
             }
@@ -653,25 +650,25 @@ impl MP4Box {
     }
 
     fn parse_irot(stream: &mut IStream) -> AvifResult<ItemProperty> {
-        let mut byte = stream.get_bitreader()?;
+        let mut bits = stream.sub_bit_stream(1)?;
         // unsigned int (6) reserved = 0;
-        if byte.read(6) != 0 {
+        if bits.read(6)? != 0 {
             println!("invalid reserve bits in irot");
             return Err(AvifError::BmffParseFailed);
         }
         // unsigned int (2) angle;
-        let angle = byte.read(2);
+        let angle = bits.read(2)? as u8;
         Ok(ItemProperty::ImageRotation(angle))
     }
 
     fn parse_imir(stream: &mut IStream) -> AvifResult<ItemProperty> {
-        let mut byte = stream.get_bitreader()?;
+        let mut bits = stream.sub_bit_stream(1)?;
         // unsigned int(7) reserved = 0;
-        if byte.read(7) != 0 {
+        if bits.read(7)? != 0 {
             println!("invalid reserve bits in imir");
             return Err(AvifError::BmffParseFailed);
         }
-        let axis = byte.read(1);
+        let axis = bits.read(1)? as u8;
         Ok(ItemProperty::ImageMirror(axis))
     }
 
@@ -697,14 +694,14 @@ impl MP4Box {
     }
 
     fn parse_a1lx(stream: &mut IStream) -> AvifResult<ItemProperty> {
-        let mut byte = stream.get_bitreader()?;
+        let mut bits = stream.sub_bit_stream(1)?;
         // unsigned int(7) reserved = 0;
-        if byte.read(7) != 0 {
+        if bits.read(7)? != 0 {
             println!("Invalid reserve bits in a1lx");
             return Err(AvifError::BmffParseFailed);
         }
         // unsigned int(1) large_size;
-        let large_size = byte.read(1) == 1;
+        let large_size = bits.read_bool()?;
         let mut layer_sizes: [usize; 3] = [0; 3];
         for layer_size in &mut layer_sizes {
             if large_size {
@@ -788,10 +785,10 @@ impl MP4Box {
             let association_count = stream.read_u8()?;
             for _j in 0..association_count {
                 // bit(1) essential;
-                let mut byte = stream.get_bitreader()?;
-                let essential = byte.read(1) == 1;
+                let mut bits = stream.sub_bit_stream(1)?;
+                let essential = bits.read_bool()?;
                 // unsigned int(7 or 15) property_index;
-                let mut property_index: u16 = byte.read(7) as u16;
+                let mut property_index: u16 = bits.read(7)? as u16;
                 if (flags & 0x1) == 1 {
                     let property_index_lsb: u16 = stream.read_u8()? as u16;
                     property_index <<= 8;
@@ -1726,17 +1723,17 @@ impl MP4Box {
     fn parse_obu_header(stream: &mut IStream) -> AvifResult<ObuHeader> {
         // TODO: This (and all sub-functions) can be a impl function of
         // Av1SequenceHeader (i.e.) parse_from_obus().
-        let mut byte = stream.get_bitreader()?;
+        let mut bits = stream.sub_bit_stream(1)?;
         // obu_forbidden_bit
-        byte.skip(1);
+        bits.skip(1)?;
         // obu_type
-        let obu_type = byte.read(4);
+        let obu_type = bits.read(4)? as u8;
         // obu_extension_flag
-        let obu_extension_flag = byte.read(1) != 0;
+        let obu_extension_flag = bits.read_bool()?;
         // obu_has_size_field
-        let obu_has_size_field = byte.read(1) != 0;
+        let obu_has_size_field = bits.read_bool()?;
         // obu_reserved_1bit
-        byte.skip(1);
+        bits.skip(1)?;
 
         if obu_extension_flag {
             // temporal_id, spatial_id, extension_header_reserved_3bits
