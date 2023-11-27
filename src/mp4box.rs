@@ -2,6 +2,8 @@ use crate::io::*;
 use crate::stream::*;
 use crate::*;
 
+use std::collections::HashSet;
+
 #[derive(Debug)]
 struct BoxHeader {
     size: u64,
@@ -347,7 +349,6 @@ impl MP4Box {
         let minor_version = stream.read_u32()?;
         let mut compatible_brands: Vec<String> = Vec::new();
         while stream.has_bytes_left() {
-            // TODO: check if remaining size is a multiple of 4.
             compatible_brands.push(stream.read_string(4)?);
         }
         Ok(FileTypeBox {
@@ -464,7 +465,6 @@ impl MP4Box {
     }
 
     fn parse_pitm(stream: &mut IStream) -> AvifResult<u32> {
-        // TODO: check for multiple pitms.
         let (version, _flags) = stream.read_version_and_flags()?;
         let primary_item_id: u32;
         if version == 0 {
@@ -944,22 +944,31 @@ impl MP4Box {
     fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
         println!("parsing meta size: {}", stream.data.len());
         let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
-        let mut first_box = true;
         let mut meta = MetaBox::default();
 
-        // TODO: add box unique checks.
+        // Parse the first hdlr box.
+        {
+            let header = Self::parse_header(stream)?;
+            if header.box_type != "hdlr" {
+                println!("first box in meta is not hdlr");
+                return Err(AvifError::BmffParseFailed);
+            }
+            let mut sub_stream = stream.sub_stream(header.size as usize)?;
+            Self::parse_hdlr(&mut sub_stream)?;
+        }
 
+        let mut boxes_seen = HashSet::from([String::from("hdlr")]);
         while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
-            if first_box {
-                if header.box_type != "hdlr" {
-                    println!("first box in meta is not hdlr");
-                    return Err(AvifError::BmffParseFailed);
+            match header.box_type.as_str() {
+                "hdlr" | "iloc" | "pitm" | "iprp" | "iinf" | "iref" | "idat" => {
+                    if boxes_seen.contains(&header.box_type) {
+                        println!("duplicate {} box in meta.", header.box_type);
+                        return Err(AvifError::BmffParseFailed);
+                    }
+                    boxes_seen.insert(header.box_type.clone());
                 }
-                let mut sub_stream = stream.sub_stream(header.size as usize)?;
-                Self::parse_hdlr(&mut sub_stream)?;
-                first_box = false;
-                continue;
+                _ => {}
             }
             let mut sub_stream = stream.sub_stream(header.size as usize)?;
             match header.box_type.as_str() {
@@ -971,11 +980,6 @@ impl MP4Box {
                 "idat" => meta.idat = Self::parse_idat(&mut sub_stream)?,
                 _ => println!("skipping box {}", header.box_type),
             }
-        }
-        if first_box {
-            // The meta box must not be empty (it must contain at least a hdlr box).
-            println!("Meta box has no child boxes");
-            return Err(AvifError::BmffParseFailed);
         }
         Ok(meta)
     }
