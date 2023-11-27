@@ -16,6 +16,59 @@ impl BitReader {
         self.offset += n;
         (self.byte >> shift) & mask
     }
+
+    pub fn skip(&mut self, n: u8) {
+        assert!(n <= 8);
+        self.offset += n;
+    }
+}
+
+#[derive(Debug)]
+pub struct IBitStream<'a> {
+    pub data: &'a [u8],
+    pub bit_offset: usize,
+}
+
+impl IBitStream<'_> {
+    fn read_bit(&mut self) -> AvifResult<u8> {
+        let byte_offset = self.bit_offset / 8;
+        if byte_offset >= self.data.len() {
+            return Err(AvifError::BmffParseFailed);
+        }
+        let byte = self.data[byte_offset];
+        let shift = 7 - (self.bit_offset % 8);
+        self.bit_offset += 1;
+        println!(
+            "read bit at offset {} is {}",
+            self.bit_offset - 1,
+            (byte >> shift) & 0x01
+        );
+        Ok(((byte >> shift) & 0x01) as u8)
+    }
+
+    pub fn read(&mut self, n: usize) -> AvifResult<u32> {
+        assert!(n <= 32);
+        let mut value: u32 = 0;
+        for _i in 0..n {
+            value <<= 1;
+            value |= self.read_bit()? as u32;
+        }
+        println!("read byte({n}): {value}");
+        Ok(value)
+    }
+
+    pub fn read_bool(&mut self) -> AvifResult<bool> {
+        let bit = self.read_bit()?;
+        println!("read bool: {}", bit == 1);
+        Ok(bit == 1)
+    }
+
+    pub fn skip(&mut self, n: usize) -> AvifResult<()> {
+        // TODO: this function need not return result.
+        self.bit_offset += n;
+        println!("skipping {n} bits");
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -43,6 +96,16 @@ impl IStream<'_> {
         Ok(IStream {
             data: &self.data[offset..self.offset],
             offset: 0,
+        })
+    }
+
+    pub fn sub_bit_stream(&mut self, size: usize) -> AvifResult<IBitStream> {
+        self.check(size)?;
+        let offset = self.offset;
+        self.offset += size;
+        Ok(IBitStream {
+            data: &self.data[offset..self.offset],
+            bit_offset: 0,
         })
     }
 
@@ -145,6 +208,23 @@ impl IStream<'_> {
         self.check(size)?;
         self.offset += size;
         Ok(())
+    }
+
+    pub fn read_uleb128(&mut self) -> AvifResult<u32> {
+        let mut val: u64 = 0;
+        for i in 0..8 {
+            let byte = self.read_u8()?;
+            val |= ((byte & 0x7F) << (i * 7)) as u64;
+            if (byte & 0x80) == 0 {
+                if val > u32::MAX as u64 {
+                    println!("uleb value will not fit in u32.");
+                    return Err(AvifError::BmffParseFailed);
+                }
+                return Ok(val as u32);
+            }
+        }
+        println!("uleb value did not terminate after 8 bytes");
+        Err(AvifError::BmffParseFailed)
     }
 
     // TODO: rename this function and bitreader struct.

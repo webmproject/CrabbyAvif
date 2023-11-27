@@ -996,6 +996,30 @@ impl AvifDecoder {
         Ok(tiles)
     }
 
+    fn harvest_cicp_from_sequence_header(&mut self) -> AvifResult<()> {
+        println!("HARVESTING!");
+        if self.tiles[0].is_empty() {
+            return Ok(());
+        }
+        // TODO: do this incrementally instead of preparing whole sample.
+        // Start with 64 and go up to 4096 incrementally.
+        self.prepare_sample(0, 0, 0)?;
+        let io = &mut self.io.as_mut().unwrap();
+        let sample = &self.tiles[0][0].input.samples[0];
+        match MP4Box::parse_sequence_header(sample.data(io)?) {
+            Ok(sequence_header) => {
+                self.image.info.color_primaries = sequence_header.color_primaries;
+                self.image.info.transfer_characteristics = sequence_header.transfer_characteristics;
+                self.image.info.matrix_coefficients = sequence_header.matrix_coefficients;
+                self.image.info.full_range = sequence_header.full_range;
+            }
+            Err(_) => {
+                println!("errored :(");
+            }
+        }
+        Ok(())
+    }
+
     #[allow(non_snake_case)]
     fn populate_grid_item_ids(
         &mut self,
@@ -1240,13 +1264,14 @@ impl AvifDecoder {
         // Find and adopt all colr boxes "at most one for a given value of
         // colour type" (HEIF 6.5.5.1, from Amendment 3) Accept one of each
         // type, and bail out if more than one of a given type is provided.
-        //match color_item.nclx() {
+        let mut cicp_set = false;
         match find_nclx(color_properties) {
             Ok(nclx) => {
                 self.image.info.color_primaries = nclx.color_primaries;
                 self.image.info.transfer_characteristics = nclx.transfer_characteristics;
                 self.image.info.matrix_coefficients = nclx.matrix_coefficients;
                 self.image.info.full_range = nclx.full_range;
+                cicp_set = true;
             }
             Err(multiple_nclx_found) => {
                 if multiple_nclx_found {
@@ -1269,8 +1294,6 @@ impl AvifDecoder {
 
         // TODO: clli, pasp, clap, irot, imir
 
-        // TODO: if cicp was not found, harvest it from the seq hdr.
-
         let av1C = find_av1C(color_properties).ok_or(AvifError::BmffParseFailed)?;
         self.image.info.depth = av1C.depth();
         self.image.info.yuv_format = if av1C.monochrome {
@@ -1285,6 +1308,11 @@ impl AvifDecoder {
             }
         };
         self.image.info.chroma_sample_position = av1C.chroma_sample_position;
+
+        if !cicp_set {
+            // If cicp was not set, try to harvest it from the sequence header.
+            self.harvest_cicp_from_sequence_header()?;
+        }
 
         Ok(&self.image.info)
     }
@@ -1381,41 +1409,53 @@ impl AvifDecoder {
         Ok(())
     }
 
-    fn prepare_samples(&mut self, image_index: usize) -> AvifResult<()> {
+    fn prepare_sample(
+        &mut self,
+        image_index: usize,
+        category: usize,
+        tile_index: usize,
+    ) -> AvifResult<()> {
         // TODO: this function can probably be moved into AvifDecodeSample.data().
-        for tiles in &mut self.tiles {
-            for tile in tiles {
-                if tile.input.samples.len() <= image_index {
-                    println!("sample for index {image_index} not found.");
-                    return Err(AvifError::NoImagesRemaining);
-                }
-                let sample = &mut tile.input.samples[image_index];
-                if sample.item_id != 0 {
-                    // Data comes from an item.
-                    let item = self
-                        .avif_items
-                        .get(&sample.item_id)
-                        .ok_or(AvifError::BmffParseFailed)?;
-                    if item.extents.len() > 1 {
-                        // Item has multiple extents, merge them into a contiguous buffer.
-                        if sample.data_buffer.is_none() {
-                            let mut data: Vec<u8> = Vec::new();
-                            data.reserve(item.size);
-                            for extent in &item.extents {
-                                let io = self.io.as_mut().unwrap();
-                                // TODO: extent.length usize cast safety?
-                                data.extend_from_slice(
-                                    io.read(extent.offset, extent.length as usize)?,
-                                );
-                            }
-                            sample.data_buffer = Some(data);
-                        }
-                    } else {
-                        sample.offset = item.data_offset();
+        println!(
+            "prepare sample: image_index {image_index} category {category} tile_index {tile_index}"
+        );
+        let tile = &mut self.tiles[category][tile_index];
+        if tile.input.samples.len() <= image_index {
+            println!("sample for index {image_index} not found.");
+            return Err(AvifError::NoImagesRemaining);
+        }
+        let sample = &mut tile.input.samples[image_index];
+        if sample.item_id != 0 {
+            // Data comes from an item.
+            let item = self
+                .avif_items
+                .get(&sample.item_id)
+                .ok_or(AvifError::BmffParseFailed)?;
+            if item.extents.len() > 1 {
+                // Item has multiple extents, merge them into a contiguous buffer.
+                if sample.data_buffer.is_none() {
+                    let mut data: Vec<u8> = Vec::new();
+                    data.reserve(item.size);
+                    for extent in &item.extents {
+                        let io = self.io.as_mut().unwrap();
+                        // TODO: extent.length usize cast safety?
+                        data.extend_from_slice(io.read(extent.offset, extent.length as usize)?);
                     }
-                } else {
-                    // TODO: handle tracks.
+                    sample.data_buffer = Some(data);
                 }
+            } else {
+                sample.offset = item.data_offset();
+            }
+        } else {
+            // TODO: handle tracks.
+        }
+        Ok(())
+    }
+
+    fn prepare_samples(&mut self, image_index: usize) -> AvifResult<()> {
+        for category in 0usize..3 {
+            for tile_index in 0..self.tiles[category].len() {
+                self.prepare_sample(image_index, category, tile_index)?;
             }
         }
         Ok(())

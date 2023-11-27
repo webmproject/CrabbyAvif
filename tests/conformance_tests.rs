@@ -41,21 +41,19 @@ fn decode_and_verify(expected_info: &ExpectedAvifImageInfo) {
     assert_eq!(info.yuv_format, expected_info.yuv_format);
     assert_eq!(info.alpha_present, expected_info.alpha_present);
     assert_eq!(info.full_range, expected_info.full_range);
-    // TODO: Fix these.
-    if false {
-        assert_eq!(info.color_primaries, expected_info.color_primaries);
-        assert_eq!(
-            info.transfer_characteristics,
-            expected_info.transfer_characteristics
-        );
-        assert_eq!(info.matrix_coefficients, expected_info.matrix_coefficients);
-    }
+    assert_eq!(info.color_primaries, expected_info.color_primaries);
+    assert_eq!(
+        info.transfer_characteristics,
+        expected_info.transfer_characteristics
+    );
+    assert_eq!(info.matrix_coefficients, expected_info.matrix_coefficients);
     let res = decoder.next_image();
     assert!(res.is_ok());
 }
 
 // If more files are added to this array, update the call to generate_tests macro below.
 const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
+    // index: 0
     ExpectedAvifImageInfo {
         filename: "Apple/edge_case_testing/non_compliant/truncated_elementary_stream.avif",
         width: 1024,
@@ -68,6 +66,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 1
     ExpectedAvifImageInfo {
         filename: "Apple/edge_case_testing/unknown_properties/free_property.avif",
         width: 2048,
@@ -80,6 +79,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 2
     ExpectedAvifImageInfo {
         filename: "Apple/edge_case_testing/unknown_properties/unknown_nonessential_property.avif",
         width: 2048,
@@ -92,6 +92,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 3
     ExpectedAvifImageInfo {
         filename: "Apple/multilayer_examples/animals_00_multilayer_a1lx.avif",
         width: 2048,
@@ -104,6 +105,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 4
     ExpectedAvifImageInfo {
         filename: "Apple/multilayer_examples/animals_00_multilayer_a1op.avif",
         width: 2048,
@@ -116,6 +118,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 5
     ExpectedAvifImageInfo {
         filename: "Apple/multilayer_examples/animals_00_multilayer_a1op_lsel.avif",
         width: 2048,
@@ -128,6 +131,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 6
     ExpectedAvifImageInfo {
         filename: "Apple/multilayer_examples/animals_00_multilayer_grid_a1lx.avif",
         width: 2048,
@@ -140,6 +144,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 7
     ExpectedAvifImageInfo {
         filename: "Apple/multilayer_examples/animals_00_multilayer_grid_lsel.avif",
         width: 2048,
@@ -152,6 +157,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 8
     ExpectedAvifImageInfo {
         filename: "Apple/multilayer_examples/animals_00_multilayer_lsel.avif",
         width: 2048,
@@ -164,6 +170,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 9
     ExpectedAvifImageInfo {
         filename: "Apple/multilayer_examples/animals_00_singlelayer.avif",
         width: 2048,
@@ -176,6 +183,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 10
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.10bpc.yuv420.avif",
         width: 1204,
@@ -188,6 +196,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 11
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.10bpc.yuv420.monochrome.avif",
         width: 1204,
@@ -200,6 +209,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 12
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.10bpc.yuv420.monochrome.odd-height.avif",
         width: 1204,
@@ -212,6 +222,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 13
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.10bpc.yuv420.monochrome.odd-width.avif",
         width: 1203,
@@ -224,6 +235,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 14
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.10bpc.yuv420.monochrome.odd-width.odd-height.avif",
         width: 1203,
@@ -236,6 +248,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 15
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.10bpc.yuv420.odd-height.avif",
         width: 1204,
@@ -248,6 +261,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 16
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.10bpc.yuv420.odd-width.avif",
         width: 1203,
@@ -260,6 +274,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 17
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.10bpc.yuv420.odd-width.odd-height.avif",
         width: 1203,
@@ -272,6 +287,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 18
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.8bpc.yuv420.avif",
         width: 1204,
@@ -284,6 +300,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 19
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.8bpc.yuv420.monochrome.avif",
         width: 1204,
@@ -296,6 +313,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 20
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.8bpc.yuv420.monochrome.odd-height.avif",
         width: 1204,
@@ -308,6 +326,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 21
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.8bpc.yuv420.monochrome.odd-width.avif",
         width: 1203,
@@ -320,6 +339,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 22
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.8bpc.yuv420.monochrome.odd-width.odd-height.avif",
         width: 1203,
@@ -332,6 +352,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 23
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.8bpc.yuv420.odd-height.avif",
         width: 1204,
@@ -344,6 +365,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 24
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.8bpc.yuv420.odd-width.avif",
         width: 1203,
@@ -356,6 +378,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 25
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile0.8bpc.yuv420.odd-width.odd-height.avif",
         width: 1203,
@@ -368,6 +391,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 26
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile1.10bpc.yuv444.avif",
         width: 1204,
@@ -380,6 +404,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 27
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile1.10bpc.yuv444.odd-height.avif",
         width: 1204,
@@ -392,6 +417,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 28
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile1.10bpc.yuv444.odd-width.avif",
         width: 1203,
@@ -404,6 +430,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 29
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile1.10bpc.yuv444.odd-width.odd-height.avif",
         width: 1203,
@@ -416,6 +443,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 30
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile1.8bpc.yuv444.avif",
         width: 1204,
@@ -428,6 +456,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 31
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile1.8bpc.yuv444.odd-height.avif",
         width: 1204,
@@ -440,6 +469,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 32
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile1.8bpc.yuv444.odd-width.avif",
         width: 1203,
@@ -452,6 +482,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 33
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile1.8bpc.yuv444.odd-width.odd-height.avif",
         width: 1203,
@@ -464,6 +495,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 34
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.10bpc.yuv422.avif",
         width: 1204,
@@ -476,6 +508,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 35
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.10bpc.yuv422.monochrome.avif",
         width: 1204,
@@ -488,6 +521,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 36
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.10bpc.yuv422.monochrome.odd-height.avif",
         width: 1204,
@@ -500,6 +534,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 37
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.10bpc.yuv422.monochrome.odd-width.avif",
         width: 1203,
@@ -512,6 +547,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 38
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.10bpc.yuv422.monochrome.odd-width.odd-height.avif",
         width: 1203,
@@ -524,6 +560,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 39
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.10bpc.yuv422.odd-height.avif",
         width: 1204,
@@ -536,6 +573,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 40
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.10bpc.yuv422.odd-width.avif",
         width: 1203,
@@ -548,6 +586,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 41
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.10bpc.yuv422.odd-width.odd-height.avif",
         width: 1203,
@@ -560,6 +599,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 42
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv420.avif",
         width: 1204,
@@ -572,6 +612,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 43
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv420.monochrome.avif",
         width: 1204,
@@ -584,6 +625,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 44
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv420.monochrome.odd-height.avif",
         width: 1204,
@@ -596,6 +638,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 45
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv420.monochrome.odd-width.avif",
         width: 1203,
@@ -608,6 +651,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 46
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv420.monochrome.odd-width.odd-height.avif",
         width: 1203,
@@ -620,6 +664,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 47
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv420.odd-height.avif",
         width: 1204,
@@ -632,6 +677,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 48
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv420.odd-width.avif",
         width: 1203,
@@ -644,6 +690,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 49
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv420.odd-width.odd-height.avif",
         width: 1203,
@@ -656,6 +703,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 50
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv422.avif",
         width: 1204,
@@ -668,6 +716,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 51
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv422.monochrome.avif",
         width: 1204,
@@ -680,6 +729,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 52
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv422.monochrome.odd-height.avif",
         width: 1204,
@@ -692,6 +742,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 53
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv422.monochrome.odd-width.avif",
         width: 1203,
@@ -704,6 +755,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 54
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv422.monochrome.odd-width.odd-height.avif",
         width: 1203,
@@ -716,6 +768,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 55
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv422.odd-height.avif",
         width: 1204,
@@ -728,6 +781,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 56
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv422.odd-width.avif",
         width: 1203,
@@ -740,6 +794,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 57
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv422.odd-width.odd-height.avif",
         width: 1203,
@@ -752,6 +807,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 58
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv444.avif",
         width: 1204,
@@ -764,6 +820,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 59
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv444.monochrome.avif",
         width: 1204,
@@ -776,6 +833,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 60
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv444.monochrome.odd-height.avif",
         width: 1204,
@@ -788,6 +846,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 61
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv444.monochrome.odd-width.avif",
         width: 1203,
@@ -800,6 +859,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 62
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv444.monochrome.odd-width.odd-height.avif",
         width: 1203,
@@ -812,6 +872,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 63
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv444.odd-height.avif",
         width: 1204,
@@ -824,6 +885,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 64
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv444.odd-width.avif",
         width: 1203,
@@ -836,6 +898,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 65
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.12bpc.yuv444.odd-width.odd-height.avif",
         width: 1203,
@@ -848,6 +911,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 66
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.8bpc.yuv422.avif",
         width: 1204,
@@ -860,6 +924,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 67
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.8bpc.yuv422.monochrome.avif",
         width: 1204,
@@ -872,6 +937,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 68
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.8bpc.yuv422.monochrome.odd-height.avif",
         width: 1204,
@@ -884,6 +950,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 69
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.8bpc.yuv422.monochrome.odd-width.avif",
         width: 1203,
@@ -896,6 +963,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 70
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.8bpc.yuv422.monochrome.odd-width.odd-height.avif",
         width: 1203,
@@ -908,6 +976,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 71
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.8bpc.yuv422.odd-height.avif",
         width: 1204,
@@ -920,6 +989,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 72
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.8bpc.yuv422.odd-width.avif",
         width: 1203,
@@ -932,6 +1002,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 73
     ExpectedAvifImageInfo {
         filename: "Link-U/fox.profile2.8bpc.yuv422.odd-width.odd-height.avif",
         width: 1203,
@@ -944,6 +1015,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 74
     ExpectedAvifImageInfo {
         filename: "Link-U/hato.profile0.10bpc.yuv420.monochrome.no-cdef.no-restoration.avif",
         width: 3082,
@@ -956,6 +1028,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 75
     ExpectedAvifImageInfo {
         filename: "Link-U/hato.profile0.10bpc.yuv420.no-cdef.no-restoration.avif",
         width: 3082,
@@ -968,6 +1041,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 76
     ExpectedAvifImageInfo {
         filename: "Link-U/hato.profile0.8bpc.yuv420.monochrome.no-cdef.avif",
         width: 3082,
@@ -980,6 +1054,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 77
     ExpectedAvifImageInfo {
         filename: "Link-U/hato.profile0.8bpc.yuv420.no-cdef.avif",
         width: 3082,
@@ -992,6 +1067,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 78
     ExpectedAvifImageInfo {
         filename: "Link-U/hato.profile2.10bpc.yuv422.monochrome.no-cdef.no-restoration.avif",
         width: 3082,
@@ -1004,6 +1080,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 79
     ExpectedAvifImageInfo {
         filename: "Link-U/hato.profile2.10bpc.yuv422.no-cdef.no-restoration.avif",
         width: 3082,
@@ -1016,6 +1093,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 80
     ExpectedAvifImageInfo {
         filename: "Link-U/hato.profile2.12bpc.yuv422.monochrome.avif",
         width: 3082,
@@ -1028,6 +1106,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 9,
     },
+    // index: 81
     ExpectedAvifImageInfo {
         filename: "Link-U/hato.profile2.12bpc.yuv422.monochrome.no-cdef.no-restoration.avif",
         width: 3082,
@@ -1040,6 +1119,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 82
     ExpectedAvifImageInfo {
         filename: "Link-U/hato.profile2.12bpc.yuv422.no-cdef.no-restoration.avif",
         width: 3082,
@@ -1052,6 +1132,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 83
     ExpectedAvifImageInfo {
         filename: "Link-U/hato.profile2.8bpc.yuv422.monochrome.no-cdef.avif",
         width: 3082,
@@ -1064,6 +1145,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 84
     ExpectedAvifImageInfo {
         filename: "Link-U/hato.profile2.8bpc.yuv422.no-cdef.avif",
         width: 3082,
@@ -1076,6 +1158,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 85
     ExpectedAvifImageInfo {
         filename: "Link-U/kimono.avif",
         width: 722,
@@ -1088,6 +1171,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 9,
     },
+    // index: 86
     ExpectedAvifImageInfo {
         filename: "Link-U/kimono.crop.avif",
         width: 722,
@@ -1100,6 +1184,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 9,
     },
+    // index: 87
     ExpectedAvifImageInfo {
         filename: "Link-U/kimono.mirror-horizontal.avif",
         width: 722,
@@ -1112,6 +1197,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 9,
     },
+    // index: 88
     ExpectedAvifImageInfo {
         filename: "Link-U/kimono.mirror-vertical.avif",
         width: 722,
@@ -1124,6 +1210,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 9,
     },
+    // index: 89
     ExpectedAvifImageInfo {
         filename: "Link-U/kimono.mirror-vertical.rotate270.avif",
         width: 1024,
@@ -1136,6 +1223,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 9,
     },
+    // index: 90
     ExpectedAvifImageInfo {
         filename: "Link-U/kimono.mirror-vertical.rotate270.crop.avif",
         width: 1024,
@@ -1148,6 +1236,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 9,
     },
+    // index: 91
     ExpectedAvifImageInfo {
         filename: "Link-U/kimono.rotate270.avif",
         width: 1024,
@@ -1160,6 +1249,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 9,
     },
+    // index: 92
     ExpectedAvifImageInfo {
         filename: "Link-U/kimono.rotate90.avif",
         width: 1024,
@@ -1172,6 +1262,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 9,
     },
+    // index: 93
     ExpectedAvifImageInfo {
         filename: "Microsoft/Chimera_10bit_cropped_to_1920x1008.avif",
         width: 1920,
@@ -1184,6 +1275,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 94
     ExpectedAvifImageInfo {
         filename: "Microsoft/Chimera_10bit_cropped_to_1920x1008_with_HDR_metadata.avif",
         width: 1920,
@@ -1196,6 +1288,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 10,
     },
+    // index: 95
     ExpectedAvifImageInfo {
         filename: "Microsoft/Chimera_8bit_cropped_480x256.avif",
         width: 480,
@@ -1208,6 +1301,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 96
     ExpectedAvifImageInfo {
         filename: "Microsoft/Irvine_CA.avif",
         width: 480,
@@ -1220,6 +1314,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 97
     ExpectedAvifImageInfo {
         filename: "Microsoft/Mexico.avif",
         width: 1920,
@@ -1232,6 +1327,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 98
     ExpectedAvifImageInfo {
         filename: "Microsoft/Mexico_YUV444.avif",
         width: 960,
@@ -1244,6 +1340,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 99
     ExpectedAvifImageInfo {
         filename: "Microsoft/Monochrome.avif",
         width: 1280,
@@ -1256,6 +1353,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 1,
         matrix_coefficients: 1,
     },
+    // index: 100
     ExpectedAvifImageInfo {
         filename: "Microsoft/Ronda_rotate90.avif",
         width: 1920,
@@ -1268,6 +1366,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 101
     ExpectedAvifImageInfo {
         filename: "Microsoft/Summer_Nature_4k.avif",
         width: 3840,
@@ -1280,6 +1379,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 102
     ExpectedAvifImageInfo {
         filename: "Microsoft/Summer_in_Tomsk_720p_5x4_grid.avif",
         width: 6400,
@@ -1292,6 +1392,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 103
     ExpectedAvifImageInfo {
         filename: "Microsoft/Tomsk_with_thumbnails.avif",
         width: 1280,
@@ -1304,6 +1405,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 1,
     },
+    // index: 104
     ExpectedAvifImageInfo {
         filename: "Microsoft/bbb_4k.avif",
         width: 3840,
@@ -1316,6 +1418,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 105
     ExpectedAvifImageInfo {
         filename: "Microsoft/bbb_alpha_inverted.avif",
         width: 3840,
@@ -1328,6 +1431,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 1,
     },
+    // index: 106
     ExpectedAvifImageInfo {
         filename: "Microsoft/kids_720p.avif",
         width: 1280,
@@ -1340,6 +1444,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 107
     ExpectedAvifImageInfo {
         filename: "Microsoft/reduced_still_picture_header.avif",
         width: 1280,
@@ -1352,6 +1457,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 1,
     },
+    // index: 108
     ExpectedAvifImageInfo {
         filename: "Microsoft/still_picture.avif",
         width: 1280,
@@ -1364,6 +1470,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 1,
     },
+    // index: 109
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos01000_cicp9-16-0_lossless.avif",
         width: 2048,
@@ -1376,6 +1483,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 0,
     },
+    // index: 110
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos01000_cicp9-16-9_yuv420_limited_qp10.avif",
         width: 2048,
@@ -1388,6 +1496,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 111
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos01000_cicp9-16-9_yuv420_limited_qp20.avif",
         width: 2048,
@@ -1400,6 +1509,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 112
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos01000_cicp9-16-9_yuv420_limited_qp40.avif",
         width: 2048,
@@ -1412,6 +1522,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 113
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos01000_cicp9-16-9_yuv444_full_qp10.avif",
         width: 2048,
@@ -1424,6 +1535,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 114
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos01000_cicp9-16-9_yuv444_full_qp20.avif",
         width: 2048,
@@ -1436,6 +1548,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 115
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos01000_cicp9-16-9_yuv444_full_qp40.avif",
         width: 2048,
@@ -1448,6 +1561,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 116
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos01650_cicp9-16-0_lossless.avif",
         width: 2048,
@@ -1460,6 +1574,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 0,
     },
+    // index: 117
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos01650_cicp9-16-9_yuv420_limited_qp10.avif",
         width: 2048,
@@ -1472,6 +1587,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 118
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos01650_cicp9-16-9_yuv420_limited_qp20.avif",
         width: 2048,
@@ -1484,6 +1600,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 119
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos01650_cicp9-16-9_yuv420_limited_qp40.avif",
         width: 2048,
@@ -1496,6 +1613,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 120
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos01650_cicp9-16-9_yuv444_full_qp10.avif",
         width: 2048,
@@ -1508,6 +1626,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 121
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos01650_cicp9-16-9_yuv444_full_qp20.avif",
         width: 2048,
@@ -1520,6 +1639,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 122
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos01650_cicp9-16-9_yuv444_full_qp40.avif",
         width: 2048,
@@ -1532,6 +1652,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 123
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos07296_cicp9-16-0_lossless.avif",
         width: 2048,
@@ -1544,6 +1665,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 0,
     },
+    // index: 124
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos07296_cicp9-16-9_yuv420_limited_qp10.avif",
         width: 2048,
@@ -1556,6 +1678,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 125
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos07296_cicp9-16-9_yuv420_limited_qp20.avif",
         width: 2048,
@@ -1568,6 +1691,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 126
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos07296_cicp9-16-9_yuv420_limited_qp40.avif",
         width: 2048,
@@ -1580,6 +1704,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 127
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos07296_cicp9-16-9_yuv444_full_qp10.avif",
         width: 2048,
@@ -1592,6 +1717,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 128
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos07296_cicp9-16-9_yuv444_full_qp20.avif",
         width: 2048,
@@ -1604,6 +1730,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 129
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos07296_cicp9-16-9_yuv444_full_qp40.avif",
         width: 2048,
@@ -1616,6 +1743,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 130
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos12920_cicp9-16-0_lossless.avif",
         width: 2048,
@@ -1628,6 +1756,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 0,
     },
+    // index: 131
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos12920_cicp9-16-9_yuv420_limited_qp10.avif",
         width: 2048,
@@ -1640,6 +1769,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 132
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos12920_cicp9-16-9_yuv420_limited_qp20.avif",
         width: 2048,
@@ -1652,6 +1782,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 133
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos12920_cicp9-16-9_yuv420_limited_qp40.avif",
         width: 2048,
@@ -1664,6 +1795,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 134
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos12920_cicp9-16-9_yuv444_full_qp10.avif",
         width: 2048,
@@ -1676,6 +1808,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 135
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos12920_cicp9-16-9_yuv444_full_qp20.avif",
         width: 2048,
@@ -1688,6 +1821,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 136
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/hdr_cosmos12920_cicp9-16-9_yuv444_full_qp40.avif",
         width: 2048,
@@ -1700,6 +1834,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 16,
         matrix_coefficients: 9,
     },
+    // index: 137
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos01000_cicp1-13-0_lossless.avif",
         width: 2048,
@@ -1712,6 +1847,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 0,
     },
+    // index: 138
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos01000_cicp1-13-6_yuv420_limited_qp10.avif",
         width: 2048,
@@ -1724,6 +1860,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 139
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos01000_cicp1-13-6_yuv420_limited_qp20.avif",
         width: 2048,
@@ -1736,6 +1873,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 140
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos01000_cicp1-13-6_yuv420_limited_qp40.avif",
         width: 2048,
@@ -1748,6 +1886,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 141
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos01000_cicp1-13-6_yuv444_full_qp10.avif",
         width: 2048,
@@ -1760,6 +1899,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 142
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos01000_cicp1-13-6_yuv444_full_qp20.avif",
         width: 2048,
@@ -1772,6 +1912,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 143
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos01000_cicp1-13-6_yuv444_full_qp40.avif",
         width: 2048,
@@ -1784,6 +1925,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 144
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos01650_cicp1-13-0_lossless.avif",
         width: 2048,
@@ -1796,6 +1938,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 0,
     },
+    // index: 145
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos01650_cicp1-13-6_yuv420_limited_qp10.avif",
         width: 2048,
@@ -1808,6 +1951,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 146
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos01650_cicp1-13-6_yuv420_limited_qp20.avif",
         width: 2048,
@@ -1820,6 +1964,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 147
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos01650_cicp1-13-6_yuv420_limited_qp40.avif",
         width: 2048,
@@ -1832,6 +1977,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 148
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos01650_cicp1-13-6_yuv444_full_qp10.avif",
         width: 2048,
@@ -1844,6 +1990,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 149
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos01650_cicp1-13-6_yuv444_full_qp20.avif",
         width: 2048,
@@ -1856,6 +2003,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 150
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos01650_cicp1-13-6_yuv444_full_qp40.avif",
         width: 2048,
@@ -1868,6 +2016,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 151
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos07296_cicp1-13-0_lossless.avif",
         width: 2048,
@@ -1880,6 +2029,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 0,
     },
+    // index: 152
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos07296_cicp1-13-6_yuv420_limited_qp10.avif",
         width: 2048,
@@ -1892,6 +2042,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 153
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos07296_cicp1-13-6_yuv420_limited_qp20.avif",
         width: 2048,
@@ -1904,6 +2055,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 154
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos07296_cicp1-13-6_yuv420_limited_qp40.avif",
         width: 2048,
@@ -1916,6 +2068,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 155
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos07296_cicp1-13-6_yuv444_full_qp10.avif",
         width: 2048,
@@ -1928,6 +2081,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 156
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos07296_cicp1-13-6_yuv444_full_qp20.avif",
         width: 2048,
@@ -1940,6 +2094,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 157
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos07296_cicp1-13-6_yuv444_full_qp40.avif",
         width: 2048,
@@ -1952,6 +2107,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 158
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos12920_cicp1-13-0_lossless.avif",
         width: 2048,
@@ -1964,6 +2120,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 0,
     },
+    // index: 159
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos12920_cicp1-13-6_yuv420_limited_qp10.avif",
         width: 2048,
@@ -1976,6 +2133,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 160
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos12920_cicp1-13-6_yuv420_limited_qp20.avif",
         width: 2048,
@@ -1988,6 +2146,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 161
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos12920_cicp1-13-6_yuv420_limited_qp40.avif",
         width: 2048,
@@ -2000,6 +2159,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 162
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos12920_cicp1-13-6_yuv444_full_qp10.avif",
         width: 2048,
@@ -2012,6 +2172,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 163
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos12920_cicp1-13-6_yuv444_full_qp20.avif",
         width: 2048,
@@ -2024,6 +2185,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 164
     ExpectedAvifImageInfo {
         filename: "Netflix/avif/sdr_cosmos12920_cicp1-13-6_yuv444_full_qp40.avif",
         width: 2048,
@@ -2036,6 +2198,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 6,
     },
+    // index: 165
     ExpectedAvifImageInfo {
         filename: "Netflix/avis/Chimera-AV1-10bit-480x270.avif",
         width: 480,
@@ -2048,6 +2211,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 166
     ExpectedAvifImageInfo {
         filename: "Netflix/avis/alpha_video.avif",
         width: 640,
@@ -2060,6 +2224,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 13,
         matrix_coefficients: 1,
     },
+    // index: 167
     ExpectedAvifImageInfo {
         filename: "Xiph/abandoned_filmgrain.avif",
         width: 1404,
@@ -2072,6 +2237,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 168
     ExpectedAvifImageInfo {
         filename: "Xiph/fruits_2layer_thumbsize.avif",
         width: 1296,
@@ -2084,6 +2250,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 169
     ExpectedAvifImageInfo {
         filename: "Xiph/quebec_3layer_op2.avif",
         width: 360,
@@ -2096,6 +2263,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 170
     ExpectedAvifImageInfo {
         filename: "Xiph/tiger_3layer_1res.avif",
         width: 1216,
@@ -2108,6 +2276,7 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
         transfer_characteristics: 2,
         matrix_coefficients: 2,
     },
+    // index: 171
     ExpectedAvifImageInfo {
         filename: "Xiph/tiger_3layer_3res.avif",
         width: 1216,
