@@ -1,3 +1,4 @@
+use rust_libavif::decoder::AvifImageInfo;
 use rust_libavif::*;
 
 const TEST_DATA_PATH: &str = "/Users/vigneshv/code/av1-avif/testFiles";
@@ -28,13 +29,7 @@ struct ExpectedAvifImageInfo<'a> {
     matrix_coefficients: u16,
 }
 
-fn decode_and_verify(expected_info: &ExpectedAvifImageInfo) {
-    let filename = String::from(format!("{TEST_DATA_PATH}/{}", expected_info.filename));
-    let mut decoder = decoder::AvifDecoder::default();
-    let _ = decoder.set_io_file(&filename).expect("Failed to set IO");
-    let res = decoder.parse();
-    assert!(res.is_ok());
-    let info = res.unwrap();
+fn verify_info(expected_info: &ExpectedAvifImageInfo, info: &AvifImageInfo) {
     assert_eq!(info.width, expected_info.width);
     assert_eq!(info.height, expected_info.height);
     assert_eq!(info.depth, expected_info.depth);
@@ -47,8 +42,24 @@ fn decode_and_verify(expected_info: &ExpectedAvifImageInfo) {
         expected_info.transfer_characteristics
     );
     assert_eq!(info.matrix_coefficients, expected_info.matrix_coefficients);
+}
+
+fn decode_and_verify(expected_info: &ExpectedAvifImageInfo) {
+    let filename = String::from(format!("{TEST_DATA_PATH}/{}", expected_info.filename));
+    let mut decoder = decoder::AvifDecoder::default();
+    let _ = decoder.set_io_file(&filename).expect("Failed to set IO");
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let info = res.unwrap();
+    verify_info(expected_info, info);
     let res = decoder.next_image();
     assert!(res.is_ok());
+    let image = res.unwrap();
+    // Link-U 422 files have wrong subsampling in the Avif header(decoded one
+    // is right).
+    if !filename.contains("Link-U") || !filename.contains("yuv422") {
+        verify_info(expected_info, &image.info);
+    }
 }
 
 // If more files are added to this array, update the call to generate_tests macro below.
