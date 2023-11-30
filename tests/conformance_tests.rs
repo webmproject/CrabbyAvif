@@ -1,16 +1,15 @@
+use rust_libavif::decoder::AvifImage;
 use rust_libavif::decoder::AvifImageInfo;
 use rust_libavif::*;
 
-const TEST_DATA_PATH: &str = "/Users/vigneshv/code/av1-avif/testFiles";
+use std::fs::remove_file;
+use std::fs::File;
+use std::io::BufReader;
+use std::io::Read;
+use std::process::Command;
+use tempfile::NamedTempFile;
 
-/*
-macro_rules! assert_avif_error {
-    ($res:ident, $err:ident) => {
-        assert!($res.is_err());
-        assert!(matches!($res.err().unwrap(), AvifError::$err));
-    };
-}
-*/
+const TEST_DATA_PATH: &str = "/Users/vigneshv/code/av1-avif/testFiles";
 
 #[derive(Copy, Clone)]
 struct ExpectedAvifImageInfo<'a> {
@@ -44,6 +43,54 @@ fn verify_info(expected_info: &ExpectedAvifImageInfo, info: &AvifImageInfo) {
     assert_eq!(info.matrix_coefficients, expected_info.matrix_coefficients);
 }
 
+fn get_tempfile() -> String {
+    let file = NamedTempFile::new().expect("unable to open tempfile");
+    let path = file.into_temp_path();
+    let filename = String::from(path.to_str().unwrap());
+    let _ = path.close();
+    println!("### filename: {:#?}", filename);
+    filename
+}
+
+fn write_y4m(image: &AvifImage) -> String {
+    let filename = get_tempfile();
+    let mut y4m = rust_libavif::utils::Y4MWriter::create(&filename);
+    assert!(y4m.write_frame(image));
+    filename
+}
+
+fn run_avifdec(filename: &String) -> String {
+    let mut outfile = get_tempfile();
+    outfile.push_str(".y4m");
+    let avifdec = Command::new("/opt/homebrew/bin/avifdec")
+        .arg("--no-strict")
+        .arg("--jobs")
+        .arg("8")
+        .arg(filename)
+        .arg(&outfile)
+        .output()
+        .unwrap();
+    println!("avifdec: {:#?}", avifdec);
+    assert!(avifdec.status.success());
+    outfile
+}
+
+fn compare_files(file1: &String, file2: &String) -> bool {
+    let f1 = File::open(file1).unwrap();
+    let f2 = File::open(file2).unwrap();
+    if f1.metadata().unwrap().len() != f2.metadata().unwrap().len() {
+        return false;
+    }
+    let f1 = BufReader::new(f1);
+    let f2 = BufReader::new(f2);
+    for (byte1, byte2) in f1.bytes().zip(f2.bytes()) {
+        if byte1.unwrap() != byte2.unwrap() {
+            return false;
+        }
+    }
+    true
+}
+
 fn decode_and_verify(expected_info: &ExpectedAvifImageInfo) {
     let filename = String::from(format!("{TEST_DATA_PATH}/{}", expected_info.filename));
     let mut decoder = decoder::AvifDecoder::default();
@@ -60,6 +107,15 @@ fn decode_and_verify(expected_info: &ExpectedAvifImageInfo) {
     if !filename.contains("Link-U") || !filename.contains("yuv422") {
         verify_info(expected_info, &image.info);
     }
+
+    // Write y4m.
+    let y4m_file = write_y4m(image);
+    // Write y4m by invoking avifdec.
+    let gold_y4m_file = run_avifdec(&filename);
+    // Compare.
+    assert!(compare_files(&y4m_file, &gold_y4m_file));
+    let _ = remove_file(y4m_file);
+    let _ = remove_file(gold_y4m_file);
 }
 
 // If more files are added to this array, update the call to generate_tests macro below.

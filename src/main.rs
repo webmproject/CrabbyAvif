@@ -63,7 +63,7 @@ fn main() {
         image_count = decoder.image_count;
         //image_count = 1;
         let mut y4m: rust_libavif::utils::Y4MWriter = Default::default();
-        y4m.filename = args[2].clone();
+        y4m.filename = Some(args[2].clone());
 
         for _i in 0..image_count {
             let image = decoder.next_image();

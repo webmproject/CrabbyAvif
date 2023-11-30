@@ -5,7 +5,7 @@ use std::io::prelude::*;
 
 #[derive(Default)]
 pub struct Y4MWriter {
-    pub filename: String,
+    pub filename: Option<String>,
     header_written: bool,
     file: Option<File>,
     write_alpha: bool,
@@ -14,7 +14,14 @@ pub struct Y4MWriter {
 impl Y4MWriter {
     pub fn create(filename: &String) -> Self {
         Self {
-            filename: filename.clone(),
+            filename: Some(filename.clone()),
+            ..Self::default()
+        }
+    }
+
+    pub fn create_from_file(file: File) -> Self {
+        Self {
+            file: Some(file),
             ..Self::default()
         }
     }
@@ -72,11 +79,14 @@ impl Y4MWriter {
             image.info.width, image.info.height
         );
         println!("{header}");
-        let file = File::create(&self.filename);
-        if !file.is_ok() {
-            return false;
+        if self.file.is_none() {
+            assert!(self.filename.is_some());
+            let file = File::create(&self.filename.as_ref().unwrap());
+            if !file.is_ok() {
+                return false;
+            }
+            self.file = Some(file.unwrap());
         }
-        self.file = Some(file.unwrap());
         match self.file.as_ref().unwrap().write_all(header.as_bytes()) {
             Err(_) => return false,
             _ => {}

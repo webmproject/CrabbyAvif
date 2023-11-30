@@ -17,6 +17,8 @@ libc = "0.2"
 test-case = "*"
 # TODO: make this test only.
 seq-macro = "*"
+# TODO: make this test only.
+tempfile = "*"
 
 [features]
 capi = []
