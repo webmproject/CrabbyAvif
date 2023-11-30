@@ -146,6 +146,9 @@ fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
 fn decoder_parse_icc_exif_xmp() {
     // Test case from https://github.com/AOMediaCodec/libavif/issues/1086.
     let mut decoder = get_decoder("paris_icc_exif_xmp.avif");
+
+    decoder.settings.ignore_xmp = true;
+    decoder.settings.ignore_exif = true;
     let res = decoder.parse();
     assert!(res.is_ok());
     let info = res.unwrap();
@@ -155,6 +158,15 @@ fn decoder_parse_icc_exif_xmp() {
     assert_eq!(info.icc[1], 0);
     assert_eq!(info.icc[2], 2);
     assert_eq!(info.icc[3], 84);
+
+    assert!(info.exif.is_empty());
+    assert!(info.xmp.is_empty());
+
+    decoder.settings.ignore_xmp = false;
+    decoder.settings.ignore_exif = false;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let info = res.unwrap();
 
     assert_eq!(info.exif.len(), 1126);
     assert_eq!(info.exif[0], 73);

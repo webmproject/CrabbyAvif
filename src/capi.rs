@@ -26,6 +26,22 @@ pub struct avifROData {
 }
 
 #[repr(C)]
+#[derive(Debug)]
+pub struct avifRWData {
+    data: *mut u8,
+    size: size_t,
+}
+
+impl Default for avifRWData {
+    fn default() -> Self {
+        avifRWData {
+            data: std::ptr::null_mut(),
+            size: 0,
+        }
+    }
+}
+
+#[repr(C)]
 #[derive(PartialEq)]
 pub enum avifResult {
     Ok,
@@ -179,7 +195,8 @@ pub struct avifImage {
     alphaRowBytes: u32,
     imageOwnsAlphaPlane: avifBool,
     alphaPremultiplied: avifBool,
-    // avifRWData icc;
+
+    icc: avifRWData,
     // avifColorPrimaries colorPrimaries;
     // avifTransferCharacteristics transferCharacteristics;
     // avifMatrixCoefficients matrixCoefficients;
@@ -189,8 +206,8 @@ pub struct avifImage {
     // avifCleanApertureBox clap;
     // avifImageRotation irot;
     // avifImageMirror imir;
-    // avifRWData exif;
-    // avifRWData xmp;
+    exif: avifRWData,
+    xmp: avifRWData,
     // avifGainMap gainMap;
 }
 
@@ -210,6 +227,18 @@ impl Default for avifImage {
             alphaRowBytes: 0,
             imageOwnsAlphaPlane: AVIF_FALSE,
             alphaPremultiplied: AVIF_FALSE,
+            icc: avifRWData::default(),
+            exif: avifRWData::default(),
+            xmp: avifRWData::default(),
+        }
+    }
+}
+
+impl From<&Vec<u8>> for avifRWData {
+    fn from(v: &Vec<u8>) -> Self {
+        avifRWData {
+            data: v.as_ptr() as *mut u8,
+            size: v.len(),
         }
     }
 }
@@ -224,6 +253,9 @@ impl From<&AvifImageInfo> for avifImage {
             yuvRange: info.full_range.into(),
             yuvChromaSamplePosition: info.chroma_sample_position.into(),
             alphaPremultiplied: info.alpha_premultiplied as avifBool,
+            icc: (&info.icc).into(),
+            exif: (&info.exif).into(),
+            xmp: (&info.xmp).into(),
             ..Self::default()
         }
     }
@@ -436,6 +468,8 @@ impl From<&avifDecoder> for AvifDecoderSettings {
             source: decoder.requestedSource.into(),
             strictness,
             allow_progressive: decoder.allowProgressive == AVIF_TRUE,
+            ignore_exif: decoder.ignoreExif == AVIF_TRUE,
+            ignore_xmp: decoder.ignoreXMP == AVIF_TRUE,
             ..Self::default()
         }
     }

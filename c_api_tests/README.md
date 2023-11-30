@@ -4,7 +4,10 @@
 
 * avifalphanoispetest.cc
 * avifanimationtest.cc
+* avifdecodetest.cc
+* avifprogressivetest.cc
 
 ### Copied with changes
 
-* ...
+* avifmetadatatest.cc
+  * Remove encoder tests and add more checks to the decoder test.
