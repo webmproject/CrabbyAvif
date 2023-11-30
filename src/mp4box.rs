@@ -1,3 +1,4 @@
+use crate::decoder::usize_from_u16;
 use crate::decoder::usize_from_u32;
 use crate::decoder::usize_from_u64;
 use crate::io::*;
@@ -291,9 +292,9 @@ impl SampleTable {
     }
 
     // returns the number of samples in the chunk.
-    pub fn get_sample_count_of_chunk(&self, chunk_index: usize) -> u32 {
+    pub fn get_sample_count_of_chunk(&self, chunk_index: u32) -> u32 {
         for entry in self.sample_to_chunk.iter().rev() {
-            if (entry.first_chunk as usize) <= chunk_index + 1 {
+            if entry.first_chunk <= chunk_index + 1 {
                 return entry.samples_per_chunk;
             }
         }
@@ -729,9 +730,9 @@ impl MP4Box {
         let mut layer_sizes: [usize; 3] = [0; 3];
         for layer_size in &mut layer_sizes {
             if large_size {
-                *layer_size = stream.read_u32()? as usize;
+                *layer_size = usize_from_u32(stream.read_u32()?)?;
             } else {
-                *layer_size = stream.read_u16()? as usize;
+                *layer_size = usize_from_u16(stream.read_u16()?)?;
             }
         }
         Ok(ItemProperty::AV1LayeredImageIndexing(layer_sizes))
@@ -752,7 +753,7 @@ impl MP4Box {
         let mut properties: Vec<ItemProperty> = Vec::new();
         while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
-            let mut sub_stream = stream.sub_stream(header.size as usize)?;
+            let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
             match header.box_type.as_str() {
                 "ispe" => properties.push(Self::parse_ispe(&mut sub_stream)?),
                 "pixi" => properties.push(Self::parse_pixi(&mut sub_stream)?),
@@ -836,7 +837,7 @@ impl MP4Box {
         let mut iprp = ItemPropertyBox::default();
         // Parse ipco box.
         {
-            let mut sub_stream = stream.sub_stream(header.size as usize)?;
+            let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
             iprp.properties = Self::parse_ipco(&mut sub_stream)?;
         }
         // Parse ipma boxes.
@@ -846,7 +847,7 @@ impl MP4Box {
                 println!("Found non ipma box in iprp");
                 return Err(AvifError::BmffParseFailed);
             }
-            let mut sub_stream = stream.sub_stream(header.size as usize)?;
+            let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
             iprp.associations
                 .append(&mut Self::parse_ipma(&mut sub_stream)?);
         }
@@ -996,7 +997,7 @@ impl MP4Box {
                 println!("first box in meta is not hdlr");
                 return Err(AvifError::BmffParseFailed);
             }
-            let mut sub_stream = stream.sub_stream(header.size as usize)?;
+            let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
             Self::parse_hdlr(&mut sub_stream)?;
         }
 
@@ -1013,7 +1014,7 @@ impl MP4Box {
                 }
                 _ => {}
             }
-            let mut sub_stream = stream.sub_stream(header.size as usize)?;
+            let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
             match header.box_type.as_str() {
                 "iloc" => meta.iloc = Self::parse_iloc(&mut sub_stream)?,
                 "pitm" => meta.primary_item_id = Self::parse_pitm(&mut sub_stream)?,
@@ -1120,8 +1121,8 @@ impl MP4Box {
     ) -> AvifResult<()> {
         let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         // unsigned int(32) entry_count;
-        let entry_count = stream.read_u32()?;
-        sample_table.chunk_offsets.reserve(entry_count as usize);
+        let entry_count = usize_from_u32(stream.read_u32()?)?;
+        sample_table.chunk_offsets.reserve(entry_count);
         for _ in 0..entry_count {
             let chunk_offset: u64;
             if large_offset {
@@ -1140,8 +1141,8 @@ impl MP4Box {
     fn parse_stsc(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
         let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         // unsigned int(32) entry_count;
-        let entry_count = stream.read_u32()?;
-        sample_table.sample_to_chunk.reserve(entry_count as usize);
+        let entry_count = usize_from_u32(stream.read_u32()?)?;
+        sample_table.sample_to_chunk.reserve(entry_count);
         for i in 0..entry_count {
             let stsc = SampleToChunk {
                 // unsigned int(32) first_chunk;
@@ -1172,14 +1173,14 @@ impl MP4Box {
         // unsigned int(32) sample_size;
         let sample_size = stream.read_u32()?;
         // unsigned int(32) sample_count;
-        let sample_count = stream.read_u32()?;
+        let sample_count = usize_from_u32(stream.read_u32()?)?;
 
         if sample_size > 0 {
             sample_table.sample_size = SampleSize::FixedSize(sample_size);
             return Ok(());
         }
         let mut sample_sizes: Vec<u32> = Vec::new();
-        sample_sizes.reserve(sample_count as usize);
+        sample_sizes.reserve(sample_count);
         for _ in 0..sample_count {
             // unsigned int(32) entry_size;
             sample_sizes.push(stream.read_u32()?);
@@ -1191,8 +1192,8 @@ impl MP4Box {
     fn parse_stss(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
         let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         // unsigned int(32) entry_count;
-        let entry_count = stream.read_u32()?;
-        sample_table.sync_samples.reserve(entry_count as usize);
+        let entry_count = usize_from_u32(stream.read_u32()?)?;
+        sample_table.sync_samples.reserve(entry_count);
         for _ in 0..entry_count {
             // unsigned int(32) sample_number;
             let sample_number = stream.read_u32()?;
@@ -1204,8 +1205,8 @@ impl MP4Box {
     fn parse_stts(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
         let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         // unsigned int(32) entry_count;
-        let entry_count = stream.read_u32()?;
-        sample_table.time_to_sample.reserve(entry_count as usize);
+        let entry_count = usize_from_u32(stream.read_u32()?)?;
+        sample_table.time_to_sample.reserve(entry_count);
         for _ in 0..entry_count {
             let stts = TimeToSample {
                 // unsigned int(32) sample_count;
@@ -1221,10 +1222,8 @@ impl MP4Box {
     fn parse_stsd(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
         let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         // unsigned int(32) entry_count;
-        let entry_count = stream.read_u32()?;
-        sample_table
-            .sample_descriptions
-            .reserve(entry_count as usize);
+        let entry_count = usize_from_u32(stream.read_u32()?)?;
+        sample_table.sample_descriptions.reserve(entry_count);
         for _ in 0..entry_count {
             let header = Self::parse_header(stream)?;
             let mut stsd = SampleDescription::default();
@@ -1236,7 +1235,7 @@ impl MP4Box {
                     println!("Not enough bytes to parse stsd");
                     return Err(AvifError::BmffParseFailed);
                 }
-                let mut sub_stream = stream.sub_stream((header.size - 78) as usize)?;
+                let mut sub_stream = stream.sub_stream(usize_from_u64(header.size - 78)?)?;
                 stsd.properties = Self::parse_ipco(&mut sub_stream)?;
             }
             sample_table.sample_descriptions.push(stsd);
@@ -1252,7 +1251,7 @@ impl MP4Box {
         let mut sample_table = SampleTable::default();
         while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
-            let mut sub_stream = stream.sub_stream(header.size as usize)?;
+            let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
             match header.box_type.as_str() {
                 "stco" => Self::parse_stco(&mut sub_stream, &mut sample_table, false)?,
                 "co64" => Self::parse_stco(&mut sub_stream, &mut sample_table, true)?,
@@ -1271,7 +1270,7 @@ impl MP4Box {
     fn parse_minf(stream: &mut IStream, track: &mut AvifTrack) -> AvifResult<()> {
         while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
-            let mut sub_stream = stream.sub_stream(header.size as usize)?;
+            let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
             match header.box_type.as_str() {
                 "stbl" => Self::parse_stbl(&mut sub_stream, track)?,
                 _ => println!("skipping box {}", header.box_type),
@@ -1283,7 +1282,7 @@ impl MP4Box {
     fn parse_mdia(stream: &mut IStream, track: &mut AvifTrack) -> AvifResult<()> {
         while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
-            let mut sub_stream = stream.sub_stream(header.size as usize)?;
+            let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
             match header.box_type.as_str() {
                 "mdhd" => Self::parse_mdhd(&mut sub_stream, track)?,
                 "minf" => Self::parse_minf(&mut sub_stream, track)?,
@@ -1296,7 +1295,7 @@ impl MP4Box {
     fn parse_tref(stream: &mut IStream, track: &mut AvifTrack) -> AvifResult<()> {
         while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
-            let mut sub_stream = stream.sub_stream(header.size as usize)?;
+            let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
             match header.box_type.as_str() {
                 "auxl" => {
                     // unsigned int(32) track_IDs[];
@@ -1359,7 +1358,7 @@ impl MP4Box {
         }
         while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
-            let mut sub_stream = stream.sub_stream(header.size as usize)?;
+            let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
             match header.box_type.as_str() {
                 "elst" => Self::parse_elst(&mut sub_stream, track)?,
                 _ => println!("skipping box {}", header.box_type),
@@ -1377,7 +1376,7 @@ impl MP4Box {
         println!("parsing trak size: {}", stream.bytes_left());
         while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
-            let mut sub_stream = stream.sub_stream(header.size as usize)?;
+            let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
             match header.box_type.as_str() {
                 "tkhd" => Self::parse_tkhd(&mut sub_stream, &mut track)?,
                 "mdia" => Self::parse_mdia(&mut sub_stream, &mut track)?,
@@ -1437,7 +1436,7 @@ impl MP4Box {
         let mut tracks: Vec<AvifTrack> = Vec::new();
         while stream.has_bytes_left() {
             let header = Self::parse_header(stream)?;
-            let mut sub_stream = stream.sub_stream(header.size as usize)?;
+            let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
             match header.box_type.as_str() {
                 "trak" => tracks.push(Self::parse_trak(&mut sub_stream)?),
                 _ => println!("skipping box {}", header.box_type),
@@ -1467,7 +1466,7 @@ impl MP4Box {
             match header.box_type.as_str() {
                 "ftyp" | "meta" | "moov" => {
                     let box_data = io.read(parse_offset, usize_from_u64(header.size)?)?;
-                    if box_data.len() != header.size as usize {
+                    if box_data.len() != usize_from_u64(header.size)? {
                         return Err(AvifError::TruncatedData);
                     }
                     let mut box_stream = IStream::create(box_data);
@@ -1780,10 +1779,10 @@ impl MP4Box {
             println!("obu header: {:#?}", obu);
             if obu.obu_type != 1 {
                 // Not a sequence header. Skip this obu.
-                stream.skip(obu.size as usize)?;
+                stream.skip(usize_from_u32(obu.size)?)?;
                 continue;
             }
-            let mut bits = stream.sub_bit_stream(obu.size as usize)?;
+            let mut bits = stream.sub_bit_stream(usize_from_u32(obu.size)?)?;
             let mut seq = Av1SequenceHeader::default();
             Self::parse_sequence_header_profile(&mut bits, &mut seq)?;
             Self::parse_sequence_header_frame_max_dimensions(&mut bits, &mut seq)?;

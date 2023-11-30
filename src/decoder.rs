@@ -837,7 +837,7 @@ fn create_tile_from_track(track: &AvifTrack) -> AvifResult<AvifTile> {
     let sample_table = &track.sample_table.as_ref().unwrap();
     for (chunk_index, chunk_offset) in sample_table.chunk_offsets.iter().enumerate() {
         // Figure out how many samples are in this chunk.
-        let sample_count = sample_table.get_sample_count_of_chunk(chunk_index);
+        let sample_count = sample_table.get_sample_count_of_chunk(chunk_index as u32);
         if sample_count == 0 {
             println!("chunk with 0 samples found");
             return Err(AvifError::BmffParseFailed);
