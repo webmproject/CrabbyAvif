@@ -1,3 +1,4 @@
+use crate::decoder::usize_from_u64;
 use crate::io::*;
 use crate::stream::*;
 use crate::*;
@@ -1440,8 +1441,7 @@ impl MP4Box {
             // Read the rest of the box if necessary.
             match header.box_type.as_str() {
                 "ftyp" | "meta" | "moov" => {
-                    // TODO: check overflow of header.size to usize cast.
-                    let box_data = io.read(parse_offset, header.size as usize)?;
+                    let box_data = io.read(parse_offset, usize_from_u64(header.size)?)?;
                     if box_data.len() != header.size as usize {
                         return Err(AvifError::TruncatedData);
                     }

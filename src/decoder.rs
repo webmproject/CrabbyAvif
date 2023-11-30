@@ -11,6 +11,10 @@ use crate::*;
 // those do not have to be debug printable.
 use derivative::Derivative;
 
+pub fn usize_from_u64(value: u64) -> AvifResult<usize> {
+    usize::try_from(value).or(Err(AvifError::BmffParseFailed))
+}
+
 #[derive(Default, Debug)]
 pub struct AvifImageInfo {
     pub width: u32,
@@ -1434,8 +1438,9 @@ impl AvifDecoder {
                     data.reserve(item.size);
                     for extent in &item.extents {
                         let io = self.io.as_mut().unwrap();
-                        // TODO: extent.length usize cast safety?
-                        data.extend_from_slice(io.read(extent.offset, extent.length as usize)?);
+                        data.extend_from_slice(
+                            io.read(extent.offset, usize_from_u64(extent.length)?)?,
+                        );
                     }
                     sample.data_buffer = Some(data);
                 }
