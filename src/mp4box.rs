@@ -127,13 +127,6 @@ impl CodecConfiguration {
 }
 
 #[derive(Debug, Default, Clone)]
-#[allow(unused)]
-pub struct Icc {
-    offset: u64,
-    size: usize,
-}
-
-#[derive(Debug, Default, Clone)]
 pub struct Nclx {
     pub color_primaries: u16,
     pub transfer_characteristics: u16,
@@ -144,7 +137,7 @@ pub struct Nclx {
 #[derive(Debug, Clone)]
 #[allow(unused)]
 pub enum ColorInformation {
-    Icc(Icc),
+    Icc(Vec<u8>),
     Nclx(Nclx),
 }
 
@@ -209,7 +202,6 @@ pub struct ItemInfo {
     pub item_type: String,
     item_name: String,
     pub content_type: String,
-    content_encoding: String,
 }
 
 #[derive(Debug, Default)]
@@ -594,15 +586,8 @@ impl MP4Box {
         // unsigned int(32) colour_type;
         let color_type = stream.read_string(4)?;
         if color_type == "rICC" || color_type == "prof" {
-            // TODO: perhaps this can be a slice or something?
-            // TODO: this offset is relative. needs to be absolute.
-            // TODO: maybe just clone the data?
-            let icc = Icc {
-                offset: stream.offset as u64,
-                size: stream.bytes_left(),
-            };
             return Ok(Some(ItemProperty::ColorInformation(ColorInformation::Icc(
-                icc,
+                stream.get_slice(stream.bytes_left())?.to_vec(),
             ))));
         }
         if color_type == "nclx" {
@@ -855,6 +840,51 @@ impl MP4Box {
         Ok(iprp)
     }
 
+    fn parse_infe(stream: &mut IStream) -> AvifResult<ItemInfo> {
+        let (version, _flags) = stream.read_version_and_flags()?;
+        if version != 2 && version != 3 {
+            println!("infe box version 2 or 3 expected.");
+            return Err(AvifError::BmffParseFailed);
+        }
+
+        // TODO: check flags. ISO/IEC 23008-12:2017, Section 9.2 says:
+        // The flags field of ItemInfoEntry with version greater than or equal to 2 is specified
+        // as follows:
+        //   (flags & 1) equal to 1 indicates that the item is not intended to be a part of the
+        //   presentation. For example, when (flags & 1) is equal to 1 for an image item, the
+        //   image item should not be displayed.(flags & 1) equal to 0 indicates that the item
+        //   is intended to be a part of the presentation.
+        //
+        // See also Section 6.4.2.
+        let mut entry = ItemInfo::default();
+        if version == 2 {
+            // unsigned int(16) item_ID;
+            entry.item_id = stream.read_u16()? as u32;
+        } else {
+            // unsigned int(16) item_ID;
+            entry.item_id = stream.read_u32()?;
+        }
+        if entry.item_id == 0 {
+            println!("Invalid item id found in infe");
+            return Err(AvifError::BmffParseFailed);
+        }
+        // unsigned int(16) item_protection_index;
+        entry.item_protection_index = stream.read_u16()?;
+        // unsigned int(32) item_type;
+        entry.item_type = stream.read_string(4)?;
+
+        // TODO: libavif read vs write does not seem to match. check it out.
+        // The rust code follows libavif.
+
+        if entry.item_type == "mime" {
+            // string item_name;
+            entry.item_name = stream.read_c_string()?;
+            // string content_type;
+            entry.content_type = stream.read_c_string()?;
+        }
+        Ok(entry)
+    }
+
     fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
         let (version, _flags) = stream.read_version_and_flags()?;
         let entry_count: u32 = if version == 0 {
@@ -871,53 +901,8 @@ impl MP4Box {
                 println!("Found non infe box in iinf");
                 return Err(AvifError::BmffParseFailed);
             }
-            let (version, _flags) = stream.read_version_and_flags()?;
-            if version != 2 && version != 3 {
-                println!("infe box version 2 or 3 expected.");
-                return Err(AvifError::BmffParseFailed);
-            }
-
-            // TODO: check flags. ISO/IEC 23008-12:2017, Section 9.2 says:
-            // The flags field of ItemInfoEntry with version greater than or equal to 2 is specified
-            // as follows:
-            //   (flags & 1) equal to 1 indicates that the item is not intended to be a part of the
-            //   presentation. For example, when (flags & 1) is equal to 1 for an image item, the
-            //   image item should not be displayed.(flags & 1) equal to 0 indicates that the item
-            //   is intended to be a part of the presentation.
-            //
-            // See also Section 6.4.2.
-            let mut entry = ItemInfo::default();
-            if version == 2 {
-                // unsigned int(16) item_ID;
-                entry.item_id = stream.read_u16()? as u32;
-            } else {
-                // unsigned int(16) item_ID;
-                entry.item_id = stream.read_u32()?;
-            }
-            if entry.item_id == 0 {
-                println!("Invalid item id found in infe");
-                return Err(AvifError::BmffParseFailed);
-            }
-            // unsigned int(16) item_protection_index;
-            entry.item_protection_index = stream.read_u16()?;
-            // unsigned int(32) item_type;
-            entry.item_type = stream.read_string(4)?;
-
-            // TODO: libavif read vs write does not seem to match. check it out.
-            // The rust code follows the spec.
-
-            // utf8string item_name;
-            entry.item_name = stream.read_c_string()?;
-            if entry.item_type == "mime" {
-                // string content_type;
-                entry.content_type = stream.read_c_string()?;
-                // string content_encoding;
-                entry.content_encoding = stream.read_c_string()?;
-            } else if entry.item_type == "uri" {
-                // string item_uri_type; (skipped)
-                _ = stream.read_c_string()?;
-            }
-            iinf.push(entry);
+            let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
+            iinf.push(Self::parse_infe(&mut sub_stream)?);
         }
         println!("end of iinf, skiping {} bytes", stream.bytes_left());
         Ok(iinf)
@@ -1780,5 +1765,34 @@ impl MP4Box {
         }
         // Failed to parse a sequence header.
         Err(AvifError::BmffParseFailed)
+    }
+
+    fn parse_exif_tiff_header_offset(stream: &mut IStream) -> AvifResult<u32> {
+        const TIFF_HEADER_BE: u32 = 0x4D4D002A; // MM0*
+        const TIFF_HEADER_LE: u32 = 0x49492A00; // II*0
+        let mut expected_offset: u32 = 0;
+        let mut size = u32::try_from(stream.bytes_left()).unwrap_or(u32::MAX);
+        while size > 0 {
+            let value = stream.read_u32().or(Err(AvifError::InvalidExifPayload))?;
+            if value == TIFF_HEADER_BE || value == TIFF_HEADER_LE {
+                stream.rewind(4)?;
+                return Ok(expected_offset);
+            }
+            size -= 4;
+            expected_offset += 4;
+        }
+        // Could not find the TIFF header.
+        Err(AvifError::InvalidExifPayload)
+    }
+
+    pub fn parse_exif(stream: &mut IStream) -> AvifResult<()> {
+        // unsigned int(32) exif_tiff_header_offset;
+        let offset = stream.read_u32().or(Err(AvifError::InvalidExifPayload))?;
+        let expected_offset = Self::parse_exif_tiff_header_offset(stream)?;
+        println!("offset: {offset} expected: {expected_offset}");
+        if offset != expected_offset {
+            return Err(AvifError::InvalidExifPayload);
+        }
+        Ok(())
     }
 }

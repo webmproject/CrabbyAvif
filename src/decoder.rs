@@ -27,7 +27,8 @@ pub fn u64_from_usize(value: usize) -> AvifResult<u64> {
     u64::try_from(value).or(Err(AvifError::BmffParseFailed))
 }
 
-#[derive(Default, Debug)]
+#[derive(Derivative, Default)]
+#[derivative(Debug)]
 pub struct AvifImageInfo {
     pub width: u32,
     pub height: u32,
@@ -40,7 +41,12 @@ pub struct AvifImageInfo {
     pub alpha_present: bool,
     pub alpha_premultiplied: bool,
 
-    pub icc: u8, //Option<Vec<u8>>,
+    #[derivative(Debug = "ignore")]
+    pub exif: Vec<u8>,
+    #[derivative(Debug = "ignore")]
+    pub icc: Vec<u8>,
+    #[derivative(Debug = "ignore")]
+    pub xmp: Vec<u8>,
 
     pub color_primaries: u16,
     pub transfer_characteristics: u16,
@@ -239,7 +245,7 @@ pub enum AvifDecoderSource {
 pub struct AvifDecoderSettings {
     pub source: AvifDecoderSource,
     pub ignore_exif: bool,
-    pub ignore_icc: bool,
+    pub ignore_xmp: bool,
     pub strictness: AvifStrictness,
     pub allow_progressive: bool,
 }
@@ -335,6 +341,18 @@ impl AvifItem {
         self.extents[0].offset
     }
 
+    fn stream<'a>(&'a self, io: &'a mut Box<dyn AvifDecoderIO>) -> AvifResult<IStream> {
+        // TODO: handle multiple extents.
+        let io_data = match self.idat.is_empty() {
+            true => io.read(self.data_offset(), self.size)?,
+            false => {
+                // TODO: assumes idat offset is 0.
+                self.idat.as_slice()
+            }
+        };
+        Ok(IStream::create(io_data))
+    }
+
     fn read_and_parse(
         &self,
         io: &mut Box<dyn AvifDecoderIO>,
@@ -344,15 +362,7 @@ impl AvifItem {
         if self.item_type != "grid" {
             return Ok(());
         }
-        // TODO: handle multiple extents.
-        let io_data = match self.idat.is_empty() {
-            true => io.read(self.data_offset(), self.size)?,
-            false => {
-                // TODO: assumes idat offset is 0.
-                self.idat.as_slice()
-            }
-        };
-        let mut stream = IStream::create(io_data);
+        let mut stream = self.stream(io)?;
         // unsigned int(8) version = 0;
         let version = stream.read_u8()?;
         if version != 0 {
@@ -475,6 +485,21 @@ impl AvifItem {
             || (self.item_type != "av01" && self.item_type != "grid")
             || self.thumbnail_for_id != 0
     }
+
+    fn is_metadata(&self, item_type: &str, color_id: u32) -> bool {
+        self.size != 0
+            && !self.has_unsupported_essential_property
+            && (color_id == 0 || self.desc_for_id == color_id)
+            && self.item_type == *item_type
+    }
+
+    fn is_exif(&self, color_id: u32) -> bool {
+        self.is_metadata("Exif", color_id)
+    }
+
+    fn is_xmp(&self, color_id: u32) -> bool {
+        self.is_metadata("mime", color_id) && self.content_type == "application/rdf+xml"
+    }
 }
 
 fn find_nclx(properties: &[ItemProperty]) -> Result<&Nclx, bool> {
@@ -495,7 +520,7 @@ fn find_nclx(properties: &[ItemProperty]) -> Result<&Nclx, bool> {
     }
 }
 
-fn find_icc(properties: &[ItemProperty]) -> Result<&Icc, bool> {
+fn find_icc(properties: &[ItemProperty]) -> Result<Vec<u8>, bool> {
     let icc_properties: Vec<_> = properties
         .iter()
         .filter(|x| match x {
@@ -506,7 +531,7 @@ fn find_icc(properties: &[ItemProperty]) -> Result<&Icc, bool> {
     match icc_properties.len() {
         0 => Err(false),
         1 => match icc_properties[0] {
-            ItemProperty::ColorInformation(ColorInformation::Icc(icc)) => Ok(icc),
+            ItemProperty::ColorInformation(ColorInformation::Icc(icc)) => Ok(icc.to_vec()),
             _ => Err(false), // not reached.
         },
         _ => Err(true), // multiple icc were found.
@@ -524,8 +549,6 @@ fn find_av1C(properties: &[ItemProperty]) -> Option<&CodecConfiguration> {
     }
 }
 
-// This design is not final. It's possible to do this in the same loop where boxes are parsed. But
-// it seems a little cleaner to do this after the fact.
 fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
     let mut avif_items: HashMap<u32, AvifItem> = HashMap::new();
     for item in &meta.iinf {
@@ -685,7 +708,7 @@ struct AvifTile {
     codec_index: usize,
 }
 
-fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifTile> {
+fn create_tile_from_item(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifTile> {
     let mut tile = AvifTile {
         width: item.width,
         height: item.height,
@@ -943,6 +966,40 @@ impl AvifDecoder {
         )
     }
 
+    fn search_exif_or_xmp_metadata(&mut self, color_item_index: u32) -> AvifResult<()> {
+        if self.settings.ignore_exif && self.settings.ignore_xmp {
+            return Ok(());
+        }
+        if !self.settings.ignore_exif {
+            if let Some(exif) = self
+                .avif_items
+                .iter()
+                .find(|x| x.1.is_exif(color_item_index))
+            {
+                let mut stream = exif.1.stream(self.io.as_mut().unwrap())?;
+                MP4Box::parse_exif(&mut stream)?;
+                self.image
+                    .info
+                    .exif
+                    .extend_from_slice(stream.get_slice(stream.bytes_left())?);
+            }
+        }
+        if !self.settings.ignore_xmp {
+            if let Some(xmp) = self
+                .avif_items
+                .iter()
+                .find(|x| x.1.is_xmp(color_item_index))
+            {
+                let mut stream = xmp.1.stream(self.io.as_mut().unwrap())?;
+                self.image
+                    .info
+                    .xmp
+                    .extend_from_slice(stream.get_slice(stream.bytes_left())?);
+            }
+        }
+        Ok(())
+    }
+
     fn generate_tiles(&mut self, item_id: u32, category: usize) -> AvifResult<Vec<AvifTile>> {
         let mut tiles: Vec<AvifTile> = Vec::new();
         let item = self
@@ -962,7 +1019,7 @@ impl AvifDecoder {
                     .avif_items
                     .get_mut(grid_item_id)
                     .ok_or(AvifError::InvalidImageGrid)?;
-                let mut tile = create_tile(grid_item, self.settings.allow_progressive)?;
+                let mut tile = create_tile_from_item(grid_item, self.settings.allow_progressive)?;
                 tile.input.category = category as u8;
                 tiles.push(tile);
             }
@@ -983,7 +1040,7 @@ impl AvifDecoder {
                 .avif_items
                 .get_mut(&item_id)
                 .ok_or(AvifError::MissingImageItem)?;
-            let mut tile = create_tile(item, self.settings.allow_progressive)?;
+            let mut tile = create_tile_from_item(item, self.settings.allow_progressive)?;
             tile.input.category = category as u8;
             tiles.push(tile);
         }
@@ -1188,7 +1245,7 @@ impl AvifDecoder {
 
                 // TODO: gainmap item.
 
-                // TODO: find exif or xmp metadata.
+                self.search_exif_or_xmp_metadata(item_ids[0])?;
 
                 self.image_index = -1;
                 self.image_count = 1;
@@ -1267,8 +1324,8 @@ impl AvifDecoder {
             }
         }
         match find_icc(color_properties) {
-            Ok(_icc) => {
-                // TODO: attach icc to self.image.
+            Ok(icc) => {
+                self.image.info.icc = icc;
             }
             Err(multiple_icc_found) => {
                 if multiple_icc_found {

@@ -140,3 +140,31 @@ fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
         // assert_eq!(image.info.height, height);
     }
 }
+
+// From avifmetadatatest.cc
+#[test]
+fn decoder_parse_icc_exif_xmp() {
+    // Test case from https://github.com/AOMediaCodec/libavif/issues/1086.
+    let mut decoder = get_decoder("paris_icc_exif_xmp.avif");
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let info = res.unwrap();
+
+    assert_eq!(info.icc.len(), 596);
+    assert_eq!(info.icc[0], 0);
+    assert_eq!(info.icc[1], 0);
+    assert_eq!(info.icc[2], 2);
+    assert_eq!(info.icc[3], 84);
+
+    assert_eq!(info.exif.len(), 1126);
+    assert_eq!(info.exif[0], 73);
+    assert_eq!(info.exif[1], 73);
+    assert_eq!(info.exif[2], 42);
+    assert_eq!(info.exif[3], 0);
+
+    assert_eq!(info.xmp.len(), 3898);
+    assert_eq!(info.xmp[0], 60);
+    assert_eq!(info.xmp[1], 63);
+    assert_eq!(info.xmp[2], 120);
+    assert_eq!(info.xmp[3], 112);
+}

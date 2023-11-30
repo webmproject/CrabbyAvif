@@ -30,7 +30,7 @@ fn main() {
         let settings = AvifDecoderSettings {
             source: AvifDecoderSource::Auto,
             ignore_exif: false,
-            ignore_icc: false,
+            ignore_xmp: false,
             strictness: AvifStrictness::None,
             allow_progressive: false,
         };

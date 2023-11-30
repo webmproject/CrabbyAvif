@@ -167,11 +167,11 @@ impl IStream<'_> {
     }
 
     pub fn read_c_string(&mut self) -> AvifResult<String> {
+        self.check(1)?;
         let null_position = self.data[self.offset..]
             .iter()
             .position(|&x| x == 0)
             .ok_or(AvifError::BmffParseFailed)?;
-        self.check(null_position + 1)?;
         let range = self.offset..self.offset + null_position;
         self.offset += null_position + 1;
         String::from_utf8(self.data[range].to_vec()).or(Err(AvifError::BmffParseFailed))
@@ -197,6 +197,14 @@ impl IStream<'_> {
     pub fn skip(&mut self, size: usize) -> AvifResult<()> {
         self.check(size)?;
         self.offset += size;
+        Ok(())
+    }
+
+    pub fn rewind(&mut self, size: usize) -> AvifResult<()> {
+        self.offset = self
+            .offset
+            .checked_sub(size)
+            .ok_or(AvifError::BmffParseFailed)?;
         Ok(())
     }
 
