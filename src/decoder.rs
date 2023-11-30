@@ -552,8 +552,9 @@ fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
         avif_items.insert(avif_item.id, avif_item);
     }
     for item in &meta.iloc.items {
-        // TODO: Make sure item id exists before unwrapping.
-        let avif_item = avif_items.get_mut(&item.item_id).unwrap();
+        let avif_item = avif_items
+            .get_mut(&item.item_id)
+            .ok_or(AvifError::BmffParseFailed)?;
         if !avif_item.extents.is_empty() {
             println!("item already has extents.");
             return Err(AvifError::BmffParseFailed);
@@ -571,10 +572,11 @@ fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
         }
     }
     for association in &meta.iprp.associations {
-        // TODO: Make sure item id exists before unwrapping.
-        let avif_item = avif_items.get_mut(&association.item_id).unwrap();
+        let avif_item = avif_items
+            .get_mut(&association.item_id)
+            .ok_or(AvifError::BmffParseFailed)?;
         if avif_item.ipma_seen {
-            // TODO: ipma_seen can be a local hashmap or set here instea of being in the
+            // TODO: ipma_seen can be a local hashmap or set here instead of being in the
             // struct as it is only used for this validation.
             println!("item has duplictate ipma.");
             return Err(AvifError::BmffParseFailed);
