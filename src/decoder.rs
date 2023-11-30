@@ -23,6 +23,10 @@ pub fn usize_from_u16(value: u16) -> AvifResult<usize> {
     usize::try_from(value).or(Err(AvifError::BmffParseFailed))
 }
 
+pub fn u64_from_usize(value: usize) -> AvifResult<u64> {
+    u64::try_from(value).or(Err(AvifError::BmffParseFailed))
+}
+
 #[derive(Default, Debug)]
 pub struct AvifImageInfo {
     pub width: u32,
@@ -160,8 +164,9 @@ impl AvifImage {
         tile_index: u32,
         category: usize,
     ) -> AvifResult<()> {
-        let row_index: usize = (tile_index / tile_info.grid.columns) as usize;
-        let column_index: usize = (tile_index % tile_info.grid.columns) as usize;
+        let err = AvifError::BmffParseFailed;
+        let row_index = u64::from(tile_index / tile_info.grid.columns);
+        let column_index = u64::from(tile_index % tile_info.grid.columns);
         //println!("copying tile {tile_index} {row_index} {column_index}");
 
         let plane_range = if category == 1 { 3usize..4 } else { 0usize..3 };
@@ -176,42 +181,48 @@ impl AvifImage {
             let src_plane = src_plane.unwrap();
             let src_width_to_copy;
             // If this is the last tile column, clamp to left over width.
-            if (column_index as u32) == tile_info.grid.columns - 1 {
-                let width_so_far = (src_plane.width as u64) * (column_index as u64);
-                src_width_to_copy = self.info.width(plane_index) as u64 - width_so_far;
+            if column_index == (tile_info.grid.columns - 1).into() {
+                let width_so_far = u64::from(src_plane.width)
+                    .checked_mul(column_index)
+                    .ok_or(err)?;
+                src_width_to_copy = u64_from_usize(self.info.width(plane_index))?
+                    .checked_sub(width_so_far)
+                    .ok_or(err)?;
             } else {
-                src_width_to_copy = src_plane.width as u64;
+                src_width_to_copy = u64::from(src_plane.width);
             }
             //println!("src_width_to_copy: {src_width_to_copy}");
-            let src_byte_count = src_width_to_copy * src_plane.pixel_size as u64;
-            let dst_row_bytes = self.row_bytes[plane_index] as u64;
-            let mut dst_base_offset: u64 = 0;
-            dst_base_offset += row_index as u64 * (src_plane.height as u64 * dst_row_bytes);
-            dst_base_offset +=
-                column_index as u64 * (src_plane.width as u64 * src_plane.pixel_size as u64);
+            let src_byte_count = src_width_to_copy * u64::from(src_plane.pixel_size);
+            let dst_row_bytes = u64::from(self.row_bytes[plane_index]);
+            let dst_base_offset = (row_index * (u64::from(src_plane.height) * dst_row_bytes))
+                + (column_index * u64::from(src_plane.width * src_plane.pixel_size));
             //println!("dst base_offset: {dst_base_offset}");
 
             let src_height_to_copy;
             // If this is the last tile row, clamp to left over height.
-            if (row_index as u32) == tile_info.grid.rows - 1 {
-                let height_so_far = (src_plane.height as u64) * (row_index as u64);
-                src_height_to_copy = self.info.height(plane_index) as u64 - height_so_far;
+            if row_index == (tile_info.grid.rows - 1).into() {
+                let height_so_far = u64::from(src_plane.height)
+                    .checked_mul(row_index)
+                    .ok_or(err)?;
+                src_height_to_copy = u64_from_usize(self.info.height(plane_index))?
+                    .checked_sub(height_so_far)
+                    .ok_or(err)?;
             } else {
-                src_height_to_copy = src_plane.height as u64;
+                src_height_to_copy = u64::from(src_plane.height);
             }
 
             //println!("src_height_to_copy: {src_height_to_copy}");
             for y in 0..src_height_to_copy {
-                let src_stride_offset = y * src_plane.row_bytes as u64;
-                let dst_stride_offset = dst_base_offset + (y * dst_row_bytes);
-                let dst_end_offset = dst_stride_offset + src_byte_count;
+                let src_stride_offset = y.checked_mul(u64::from(src_plane.row_bytes)).ok_or(err)?;
+                let src_end_offset = src_stride_offset.checked_add(src_byte_count).ok_or(err)?;
+                let dst_row_offset = y.checked_mul(dst_row_bytes).ok_or(err)?;
+                let dst_stride_offset = dst_base_offset.checked_add(dst_row_offset).ok_or(err)?;
+                let dst_end_offset = dst_stride_offset.checked_add(src_byte_count).ok_or(err)?;
 
-                let src_slice1 = usize_from_u64(src_stride_offset)?;
-                let src_slice2 = usize_from_u64(src_stride_offset + src_byte_count)?;
-                let src_slice = &src_plane.data[src_slice1..src_slice2];
-                let dst_slice1 = usize_from_u64(dst_stride_offset)?;
-                let dst_slice2 = usize_from_u64(dst_end_offset)?;
-                let dst_slice = &mut self.plane_buffers[plane_index][dst_slice1..dst_slice2];
+                let src_slice = &src_plane.data
+                    [usize_from_u64(src_stride_offset)?..usize_from_u64(src_end_offset)?];
+                let dst_slice = &mut self.plane_buffers[plane_index]
+                    [usize_from_u64(dst_stride_offset)?..usize_from_u64(dst_end_offset)?];
                 dst_slice.copy_from_slice(src_slice);
             }
         }
