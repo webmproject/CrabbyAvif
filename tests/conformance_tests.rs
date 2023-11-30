@@ -116,6 +116,7 @@ fn decode_and_verify(expected_info: &ExpectedAvifImageInfo) {
     assert!(compare_files(&y4m_file, &gold_y4m_file));
     let _ = remove_file(y4m_file);
     let _ = remove_file(gold_y4m_file);
+    println!("filename: {filename}");
 }
 
 // If more files are added to this array, update the call to generate_tests macro below.
@@ -2359,8 +2360,8 @@ const EXPECTED_INFOS: [ExpectedAvifImageInfo; 172] = [
 ];
 
 macro_rules! generate_tests {
-    ($size: expr) => {
-        seq_macro::seq!(N in 0..$size {
+    ($from: expr, $to: expr) => {
+        seq_macro::seq!(N in $from..$to {
             #(#[test_case::test_case(N)])*
             fn test_conformance(index: usize) {
                 decode_and_verify(&EXPECTED_INFOS[index]);
@@ -2369,4 +2370,5 @@ macro_rules! generate_tests {
     };
 }
 
-generate_tests!(172);
+generate_tests!(0, 172);
+//generate_tests!(102, 103);

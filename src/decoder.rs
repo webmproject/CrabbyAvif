@@ -159,7 +159,7 @@ impl AvifImage {
         tile_info: &AvifTileInfo,
         tile_index: u32,
         category: usize,
-    ) {
+    ) -> AvifResult<()> {
         let row_index: usize = (tile_index / tile_info.grid.columns) as usize;
         let column_index: usize = (tile_index % tile_info.grid.columns) as usize;
         //println!("copying tile {tile_index} {row_index} {column_index}");
@@ -177,49 +177,45 @@ impl AvifImage {
             let src_width_to_copy;
             // If this is the last tile column, clamp to left over width.
             if (column_index as u32) == tile_info.grid.columns - 1 {
-                let width_so_far = src_plane.width * (column_index as u32);
-                src_width_to_copy = self.info.width(plane_index) as u32 - width_so_far;
+                let width_so_far = (src_plane.width as u64) * (column_index as u64);
+                src_width_to_copy = self.info.width(plane_index) as u64 - width_so_far;
             } else {
-                src_width_to_copy = src_plane.width;
+                src_width_to_copy = src_plane.width as u64;
             }
             //println!("src_width_to_copy: {src_width_to_copy}");
-            let src_byte_count: usize = (src_width_to_copy * src_plane.pixel_size)
-                .try_into()
-                .unwrap();
-            let dst_row_bytes = self.row_bytes[plane_index];
-            let mut dst_base_offset: usize = 0;
-            dst_base_offset += row_index * ((src_plane.height * dst_row_bytes) as usize);
-            dst_base_offset += column_index * ((src_plane.width * src_plane.pixel_size) as usize);
+            let src_byte_count = src_width_to_copy * src_plane.pixel_size as u64;
+            let dst_row_bytes = self.row_bytes[plane_index] as u64;
+            let mut dst_base_offset: u64 = 0;
+            dst_base_offset += row_index as u64 * (src_plane.height as u64 * dst_row_bytes);
+            dst_base_offset +=
+                column_index as u64 * (src_plane.width as u64 * src_plane.pixel_size as u64);
             //println!("dst base_offset: {dst_base_offset}");
 
             let src_height_to_copy;
             // If this is the last tile row, clamp to left over height.
             if (row_index as u32) == tile_info.grid.rows - 1 {
-                let height_so_far = src_plane.height * (row_index as u32);
-                src_height_to_copy = self.info.height(plane_index) as u32 - height_so_far;
+                let height_so_far = (src_plane.height as u64) * (row_index as u64);
+                src_height_to_copy = self.info.height(plane_index) as u64 - height_so_far;
             } else {
-                src_height_to_copy = src_plane.height;
+                src_height_to_copy = src_plane.height as u64;
             }
 
             //println!("src_height_to_copy: {src_height_to_copy}");
             for y in 0..src_height_to_copy {
-                let src_stride_offset: usize = (y * src_plane.row_bytes).try_into().unwrap();
-                let pixels = &src_plane.data[src_stride_offset..src_stride_offset + src_byte_count];
-                let dst_stride_offset: usize = dst_base_offset + ((y * dst_row_bytes) as usize);
-                let dst_end_offset: usize = dst_stride_offset + src_byte_count;
+                let src_stride_offset = y * src_plane.row_bytes as u64;
+                let dst_stride_offset = dst_base_offset + (y * dst_row_bytes);
+                let dst_end_offset = dst_stride_offset + src_byte_count;
 
-                let dst_slice =
-                    &mut self.plane_buffers[plane_index][dst_stride_offset..dst_end_offset];
-                // if y == 0 {
-                //     println!(
-                //         "src slice len: {} dst_slice_len: {}",
-                //         pixels.len(),
-                //         dst_slice.len()
-                //     );
-                // }
-                dst_slice.copy_from_slice(pixels);
+                let src_slice1 = usize_from_u64(src_stride_offset)?;
+                let src_slice2 = usize_from_u64(src_stride_offset + src_byte_count)?;
+                let src_slice = &src_plane.data[src_slice1..src_slice2];
+                let dst_slice1 = usize_from_u64(dst_stride_offset)?;
+                let dst_slice2 = usize_from_u64(dst_end_offset)?;
+                let dst_slice = &mut self.plane_buffers[plane_index][dst_slice1..dst_slice2];
+                dst_slice.copy_from_slice(src_slice);
             }
         }
+        Ok(())
     }
 }
 
@@ -1497,7 +1493,7 @@ impl AvifDecoder {
                         &self.tile_info[category],
                         tile_index as u32,
                         category,
-                    );
+                    )?;
                 } else {
                     // Non grid path, steal planes from the only tile.
                     if category == 0 {
