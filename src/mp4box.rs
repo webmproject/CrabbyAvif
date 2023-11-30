@@ -823,7 +823,6 @@ impl MP4Box {
                     property_index <<= 8;
                     property_index |= property_index_lsb;
                 }
-                // TODO: verify the correctness of essential.
                 entry.associations.push((property_index, essential));
             }
             ipma.push(entry);
