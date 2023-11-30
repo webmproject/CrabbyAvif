@@ -15,6 +15,10 @@ pub fn usize_from_u64(value: u64) -> AvifResult<usize> {
     usize::try_from(value).or(Err(AvifError::BmffParseFailed))
 }
 
+pub fn usize_from_u16(value: u16) -> AvifResult<usize> {
+    usize::try_from(value).or(Err(AvifError::BmffParseFailed))
+}
+
 #[derive(Default, Debug)]
 pub struct AvifImageInfo {
     pub width: u32,
@@ -566,13 +570,15 @@ fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
         if item.construction_method == 1 {
             avif_item.idat = meta.idat.clone();
         }
-        // TODO: handle overflows in the addition below.
         for extent in &item.extents {
             avif_item.extents.push(ItemLocationExtent {
                 offset: item.base_offset + extent.offset,
                 length: extent.length,
             });
-            avif_item.size += extent.length as usize;
+            avif_item.size = avif_item
+                .size
+                .checked_add(usize_from_u64(extent.length)?)
+                .ok_or(AvifError::BmffParseFailed)?;
         }
     }
     let mut ipma_seen: HashSet<u32> = HashSet::new();
@@ -707,7 +713,7 @@ fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifT
     tile.operating_point = item.operating_point();
     tile.image = AvifImage::default();
     let mut layer_sizes: [usize; 4] = [0; 4];
-    let mut layer_count = 0;
+    let mut layer_count: usize = 0;
     let a1lx = item.a1lx();
     let has_a1lx = a1lx.is_some();
     if a1lx.is_some() {
@@ -747,7 +753,7 @@ fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifT
         // this appears to be a single frame.
         tile.input.all_layers = true;
         let mut sample_size: usize = 0;
-        let layer_id = lsel.unwrap();
+        let layer_id = usize_from_u16(lsel.unwrap())?;
         if layer_count > 0 {
             // TODO: test this with a case?
             if true {
@@ -760,8 +766,8 @@ fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifT
                 println!("lsel layer index not found in a1lx.");
                 return Err(AvifError::InvalidImageGrid);
             }
-            let layer_id_plus_1: usize = (layer_id + 1) as usize;
-            for i in 0usize..layer_id_plus_1 {
+            let layer_id_plus_1 = layer_id.checked_add(1).ok_or(AvifError::BmffParseFailed)?;
+            for i in 0..layer_id_plus_1 {
                 sample_size += layer_sizes[i];
             }
         } else {
@@ -785,7 +791,7 @@ fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifT
 
         tile.input.all_layers = true;
         let mut offset = 0;
-        for i in 0usize..layer_count as usize {
+        for i in 0..layer_count {
             let sample = AvifDecodeSample {
                 item_id: item.id,
                 offset,
