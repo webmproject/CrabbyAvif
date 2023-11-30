@@ -15,6 +15,10 @@ pub fn usize_from_u64(value: u64) -> AvifResult<usize> {
     usize::try_from(value).or(Err(AvifError::BmffParseFailed))
 }
 
+pub fn usize_from_u32(value: u32) -> AvifResult<usize> {
+    usize::try_from(value).or(Err(AvifError::BmffParseFailed))
+}
+
 pub fn usize_from_u16(value: u16) -> AvifResult<usize> {
     usize::try_from(value).or(Err(AvifError::BmffParseFailed))
 }
@@ -829,7 +833,7 @@ fn create_tile_from_track(track: &AvifTrack) -> AvifResult<AvifTile> {
 
     // TODO: implement the imagecount check in avifCodecDecodeInputFillFromSampleTable.
 
-    let mut sample_size_index = 0;
+    let mut sample_size_index: usize = 0;
     let sample_table = &track.sample_table.as_ref().unwrap();
     for (chunk_index, chunk_offset) in sample_table.chunk_offsets.iter().enumerate() {
         // Figure out how many samples are in this chunk.
@@ -841,18 +845,11 @@ fn create_tile_from_track(track: &AvifTrack) -> AvifResult<AvifTile> {
 
         let mut sample_offset = *chunk_offset;
         for _ in 0..sample_count {
-            let mut sample_size = sample_table.all_samples_size;
-            if sample_size == 0 {
-                if sample_size_index >= sample_table.sample_sizes.len() {
-                    println!("not enough sampel sizes in the table");
-                    return Err(AvifError::BmffParseFailed);
-                }
-                sample_size = sample_table.sample_sizes[sample_size_index];
-            }
+            let sample_size = sample_table.sample_size(sample_size_index)?;
             let sample = AvifDecodeSample {
                 item_id: 0,
                 offset: sample_offset,
-                size: sample_size as usize,
+                size: sample_size,
                 // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel
                 // value for "do not filter by spatial_id"
                 spatial_id: 0xff,
@@ -861,8 +858,9 @@ fn create_tile_from_track(track: &AvifTrack) -> AvifResult<AvifTile> {
                 data_buffer: None,
             };
             tile.input.samples.push(sample);
-            // TODO: verify if sample size math can be done here.
-            sample_offset += sample_size as u64;
+            sample_offset = sample_offset
+                .checked_add(sample_size as u64)
+                .ok_or(AvifError::BmffParseFailed)?;
             sample_size_index += 1;
         }
     }

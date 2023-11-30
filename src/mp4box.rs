@@ -1,3 +1,4 @@
+use crate::decoder::usize_from_u32;
 use crate::decoder::usize_from_u64;
 use crate::io::*;
 use crate::stream::*;
@@ -298,6 +299,17 @@ impl SampleTable {
                 .find(|x| x.format == "av01")?
                 .properties,
         )
+    }
+
+    pub fn sample_size(&self, index: usize) -> AvifResult<usize> {
+        if self.all_samples_size > 0 {
+            return usize_from_u32(self.all_samples_size);
+        }
+        if index >= self.sample_sizes.len() {
+            println!("not enough sampel sizes in the table");
+            return Err(AvifError::BmffParseFailed);
+        }
+        usize_from_u32(self.sample_sizes[index])
     }
 }
 
