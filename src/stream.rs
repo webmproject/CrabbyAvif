@@ -22,7 +22,7 @@ impl IBitStream<'_> {
         //     self.bit_offset - 1,
         //     (byte >> shift) & 0x01
         // );
-        Ok(((byte >> shift) & 0x01) as u8)
+        Ok((byte >> shift) & 0x01)
     }
 
     pub fn read(&mut self, n: usize) -> AvifResult<u32> {

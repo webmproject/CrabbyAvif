@@ -20,7 +20,7 @@ unsafe extern "C" fn avif_dav1d_free_callback(
 
 fn dav1d_error(err: u32) -> i32 {
     let e: i32 = err.try_into().unwrap();
-    -1i32 * e
+    -e
 }
 
 impl Dav1d {

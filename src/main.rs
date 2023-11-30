@@ -83,7 +83,7 @@ fn main() {
     }
     if args.len() == 3 {
         if image_count <= 1 {
-            let ffmpeg_infile = format!("{}", args[2]);
+            let ffmpeg_infile = args[2].to_string();
             let ffmpeg_outfile = format!("{}.png", args[2]);
             let ffmpeg = Command::new("ffmpeg")
                 .arg("-i")
@@ -100,7 +100,7 @@ fn main() {
             }
             println!("wrote {}.png", args[2]);
         } else {
-            let ffmpeg_infile = format!("{}", args[2]);
+            let ffmpeg_infile = args[2].to_string();
             let ffmpeg_outfile = format!("{}.gif", args[2]);
             let ffmpeg = Command::new("ffmpeg")
                 .arg("-i")

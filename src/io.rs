@@ -42,23 +42,24 @@ impl AvifDecoderIO for AvifDecoderFileIO {
                 self.buffer.reserve(size_to_read);
             }
             self.buffer.resize(size_to_read, 0);
-            if let Err(_) = self
+            if self
                 .file
                 .as_ref()
                 .unwrap()
                 .read_exact_at(self.buffer.as_mut_slice(), offset)
+                .is_err()
             {
                 return Err(AvifError::IoError);
             }
         } else {
-            self.buffer.resize(0, 0);
+            self.buffer.clear();
         }
         Ok(self.buffer.as_slice())
     }
 
     fn size_hint(&self) -> u64 {
         let metadata = self.file.as_ref().unwrap().metadata();
-        if !metadata.is_ok() {
+        if metadata.is_err() {
             return 0;
         }
         metadata.unwrap().len()

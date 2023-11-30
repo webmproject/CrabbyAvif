@@ -115,9 +115,7 @@ pub struct AvifPlane<'a> {
 impl AvifImage {
     pub fn plane(&self, plane: usize) -> Option<AvifPlane> {
         assert!(plane < 4);
-        if self.planes[plane].is_none() {
-            return None;
-        }
+        self.planes[plane]?;
         let pixel_size = if self.info.depth == 8 { 1 } else { 2 };
         let height = self.info.height(plane);
         let row_bytes = self.row_bytes[plane] as usize;
@@ -179,18 +177,17 @@ impl AvifImage {
                 continue;
             }
             let src_plane = src_plane.unwrap();
-            let src_width_to_copy;
             // If this is the last tile column, clamp to left over width.
-            if column_index == (tile_info.grid.columns - 1).into() {
+            let src_width_to_copy = if column_index == (tile_info.grid.columns - 1).into() {
                 let width_so_far = u64::from(src_plane.width)
                     .checked_mul(column_index)
                     .ok_or(err)?;
-                src_width_to_copy = u64_from_usize(self.info.width(plane_index))?
+                u64_from_usize(self.info.width(plane_index))?
                     .checked_sub(width_so_far)
-                    .ok_or(err)?;
+                    .ok_or(err)?
             } else {
-                src_width_to_copy = u64::from(src_plane.width);
-            }
+                u64::from(src_plane.width)
+            };
             //println!("src_width_to_copy: {src_width_to_copy}");
             let src_byte_count = src_width_to_copy * u64::from(src_plane.pixel_size);
             let dst_row_bytes = u64::from(self.row_bytes[plane_index]);
@@ -198,18 +195,17 @@ impl AvifImage {
                 + (column_index * u64::from(src_plane.width * src_plane.pixel_size));
             //println!("dst base_offset: {dst_base_offset}");
 
-            let src_height_to_copy;
             // If this is the last tile row, clamp to left over height.
-            if row_index == (tile_info.grid.rows - 1).into() {
+            let src_height_to_copy = if row_index == (tile_info.grid.rows - 1).into() {
                 let height_so_far = u64::from(src_plane.height)
                     .checked_mul(row_index)
                     .ok_or(err)?;
-                src_height_to_copy = u64_from_usize(self.info.height(plane_index))?
+                u64_from_usize(self.info.height(plane_index))?
                     .checked_sub(height_so_far)
-                    .ok_or(err)?;
+                    .ok_or(err)?
             } else {
-                src_height_to_copy = u64::from(src_plane.height);
-            }
+                u64::from(src_plane.height)
+            };
 
             //println!("src_height_to_copy: {src_height_to_copy}");
             for y in 0..src_height_to_copy {
@@ -254,12 +250,10 @@ impl AvifStrictness {
             AvifStrictness::All => true,
             AvifStrictness::SpecificInclude(flags) => flags
                 .iter()
-                .find(|x| matches!(x, AvifStrictnessFlag::AlphaIspeRequired))
-                .is_some(),
-            AvifStrictness::SpecificExclude(flags) => flags
+                .any(|x| matches!(x, AvifStrictnessFlag::AlphaIspeRequired)),
+            AvifStrictness::SpecificExclude(flags) => !flags
                 .iter()
-                .find(|x| matches!(x, AvifStrictnessFlag::AlphaIspeRequired))
-                .is_none(),
+                .any(|x| matches!(x, AvifStrictnessFlag::AlphaIspeRequired)),
             _ => false,
         }
     }
@@ -309,6 +303,7 @@ struct AvifItem {
     size: usize,
     width: u32,
     height: u32,
+    #[allow(unused)]
     content_type: String,
     properties: Vec<ItemProperty>,
     extents: Vec<ItemLocationExtent>,
@@ -337,7 +332,7 @@ macro_rules! find_property {
 
 impl AvifItem {
     fn data_offset(&self) -> u64 {
-        self.extents[0].offset as u64
+        self.extents[0].offset
     }
 
     fn read_and_parse(
@@ -394,11 +389,8 @@ impl AvifItem {
 
     fn operating_point(&self) -> u8 {
         match find_property!(self, OperatingPointSelector) {
-            Some(a1op) => match a1op {
-                ItemProperty::OperatingPointSelector(operating_point) => *operating_point,
-                _ => 0, // not reached.
-            },
-            None => 0, // default operating point.
+            Some(ItemProperty::OperatingPointSelector(operating_point)) => *operating_point,
+            _ => 0, // default operating point.
         }
     }
 
@@ -447,45 +439,33 @@ impl AvifItem {
     #[allow(non_snake_case)]
     fn av1C(&self) -> Option<&CodecConfiguration> {
         match find_property!(self, CodecConfiguration) {
-            Some(property) => match property {
-                ItemProperty::CodecConfiguration(av1C) => Some(&av1C),
-                _ => None, // not reached.
-            },
-            None => None,
+            Some(ItemProperty::CodecConfiguration(av1C)) => Some(av1C),
+            _ => None,
         }
     }
 
     fn a1lx(&self) -> Option<&[usize; 3]> {
         match find_property!(self, AV1LayeredImageIndexing) {
-            Some(property) => match property {
-                ItemProperty::AV1LayeredImageIndexing(a1lx) => Some(&a1lx),
-                _ => None, // not reached.
-            },
-            None => None,
+            Some(ItemProperty::AV1LayeredImageIndexing(a1lx)) => Some(a1lx),
+            _ => None,
         }
     }
 
     fn lsel(&self) -> Option<u16> {
         match find_property!(self, LayerSelector) {
-            Some(property) => match property {
-                ItemProperty::LayerSelector(lsel) => Some(*lsel),
-                _ => None, // not reached.
-            },
-            None => None,
+            Some(ItemProperty::LayerSelector(lsel)) => Some(*lsel),
+            _ => None,
         }
     }
 
     #[allow(non_snake_case)]
     fn is_auxiliary_alpha(&self) -> bool {
         match find_property!(self, AuxiliaryType) {
-            Some(auxC) => match auxC {
-                ItemProperty::AuxiliaryType(aux_type) => {
-                    aux_type == "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha"
-                        || aux_type == "urn:mpeg:hevc:2015:auxid:1"
-                }
-                _ => false, // not reached.
-            },
-            None => false,
+            Some(ItemProperty::AuxiliaryType(aux_type)) => {
+                aux_type == "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha"
+                    || aux_type == "urn:mpeg:hevc:2015:auxid:1"
+            }
+            _ => false,
         }
     }
 
@@ -497,48 +477,36 @@ impl AvifItem {
     }
 }
 
-fn find_nclx(properties: &Vec<ItemProperty>) -> Result<&Nclx, bool> {
+fn find_nclx(properties: &[ItemProperty]) -> Result<&Nclx, bool> {
     let nclx_properties: Vec<_> = properties
         .iter()
         .filter(|x| match x {
-            ItemProperty::ColorInformation(colr) => match colr {
-                ColorInformation::Nclx(_) => true,
-                _ => false,
-            },
+            ItemProperty::ColorInformation(colr) => matches!(colr, ColorInformation::Nclx(_)),
             _ => false,
         })
         .collect();
     match nclx_properties.len() {
         0 => Err(false),
         1 => match nclx_properties[0] {
-            ItemProperty::ColorInformation(colr) => match colr {
-                ColorInformation::Nclx(nclx) => Ok(&nclx),
-                _ => Err(false), // not reached.
-            },
+            ItemProperty::ColorInformation(ColorInformation::Nclx(nclx)) => Ok(nclx),
             _ => Err(false), // not reached.
         },
         _ => Err(true), // multiple nclx were found.
     }
 }
 
-fn find_icc(properties: &Vec<ItemProperty>) -> Result<&Icc, bool> {
+fn find_icc(properties: &[ItemProperty]) -> Result<&Icc, bool> {
     let icc_properties: Vec<_> = properties
         .iter()
         .filter(|x| match x {
-            ItemProperty::ColorInformation(colr) => match colr {
-                ColorInformation::Icc(_) => true,
-                _ => false,
-            },
+            ItemProperty::ColorInformation(colr) => matches!(colr, ColorInformation::Icc(_)),
             _ => false,
         })
         .collect();
     match icc_properties.len() {
         0 => Err(false),
         1 => match icc_properties[0] {
-            ItemProperty::ColorInformation(colr) => match colr {
-                ColorInformation::Icc(icc) => Ok(&icc),
-                _ => Err(false), // not reached.
-            },
+            ItemProperty::ColorInformation(ColorInformation::Icc(icc)) => Ok(icc),
             _ => Err(false), // not reached.
         },
         _ => Err(true), // multiple icc were found.
@@ -546,16 +514,13 @@ fn find_icc(properties: &Vec<ItemProperty>) -> Result<&Icc, bool> {
 }
 
 #[allow(non_snake_case)]
-fn find_av1C(properties: &Vec<ItemProperty>) -> Option<&CodecConfiguration> {
+fn find_av1C(properties: &[ItemProperty]) -> Option<&CodecConfiguration> {
     match properties
         .iter()
         .find(|x| matches!(x, ItemProperty::CodecConfiguration(_)))
     {
-        Some(property) => match property {
-            ItemProperty::CodecConfiguration(av1C) => Some(&av1C),
-            _ => None, // not reached.
-        },
-        None => None,
+        Some(ItemProperty::CodecConfiguration(av1C)) => Some(av1C),
+        _ => None,
     }
 }
 
@@ -564,11 +529,15 @@ fn find_av1C(properties: &Vec<ItemProperty>) -> Option<&CodecConfiguration> {
 fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
     let mut avif_items: HashMap<u32, AvifItem> = HashMap::new();
     for item in &meta.iinf {
-        let mut avif_item: AvifItem = Default::default();
-        avif_item.id = item.item_id;
-        avif_item.item_type = item.item_type.clone();
-        avif_item.content_type = item.content_type.clone();
-        avif_items.insert(avif_item.id, avif_item);
+        avif_items.insert(
+            item.item_id,
+            AvifItem {
+                id: item.item_id,
+                item_type: item.item_type.clone(),
+                content_type: item.content_type.clone(),
+                ..AvifItem::default()
+            },
+        );
     }
     for item in &meta.iloc.items {
         let avif_item = avif_items
@@ -615,30 +584,27 @@ fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
             }
             // property_index is 1-indexed.
             let property = meta.iprp.properties[property_index - 1].clone();
-            let is_supported_property = match property {
+            let is_supported_property = matches!(
+                property,
                 ItemProperty::ImageSpatialExtents(_)
-                | ItemProperty::ColorInformation(_)
-                | ItemProperty::CodecConfiguration(_)
-                | ItemProperty::PixelInformation(_)
-                | ItemProperty::PixelAspectRatio(_)
-                | ItemProperty::AuxiliaryType(_)
-                | ItemProperty::ClearAperture(_)
-                | ItemProperty::ImageRotation(_)
-                | ItemProperty::ImageMirror(_)
-                | ItemProperty::OperatingPointSelector(_)
-                | ItemProperty::LayerSelector(_)
-                | ItemProperty::AV1LayeredImageIndexing(_)
-                | ItemProperty::ContentLightLevelInformation(_) => true,
-                _ => false,
-            };
+                    | ItemProperty::ColorInformation(_)
+                    | ItemProperty::CodecConfiguration(_)
+                    | ItemProperty::PixelInformation(_)
+                    | ItemProperty::PixelAspectRatio(_)
+                    | ItemProperty::AuxiliaryType(_)
+                    | ItemProperty::ClearAperture(_)
+                    | ItemProperty::ImageRotation(_)
+                    | ItemProperty::ImageMirror(_)
+                    | ItemProperty::OperatingPointSelector(_)
+                    | ItemProperty::LayerSelector(_)
+                    | ItemProperty::AV1LayeredImageIndexing(_)
+                    | ItemProperty::ContentLightLevelInformation(_)
+            );
             if is_supported_property {
                 if essential {
-                    match property {
-                        ItemProperty::AV1LayeredImageIndexing(_) => {
-                            println!("invalid essential property.");
-                            return Err(AvifError::BmffParseFailed);
-                        }
-                        _ => {}
+                    if let ItemProperty::AV1LayeredImageIndexing(_) = property {
+                        println!("invalid essential property.");
+                        return Err(AvifError::BmffParseFailed);
                     }
                 } else {
                     match property {
@@ -694,7 +660,7 @@ struct AvifDecodeSample {
 impl AvifDecodeSample {
     pub fn data<'a>(&'a self, io: &'a mut Box<impl AvifDecoderIO + ?Sized>) -> AvifResult<&[u8]> {
         match &self.data_buffer {
-            Some(data_buffer) => Ok(&data_buffer),
+            Some(data_buffer) => Ok(data_buffer),
             None => io.read(self.offset, self.size),
         }
     }
@@ -709,7 +675,9 @@ struct AvifDecodeInput {
 
 #[derive(Debug, Default)]
 struct AvifTile {
+    #[allow(unused)]
     width: u32,
+    #[allow(unused)]
     height: u32,
     operating_point: u8,
     image: AvifImage,
@@ -718,17 +686,18 @@ struct AvifTile {
 }
 
 fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifTile> {
-    let mut tile = AvifTile::default();
-    tile.width = item.width;
-    tile.height = item.height;
-    tile.operating_point = item.operating_point();
-    tile.image = AvifImage::default();
+    let mut tile = AvifTile {
+        width: item.width,
+        height: item.height,
+        operating_point: item.operating_point(),
+        image: AvifImage::default(),
+        ..AvifTile::default()
+    };
     let mut layer_sizes: [usize; 4] = [0; 4];
     let mut layer_count: usize = 0;
     let a1lx = item.a1lx();
     let has_a1lx = a1lx.is_some();
-    if a1lx.is_some() {
-        let a1lx = a1lx.unwrap();
+    if let Some(a1lx) = a1lx {
         println!("item size: {} a1lx: {:#?}", item.size, a1lx);
         let mut remaining_size: usize = item.size;
         for i in 0usize..3 {
@@ -754,17 +723,28 @@ fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifT
         }
         println!("layer count: {layer_count} layer_sizes: {:#?}", layer_sizes);
     }
-    let lsel = item.lsel();
+    let lsel;
+    let has_lsel;
+    match item.lsel() {
+        Some(x) => {
+            lsel = x;
+            has_lsel = true;
+        }
+        None => {
+            lsel = 0;
+            has_lsel = false;
+        }
+    }
     // Progressive images offer layers via the a1lxProp, but don't specify a
     // layer selection with lsel.
-    item.progressive = has_a1lx && (lsel.is_none() || lsel.unwrap() == 0xFFFF);
-    if lsel.is_some() && lsel.unwrap() != 0xFFFF {
+    item.progressive = has_a1lx && (!has_lsel || lsel == 0xFFFF);
+    if has_lsel && lsel != 0xFFFF {
         // Layer selection. This requires that the underlying AV1 codec decodes all layers,
         // and then only returns the requested layer as a single frame. To the user of libavif,
         // this appears to be a single frame.
         tile.input.all_layers = true;
         let mut sample_size: usize = 0;
-        let layer_id = usize_from_u16(lsel.unwrap())?;
+        let layer_id = usize_from_u16(lsel)?;
         if layer_count > 0 {
             // TODO: test this with a case?
             if true {
@@ -778,8 +758,8 @@ fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifT
                 return Err(AvifError::InvalidImageGrid);
             }
             let layer_id_plus_1 = layer_id.checked_add(1).ok_or(AvifError::BmffParseFailed)?;
-            for i in 0..layer_id_plus_1 {
-                sample_size += layer_sizes[i];
+            for layer_size in layer_sizes.iter().take(layer_id_plus_1) {
+                sample_size += layer_size;
             }
         } else {
             // This layer payload subsection is not known. Use the whole payload.
@@ -789,7 +769,7 @@ fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifT
             item_id: item.id,
             offset: 0,
             size: sample_size,
-            spatial_id: lsel.unwrap() as u8,
+            spatial_id: lsel as u8,
             sync: true,
             data_buffer: None,
         };
@@ -802,17 +782,17 @@ fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifT
 
         tile.input.all_layers = true;
         let mut offset = 0;
-        for i in 0..layer_count {
+        for (i, layer_size) in layer_sizes.iter().take(layer_count).enumerate() {
             let sample = AvifDecodeSample {
                 item_id: item.id,
                 offset,
-                size: layer_sizes[i],
+                size: *layer_size,
                 spatial_id: 0xff,
                 sync: i == 0, // Assume all layers depend on the first layer.
                 data_buffer: None,
             };
             tile.input.samples.push(sample);
-            offset += layer_sizes[i] as u64;
+            offset += *layer_size as u64;
         }
         println!("input samples: {:#?}", tile.input.samples);
     } else {
@@ -833,10 +813,12 @@ fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifT
 }
 
 fn create_tile_from_track(track: &AvifTrack) -> AvifResult<AvifTile> {
-    let mut tile = AvifTile::default();
-    tile.width = track.width;
-    tile.height = track.height;
-    tile.operating_point = 0; // No way to set operating point via tracks
+    let mut tile = AvifTile {
+        width: track.width,
+        height: track.height,
+        operating_point: 0, // No way to set operating point via tracks
+        ..AvifTile::default()
+    };
 
     // TODO: implement the imagecount check in avifCodecDecodeInputFillFromSampleTable.
 
@@ -921,12 +903,11 @@ impl AvifDecoder {
 
     fn find_alpha_item(&self, color_item_index: u32) -> (u32, Option<AvifItem>) {
         let color_item = self.avif_items.get(&color_item_index).unwrap();
-        match self.avif_items.iter().find(|x| {
+        if let Some(item) = self.avif_items.iter().find(|x| {
             !x.1.should_skip() && x.1.aux_for_id == color_item.id && x.1.is_auxiliary_alpha()
         }) {
-            Some(item) => return (*item.0, None),
-            None => {} // Do nothing.
-        };
+            return (*item.0, None);
+        }
         if color_item.item_type != "grid" || color_item.grid_item_ids.is_empty() {
             return (0, None);
         }
@@ -1097,10 +1078,10 @@ impl AvifDecoder {
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
         }
-        let avif_boxes = MP4Box::parse(&mut self.io.as_mut().unwrap())?;
+        let avif_boxes = MP4Box::parse(self.io.as_mut().unwrap())?;
         self.tracks = avif_boxes.tracks;
         self.avif_items = construct_avif_items(&avif_boxes.meta)?;
-        for (_id, item) in &mut self.avif_items {
+        for item in self.avif_items.values_mut() {
             item.harvest_ispe(self.settings.strictness.alpha_ispe_required())?;
         }
         self.image.info.image_sequence_track_present = !self.tracks.is_empty();
@@ -1137,19 +1118,15 @@ impl AvifDecoder {
 
                 // TODO: exif/xmp from meta.
 
-                self.tiles[0].push(create_tile_from_track(&color_track)?);
+                self.tiles[0].push(create_tile_from_track(color_track)?);
                 self.tile_info[0].tile_count = 1;
 
-                match self.tracks.iter().find(|x| x.is_aux(color_track.id)) {
-                    Some(alpha_track) => {
-                        self.tiles[1].push(create_tile_from_track(alpha_track)?);
-                        //println!("alpha_tile: {:#?}", self.tiles[1]);
-                        self.tile_info[1].tile_count = 1;
-                        self.image.info.alpha_present = true;
-                        self.image.info.alpha_premultiplied =
-                            color_track.prem_by_id == alpha_track.id;
-                    }
-                    None => {}
+                if let Some(alpha_track) = self.tracks.iter().find(|x| x.is_aux(color_track.id)) {
+                    self.tiles[1].push(create_tile_from_track(alpha_track)?);
+                    //println!("alpha_tile: {:#?}", self.tiles[1]);
+                    self.tile_info[1].tile_count = 1;
+                    self.image.info.alpha_present = true;
+                    self.image.info.alpha_premultiplied = color_track.prem_by_id == alpha_track.id;
                 }
 
                 self.image_index = -1;
@@ -1224,7 +1201,7 @@ impl AvifDecoder {
                         continue;
                     }
                     {
-                        let item = self.avif_items.get(&item_id).unwrap();
+                        let item = self.avif_items.get(item_id).unwrap();
                         if index == 1 && item.width == 0 && item.height == 0 {
                             // NON-STANDARD: Alpha subimage does not have an ispe
                             // property; adopt width/height from color item.
@@ -1309,14 +1286,12 @@ impl AvifDecoder {
         self.image.info.depth = av1C.depth();
         self.image.info.yuv_format = if av1C.monochrome {
             PixelFormat::Monochrome
+        } else if av1C.chroma_subsampling_x == 1 && av1C.chroma_subsampling_y == 1 {
+            PixelFormat::Yuv420
+        } else if av1C.chroma_subsampling_x == 1 {
+            PixelFormat::Yuv422
         } else {
-            if av1C.chroma_subsampling_x == 1 && av1C.chroma_subsampling_y == 1 {
-                PixelFormat::Yuv420
-            } else if av1C.chroma_subsampling_x == 1 {
-                PixelFormat::Yuv422
-            } else {
-                PixelFormat::Yuv444
-            }
+            PixelFormat::Yuv444
         };
         self.image.info.chroma_sample_position = av1C.chroma_sample_position;
 
@@ -1333,8 +1308,8 @@ impl AvifDecoder {
             return Ok(());
         }
         self.avif_items.get(&item_id).unwrap().read_and_parse(
-            &mut self.io.as_mut().unwrap(),
-            &mut self.tile_info[category as usize].grid,
+            self.io.as_mut().unwrap(),
+            &mut self.tile_info[category].grid,
         )
     }
 
@@ -1396,24 +1371,22 @@ impl AvifDecoder {
                 )?;
                 self.tiles[1][0].codec_index = 1;
             }
-        } else {
-            if self.can_use_single_codec() {
-                self.create_codec(
-                    self.tiles[0][0].operating_point,
-                    self.tiles[0][0].input.all_layers,
-                )?;
-                for tiles in &mut self.tiles {
-                    for tile in tiles {
-                        tile.codec_index = 0;
-                    }
+        } else if self.can_use_single_codec() {
+            self.create_codec(
+                self.tiles[0][0].operating_point,
+                self.tiles[0][0].input.all_layers,
+            )?;
+            for tiles in &mut self.tiles {
+                for tile in tiles {
+                    tile.codec_index = 0;
                 }
-            } else {
-                for category in 0usize..3 {
-                    for tile_index in 0..self.tiles[category].len() {
-                        let tile = &self.tiles[category][tile_index];
-                        self.create_codec(tile.operating_point, tile.input.all_layers)?;
-                        self.tiles[category][tile_index].codec_index = self.codecs.len() - 1;
-                    }
+            }
+        } else {
+            for category in 0usize..3 {
+                for tile_index in 0..self.tiles[category].len() {
+                    let tile = &self.tiles[category][tile_index];
+                    self.create_codec(tile.operating_point, tile.input.all_layers)?;
+                    self.tiles[category][tile_index].codec_index = self.codecs.len() - 1;
                 }
             }
         }
@@ -1544,9 +1517,6 @@ impl AvifDecoder {
     }
 
     pub fn peek_compatible_file_type(data: &[u8]) -> bool {
-        match MP4Box::peek_compatible_file_type(data) {
-            Ok(x) => x,
-            Err(_) => false,
-        }
+        MP4Box::peek_compatible_file_type(data).unwrap_or(false)
     }
 }

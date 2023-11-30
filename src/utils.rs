@@ -12,9 +12,9 @@ pub struct Y4MWriter {
 }
 
 impl Y4MWriter {
-    pub fn create(filename: &String) -> Self {
+    pub fn create(filename: &str) -> Self {
         Self {
-            filename: Some(filename.clone()),
+            filename: Some(filename.to_owned()),
             ..Self::default()
         }
     }
@@ -81,15 +81,20 @@ impl Y4MWriter {
         println!("{header}");
         if self.file.is_none() {
             assert!(self.filename.is_some());
-            let file = File::create(&self.filename.as_ref().unwrap());
-            if !file.is_ok() {
+            let file = File::create(self.filename.as_ref().unwrap());
+            if file.is_err() {
                 return false;
             }
             self.file = Some(file.unwrap());
         }
-        match self.file.as_ref().unwrap().write_all(header.as_bytes()) {
-            Err(_) => return false,
-            _ => {}
+        if self
+            .file
+            .as_ref()
+            .unwrap()
+            .write_all(header.as_bytes())
+            .is_err()
+        {
+            return false;
         }
         self.header_written = true;
         true
@@ -100,14 +105,14 @@ impl Y4MWriter {
             return false;
         }
         let frame_marker = "FRAME\n";
-        match self
+        if self
             .file
             .as_ref()
             .unwrap()
             .write_all(frame_marker.as_bytes())
+            .is_err()
         {
-            Err(_) => return false,
-            _ => {}
+            return false;
         }
         let plane_count = if self.write_alpha { 4 } else { 3 };
         for plane in 0usize..plane_count {
@@ -124,9 +129,8 @@ impl Y4MWriter {
                 let stride_offset: usize = (y * avif_plane.row_bytes).try_into().unwrap();
                 //println!("{y}: {stride_offset} plane_height: {}", avif_plane.height);
                 let pixels = &avif_plane.data[stride_offset..stride_offset + byte_count];
-                match self.file.as_ref().unwrap().write_all(pixels) {
-                    Err(_) => return false,
-                    _ => {}
+                if self.file.as_ref().unwrap().write_all(pixels).is_err() {
+                    return false;
                 }
             }
         }
