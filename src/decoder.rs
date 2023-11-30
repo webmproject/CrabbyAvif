@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::dav1d::*;
 use crate::io::*;
@@ -300,7 +301,6 @@ struct AvifItem {
     dimg_index: u32,
     prem_by_id: u32,
     has_unsupported_essential_property: bool,
-    ipma_seen: bool,
     #[allow(unused)]
     progressive: bool,
     idat: Vec<u8>,
@@ -571,17 +571,16 @@ fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
             avif_item.size += extent.length as usize;
         }
     }
+    let mut ipma_seen: HashSet<u32> = HashSet::new();
     for association in &meta.iprp.associations {
-        let avif_item = avif_items
-            .get_mut(&association.item_id)
-            .ok_or(AvifError::BmffParseFailed)?;
-        if avif_item.ipma_seen {
-            // TODO: ipma_seen can be a local hashmap or set here instead of being in the
-            // struct as it is only used for this validation.
+        if ipma_seen.contains(&association.item_id) {
             println!("item has duplictate ipma.");
             return Err(AvifError::BmffParseFailed);
         }
-        avif_item.ipma_seen = true;
+        ipma_seen.insert(association.item_id);
+        let avif_item = avif_items
+            .get_mut(&association.item_id)
+            .ok_or(AvifError::BmffParseFailed)?;
         for (property_index_ref, essential_ref) in &association.associations {
             let property_index: usize = *property_index_ref as usize;
             let essential = *essential_ref;
@@ -590,17 +589,11 @@ fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
                 continue;
             }
             if property_index > meta.iprp.properties.len() {
-                println!(
-                    "property index: {} len: {}",
-                    property_index,
-                    meta.iprp.properties.len()
-                );
                 println!("invalid property_index in ipma.");
                 return Err(AvifError::BmffParseFailed);
             }
             // property_index is 1-indexed.
             let property = meta.iprp.properties[property_index - 1].clone();
-            // TODO: Add more boxes here once they are supported.
             let is_supported_property = match property {
                 ItemProperty::ImageSpatialExtents(_)
                 | ItemProperty::ColorInformation(_)
@@ -619,17 +612,26 @@ fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
             };
             if is_supported_property {
                 if essential {
-                    // a1lx is not allowed to be marked as essential.
-                    // TODO: enforce that.
+                    match property {
+                        ItemProperty::AV1LayeredImageIndexing(_) => {
+                            println!("invalid essential property.");
+                            return Err(AvifError::BmffParseFailed);
+                        }
+                        _ => {}
+                    }
                 } else {
-                    // a1op and lsel must be marked as essential.
-                    // TODO: enforce that.
+                    match property {
+                        ItemProperty::OperatingPointSelector(_)
+                        | ItemProperty::LayerSelector(_) => {
+                            println!("required essential property not marked as essential.");
+                            return Err(AvifError::BmffParseFailed);
+                        }
+                        _ => {}
+                    }
                 }
                 avif_item.properties.push(property);
-            } else {
-                if essential {
-                    avif_item.has_unsupported_essential_property = true;
-                }
+            } else if essential {
+                avif_item.has_unsupported_essential_property = true;
             }
         }
     }
@@ -660,14 +662,11 @@ fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
 
 #[derive(Debug, Default)]
 struct AvifDecodeSample {
-    // owns_data
-    // partial_data
     item_id: u32,
     offset: u64,
     size: usize,
     spatial_id: u8,
     sync: bool,
-    // TODO: these two can be some enum?
     data_buffer: Option<Vec<u8>>,
 }
 
@@ -703,7 +702,6 @@ fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifT
     tile.height = item.height;
     tile.operating_point = item.operating_point();
     tile.image = AvifImage::default();
-    // TODO: do all the layer stuff (a1op and lsel) in avifCodecDecodeInputFillFromDecoderItem.
     let mut layer_sizes: [usize; 4] = [0; 4];
     let mut layer_count = 0;
     let a1lx = item.a1lx();
@@ -739,7 +737,6 @@ fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifT
     // Progressive images offer layers via the a1lxProp, but don't specify a
     // layer selection with lsel.
     item.progressive = has_a1lx && (lsel.is_none() || lsel.unwrap() == 0xFFFF);
-    println!("PROGRESSIVE: {}", item.progressive);
     if lsel.is_some() && lsel.unwrap() != 0xFFFF {
         // Layer selection. This requires that the underlying AV1 codec decodes all layers,
         // and then only returns the requested layer as a single frame. To the user of libavif,
@@ -1126,7 +1123,6 @@ impl AvifDecoder {
                 // TODO: exif/xmp from meta.
 
                 self.tiles[0].push(create_tile_from_track(&color_track)?);
-                //println!("color_tile: {:#?}", self.tiles[0]);
                 self.tile_info[0].tile_count = 1;
 
                 match self.tracks.iter().find(|x| x.is_aux(color_track.id)) {
