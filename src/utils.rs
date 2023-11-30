@@ -12,6 +12,13 @@ pub struct Y4MWriter {
 }
 
 impl Y4MWriter {
+    pub fn create(filename: &String) -> Self {
+        Self {
+            filename: filename.clone(),
+            ..Self::default()
+        }
+    }
+
     fn write_header(&mut self, image: &AvifImage) -> bool {
         if self.header_written {
             return true;

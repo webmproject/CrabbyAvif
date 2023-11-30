@@ -920,19 +920,17 @@ impl AvifDecoder {
         // represented as an auxl item to each color tile item.
         let mut alpha_item_indices: Vec<u32> = Vec::new();
         for color_grid_item_id in &color_item.grid_item_ids {
-            let mut seen_alpha = false;
-            for (auxl_item_id, auxl_item) in &self.avif_items {
-                if auxl_item.aux_for_id == *color_grid_item_id && auxl_item.is_auxiliary_alpha() {
-                    if seen_alpha {
-                        return (0, None);
-                    }
-                    alpha_item_indices.push(*auxl_item_id);
-                    seen_alpha = true;
+            match self
+                .avif_items
+                .iter()
+                .find(|x| x.1.aux_for_id == *color_grid_item_id && x.1.is_auxiliary_alpha())
+            {
+                Some(item) => alpha_item_indices.push(*item.0),
+                None => {
+                    // TODO: This case must be an error.
+                    println!("alpha aux item was not found for color tile.");
+                    return (0, None);
                 }
-            }
-            if !seen_alpha {
-                // TODO: This must be an error.
-                return (0, None);
             }
         }
         assert!(color_item.grid_item_ids.len() == alpha_item_indices.len());
