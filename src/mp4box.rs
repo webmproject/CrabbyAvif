@@ -220,9 +220,8 @@ pub struct ItemPropertyBox {
 
 #[derive(Debug)]
 pub struct ItemReference {
-    // Read this reference as "{from_item_id} is a {reference_type} for
-    // {to_item_id}" (except for dimg where it is in the opposite
-    // direction).
+    // Read this reference as "{from_item_id} is a {reference_type} for{to_item_id}" (except for
+    // dimg where it is in the opposite direction).
     pub from_item_id: u32,
     pub to_item_id: u32,
     pub reference_type: String,
@@ -487,10 +486,6 @@ impl MP4Box {
             // unsigned int(16) extent_count;
             entry.extent_count = stream.read_u16()?;
             for _j in 0..entry.extent_count {
-                // If extent_index is ever supported, this spec must be implemented here:
-                // ::  if (((version == 1) || (version == 2)) && (index_size > 0)) {
-                // ::      unsigned int(index_size*8) extent_index;
-                // ::  }
                 let extent = ItemLocationExtent {
                     // unsigned int(offset_size*8) extent_offset;
                     offset: stream.read_uxx(iloc.offset_size)?,
@@ -783,7 +778,8 @@ impl MP4Box {
         let (version, flags) = stream.read_version_and_flags()?;
         // unsigned int(32) entry_count;
         let entry_count = stream.read_u32()?;
-        let mut previous_item_id = 0; // TODO: there is no need for this. can simply look up the vector.
+        // TODO: there is no need for this. can simply look up the vector.
+        let mut previous_item_id = 0;
         let mut ipma: Vec<ItemPropertyAssociation> = Vec::new();
         for _i in 0..entry_count {
             let mut entry = ItemPropertyAssociation {
@@ -792,8 +788,9 @@ impl MP4Box {
                 ..ItemPropertyAssociation::default()
             };
             // ISO/IEC 23008-12, First edition, 2017-12, Section 9.3.1:
-            //   Each ItemPropertyAssociation box shall be ordered by increasing item_ID, and there shall
-            //   be at most one association box for each item_ID, in any ItemPropertyAssociation box.
+            //   Each ItemPropertyAssociation box shall be ordered by increasing item_ID, and there
+            //   shall be at most one association box for each item_ID, in any
+            //   ItemPropertyAssociation box.
             if version < 1 {
                 // unsigned int(16) item_ID;
                 entry.item_id = stream.read_u16()? as u32;
@@ -881,17 +878,14 @@ impl MP4Box {
             }
 
             // TODO: check flags. ISO/IEC 23008-12:2017, Section 9.2 says:
-            //   The flags field of ItemInfoEntry with version greater than or equal to 2 is specified as
-            //   follows:
-            //
+            // The flags field of ItemInfoEntry with version greater than or equal to 2 is specified
+            // as follows:
             //   (flags & 1) equal to 1 indicates that the item is not intended to be a part of the
-            //   presentation. For example, when (flags & 1) is equal to 1 for an image item, the image
-            //   item should not be displayed.
-            //   (flags & 1) equal to 0 indicates that the item is intended to be a part of the
-            //   presentation.
+            //   presentation. For example, when (flags & 1) is equal to 1 for an image item, the
+            //   image item should not be displayed.(flags & 1) equal to 0 indicates that the item
+            //   is intended to be a part of the presentation.
             //
             // See also Section 6.4.2.
-
             let mut entry = ItemInfo::default();
             if version == 2 {
                 // unsigned int(16) item_ID;
@@ -1350,9 +1344,8 @@ impl MP4Box {
 
     fn parse_edts(stream: &mut IStream, track: &mut AvifTrack) -> AvifResult<()> {
         if track.elst_seen {
-            // This function always exits with track.elst_seen set to true. So
-            // it is sufficient to check track.elst_seen to verify the
-            // uniqueness of the edts box.
+            // This function always exits with track.elst_seen set to true. So it is sufficient to
+            // check track.elst_seen to verify the uniqueness of the edts box.
             println!("multiple edts boxes found for track.");
             return Err(AvifError::BmffParseFailed);
         }
@@ -1391,23 +1384,19 @@ impl MP4Box {
             track.repetition_count = -2;
         } else if track.is_repeating {
             if track.track_duration == u64::MAX {
-                // If isRepeating is true and the track duration is
-                // unknown/indefinite, then set the repetition count to
-                // infinite(Section 9.6.1 of ISO/IEC 23008-12 Part 12).
+                // If isRepeating is true and the track duration is unknown/indefinite, then set the
+                // repetition count to infinite(Section 9.6.1 of ISO/IEC 23008-12 Part 12).
                 track.repetition_count = -1;
             } else {
-                // Section 9.6.1. of ISO/IEC 23008-12 Part 12: 1, the entire
-                // edit list is repeated a sufficient number of times to
-                // equal the track duration.
+                // Section 9.6.1. of ISO/IEC 23008-12 Part 12: 1, the entire edit list is repeated a
+                // sufficient number of times to equal the track duration.
                 //
-                // Since libavif uses repetitionCount (which is 0-based), we
-                // subtract the value by 1 to derive the number of
-                // repetitions.
+                // Since libavif uses repetitionCount (which is 0-based), we subtract the value by 1
+                // to derive the number of repetitions.
                 assert!(track.segment_duration != 0);
-                // We specifically check for trackDuration == 0 here and not
-                // when it is actually read in order to accept files which
-                // inadvertently has a trackDuration of 0 without any edit
-                // lists.
+                // We specifically check for trackDuration == 0 here and not when it is actually
+                // read in order to accept files which inadvertently has a trackDuration of 0
+                // without any edit lists.
                 if track.track_duration == 0 {
                     println!("invalid track duration 0");
                     return Err(AvifError::BmffParseFailed);

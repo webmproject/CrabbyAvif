@@ -7,8 +7,8 @@ use crate::mp4box::*;
 use crate::stream::*;
 use crate::*;
 
-// TODO: needed only for debug to AvifImage and AvifPlane. Can be removed it
-// those do not have to be debug printable.
+// TODO: needed only for debug to AvifImage and AvifPlane. Can be removed it those do not have to be
+// debug printable.
 use derivative::Derivative;
 
 pub fn usize_from_u64(value: u64) -> AvifResult<usize> {
@@ -274,8 +274,8 @@ pub struct AvifDecoder {
     pub repetition_count: i32,
     avif_items: HashMap<u32, AvifItem>,
     tracks: Vec<AvifTrack>,
-    // To replicate the C-API, we need to keep this optional. Otherwise this
-    // could be part of the initialization.
+    // To replicate the C-API, we need to keep this optional. Otherwise this could be part of the
+    // initialization.
     io: Option<Box<dyn AvifDecoderIO>>,
     codecs: Vec<Dav1d>,
 }
@@ -524,8 +524,8 @@ fn find_av1C(properties: &[ItemProperty]) -> Option<&CodecConfiguration> {
     }
 }
 
-// This design is not final. It's possible to do this in the same loop where boxes are parsed. But it
-// seems a little cleaner to do this after the fact.
+// This design is not final. It's possible to do this in the same loop where boxes are parsed. But
+// it seems a little cleaner to do this after the fact.
 fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
     let mut avif_items: HashMap<u32, AvifItem> = HashMap::new();
     for item in &meta.iinf {
@@ -735,13 +735,13 @@ fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifT
             has_lsel = false;
         }
     }
-    // Progressive images offer layers via the a1lxProp, but don't specify a
-    // layer selection with lsel.
+    // Progressive images offer layers via the a1lxProp, but don't specify a layer selection with
+    // lsel.
     item.progressive = has_a1lx && (!has_lsel || lsel == 0xFFFF);
     if has_lsel && lsel != 0xFFFF {
-        // Layer selection. This requires that the underlying AV1 codec decodes all layers,
-        // and then only returns the requested layer as a single frame. To the user of libavif,
-        // this appears to be a single frame.
+        // Layer selection. This requires that the underlying AV1 codec decodes all layers, and then
+        // only returns the requested layer as a single frame. To the user of libavif, this appears
+        // to be a single frame.
         tile.input.all_layers = true;
         let mut sample_size: usize = 0;
         let layer_id = usize_from_u16(lsel)?;
@@ -751,8 +751,8 @@ fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifT
                 println!("in lsel case!");
                 return Err(AvifError::InvalidImageGrid);
             }
-            // Optimization: If we're selecting a layer that doesn't require
-            // the entire image's payload (hinted via the a1lx box).
+            // Optimization: If we're selecting a layer that doesn't require the entire image's
+            // payload (hinted via the a1lx box).
             if layer_id >= layer_count {
                 println!("lsel layer index not found in a1lx.");
                 return Err(AvifError::InvalidImageGrid);
@@ -801,8 +801,8 @@ fn create_tile(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifT
             item_id: item.id,
             offset: 0,
             size: item.size,
-            // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel
-            // value for "do not filter by spatial_id"
+            // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel value for "do not
+            // filter by spatial_id"
             spatial_id: 0xff,
             sync: true,
             data_buffer: None,
@@ -839,8 +839,8 @@ fn create_tile_from_track(track: &AvifTrack) -> AvifResult<AvifTile> {
                 item_id: 0,
                 offset: sample_offset,
                 size: sample_size,
-                // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel
-                // value for "do not filter by spatial_id"
+                // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel value for "do
+                // not filter by spatial_id"
                 spatial_id: 0xff,
                 // Assume first sample is always sync (in case stss box was missing).
                 sync: tile.input.samples.is_empty(),
@@ -854,7 +854,8 @@ fn create_tile_from_track(track: &AvifTrack) -> AvifResult<AvifTile> {
         }
     }
     for sync_sample_number in &sample_table.sync_samples {
-        let index: usize = (*sync_sample_number - 1) as usize; // sample_table.sync_samples is 1-based.
+        // sample_table.sync_samples is 1-based.
+        let index: usize = (*sync_sample_number - 1) as usize;
         if index < tile.input.samples.len() {
             tile.input.samples[index].sync = true;
         }
@@ -911,8 +912,8 @@ impl AvifDecoder {
         if color_item.item_type != "grid" || color_item.grid_item_ids.is_empty() {
             return (0, None);
         }
-        // If color item is a grid, check if there is an alpha channel which is
-        // represented as an auxl item to each color tile item.
+        // If color item is a grid, check if there is an alpha channel which is represented as an
+        // auxl item to each color tile item.
         let mut alpha_item_indices: Vec<u32> = Vec::new();
         for color_grid_item_id in &color_item.grid_item_ids {
             match self
@@ -994,8 +995,8 @@ impl AvifDecoder {
         if self.tiles[0].is_empty() {
             return Ok(());
         }
-        // TODO: do this incrementally instead of preparing whole sample.
-        // Start with 64 and go up to 4096 incrementally.
+        // TODO: do this incrementally instead of preparing whole sample. Start with 64 and go up to
+        // 4096 incrementally.
         self.prepare_sample(0, 0, 0)?;
         let io = &mut self.io.as_mut().unwrap();
         let sample = &self.tiles[0][0].input.samples[0];
@@ -1026,9 +1027,8 @@ impl AvifDecoder {
         let mut grid_item_ids: Vec<u32> = Vec::new();
         let mut first_av1C = CodecConfiguration::default();
         let mut is_first = true;
-        // Collect all the dimg items. Cannot directly iterate
-        // through avif_items here directly because HashMap is
-        // not ordered.
+        // Collect all the dimg items. Cannot directly iterate through avif_items here directly
+        // because HashMap is not ordered.
         for item_info in iinf {
             let dimg_item = self
                 .avif_items
@@ -1173,8 +1173,8 @@ impl AvifDecoder {
                     self.read_and_parse_item(item_ids[1], 1)?;
                     self.populate_grid_item_ids(&avif_boxes.meta.iinf, item_ids[1], 1)?;
                 } else if alpha_item.is_some() {
-                    // Alpha item was made up and not part of the input. Make
-                    // it part of the items array.
+                    // Alpha item was made up and not part of the input. Make it part of the items
+                    // array.
                     let alpha_item = alpha_item.unwrap();
                     item_ids[1] = alpha_item.id;
                     self.tile_info[1].grid = self.tile_info[0].grid;
@@ -1203,12 +1203,10 @@ impl AvifDecoder {
                     {
                         let item = self.avif_items.get(item_id).unwrap();
                         if index == 1 && item.width == 0 && item.height == 0 {
-                            // NON-STANDARD: Alpha subimage does not have an ispe
-                            // property; adopt width/height from color item.
-                            // TODO: need to assert for strict flag.
-                            // item.width = items[0].unwrap().width;
-                            // item.height = items[0].unwrap().height;
-                            // TODO: make this work. some mut problem.
+                            // NON-STANDARD: Alpha subimage does not have an ispe property; adopt
+                            // width/height from color item. TODO: need to assert for strict flag.
+                            // item.width = items[0].unwrap().width; item.height = items[0].unwrap
+                            // ().height; TODO: make this work. some mut problem.
                         }
                     }
                     self.tiles[index] = self.generate_tiles(*item_id, index)?;
@@ -1249,9 +1247,9 @@ impl AvifDecoder {
             }
         }
 
-        // Find and adopt all colr boxes "at most one for a given value of
-        // colour type" (HEIF 6.5.5.1, from Amendment 3) Accept one of each
-        // type, and bail out if more than one of a given type is provided.
+        // Find and adopt all colr boxes "at most one for a given value of colour type"
+        // (HEIF 6.5.5.1, from Amendment 3) Accept one of each type, and bail out if more than one
+        // of a given type is provided.
         let mut cicp_set = false;
         match find_nclx(color_properties) {
             Ok(nclx) => {
@@ -1356,9 +1354,8 @@ impl AvifDecoder {
 
     fn create_codecs(&mut self) -> AvifResult<()> {
         if matches!(self.source, AvifDecoderSource::Tracks) {
-            // In this case, we will use at most two codec instances (one for
-            // the color planes and one for the alpha plane). Gain maps are
-            // not supported.
+            // In this case, we will use at most two codec instances (one for the color planes and
+            // one for the alpha plane). Gain maps are not supported.
             self.create_codec(
                 self.tiles[0][0].operating_point,
                 self.tiles[0][0].input.all_layers,
@@ -1470,8 +1467,8 @@ impl AvifDecoder {
                 // TODO: scale tile to match output dimension.
 
                 if is_grid {
-                    // TODO: make sure all tiles decoded properties match.
-                    // Need to figure out a way to do it with proper borrows.
+                    // TODO: make sure all tiles decoded properties match. Need to figure out a way
+                    // to do it with proper borrows.
                     self.image.copy_from_tile(
                         &tile.image,
                         &self.tile_info[category],
@@ -1505,8 +1502,8 @@ impl AvifDecoder {
         }
         let next_image_index = self.image_index + 1;
         if next_image_index == 0 {
-            // TODO: this may accidentally create more when nth image is added.
-            // so make sure this function is called only once.
+            // TODO: this may accidentally create more when nth image is added. so make sure this
+            // function is called only once.
             self.create_codecs()?;
         }
         self.prepare_samples(next_image_index as usize)?;
