@@ -260,14 +260,23 @@ pub struct SampleDescription {
     properties: Vec<ItemProperty>,
 }
 
+#[derive(Debug)]
+enum SampleSize {
+    FixedSize(u32),
+    Sizes(Vec<u32>),
+}
+
+impl Default for SampleSize {
+    fn default() -> Self {
+        Self::FixedSize(0)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct SampleTable {
     pub chunk_offsets: Vec<u64>,
     pub sample_to_chunk: Vec<SampleToChunk>,
-    pub sample_sizes: Vec<u32>,
-    // If this is non-zero, sampleSizes will be empty and all samples will be this size.
-    // TODO: candidate for rust enum ?
-    pub all_samples_size: u32,
+    sample_size: SampleSize,
     pub sync_samples: Vec<u32>,
     pub time_to_sample: Vec<TimeToSample>,
     pub sample_descriptions: Vec<SampleDescription>,
@@ -302,14 +311,16 @@ impl SampleTable {
     }
 
     pub fn sample_size(&self, index: usize) -> AvifResult<usize> {
-        if self.all_samples_size > 0 {
-            return usize_from_u32(self.all_samples_size);
-        }
-        if index >= self.sample_sizes.len() {
-            println!("not enough sampel sizes in the table");
-            return Err(AvifError::BmffParseFailed);
-        }
-        usize_from_u32(self.sample_sizes[index])
+        usize_from_u32(match &self.sample_size {
+            SampleSize::FixedSize(size) => *size,
+            SampleSize::Sizes(sizes) => {
+                if index >= sizes.len() {
+                    println!("not enough sampel sizes in the table");
+                    return Err(AvifError::BmffParseFailed);
+                }
+                sizes[index]
+            }
+        })
     }
 }
 
@@ -1159,19 +1170,21 @@ impl MP4Box {
     fn parse_stsz(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
         let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
         // unsigned int(32) sample_size;
-        sample_table.all_samples_size = stream.read_u32()?;
+        let sample_size = stream.read_u32()?;
         // unsigned int(32) sample_count;
         let sample_count = stream.read_u32()?;
 
-        if sample_table.all_samples_size > 0 {
+        if sample_size > 0 {
+            sample_table.sample_size = SampleSize::FixedSize(sample_size);
             return Ok(());
         }
-        sample_table.sample_sizes.reserve(sample_count as usize);
+        let mut sample_sizes: Vec<u32> = Vec::new();
+        sample_sizes.reserve(sample_count as usize);
         for _ in 0..sample_count {
             // unsigned int(32) entry_size;
-            let entry_size = stream.read_u32()?;
-            sample_table.sample_sizes.push(entry_size);
+            sample_sizes.push(stream.read_u32()?);
         }
+        sample_table.sample_size = SampleSize::Sizes(sample_sizes);
         Ok(())
     }
 
