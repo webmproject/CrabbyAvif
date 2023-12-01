@@ -429,6 +429,20 @@ impl From<AvifProgressiveState> for avifProgressiveState {
 }
 
 #[repr(C)]
+pub struct avifDecoderData {}
+
+#[repr(C)]
+pub struct avifDiagnostics {
+    error: [c_char; 256],
+}
+
+impl Default for avifDiagnostics {
+    fn default() -> Self {
+        Self { error: [0; 256] }
+    }
+}
+
+#[repr(C)]
 pub struct avifDecoder {
     // avifCodecChoice codecChoice;
     pub maxThreads: i32,
@@ -456,9 +470,9 @@ pub struct avifDecoder {
     pub alphaPresent: avifBool,
 
     //avifIOStats ioStats;
-    //avifDiagnostics diag;
+    pub diag: avifDiagnostics,
     //avifIO * io;
-    //struct avifDecoderData * data;
+    data: *mut avifDecoderData,
     gainMapPresent: avifBool,
     enableDecodingGainMap: avifBool,
     enableParsingGainMapMetadata: avifBool,
@@ -491,6 +505,8 @@ impl Default for avifDecoder {
             durationInTimescales: 0,
             repetitionCount: 0,
             alphaPresent: AVIF_FALSE,
+            diag: avifDiagnostics::default(),
+            data: std::ptr::null_mut(),
             gainMapPresent: AVIF_FALSE,
             enableDecodingGainMap: AVIF_FALSE,
             enableParsingGainMapMetadata: AVIF_FALSE,

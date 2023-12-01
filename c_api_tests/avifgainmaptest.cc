@@ -21,12 +21,12 @@ TEST(GainMapTest, DecodeGainMapGrid) {
 
   avifResult result = avifDecoderSetIOFile(decoder.get(), path.c_str());
   ASSERT_EQ(result, AVIF_RESULT_OK)
-      << avifResultToString(result) << " "; // << decoder->diag.error;
+      << avifResultToString(result) << " " << decoder->diag.error;
 
   // Just parse the image first.
   result = avifDecoderParse(decoder.get());
   ASSERT_EQ(result, AVIF_RESULT_OK)
-      << avifResultToString(result) << " "; // << decoder->diag.error;
+      << avifResultToString(result) << " " << decoder->diag.error;
   avifImage* decoded = decoder->image;
   ASSERT_NE(decoded, nullptr);
 
@@ -48,7 +48,7 @@ TEST(GainMapTest, DecodeGainMapGrid) {
   // Decode the image.
   result = avifDecoderNextImage(decoder.get());
   ASSERT_EQ(result, AVIF_RESULT_OK)
-      << avifResultToString(result) << " "; // << decoder->diag.error;
+      << avifResultToString(result) << " " << decoder->diag.error;
 }
 
 // The following two functions use avifDecoderReadFile which is not supported in CAPI yet.
