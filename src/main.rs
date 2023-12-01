@@ -33,6 +33,8 @@ fn main() {
             ignore_xmp: false,
             strictness: AvifStrictness::None,
             allow_progressive: false,
+            enable_decoding_gainmap: true,
+            enable_parsing_gainmap_metadata: true,
         };
         let mut decoder: AvifDecoder = Default::default();
         decoder.settings = settings;

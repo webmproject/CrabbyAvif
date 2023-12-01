@@ -1,6 +1,7 @@
 use crate::decoder::usize_from_u16;
 use crate::decoder::usize_from_u32;
 use crate::decoder::usize_from_u64;
+use crate::decoder::GainMapMetadata;
 use crate::io::*;
 use crate::stream::*;
 use crate::*;
@@ -97,8 +98,8 @@ pub struct ImageSpatialExtents {
 
 #[derive(Debug, Default, Clone)]
 pub struct PixelInformation {
-    plane_count: u8,
-    plane_depths: [u8; MAX_PLANE_COUNT],
+    pub plane_count: u8,
+    pub plane_depths: [u8; MAX_PLANE_COUNT],
 }
 
 #[derive(Debug, Default, Clone)]
@@ -122,6 +123,18 @@ impl CodecConfiguration {
                 true => 10,
                 false => 8,
             },
+        }
+    }
+
+    pub fn pixel_format(&self) -> PixelFormat {
+        if self.monochrome {
+            PixelFormat::Monochrome
+        } else if self.chroma_subsampling_x == 1 && self.chroma_subsampling_y == 1 {
+            PixelFormat::Yuv420
+        } else if self.chroma_subsampling_x == 1 {
+            PixelFormat::Yuv422
+        } else {
+            PixelFormat::Yuv444
         }
     }
 }
@@ -161,11 +174,11 @@ pub struct ClearAperture {
     vert_off_d: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, Copy)]
 #[allow(unused)]
 pub struct ContentLightLevelInformation {
-    max_cll: u16,
-    max_pall: u16,
+    pub max_cll: u16,
+    pub max_pall: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +230,7 @@ pub struct ItemReference {
     pub from_item_id: u32,
     pub to_item_id: u32,
     pub reference_type: String,
+    pub index: u32, // Index of the reference within the iref type.
 }
 
 #[derive(Debug, Default)]
@@ -928,7 +942,7 @@ impl MP4Box {
                 }
                 // unsigned int(16) reference_count;
                 let reference_count = stream.read_u16()?;
-                for _ in 0..reference_count {
+                for index in 0..reference_count {
                     let to_item_id: u32 = if version == 0 {
                         // unsigned int(16) to_item_ID;
                         stream.read_u16()? as u32
@@ -944,6 +958,7 @@ impl MP4Box {
                         from_item_id,
                         to_item_id,
                         reference_type: header.box_type.clone(),
+                        index: index as u32,
                     });
                 }
             }
@@ -1794,5 +1809,67 @@ impl MP4Box {
             return Err(AvifError::InvalidExifPayload);
         }
         Ok(())
+    }
+
+    pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
+        // unsigned int(8) version = 0;
+        let version = stream.read_u8()?;
+        if version != 0 {
+            println!("unsupported version in tmap box");
+            return Err(AvifError::InvalidToneMappedImage);
+        }
+        // unsigned int(8) flags;
+        let flags = stream.read_u8()?;
+        let channel_count: usize = ((flags & 1) * 2 + 1).into();
+        let mut metadata = GainMapMetadata {
+            use_base_color_space: (flags & 2) != 0,
+            backward_direction: (flags & 4) != 0,
+            ..GainMapMetadata::default()
+        };
+        let use_common_denominator = (flags & 8) != 0;
+        println!("channel_count: {channel_count}");
+        println!("use_common_denominator: {use_common_denominator}");
+        if use_common_denominator {
+            let common_denominator = stream.read_u32()?;
+            metadata.base_hdr_headroom = (stream.read_u32()?, common_denominator);
+            metadata.alternate_hdr_headroom = (stream.read_u32()?, common_denominator);
+            for i in 0..channel_count {
+                metadata.min[i] = (stream.read_i32()?, common_denominator);
+                metadata.max[i] = (stream.read_i32()?, common_denominator);
+                metadata.gamma[i] = (stream.read_u32()?, common_denominator);
+                metadata.base_offset[i] = (stream.read_i32()?, common_denominator);
+                metadata.alternate_offset[i] = (stream.read_i32()?, common_denominator);
+            }
+        } else {
+            metadata.base_hdr_headroom = stream.read_ufraction()?;
+            println!("here1 offset: {}", stream.offset);
+            metadata.alternate_hdr_headroom = stream.read_ufraction()?;
+            println!("here2 offset: {}", stream.offset);
+            for i in 0..channel_count {
+                metadata.min[i] = stream.read_fraction()?;
+                println!("here3 offset: {}", stream.offset);
+                metadata.max[i] = stream.read_fraction()?;
+                println!("here4 offset: {}", stream.offset);
+                metadata.gamma[i] = stream.read_ufraction()?;
+                println!("here5 offset: {}", stream.offset);
+                metadata.base_offset[i] = stream.read_fraction()?;
+                println!("here6 offset: {}", stream.offset);
+                metadata.alternate_offset[i] = stream.read_fraction()?;
+                println!("here7 offset: {}", stream.offset);
+            }
+        }
+        // Fill the remaining values by copying those from the first channel.
+        for i in channel_count..3 {
+            metadata.min[i] = metadata.min[0];
+            metadata.max[i] = metadata.max[0];
+            metadata.gamma[i] = metadata.gamma[0];
+            metadata.base_offset[i] = metadata.base_offset[0];
+            metadata.alternate_offset[i] = metadata.alternate_offset[0];
+        }
+        if stream.has_bytes_left() {
+            println!("invalid trailing bytes in tmap box");
+            return Err(AvifError::InvalidToneMappedImage);
+        }
+        Ok(metadata)
     }
 }

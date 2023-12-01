@@ -1,3 +1,5 @@
+use crate::decoder::Fraction;
+use crate::decoder::UFraction;
 use crate::AvifError;
 use crate::AvifResult;
 use byteorder::{BigEndian, ByteOrder};
@@ -141,12 +143,27 @@ impl IStream<'_> {
         Ok(BigEndian::read_u64(self.get_slice(8)?))
     }
 
+    pub fn read_i32(&mut self) -> AvifResult<i32> {
+        // For now this is used only for gainmap fractions where we need
+        // wrapping conversion from u32 to i32.
+        Ok(self.read_u32()? as i32)
+        //i32::try_from(val).or(Err(AvifError::BmffParseFailed))
+    }
+
     pub fn skip_u32(&mut self) -> AvifResult<()> {
         self.skip(4)
     }
 
     pub fn skip_u64(&mut self) -> AvifResult<()> {
         self.skip(8)
+    }
+
+    pub fn read_fraction(&mut self) -> AvifResult<Fraction> {
+        Ok((self.read_i32()?, self.read_u32()?))
+    }
+
+    pub fn read_ufraction(&mut self) -> AvifResult<UFraction> {
+        Ok((self.read_u32()?, self.read_u32()?))
     }
 
     pub fn read_string(&mut self, size: usize) -> AvifResult<String> {
