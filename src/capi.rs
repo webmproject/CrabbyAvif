@@ -8,8 +8,6 @@ use std::ffi::CStr;
 
 use std::slice;
 
-use libc::size_t;
-
 use crate::decoder::*;
 use crate::AvifError;
 use crate::AvifProgressiveState;
@@ -22,14 +20,14 @@ use crate::PixelFormat;
 #[repr(C)]
 pub struct avifROData {
     pub data: *const u8,
-    pub size: size_t,
+    pub size: usize,
 }
 
 #[repr(C)]
 #[derive(Debug)]
 pub struct avifRWData {
     data: *mut u8,
-    size: size_t,
+    size: usize,
 }
 
 impl Default for avifRWData {
@@ -146,15 +144,15 @@ impl From<PixelFormat> for avifPixelFormat {
 #[repr(C)]
 #[derive(Debug)]
 enum avifRange {
-    LIMITED = 0,
-    FULL = 1,
+    Limited = 0,
+    Full = 1,
 }
 
 impl From<bool> for avifRange {
     fn from(full_range: bool) -> Self {
         match full_range {
-            true => Self::FULL,
-            false => Self::LIMITED,
+            true => Self::Full,
+            false => Self::Limited,
         }
     }
 }
@@ -173,6 +171,112 @@ impl From<ChromaSamplePosition> for avifChromaSamplePosition {
             ChromaSamplePosition::Unknown => avifChromaSamplePosition::Unknown,
             ChromaSamplePosition::Vertical => avifChromaSamplePosition::Vertical,
             ChromaSamplePosition::Colocated => avifChromaSamplePosition::Colocated,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct avifGainMapMetadata {
+    gainMapMinN: [i32; 3],
+    gainMapMinD: [u32; 3],
+
+    gainMapMaxN: [i32; 3],
+    gainMapMaxD: [u32; 3],
+
+    gainMapGammaN: [u32; 3],
+    gainMapGammaD: [u32; 3],
+
+    baseOffsetN: [i32; 3],
+    baseOffsetD: [u32; 3],
+
+    alternateOffsetN: [i32; 3],
+    alternateOffsetD: [u32; 3],
+
+    baseHdrHeadroomN: u32,
+    baseHdrHeadroomD: u32,
+
+    alternateHdrHeadroomN: u32,
+    alternateHdrHeadroomD: u32,
+
+    backwardDirection: avifBool,
+    useBaseColorSpace: avifBool,
+}
+
+impl From<&GainMapMetadata> for avifGainMapMetadata {
+    fn from(m: &GainMapMetadata) -> Self {
+        avifGainMapMetadata {
+            gainMapMinN: [m.min[0].0, m.min[1].0, m.min[2].0],
+            gainMapMinD: [m.min[0].1, m.min[1].1, m.min[2].1],
+            gainMapMaxN: [m.max[0].0, m.max[1].0, m.max[2].0],
+            gainMapMaxD: [m.max[0].1, m.max[1].1, m.max[2].1],
+            gainMapGammaN: [m.gamma[0].0, m.gamma[1].0, m.gamma[2].0],
+            gainMapGammaD: [m.gamma[0].1, m.gamma[1].1, m.gamma[2].1],
+            baseOffsetN: [m.base_offset[0].0, m.base_offset[1].0, m.base_offset[2].0],
+            baseOffsetD: [m.base_offset[0].1, m.base_offset[1].1, m.base_offset[2].1],
+            alternateOffsetN: [
+                m.alternate_offset[0].0,
+                m.alternate_offset[1].0,
+                m.alternate_offset[2].0,
+            ],
+            alternateOffsetD: [
+                m.alternate_offset[0].1,
+                m.alternate_offset[1].1,
+                m.alternate_offset[2].1,
+            ],
+            baseHdrHeadroomN: m.base_hdr_headroom.0,
+            baseHdrHeadroomD: m.base_hdr_headroom.1,
+            alternateHdrHeadroomN: m.alternate_hdr_headroom.0,
+            alternateHdrHeadroomD: m.alternate_hdr_headroom.1,
+            backwardDirection: m.backward_direction as avifBool,
+            useBaseColorSpace: m.use_base_color_space as avifBool,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct avifGainMap {
+    image: *mut avifImage,
+    metadata: avifGainMapMetadata,
+    altICC: avifRWData,
+    altColorPrimaries: u16,          // TODO: avifColorPrimaries,
+    altTransferCharacteristics: u16, // TODO: avifTransferCharacteristics,
+    altMatrixCoefficients: u16,      // TODO: avifMatrixCoefficients,
+    altYUVRange: avifRange,
+    altDepth: u32,
+    altPlaneCount: u32,
+    //avifContentLightLevelInformationBox altCLLI;
+}
+
+impl Default for avifGainMap {
+    fn default() -> Self {
+        avifGainMap {
+            image: std::ptr::null_mut(),
+            metadata: avifGainMapMetadata::default(),
+            altICC: avifRWData::default(),
+            altColorPrimaries: 0,
+            altTransferCharacteristics: 0,
+            altMatrixCoefficients: 0,
+            altYUVRange: avifRange::Full,
+            altDepth: 0,
+            altPlaneCount: 0,
+        }
+    }
+}
+
+impl From<&AvifGainMap> for avifGainMap {
+    fn from(gainmap: &AvifGainMap) -> Self {
+        avifGainMap {
+            metadata: (&gainmap.metadata).into(),
+            altICC: (&gainmap.alt_icc).into(),
+            altColorPrimaries: gainmap.alt_color_primaries,
+            altTransferCharacteristics: gainmap.alt_transfer_characteristics,
+            altMatrixCoefficients: gainmap.alt_matrix_coefficients,
+            altYUVRange: gainmap.alt_full_range.into(),
+            altDepth: u32::from(gainmap.alt_plane_depth),
+            altPlaneCount: u32::from(gainmap.alt_plane_count),
+            ..Self::default()
         }
     }
 }
@@ -208,7 +312,7 @@ pub struct avifImage {
     // avifImageMirror imir;
     exif: avifRWData,
     xmp: avifRWData,
-    // avifGainMap gainMap;
+    gainMap: *mut avifGainMap,
 }
 
 impl Default for avifImage {
@@ -218,7 +322,7 @@ impl Default for avifImage {
             height: 0,
             depth: 0,
             yuvFormat: avifPixelFormat::None,
-            yuvRange: avifRange::FULL,
+            yuvRange: avifRange::Full,
             yuvChromaSamplePosition: avifChromaSamplePosition::Unknown,
             yuvPlanes: [std::ptr::null_mut(); 3],
             yuvRowBytes: [0; 3],
@@ -230,6 +334,7 @@ impl Default for avifImage {
             icc: avifRWData::default(),
             exif: avifRWData::default(),
             xmp: avifRWData::default(),
+            gainMap: std::ptr::null_mut(),
         }
     }
 }
@@ -351,22 +456,20 @@ pub struct avifDecoder {
     pub alphaPresent: avifBool,
 
     //avifIOStats ioStats;
-
     //avifDiagnostics diag;
-
     //avifIO * io;
-
     //struct avifDecoderData * data;
-
-    //avifBool gainMapPresent;
-    // avifBool enableDecodingGainMap;
-    // avifBool enableParsingGainMapMetadata;
+    gainMapPresent: avifBool,
+    enableDecodingGainMap: avifBool,
+    enableParsingGainMapMetadata: avifBool,
     // avifBool ignoreColorAndAlpha;
     pub imageSequenceTrackPresent: avifBool,
 
     // TODO: maybe wrap these fields in a private data kind of field?
     rust_decoder: Box<AvifDecoder>,
     image_object: avifImage,
+    gainmap_object: avifGainMap,
+    gainmap_image_object: avifImage,
 }
 
 impl Default for avifDecoder {
@@ -388,9 +491,14 @@ impl Default for avifDecoder {
             durationInTimescales: 0,
             repetitionCount: 0,
             alphaPresent: AVIF_FALSE,
+            gainMapPresent: AVIF_FALSE,
+            enableDecodingGainMap: AVIF_FALSE,
+            enableParsingGainMapMetadata: AVIF_FALSE,
             imageSequenceTrackPresent: AVIF_FALSE,
             rust_decoder: Box::new(AvifDecoder::default()),
             image_object: avifImage::default(),
+            gainmap_image_object: avifImage::default(),
+            gainmap_object: avifGainMap::default(),
         }
     }
 }
@@ -470,6 +578,8 @@ impl From<&avifDecoder> for AvifDecoderSettings {
             allow_progressive: decoder.allowProgressive == AVIF_TRUE,
             ignore_exif: decoder.ignoreExif == AVIF_TRUE,
             ignore_xmp: decoder.ignoreXMP == AVIF_TRUE,
+            enable_decoding_gainmap: decoder.enableDecodingGainMap == AVIF_TRUE,
+            enable_parsing_gainmap_metadata: decoder.enableParsingGainMapMetadata == AVIF_TRUE,
             ..Self::default()
         }
     }
@@ -497,6 +607,13 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
     (*decoder).imageSequenceTrackPresent = to_avifBool(info.image_sequence_track_present);
     (*decoder).progressiveState = info.progressive_state.into();
     (*decoder).imageCount = rust_decoder.image_count as i32;
+    if rust_decoder.gainmap_present {
+        (*decoder).gainMapPresent = AVIF_TRUE;
+        (*decoder).gainmap_image_object = (&rust_decoder.gainmap.image).into();
+        (*decoder).gainmap_object = (&rust_decoder.gainmap).into();
+        (*decoder).gainmap_object.image = (&mut (*decoder).gainmap_image_object) as *mut avifImage;
+        (*decoder).image_object.gainMap = (&mut (*decoder).gainmap_object) as *mut avifGainMap;
+    }
     (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
 
     avifResult::Ok
@@ -529,4 +646,15 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
 #[no_mangle]
 pub unsafe extern "C" fn avifDecoderDestroy(decoder: *mut avifDecoder) {
     let _ = Box::from_raw(decoder);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifImageDestroy(_image: *mut avifImage) {
+    // Nothing to do.
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifResultToString(_res: avifResult) -> *const c_char {
+    // TODO: implement this function.
+    std::ptr::null()
 }

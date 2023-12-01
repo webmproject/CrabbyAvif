@@ -20,3 +20,10 @@ replace all safe unwrap() calls with unwrap_unchecked().
 
 // TODO: re-using err here results in some weird borrow checker error:
 // https://old.reddit.com/r/rust/comments/qi3ye9/why_does_returning_a_value_mess_with_borrows/
+
+
+===
+
+properly define rust api returns. &ImageInfo and &Image are very confusing with some fields being accessed from the decoder.
+
+===

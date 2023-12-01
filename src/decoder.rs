@@ -284,16 +284,16 @@ pub struct AvifGainMap {
     pub image: AvifImage,
     pub metadata: GainMapMetadata,
 
-    alt_icc: Vec<u8>,
-    alt_color_primaries: u16,
-    alt_transfer_characteristics: u16,
-    alt_matrix_coefficients: u16,
-    alt_full_range: bool,
+    pub alt_icc: Vec<u8>,
+    pub alt_color_primaries: u16,
+    pub alt_transfer_characteristics: u16,
+    pub alt_matrix_coefficients: u16,
+    pub alt_full_range: bool,
 
-    alt_clli: ContentLightLevelInformation,
+    pub alt_clli: ContentLightLevelInformation,
 
-    alt_plane_count: u8,
-    alt_plane_depth: u8,
+    pub alt_plane_count: u8,
+    pub alt_plane_depth: u8,
 }
 
 #[derive(Default)]
