@@ -1446,9 +1446,16 @@ impl AvifDecoder {
                         let item = self.avif_items.get(item_id).unwrap();
                         if index == 1 && item.width == 0 && item.height == 0 {
                             // NON-STANDARD: Alpha subimage does not have an ispe property; adopt
-                            // width/height from color item. TODO: need to assert for strict flag.
-                            // item.width = items[0].unwrap().width; item.height = items[0].unwrap
-                            // ().height; TODOd: make this work. some mut problem.
+                            // width/height from color item.
+                            assert!(!self.settings.strictness.alpha_ispe_required());
+                            let color_item = self.avif_items.get(&item_ids[0]).unwrap();
+                            let width = color_item.width;
+                            let height = color_item.height;
+                            let alpha_item = self.avif_items.get_mut(item_id).unwrap();
+                            // Note: We cannot directly use color_item.width here because borrow
+                            // checker won't allow that.
+                            alpha_item.width = width;
+                            alpha_item.height = height;
                         }
                     }
                     self.tiles[index] = self.generate_tiles(*item_id, index)?;
