@@ -140,7 +140,7 @@ impl AvifImage {
         // TODO : assumes 444. do other stuff.
         let pixel_size: u32 = if self.info.depth == 8 { 1 } else { 2 };
         let plane_size = (self.info.width * self.info.height * pixel_size) as usize;
-        if category == 0 {
+        if category == 0 || category == 2 {
             for plane_index in 0usize..3 {
                 self.plane_buffers[plane_index].reserve(plane_size);
                 self.plane_buffers[plane_index].resize(plane_size, 0);
@@ -148,15 +148,13 @@ impl AvifImage {
                 self.planes[plane_index] = Some(self.plane_buffers[plane_index].as_ptr());
             }
             self.image_owns_planes = true;
-        } else if category == 1 {
+        } else {
+            assert!(category == 1);
             self.plane_buffers[3].reserve(plane_size);
             self.plane_buffers[3].resize(plane_size, 255);
             self.row_bytes[3] = self.info.width * pixel_size;
             self.planes[3] = Some(self.plane_buffers[3].as_ptr());
             self.image_owns_alpha_plane = true;
-        } else {
-            panic!("unknown category {category}. cannot allocate grid.");
-            //return Err(AvifError::UnknownError);
         }
         Ok(())
     }
@@ -174,10 +172,6 @@ impl AvifImage {
         //println!("copying tile {tile_index} {row_index} {column_index}");
 
         let plane_range = if category == 1 { 3usize..4 } else { 0usize..3 };
-        if category == 2 {
-            panic!("gainmap grid ohmy!");
-        }
-
         for plane_index in plane_range {
             //println!("plane_index {plane_index}");
             let src_plane = tile.plane(plane_index);
@@ -1415,6 +1409,7 @@ impl AvifDecoder {
                 let (tonemap_id, gainmap_id) = self.find_gainmap_item(item_ids[0])?;
                 if tonemap_id != 0 && gainmap_id != 0 {
                     self.read_and_parse_item(gainmap_id, 2)?;
+                    self.populate_grid_item_ids(&avif_boxes.meta.iinf, gainmap_id, 2)?;
                     if self.settings.enable_decoding_gainmap {
                         self.validate_gainmap_item(gainmap_id)?;
                         item_ids[2] = gainmap_id;
@@ -1455,7 +1450,7 @@ impl AvifDecoder {
                             // NON-STANDARD: Alpha subimage does not have an ispe property; adopt
                             // width/height from color item. TODO: need to assert for strict flag.
                             // item.width = items[0].unwrap().width; item.height = items[0].unwrap
-                            // ().height; TODO: make this work. some mut problem.
+                            // ().height; TODOd: make this work. some mut problem.
                         }
                     }
                     self.tiles[index] = self.generate_tiles(*item_id, index)?;
@@ -1701,7 +1696,11 @@ impl AvifDecoder {
             let grid = &self.tile_info[category].grid;
             let is_grid = grid.rows > 0 && grid.columns > 0;
             if is_grid {
-                self.image.allocate_planes(category)?;
+                if category == 2 {
+                    self.gainmap.image.allocate_planes(category)?;
+                } else {
+                    self.image.allocate_planes(category)?;
+                }
             }
             for (tile_index, tile) in self.tiles[category].iter_mut().enumerate() {
                 let sample = &tile.input.samples[image_index];
@@ -1722,12 +1721,21 @@ impl AvifDecoder {
                 if is_grid {
                     // TODO: make sure all tiles decoded properties match. Need to figure out a way
                     // to do it with proper borrows.
-                    self.image.copy_from_tile(
-                        &tile.image,
-                        &self.tile_info[category],
-                        tile_index as u32,
-                        category,
-                    )?;
+                    if category == 2 {
+                        self.gainmap.image.copy_from_tile(
+                            &tile.image,
+                            &self.tile_info[category],
+                            tile_index as u32,
+                            category,
+                        )?;
+                    } else {
+                        self.image.copy_from_tile(
+                            &tile.image,
+                            &self.tile_info[category],
+                            tile_index as u32,
+                            category,
+                        )?;
+                    }
                 } else {
                     // Non grid path, steal planes from the only tile.
                     if category == 0 {

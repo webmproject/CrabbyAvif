@@ -181,7 +181,6 @@ fn decoder_parse_icc_exif_xmp() {
     assert_eq!(info.xmp[3], 112);
 }
 
-/*
 // From avifgainmaptest.cc
 #[test]
 fn color_grid_gainmap_different_grid() {
@@ -205,7 +204,6 @@ fn color_grid_gainmap_different_grid() {
     let res = decoder.next_image();
     assert!(res.is_ok());
 }
-*/
 
 // From avifgainmaptest.cc
 #[test]
@@ -224,6 +222,30 @@ fn color_grid_alpha_grid_gainmap_nogrid() {
     assert!(decoder.gainmap_present);
     assert_eq!(decoder.gainmap.image.info.width, 64);
     assert_eq!(decoder.gainmap.image.info.height, 80);
+    assert_eq!(decoder.gainmap.image.info.depth, 8);
+    assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.0, 6);
+    assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.1, 2);
+    let res = decoder.next_image();
+    assert!(res.is_ok());
+}
+
+// From avifgainmaptest.cc
+#[test]
+fn color_nogrid_alpha_nogrid_gainmap_grid() {
+    let mut decoder = get_decoder("color_nogrid_alpha_nogrid_gainmap_grid.avif");
+    decoder.settings.enable_decoding_gainmap = true;
+    decoder.settings.enable_parsing_gainmap_metadata = true;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let info = res.unwrap();
+    // Color+alpha: single image of size 128x200.
+    assert_eq!(info.width, 128);
+    assert_eq!(info.height, 200);
+    assert_eq!(info.depth, 10);
+    // Gain map: 2x2 grid of 64x80 tiles.
+    assert!(decoder.gainmap_present);
+    assert_eq!(decoder.gainmap.image.info.width, 64 * 2);
+    assert_eq!(decoder.gainmap.image.info.height, 80 * 2);
     assert_eq!(decoder.gainmap.image.info.depth, 8);
     assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.0, 6);
     assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.1, 2);

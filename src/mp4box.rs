@@ -1842,20 +1842,20 @@ impl MP4Box {
             }
         } else {
             metadata.base_hdr_headroom = stream.read_ufraction()?;
-            println!("here1 offset: {}", stream.offset);
+            //println!("here1 offset: {}", stream.offset);
             metadata.alternate_hdr_headroom = stream.read_ufraction()?;
-            println!("here2 offset: {}", stream.offset);
+            //println!("here2 offset: {}", stream.offset);
             for i in 0..channel_count {
                 metadata.min[i] = stream.read_fraction()?;
-                println!("here3 offset: {}", stream.offset);
+                //println!("here3 offset: {}", stream.offset);
                 metadata.max[i] = stream.read_fraction()?;
-                println!("here4 offset: {}", stream.offset);
+                //println!("here4 offset: {}", stream.offset);
                 metadata.gamma[i] = stream.read_ufraction()?;
-                println!("here5 offset: {}", stream.offset);
+                //println!("here5 offset: {}", stream.offset);
                 metadata.base_offset[i] = stream.read_fraction()?;
-                println!("here6 offset: {}", stream.offset);
+                //println!("here6 offset: {}", stream.offset);
                 metadata.alternate_offset[i] = stream.read_fraction()?;
-                println!("here7 offset: {}", stream.offset);
+                //println!("here7 offset: {}", stream.offset);
             }
         }
         // Fill the remaining values by copying those from the first channel.
