@@ -342,7 +342,6 @@ struct AvifItem {
     size: usize,
     width: u32,
     height: u32,
-    #[allow(unused)]
     content_type: String,
     properties: Vec<ItemProperty>,
     extents: Vec<ItemLocationExtent>,
@@ -354,7 +353,6 @@ struct AvifItem {
     dimg_index: u32,
     prem_by_id: u32,
     has_unsupported_essential_property: bool,
-    #[allow(unused)]
     progressive: bool,
     idat: Vec<u8>,
     grid_item_ids: Vec<u32>,
@@ -1013,7 +1011,7 @@ impl AvifDecoder {
         (
             0,
             Some(AvifItem {
-                id: 1000, // TODO: max + 1.
+                id: self.avif_items.keys().max().unwrap() + 1,
                 item_type: String::from("grid"),
                 width: color_item.width,
                 height: color_item.height,
