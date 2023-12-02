@@ -1,6 +1,6 @@
 pub mod decoder;
+pub mod image;
 pub mod io;
-pub mod types;
 pub mod utils;
 
 #[cfg(feature = "capi")]
@@ -13,6 +13,7 @@ mod dav1d;
 
 mod parser;
 mod stream;
+pub mod types;
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum PixelFormat {

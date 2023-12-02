@@ -1,5 +1,5 @@
 use crate::bindings::*;
-use crate::decoder::Image;
+use crate::image::Image;
 use crate::AvifError;
 use crate::AvifResult;
 use crate::PixelFormat;

@@ -28,6 +28,22 @@ pub struct DecodeInput {
     pub category: u8,
 }
 
+#[derive(Debug, Default, Copy, Clone)]
+pub struct Grid {
+    pub rows: u32,
+    pub columns: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Default)]
+pub struct TileInfo {
+    pub tile_count: u32,
+    #[allow(unused)]
+    pub decoded_tile_count: u32,
+    pub grid: Grid,
+}
+
 #[derive(Debug, Default)]
 pub struct Tile {
     #[allow(unused)]
