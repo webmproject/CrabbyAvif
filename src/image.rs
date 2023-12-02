@@ -1,6 +1,5 @@
 use crate::decoder::tile::TileInfo;
-use crate::decoder::u64_from_usize;
-use crate::decoder::usize_from_u64;
+use crate::utils::*;
 use crate::*;
 
 // TODO: needed only for debug to Image and PlaneData. Can be removed it those do not have to be
