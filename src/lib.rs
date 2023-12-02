@@ -10,7 +10,7 @@ mod bindings;
 /// cbindgen:ignore
 mod dav1d;
 
-mod mp4box;
+mod parser;
 mod stream;
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]

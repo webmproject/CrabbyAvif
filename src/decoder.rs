@@ -3,7 +3,10 @@ use std::collections::HashSet;
 
 use crate::dav1d::*;
 use crate::io::*;
-use crate::mp4box::*;
+use crate::parser::exif;
+use crate::parser::mp4box;
+use crate::parser::mp4box::*;
+use crate::parser::obu;
 use crate::stream::*;
 use crate::*;
 
@@ -325,7 +328,7 @@ pub struct Decoder {
     pub gainmap: GainMap,
     pub gainmap_present: bool,
     avif_items: HashMap<u32, Item>,
-    tracks: Vec<AvifTrack>,
+    tracks: Vec<Track>,
     // To replicate the C-API, we need to keep this optional. Otherwise this could be part of the
     // initialization.
     io: Option<Box<dyn DecoderIO>>,
@@ -943,7 +946,7 @@ fn create_tile_from_item(item: &mut Item, allow_progressive: bool) -> AvifResult
     Ok(tile)
 }
 
-fn create_tile_from_track(track: &AvifTrack) -> AvifResult<Tile> {
+fn create_tile_from_track(track: &Track) -> AvifResult<Tile> {
     let mut tile = Tile {
         width: track.width,
         height: track.height,
@@ -1199,7 +1202,7 @@ impl Decoder {
                 .find(|x| x.1.is_exif(color_item_index))
             {
                 let mut stream = exif.1.stream(self.io.as_mut().unwrap())?;
-                MP4Box::parse_exif(&mut stream)?;
+                exif::parse(&mut stream)?;
                 self.image
                     .info
                     .exif
@@ -1279,7 +1282,7 @@ impl Decoder {
         self.prepare_sample(0, 0, 0)?;
         let io = &mut self.io.as_mut().unwrap();
         let sample = &self.tiles[0][0].input.samples[0];
-        match MP4Box::parse_sequence_header(sample.data(io)?) {
+        match obu::parse_sequence_header(sample.data(io)?) {
             Ok(sequence_header) => {
                 self.image.info.color_primaries = sequence_header.color_primaries;
                 self.image.info.transfer_characteristics = sequence_header.transfer_characteristics;
@@ -1357,7 +1360,7 @@ impl Decoder {
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
         }
-        let avif_boxes = MP4Box::parse(self.io.as_mut().unwrap())?;
+        let avif_boxes = mp4box::parse(self.io.as_mut().unwrap())?;
         self.tracks = avif_boxes.tracks;
         self.avif_items = construct_avif_items(&avif_boxes.meta)?;
         for item in self.avif_items.values_mut() {
@@ -1485,7 +1488,7 @@ impl Decoder {
                             .ok_or(AvifError::InvalidToneMappedImage)?;
                         let mut stream = tonemap_item.stream(self.io.as_mut().unwrap())?;
                         println!("tonemap stream size: {}", stream.data.len());
-                        self.gainmap.metadata = MP4Box::parse_tmap(&mut stream)?;
+                        self.gainmap.metadata = mp4box::parse_tmap(&mut stream)?;
                     }
                     println!("gainmap: {:#?}", self.gainmap);
                 }
@@ -1855,6 +1858,6 @@ impl Decoder {
     }
 
     pub fn peek_compatible_file_type(data: &[u8]) -> bool {
-        MP4Box::peek_compatible_file_type(data).unwrap_or(false)
+        mp4box::peek_compatible_file_type(data).unwrap_or(false)
     }
 }
