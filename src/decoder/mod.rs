@@ -1,7 +1,10 @@
+pub mod track;
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::dav1d::*;
+use crate::decoder::track::*;
 use crate::io::*;
 use crate::parser::exif;
 use crate::parser::mp4box;
