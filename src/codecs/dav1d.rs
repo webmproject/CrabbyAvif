@@ -126,7 +126,7 @@ impl Decoder for Dav1d {
                 self.picture = Some(next_frame);
                 // store other fields like color range, etc.
             } else {
-                // handle alpha special case.
+                // TODO: handle alpha special case.
             }
         }
 
@@ -179,6 +179,7 @@ impl Decoder for Dav1d {
             let seq_hdr = unsafe { *dav1d_picture.seq_hdr };
             image.info.full_range = seq_hdr.color_range != 0;
         }
+        // TODO: gainmap category.
         Ok(())
     }
 }
