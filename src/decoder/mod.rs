@@ -22,7 +22,7 @@ use crate::utils::*;
 use crate::*;
 
 #[derive(Debug, Copy, Clone, Default)]
-pub enum DecoderSource {
+pub enum Source {
     Tracks,
     PrimaryItem,
     #[default]
@@ -31,14 +31,38 @@ pub enum DecoderSource {
 }
 
 #[derive(Debug, Default)]
-pub struct DecoderSettings {
-    pub source: DecoderSource,
+pub struct Settings {
+    pub source: Source,
     pub ignore_exif: bool,
     pub ignore_xmp: bool,
     pub strictness: Strictness,
     pub allow_progressive: bool,
     pub enable_decoding_gainmap: bool,
     pub enable_parsing_gainmap_metadata: bool,
+}
+
+#[derive(Debug)]
+pub enum StrictnessFlag {
+    PixiRequired,
+    ClapValid,
+    AlphaIspeRequired,
+}
+
+#[derive(Debug, Default)]
+pub enum Strictness {
+    None,
+    #[default]
+    All,
+    SpecificInclude(Vec<StrictnessFlag>),
+    SpecificExclude(Vec<StrictnessFlag>),
+}
+
+#[derive(Debug, Default, Copy, Clone)]
+pub enum ProgressiveState {
+    #[default]
+    Unavailable,
+    Available,
+    Active,
 }
 
 impl Strictness {
@@ -71,9 +95,9 @@ impl Strictness {
 
 #[derive(Default)]
 pub struct Decoder {
-    pub settings: DecoderSettings,
+    pub settings: Settings,
     image: Image,
-    source: DecoderSource,
+    source: Source,
     tile_info: [TileInfo; 3],
     tiles: [Vec<Tile>; 3],
     image_index: i32,
@@ -477,24 +501,24 @@ impl Decoder {
 
         self.source = match self.settings.source {
             // Decide the source based on the major brand.
-            DecoderSource::Auto => match avif_boxes.ftyp.major_brand.as_str() {
-                "avis" => DecoderSource::Tracks,
-                "avif" => DecoderSource::PrimaryItem,
+            Source::Auto => match avif_boxes.ftyp.major_brand.as_str() {
+                "avis" => Source::Tracks,
+                "avif" => Source::PrimaryItem,
                 _ => {
                     if self.tracks.is_empty() {
-                        DecoderSource::PrimaryItem
+                        Source::PrimaryItem
                     } else {
-                        DecoderSource::Tracks
+                        Source::Tracks
                     }
                 }
             },
-            DecoderSource::Tracks => DecoderSource::Tracks,
-            DecoderSource::PrimaryItem => DecoderSource::PrimaryItem,
+            Source::Tracks => Source::Tracks,
+            Source::PrimaryItem => Source::PrimaryItem,
         };
 
         let color_properties: &Vec<ItemProperty>;
         match self.source {
-            DecoderSource::Tracks => {
+            Source::Tracks => {
                 let color_track = self
                     .tracks
                     .iter()
@@ -536,7 +560,7 @@ impl Decoder {
                 self.image.info.width = color_track.width;
                 self.image.info.height = color_track.height;
             }
-            DecoderSource::PrimaryItem => {
+            Source::PrimaryItem => {
                 // 0 color, 1 alpha, 2 gainmap
                 let mut item_ids: [u32; 3] = [0; 3];
 
@@ -780,7 +804,7 @@ impl Decoder {
     }
 
     fn create_codecs(&mut self) -> AvifResult<()> {
-        if matches!(self.source, DecoderSource::Tracks) {
+        if matches!(self.source, Source::Tracks) {
             // In this case, we will use at most two codec instances (one for the color planes and
             // one for the alpha plane). Gain maps are not supported.
             self.create_codec(

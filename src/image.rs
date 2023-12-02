@@ -1,4 +1,5 @@
 use crate::decoder::tile::TileInfo;
+use crate::decoder::ProgressiveState;
 use crate::utils::*;
 use crate::*;
 

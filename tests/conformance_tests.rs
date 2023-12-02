@@ -94,7 +94,7 @@ fn compare_files(file1: &String, file2: &String) -> bool {
 fn decode_and_verify(expected_info: &ExpectedImageInfo) {
     let filename = String::from(format!("{TEST_DATA_PATH}/{}", expected_info.filename));
     let mut decoder = decoder::Decoder::default();
-    decoder.settings.strictness = Strictness::None;
+    decoder.settings.strictness = decoder::Strictness::None;
     let _ = decoder.set_io_file(&filename).expect("Failed to set IO");
     let res = decoder.parse();
     assert!(res.is_ok());

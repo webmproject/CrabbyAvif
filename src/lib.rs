@@ -91,32 +91,6 @@ pub enum AvifError {
 
 pub type AvifResult<T> = Result<T, AvifError>;
 
-#[derive(Debug)]
-pub enum StrictnessFlag {
-    PixiRequired,
-    ClapValid,
-    AlphaIspeRequired,
-}
-
-// TODO: This is a decoder only struct. move it.
-#[derive(Debug, Default)]
-pub enum Strictness {
-    None,
-    #[default]
-    All,
-    SpecificInclude(Vec<StrictnessFlag>),
-    SpecificExclude(Vec<StrictnessFlag>),
-}
-
-// TODO: This is a decoder only struct. move it.
-#[derive(Debug, Default, Copy, Clone)]
-pub enum ProgressiveState {
-    #[default]
-    Unavailable,
-    Available,
-    Active,
-}
-
 pub trait DecoderIO {
     fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]>;
     fn size_hint(&self) -> u64;

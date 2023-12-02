@@ -2,7 +2,6 @@ use std::env;
 use std::process::Command;
 
 use rust_libavif::decoder::*;
-use rust_libavif::*;
 
 fn main() {
     // let data: [u8; 32] = [
@@ -27,8 +26,8 @@ fn main() {
     }
     let image_count;
     {
-        let settings = DecoderSettings {
-            source: DecoderSource::Auto,
+        let settings = Settings {
+            source: Source::Auto,
             ignore_exif: false,
             ignore_xmp: false,
             strictness: Strictness::None,

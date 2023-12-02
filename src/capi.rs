@@ -396,12 +396,12 @@ pub enum avifDecoderSource {
     Tracks,
 }
 
-impl From<avifDecoderSource> for DecoderSource {
+impl From<avifDecoderSource> for Source {
     fn from(source: avifDecoderSource) -> Self {
         match source {
-            avifDecoderSource::Auto => DecoderSource::Auto,
-            avifDecoderSource::PrimaryItem => DecoderSource::PrimaryItem,
-            avifDecoderSource::Tracks => DecoderSource::Tracks,
+            avifDecoderSource::Auto => Source::Auto,
+            avifDecoderSource::PrimaryItem => Source::PrimaryItem,
+            avifDecoderSource::Tracks => Source::Tracks,
         }
     }
 }
@@ -565,7 +565,7 @@ pub unsafe extern "C" fn avifDecoderSetSource(
     avifResult::Ok
 }
 
-impl From<&avifDecoder> for DecoderSettings {
+impl From<&avifDecoder> for Settings {
     fn from(decoder: &avifDecoder) -> Self {
         let strictness = if decoder.strictFlags == AVIF_STRICT_DISABLED {
             Strictness::None
