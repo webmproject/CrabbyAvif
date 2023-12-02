@@ -1,6 +1,5 @@
 pub mod decoder;
 pub mod image;
-pub mod io;
 pub mod utils;
 
 #[cfg(feature = "capi")]
@@ -11,9 +10,10 @@ mod bindings;
 /// cbindgen:ignore
 mod dav1d;
 
+mod io;
 mod parser;
 mod stream;
-pub mod types;
+mod types;
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum PixelFormat {
@@ -98,6 +98,7 @@ pub enum StrictnessFlag {
     AlphaIspeRequired,
 }
 
+// TODO: This is a decoder only struct. move it.
 #[derive(Debug, Default)]
 pub enum Strictness {
     None,
@@ -113,4 +114,10 @@ pub enum ProgressiveState {
     Unavailable,
     Available,
     Active,
+}
+
+pub trait DecoderIO {
+    fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]>;
+    fn size_hint(&self) -> u64;
+    fn persistent(&self) -> bool;
 }

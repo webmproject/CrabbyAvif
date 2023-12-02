@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use crate::decoder::*;
-use crate::io::*;
 use crate::parser::mp4box::*;
 use crate::*;
 

@@ -3,7 +3,6 @@ use crate::decoder::track::*;
 use crate::decoder::usize_from_u16;
 use crate::decoder::usize_from_u32;
 use crate::decoder::usize_from_u64;
-use crate::io::*;
 use crate::stream::*;
 use crate::*;
 

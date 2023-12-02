@@ -1,13 +1,8 @@
 use crate::AvifError;
 use crate::AvifResult;
+use crate::DecoderIO;
 use std::fs::File;
 use std::os::unix::fs::FileExt; // TODO: what happens when this is compiled for windows?
-
-pub trait DecoderIO {
-    fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]>;
-    fn size_hint(&self) -> u64;
-    fn persistent(&self) -> bool;
-}
 
 #[derive(Default, Debug)]
 pub struct DecoderFileIO {
