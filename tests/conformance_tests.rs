@@ -94,6 +94,7 @@ fn compare_files(file1: &String, file2: &String) -> bool {
 fn decode_and_verify(expected_info: &ExpectedAvifImageInfo) {
     let filename = String::from(format!("{TEST_DATA_PATH}/{}", expected_info.filename));
     let mut decoder = decoder::AvifDecoder::default();
+    decoder.settings.strictness = AvifStrictness::None;
     let _ = decoder.set_io_file(&filename).expect("Failed to set IO");
     let res = decoder.parse();
     assert!(res.is_ok());

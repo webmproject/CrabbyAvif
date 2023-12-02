@@ -249,6 +249,19 @@ pub struct AvifDecoderSettings {
 }
 
 impl AvifStrictness {
+    pub fn pixi_required(&self) -> bool {
+        match self {
+            AvifStrictness::All => true,
+            AvifStrictness::SpecificInclude(flags) => flags
+                .iter()
+                .any(|x| matches!(x, AvifStrictnessFlag::PixiRequired)),
+            AvifStrictness::SpecificExclude(flags) => !flags
+                .iter()
+                .any(|x| matches!(x, AvifStrictnessFlag::PixiRequired)),
+            _ => false,
+        }
+    }
+
     pub fn alpha_ispe_required(&self) -> bool {
         match self {
             AvifStrictness::All => true,
@@ -478,9 +491,53 @@ impl AvifItem {
     }
 
     #[allow(non_snake_case)]
+    fn validate_properties(
+        &self,
+        avif_items: &HashMap<u32, AvifItem>,
+        pixi_required: bool,
+    ) -> AvifResult<()> {
+        println!("validating item: {:#?}", self);
+        let av1C = self.av1C().ok_or(AvifError::BmffParseFailed)?;
+        if self.item_type == "grid" {
+            for grid_item_id in &self.grid_item_ids {
+                let grid_item = avif_items.get(&grid_item_id).unwrap();
+                let grid_av1C = grid_item.av1C().ok_or(AvifError::BmffParseFailed)?;
+                if av1C != grid_av1C {
+                    println!("av1c of grid items do not match");
+                    return Err(AvifError::BmffParseFailed);
+                }
+            }
+        }
+        match self.pixi() {
+            Some(pixi) => {
+                for i in 0..pixi.plane_count as usize {
+                    if pixi.plane_depths[i] != av1C.depth() {
+                        println!("pixi depth does not match av1C depth");
+                        return Err(AvifError::BmffParseFailed);
+                    }
+                }
+            }
+            None => {
+                if pixi_required {
+                    println!("missing pixi property");
+                    return Err(AvifError::BmffParseFailed);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(non_snake_case)]
     fn av1C(&self) -> Option<&CodecConfiguration> {
         match find_property!(self, CodecConfiguration) {
             Some(ItemProperty::CodecConfiguration(av1C)) => Some(av1C),
+            _ => None,
+        }
+    }
+
+    fn pixi(&self) -> Option<&PixelInformation> {
+        match find_property!(self, PixelInformation) {
+            Some(ItemProperty::PixelInformation(pixi)) => Some(pixi),
             _ => None,
         }
     }
@@ -980,6 +1037,7 @@ impl AvifDecoder {
         Ok(())
     }
 
+    #[allow(non_snake_case)]
     fn find_alpha_item(&self, color_item_index: u32) -> (u32, Option<AvifItem>) {
         let color_item = self.avif_items.get(&color_item_index).unwrap();
         if let Some(item) = self.avif_items.iter().find(|x| {
@@ -1008,6 +1066,11 @@ impl AvifDecoder {
             }
         }
         assert!(color_item.grid_item_ids.len() == alpha_item_indices.len());
+        let first_item = self.avif_items.get(&alpha_item_indices[0]).unwrap();
+        let properties = match find_av1C(&first_item.properties) {
+            Some(av1C) => vec![ItemProperty::CodecConfiguration(av1C.clone())],
+            None => return (0, None),
+        };
         (
             0,
             Some(AvifItem {
@@ -1016,6 +1079,7 @@ impl AvifDecoder {
                 width: color_item.width,
                 height: color_item.height,
                 grid_item_ids: alpha_item_indices,
+                properties,
                 ..AvifItem::default()
             }),
         )
@@ -1386,6 +1450,7 @@ impl AvifDecoder {
                 self.populate_grid_item_ids(&avif_boxes.meta.iinf, item_ids[0], 0)?;
 
                 // Optional alpha auxiliary item
+                let mut ignore_pixi_validation_for_alpha = false;
                 let (alpha_item_id, alpha_item) = self.find_alpha_item(item_ids[0]);
                 if alpha_item_id != 0 {
                     item_ids[1] = alpha_item_id;
@@ -1398,6 +1463,9 @@ impl AvifDecoder {
                     item_ids[1] = alpha_item.id;
                     self.tile_info[1].grid = self.tile_info[0].grid;
                     self.avif_items.insert(item_ids[1], alpha_item);
+                    // Made up alpha item does not contain the pixi property. So do not try to
+                    // validate it.
+                    ignore_pixi_validation_for_alpha = true;
                 } else {
                     // No alpha channel.
                     item_ids[1] = 0;
@@ -1428,8 +1496,6 @@ impl AvifDecoder {
 
                 println!("item ids: {:#?}", item_ids);
 
-                // TODO: gainmap item.
-
                 self.search_exif_or_xmp_metadata(item_ids[0])?;
 
                 self.image_index = -1;
@@ -1459,8 +1525,12 @@ impl AvifDecoder {
                         }
                     }
                     self.tiles[index] = self.generate_tiles(*item_id, index)?;
-                    // TODO: validate item properties.
+                    let pixi_required = self.settings.strictness.pixi_required()
+                        && (index != 1 || !ignore_pixi_validation_for_alpha);
+                    let item = self.avif_items.get(item_id).unwrap();
+                    item.validate_properties(&self.avif_items, pixi_required)?;
                 }
+                println!("hello");
 
                 let color_item = self.avif_items.get(&item_ids[0]).unwrap();
                 self.image.info.width = color_item.width;
