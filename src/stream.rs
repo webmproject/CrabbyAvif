@@ -1,4 +1,4 @@
-use crate::types::*;
+use crate::utils::*;
 use crate::AvifError;
 use crate::AvifResult;
 use byteorder::{BigEndian, ByteOrder};
