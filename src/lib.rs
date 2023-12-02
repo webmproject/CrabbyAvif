@@ -108,6 +108,7 @@ pub enum Strictness {
     SpecificExclude(Vec<StrictnessFlag>),
 }
 
+// TODO: This is a decoder only struct. move it.
 #[derive(Debug, Default, Copy, Clone)]
 pub enum ProgressiveState {
     #[default]

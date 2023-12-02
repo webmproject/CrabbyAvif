@@ -139,26 +139,6 @@ fn find_av1C(properties: &[ItemProperty]) -> Option<&CodecConfiguration> {
     }
 }
 
-fn find_clli(properties: &[ItemProperty]) -> Option<&ContentLightLevelInformation> {
-    match properties
-        .iter()
-        .find(|x| matches!(x, ItemProperty::ContentLightLevelInformation(_)))
-    {
-        Some(ItemProperty::ContentLightLevelInformation(clli)) => Some(clli),
-        _ => None,
-    }
-}
-
-fn find_pixi(properties: &[ItemProperty]) -> Option<&PixelInformation> {
-    match properties
-        .iter()
-        .find(|x| matches!(x, ItemProperty::PixelInformation(_)))
-    {
-        Some(ItemProperty::PixelInformation(pixi)) => Some(pixi),
-        _ => None,
-    }
-}
-
 impl Decoder {
     pub fn set_io_file(&mut self, filename: &String) -> AvifResult<()> {
         self.io = Some(Box::new(DecoderFileIO::create(filename)?));
@@ -200,7 +180,7 @@ impl Decoder {
         }
         assert!(color_item.grid_item_ids.len() == alpha_item_indices.len());
         let first_item = self.items.get(&alpha_item_indices[0]).unwrap();
-        let properties = match find_av1C(&first_item.properties) {
+        let properties = match first_item.av1C() {
             Some(av1C) => vec![ItemProperty::CodecConfiguration(av1C.clone())],
             None => return (0, None),
         };
@@ -311,10 +291,10 @@ impl Decoder {
                 }
             }
         }
-        if let Some(clli) = find_clli(&tonemap_item.properties) {
+        if let Some(clli) = tonemap_item.clli() {
             self.gainmap.alt_clli = *clli;
         }
-        if let Some(pixi) = find_pixi(&tonemap_item.properties) {
+        if let Some(pixi) = tonemap_item.pixi() {
             if pixi.plane_count == 0 {
                 println!("invalid plane count in tonemap");
                 return Err(AvifError::BmffParseFailed);
@@ -677,8 +657,7 @@ impl Decoder {
                     let gainmap_item = self.items.get(&item_ids[2]).unwrap();
                     self.gainmap.image.info.width = gainmap_item.width;
                     self.gainmap.image.info.height = gainmap_item.height;
-                    let av1C =
-                        find_av1C(&gainmap_item.properties).ok_or(AvifError::BmffParseFailed)?;
+                    let av1C = gainmap_item.av1C().ok_or(AvifError::BmffParseFailed)?;
                     self.gainmap.image.info.depth = av1C.depth();
                     self.gainmap.image.info.yuv_format = av1C.pixel_format();
                     self.gainmap.image.info.chroma_sample_position = av1C.chroma_sample_position;
@@ -854,6 +833,7 @@ impl Decoder {
             return Err(AvifError::NoImagesRemaining);
         }
         let sample = &mut tile.input.samples[image_index];
+        // the rest of the code can be in sample struct.
         if sample.item_id != 0 {
             // Data comes from an item.
             let item = self

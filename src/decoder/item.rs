@@ -204,6 +204,13 @@ impl Item {
         }
     }
 
+    pub fn clli(&self) -> Option<&ContentLightLevelInformation> {
+        match find_property!(self, ContentLightLevelInformation) {
+            Some(ItemProperty::ContentLightLevelInformation(clli)) => Some(clli),
+            _ => None,
+        }
+    }
+
     #[allow(non_snake_case)]
     pub fn is_auxiliary_alpha(&self) -> bool {
         match find_property!(self, AuxiliaryType) {
