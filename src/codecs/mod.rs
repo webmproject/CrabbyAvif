@@ -1,5 +1,5 @@
 pub mod bindings;
-//pub mod dav1d;
+pub mod dav1d;
 pub mod libgav1;
 
 use crate::image::Image;

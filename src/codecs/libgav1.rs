@@ -58,6 +58,7 @@ impl Decoder for Libgav1 {
                 std::ptr::null_mut(),
             );
             if ret != Libgav1StatusCode_kLibgav1StatusOk {
+                println!("enqueue failed. err: {ret}");
                 return Err(AvifError::UnknownError);
             }
             self.image = None;
@@ -65,6 +66,7 @@ impl Decoder for Libgav1 {
             loop {
                 let ret = Libgav1DecoderDequeueFrame(self.decoder.unwrap(), &mut next_frame);
                 if ret != Libgav1StatusCode_kLibgav1StatusOk {
+                    println!("dequeue failed. err: {ret}");
                     return Err(AvifError::UnknownError);
                 }
                 if !next_frame.is_null()
@@ -81,6 +83,7 @@ impl Decoder for Libgav1 {
                 if category == 1 {
                     // TODO: handle alpha special case.
                 } else {
+                    println!("next frame is null. err: {ret}");
                     return Err(AvifError::UnknownError);
                 }
             } else {
@@ -131,5 +134,14 @@ impl Decoder for Libgav1 {
             // TODO: gainmap category.
         }
         Ok(())
+    }
+}
+
+impl Drop for Libgav1 {
+    fn drop(&mut self) {
+        if self.decoder.is_some() {
+            println!("closing gav1");
+            unsafe { Libgav1DecoderDestroy(self.decoder.unwrap()) };
+        }
     }
 }

@@ -10,7 +10,7 @@ use crate::decoder::item::*;
 use crate::decoder::tile::*;
 use crate::decoder::track::*;
 
-//use crate::codecs::dav1d::Dav1d;
+use crate::codecs::dav1d::Dav1d;
 use crate::codecs::libgav1::Libgav1;
 use crate::codecs::Decoder as DecoderTrait;
 use crate::image::*;
@@ -669,7 +669,6 @@ impl Decoder {
                     let item = self.items.get(item_id).unwrap();
                     item.validate_properties(&self.items, pixi_required)?;
                 }
-                println!("hello");
 
                 let color_item = self.items.get(&item_ids[0]).unwrap();
                 self.image.info.width = color_item.width;
@@ -808,8 +807,7 @@ impl Decoder {
 
     fn create_codec(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
         let mut codec: Codec = if true {
-            //Box::new(Dav1d::default())
-            Box::new(Libgav1::default())
+            Box::new(Dav1d::default())
         } else {
             Box::new(Libgav1::default())
         };
