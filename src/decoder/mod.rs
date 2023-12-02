@@ -10,7 +10,7 @@ use crate::decoder::item::*;
 use crate::decoder::tile::*;
 use crate::decoder::track::*;
 
-use crate::dav1d::*;
+use crate::codecs::dav1d::Dav1d;
 use crate::image::*;
 use crate::io::*;
 use crate::parser::exif;

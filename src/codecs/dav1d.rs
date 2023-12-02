@@ -1,4 +1,4 @@
-use crate::bindings::*;
+use crate::codecs::bindings::dav1d::*;
 use crate::image::Image;
 use crate::AvifError;
 use crate::AvifResult;

@@ -6,9 +6,7 @@ pub mod y4m;
 pub mod capi;
 
 /// cbindgen:ignore
-mod bindings;
-/// cbindgen:ignore
-mod dav1d;
+mod codecs;
 
 mod io;
 mod parser;
