@@ -138,6 +138,26 @@ impl Image {
         Ok(())
     }
 
+    pub fn steal_from(&mut self, src: &Image, category: usize) {
+        match category {
+            0 | 2 => {
+                self.planes[0] = src.planes[0];
+                self.planes[1] = src.planes[1];
+                self.planes[2] = src.planes[2];
+                self.row_bytes[0] = src.row_bytes[0];
+                self.row_bytes[1] = src.row_bytes[1];
+                self.row_bytes[2] = src.row_bytes[2];
+            }
+            1 => {
+                self.planes[3] = src.planes[3];
+                self.row_bytes[3] = src.row_bytes[3];
+            }
+            _ => {
+                panic!("invalid category in steal planes");
+            }
+        }
+    }
+
     pub fn copy_from_tile(
         &mut self,
         tile: &Image,

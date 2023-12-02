@@ -159,34 +159,6 @@ fn find_pixi(properties: &[ItemProperty]) -> Option<&PixelInformation> {
     }
 }
 
-fn steal_planes(dst: &mut Image, src: &mut Image, category: usize) {
-    match category {
-        0 | 2 => {
-            dst.planes[0] = src.planes[0];
-            dst.planes[1] = src.planes[1];
-            dst.planes[2] = src.planes[2];
-            dst.row_bytes[0] = src.row_bytes[0];
-            dst.row_bytes[1] = src.row_bytes[1];
-            dst.row_bytes[2] = src.row_bytes[2];
-            src.planes[0] = None;
-            src.planes[1] = None;
-            src.planes[2] = None;
-            src.row_bytes[0] = 0;
-            src.row_bytes[1] = 0;
-            src.row_bytes[2] = 0;
-        }
-        1 => {
-            dst.planes[3] = src.planes[3];
-            dst.row_bytes[3] = src.row_bytes[3];
-            src.planes[3] = None;
-            src.row_bytes[3] = 0;
-        }
-        _ => {
-            panic!("invalid category in steal planes");
-        }
-    }
-}
-
 impl Decoder {
     pub fn set_io_file(&mut self, filename: &String) -> AvifResult<()> {
         self.io = Some(Box::new(DecoderFileIO::create(filename)?));
@@ -981,9 +953,9 @@ impl Decoder {
                     }
 
                     if category == 0 || category == 1 {
-                        steal_planes(&mut self.image, &mut tile.image, category);
+                        self.image.steal_from(&tile.image, category);
                     } else {
-                        steal_planes(&mut self.gainmap.image, &mut tile.image, category);
+                        self.gainmap.image.steal_from(&tile.image, category);
                     }
                 }
             }
