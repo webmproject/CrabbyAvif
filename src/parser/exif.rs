@@ -1,4 +1,4 @@
-use crate::stream::*;
+use crate::internal_utils::stream::*;
 use crate::*;
 
 fn parse_exif_tiff_header_offset(stream: &mut IStream) -> AvifResult<u32> {

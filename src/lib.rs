@@ -10,7 +10,6 @@ mod codecs;
 
 mod internal_utils;
 mod parser;
-mod stream;
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum PixelFormat {

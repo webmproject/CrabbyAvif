@@ -1,7 +1,7 @@
 use crate::decoder::gainmap::GainMapMetadata;
 use crate::decoder::track::*;
 use crate::decoder::GenericIO;
-use crate::stream::*;
+use crate::internal_utils::stream::*;
 use crate::internal_utils::*;
 use crate::*;
 

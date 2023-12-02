@@ -1,4 +1,5 @@
 pub mod io;
+pub mod stream;
 
 use crate::AvifError;
 use crate::AvifResult;

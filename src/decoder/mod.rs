@@ -18,7 +18,6 @@ use crate::parser::exif;
 use crate::parser::mp4box;
 use crate::parser::mp4box::*;
 use crate::parser::obu;
-use crate::stream::*;
 use crate::*;
 
 pub trait IO {

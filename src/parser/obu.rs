@@ -1,6 +1,6 @@
-use crate::parser::mp4box::CodecConfiguration;
-use crate::stream::*;
+use crate::internal_utils::stream::*;
 use crate::internal_utils::*;
+use crate::parser::mp4box::CodecConfiguration;
 use crate::*;
 
 #[derive(Debug)]
