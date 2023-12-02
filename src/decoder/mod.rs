@@ -18,7 +18,7 @@ use crate::parser::mp4box;
 use crate::parser::mp4box::*;
 use crate::parser::obu;
 use crate::stream::*;
-use crate::utils::*;
+use crate::internal_utils::*;
 use crate::*;
 
 pub trait IO {

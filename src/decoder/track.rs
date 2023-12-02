@@ -1,5 +1,5 @@
 use crate::parser::mp4box::ItemProperty;
-use crate::utils::*;
+use crate::internal_utils::*;
 use crate::*;
 
 #[derive(Debug, Default)]

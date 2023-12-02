@@ -1,6 +1,6 @@
 pub mod decoder;
 pub mod image;
-pub mod y4m;
+pub mod utils;
 
 #[cfg(feature = "capi")]
 pub mod capi;
@@ -8,10 +8,10 @@ pub mod capi;
 /// cbindgen:ignore
 mod codecs;
 
+mod internal_utils;
 mod io;
 mod parser;
 mod stream;
-mod utils;
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum PixelFormat {

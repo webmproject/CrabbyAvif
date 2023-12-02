@@ -1,6 +1,6 @@
 use crate::decoder::tile::TileInfo;
 use crate::decoder::ProgressiveState;
-use crate::utils::*;
+use crate::internal_utils::*;
 use crate::*;
 
 // TODO: needed only for debug to Image and PlaneData. Can be removed it those do not have to be

@@ -2,7 +2,7 @@ use crate::decoder::gainmap::GainMapMetadata;
 use crate::decoder::track::*;
 use crate::decoder::GenericIO;
 use crate::stream::*;
-use crate::utils::*;
+use crate::internal_utils::*;
 use crate::*;
 
 use std::collections::HashSet;

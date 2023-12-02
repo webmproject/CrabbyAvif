@@ -1,6 +1,6 @@
 use crate::decoder::Image;
+use crate::internal_utils::*;
 use crate::parser::mp4box::ContentLightLevelInformation;
-use crate::utils::*;
 
 #[derive(Default, Debug)]
 pub struct GainMapMetadata {
