@@ -153,7 +153,7 @@ impl Item {
         let av1C = self.av1C().ok_or(AvifError::BmffParseFailed)?;
         if self.item_type == "grid" {
             for grid_item_id in &self.grid_item_ids {
-                let grid_item = avif_items.get(&grid_item_id).unwrap();
+                let grid_item = avif_items.get(grid_item_id).unwrap();
                 let grid_av1C = grid_item.av1C().ok_or(AvifError::BmffParseFailed)?;
                 if av1C != grid_av1C {
                     println!("av1c of grid items do not match");
