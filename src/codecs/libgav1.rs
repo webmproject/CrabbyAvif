@@ -58,7 +58,7 @@ impl Decoder for Libgav1 {
                 std::ptr::null_mut(),
             );
             if ret != Libgav1StatusCode_kLibgav1StatusOk {
-                println!("enqueue failed. err: {ret}");
+                println!("enqueue failed. err: {ret} len: {}", av1_payload.len());
                 return Err(AvifError::UnknownError);
             }
             self.image = None;

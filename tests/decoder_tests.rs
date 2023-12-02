@@ -134,7 +134,7 @@ fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     assert_eq!(info.width, width);
     assert_eq!(info.height, height);
     assert_eq!(decoder.image_count, layer_count);
-    for _ in 0..decoder.image_count {
+    for _i in 0..decoder.image_count {
         let res = decoder.next_image();
         assert!(res.is_ok());
         // let _image = res.unwrap();

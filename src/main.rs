@@ -34,6 +34,7 @@ fn main() {
             allow_progressive: false,
             enable_decoding_gainmap: true,
             enable_parsing_gainmap_metadata: true,
+            codec_choice: CodecChoice::Dav1d,
         };
         let mut decoder: Decoder = Default::default();
         decoder.settings = settings;

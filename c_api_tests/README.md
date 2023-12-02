@@ -11,3 +11,5 @@
 
 * avifmetadatatest.cc
   * Remove encoder tests and add more checks to the decoder test.
+* avifgainmaptest.cc
+  * Remove encoder tests.
