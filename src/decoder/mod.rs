@@ -12,13 +12,13 @@ use crate::decoder::track::*;
 
 use crate::codecs::dav1d::Dav1d;
 use crate::image::*;
-use crate::io::*;
+use crate::internal_utils::io::*;
+use crate::internal_utils::*;
 use crate::parser::exif;
 use crate::parser::mp4box;
 use crate::parser::mp4box::*;
 use crate::parser::obu;
 use crate::stream::*;
-use crate::internal_utils::*;
 use crate::*;
 
 pub trait IO {

@@ -1,3 +1,5 @@
+pub mod io;
+
 use crate::AvifError;
 use crate::AvifResult;
 

@@ -9,7 +9,6 @@ pub mod capi;
 mod codecs;
 
 mod internal_utils;
-mod io;
 mod parser;
 mod stream;
 
