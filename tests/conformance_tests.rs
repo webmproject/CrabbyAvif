@@ -1,5 +1,5 @@
-use rust_libavif::decoder::Image;
-use rust_libavif::decoder::ImageInfo;
+use rust_libavif::image::*;
+use rust_libavif::y4m::*;
 use rust_libavif::*;
 
 use std::fs::remove_file;
@@ -54,7 +54,7 @@ fn get_tempfile() -> String {
 
 fn write_y4m(image: &Image) -> String {
     let filename = get_tempfile();
-    let mut y4m = rust_libavif::utils::Y4MWriter::create(&filename);
+    let mut y4m = Y4MWriter::create(&filename);
     assert!(y4m.write_frame(image));
     filename
 }
