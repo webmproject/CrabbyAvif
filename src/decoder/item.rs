@@ -143,16 +143,12 @@ impl Item {
     }
 
     #[allow(non_snake_case)]
-    pub fn validate_properties(
-        &self,
-        avif_items: &HashMap<u32, Item>,
-        pixi_required: bool,
-    ) -> AvifResult<()> {
+    pub fn validate_properties(&self, items: &Items, pixi_required: bool) -> AvifResult<()> {
         println!("validating item: {:#?}", self);
         let av1C = self.av1C().ok_or(AvifError::BmffParseFailed)?;
         if self.item_type == "grid" {
             for grid_item_id in &self.grid_item_ids {
-                let grid_item = avif_items.get(grid_item_id).unwrap();
+                let grid_item = items.get(grid_item_id).unwrap();
                 let grid_av1C = grid_item.av1C().ok_or(AvifError::BmffParseFailed)?;
                 if av1C != grid_av1C {
                     println!("av1c of grid items do not match");
@@ -244,4 +240,127 @@ impl Item {
     pub fn is_tmap(&self) -> bool {
         self.is_metadata("tmap", 0) && self.thumbnail_for_id == 0
     }
+}
+
+pub type Items = HashMap<u32, Item>;
+
+pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
+    let mut items: Items = HashMap::new();
+    for iinf in &meta.iinf {
+        items.insert(
+            iinf.item_id,
+            Item {
+                id: iinf.item_id,
+                item_type: iinf.item_type.clone(),
+                content_type: iinf.content_type.clone(),
+                ..Item::default()
+            },
+        );
+    }
+    for iloc in &meta.iloc.items {
+        let item = items
+            .get_mut(&iloc.item_id)
+            .ok_or(AvifError::BmffParseFailed)?;
+        if !item.extents.is_empty() {
+            println!("item already has extents.");
+            return Err(AvifError::BmffParseFailed);
+        }
+        if iloc.construction_method == 1 {
+            item.idat = meta.idat.clone();
+        }
+        for extent in &iloc.extents {
+            item.extents.push(ItemLocationExtent {
+                offset: iloc.base_offset + extent.offset,
+                length: extent.length,
+            });
+            item.size = item
+                .size
+                .checked_add(usize_from_u64(extent.length)?)
+                .ok_or(AvifError::BmffParseFailed)?;
+        }
+    }
+    let mut ipma_seen: HashSet<u32> = HashSet::new();
+    for association in &meta.iprp.associations {
+        if ipma_seen.contains(&association.item_id) {
+            println!("item has duplictate ipma.");
+            return Err(AvifError::BmffParseFailed);
+        }
+        ipma_seen.insert(association.item_id);
+        let item = items
+            .get_mut(&association.item_id)
+            .ok_or(AvifError::BmffParseFailed)?;
+        for (property_index_ref, essential_ref) in &association.associations {
+            let property_index: usize = *property_index_ref as usize;
+            let essential = *essential_ref;
+            if property_index == 0 {
+                // Not associated with any item.
+                continue;
+            }
+            if property_index > meta.iprp.properties.len() {
+                println!("invalid property_index in ipma.");
+                return Err(AvifError::BmffParseFailed);
+            }
+            // property_index is 1-indexed.
+            let property = meta.iprp.properties[property_index - 1].clone();
+            let is_supported_property = matches!(
+                property,
+                ItemProperty::ImageSpatialExtents(_)
+                    | ItemProperty::ColorInformation(_)
+                    | ItemProperty::CodecConfiguration(_)
+                    | ItemProperty::PixelInformation(_)
+                    | ItemProperty::PixelAspectRatio(_)
+                    | ItemProperty::AuxiliaryType(_)
+                    | ItemProperty::ClearAperture(_)
+                    | ItemProperty::ImageRotation(_)
+                    | ItemProperty::ImageMirror(_)
+                    | ItemProperty::OperatingPointSelector(_)
+                    | ItemProperty::LayerSelector(_)
+                    | ItemProperty::AV1LayeredImageIndexing(_)
+                    | ItemProperty::ContentLightLevelInformation(_)
+            );
+            if is_supported_property {
+                if essential {
+                    if let ItemProperty::AV1LayeredImageIndexing(_) = property {
+                        println!("invalid essential property.");
+                        return Err(AvifError::BmffParseFailed);
+                    }
+                } else {
+                    match property {
+                        ItemProperty::OperatingPointSelector(_)
+                        | ItemProperty::LayerSelector(_) => {
+                            println!("required essential property not marked as essential.");
+                            return Err(AvifError::BmffParseFailed);
+                        }
+                        _ => {}
+                    }
+                }
+                item.properties.push(property);
+            } else if essential {
+                item.has_unsupported_essential_property = true;
+            }
+        }
+    }
+    for reference in &meta.iref {
+        let item = items
+            .get_mut(&reference.from_item_id)
+            .ok_or(AvifError::BmffParseFailed)?;
+        match reference.reference_type.as_str() {
+            "thmb" => item.thumbnail_for_id = reference.to_item_id,
+            "auxl" => item.aux_for_id = reference.to_item_id,
+            "cdsc" => item.desc_for_id = reference.to_item_id,
+            "prem" => item.prem_by_id = reference.to_item_id,
+            "dimg" => {
+                // derived images refer in the opposite direction.
+                let dimg_item = items
+                    .get_mut(&reference.to_item_id)
+                    .ok_or(AvifError::BmffParseFailed)?;
+                dimg_item.dimg_for_id = reference.from_item_id;
+                dimg_item.dimg_index = reference.index;
+            }
+            _ => {
+                // unknown reference type, ignore.
+            }
+        }
+    }
+    Ok(items)
 }

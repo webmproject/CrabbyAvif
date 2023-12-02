@@ -3,7 +3,6 @@ pub mod item;
 pub mod tile;
 pub mod track;
 
-use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::decoder::gainmap::*;
@@ -85,7 +84,7 @@ pub struct Decoder {
     pub repetition_count: i32,
     pub gainmap: GainMap,
     pub gainmap_present: bool,
-    avif_items: HashMap<u32, Item>,
+    items: Items,
     tracks: Vec<Track>,
     // To replicate the C-API, we need to keep this optional. Otherwise this could be part of the
     // initialization.
@@ -160,127 +159,6 @@ fn find_pixi(properties: &[ItemProperty]) -> Option<&PixelInformation> {
     }
 }
 
-fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, Item>> {
-    let mut avif_items: HashMap<u32, Item> = HashMap::new();
-    for item in &meta.iinf {
-        avif_items.insert(
-            item.item_id,
-            Item {
-                id: item.item_id,
-                item_type: item.item_type.clone(),
-                content_type: item.content_type.clone(),
-                ..Item::default()
-            },
-        );
-    }
-    for item in &meta.iloc.items {
-        let avif_item = avif_items
-            .get_mut(&item.item_id)
-            .ok_or(AvifError::BmffParseFailed)?;
-        if !avif_item.extents.is_empty() {
-            println!("item already has extents.");
-            return Err(AvifError::BmffParseFailed);
-        }
-        if item.construction_method == 1 {
-            avif_item.idat = meta.idat.clone();
-        }
-        for extent in &item.extents {
-            avif_item.extents.push(ItemLocationExtent {
-                offset: item.base_offset + extent.offset,
-                length: extent.length,
-            });
-            avif_item.size = avif_item
-                .size
-                .checked_add(usize_from_u64(extent.length)?)
-                .ok_or(AvifError::BmffParseFailed)?;
-        }
-    }
-    let mut ipma_seen: HashSet<u32> = HashSet::new();
-    for association in &meta.iprp.associations {
-        if ipma_seen.contains(&association.item_id) {
-            println!("item has duplictate ipma.");
-            return Err(AvifError::BmffParseFailed);
-        }
-        ipma_seen.insert(association.item_id);
-        let avif_item = avif_items
-            .get_mut(&association.item_id)
-            .ok_or(AvifError::BmffParseFailed)?;
-        for (property_index_ref, essential_ref) in &association.associations {
-            let property_index: usize = *property_index_ref as usize;
-            let essential = *essential_ref;
-            if property_index == 0 {
-                // Not associated with any item.
-                continue;
-            }
-            if property_index > meta.iprp.properties.len() {
-                println!("invalid property_index in ipma.");
-                return Err(AvifError::BmffParseFailed);
-            }
-            // property_index is 1-indexed.
-            let property = meta.iprp.properties[property_index - 1].clone();
-            let is_supported_property = matches!(
-                property,
-                ItemProperty::ImageSpatialExtents(_)
-                    | ItemProperty::ColorInformation(_)
-                    | ItemProperty::CodecConfiguration(_)
-                    | ItemProperty::PixelInformation(_)
-                    | ItemProperty::PixelAspectRatio(_)
-                    | ItemProperty::AuxiliaryType(_)
-                    | ItemProperty::ClearAperture(_)
-                    | ItemProperty::ImageRotation(_)
-                    | ItemProperty::ImageMirror(_)
-                    | ItemProperty::OperatingPointSelector(_)
-                    | ItemProperty::LayerSelector(_)
-                    | ItemProperty::AV1LayeredImageIndexing(_)
-                    | ItemProperty::ContentLightLevelInformation(_)
-            );
-            if is_supported_property {
-                if essential {
-                    if let ItemProperty::AV1LayeredImageIndexing(_) = property {
-                        println!("invalid essential property.");
-                        return Err(AvifError::BmffParseFailed);
-                    }
-                } else {
-                    match property {
-                        ItemProperty::OperatingPointSelector(_)
-                        | ItemProperty::LayerSelector(_) => {
-                            println!("required essential property not marked as essential.");
-                            return Err(AvifError::BmffParseFailed);
-                        }
-                        _ => {}
-                    }
-                }
-                avif_item.properties.push(property);
-            } else if essential {
-                avif_item.has_unsupported_essential_property = true;
-            }
-        }
-    }
-    for reference in &meta.iref {
-        let item = avif_items
-            .get_mut(&reference.from_item_id)
-            .ok_or(AvifError::BmffParseFailed)?;
-        match reference.reference_type.as_str() {
-            "thmb" => item.thumbnail_for_id = reference.to_item_id,
-            "auxl" => item.aux_for_id = reference.to_item_id,
-            "cdsc" => item.desc_for_id = reference.to_item_id,
-            "prem" => item.prem_by_id = reference.to_item_id,
-            "dimg" => {
-                // derived images refer in the opposite direction.
-                let dimg_item = avif_items
-                    .get_mut(&reference.to_item_id)
-                    .ok_or(AvifError::BmffParseFailed)?;
-                dimg_item.dimg_for_id = reference.from_item_id;
-                dimg_item.dimg_index = reference.index;
-            }
-            _ => {
-                // unknown reference type, ignore.
-            }
-        }
-    }
-    Ok(avif_items)
-}
-
 fn steal_planes(dst: &mut Image, src: &mut Image, category: usize) {
     match category {
         0 | 2 => {
@@ -322,8 +200,8 @@ impl Decoder {
 
     #[allow(non_snake_case)]
     fn find_alpha_item(&self, color_item_index: u32) -> (u32, Option<Item>) {
-        let color_item = self.avif_items.get(&color_item_index).unwrap();
-        if let Some(item) = self.avif_items.iter().find(|x| {
+        let color_item = self.items.get(&color_item_index).unwrap();
+        if let Some(item) = self.items.iter().find(|x| {
             !x.1.should_skip() && x.1.aux_for_id == color_item.id && x.1.is_auxiliary_alpha()
         }) {
             return (*item.0, None);
@@ -336,7 +214,7 @@ impl Decoder {
         let mut alpha_item_indices: Vec<u32> = Vec::new();
         for color_grid_item_id in &color_item.grid_item_ids {
             match self
-                .avif_items
+                .items
                 .iter()
                 .find(|x| x.1.aux_for_id == *color_grid_item_id && x.1.is_auxiliary_alpha())
             {
@@ -349,7 +227,7 @@ impl Decoder {
             }
         }
         assert!(color_item.grid_item_ids.len() == alpha_item_indices.len());
-        let first_item = self.avif_items.get(&alpha_item_indices[0]).unwrap();
+        let first_item = self.items.get(&alpha_item_indices[0]).unwrap();
         let properties = match find_av1C(&first_item.properties) {
             Some(av1C) => vec![ItemProperty::CodecConfiguration(av1C.clone())],
             None => return (0, None),
@@ -357,7 +235,7 @@ impl Decoder {
         (
             0,
             Some(Item {
-                id: self.avif_items.keys().max().unwrap() + 1,
+                id: self.items.keys().max().unwrap() + 1,
                 item_type: String::from("grid"),
                 width: color_item.width,
                 height: color_item.height,
@@ -371,11 +249,11 @@ impl Decoder {
     // returns (tone_mapped_image_item_id, gain_map_item_id)
     fn find_tone_mapped_image_item(&self, color_item_id: u32) -> AvifResult<(u32, u32)> {
         // TODO: may have to find_all instead of find one.
-        let tmap_items: Vec<_> = self.avif_items.values().filter(|x| x.is_tmap()).collect();
+        let tmap_items: Vec<_> = self.items.values().filter(|x| x.is_tmap()).collect();
         for item in tmap_items {
             println!("found a tonemapped item: {:#?}", item.id);
             let dimg_items: Vec<_> = self
-                .avif_items
+                .items
                 .values()
                 .filter(|x| x.dimg_for_id == item.id)
                 .collect();
@@ -408,7 +286,7 @@ impl Decoder {
         }
         println!("tonemap_id: {tonemap_id} gainmap_id: {gainmap_id}");
         let gainmap_item = self
-            .avif_items
+            .items
             .get(&gainmap_id)
             .ok_or(AvifError::InvalidToneMappedImage)?;
         if gainmap_item.should_skip() {
@@ -419,7 +297,7 @@ impl Decoder {
 
     fn validate_gainmap_item(&mut self, gainmap_id: u32) -> AvifResult<()> {
         let gainmap_item = self
-            .avif_items
+            .items
             .get(&gainmap_id)
             .ok_or(AvifError::InvalidToneMappedImage)?;
         if let Ok(nclx) = find_nclx(&gainmap_item.properties) {
@@ -433,7 +311,7 @@ impl Decoder {
         // (HEIF 6.5.5.1, from Amendment 3) Accept one of each type, and bail out if more than one
         // of a given type is provided.
         let tonemap_item = self
-            .avif_items
+            .items
             .get(&gainmap_id)
             .ok_or(AvifError::InvalidToneMappedImage)?;
         match find_nclx(&tonemap_item.properties) {
@@ -480,11 +358,7 @@ impl Decoder {
             return Ok(());
         }
         if !self.settings.ignore_exif {
-            if let Some(exif) = self
-                .avif_items
-                .iter()
-                .find(|x| x.1.is_exif(color_item_index))
-            {
+            if let Some(exif) = self.items.iter().find(|x| x.1.is_exif(color_item_index)) {
                 let mut stream = exif.1.stream(self.io.as_mut().unwrap())?;
                 exif::parse(&mut stream)?;
                 self.image
@@ -494,11 +368,7 @@ impl Decoder {
             }
         }
         if !self.settings.ignore_xmp {
-            if let Some(xmp) = self
-                .avif_items
-                .iter()
-                .find(|x| x.1.is_xmp(color_item_index))
-            {
+            if let Some(xmp) = self.items.iter().find(|x| x.1.is_xmp(color_item_index)) {
                 let mut stream = xmp.1.stream(self.io.as_mut().unwrap())?;
                 self.image
                     .info
@@ -512,7 +382,7 @@ impl Decoder {
     fn generate_tiles(&mut self, item_id: u32, category: usize) -> AvifResult<Vec<Tile>> {
         let mut tiles: Vec<Tile> = Vec::new();
         let item = self
-            .avif_items
+            .items
             .get(&item_id)
             .ok_or(AvifError::MissingImageItem)?;
         if !item.grid_item_ids.is_empty() {
@@ -525,7 +395,7 @@ impl Decoder {
             let grid_item_ids = item.grid_item_ids.clone();
             for grid_item_id in &grid_item_ids {
                 let grid_item = self
-                    .avif_items
+                    .items
                     .get_mut(grid_item_id)
                     .ok_or(AvifError::InvalidImageGrid)?;
                 let mut tile = Tile::create_from_item(grid_item, self.settings.allow_progressive)?;
@@ -533,10 +403,10 @@ impl Decoder {
                 tiles.push(tile);
             }
 
-            if category == 0 && self.avif_items.get(&grid_item_ids[0]).unwrap().progressive {
+            if category == 0 && self.items.get(&grid_item_ids[0]).unwrap().progressive {
                 // Propagate the progressive status to the top-level grid item.
                 let item = self
-                    .avif_items
+                    .items
                     .get_mut(&item_id)
                     .ok_or(AvifError::MissingImageItem)?;
                 item.progressive = true;
@@ -546,7 +416,7 @@ impl Decoder {
                 return Err(AvifError::MissingImageItem);
             }
             let item = self
-                .avif_items
+                .items
                 .get_mut(&item_id)
                 .ok_or(AvifError::MissingImageItem)?;
             let mut tile = Tile::create_from_item(item, self.settings.allow_progressive)?;
@@ -587,17 +457,17 @@ impl Decoder {
         item_id: u32,
         category: usize,
     ) -> AvifResult<()> {
-        if self.avif_items.get(&item_id).unwrap().item_type != "grid" {
+        if self.items.get(&item_id).unwrap().item_type != "grid" {
             return Ok(());
         }
         let mut grid_item_ids: Vec<u32> = Vec::new();
         let mut first_av1C = CodecConfiguration::default();
         let mut is_first = true;
-        // Collect all the dimg items. Cannot directly iterate through avif_items here directly
+        // Collect all the dimg items. Cannot directly iterate through items here directly
         // because HashMap is not ordered.
         for item_info in iinf {
             let dimg_item = self
-                .avif_items
+                .items
                 .get(&item_info.item_id)
                 .ok_or(AvifError::InvalidImageGrid)?;
             if dimg_item.dimg_for_id != item_id {
@@ -630,7 +500,7 @@ impl Decoder {
             return Err(AvifError::InvalidImageGrid);
         }
         let item = self
-            .avif_items
+            .items
             .get_mut(&item_id)
             .ok_or(AvifError::InvalidImageGrid)?;
         item.properties
@@ -646,12 +516,12 @@ impl Decoder {
         }
         let avif_boxes = mp4box::parse(self.io.as_mut().unwrap())?;
         self.tracks = avif_boxes.tracks;
-        self.avif_items = construct_avif_items(&avif_boxes.meta)?;
-        for item in self.avif_items.values_mut() {
+        self.items = construct_items(&avif_boxes.meta)?;
+        for item in self.items.values_mut() {
             item.harvest_ispe(self.settings.strictness.alpha_ispe_required())?;
         }
         self.image.info.image_sequence_track_present = !self.tracks.is_empty();
-        //println!("{:#?}", self.avif_items);
+        //println!("{:#?}", self.items);
 
         self.source = match self.settings.source {
             // Decide the source based on the major brand.
@@ -720,7 +590,7 @@ impl Decoder {
 
                 // Mandatory color item.
                 item_ids[0] = *self
-                    .avif_items
+                    .items
                     .iter()
                     .find(|x| {
                         !x.1.should_skip()
@@ -745,7 +615,7 @@ impl Decoder {
                     let alpha_item = alpha_item.unwrap();
                     item_ids[1] = alpha_item.id;
                     self.tile_info[1].grid = self.tile_info[0].grid;
-                    self.avif_items.insert(item_ids[1], alpha_item);
+                    self.items.insert(item_ids[1], alpha_item);
                     // Made up alpha item does not contain the pixi property. So do not try to
                     // validate it.
                     ignore_pixi_validation_for_alpha = true;
@@ -767,7 +637,7 @@ impl Decoder {
                     }
                     if self.settings.enable_parsing_gainmap_metadata {
                         let tonemap_item = self
-                            .avif_items
+                            .items
                             .get(&tonemap_id)
                             .ok_or(AvifError::InvalidToneMappedImage)?;
                         let mut stream = tonemap_item.stream(self.io.as_mut().unwrap())?;
@@ -792,15 +662,15 @@ impl Decoder {
                         continue;
                     }
                     {
-                        let item = self.avif_items.get(item_id).unwrap();
+                        let item = self.items.get(item_id).unwrap();
                         if index == 1 && item.width == 0 && item.height == 0 {
                             // NON-STANDARD: Alpha subimage does not have an ispe property; adopt
                             // width/height from color item.
                             assert!(!self.settings.strictness.alpha_ispe_required());
-                            let color_item = self.avif_items.get(&item_ids[0]).unwrap();
+                            let color_item = self.items.get(&item_ids[0]).unwrap();
                             let width = color_item.width;
                             let height = color_item.height;
-                            let alpha_item = self.avif_items.get_mut(item_id).unwrap();
+                            let alpha_item = self.items.get_mut(item_id).unwrap();
                             // Note: We cannot directly use color_item.width here because borrow
                             // checker won't allow that.
                             alpha_item.width = width;
@@ -810,12 +680,12 @@ impl Decoder {
                     self.tiles[index] = self.generate_tiles(*item_id, index)?;
                     let pixi_required = self.settings.strictness.pixi_required()
                         && (index != 1 || !ignore_pixi_validation_for_alpha);
-                    let item = self.avif_items.get(item_id).unwrap();
-                    item.validate_properties(&self.avif_items, pixi_required)?;
+                    let item = self.items.get(item_id).unwrap();
+                    item.validate_properties(&self.items, pixi_required)?;
                 }
                 println!("hello");
 
-                let color_item = self.avif_items.get(&item_ids[0]).unwrap();
+                let color_item = self.items.get(&item_ids[0]).unwrap();
                 self.image.info.width = color_item.width;
                 self.image.info.height = color_item.height;
                 self.image.info.alpha_present = item_ids[1] != 0;
@@ -832,7 +702,7 @@ impl Decoder {
 
                 if item_ids[2] != 0 {
                     self.gainmap_present = true;
-                    let gainmap_item = self.avif_items.get(&item_ids[2]).unwrap();
+                    let gainmap_item = self.items.get(&item_ids[2]).unwrap();
                     self.gainmap.image.info.width = gainmap_item.width;
                     self.gainmap.image.info.height = gainmap_item.height;
                     let av1C =
@@ -843,7 +713,7 @@ impl Decoder {
                 }
 
                 // This borrow has to be in the end of this branch.
-                color_properties = &self.avif_items.get(&item_ids[0]).unwrap().properties;
+                color_properties = &self.items.get(&item_ids[0]).unwrap().properties;
             }
             _ => return Err(AvifError::UnknownError), // not reached.
         }
@@ -911,7 +781,7 @@ impl Decoder {
         if item_id == 0 {
             return Ok(());
         }
-        self.avif_items.get(&item_id).unwrap().read_and_parse(
+        self.items.get(&item_id).unwrap().read_and_parse(
             self.io.as_mut().unwrap(),
             &mut self.tile_info[category].grid,
         )
@@ -1015,7 +885,7 @@ impl Decoder {
         if sample.item_id != 0 {
             // Data comes from an item.
             let item = self
-                .avif_items
+                .items
                 .get(&sample.item_id)
                 .ok_or(AvifError::BmffParseFailed)?;
             if item.extents.len() > 1 {
