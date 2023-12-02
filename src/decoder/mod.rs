@@ -1,4 +1,5 @@
 pub mod gainmap;
+pub mod item;
 pub mod track;
 
 use std::collections::HashMap;
@@ -6,6 +7,7 @@ use std::collections::HashSet;
 
 use crate::dav1d::*;
 use crate::decoder::gainmap::*;
+use crate::decoder::item::*;
 use crate::decoder::track::*;
 use crate::io::*;
 use crate::parser::exif;
@@ -308,7 +310,7 @@ pub struct Decoder {
 }
 
 #[derive(Debug, Default, Copy, Clone)]
-struct Grid {
+pub struct Grid {
     rows: u32,
     columns: u32,
     width: u32,
@@ -321,248 +323,6 @@ struct TileInfo {
     #[allow(unused)]
     decoded_tile_count: u32,
     grid: Grid,
-}
-
-#[derive(Debug, Default)]
-struct Item {
-    id: u32,
-    item_type: String,
-    size: usize,
-    width: u32,
-    height: u32,
-    content_type: String,
-    properties: Vec<ItemProperty>,
-    extents: Vec<ItemLocationExtent>,
-    // TODO mergedExtents stuff.
-    thumbnail_for_id: u32,
-    aux_for_id: u32,
-    desc_for_id: u32,
-    dimg_for_id: u32,
-    dimg_index: u32,
-    prem_by_id: u32,
-    has_unsupported_essential_property: bool,
-    progressive: bool,
-    idat: Vec<u8>,
-    grid_item_ids: Vec<u32>,
-}
-
-macro_rules! find_property {
-    ($self:ident, $a:ident) => {
-        $self
-            .properties
-            .iter()
-            .find(|x| matches!(x, ItemProperty::$a(_)))
-    };
-}
-
-impl Item {
-    fn data_offset(&self) -> u64 {
-        self.extents[0].offset
-    }
-
-    fn stream<'a>(&'a self, io: &'a mut Box<dyn DecoderIO>) -> AvifResult<IStream> {
-        // TODO: handle multiple extents.
-        let io_data = match self.idat.is_empty() {
-            true => io.read(self.data_offset(), self.size)?,
-            false => {
-                // TODO: assumes idat offset is 0.
-                self.idat.as_slice()
-            }
-        };
-        Ok(IStream::create(io_data))
-    }
-
-    fn read_and_parse(&self, io: &mut Box<dyn DecoderIO>, grid: &mut Grid) -> AvifResult<()> {
-        // TODO: this function also has to extract codec type.
-        if self.item_type != "grid" {
-            return Ok(());
-        }
-        let mut stream = self.stream(io)?;
-        // unsigned int(8) version = 0;
-        let version = stream.read_u8()?;
-        if version != 0 {
-            println!("unsupported version for grid");
-            return Err(AvifError::InvalidImageGrid);
-        }
-        // unsigned int(8) flags;
-        let flags = stream.read_u8()?;
-        // unsigned int(8) rows_minus_one;
-        grid.rows = stream.read_u8()? as u32;
-        grid.rows += 1;
-        // unsigned int(8) columns_minus_one;
-        grid.columns = stream.read_u8()? as u32;
-        grid.columns += 1;
-        if (flags & 1) == 1 {
-            // unsigned int(32) output_width;
-            grid.width = stream.read_u32()?;
-            // unsigned int(32) output_height;
-            grid.height = stream.read_u32()?;
-        } else {
-            // unsigned int(16) output_width;
-            grid.width = stream.read_u16()? as u32;
-            // unsigned int(16) output_height;
-            grid.height = stream.read_u16()? as u32;
-        }
-        if grid.width == 0 || grid.height == 0 {
-            println!("invalid dimensions in grid box");
-            return Err(AvifError::InvalidImageGrid);
-        }
-        println!("grid: {:#?}", grid);
-        // TODO: check for too large of a grid.
-        Ok(())
-    }
-
-    fn operating_point(&self) -> u8 {
-        match find_property!(self, OperatingPointSelector) {
-            Some(ItemProperty::OperatingPointSelector(operating_point)) => *operating_point,
-            _ => 0, // default operating point.
-        }
-    }
-
-    fn harvest_ispe(&mut self, alpha_ispe_required: bool) -> AvifResult<()> {
-        if self.size == 0 {
-            return Ok(());
-        }
-        if self.has_unsupported_essential_property {
-            // An essential property isn't supported by libavif. Ignore.
-            return Ok(());
-        }
-
-        let is_grid = self.item_type == "grid";
-        if self.item_type != "av01" && !is_grid {
-            // probably exif or some other data.
-            return Ok(());
-        }
-        match find_property!(self, ImageSpatialExtents) {
-            Some(property) => match property {
-                ItemProperty::ImageSpatialExtents(x) => {
-                    self.width = x.width;
-                    self.height = x.height;
-                    if self.width == 0 || self.height == 0 {
-                        println!("item id has invalid size.");
-                        return Err(AvifError::BmffParseFailed);
-                    }
-                }
-                _ => return Err(AvifError::UnknownError), // not reached.
-            },
-            None => {
-                // No ispe was found.
-                if self.is_auxiliary_alpha() {
-                    if alpha_ispe_required {
-                        println!("alpha auxiliary image is missing mandatory ispe");
-                        return Err(AvifError::BmffParseFailed);
-                    }
-                } else {
-                    println!("item id is missing mandatory ispe property");
-                    return Err(AvifError::BmffParseFailed);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[allow(non_snake_case)]
-    fn validate_properties(
-        &self,
-        avif_items: &HashMap<u32, Item>,
-        pixi_required: bool,
-    ) -> AvifResult<()> {
-        println!("validating item: {:#?}", self);
-        let av1C = self.av1C().ok_or(AvifError::BmffParseFailed)?;
-        if self.item_type == "grid" {
-            for grid_item_id in &self.grid_item_ids {
-                let grid_item = avif_items.get(&grid_item_id).unwrap();
-                let grid_av1C = grid_item.av1C().ok_or(AvifError::BmffParseFailed)?;
-                if av1C != grid_av1C {
-                    println!("av1c of grid items do not match");
-                    return Err(AvifError::BmffParseFailed);
-                }
-            }
-        }
-        match self.pixi() {
-            Some(pixi) => {
-                for i in 0..pixi.plane_count as usize {
-                    if pixi.plane_depths[i] != av1C.depth() {
-                        println!("pixi depth does not match av1C depth");
-                        return Err(AvifError::BmffParseFailed);
-                    }
-                }
-            }
-            None => {
-                if pixi_required {
-                    println!("missing pixi property");
-                    return Err(AvifError::BmffParseFailed);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[allow(non_snake_case)]
-    fn av1C(&self) -> Option<&CodecConfiguration> {
-        match find_property!(self, CodecConfiguration) {
-            Some(ItemProperty::CodecConfiguration(av1C)) => Some(av1C),
-            _ => None,
-        }
-    }
-
-    fn pixi(&self) -> Option<&PixelInformation> {
-        match find_property!(self, PixelInformation) {
-            Some(ItemProperty::PixelInformation(pixi)) => Some(pixi),
-            _ => None,
-        }
-    }
-
-    fn a1lx(&self) -> Option<&[usize; 3]> {
-        match find_property!(self, AV1LayeredImageIndexing) {
-            Some(ItemProperty::AV1LayeredImageIndexing(a1lx)) => Some(a1lx),
-            _ => None,
-        }
-    }
-
-    fn lsel(&self) -> Option<u16> {
-        match find_property!(self, LayerSelector) {
-            Some(ItemProperty::LayerSelector(lsel)) => Some(*lsel),
-            _ => None,
-        }
-    }
-
-    #[allow(non_snake_case)]
-    fn is_auxiliary_alpha(&self) -> bool {
-        match find_property!(self, AuxiliaryType) {
-            Some(ItemProperty::AuxiliaryType(aux_type)) => {
-                aux_type == "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha"
-                    || aux_type == "urn:mpeg:hevc:2015:auxid:1"
-            }
-            _ => false,
-        }
-    }
-
-    fn should_skip(&self) -> bool {
-        self.size == 0
-            || self.has_unsupported_essential_property
-            || (self.item_type != "av01" && self.item_type != "grid")
-            || self.thumbnail_for_id != 0
-    }
-
-    fn is_metadata(&self, item_type: &str, color_id: u32) -> bool {
-        self.size != 0
-            && !self.has_unsupported_essential_property
-            && (color_id == 0 || self.desc_for_id == color_id)
-            && self.item_type == *item_type
-    }
-
-    fn is_exif(&self, color_id: u32) -> bool {
-        self.is_metadata("Exif", color_id)
-    }
-
-    fn is_xmp(&self, color_id: u32) -> bool {
-        self.is_metadata("mime", color_id) && self.content_type == "application/rdf+xml"
-    }
-
-    fn is_tmap(&self) -> bool {
-        self.is_metadata("tmap", 0) && self.thumbnail_for_id == 0
-    }
 }
 
 fn find_nclx(properties: &[ItemProperty]) -> Result<&Nclx, bool> {
@@ -791,182 +551,184 @@ struct Tile {
     codec_index: usize,
 }
 
-fn create_tile_from_item(item: &mut Item, allow_progressive: bool) -> AvifResult<Tile> {
-    let mut tile = Tile {
-        width: item.width,
-        height: item.height,
-        operating_point: item.operating_point(),
-        image: Image::default(),
-        ..Tile::default()
-    };
-    let mut layer_sizes: [usize; 4] = [0; 4];
-    let mut layer_count: usize = 0;
-    let a1lx = item.a1lx();
-    let has_a1lx = a1lx.is_some();
-    if let Some(a1lx) = a1lx {
-        println!("item size: {} a1lx: {:#?}", item.size, a1lx);
-        let mut remaining_size: usize = item.size;
-        for i in 0usize..3 {
-            layer_count += 1;
-            if a1lx[i] > 0 {
-                // >= instead of > because there must be room for the last layer
-                if a1lx[i] >= remaining_size {
-                    println!("a1lx layer index [{i}] does not fit in item size");
-                    return Err(AvifError::BmffParseFailed);
-                }
-                layer_sizes[i] = a1lx[i];
-                remaining_size -= a1lx[i];
-            } else {
-                layer_sizes[i] = remaining_size;
-                remaining_size = 0;
-                break;
-            }
-        }
-        if remaining_size > 0 {
-            assert!(layer_count == 3);
-            layer_count += 1;
-            layer_sizes[3] = remaining_size;
-        }
-        println!("layer count: {layer_count} layer_sizes: {:#?}", layer_sizes);
-    }
-    let lsel;
-    let has_lsel;
-    match item.lsel() {
-        Some(x) => {
-            lsel = x;
-            has_lsel = true;
-        }
-        None => {
-            lsel = 0;
-            has_lsel = false;
-        }
-    }
-    // Progressive images offer layers via the a1lxProp, but don't specify a layer selection with
-    // lsel.
-    item.progressive = has_a1lx && (!has_lsel || lsel == 0xFFFF);
-    if has_lsel && lsel != 0xFFFF {
-        // Layer selection. This requires that the underlying AV1 codec decodes all layers, and then
-        // only returns the requested layer as a single frame. To the user of libavif, this appears
-        // to be a single frame.
-        tile.input.all_layers = true;
-        let mut sample_size: usize = 0;
-        let layer_id = usize_from_u16(lsel)?;
-        if layer_count > 0 {
-            // TODO: test this with a case?
-            if true {
-                println!("in lsel case!");
-                return Err(AvifError::InvalidImageGrid);
-            }
-            // Optimization: If we're selecting a layer that doesn't require the entire image's
-            // payload (hinted via the a1lx box).
-            if layer_id >= layer_count {
-                println!("lsel layer index not found in a1lx.");
-                return Err(AvifError::InvalidImageGrid);
-            }
-            let layer_id_plus_1 = layer_id.checked_add(1).ok_or(AvifError::BmffParseFailed)?;
-            for layer_size in layer_sizes.iter().take(layer_id_plus_1) {
-                sample_size += layer_size;
-            }
-        } else {
-            // This layer payload subsection is not known. Use the whole payload.
-            sample_size = item.size;
-        }
-        let sample = DecodeSample {
-            item_id: item.id,
-            offset: 0,
-            size: sample_size,
-            spatial_id: lsel as u8,
-            sync: true,
-            data_buffer: None,
+impl Tile {
+    fn create_from_item(item: &mut Item, allow_progressive: bool) -> AvifResult<Tile> {
+        let mut tile = Tile {
+            width: item.width,
+            height: item.height,
+            operating_point: item.operating_point(),
+            image: Image::default(),
+            ..Tile::default()
         };
-        tile.input.samples.push(sample);
-    } else if item.progressive && allow_progressive {
-        // Progressive image. Decode all layers and expose them all to the
-        // user.
-
-        // TODO: check image count limit.
-
-        tile.input.all_layers = true;
-        let mut offset = 0;
-        for (i, layer_size) in layer_sizes.iter().take(layer_count).enumerate() {
+        let mut layer_sizes: [usize; 4] = [0; 4];
+        let mut layer_count: usize = 0;
+        let a1lx = item.a1lx();
+        let has_a1lx = a1lx.is_some();
+        if let Some(a1lx) = a1lx {
+            println!("item size: {} a1lx: {:#?}", item.size, a1lx);
+            let mut remaining_size: usize = item.size;
+            for i in 0usize..3 {
+                layer_count += 1;
+                if a1lx[i] > 0 {
+                    // >= instead of > because there must be room for the last layer
+                    if a1lx[i] >= remaining_size {
+                        println!("a1lx layer index [{i}] does not fit in item size");
+                        return Err(AvifError::BmffParseFailed);
+                    }
+                    layer_sizes[i] = a1lx[i];
+                    remaining_size -= a1lx[i];
+                } else {
+                    layer_sizes[i] = remaining_size;
+                    remaining_size = 0;
+                    break;
+                }
+            }
+            if remaining_size > 0 {
+                assert!(layer_count == 3);
+                layer_count += 1;
+                layer_sizes[3] = remaining_size;
+            }
+            println!("layer count: {layer_count} layer_sizes: {:#?}", layer_sizes);
+        }
+        let lsel;
+        let has_lsel;
+        match item.lsel() {
+            Some(x) => {
+                lsel = x;
+                has_lsel = true;
+            }
+            None => {
+                lsel = 0;
+                has_lsel = false;
+            }
+        }
+        // Progressive images offer layers via the a1lxProp, but don't specify a layer selection with
+        // lsel.
+        item.progressive = has_a1lx && (!has_lsel || lsel == 0xFFFF);
+        if has_lsel && lsel != 0xFFFF {
+            // Layer selection. This requires that the underlying AV1 codec decodes all layers, and then
+            // only returns the requested layer as a single frame. To the user of libavif, this appears
+            // to be a single frame.
+            tile.input.all_layers = true;
+            let mut sample_size: usize = 0;
+            let layer_id = usize_from_u16(lsel)?;
+            if layer_count > 0 {
+                // TODO: test this with a case?
+                if true {
+                    println!("in lsel case!");
+                    return Err(AvifError::InvalidImageGrid);
+                }
+                // Optimization: If we're selecting a layer that doesn't require the entire image's
+                // payload (hinted via the a1lx box).
+                if layer_id >= layer_count {
+                    println!("lsel layer index not found in a1lx.");
+                    return Err(AvifError::InvalidImageGrid);
+                }
+                let layer_id_plus_1 = layer_id.checked_add(1).ok_or(AvifError::BmffParseFailed)?;
+                for layer_size in layer_sizes.iter().take(layer_id_plus_1) {
+                    sample_size += layer_size;
+                }
+            } else {
+                // This layer payload subsection is not known. Use the whole payload.
+                sample_size = item.size;
+            }
             let sample = DecodeSample {
                 item_id: item.id,
-                offset,
-                size: *layer_size,
-                spatial_id: 0xff,
-                sync: i == 0, // Assume all layers depend on the first layer.
-                data_buffer: None,
-            };
-            tile.input.samples.push(sample);
-            offset += *layer_size as u64;
-        }
-        println!("input samples: {:#?}", tile.input.samples);
-    } else {
-        // Typical case: Use the entire item's payload for a single frame output
-        let sample = DecodeSample {
-            item_id: item.id,
-            offset: 0,
-            size: item.size,
-            // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel value for "do not
-            // filter by spatial_id"
-            spatial_id: 0xff,
-            sync: true,
-            data_buffer: None,
-        };
-        tile.input.samples.push(sample);
-    }
-    Ok(tile)
-}
-
-fn create_tile_from_track(track: &Track) -> AvifResult<Tile> {
-    let mut tile = Tile {
-        width: track.width,
-        height: track.height,
-        operating_point: 0, // No way to set operating point via tracks
-        ..Tile::default()
-    };
-
-    // TODO: implement the imagecount check in avifCodecDecodeInputFillFromSampleTable.
-
-    let mut sample_size_index: usize = 0;
-    let sample_table = &track.sample_table.as_ref().unwrap();
-    for (chunk_index, chunk_offset) in sample_table.chunk_offsets.iter().enumerate() {
-        // Figure out how many samples are in this chunk.
-        let sample_count = sample_table.get_sample_count_of_chunk(chunk_index as u32);
-        if sample_count == 0 {
-            println!("chunk with 0 samples found");
-            return Err(AvifError::BmffParseFailed);
-        }
-
-        let mut sample_offset = *chunk_offset;
-        for _ in 0..sample_count {
-            let sample_size = sample_table.sample_size(sample_size_index)?;
-            let sample = DecodeSample {
-                item_id: 0,
-                offset: sample_offset,
+                offset: 0,
                 size: sample_size,
-                // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel value for "do
-                // not filter by spatial_id"
-                spatial_id: 0xff,
-                // Assume first sample is always sync (in case stss box was missing).
-                sync: tile.input.samples.is_empty(),
+                spatial_id: lsel as u8,
+                sync: true,
                 data_buffer: None,
             };
             tile.input.samples.push(sample);
-            sample_offset = sample_offset
-                .checked_add(sample_size as u64)
-                .ok_or(AvifError::BmffParseFailed)?;
-            sample_size_index += 1;
+        } else if item.progressive && allow_progressive {
+            // Progressive image. Decode all layers and expose them all to the
+            // user.
+
+            // TODO: check image count limit.
+
+            tile.input.all_layers = true;
+            let mut offset = 0;
+            for (i, layer_size) in layer_sizes.iter().take(layer_count).enumerate() {
+                let sample = DecodeSample {
+                    item_id: item.id,
+                    offset,
+                    size: *layer_size,
+                    spatial_id: 0xff,
+                    sync: i == 0, // Assume all layers depend on the first layer.
+                    data_buffer: None,
+                };
+                tile.input.samples.push(sample);
+                offset += *layer_size as u64;
+            }
+            println!("input samples: {:#?}", tile.input.samples);
+        } else {
+            // Typical case: Use the entire item's payload for a single frame output
+            let sample = DecodeSample {
+                item_id: item.id,
+                offset: 0,
+                size: item.size,
+                // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel value for "do not
+                // filter by spatial_id"
+                spatial_id: 0xff,
+                sync: true,
+                data_buffer: None,
+            };
+            tile.input.samples.push(sample);
         }
+        Ok(tile)
     }
-    for sync_sample_number in &sample_table.sync_samples {
-        // sample_table.sync_samples is 1-based.
-        let index: usize = (*sync_sample_number - 1) as usize;
-        if index < tile.input.samples.len() {
-            tile.input.samples[index].sync = true;
+
+    fn create_from_track(track: &Track) -> AvifResult<Tile> {
+        let mut tile = Tile {
+            width: track.width,
+            height: track.height,
+            operating_point: 0, // No way to set operating point via tracks
+            ..Tile::default()
+        };
+
+        // TODO: implement the imagecount check in avifCodecDecodeInputFillFromSampleTable.
+
+        let mut sample_size_index: usize = 0;
+        let sample_table = &track.sample_table.as_ref().unwrap();
+        for (chunk_index, chunk_offset) in sample_table.chunk_offsets.iter().enumerate() {
+            // Figure out how many samples are in this chunk.
+            let sample_count = sample_table.get_sample_count_of_chunk(chunk_index as u32);
+            if sample_count == 0 {
+                println!("chunk with 0 samples found");
+                return Err(AvifError::BmffParseFailed);
+            }
+
+            let mut sample_offset = *chunk_offset;
+            for _ in 0..sample_count {
+                let sample_size = sample_table.sample_size(sample_size_index)?;
+                let sample = DecodeSample {
+                    item_id: 0,
+                    offset: sample_offset,
+                    size: sample_size,
+                    // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel value for "do
+                    // not filter by spatial_id"
+                    spatial_id: 0xff,
+                    // Assume first sample is always sync (in case stss box was missing).
+                    sync: tile.input.samples.is_empty(),
+                    data_buffer: None,
+                };
+                tile.input.samples.push(sample);
+                sample_offset = sample_offset
+                    .checked_add(sample_size as u64)
+                    .ok_or(AvifError::BmffParseFailed)?;
+                sample_size_index += 1;
+            }
         }
+        for sync_sample_number in &sample_table.sync_samples {
+            // sample_table.sync_samples is 1-based.
+            let index: usize = (*sync_sample_number - 1) as usize;
+            if index < tile.input.samples.len() {
+                tile.input.samples[index].sync = true;
+            }
+        }
+        Ok(tile)
     }
-    Ok(tile)
 }
 
 fn steal_planes(dst: &mut Image, src: &mut Image, category: usize) {
@@ -1216,7 +978,7 @@ impl Decoder {
                     .avif_items
                     .get_mut(grid_item_id)
                     .ok_or(AvifError::InvalidImageGrid)?;
-                let mut tile = create_tile_from_item(grid_item, self.settings.allow_progressive)?;
+                let mut tile = Tile::create_from_item(grid_item, self.settings.allow_progressive)?;
                 tile.input.category = category as u8;
                 tiles.push(tile);
             }
@@ -1237,7 +999,7 @@ impl Decoder {
                 .avif_items
                 .get_mut(&item_id)
                 .ok_or(AvifError::MissingImageItem)?;
-            let mut tile = create_tile_from_item(item, self.settings.allow_progressive)?;
+            let mut tile = Tile::create_from_item(item, self.settings.allow_progressive)?;
             tile.input.category = category as u8;
             tiles.push(tile);
         }
@@ -1372,11 +1134,11 @@ impl Decoder {
 
                 // TODO: exif/xmp from meta.
 
-                self.tiles[0].push(create_tile_from_track(color_track)?);
+                self.tiles[0].push(Tile::create_from_track(color_track)?);
                 self.tile_info[0].tile_count = 1;
 
                 if let Some(alpha_track) = self.tracks.iter().find(|x| x.is_aux(color_track.id)) {
-                    self.tiles[1].push(create_tile_from_track(alpha_track)?);
+                    self.tiles[1].push(Tile::create_from_track(alpha_track)?);
                     //println!("alpha_tile: {:#?}", self.tiles[1]);
                     self.tile_info[1].tile_count = 1;
                     self.image.info.alpha_present = true;
