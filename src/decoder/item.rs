@@ -41,7 +41,7 @@ impl Item {
         self.extents[0].offset
     }
 
-    pub fn stream<'a>(&'a self, io: &'a mut Box<dyn DecoderIO>) -> AvifResult<IStream> {
+    pub fn stream<'a>(&'a self, io: &'a mut GenericIO) -> AvifResult<IStream> {
         // TODO: handle multiple extents.
         let io_data = match self.idat.is_empty() {
             true => io.read(self.data_offset(), self.size)?,
@@ -53,7 +53,7 @@ impl Item {
         Ok(IStream::create(io_data))
     }
 
-    pub fn read_and_parse(&self, io: &mut Box<dyn DecoderIO>, grid: &mut Grid) -> AvifResult<()> {
+    pub fn read_and_parse(&self, io: &mut GenericIO, grid: &mut Grid) -> AvifResult<()> {
         // TODO: this function also has to extract codec type.
         if self.item_type != "grid" {
             return Ok(());

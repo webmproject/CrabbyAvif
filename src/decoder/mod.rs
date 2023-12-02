@@ -21,6 +21,14 @@ use crate::stream::*;
 use crate::utils::*;
 use crate::*;
 
+pub trait IO {
+    fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]>;
+    fn size_hint(&self) -> u64;
+    fn persistent(&self) -> bool;
+}
+
+pub type GenericIO = Box<dyn IO>;
+
 #[derive(Debug, Copy, Clone, Default)]
 pub enum Source {
     Tracks,
@@ -112,7 +120,7 @@ pub struct Decoder {
     tracks: Vec<Track>,
     // To replicate the C-API, we need to keep this optional. Otherwise this could be part of the
     // initialization.
-    io: Option<Box<dyn DecoderIO>>,
+    io: Option<GenericIO>,
     codecs: Vec<Dav1d>,
 }
 
@@ -169,7 +177,7 @@ impl Decoder {
         Ok(())
     }
 
-    pub fn set_io(&mut self, io: Box<dyn DecoderIO>) -> AvifResult<()> {
+    pub fn set_io(&mut self, io: GenericIO) -> AvifResult<()> {
         self.io = Some(io);
         Ok(())
     }

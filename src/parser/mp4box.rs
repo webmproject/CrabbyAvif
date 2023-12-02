@@ -1,5 +1,6 @@
 use crate::decoder::gainmap::GainMapMetadata;
 use crate::decoder::track::*;
+use crate::decoder::GenericIO;
 use crate::stream::*;
 use crate::utils::*;
 use crate::*;
@@ -1285,7 +1286,7 @@ fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
     Ok(tracks)
 }
 
-pub fn parse(io: &mut Box<dyn DecoderIO>) -> AvifResult<AvifBoxes> {
+pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
     let mut ftyp: Option<FileTypeBox> = None;
     let mut meta: Option<MetaBox> = None;
     let mut tracks: Option<Vec<Track>> = None;

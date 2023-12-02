@@ -28,12 +28,15 @@ fn alpha_no_ispe() {
     // See https://github.com/AOMediaCodec/libavif/pull/745.
     let mut decoder = get_decoder("alpha_noispe.avif");
     // By default, non-strict files are refused.
-    assert!(matches!(decoder.settings.strictness, Strictness::All));
+    assert!(matches!(
+        decoder.settings.strictness,
+        decoder::Strictness::All
+    ));
     let res = decoder.parse();
     assert_avif_error!(res, BmffParseFailed);
     // Allow this kind of file specifically.
     decoder.settings.strictness =
-        Strictness::SpecificExclude(vec![StrictnessFlag::AlphaIspeRequired]);
+        decoder::Strictness::SpecificExclude(vec![decoder::StrictnessFlag::AlphaIspeRequired]);
     let res = decoder.parse();
     assert!(res.is_ok());
     let info = res.unwrap();
@@ -67,7 +70,7 @@ fn animated_image() {
 #[test]
 fn animated_image_with_source_set_to_primary_item() {
     let mut decoder = get_decoder("colors-animated-8bpc.avif");
-    decoder.settings.source = decoder::DecoderSource::PrimaryItem;
+    decoder.settings.source = decoder::Source::PrimaryItem;
     let res = decoder.parse();
     assert!(res.is_ok());
     let info = res.unwrap();
@@ -117,14 +120,17 @@ fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     let info = res.unwrap();
     assert!(matches!(
         info.progressive_state,
-        ProgressiveState::Available
+        decoder::ProgressiveState::Available
     ));
 
     decoder.settings.allow_progressive = true;
     let res = decoder.parse();
     assert!(res.is_ok());
     let info = res.unwrap();
-    assert!(matches!(info.progressive_state, ProgressiveState::Active));
+    assert!(matches!(
+        info.progressive_state,
+        decoder::ProgressiveState::Active
+    ));
     assert_eq!(info.width, width);
     assert_eq!(info.height, height);
     assert_eq!(decoder.image_count, layer_count);

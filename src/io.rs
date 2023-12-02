@@ -1,6 +1,6 @@
+use crate::decoder;
 use crate::AvifError;
 use crate::AvifResult;
-use crate::DecoderIO;
 use std::fs::File;
 use std::os::unix::fs::FileExt; // TODO: what happens when this is compiled for windows?
 
@@ -20,7 +20,7 @@ impl DecoderFileIO {
     }
 }
 
-impl DecoderIO for DecoderFileIO {
+impl decoder::IO for DecoderFileIO {
     fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]> {
         let file_size = self.size_hint();
         if offset > file_size {

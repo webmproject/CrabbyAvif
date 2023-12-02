@@ -90,9 +90,3 @@ pub enum AvifError {
 }
 
 pub type AvifResult<T> = Result<T, AvifError>;
-
-pub trait DecoderIO {
-    fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]>;
-    fn size_hint(&self) -> u64;
-    fn persistent(&self) -> bool;
-}

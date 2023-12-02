@@ -12,7 +12,7 @@ pub struct DecodeSample {
 }
 
 impl DecodeSample {
-    pub fn data<'a>(&'a self, io: &'a mut Box<impl DecoderIO + ?Sized>) -> AvifResult<&[u8]> {
+    pub fn data<'a>(&'a self, io: &'a mut Box<impl decoder::IO + ?Sized>) -> AvifResult<&[u8]> {
         match &self.data_buffer {
             Some(data_buffer) => Ok(data_buffer),
             None => io.read(self.offset, self.size),
