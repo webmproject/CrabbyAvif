@@ -11,6 +11,7 @@ use crate::decoder::tile::*;
 use crate::decoder::track::*;
 
 use crate::codecs::dav1d::Dav1d;
+use crate::codecs::Decoder as DecoderTrait;
 use crate::image::*;
 use crate::internal_utils::io::*;
 use crate::internal_utils::*;
@@ -27,6 +28,7 @@ pub trait IO {
 }
 
 pub type GenericIO = Box<dyn IO>;
+pub type Codec = Box<dyn crate::codecs::Decoder>;
 
 #[derive(Debug, Copy, Clone, Default)]
 pub enum Source {
@@ -117,10 +119,10 @@ pub struct Decoder {
     pub gainmap_present: bool,
     items: Items,
     tracks: Vec<Track>,
-    // To replicate the C-API, we need to keep this optional. Otherwise this could be part of the
-    // initialization.
+    // To replicate the C-API, we need to keep this optional. Otherwise this
+    // could be part of the initialization.
     io: Option<GenericIO>,
-    codecs: Vec<Dav1d>,
+    codecs: Vec<Codec>,
 }
 
 fn find_nclx(properties: &[ItemProperty]) -> Result<&Nclx, bool> {
@@ -804,7 +806,7 @@ impl Decoder {
     }
 
     fn create_codec(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
-        let mut codec = Dav1d::default();
+        let mut codec = Box::new(Dav1d::default());
         codec.initialize(operating_point, all_layers)?;
         self.codecs.push(codec);
         Ok(())

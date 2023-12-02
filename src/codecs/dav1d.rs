@@ -1,4 +1,5 @@
 use crate::codecs::bindings::dav1d::*;
+use crate::codecs::Decoder;
 use crate::image::Image;
 use crate::AvifError;
 use crate::AvifResult;
@@ -23,8 +24,8 @@ fn dav1d_error(err: u32) -> i32 {
     -e
 }
 
-impl Dav1d {
-    pub fn initialize(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
+impl Decoder for Dav1d {
+    fn initialize(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
         if self.context.is_some() {
             return Ok(()); // Already initialized.
         }
@@ -50,7 +51,7 @@ impl Dav1d {
         Ok(())
     }
 
-    pub fn get_next_image(
+    fn get_next_image(
         &mut self,
         av1_payload: &[u8],
         spatial_id: u8,
