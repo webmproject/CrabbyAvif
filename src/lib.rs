@@ -1,15 +1,17 @@
-/// cbindgen:ignore
-mod bindings;
-/// cbindgen:ignore
-mod dav1d;
 pub mod decoder;
 pub mod io;
-mod mp4box;
-mod stream;
 pub mod utils;
 
 #[cfg(feature = "capi")]
 pub mod capi;
+
+/// cbindgen:ignore
+mod bindings;
+/// cbindgen:ignore
+mod dav1d;
+
+mod mp4box;
+mod stream;
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum PixelFormat {
@@ -88,23 +90,23 @@ pub enum AvifError {
 pub type AvifResult<T> = Result<T, AvifError>;
 
 #[derive(Debug)]
-pub enum AvifStrictnessFlag {
+pub enum StrictnessFlag {
     PixiRequired,
     ClapValid,
     AlphaIspeRequired,
 }
 
 #[derive(Debug, Default)]
-pub enum AvifStrictness {
+pub enum Strictness {
     None,
     #[default]
     All,
-    SpecificInclude(Vec<AvifStrictnessFlag>),
-    SpecificExclude(Vec<AvifStrictnessFlag>),
+    SpecificInclude(Vec<StrictnessFlag>),
+    SpecificExclude(Vec<StrictnessFlag>),
 }
 
 #[derive(Debug, Default, Copy, Clone)]
-pub enum AvifProgressiveState {
+pub enum ProgressiveState {
     #[default]
     Unavailable,
     Available,

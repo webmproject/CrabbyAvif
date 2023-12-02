@@ -10,12 +10,12 @@ use std::slice;
 
 use crate::decoder::*;
 use crate::AvifError;
-use crate::AvifProgressiveState;
 use crate::AvifResult;
-use crate::AvifStrictness;
-use crate::AvifStrictnessFlag;
 use crate::ChromaSamplePosition;
 use crate::PixelFormat;
+use crate::ProgressiveState;
+use crate::Strictness;
+use crate::StrictnessFlag;
 
 #[repr(C)]
 pub struct avifROData {
@@ -177,7 +177,7 @@ impl From<ChromaSamplePosition> for avifChromaSamplePosition {
 
 #[repr(C)]
 #[derive(Debug, Default)]
-pub struct avifGainMapMetadata {
+pub struct GainMapMetadata {
     gainMapMinN: [i32; 3],
     gainMapMinD: [u32; 3],
 
@@ -203,9 +203,9 @@ pub struct avifGainMapMetadata {
     useBaseColorSpace: avifBool,
 }
 
-impl From<&GainMapMetadata> for avifGainMapMetadata {
+impl From<&GainMapMetadata> for GainMapMetadata {
     fn from(m: &GainMapMetadata) -> Self {
-        avifGainMapMetadata {
+        GainMapMetadata {
             gainMapMinN: [m.min[0].0, m.min[1].0, m.min[2].0],
             gainMapMinD: [m.min[0].1, m.min[1].1, m.min[2].1],
             gainMapMaxN: [m.max[0].0, m.max[1].0, m.max[2].0],
@@ -236,9 +236,9 @@ impl From<&GainMapMetadata> for avifGainMapMetadata {
 
 #[repr(C)]
 #[derive(Debug)]
-pub struct avifGainMap {
-    image: *mut avifImage,
-    metadata: avifGainMapMetadata,
+pub struct GainMap {
+    image: *mut Image,
+    metadata: GainMapMetadata,
     altICC: avifRWData,
     altColorPrimaries: u16,          // TODO: avifColorPrimaries,
     altTransferCharacteristics: u16, // TODO: avifTransferCharacteristics,
@@ -249,11 +249,11 @@ pub struct avifGainMap {
     //avifContentLightLevelInformationBox altCLLI;
 }
 
-impl Default for avifGainMap {
+impl Default for GainMap {
     fn default() -> Self {
-        avifGainMap {
+        GainMap {
             image: std::ptr::null_mut(),
-            metadata: avifGainMapMetadata::default(),
+            metadata: GainMapMetadata::default(),
             altICC: avifRWData::default(),
             altColorPrimaries: 0,
             altTransferCharacteristics: 0,
@@ -265,9 +265,9 @@ impl Default for avifGainMap {
     }
 }
 
-impl From<&AvifGainMap> for avifGainMap {
-    fn from(gainmap: &AvifGainMap) -> Self {
-        avifGainMap {
+impl From<&GainMap> for GainMap {
+    fn from(gainmap: &GainMap) -> Self {
+        GainMap {
             metadata: (&gainmap.metadata).into(),
             altICC: (&gainmap.alt_icc).into(),
             altColorPrimaries: gainmap.alt_color_primaries,
@@ -283,7 +283,7 @@ impl From<&AvifGainMap> for avifGainMap {
 
 #[repr(C)]
 #[derive(Debug)]
-pub struct avifImage {
+pub struct Image {
     width: u32,
     height: u32,
     depth: u32,
@@ -308,16 +308,16 @@ pub struct avifImage {
     // avifTransformFlags transformFlags;
     // avifPixelAspectRatioBox pasp;
     // avifCleanApertureBox clap;
-    // avifImageRotation irot;
-    // avifImageMirror imir;
+    // ImageRotation irot;
+    // ImageMirror imir;
     exif: avifRWData,
     xmp: avifRWData,
-    gainMap: *mut avifGainMap,
+    gainMap: *mut GainMap,
 }
 
-impl Default for avifImage {
+impl Default for Image {
     fn default() -> Self {
-        avifImage {
+        Image {
             width: 0,
             height: 0,
             depth: 0,
@@ -348,9 +348,9 @@ impl From<&Vec<u8>> for avifRWData {
     }
 }
 
-impl From<&AvifImageInfo> for avifImage {
-    fn from(info: &AvifImageInfo) -> Self {
-        avifImage {
+impl From<&ImageInfo> for Image {
+    fn from(info: &ImageInfo) -> Self {
+        Image {
             width: info.width,
             height: info.height,
             depth: info.depth as u32,
@@ -366,9 +366,9 @@ impl From<&AvifImageInfo> for avifImage {
     }
 }
 
-impl From<&AvifImage> for avifImage {
-    fn from(image: &AvifImage) -> Self {
-        let mut dst_image: avifImage = (&image.info).into();
+impl From<&Image> for Image {
+    fn from(image: &Image) -> Self {
+        let mut dst_image: Image = (&image.info).into();
         for i in 0usize..3 {
             if image.planes[i].is_none() {
                 continue;
@@ -394,42 +394,42 @@ pub type avifStrictFlags = u32;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub enum avifDecoderSource {
+pub enum DecoderSource {
     Auto,
     PrimaryItem,
     Tracks,
 }
 
-impl From<avifDecoderSource> for AvifDecoderSource {
-    fn from(source: avifDecoderSource) -> Self {
+impl From<DecoderSource> for DecoderSource {
+    fn from(source: DecoderSource) -> Self {
         match source {
-            avifDecoderSource::Auto => AvifDecoderSource::Auto,
-            avifDecoderSource::PrimaryItem => AvifDecoderSource::PrimaryItem,
-            avifDecoderSource::Tracks => AvifDecoderSource::Tracks,
+            DecoderSource::Auto => DecoderSource::Auto,
+            DecoderSource::PrimaryItem => DecoderSource::PrimaryItem,
+            DecoderSource::Tracks => DecoderSource::Tracks,
         }
     }
 }
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub enum avifProgressiveState {
+pub enum ProgressiveState {
     Unavailable,
     Available,
     Active,
 }
 
-impl From<AvifProgressiveState> for avifProgressiveState {
-    fn from(progressive_state: AvifProgressiveState) -> Self {
+impl From<ProgressiveState> for ProgressiveState {
+    fn from(progressive_state: ProgressiveState) -> Self {
         match progressive_state {
-            AvifProgressiveState::Unavailable => avifProgressiveState::Unavailable,
-            AvifProgressiveState::Available => avifProgressiveState::Available,
-            AvifProgressiveState::Active => avifProgressiveState::Active,
+            ProgressiveState::Unavailable => ProgressiveState::Unavailable,
+            ProgressiveState::Available => ProgressiveState::Available,
+            ProgressiveState::Active => ProgressiveState::Active,
         }
     }
 }
 
 #[repr(C)]
-pub struct avifDecoderData {}
+pub struct DecoderData {}
 
 #[repr(C)]
 pub struct avifDiagnostics {
@@ -443,10 +443,10 @@ impl Default for avifDiagnostics {
 }
 
 #[repr(C)]
-pub struct avifDecoder {
+pub struct Decoder {
     // avifCodecChoice codecChoice;
     pub maxThreads: i32,
-    pub requestedSource: avifDecoderSource,
+    pub requestedSource: DecoderSource,
     pub allowIncremental: avifBool,
     pub allowProgressive: avifBool,
     pub ignoreExif: avifBool,
@@ -457,11 +457,11 @@ pub struct avifDecoder {
     pub strictFlags: avifStrictFlags,
 
     // Output params.
-    pub image: *mut avifImage,
+    pub image: *mut Image,
     pub imageIndex: i32,
     pub imageCount: i32,
-    pub progressiveState: avifProgressiveState,
-    // avifImageTiming imageTiming;
+    pub progressiveState: ProgressiveState,
+    // ImageTiming imageTiming;
     pub timescale: u64,
     pub duration: f64,
     pub durationInTimescales: u64,
@@ -472,7 +472,7 @@ pub struct avifDecoder {
     //avifIOStats ioStats;
     pub diag: avifDiagnostics,
     //avifIO * io;
-    data: *mut avifDecoderData,
+    data: *mut DecoderData,
     gainMapPresent: avifBool,
     enableDecodingGainMap: avifBool,
     enableParsingGainMapMetadata: avifBool,
@@ -480,17 +480,17 @@ pub struct avifDecoder {
     pub imageSequenceTrackPresent: avifBool,
 
     // TODO: maybe wrap these fields in a private data kind of field?
-    rust_decoder: Box<AvifDecoder>,
-    image_object: avifImage,
-    gainmap_object: avifGainMap,
-    gainmap_image_object: avifImage,
+    rust_decoder: Box<Decoder>,
+    image_object: Image,
+    gainmap_object: GainMap,
+    gainmap_image_object: Image,
 }
 
-impl Default for avifDecoder {
+impl Default for Decoder {
     fn default() -> Self {
         Self {
             maxThreads: 1,
-            requestedSource: avifDecoderSource::Auto,
+            requestedSource: DecoderSource::Auto,
             allowIncremental: AVIF_FALSE,
             allowProgressive: AVIF_FALSE,
             ignoreExif: AVIF_FALSE,
@@ -499,7 +499,7 @@ impl Default for avifDecoder {
             image: std::ptr::null_mut(),
             imageIndex: -1,
             imageCount: 0,
-            progressiveState: avifProgressiveState::Unavailable,
+            progressiveState: ProgressiveState::Unavailable,
             timescale: 0,
             duration: 0.0,
             durationInTimescales: 0,
@@ -511,10 +511,10 @@ impl Default for avifDecoder {
             enableDecodingGainMap: AVIF_FALSE,
             enableParsingGainMapMetadata: AVIF_FALSE,
             imageSequenceTrackPresent: AVIF_FALSE,
-            rust_decoder: Box::new(AvifDecoder::default()),
-            image_object: avifImage::default(),
-            gainmap_image_object: avifImage::default(),
-            gainmap_object: avifGainMap::default(),
+            rust_decoder: Box::new(Decoder::default()),
+            image_object: Image::default(),
+            gainmap_image_object: Image::default(),
+            gainmap_object: GainMap::default(),
         }
     }
 }
@@ -540,17 +540,17 @@ fn to_avifResult<T>(res: &AvifResult<T>) -> avifResult {
 #[no_mangle]
 pub unsafe extern "C" fn avifPeekCompatibleFileType(input: *const avifROData) -> avifBool {
     let data = slice::from_raw_parts((*input).data, (*input).size);
-    to_avifBool(AvifDecoder::peek_compatible_file_type(data))
+    to_avifBool(Decoder::peek_compatible_file_type(data))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderCreate() -> *mut avifDecoder {
-    Box::into_raw(Box::new(avifDecoder::default()))
+pub unsafe extern "C" fn DecoderCreate() -> *mut Decoder {
+    Box::into_raw(Box::new(Decoder::default()))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderSetIOFile(
-    decoder: *mut avifDecoder,
+pub unsafe extern "C" fn DecoderSetIOFile(
+    decoder: *mut Decoder,
     filename: *const c_char,
 ) -> avifResult {
     let rust_decoder = &mut (*decoder).rust_decoder;
@@ -560,33 +560,33 @@ pub unsafe extern "C" fn avifDecoderSetIOFile(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderSetSource(
-    decoder: *mut avifDecoder,
-    source: avifDecoderSource,
+pub unsafe extern "C" fn DecoderSetSource(
+    decoder: *mut Decoder,
+    source: DecoderSource,
 ) -> avifResult {
     (*decoder).requestedSource = source;
     // TODO: should decoder be reset here in case this is called after parse?
     avifResult::Ok
 }
 
-impl From<&avifDecoder> for AvifDecoderSettings {
-    fn from(decoder: &avifDecoder) -> Self {
+impl From<&Decoder> for DecoderSettings {
+    fn from(decoder: &Decoder) -> Self {
         let strictness = if decoder.strictFlags == AVIF_STRICT_DISABLED {
-            AvifStrictness::None
+            Strictness::None
         } else if decoder.strictFlags == AVIF_STRICT_ENABLED {
-            AvifStrictness::All
+            Strictness::All
         } else {
-            let mut flags: Vec<AvifStrictnessFlag> = Vec::new();
+            let mut flags: Vec<StrictnessFlag> = Vec::new();
             if (decoder.strictFlags & AVIF_STRICT_PIXI_REQUIRED) != 0 {
-                flags.push(AvifStrictnessFlag::PixiRequired);
+                flags.push(StrictnessFlag::PixiRequired);
             }
             if (decoder.strictFlags & AVIF_STRICT_CLAP_VALID) != 0 {
-                flags.push(AvifStrictnessFlag::ClapValid);
+                flags.push(StrictnessFlag::ClapValid);
             }
             if (decoder.strictFlags & AVIF_STRICT_ALPHA_ISPE_REQUIRED) != 0 {
-                flags.push(AvifStrictnessFlag::AlphaIspeRequired);
+                flags.push(StrictnessFlag::AlphaIspeRequired);
             }
-            AvifStrictness::SpecificInclude(flags)
+            Strictness::SpecificInclude(flags)
         };
         Self {
             source: decoder.requestedSource.into(),
@@ -602,7 +602,7 @@ impl From<&avifDecoder> for AvifDecoderSettings {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResult {
+pub unsafe extern "C" fn DecoderParse(decoder: *mut Decoder) -> avifResult {
     let rust_decoder = &mut (*decoder).rust_decoder;
     rust_decoder.settings = (&(*decoder)).into();
 
@@ -627,16 +627,16 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
         (*decoder).gainMapPresent = AVIF_TRUE;
         (*decoder).gainmap_image_object = (&rust_decoder.gainmap.image).into();
         (*decoder).gainmap_object = (&rust_decoder.gainmap).into();
-        (*decoder).gainmap_object.image = (&mut (*decoder).gainmap_image_object) as *mut avifImage;
-        (*decoder).image_object.gainMap = (&mut (*decoder).gainmap_object) as *mut avifGainMap;
+        (*decoder).gainmap_object.image = (&mut (*decoder).gainmap_image_object) as *mut Image;
+        (*decoder).image_object.gainMap = (&mut (*decoder).gainmap_object) as *mut GainMap;
     }
-    (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
+    (*decoder).image = (&mut (*decoder).image_object) as *mut Image;
 
     avifResult::Ok
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avifResult {
+pub unsafe extern "C" fn DecoderNextImage(decoder: *mut Decoder) -> avifResult {
     let rust_decoder = &mut (*decoder).rust_decoder;
 
     let res = rust_decoder.next_image();
@@ -654,18 +654,18 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
     (*decoder).imageSequenceTrackPresent = to_avifBool(image.info.image_sequence_track_present);
     (*decoder).progressiveState = image.info.progressive_state.into();
     (*decoder).imageCount = rust_decoder.image_count as i32;
-    (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
+    (*decoder).image = (&mut (*decoder).image_object) as *mut Image;
 
     avifResult::Ok
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderDestroy(decoder: *mut avifDecoder) {
+pub unsafe extern "C" fn DecoderDestroy(decoder: *mut Decoder) {
     let _ = Box::from_raw(decoder);
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImageDestroy(_image: *mut avifImage) {
+pub unsafe extern "C" fn ImageDestroy(_image: *mut Image) {
     // Nothing to do.
 }
 

@@ -7,7 +7,7 @@ use crate::mp4box::*;
 use crate::stream::*;
 use crate::*;
 
-// TODO: needed only for debug to AvifImage and AvifPlane. Can be removed it those do not have to be
+// TODO: needed only for debug to Image and PlaneData. Can be removed it those do not have to be
 // debug printable.
 use derivative::Derivative;
 
@@ -29,7 +29,7 @@ pub fn u64_from_usize(value: usize) -> AvifResult<u64> {
 
 #[derive(Derivative, Default)]
 #[derivative(Debug)]
-pub struct AvifImageInfo {
+pub struct ImageInfo {
     pub width: u32,
     pub height: u32,
     pub depth: u8,
@@ -53,13 +53,13 @@ pub struct AvifImageInfo {
     pub matrix_coefficients: u16,
 
     // TODO: these can go in a "global" image info struct. which can then
-    // contain an AvifImageInfo as well.
+    // contain an ImageInfo as well.
     pub image_sequence_track_present: bool,
 
-    pub progressive_state: AvifProgressiveState,
+    pub progressive_state: ProgressiveState,
 }
 
-impl AvifImageInfo {
+impl ImageInfo {
     // TODO: replace plane_index with an enum.
     pub fn height(&self, plane_index: usize) -> usize {
         assert!(plane_index <= 3);
@@ -90,8 +90,8 @@ impl AvifImageInfo {
 
 #[derive(Derivative, Default)]
 #[derivative(Debug)]
-pub struct AvifImage {
-    pub info: AvifImageInfo,
+pub struct Image {
+    pub info: ImageInfo,
 
     pub planes: [Option<*const u8>; 4],
     pub row_bytes: [u32; 4], // TODO: named constant
@@ -109,7 +109,7 @@ pub struct AvifImage {
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct AvifPlane<'a> {
+pub struct PlaneData<'a> {
     #[derivative(Debug = "ignore")]
     pub data: &'a [u8],
     pub width: u32,
@@ -118,8 +118,8 @@ pub struct AvifPlane<'a> {
     pub pixel_size: u32,
 }
 
-impl AvifImage {
-    pub fn plane(&self, plane: usize) -> Option<AvifPlane> {
+impl Image {
+    pub fn plane(&self, plane: usize) -> Option<PlaneData> {
         assert!(plane < 4);
         self.planes[plane]?;
         let pixel_size = if self.info.depth == 8 { 1 } else { 2 };
@@ -127,7 +127,7 @@ impl AvifImage {
         let row_bytes = self.row_bytes[plane] as usize;
         let plane_size = height * row_bytes;
         let data = unsafe { std::slice::from_raw_parts(self.planes[plane].unwrap(), plane_size) };
-        Some(AvifPlane {
+        Some(PlaneData {
             data,
             width: self.info.width(plane) as u32,
             height: height as u32,
@@ -161,8 +161,8 @@ impl AvifImage {
 
     fn copy_from_tile(
         &mut self,
-        tile: &AvifImage,
-        tile_info: &AvifTileInfo,
+        tile: &Image,
+        tile_info: &TileInfo,
         tile_index: u32,
         category: usize,
     ) -> AvifResult<()> {
@@ -229,7 +229,7 @@ impl AvifImage {
 }
 
 #[derive(Debug, Copy, Clone, Default)]
-pub enum AvifDecoderSource {
+pub enum DecoderSource {
     Tracks,
     PrimaryItem,
     #[default]
@@ -238,39 +238,39 @@ pub enum AvifDecoderSource {
 }
 
 #[derive(Debug, Default)]
-pub struct AvifDecoderSettings {
-    pub source: AvifDecoderSource,
+pub struct DecoderSettings {
+    pub source: DecoderSource,
     pub ignore_exif: bool,
     pub ignore_xmp: bool,
-    pub strictness: AvifStrictness,
+    pub strictness: Strictness,
     pub allow_progressive: bool,
     pub enable_decoding_gainmap: bool,
     pub enable_parsing_gainmap_metadata: bool,
 }
 
-impl AvifStrictness {
+impl Strictness {
     pub fn pixi_required(&self) -> bool {
         match self {
-            AvifStrictness::All => true,
-            AvifStrictness::SpecificInclude(flags) => flags
+            Strictness::All => true,
+            Strictness::SpecificInclude(flags) => flags
                 .iter()
-                .any(|x| matches!(x, AvifStrictnessFlag::PixiRequired)),
-            AvifStrictness::SpecificExclude(flags) => !flags
+                .any(|x| matches!(x, StrictnessFlag::PixiRequired)),
+            Strictness::SpecificExclude(flags) => !flags
                 .iter()
-                .any(|x| matches!(x, AvifStrictnessFlag::PixiRequired)),
+                .any(|x| matches!(x, StrictnessFlag::PixiRequired)),
             _ => false,
         }
     }
 
     pub fn alpha_ispe_required(&self) -> bool {
         match self {
-            AvifStrictness::All => true,
-            AvifStrictness::SpecificInclude(flags) => flags
+            Strictness::All => true,
+            Strictness::SpecificInclude(flags) => flags
                 .iter()
-                .any(|x| matches!(x, AvifStrictnessFlag::AlphaIspeRequired)),
-            AvifStrictness::SpecificExclude(flags) => !flags
+                .any(|x| matches!(x, StrictnessFlag::AlphaIspeRequired)),
+            Strictness::SpecificExclude(flags) => !flags
                 .iter()
-                .any(|x| matches!(x, AvifStrictnessFlag::AlphaIspeRequired)),
+                .any(|x| matches!(x, StrictnessFlag::AlphaIspeRequired)),
             _ => false,
         }
     }
@@ -293,8 +293,8 @@ pub struct GainMapMetadata {
 }
 
 #[derive(Default, Debug)]
-pub struct AvifGainMap {
-    pub image: AvifImage,
+pub struct GainMap {
+    pub image: Image,
     pub metadata: GainMapMetadata,
 
     pub alt_icc: Vec<u8>,
@@ -310,30 +310,30 @@ pub struct AvifGainMap {
 }
 
 #[derive(Default)]
-pub struct AvifDecoder {
-    pub settings: AvifDecoderSettings,
-    image: AvifImage,
-    source: AvifDecoderSource,
-    tile_info: [AvifTileInfo; 3],
-    tiles: [Vec<AvifTile>; 3],
+pub struct Decoder {
+    pub settings: DecoderSettings,
+    image: Image,
+    source: DecoderSource,
+    tile_info: [TileInfo; 3],
+    tiles: [Vec<Tile>; 3],
     image_index: i32,
     pub image_count: u32,
     pub timescale: u32,
     pub duration_in_timescales: u64,
     pub duration: f64,
     pub repetition_count: i32,
-    pub gainmap: AvifGainMap,
+    pub gainmap: GainMap,
     pub gainmap_present: bool,
-    avif_items: HashMap<u32, AvifItem>,
+    avif_items: HashMap<u32, Item>,
     tracks: Vec<AvifTrack>,
     // To replicate the C-API, we need to keep this optional. Otherwise this could be part of the
     // initialization.
-    io: Option<Box<dyn AvifDecoderIO>>,
+    io: Option<Box<dyn DecoderIO>>,
     codecs: Vec<Dav1d>,
 }
 
 #[derive(Debug, Default, Copy, Clone)]
-struct AvifGrid {
+struct Grid {
     rows: u32,
     columns: u32,
     width: u32,
@@ -341,15 +341,15 @@ struct AvifGrid {
 }
 
 #[derive(Debug, Default)]
-struct AvifTileInfo {
+struct TileInfo {
     tile_count: u32,
     #[allow(unused)]
     decoded_tile_count: u32,
-    grid: AvifGrid,
+    grid: Grid,
 }
 
 #[derive(Debug, Default)]
-struct AvifItem {
+struct Item {
     id: u32,
     item_type: String,
     size: usize,
@@ -380,12 +380,12 @@ macro_rules! find_property {
     };
 }
 
-impl AvifItem {
+impl Item {
     fn data_offset(&self) -> u64 {
         self.extents[0].offset
     }
 
-    fn stream<'a>(&'a self, io: &'a mut Box<dyn AvifDecoderIO>) -> AvifResult<IStream> {
+    fn stream<'a>(&'a self, io: &'a mut Box<dyn DecoderIO>) -> AvifResult<IStream> {
         // TODO: handle multiple extents.
         let io_data = match self.idat.is_empty() {
             true => io.read(self.data_offset(), self.size)?,
@@ -397,11 +397,7 @@ impl AvifItem {
         Ok(IStream::create(io_data))
     }
 
-    fn read_and_parse(
-        &self,
-        io: &mut Box<dyn AvifDecoderIO>,
-        grid: &mut AvifGrid,
-    ) -> AvifResult<()> {
+    fn read_and_parse(&self, io: &mut Box<dyn DecoderIO>, grid: &mut Grid) -> AvifResult<()> {
         // TODO: this function also has to extract codec type.
         if self.item_type != "grid" {
             return Ok(());
@@ -493,7 +489,7 @@ impl AvifItem {
     #[allow(non_snake_case)]
     fn validate_properties(
         &self,
-        avif_items: &HashMap<u32, AvifItem>,
+        avif_items: &HashMap<u32, Item>,
         pixi_required: bool,
     ) -> AvifResult<()> {
         println!("validating item: {:#?}", self);
@@ -661,16 +657,16 @@ fn find_pixi(properties: &[ItemProperty]) -> Option<&PixelInformation> {
     }
 }
 
-fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
-    let mut avif_items: HashMap<u32, AvifItem> = HashMap::new();
+fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, Item>> {
+    let mut avif_items: HashMap<u32, Item> = HashMap::new();
     for item in &meta.iinf {
         avif_items.insert(
             item.item_id,
-            AvifItem {
+            Item {
                 id: item.item_id,
                 item_type: item.item_type.clone(),
                 content_type: item.content_type.clone(),
-                ..AvifItem::default()
+                ..Item::default()
             },
         );
     }
@@ -783,7 +779,7 @@ fn construct_avif_items(meta: &MetaBox) -> AvifResult<HashMap<u32, AvifItem>> {
 }
 
 #[derive(Debug, Default)]
-struct AvifDecodeSample {
+struct DecodeSample {
     item_id: u32,
     offset: u64,
     size: usize,
@@ -792,8 +788,8 @@ struct AvifDecodeSample {
     data_buffer: Option<Vec<u8>>,
 }
 
-impl AvifDecodeSample {
-    pub fn data<'a>(&'a self, io: &'a mut Box<impl AvifDecoderIO + ?Sized>) -> AvifResult<&[u8]> {
+impl DecodeSample {
+    pub fn data<'a>(&'a self, io: &'a mut Box<impl DecoderIO + ?Sized>) -> AvifResult<&[u8]> {
         match &self.data_buffer {
             Some(data_buffer) => Ok(data_buffer),
             None => io.read(self.offset, self.size),
@@ -802,31 +798,31 @@ impl AvifDecodeSample {
 }
 
 #[derive(Debug, Default)]
-struct AvifDecodeInput {
-    samples: Vec<AvifDecodeSample>,
+struct DecodeInput {
+    samples: Vec<DecodeSample>,
     all_layers: bool,
     category: u8,
 }
 
 #[derive(Debug, Default)]
-struct AvifTile {
+struct Tile {
     #[allow(unused)]
     width: u32,
     #[allow(unused)]
     height: u32,
     operating_point: u8,
-    image: AvifImage,
-    input: AvifDecodeInput,
+    image: Image,
+    input: DecodeInput,
     codec_index: usize,
 }
 
-fn create_tile_from_item(item: &mut AvifItem, allow_progressive: bool) -> AvifResult<AvifTile> {
-    let mut tile = AvifTile {
+fn create_tile_from_item(item: &mut Item, allow_progressive: bool) -> AvifResult<Tile> {
+    let mut tile = Tile {
         width: item.width,
         height: item.height,
         operating_point: item.operating_point(),
-        image: AvifImage::default(),
-        ..AvifTile::default()
+        image: Image::default(),
+        ..Tile::default()
     };
     let mut layer_sizes: [usize; 4] = [0; 4];
     let mut layer_count: usize = 0;
@@ -900,7 +896,7 @@ fn create_tile_from_item(item: &mut AvifItem, allow_progressive: bool) -> AvifRe
             // This layer payload subsection is not known. Use the whole payload.
             sample_size = item.size;
         }
-        let sample = AvifDecodeSample {
+        let sample = DecodeSample {
             item_id: item.id,
             offset: 0,
             size: sample_size,
@@ -918,7 +914,7 @@ fn create_tile_from_item(item: &mut AvifItem, allow_progressive: bool) -> AvifRe
         tile.input.all_layers = true;
         let mut offset = 0;
         for (i, layer_size) in layer_sizes.iter().take(layer_count).enumerate() {
-            let sample = AvifDecodeSample {
+            let sample = DecodeSample {
                 item_id: item.id,
                 offset,
                 size: *layer_size,
@@ -932,7 +928,7 @@ fn create_tile_from_item(item: &mut AvifItem, allow_progressive: bool) -> AvifRe
         println!("input samples: {:#?}", tile.input.samples);
     } else {
         // Typical case: Use the entire item's payload for a single frame output
-        let sample = AvifDecodeSample {
+        let sample = DecodeSample {
             item_id: item.id,
             offset: 0,
             size: item.size,
@@ -947,12 +943,12 @@ fn create_tile_from_item(item: &mut AvifItem, allow_progressive: bool) -> AvifRe
     Ok(tile)
 }
 
-fn create_tile_from_track(track: &AvifTrack) -> AvifResult<AvifTile> {
-    let mut tile = AvifTile {
+fn create_tile_from_track(track: &AvifTrack) -> AvifResult<Tile> {
+    let mut tile = Tile {
         width: track.width,
         height: track.height,
         operating_point: 0, // No way to set operating point via tracks
-        ..AvifTile::default()
+        ..Tile::default()
     };
 
     // TODO: implement the imagecount check in avifCodecDecodeInputFillFromSampleTable.
@@ -970,7 +966,7 @@ fn create_tile_from_track(track: &AvifTrack) -> AvifResult<AvifTile> {
         let mut sample_offset = *chunk_offset;
         for _ in 0..sample_count {
             let sample_size = sample_table.sample_size(sample_size_index)?;
-            let sample = AvifDecodeSample {
+            let sample = DecodeSample {
                 item_id: 0,
                 offset: sample_offset,
                 size: sample_size,
@@ -998,7 +994,7 @@ fn create_tile_from_track(track: &AvifTrack) -> AvifResult<AvifTile> {
     Ok(tile)
 }
 
-fn steal_planes(dst: &mut AvifImage, src: &mut AvifImage, category: usize) {
+fn steal_planes(dst: &mut Image, src: &mut Image, category: usize) {
     match category {
         0 | 2 => {
             dst.planes[0] = src.planes[0];
@@ -1026,19 +1022,19 @@ fn steal_planes(dst: &mut AvifImage, src: &mut AvifImage, category: usize) {
     }
 }
 
-impl AvifDecoder {
+impl Decoder {
     pub fn set_io_file(&mut self, filename: &String) -> AvifResult<()> {
-        self.io = Some(Box::new(AvifDecoderFileIO::create(filename)?));
+        self.io = Some(Box::new(DecoderFileIO::create(filename)?));
         Ok(())
     }
 
-    pub fn set_io(&mut self, io: Box<dyn AvifDecoderIO>) -> AvifResult<()> {
+    pub fn set_io(&mut self, io: Box<dyn DecoderIO>) -> AvifResult<()> {
         self.io = Some(io);
         Ok(())
     }
 
     #[allow(non_snake_case)]
-    fn find_alpha_item(&self, color_item_index: u32) -> (u32, Option<AvifItem>) {
+    fn find_alpha_item(&self, color_item_index: u32) -> (u32, Option<Item>) {
         let color_item = self.avif_items.get(&color_item_index).unwrap();
         if let Some(item) = self.avif_items.iter().find(|x| {
             !x.1.should_skip() && x.1.aux_for_id == color_item.id && x.1.is_auxiliary_alpha()
@@ -1073,14 +1069,14 @@ impl AvifDecoder {
         };
         (
             0,
-            Some(AvifItem {
+            Some(Item {
                 id: self.avif_items.keys().max().unwrap() + 1,
                 item_type: String::from("grid"),
                 width: color_item.width,
                 height: color_item.height,
                 grid_item_ids: alpha_item_indices,
                 properties,
-                ..AvifItem::default()
+                ..Item::default()
             }),
         )
     }
@@ -1226,8 +1222,8 @@ impl AvifDecoder {
         Ok(())
     }
 
-    fn generate_tiles(&mut self, item_id: u32, category: usize) -> AvifResult<Vec<AvifTile>> {
-        let mut tiles: Vec<AvifTile> = Vec::new();
+    fn generate_tiles(&mut self, item_id: u32, category: usize) -> AvifResult<Vec<Tile>> {
+        let mut tiles: Vec<Tile> = Vec::new();
         let item = self
             .avif_items
             .get(&item_id)
@@ -1357,7 +1353,7 @@ impl AvifDecoder {
     }
 
     #[allow(non_snake_case)]
-    pub fn parse(&mut self) -> AvifResult<&AvifImageInfo> {
+    pub fn parse(&mut self) -> AvifResult<&ImageInfo> {
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
         }
@@ -1372,24 +1368,24 @@ impl AvifDecoder {
 
         self.source = match self.settings.source {
             // Decide the source based on the major brand.
-            AvifDecoderSource::Auto => match avif_boxes.ftyp.major_brand.as_str() {
-                "avis" => AvifDecoderSource::Tracks,
-                "avif" => AvifDecoderSource::PrimaryItem,
+            DecoderSource::Auto => match avif_boxes.ftyp.major_brand.as_str() {
+                "avis" => DecoderSource::Tracks,
+                "avif" => DecoderSource::PrimaryItem,
                 _ => {
                     if self.tracks.is_empty() {
-                        AvifDecoderSource::PrimaryItem
+                        DecoderSource::PrimaryItem
                     } else {
-                        AvifDecoderSource::Tracks
+                        DecoderSource::Tracks
                     }
                 }
             },
-            AvifDecoderSource::Tracks => AvifDecoderSource::Tracks,
-            AvifDecoderSource::PrimaryItem => AvifDecoderSource::PrimaryItem,
+            DecoderSource::Tracks => DecoderSource::Tracks,
+            DecoderSource::PrimaryItem => DecoderSource::PrimaryItem,
         };
 
         let color_properties: &Vec<ItemProperty>;
         match self.source {
-            AvifDecoderSource::Tracks => {
+            DecoderSource::Tracks => {
                 let color_track = self
                     .tracks
                     .iter()
@@ -1431,7 +1427,7 @@ impl AvifDecoder {
                 self.image.info.width = color_track.width;
                 self.image.info.height = color_track.height;
             }
-            AvifDecoderSource::PrimaryItem => {
+            DecoderSource::PrimaryItem => {
                 // 0 color, 1 alpha, 2 gainmap
                 let mut item_ids: [u32; 3] = [0; 3];
 
@@ -1539,10 +1535,10 @@ impl AvifDecoder {
                 // alphapremultiplied.
 
                 if color_item.progressive {
-                    self.image.info.progressive_state = AvifProgressiveState::Available;
+                    self.image.info.progressive_state = ProgressiveState::Available;
                     let sample_count = self.tiles[0][0].input.samples.len();
                     if sample_count > 1 {
-                        self.image.info.progressive_state = AvifProgressiveState::Active;
+                        self.image.info.progressive_state = ProgressiveState::Active;
                         self.image_count = sample_count as u32;
                     }
                 }
@@ -1676,7 +1672,7 @@ impl AvifDecoder {
     }
 
     fn create_codecs(&mut self) -> AvifResult<()> {
-        if matches!(self.source, AvifDecoderSource::Tracks) {
+        if matches!(self.source, DecoderSource::Tracks) {
             // In this case, we will use at most two codec instances (one for the color planes and
             // one for the alpha plane). Gain maps are not supported.
             self.create_codec(
@@ -1719,7 +1715,7 @@ impl AvifDecoder {
         category: usize,
         tile_index: usize,
     ) -> AvifResult<()> {
-        // TODO: this function can probably be moved into AvifDecodeSample.data().
+        // TODO: this function can probably be moved into DecodeSample.data().
         // println!(
         //     "prepare sample: image_index {image_index} category {category} tile_index {tile_index}"
         // );
@@ -1838,7 +1834,7 @@ impl AvifDecoder {
         Ok(())
     }
 
-    pub fn next_image(&mut self) -> AvifResult<&AvifImage> {
+    pub fn next_image(&mut self) -> AvifResult<&Image> {
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
         }

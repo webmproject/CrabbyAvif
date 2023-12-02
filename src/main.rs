@@ -15,7 +15,7 @@ fn main() {
     //     0x00, 0x61, 0x76, 0x69, 0x68, 0x6d, 0x69, 0x66, 0x31, 0x6d, 0x69, 0x61, 0x66, 0x4d, 0x41,
     //     0x31, 0x41,
     // ];
-    // let val = AvifDecoder::peek_compatible_file_type(&data);
+    // let val = Decoder::peek_compatible_file_type(&data);
     // println!("val: {val}");
     // return;
 
@@ -27,16 +27,16 @@ fn main() {
     }
     let image_count;
     {
-        let settings = AvifDecoderSettings {
-            source: AvifDecoderSource::Auto,
+        let settings = DecoderSettings {
+            source: DecoderSource::Auto,
             ignore_exif: false,
             ignore_xmp: false,
-            strictness: AvifStrictness::None,
+            strictness: Strictness::None,
             allow_progressive: false,
             enable_decoding_gainmap: true,
             enable_parsing_gainmap_metadata: true,
         };
-        let mut decoder: AvifDecoder = Default::default();
+        let mut decoder: Decoder = Default::default();
         decoder.settings = settings;
         match decoder.set_io_file(&args[1]) {
             Ok(_) => {}

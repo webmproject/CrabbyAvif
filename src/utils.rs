@@ -1,4 +1,4 @@
-use crate::decoder::AvifImage;
+use crate::decoder::Image;
 use crate::*;
 use std::fs::File;
 use std::io::prelude::*;
@@ -26,7 +26,7 @@ impl Y4MWriter {
         }
     }
 
-    fn write_header(&mut self, image: &AvifImage) -> bool {
+    fn write_header(&mut self, image: &Image) -> bool {
         if self.header_written {
             return true;
         }
@@ -100,7 +100,7 @@ impl Y4MWriter {
         true
     }
 
-    pub fn write_frame(&mut self, image: &AvifImage) -> bool {
+    pub fn write_frame(&mut self, image: &Image) -> bool {
         if !self.write_header(image) {
             return false;
         }

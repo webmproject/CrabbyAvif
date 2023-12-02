@@ -1434,7 +1434,7 @@ impl MP4Box {
         Ok(tracks)
     }
 
-    pub fn parse(io: &mut Box<dyn AvifDecoderIO>) -> AvifResult<AvifBoxes> {
+    pub fn parse(io: &mut Box<dyn DecoderIO>) -> AvifResult<AvifBoxes> {
         let mut ftyp: Option<FileTypeBox> = None;
         let mut meta: Option<MetaBox> = None;
         let mut tracks: Option<Vec<AvifTrack>> = None;

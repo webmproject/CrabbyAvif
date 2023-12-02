@@ -1,5 +1,5 @@
 use crate::bindings::*;
-use crate::decoder::AvifImage;
+use crate::decoder::Image;
 use crate::AvifError;
 use crate::AvifResult;
 use crate::PixelFormat;
@@ -54,7 +54,7 @@ impl Dav1d {
         &mut self,
         av1_payload: &[u8],
         spatial_id: u8,
-        image: &mut AvifImage,
+        image: &mut Image,
         category: usize,
     ) -> AvifResult<()> {
         if self.context.is_none() {

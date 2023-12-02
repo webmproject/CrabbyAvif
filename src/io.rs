@@ -3,29 +3,29 @@ use crate::AvifResult;
 use std::fs::File;
 use std::os::unix::fs::FileExt; // TODO: what happens when this is compiled for windows?
 
-pub trait AvifDecoderIO {
+pub trait DecoderIO {
     fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]>;
     fn size_hint(&self) -> u64;
     fn persistent(&self) -> bool;
 }
 
 #[derive(Default, Debug)]
-pub struct AvifDecoderFileIO {
+pub struct DecoderFileIO {
     file: Option<File>,
     buffer: Vec<u8>,
 }
 
-impl AvifDecoderFileIO {
-    pub fn create(filename: &String) -> AvifResult<AvifDecoderFileIO> {
+impl DecoderFileIO {
+    pub fn create(filename: &String) -> AvifResult<DecoderFileIO> {
         let file = File::open(filename).or(Err(AvifError::IoError))?;
-        Ok(AvifDecoderFileIO {
+        Ok(DecoderFileIO {
             file: Some(file),
             buffer: Vec::new(),
         })
     }
 }
 
-impl AvifDecoderIO for AvifDecoderFileIO {
+impl DecoderIO for DecoderFileIO {
     fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]> {
         let file_size = self.size_hint();
         if offset > file_size {

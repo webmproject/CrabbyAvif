@@ -6,9 +6,9 @@ fn get_test_file(filename: &str) -> String {
     String::from(format!("{TEST_DATA_PATH}/{filename}"))
 }
 
-fn get_decoder(filename: &str) -> decoder::AvifDecoder {
+fn get_decoder(filename: &str) -> decoder::Decoder {
     let abs_filename = get_test_file(filename);
-    let mut decoder = decoder::AvifDecoder::default();
+    let mut decoder = decoder::Decoder::default();
     let _ = decoder
         .set_io_file(&abs_filename)
         .expect("Failed to set IO");
@@ -28,12 +28,12 @@ fn alpha_no_ispe() {
     // See https://github.com/AOMediaCodec/libavif/pull/745.
     let mut decoder = get_decoder("alpha_noispe.avif");
     // By default, non-strict files are refused.
-    assert!(matches!(decoder.settings.strictness, AvifStrictness::All));
+    assert!(matches!(decoder.settings.strictness, Strictness::All));
     let res = decoder.parse();
     assert_avif_error!(res, BmffParseFailed);
     // Allow this kind of file specifically.
     decoder.settings.strictness =
-        AvifStrictness::SpecificExclude(vec![AvifStrictnessFlag::AlphaIspeRequired]);
+        Strictness::SpecificExclude(vec![StrictnessFlag::AlphaIspeRequired]);
     let res = decoder.parse();
     assert!(res.is_ok());
     let info = res.unwrap();
@@ -67,7 +67,7 @@ fn animated_image() {
 #[test]
 fn animated_image_with_source_set_to_primary_item() {
     let mut decoder = get_decoder("colors-animated-8bpc.avif");
-    decoder.settings.source = decoder::AvifDecoderSource::PrimaryItem;
+    decoder.settings.source = decoder::DecoderSource::PrimaryItem;
     let res = decoder.parse();
     assert!(res.is_ok());
     let info = res.unwrap();
@@ -117,17 +117,14 @@ fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     let info = res.unwrap();
     assert!(matches!(
         info.progressive_state,
-        AvifProgressiveState::Available
+        ProgressiveState::Available
     ));
 
     decoder.settings.allow_progressive = true;
     let res = decoder.parse();
     assert!(res.is_ok());
     let info = res.unwrap();
-    assert!(matches!(
-        info.progressive_state,
-        AvifProgressiveState::Active
-    ));
+    assert!(matches!(info.progressive_state, ProgressiveState::Active));
     assert_eq!(info.width, width);
     assert_eq!(info.height, height);
     assert_eq!(decoder.image_count, layer_count);
@@ -181,7 +178,7 @@ fn decoder_parse_icc_exif_xmp() {
     assert_eq!(info.xmp[3], 112);
 }
 
-// From avifgainmaptest.cc
+// From GainMaptest.cc
 #[test]
 fn color_grid_gainmap_different_grid() {
     let mut decoder = get_decoder("color_grid_gainmap_different_grid.avif");
@@ -205,7 +202,7 @@ fn color_grid_gainmap_different_grid() {
     assert!(res.is_ok());
 }
 
-// From avifgainmaptest.cc
+// From GainMaptest.cc
 #[test]
 fn color_grid_alpha_grid_gainmap_nogrid() {
     let mut decoder = get_decoder("color_grid_alpha_grid_gainmap_nogrid.avif");
@@ -229,7 +226,7 @@ fn color_grid_alpha_grid_gainmap_nogrid() {
     assert!(res.is_ok());
 }
 
-// From avifgainmaptest.cc
+// From GainMaptest.cc
 #[test]
 fn color_nogrid_alpha_nogrid_gainmap_grid() {
     let mut decoder = get_decoder("color_nogrid_alpha_nogrid_gainmap_grid.avif");
