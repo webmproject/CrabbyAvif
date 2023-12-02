@@ -1,5 +1,6 @@
 pub mod decoder;
 pub mod io;
+pub mod types;
 pub mod utils;
 
 #[cfg(feature = "capi")]

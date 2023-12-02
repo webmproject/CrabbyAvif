@@ -1,5 +1,4 @@
-use crate::decoder::Fraction;
-use crate::decoder::UFraction;
+use crate::types::*;
 use crate::AvifError;
 use crate::AvifResult;
 use byteorder::{BigEndian, ByteOrder};
