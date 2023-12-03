@@ -27,3 +27,32 @@ replace all safe unwrap() calls with unwrap_unchecked().
 properly define rust api returns. &ImageInfo and &Image are very confusing with some fields being accessed from the decoder.
 
 ===
+
+building for android:
+
+$ rustup target add ${target}
+$ cargo build --no-default-features --target=${target}
+
+arm64: aarch64-linux-android
+
+$ cp cargo-config.toml ~/.cargo/config
+$ rustup target add aarch64-linux-android
+$ cargo build --no-default-features --target=aarch64-linux-android
+
+===
+
+$ cargo-config.toml
+
+[target.aarch64-linux-android]
+ar = "<project path>/greetings/NDK/arm64/bin/aarch64-linux-android-ar"
+linker = "<project path>/greetings/NDK/arm64/bin/aarch64-linux-android-clang"
+
+[target.armv7-linux-androideabi]
+ar = "<project path>/greetings/NDK/arm/bin/arm-linux-androideabi-ar"
+linker = "<project path>/greetings/NDK/arm/bin/arm-linux-androideabi-clang"
+
+[target.i686-linux-android]
+ar = "<project path>/greetings/NDK/x86/bin/i686-linux-android-ar"
+linker = "<project path>/greetings/NDK/x86/bin/i686-linux-android-clang"
+
+some documentation: https://doc.rust-lang.org/cargo/reference/config.html#target
