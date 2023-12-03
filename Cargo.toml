@@ -9,6 +9,7 @@ build = "src/build.rs"
 
 [dependencies]
 byteorder = "1.5.0"
+# TODO: this is only needed for binary crates.
 exitcode = "1.1.2"
 derivative = "2.2.0"
 
@@ -18,7 +19,10 @@ seq-macro = "0.3.5"
 tempfile = "3.8.1"
 
 [features]
+default = ["dav1d"]
 capi = []
+dav1d = []
+libgav1 = []
 
 [package.metadata.capi.header]
 name = "avif"

@@ -3,15 +3,17 @@ pub mod item;
 pub mod tile;
 pub mod track;
 
-use std::collections::HashSet;
-
 use crate::decoder::gainmap::*;
 use crate::decoder::item::*;
 use crate::decoder::tile::*;
 use crate::decoder::track::*;
 
+#[cfg(feature = "dav1d")]
 use crate::codecs::dav1d::Dav1d;
+
+#[cfg(feature = "libgav1")]
 use crate::codecs::libgav1::Libgav1;
+
 use crate::image::*;
 use crate::internal_utils::io::*;
 use crate::internal_utils::*;
@@ -21,12 +23,7 @@ use crate::parser::mp4box::*;
 use crate::parser::obu;
 use crate::*;
 
-#[derive(Debug, Default)]
-pub enum CodecChoice {
-    #[default]
-    Dav1d,
-    Libgav1,
-}
+use std::collections::HashSet;
 
 pub trait IO {
     fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]>;
@@ -36,6 +33,47 @@ pub trait IO {
 
 pub type GenericIO = Box<dyn IO>;
 pub type Codec = Box<dyn crate::codecs::Decoder>;
+
+#[derive(Debug, Default)]
+pub enum CodecChoice {
+    #[default]
+    Auto,
+    Dav1d,
+    Libgav1,
+}
+
+impl CodecChoice {
+    #[allow(unreachable_code)]
+    fn get_codec(&self) -> AvifResult<Codec> {
+        match self {
+            CodecChoice::Auto => {
+                #[cfg(feature = "dav1d")]
+                {
+                    return Ok(Box::new(Dav1d::default()));
+                }
+                #[cfg(feature = "libgav1")]
+                {
+                    return Ok(Box::new(Libgav1::default()));
+                }
+                return Err(AvifError::NoCodecAvailable);
+            }
+            CodecChoice::Dav1d => {
+                #[cfg(feature = "dav1d")]
+                {
+                    return Ok(Box::new(Dav1d::default()));
+                }
+                return Err(AvifError::NoCodecAvailable);
+            }
+            CodecChoice::Libgav1 => {
+                #[cfg(feature = "libgav1")]
+                {
+                    return Ok(Box::new(Libgav1::default()));
+                }
+                return Err(AvifError::NoCodecAvailable);
+            }
+        }
+    }
+}
 
 #[derive(Debug, Copy, Clone, Default)]
 pub enum Source {
@@ -813,10 +851,7 @@ impl Decoder {
     }
 
     fn create_codec(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
-        let mut codec: Codec = match self.settings.codec_choice {
-            CodecChoice::Dav1d => Box::new(Dav1d::default()),
-            CodecChoice::Libgav1 => Box::new(Libgav1::default()),
-        };
+        let mut codec: Codec = self.settings.codec_choice.get_codec()?;
         codec.initialize(operating_point, all_layers)?;
         self.codecs.push(codec);
         Ok(())
