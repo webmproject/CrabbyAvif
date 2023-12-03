@@ -6,6 +6,9 @@ pub mod dav1d;
 #[cfg(feature = "libgav1")]
 pub mod libgav1;
 
+#[cfg(feature = "android_mediacodec")]
+pub mod android_mediacodec;
+
 use crate::image::Image;
 use crate::AvifResult;
 

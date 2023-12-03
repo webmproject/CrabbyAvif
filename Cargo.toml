@@ -12,6 +12,8 @@ byteorder = "1.5.0"
 # TODO: this is only needed for binary crates.
 exitcode = "1.1.2"
 derivative = "2.2.0"
+# 28 is needed only for mediacodec.name().
+ndk = {version = "0.8.0", features = ["media"]}
 
 [dev-dependencies]
 test-case = "3.3.1"
@@ -23,6 +25,7 @@ default = ["dav1d"]
 capi = []
 dav1d = []
 libgav1 = []
+android_mediacodec = [] #["dep:mediacodec"]
 
 [package.metadata.capi.header]
 name = "avif"

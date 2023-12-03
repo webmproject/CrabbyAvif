@@ -14,6 +14,9 @@ use crate::codecs::dav1d::Dav1d;
 #[cfg(feature = "libgav1")]
 use crate::codecs::libgav1::Libgav1;
 
+#[cfg(feature = "android_mediacodec")]
+use crate::codecs::android_mediacodec::MediaCodec;
+
 use crate::image::*;
 use crate::internal_utils::io::*;
 use crate::internal_utils::*;
@@ -40,6 +43,7 @@ pub enum CodecChoice {
     Auto,
     Dav1d,
     Libgav1,
+    MediaCodec,
 }
 
 impl CodecChoice {
@@ -55,6 +59,10 @@ impl CodecChoice {
                 {
                     return Ok(Box::new(Libgav1::default()));
                 }
+                #[cfg(feature = "android_mediacodec")]
+                {
+                    return Ok(Box::new(MediaCodec::default()));
+                }
                 return Err(AvifError::NoCodecAvailable);
             }
             CodecChoice::Dav1d => {
@@ -68,6 +76,13 @@ impl CodecChoice {
                 #[cfg(feature = "libgav1")]
                 {
                     return Ok(Box::new(Libgav1::default()));
+                }
+                return Err(AvifError::NoCodecAvailable);
+            }
+            CodecChoice::MediaCodec => {
+                #[cfg(feature = "android_mediacodec")]
+                {
+                    return Ok(Box::new(MediaCodec::default()));
                 }
                 return Err(AvifError::NoCodecAvailable);
             }
@@ -816,7 +831,15 @@ impl Decoder {
         )
     }
 
+    #[allow(unreachable_code)]
     fn can_use_single_codec(&self) -> bool {
+        #[cfg(feature = "android_mediacodec")]
+        {
+            // Android MediaCodec does not support using a single codec
+            // instance for images of varying formats (which could happen
+            // when image contains alpha).
+            return false;
+        }
         let total_tile_count = self.tiles[0].len() + self.tiles[1].len() + self.tiles[2].len();
         if total_tile_count == 1 {
             return true;

@@ -66,6 +66,18 @@ impl ImageInfo {
             PixelFormat::Yuv420 | PixelFormat::Yuv422 => (self.width as usize + 1) / 2,
         }
     }
+
+    pub fn subsampled_value(&self, value: u32, plane_index: usize) -> usize {
+        assert!(plane_index <= 3);
+        if plane_index == 0 || plane_index == 3 {
+            // Y and Alpha planes are never subsampled.
+            return value as usize;
+        }
+        match self.yuv_format {
+            PixelFormat::Yuv444 | PixelFormat::Monochrome => value as usize,
+            PixelFormat::Yuv420 | PixelFormat::Yuv422 => (value as usize + 1) / 2,
+        }
+    }
 }
 
 #[derive(Derivative, Default)]
@@ -118,6 +130,7 @@ impl Image {
 
     pub fn allocate_planes(&mut self, category: usize) -> AvifResult<()> {
         // TODO : assumes 444. do other stuff.
+        // TODO: do not realloc if size is already big enough.
         let pixel_size: u32 = if self.info.depth == 8 { 1 } else { 2 };
         let plane_size = (self.info.width * self.info.height * pixel_size) as usize;
         if category == 0 || category == 2 {
@@ -135,6 +148,65 @@ impl Image {
             self.row_bytes[3] = self.info.width * pixel_size;
             self.planes[3] = Some(self.plane_buffers[3].as_ptr());
             self.image_owns_alpha_plane = true;
+        }
+        Ok(())
+    }
+
+    pub fn copy_from_slice(
+        &mut self,
+        source: &[u8],
+        stride: u32,
+        category: usize,
+    ) -> AvifResult<()> {
+        // TODO: deal with integer math safety in this function.
+        self.allocate_planes(category)?;
+        let pixel_size: usize = if self.info.depth == 8 { 1 } else { 2 };
+        if category == 0 || category == 2 {
+            let mut src_offset = 0;
+            for plane_index in 0usize..3 {
+                let plane_stride = self.info.subsampled_value(stride, plane_index);
+                let width = self.info.width(plane_index);
+                let height = self.info.height(plane_index);
+                let row_width = width * pixel_size;
+                let mut dst_offset = 0;
+                for y in 0usize..height {
+                    let src_y_start = src_offset;
+                    let src_y_end = src_y_start + row_width;
+                    let src_slice = &source[src_y_start..src_y_end];
+
+                    let dst_y_start = dst_offset;
+                    let dst_y_end = dst_y_start + row_width;
+                    let dst_slice = &mut self.plane_buffers[plane_index][dst_y_start..dst_y_end];
+
+                    dst_slice.copy_from_slice(src_slice);
+
+                    // TODO: does plane_stride account for pixel size?
+                    src_offset += plane_stride;
+                    dst_offset += self.row_bytes[plane_index] as usize;
+                }
+            }
+        } else {
+            assert!(category == 1);
+            let mut src_offset = 0;
+            let width = self.info.width(3);
+            let height = self.info.height(3);
+            let row_width = width * pixel_size;
+            let mut dst_offset = 0;
+            for y in 0usize..height {
+                let src_y_start = src_offset;
+                let src_y_end = src_y_start + row_width;
+                let src_slice = &source[src_y_start..src_y_end];
+
+                let dst_y_start = dst_offset;
+                let dst_y_end = dst_y_start + row_width;
+                let dst_slice = &mut self.plane_buffers[3][dst_y_start..dst_y_end];
+
+                dst_slice.copy_from_slice(src_slice);
+
+                // TODO: does stride account for pixel size?
+                src_offset += stride as usize;
+                dst_offset += self.row_bytes[3] as usize;
+            }
         }
         Ok(())
     }

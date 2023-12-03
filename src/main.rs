@@ -64,8 +64,9 @@ fn main() {
 
         image_count = decoder.image_count;
         //image_count = 1;
-        let mut y4m: rust_libavif::utils::y4m::Y4MWriter = Default::default();
-        y4m.filename = Some(args[2].clone());
+        //let mut writer: rust_libavif::utils::y4m::Y4MWriter = Default::default();
+        let mut writer: rust_libavif::utils::raw::RawWriter = Default::default();
+        writer.filename = Some(args[2].clone());
 
         for _i in 0..image_count {
             let image = decoder.next_image();
@@ -75,7 +76,7 @@ fn main() {
                 std::process::exit(1);
             }
 
-            let ret = y4m.write_frame(image.unwrap());
+            let ret = writer.write_frame(image.unwrap());
             if !ret {
                 println!("error writing y4m file");
                 std::process::exit(1);
