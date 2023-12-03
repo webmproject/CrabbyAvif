@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
+#![allow(clippy::missing_safety_doc)]
 
 use std::os::raw::c_char;
 use std::os::raw::c_int;
@@ -507,7 +508,7 @@ impl Default for avifDecoder {
             enableDecodingGainMap: AVIF_FALSE,
             enableParsingGainMapMetadata: AVIF_FALSE,
             imageSequenceTrackPresent: AVIF_FALSE,
-            rust_decoder: Box::new(Decoder::default()),
+            rust_decoder: Box::<Decoder>::default(),
             image_object: avifImage::default(),
             gainmap_image_object: avifImage::default(),
             gainmap_object: avifGainMap::default(),
@@ -541,7 +542,7 @@ pub unsafe extern "C" fn avifPeekCompatibleFileType(input: *const avifROData) ->
 
 #[no_mangle]
 pub unsafe extern "C" fn avifDecoderCreate() -> *mut avifDecoder {
-    Box::into_raw(Box::new(avifDecoder::default()))
+    Box::into_raw(Box::<avifDecoder>::default())
 }
 
 #[no_mangle]

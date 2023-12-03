@@ -161,6 +161,7 @@ impl Image {
         // TODO: deal with integer math safety in this function.
         self.allocate_planes(category)?;
         let pixel_size: usize = if self.info.depth == 8 { 1 } else { 2 };
+        // TODO: if width == stride, the whole thing can be one copy.
         if category == 0 || category == 2 {
             let mut src_offset = 0;
             for plane_index in 0usize..3 {
@@ -169,7 +170,7 @@ impl Image {
                 let height = self.info.height(plane_index);
                 let row_width = width * pixel_size;
                 let mut dst_offset = 0;
-                for y in 0usize..height {
+                for _y in 0usize..height {
                     let src_y_start = src_offset;
                     let src_y_end = src_y_start + row_width;
                     let src_slice = &source[src_y_start..src_y_end];
@@ -192,7 +193,7 @@ impl Image {
             let height = self.info.height(3);
             let row_width = width * pixel_size;
             let mut dst_offset = 0;
-            for y in 0usize..height {
+            for _y in 0usize..height {
                 let src_y_start = src_offset;
                 let src_y_end = src_y_start + row_width;
                 let src_slice = &source[src_y_start..src_y_end];

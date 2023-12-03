@@ -1,5 +1,4 @@
 use crate::image::Image;
-use crate::*;
 use std::fs::File;
 use std::io::prelude::*;
 

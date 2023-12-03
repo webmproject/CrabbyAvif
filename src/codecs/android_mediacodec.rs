@@ -11,7 +11,6 @@ use ndk::media::media_codec::MediaCodecDirection;
 use ndk::media::media_codec::MediaFormat;
 use ndk::media::media_codec::OutputBuffer;
 
-use std::mem::MaybeUninit;
 use std::time::Duration;
 
 #[derive(Debug, Default)]
@@ -21,7 +20,7 @@ pub struct MediaCodec {
 }
 
 impl Decoder for MediaCodec {
-    fn initialize(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
+    fn initialize(&mut self, _operating_point: u8, _all_layers: bool) -> AvifResult<()> {
         // Does not support operating point and all layers.
         if self.codec.is_some() {
             return Ok(()); // Already initialized.
@@ -55,7 +54,7 @@ impl Decoder for MediaCodec {
     fn get_next_image(
         &mut self,
         av1_payload: &[u8],
-        spatial_id: u8,
+        _spatial_id: u8,
         image: &mut Image,
         category: usize,
     ) -> AvifResult<()> {
