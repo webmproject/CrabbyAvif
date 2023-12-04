@@ -294,7 +294,6 @@ impl Decoder {
 
     // returns (tone_mapped_image_item_id, gain_map_item_id)
     fn find_tone_mapped_image_item(&self, color_item_id: u32) -> AvifResult<(u32, u32)> {
-        // TODO: may have to find_all instead of find one.
         let tmap_items: Vec<_> = self.items.values().filter(|x| x.is_tmap()).collect();
         for item in tmap_items {
             println!("found a tonemapped item: {:#?}", item.id);

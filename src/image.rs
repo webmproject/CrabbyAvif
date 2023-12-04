@@ -3,8 +3,8 @@ use crate::decoder::ProgressiveState;
 use crate::internal_utils::*;
 use crate::*;
 
-// TODO: needed only for debug to Image and PlaneData. Can be removed it those do not have to be
-// debug printable.
+// TODO: needed only for debug to Image and PlaneData. Can be removed it those
+// do not have to be debug printable.
 use derivative::Derivative;
 
 #[derive(Derivative, Default)]
