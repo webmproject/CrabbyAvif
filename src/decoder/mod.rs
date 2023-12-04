@@ -128,12 +128,13 @@ pub enum Strictness {
     SpecificExclude(Vec<StrictnessFlag>),
 }
 
+#[repr(C)]
 #[derive(Debug, Default, Copy, Clone)]
 pub enum ProgressiveState {
     #[default]
-    Unavailable,
-    Available,
-    Active,
+    Unavailable = 0,
+    Available = 1,
+    Active = 2,
 }
 
 impl Strictness {

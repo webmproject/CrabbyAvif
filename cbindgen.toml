@@ -9,6 +9,7 @@ usize_is_size_t = true
 "ChromaSamplePosition" = "avifChromaSamplePosition"
 "ColorPrimaries" = "avifColorPrimaries"
 "MatrixCoefficients" = "avifMatrixCoefficients"
+"ProgressiveState" = "avifProgressiveState"
 "Source" = "avifDecoderSource"
 "TransferCharacteristics" = "avifTransferCharacteristics"
 

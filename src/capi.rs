@@ -149,7 +149,7 @@ impl From<PixelFormat> for avifPixelFormat {
 
 #[repr(C)]
 #[derive(Debug)]
-enum avifRange {
+pub enum avifRange {
     Limited = 0,
     Full = 1,
 }
@@ -289,9 +289,9 @@ pub struct avifImage {
     alphaPremultiplied: avifBool,
 
     icc: avifRWData,
-    // avifColorPrimaries colorPrimaries;
-    // avifTransferCharacteristics transferCharacteristics;
-    // avifMatrixCoefficients matrixCoefficients;
+    colorPrimaries: ColorPrimaries,
+    transferCharacteristics: TransferCharacteristics,
+    matrixCoefficients: MatrixCoefficients,
     // avifContentLightLevelInformationBox clli;
     // avifTransformFlags transformFlags;
     // avifPixelAspectRatioBox pasp;
@@ -320,6 +320,9 @@ impl Default for avifImage {
             imageOwnsAlphaPlane: AVIF_FALSE,
             alphaPremultiplied: AVIF_FALSE,
             icc: avifRWData::default(),
+            colorPrimaries: ColorPrimaries::default(),
+            transferCharacteristics: TransferCharacteristics::default(),
+            matrixCoefficients: MatrixCoefficients::default(),
             exif: avifRWData::default(),
             xmp: avifRWData::default(),
             gainMap: std::ptr::null_mut(),
@@ -338,6 +341,9 @@ impl From<&ImageInfo> for avifImage {
             yuvChromaSamplePosition: info.chroma_sample_position.into(),
             alphaPremultiplied: info.alpha_premultiplied as avifBool,
             icc: (&info.icc).into(),
+            colorPrimaries: info.color_primaries,
+            transferCharacteristics: info.transfer_characteristics,
+            matrixCoefficients: info.matrix_coefficients,
             exif: (&info.exif).into(),
             xmp: (&info.xmp).into(),
             ..Self::default()
@@ -372,24 +378,6 @@ pub const AVIF_STRICT_ENABLED: u32 =
 pub type avifStrictFlags = u32;
 
 #[repr(C)]
-#[derive(Copy, Clone)]
-pub enum avifProgressiveState {
-    Unavailable,
-    Available,
-    Active,
-}
-
-impl From<ProgressiveState> for avifProgressiveState {
-    fn from(progressive_state: ProgressiveState) -> Self {
-        match progressive_state {
-            ProgressiveState::Unavailable => avifProgressiveState::Unavailable,
-            ProgressiveState::Available => avifProgressiveState::Available,
-            ProgressiveState::Active => avifProgressiveState::Active,
-        }
-    }
-}
-
-#[repr(C)]
 pub struct avifDecoderData {}
 
 #[repr(C)]
@@ -421,7 +409,7 @@ pub struct avifDecoder {
     pub image: *mut avifImage,
     pub imageIndex: i32,
     pub imageCount: i32,
-    pub progressiveState: avifProgressiveState,
+    pub progressiveState: ProgressiveState,
     // avifImageTiming imageTiming;
     pub timescale: u64,
     pub duration: f64,
@@ -460,7 +448,7 @@ impl Default for avifDecoder {
             image: std::ptr::null_mut(),
             imageIndex: -1,
             imageCount: 0,
-            progressiveState: avifProgressiveState::Unavailable,
+            progressiveState: ProgressiveState::Unavailable,
             timescale: 0,
             duration: 0.0,
             durationInTimescales: 0,
@@ -632,7 +620,7 @@ pub unsafe extern "C" fn avifImageDestroy(_image: *mut avifImage) {
 
 #[no_mangle]
 pub unsafe extern "C" fn avifResultToString(_res: avifResult) -> *const c_char {
-    println!("hello:232322322212311");
+    println!("hello:232322322123");
     // TODO: implement this function.
     std::ptr::null()
 }
