@@ -1,6 +1,7 @@
 use crate::decoder::Image;
 use crate::internal_utils::*;
 use crate::parser::mp4box::ContentLightLevelInformation;
+use crate::*;
 
 #[derive(Default, Debug)]
 pub struct GainMapMetadata {
@@ -21,9 +22,9 @@ pub struct GainMap {
     pub metadata: GainMapMetadata,
 
     pub alt_icc: Vec<u8>,
-    pub alt_color_primaries: u16,
-    pub alt_transfer_characteristics: u16,
-    pub alt_matrix_coefficients: u16,
+    pub alt_color_primaries: ColorPrimaries,
+    pub alt_transfer_characteristics: TransferCharacteristics,
+    pub alt_matrix_coefficients: MatrixCoefficients,
     pub alt_full_range: bool,
 
     pub alt_clli: ContentLightLevelInformation,

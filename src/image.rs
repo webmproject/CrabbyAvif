@@ -28,9 +28,9 @@ pub struct ImageInfo {
     #[derivative(Debug = "ignore")]
     pub xmp: Vec<u8>,
 
-    pub color_primaries: u16,
-    pub transfer_characteristics: u16,
-    pub matrix_coefficients: u16,
+    pub color_primaries: ColorPrimaries,
+    pub transfer_characteristics: TransferCharacteristics,
+    pub matrix_coefficients: MatrixCoefficients,
 
     // TODO: these can go in a "global" image info struct. which can then
     // contain an ImageInfo as well.

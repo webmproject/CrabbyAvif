@@ -9,11 +9,12 @@ build = "src/build.rs"
 
 [dependencies]
 byteorder = "1.5.0"
+derivative = "2.2.0"
+num-traits = "0.2"
+num-derive = "0.3"
+ndk = {version = "0.8.0", features = ["media"], optional = true}
 # TODO: this is only needed for binary crates.
 exitcode = "1.1.2"
-derivative = "2.2.0"
-# 28 is needed only for mediacodec.name().
-ndk = {version = "0.8.0", features = ["media"], optional = true}
 
 [dev-dependencies]
 test-case = "3.3.1"

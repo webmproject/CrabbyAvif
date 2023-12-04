@@ -118,9 +118,9 @@ impl CodecConfiguration {
 
 #[derive(Debug, Default, Clone)]
 pub struct Nclx {
-    pub color_primaries: u16,
-    pub transfer_characteristics: u16,
-    pub matrix_coefficients: u16,
+    pub color_primaries: ColorPrimaries,
+    pub transfer_characteristics: TransferCharacteristics,
+    pub matrix_coefficients: MatrixCoefficients,
     pub full_range: bool,
 }
 
@@ -433,7 +433,7 @@ fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
         monochrome: bits.read_bool()?,
         chroma_subsampling_x: bits.read(1)? as u8,
         chroma_subsampling_y: bits.read(1)? as u8,
-        chroma_sample_position: (bits.read(2)? as u8).into(),
+        chroma_sample_position: bits.read(2)?.into(),
     };
 
     // unsigned int(3) reserved = 0;
@@ -460,11 +460,11 @@ fn parse_colr(stream: &mut IStream) -> AvifResult<Option<ItemProperty>> {
     if color_type == "nclx" {
         let mut nclx = Nclx {
             // unsigned int(16) colour_primaries;
-            color_primaries: stream.read_u16()?,
+            color_primaries: stream.read_u16()?.into(),
             // unsigned int(16) transfer_characteristics;
-            transfer_characteristics: stream.read_u16()?,
+            transfer_characteristics: stream.read_u16()?.into(),
             // unsigned int(16) matrix_coefficients;
-            matrix_coefficients: stream.read_u16()?,
+            matrix_coefficients: stream.read_u16()?.into(),
             ..Nclx::default()
         };
         // unsigned int(1) full_range_flag;

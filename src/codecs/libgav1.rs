@@ -1,9 +1,8 @@
 use crate::codecs::bindings::libgav1::*;
 use crate::codecs::Decoder;
 use crate::image::Image;
-use crate::AvifError;
-use crate::AvifResult;
-use crate::PixelFormat;
+use crate::*;
+
 use std::mem::MaybeUninit;
 
 #[derive(Debug, Default)]
@@ -106,12 +105,12 @@ impl Decoder for Libgav1 {
                 };
                 image.info.full_range =
                     gav1_image.color_range != Libgav1ColorRange_kLibgav1ColorRangeStudio;
-                image.info.chroma_sample_position =
-                    (gav1_image.chroma_sample_position as u8).into();
+                image.info.chroma_sample_position = gav1_image.chroma_sample_position.into();
 
-                image.info.color_primaries = gav1_image.color_primary as u16;
-                image.info.transfer_characteristics = gav1_image.transfer_characteristics as u16;
-                image.info.matrix_coefficients = gav1_image.matrix_coefficients as u16;
+                image.info.color_primaries = (gav1_image.color_primary as u16).into();
+                image.info.transfer_characteristics =
+                    (gav1_image.transfer_characteristics as u16).into();
+                image.info.matrix_coefficients = (gav1_image.matrix_coefficients as u16).into();
 
                 // TODO: call free planes.
                 for plane in 0usize..image.info.yuv_format.plane_count() {

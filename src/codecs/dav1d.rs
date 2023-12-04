@@ -1,9 +1,8 @@
 use crate::codecs::bindings::dav1d::*;
 use crate::codecs::Decoder;
 use crate::image::Image;
-use crate::AvifError;
-use crate::AvifResult;
-use crate::PixelFormat;
+use crate::*;
+
 use std::mem::MaybeUninit;
 
 #[derive(Debug, Default)]
@@ -146,11 +145,11 @@ impl Decoder for Dav1d {
             };
             let seq_hdr = unsafe { *dav1d_picture.seq_hdr };
             image.info.full_range = seq_hdr.color_range != 0;
-            image.info.chroma_sample_position = (seq_hdr.chr as u8).into();
+            image.info.chroma_sample_position = seq_hdr.chr.into();
 
-            image.info.color_primaries = seq_hdr.pri as u16;
-            image.info.transfer_characteristics = seq_hdr.trc as u16;
-            image.info.matrix_coefficients = seq_hdr.mtrx as u16;
+            image.info.color_primaries = (seq_hdr.pri as u16).into();
+            image.info.transfer_characteristics = (seq_hdr.trc as u16).into();
+            image.info.matrix_coefficients = (seq_hdr.mtrx as u16).into();
 
             // TODO: call image freeplanes.
             for plane in 0usize..image.info.yuv_format.plane_count() {

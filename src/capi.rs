@@ -14,6 +14,8 @@ use crate::decoder::*;
 use crate::image::*;
 use crate::*;
 
+use num_traits::cast::ToPrimitive;
+
 #[repr(C)]
 pub struct avifROData {
     pub data: *const u8,
@@ -267,9 +269,9 @@ impl From<&GainMap> for avifGainMap {
         avifGainMap {
             metadata: (&gainmap.metadata).into(),
             altICC: (&gainmap.alt_icc).into(),
-            altColorPrimaries: gainmap.alt_color_primaries,
-            altTransferCharacteristics: gainmap.alt_transfer_characteristics,
-            altMatrixCoefficients: gainmap.alt_matrix_coefficients,
+            altColorPrimaries: gainmap.alt_color_primaries.to_u16().unwrap(),
+            altTransferCharacteristics: gainmap.alt_transfer_characteristics.to_u16().unwrap(),
+            altMatrixCoefficients: gainmap.alt_matrix_coefficients.to_u16().unwrap(),
             altYUVRange: gainmap.alt_full_range.into(),
             altDepth: u32::from(gainmap.alt_plane_depth),
             altPlaneCount: u32::from(gainmap.alt_plane_count),

@@ -18,9 +18,9 @@ pub struct Av1SequenceHeader {
     bit_depth: u8,
     yuv_format: PixelFormat,
     chroma_sample_position: ChromaSamplePosition,
-    pub color_primaries: u16,
-    pub transfer_characteristics: u16,
-    pub matrix_coefficients: u16,
+    pub color_primaries: ColorPrimaries,
+    pub transfer_characteristics: TransferCharacteristics,
+    pub matrix_coefficients: MatrixCoefficients,
     pub full_range: bool,
     config: CodecConfiguration,
 }
@@ -172,15 +172,15 @@ fn parse_sequence_header_color_config(
     // color_description_present_flag
     if bits.read_bool()? {
         // color_primaries
-        seq.color_primaries = bits.read(8)? as u16;
+        seq.color_primaries = (bits.read(8)? as u16).into();
         // transfer_characteristics
-        seq.transfer_characteristics = bits.read(8)? as u16;
+        seq.transfer_characteristics = (bits.read(8)? as u16).into();
         // matrix_coefficients
-        seq.matrix_coefficients = bits.read(8)? as u16;
+        seq.matrix_coefficients = (bits.read(8)? as u16).into();
     } else {
-        seq.color_primaries = 2; // unspecified
-        seq.transfer_characteristics = 2; // unspecified
-        seq.matrix_coefficients = 2; // unspecified
+        seq.color_primaries = ColorPrimaries::Unspecified;
+        seq.transfer_characteristics = TransferCharacteristics::Unspecified;
+        seq.matrix_coefficients = MatrixCoefficients::Unspecified;
     }
     if seq.config.monochrome {
         seq.full_range = bits.read_bool()?;
@@ -189,9 +189,9 @@ fn parse_sequence_header_color_config(
         seq.yuv_format = PixelFormat::Monochrome;
         return Ok(());
     }
-    if seq.color_primaries == 1
-        && seq.transfer_characteristics == 13
-        && seq.matrix_coefficients == 0
+    if seq.color_primaries == ColorPrimaries::Srgb
+        && seq.transfer_characteristics == TransferCharacteristics::Srgb
+        && seq.matrix_coefficients == MatrixCoefficients::Identity
     {
         seq.full_range = true;
         seq.yuv_format = PixelFormat::Yuv444;
@@ -228,7 +228,7 @@ fn parse_sequence_header_color_config(
             _ => {} // Not reached.
         }
         if seq.config.chroma_subsampling_x == 1 && seq.config.chroma_subsampling_y == 1 {
-            seq.config.chroma_sample_position = (bits.read(2)? as u8).into();
+            seq.config.chroma_sample_position = bits.read(2)?.into();
         }
     }
     // separate_uv_delta_q

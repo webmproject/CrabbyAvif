@@ -35,12 +35,15 @@ fn verify_info(expected_info: &ExpectedImageInfo, info: &ImageInfo) {
     assert_eq!(info.yuv_format, expected_info.yuv_format);
     assert_eq!(info.alpha_present, expected_info.alpha_present);
     assert_eq!(info.full_range, expected_info.full_range);
-    assert_eq!(info.color_primaries, expected_info.color_primaries);
+    assert_eq!(info.color_primaries, expected_info.color_primaries.into());
     assert_eq!(
         info.transfer_characteristics,
-        expected_info.transfer_characteristics
+        expected_info.transfer_characteristics.into()
     );
-    assert_eq!(info.matrix_coefficients, expected_info.matrix_coefficients);
+    assert_eq!(
+        info.matrix_coefficients,
+        expected_info.matrix_coefficients.into()
+    );
 }
 
 fn get_tempfile() -> String {

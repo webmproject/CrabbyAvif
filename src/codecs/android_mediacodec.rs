@@ -1,8 +1,6 @@
 use crate::codecs::Decoder;
 use crate::image::Image;
-use crate::AvifError;
-use crate::AvifResult;
-use crate::PixelFormat;
+use crate::*;
 
 use ndk::media::media_codec::DequeuedInputBufferResult;
 use ndk::media::media_codec::DequeuedOutputBufferInfoResult;
@@ -174,11 +172,11 @@ impl Decoder for MediaCodec {
                 }
             };
             image.info.full_range = format.i32("color-range").unwrap_or(0) == 1;
-            image.info.chroma_sample_position = 0u8.into();
+            image.info.chroma_sample_position = ChromaSamplePosition::Unknown;
 
-            image.info.color_primaries = 2;
-            image.info.transfer_characteristics = 2;
-            image.info.matrix_coefficients = 2;
+            image.info.color_primaries = ColorPrimaries::Unspecified;
+            image.info.transfer_characteristics = TransferCharacteristics::Unspecified;
+            image.info.matrix_coefficients = MatrixCoefficients::Unspecified;
 
             image.copy_from_slice(buffer.buffer(), stride as u32, category)?;
         } else if category == 1 {
