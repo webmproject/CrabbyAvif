@@ -64,8 +64,8 @@ fn main() {
 
         image_count = decoder.image_count;
         //image_count = 1;
-        //let mut writer: rust_libavif::utils::y4m::Y4MWriter = Default::default();
-        let mut writer: rust_libavif::utils::raw::RawWriter = Default::default();
+        let mut writer: rust_libavif::utils::y4m::Y4MWriter = Default::default();
+        //let mut writer: rust_libavif::utils::raw::RawWriter = Default::default();
         writer.filename = Some(args[2].clone());
 
         for _i in 0..image_count {

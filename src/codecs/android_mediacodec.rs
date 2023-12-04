@@ -33,6 +33,18 @@ impl Decoder for MediaCodec {
         format.set_str("mime", "video/av01");
         format.set_i32("width", 200);
         format.set_i32("height", 200);
+
+        // TODO: Need to set it to 2135033992 but seems to be having some
+        // stride issues. Investigate.
+
+        // format.set_i32("color-format", 2135033992);
+        // format.set_i32("color-format", 19);
+
+        // TODO: for 10-bit need to set format to 54 in order to get 10-bit
+        // output. Or maybe it is possible to get RGB 1010102 itself?
+
+        // int32_t COLOR_FormatYUVP010 = 54;
+
         // TODO: may have to set width and height.
         // fox is 1204x800.
         println!("mediacodec configure");
@@ -94,18 +106,20 @@ impl Decoder for MediaCodec {
                 return Err(AvifError::UnknownError);
             }
         }
-        let buffer: OutputBuffer;
-        loop {
-            println!("mediacodec trying to dequeue output");
+        let mut buffer: Option<OutputBuffer> = None;
+        let mut retry_count = 0;
+        while retry_count < 100 {
+            retry_count += 1;
+            //println!("mediacodec trying to dequeue output");
             match codec.dequeue_output_buffer(Duration::from_millis(10)) {
                 Ok(dequeue_result) => match dequeue_result {
                     DequeuedOutputBufferInfoResult::Buffer(output_buffer) => {
-                        buffer = output_buffer;
+                        buffer = Some(output_buffer);
                         println!("got decoded buffer: {:#?}", buffer);
                         break;
                     }
                     DequeuedOutputBufferInfoResult::TryAgainLater => {
-                        println!("try again!");
+                        //println!("try again!");
                         continue;
                     }
                     DequeuedOutputBufferInfoResult::OutputFormatChanged => {
@@ -125,10 +139,15 @@ impl Decoder for MediaCodec {
                 }
             }
         }
+        if buffer.is_none() {
+            println!("did not get buffer from mediacodec");
+            return Err(AvifError::UnknownError);
+        }
         if self.format.is_none() {
             println!("format is none :(");
             return Err(AvifError::UnknownError);
         }
+        let buffer = buffer.unwrap();
         let format = self.format.as_ref().unwrap();
         println!("getting width");
         let width = format.i32("width").ok_or(AvifError::UnknownError)?;
@@ -138,10 +157,6 @@ impl Decoder for MediaCodec {
         let stride = format.i32("stride").ok_or(AvifError::UnknownError)?;
         // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Planar
         let color_format = format.i32("color-format").unwrap_or(19);
-        if color_format != 19 {
-            println!("unknown color format: {color_format}");
-            return Err(AvifError::UnknownError);
-        }
         println!("width: {:#?}", width);
         println!("height: {:#?}", height);
         println!("stride: {:#?}", stride);
@@ -150,7 +165,14 @@ impl Decoder for MediaCodec {
             image.info.width = width as u32;
             image.info.height = height as u32;
             image.info.depth = 8; // TODO: 10?
-            image.info.yuv_format = PixelFormat::Yuv420;
+            image.info.yuv_format = match color_format {
+                // Android maps all AV1 8-bit images into yuv 420.
+                19 | 2135033992 => PixelFormat::Yuv420,
+                _ => {
+                    println!("unknown color format: {color_format}");
+                    return Err(AvifError::UnknownError);
+                }
+            };
             image.info.full_range = format.i32("color-range").unwrap_or(0) == 1;
             image.info.chroma_sample_position = 0u8.into();
 
