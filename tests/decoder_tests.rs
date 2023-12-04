@@ -112,7 +112,9 @@ fn color_grid_alpha_no_grid() {
 #[test_case::test_case("progressive_quality_change.avif", 2, 256, 256; "progressive_quality_change")]
 #[test_case::test_case("progressive_same_layers.avif", 4, 256, 256; "progressive_same_layers")]
 fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
-    let mut decoder = get_decoder(filename);
+    let mut filename_with_prefix = String::from("progressive/");
+    filename_with_prefix.push_str(filename);
+    let mut decoder = get_decoder(&filename_with_prefix);
 
     decoder.settings.allow_progressive = false;
     let res = decoder.parse();
@@ -184,7 +186,7 @@ fn decoder_parse_icc_exif_xmp() {
     assert_eq!(info.xmp[3], 112);
 }
 
-// From GainMaptest.cc
+// From avifgainmaptest.cc
 #[test]
 fn color_grid_gainmap_different_grid() {
     let mut decoder = get_decoder("color_grid_gainmap_different_grid.avif");
@@ -208,7 +210,7 @@ fn color_grid_gainmap_different_grid() {
     assert!(res.is_ok());
 }
 
-// From GainMaptest.cc
+// From avifgainmaptest.cc
 #[test]
 fn color_grid_alpha_grid_gainmap_nogrid() {
     let mut decoder = get_decoder("color_grid_alpha_grid_gainmap_nogrid.avif");
@@ -232,7 +234,7 @@ fn color_grid_alpha_grid_gainmap_nogrid() {
     assert!(res.is_ok());
 }
 
-// From GainMaptest.cc
+// From avifgainmaptest.cc
 #[test]
 fn color_nogrid_alpha_nogrid_gainmap_grid() {
     let mut decoder = get_decoder("color_nogrid_alpha_nogrid_gainmap_grid.avif");
@@ -254,4 +256,25 @@ fn color_nogrid_alpha_nogrid_gainmap_grid() {
     assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.1, 2);
     let res = decoder.next_image();
     assert!(res.is_ok());
+}
+
+// From avifcllitest.cc
+#[test_case::test_case("clli_0_0.avif", 0, 0; "clli_0_0")]
+#[test_case::test_case("clli_0_1.avif", 0, 1; "clli_0_1")]
+#[test_case::test_case("clli_0_65535.avif", 0, 65535; "clli_0_65535")]
+#[test_case::test_case("clli_1_0.avif", 1, 0; "clli_1_0")]
+#[test_case::test_case("clli_1_1.avif", 1, 1; "clli_1_1")]
+#[test_case::test_case("clli_1_65535.avif", 1, 65535; "clli_1_65535")]
+#[test_case::test_case("clli_65535_0.avif", 65535, 0; "clli_65535_0")]
+#[test_case::test_case("clli_65535_1.avif", 65535, 1; "clli_65535_1")]
+#[test_case::test_case("clli_65535_65535.avif", 65535, 65535; "clli_65535_65535")]
+fn clli(filename: &str, max_cll: u16, max_pall: u16) {
+    let mut filename_with_prefix = String::from("clli/");
+    filename_with_prefix.push_str(filename);
+    let mut decoder = get_decoder(&filename_with_prefix);
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let info = res.unwrap();
+    assert_eq!(info.clli.max_cll, max_cll);
+    assert_eq!(info.clli.max_pall, max_pall);
 }

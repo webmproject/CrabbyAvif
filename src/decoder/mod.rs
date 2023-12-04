@@ -188,53 +188,6 @@ pub struct Decoder {
     codecs: Vec<Codec>,
 }
 
-fn find_nclx(properties: &[ItemProperty]) -> Result<&Nclx, bool> {
-    let nclx_properties: Vec<_> = properties
-        .iter()
-        .filter(|x| match x {
-            ItemProperty::ColorInformation(colr) => matches!(colr, ColorInformation::Nclx(_)),
-            _ => false,
-        })
-        .collect();
-    match nclx_properties.len() {
-        0 => Err(false),
-        1 => match nclx_properties[0] {
-            ItemProperty::ColorInformation(ColorInformation::Nclx(nclx)) => Ok(nclx),
-            _ => Err(false), // not reached.
-        },
-        _ => Err(true), // multiple nclx were found.
-    }
-}
-
-fn find_icc(properties: &[ItemProperty]) -> Result<Vec<u8>, bool> {
-    let icc_properties: Vec<_> = properties
-        .iter()
-        .filter(|x| match x {
-            ItemProperty::ColorInformation(colr) => matches!(colr, ColorInformation::Icc(_)),
-            _ => false,
-        })
-        .collect();
-    match icc_properties.len() {
-        0 => Err(false),
-        1 => match icc_properties[0] {
-            ItemProperty::ColorInformation(ColorInformation::Icc(icc)) => Ok(icc.to_vec()),
-            _ => Err(false), // not reached.
-        },
-        _ => Err(true), // multiple icc were found.
-    }
-}
-
-#[allow(non_snake_case)]
-fn find_av1C(properties: &[ItemProperty]) -> Option<&CodecConfiguration> {
-    match properties
-        .iter()
-        .find(|x| matches!(x, ItemProperty::CodecConfiguration(_)))
-    {
-        Some(ItemProperty::CodecConfiguration(av1C)) => Some(av1C),
-        _ => None,
-    }
-}
-
 impl Decoder {
     pub fn set_io_file(&mut self, filename: &String) -> AvifResult<()> {
         self.io = Some(Box::new(DecoderFileIO::create(filename)?));
@@ -805,6 +758,10 @@ impl Decoder {
                     return Err(AvifError::BmffParseFailed);
                 }
             }
+        }
+
+        if let Some(clli) = find_clli(color_properties) {
+            self.image.info.clli = *clli;
         }
 
         // TODO: clli, pasp, clap, irot, imir

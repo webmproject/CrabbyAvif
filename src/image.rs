@@ -1,6 +1,7 @@
 use crate::decoder::tile::TileInfo;
 use crate::decoder::ProgressiveState;
 use crate::internal_utils::*;
+use crate::parser::mp4box::*;
 use crate::*;
 
 // TODO: needed only for debug to Image and PlaneData. Can be removed it those
@@ -31,6 +32,9 @@ pub struct ImageInfo {
     pub color_primaries: ColorPrimaries,
     pub transfer_characteristics: TransferCharacteristics,
     pub matrix_coefficients: MatrixCoefficients,
+
+    pub clli: ContentLightLevelInformation,
+    // some more boxes. transformations. pasp, clap, irot, imir.
 
     // TODO: these can go in a "global" image info struct. which can then
     // contain an ImageInfo as well.
@@ -84,17 +88,11 @@ impl ImageInfo {
 #[derivative(Debug)]
 pub struct Image {
     pub info: ImageInfo,
-
     pub planes: [Option<*const u8>; 4],
     pub row_bytes: [u32; 4], // TODO: named constant
     pub image_owns_planes: bool,
     pub image_owns_alpha_plane: bool,
-
-    // some more boxes. clli, transformations. pasp, clap, irot, imir.
-
-    // exif, xmp.
-
-    // gainmap.
+    // TODO: gainmap image ?
     #[derivative(Debug = "ignore")]
     plane_buffers: [Vec<u8>; 4],
 }
