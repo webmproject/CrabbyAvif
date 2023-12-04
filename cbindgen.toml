@@ -5,6 +5,12 @@ style = "both"
 cpp_compat = true
 usize_is_size_t = true
 
+[export.rename]
+"ChromaSamplePosition" = "avifChromaSamplePosition"
+"ColorPrimaries" = "avifColorPrimaries"
+"MatrixCoefficients" = "avifMatrixCoefficients"
+"Source" = "avifDecoderSource"
+"TransferCharacteristics" = "avifTransferCharacteristics"
+
 [enum]
-prefix_with_name = true
-rename_variants = "ScreamingSnakeCase"
+rename_variants = "QualifiedScreamingSnakeCase"

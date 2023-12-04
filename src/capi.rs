@@ -14,8 +14,6 @@ use crate::decoder::*;
 use crate::image::*;
 use crate::*;
 
-use num_traits::cast::ToPrimitive;
-
 #[repr(C)]
 pub struct avifROData {
     pub data: *const u8,
@@ -34,6 +32,15 @@ impl Default for avifRWData {
         avifRWData {
             data: std::ptr::null_mut(),
             size: 0,
+        }
+    }
+}
+
+impl From<&Vec<u8>> for avifRWData {
+    fn from(v: &Vec<u8>) -> Self {
+        avifRWData {
+            data: v.as_ptr() as *mut u8,
+            size: v.len(),
         }
     }
 }
@@ -157,24 +164,6 @@ impl From<bool> for avifRange {
 }
 
 #[repr(C)]
-#[derive(Debug)]
-enum avifChromaSamplePosition {
-    Unknown = 0,
-    Vertical = 1,
-    Colocated = 2,
-}
-
-impl From<ChromaSamplePosition> for avifChromaSamplePosition {
-    fn from(chroma_sample_position: ChromaSamplePosition) -> Self {
-        match chroma_sample_position {
-            ChromaSamplePosition::Unknown => avifChromaSamplePosition::Unknown,
-            ChromaSamplePosition::Vertical => avifChromaSamplePosition::Vertical,
-            ChromaSamplePosition::Colocated => avifChromaSamplePosition::Colocated,
-        }
-    }
-}
-
-#[repr(C)]
 #[derive(Debug, Default)]
 pub struct avifGainMapMetadata {
     gainMapMinN: [i32; 3],
@@ -239,9 +228,9 @@ pub struct avifGainMap {
     image: *mut avifImage,
     metadata: avifGainMapMetadata,
     altICC: avifRWData,
-    altColorPrimaries: u16,          // TODO: avifColorPrimaries,
-    altTransferCharacteristics: u16, // TODO: avifTransferCharacteristics,
-    altMatrixCoefficients: u16,      // TODO: avifMatrixCoefficients,
+    altColorPrimaries: ColorPrimaries,
+    altTransferCharacteristics: TransferCharacteristics,
+    altMatrixCoefficients: MatrixCoefficients,
     altYUVRange: avifRange,
     altDepth: u32,
     altPlaneCount: u32,
@@ -254,9 +243,9 @@ impl Default for avifGainMap {
             image: std::ptr::null_mut(),
             metadata: avifGainMapMetadata::default(),
             altICC: avifRWData::default(),
-            altColorPrimaries: 0,
-            altTransferCharacteristics: 0,
-            altMatrixCoefficients: 0,
+            altColorPrimaries: ColorPrimaries::default(),
+            altTransferCharacteristics: TransferCharacteristics::default(),
+            altMatrixCoefficients: MatrixCoefficients::default(),
             altYUVRange: avifRange::Full,
             altDepth: 0,
             altPlaneCount: 0,
@@ -269,9 +258,9 @@ impl From<&GainMap> for avifGainMap {
         avifGainMap {
             metadata: (&gainmap.metadata).into(),
             altICC: (&gainmap.alt_icc).into(),
-            altColorPrimaries: gainmap.alt_color_primaries.to_u16().unwrap(),
-            altTransferCharacteristics: gainmap.alt_transfer_characteristics.to_u16().unwrap(),
-            altMatrixCoefficients: gainmap.alt_matrix_coefficients.to_u16().unwrap(),
+            altColorPrimaries: gainmap.alt_color_primaries,
+            altTransferCharacteristics: gainmap.alt_transfer_characteristics,
+            altMatrixCoefficients: gainmap.alt_matrix_coefficients,
             altYUVRange: gainmap.alt_full_range.into(),
             altDepth: u32::from(gainmap.alt_plane_depth),
             altPlaneCount: u32::from(gainmap.alt_plane_count),
@@ -289,7 +278,7 @@ pub struct avifImage {
 
     yuvFormat: avifPixelFormat,
     yuvRange: avifRange,
-    yuvChromaSamplePosition: avifChromaSamplePosition,
+    yuvChromaSamplePosition: ChromaSamplePosition,
     yuvPlanes: [*mut u8; 3],
     yuvRowBytes: [u32; 3],
     imageOwnsYUVPlanes: avifBool,
@@ -322,7 +311,7 @@ impl Default for avifImage {
             depth: 0,
             yuvFormat: avifPixelFormat::None,
             yuvRange: avifRange::Full,
-            yuvChromaSamplePosition: avifChromaSamplePosition::Unknown,
+            yuvChromaSamplePosition: ChromaSamplePosition::default(),
             yuvPlanes: [std::ptr::null_mut(); 3],
             yuvRowBytes: [0; 3],
             imageOwnsYUVPlanes: AVIF_FALSE,
@@ -334,15 +323,6 @@ impl Default for avifImage {
             exif: avifRWData::default(),
             xmp: avifRWData::default(),
             gainMap: std::ptr::null_mut(),
-        }
-    }
-}
-
-impl From<&Vec<u8>> for avifRWData {
-    fn from(v: &Vec<u8>) -> Self {
-        avifRWData {
-            data: v.as_ptr() as *mut u8,
-            size: v.len(),
         }
     }
 }
@@ -393,24 +373,6 @@ pub type avifStrictFlags = u32;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub enum avifDecoderSource {
-    Auto,
-    PrimaryItem,
-    Tracks,
-}
-
-impl From<avifDecoderSource> for Source {
-    fn from(source: avifDecoderSource) -> Self {
-        match source {
-            avifDecoderSource::Auto => Source::Auto,
-            avifDecoderSource::PrimaryItem => Source::PrimaryItem,
-            avifDecoderSource::Tracks => Source::Tracks,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
 pub enum avifProgressiveState {
     Unavailable,
     Available,
@@ -445,7 +407,7 @@ impl Default for avifDiagnostics {
 pub struct avifDecoder {
     // avifCodecChoice codecChoice;
     pub maxThreads: i32,
-    pub requestedSource: avifDecoderSource,
+    pub requestedSource: Source,
     pub allowIncremental: avifBool,
     pub allowProgressive: avifBool,
     pub ignoreExif: avifBool,
@@ -489,7 +451,7 @@ impl Default for avifDecoder {
     fn default() -> Self {
         Self {
             maxThreads: 1,
-            requestedSource: avifDecoderSource::Auto,
+            requestedSource: Source::Auto,
             allowIncremental: AVIF_FALSE,
             allowProgressive: AVIF_FALSE,
             ignoreExif: AVIF_FALSE,
@@ -561,7 +523,7 @@ pub unsafe extern "C" fn avifDecoderSetIOFile(
 #[no_mangle]
 pub unsafe extern "C" fn avifDecoderSetSource(
     decoder: *mut avifDecoder,
-    source: avifDecoderSource,
+    source: Source,
 ) -> avifResult {
     (*decoder).requestedSource = source;
     // TODO: should decoder be reset here in case this is called after parse?
@@ -588,7 +550,7 @@ impl From<&avifDecoder> for Settings {
             Strictness::SpecificInclude(flags)
         };
         Self {
-            source: decoder.requestedSource.into(),
+            source: decoder.requestedSource,
             strictness,
             allow_progressive: decoder.allowProgressive == AVIF_TRUE,
             ignore_exif: decoder.ignoreExif == AVIF_TRUE,
@@ -670,6 +632,7 @@ pub unsafe extern "C" fn avifImageDestroy(_image: *mut avifImage) {
 
 #[no_mangle]
 pub unsafe extern "C" fn avifResultToString(_res: avifResult) -> *const c_char {
+    println!("hello:232322322212311");
     // TODO: implement this function.
     std::ptr::null()
 }

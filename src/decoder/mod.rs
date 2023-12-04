@@ -90,12 +90,13 @@ impl CodecChoice {
     }
 }
 
+#[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub enum Source {
-    Tracks,
-    PrimaryItem,
     #[default]
-    Auto,
+    Auto = 0,
+    PrimaryItem = 1,
+    Tracks = 2,
     // TODO: Thumbnail,
 }
 

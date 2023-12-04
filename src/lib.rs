@@ -12,7 +12,6 @@ mod internal_utils;
 mod parser;
 
 use num_derive::FromPrimitive;
-use num_derive::ToPrimitive;
 use num_traits::cast::FromPrimitive;
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
@@ -43,7 +42,7 @@ macro_rules! impl_from_primitive {
     };
 }
 
-#[repr(u8)]
+#[repr(C)]
 #[derive(Debug, Default, PartialEq, Copy, Clone, FromPrimitive)]
 pub enum ChromaSamplePosition {
     #[default]
@@ -54,8 +53,8 @@ pub enum ChromaSamplePosition {
 
 impl_from_primitive!(u32, from_u32, ChromaSamplePosition, Unknown);
 
-#[repr(u8)]
-#[derive(Debug, Default, PartialEq, Copy, Clone, FromPrimitive, ToPrimitive)]
+#[repr(C)]
+#[derive(Debug, Default, PartialEq, Copy, Clone, FromPrimitive)]
 pub enum ColorPrimaries {
     Unknown = 0,
     Srgb = 1,
@@ -77,14 +76,15 @@ impl_from_primitive!(u16, from_u16, ColorPrimaries, Unspecified);
 
 #[allow(non_camel_case_types, non_upper_case_globals)]
 impl ColorPrimaries {
+    // TODO: expose these in the capi?
     pub const Bt709: Self = Self::Srgb;
     pub const Iec61966_2_4: Self = Self::Srgb;
     pub const Bt2100: Self = Self::Bt2020;
     pub const Dci_p3: Self = Self::Smpte432;
 }
 
-#[repr(u8)]
-#[derive(Debug, Default, PartialEq, Copy, Clone, FromPrimitive, ToPrimitive)]
+#[repr(C)]
+#[derive(Debug, Default, PartialEq, Copy, Clone, FromPrimitive)]
 pub enum TransferCharacteristics {
     Unknown = 0,
     Bt709 = 1,
@@ -115,8 +115,8 @@ impl TransferCharacteristics {
     pub const Smpte2084: Self = Self::Pq;
 }
 
-#[repr(u8)]
-#[derive(Debug, Default, PartialEq, Copy, Clone, FromPrimitive, ToPrimitive)]
+#[repr(C)]
+#[derive(Debug, Default, PartialEq, Copy, Clone, FromPrimitive)]
 pub enum MatrixCoefficients {
     Identity = 0,
     Bt709 = 1,
