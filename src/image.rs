@@ -33,8 +33,11 @@ pub struct ImageInfo {
     pub transfer_characteristics: TransferCharacteristics,
     pub matrix_coefficients: MatrixCoefficients,
 
-    pub clli: ContentLightLevelInformation,
-    // some more boxes. transformations. pasp, clap, irot, imir.
+    pub clli: Option<ContentLightLevelInformation>,
+    pub pasp: Option<PixelAspectRatio>,
+    pub clap: Option<CleanAperture>,
+    pub irot_angle: Option<u8>,
+    pub imir_axis: Option<u8>,
 
     // TODO: these can go in a "global" image info struct. which can then
     // contain an ImageInfo as well.

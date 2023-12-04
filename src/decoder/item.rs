@@ -318,7 +318,7 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
                     | ItemProperty::PixelInformation(_)
                     | ItemProperty::PixelAspectRatio(_)
                     | ItemProperty::AuxiliaryType(_)
-                    | ItemProperty::ClearAperture(_)
+                    | ItemProperty::CleanAperture(_)
                     | ItemProperty::ImageRotation(_)
                     | ItemProperty::ImageMirror(_)
                     | ItemProperty::OperatingPointSelector(_)

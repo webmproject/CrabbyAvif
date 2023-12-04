@@ -59,16 +59,6 @@ pub fn find_icc(properties: &[ItemProperty]) -> Result<Vec<u8>, bool> {
     }
 }
 
-pub fn find_clli(properties: &[ItemProperty]) -> Option<&ContentLightLevelInformation> {
-    match properties
-        .iter()
-        .find(|x| matches!(x, ItemProperty::ContentLightLevelInformation(_)))
-    {
-        Some(ItemProperty::ContentLightLevelInformation(clli)) => Some(clli),
-        _ => None,
-    }
-}
-
 #[allow(non_snake_case)]
 pub fn find_av1C(properties: &[ItemProperty]) -> Option<&CodecConfiguration> {
     match properties
@@ -79,3 +69,27 @@ pub fn find_av1C(properties: &[ItemProperty]) -> Option<&CodecConfiguration> {
         _ => None,
     }
 }
+
+macro_rules! find_property_function {
+    ($func:ident, $prop: ident, $ret:ty) => {
+        pub fn $func(properties: &[ItemProperty]) -> Option<$ret> {
+            match properties
+                .iter()
+                .find(|x| matches!(x, ItemProperty::$prop(_)))
+            {
+                Some(ItemProperty::$prop(x)) => Some(*x),
+                _ => None,
+            }
+        }
+    };
+}
+
+find_property_function!(
+    find_clli,
+    ContentLightLevelInformation,
+    ContentLightLevelInformation
+);
+find_property_function!(find_pasp, PixelAspectRatio, PixelAspectRatio);
+find_property_function!(find_clap, CleanAperture, CleanAperture);
+find_property_function!(find_irot_angle, ImageRotation, u8);
+find_property_function!(find_imir_axis, ImageMirror, u8);

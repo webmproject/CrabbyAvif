@@ -131,30 +131,26 @@ pub enum ColorInformation {
     Nclx(Nclx),
 }
 
-#[derive(Debug, Clone)]
-#[allow(unused)]
+/// cbindgen:rename-all=CamelCase
+#[derive(Debug, Clone, Default, Copy)]
+#[repr(C)]
 pub struct PixelAspectRatio {
-    h_spacing: u32,
-    v_spacing: u32,
+    pub h_spacing: u32,
+    pub v_spacing: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 #[allow(unused)]
-pub struct ClearAperture {
-    width_n: u32,
-    width_d: u32,
-    height_n: u32,
-    height_d: u32,
-    horiz_off_n: u32,
-    horiz_off_d: u32,
-    vert_off_n: u32,
-    vert_off_d: u32,
+pub struct CleanAperture {
+    pub width: UFraction,
+    pub height: UFraction,
+    pub horiz_off: UFraction,
+    pub vert_off: UFraction,
 }
 
 /// cbindgen:field-names=[maxCLL, maxPALL]
 #[repr(C)]
 #[derive(Debug, Clone, Default, Copy)]
-#[allow(unused)]
 pub struct ContentLightLevelInformation {
     pub max_cll: u16,
     pub max_pall: u16,
@@ -168,7 +164,7 @@ pub enum ItemProperty {
     ColorInformation(ColorInformation),
     PixelAspectRatio(PixelAspectRatio),
     AuxiliaryType(String),
-    ClearAperture(ClearAperture),
+    CleanAperture(CleanAperture),
     ImageRotation(u8),
     ImageMirror(u8),
     OperatingPointSelector(u8),
@@ -503,25 +499,21 @@ fn parse_auxC(stream: &mut IStream) -> AvifResult<ItemProperty> {
 }
 
 fn parse_clap(stream: &mut IStream) -> AvifResult<ItemProperty> {
-    let clap = ClearAperture {
+    let clap = CleanAperture {
         // unsigned int(32) cleanApertureWidthN;
-        width_n: stream.read_u32()?,
         // unsigned int(32) cleanApertureWidthD;
-        width_d: stream.read_u32()?,
+        width: stream.read_ufraction()?,
         // unsigned int(32) cleanApertureHeightN;
-        height_n: stream.read_u32()?,
         // unsigned int(32) cleanApertureHeightD;
-        height_d: stream.read_u32()?,
+        height: stream.read_ufraction()?,
         // unsigned int(32) horizOffN;
-        horiz_off_n: stream.read_u32()?,
         // unsigned int(32) horizOffD;
-        horiz_off_d: stream.read_u32()?,
+        horiz_off: stream.read_ufraction()?,
         // unsigned int(32) vertOffN;
-        vert_off_n: stream.read_u32()?,
         // unsigned int(32) vertOffD;
-        vert_off_d: stream.read_u32()?,
+        vert_off: stream.read_ufraction()?,
     };
-    Ok(ItemProperty::ClearAperture(clap))
+    Ok(ItemProperty::CleanAperture(clap))
 }
 
 fn parse_irot(stream: &mut IStream) -> AvifResult<ItemProperty> {

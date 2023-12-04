@@ -760,11 +760,11 @@ impl Decoder {
             }
         }
 
-        if let Some(clli) = find_clli(color_properties) {
-            self.image.info.clli = *clli;
-        }
-
-        // TODO: clli, pasp, clap, irot, imir
+        self.image.info.clli = find_clli(color_properties);
+        self.image.info.pasp = find_pasp(color_properties);
+        self.image.info.clap = find_clap(color_properties);
+        self.image.info.irot_angle = find_irot_angle(color_properties);
+        self.image.info.imir_axis = find_imir_axis(color_properties);
 
         let av1C = find_av1C(color_properties).ok_or(AvifError::BmffParseFailed)?;
         self.image.info.depth = av1C.depth();

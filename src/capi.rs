@@ -272,6 +272,52 @@ impl From<&GainMap> for avifGainMap {
     }
 }
 
+pub type avifPixelAspectRatioBox = PixelAspectRatio;
+
+/// cbindgen:rename-all=CamelCase
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct avifCleanApertureBox {
+    width_n: u32,
+    width_d: u32,
+    height_n: u32,
+    height_d: u32,
+    horiz_off_n: u32,
+    horiz_off_d: u32,
+    vert_off_n: u32,
+    vert_off_d: u32,
+}
+
+impl From<&Option<CleanAperture>> for avifCleanApertureBox {
+    fn from(clap_op: &Option<CleanAperture>) -> Self {
+        match clap_op {
+            Some(clap) => Self {
+                width_n: clap.width.0,
+                width_d: clap.width.1,
+                height_n: clap.height.0,
+                height_d: clap.height.1,
+                horiz_off_n: clap.horiz_off.0,
+                horiz_off_d: clap.horiz_off.1,
+                vert_off_n: clap.vert_off.0,
+                vert_off_d: clap.vert_off.1,
+            },
+            None => Self::default(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct avifImageRotation {
+    angle: u8,
+}
+
+#[derive(Debug, Default)]
+#[repr(C)]
+pub struct avifImageMirror {
+    axis: u8,
+}
+
 #[repr(C)]
 #[derive(Debug)]
 pub struct avifImage {
@@ -298,10 +344,11 @@ pub struct avifImage {
 
     clli: avifContentLightLevelInformationBox,
     // avifTransformFlags transformFlags;
-    // avifPixelAspectRatioBox pasp;
-    // avifCleanApertureBox clap;
-    // avifImageRotation irot;
-    // avifImageMirror imir;
+    pasp: avifPixelAspectRatioBox,
+    clap: avifCleanApertureBox,
+    irot: avifImageRotation,
+    imir: avifImageMirror,
+
     exif: avifRWData,
     xmp: avifRWData,
     gainMap: *mut avifGainMap,
@@ -315,7 +362,7 @@ impl Default for avifImage {
             depth: 0,
             yuvFormat: avifPixelFormat::None,
             yuvRange: avifRange::Full,
-            yuvChromaSamplePosition: ChromaSamplePosition::default(),
+            yuvChromaSamplePosition: Default::default(),
             yuvPlanes: [std::ptr::null_mut(); 3],
             yuvRowBytes: [0; 3],
             imageOwnsYUVPlanes: AVIF_FALSE,
@@ -323,13 +370,17 @@ impl Default for avifImage {
             alphaRowBytes: 0,
             imageOwnsAlphaPlane: AVIF_FALSE,
             alphaPremultiplied: AVIF_FALSE,
-            icc: avifRWData::default(),
-            colorPrimaries: ColorPrimaries::default(),
-            transferCharacteristics: TransferCharacteristics::default(),
-            matrixCoefficients: MatrixCoefficients::default(),
-            clli: ContentLightLevelInformation::default(),
-            exif: avifRWData::default(),
-            xmp: avifRWData::default(),
+            icc: Default::default(),
+            colorPrimaries: Default::default(),
+            transferCharacteristics: Default::default(),
+            matrixCoefficients: Default::default(),
+            clli: Default::default(),
+            pasp: Default::default(),
+            clap: Default::default(),
+            irot: Default::default(),
+            imir: Default::default(),
+            exif: Default::default(),
+            xmp: Default::default(),
             gainMap: std::ptr::null_mut(),
         }
     }
@@ -349,7 +400,15 @@ impl From<&ImageInfo> for avifImage {
             colorPrimaries: info.color_primaries,
             transferCharacteristics: info.transfer_characteristics,
             matrixCoefficients: info.matrix_coefficients,
-            clli: info.clli,
+            clli: info.clli.unwrap_or_default(),
+            pasp: info.pasp.unwrap_or_default(),
+            clap: (&info.clap).into(),
+            irot: avifImageRotation {
+                angle: info.irot_angle.unwrap_or_default(),
+            },
+            imir: avifImageMirror {
+                axis: info.imir_axis.unwrap_or_default(),
+            },
             exif: (&info.exif).into(),
             xmp: (&info.xmp).into(),
             ..Self::default()
@@ -626,7 +685,7 @@ pub unsafe extern "C" fn avifImageDestroy(_image: *mut avifImage) {
 
 #[no_mangle]
 pub unsafe extern "C" fn avifResultToString(_res: avifResult) -> *const c_char {
-    println!("hello:2323223222");
+    println!("hello:23232232");
     // TODO: implement this function.
     std::ptr::null()
 }

@@ -275,6 +275,12 @@ fn clli(filename: &str, max_cll: u16, max_pall: u16) {
     let res = decoder.parse();
     assert!(res.is_ok());
     let info = res.unwrap();
-    assert_eq!(info.clli.max_cll, max_cll);
-    assert_eq!(info.clli.max_pall, max_pall);
+    if max_cll == 0 && max_pall == 0 {
+        assert!(info.clli.is_none());
+    } else {
+        assert!(info.clli.is_some());
+        let clli = info.clli.as_ref().unwrap();
+        assert_eq!(clli.max_cll, max_cll);
+        assert_eq!(clli.max_pall, max_pall);
+    }
 }
