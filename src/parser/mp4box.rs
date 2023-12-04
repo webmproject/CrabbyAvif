@@ -151,6 +151,8 @@ pub struct ClearAperture {
     vert_off_d: u32,
 }
 
+/// cbindgen:field-names=[maxCLL, maxPALL]
+#[repr(C)]
 #[derive(Debug, Clone, Default, Copy)]
 #[allow(unused)]
 pub struct ContentLightLevelInformation {

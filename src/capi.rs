@@ -12,6 +12,7 @@ use std::slice;
 use crate::decoder::gainmap::*;
 use crate::decoder::*;
 use crate::image::*;
+use crate::parser::mp4box::*;
 use crate::*;
 
 #[repr(C)]
@@ -163,6 +164,8 @@ impl From<bool> for avifRange {
     }
 }
 
+type avifContentLightLevelInformationBox = ContentLightLevelInformation;
+
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct avifGainMapMetadata {
@@ -292,7 +295,8 @@ pub struct avifImage {
     colorPrimaries: ColorPrimaries,
     transferCharacteristics: TransferCharacteristics,
     matrixCoefficients: MatrixCoefficients,
-    // avifContentLightLevelInformationBox clli;
+
+    clli: avifContentLightLevelInformationBox,
     // avifTransformFlags transformFlags;
     // avifPixelAspectRatioBox pasp;
     // avifCleanApertureBox clap;
@@ -323,6 +327,7 @@ impl Default for avifImage {
             colorPrimaries: ColorPrimaries::default(),
             transferCharacteristics: TransferCharacteristics::default(),
             matrixCoefficients: MatrixCoefficients::default(),
+            clli: ContentLightLevelInformation::default(),
             exif: avifRWData::default(),
             xmp: avifRWData::default(),
             gainMap: std::ptr::null_mut(),
@@ -344,6 +349,7 @@ impl From<&ImageInfo> for avifImage {
             colorPrimaries: info.color_primaries,
             transferCharacteristics: info.transfer_characteristics,
             matrixCoefficients: info.matrix_coefficients,
+            clli: info.clli,
             exif: (&info.exif).into(),
             xmp: (&info.xmp).into(),
             ..Self::default()
@@ -620,7 +626,7 @@ pub unsafe extern "C" fn avifImageDestroy(_image: *mut avifImage) {
 
 #[no_mangle]
 pub unsafe extern "C" fn avifResultToString(_res: avifResult) -> *const c_char {
-    println!("hello:232322322123");
+    println!("hello:2323223222");
     // TODO: implement this function.
     std::ptr::null()
 }
