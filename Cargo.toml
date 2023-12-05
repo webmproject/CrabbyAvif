@@ -1,5 +1,5 @@
 [package]
-name = "rust-libavif"
+name = "crabby-avif"
 version = "0.1.0"
 edition = "2021"
 

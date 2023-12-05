@@ -1,6 +1,6 @@
-use rust_libavif::image::*;
-use rust_libavif::utils::y4m;
-use rust_libavif::*;
+use crabby_avif::image::*;
+use crabby_avif::utils::y4m;
+use crabby_avif::*;
 
 use std::fs::remove_file;
 use std::fs::File;

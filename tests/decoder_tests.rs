@@ -1,4 +1,4 @@
-use rust_libavif::*;
+use crabby_avif::*;
 
 const TEST_DATA_PATH: &str = "/Users/vigneshv/code/rust_pg/rust-libavif/tests/data";
 

@@ -1,7 +1,7 @@
 use std::env;
 use std::process::Command;
 
-use rust_libavif::decoder::*;
+use crabby_avif::decoder::*;
 
 fn main() {
     // let data: [u8; 32] = [
@@ -64,8 +64,8 @@ fn main() {
 
         image_count = decoder.image_count;
         //image_count = 1;
-        let mut writer: rust_libavif::utils::y4m::Y4MWriter = Default::default();
-        //let mut writer: rust_libavif::utils::raw::RawWriter = Default::default();
+        let mut writer: crabby_avif::utils::y4m::Y4MWriter = Default::default();
+        //let mut writer: crabby_avif::utils::raw::RawWriter = Default::default();
         writer.filename = Some(args[2].clone());
 
         for _i in 0..image_count {
