@@ -10,7 +10,13 @@ use derivative::Derivative;
 
 #[derive(Derivative, Default)]
 #[derivative(Debug)]
-pub struct ImageInfo {
+pub struct ImageInfo {}
+
+impl ImageInfo {}
+
+#[derive(Derivative, Default)]
+#[derivative(Debug)]
+pub struct Image {
     pub width: u32,
     pub height: u32,
     pub depth: u8,
@@ -22,12 +28,12 @@ pub struct ImageInfo {
     pub alpha_present: bool,
     pub alpha_premultiplied: bool,
 
+    pub planes: [Option<*const u8>; 4],
+    pub row_bytes: [u32; 4], // TODO: named constant
+    pub image_owns_planes: bool,
+    pub image_owns_alpha_plane: bool,
     #[derivative(Debug = "ignore")]
-    pub exif: Vec<u8>,
-    #[derivative(Debug = "ignore")]
-    pub icc: Vec<u8>,
-    #[derivative(Debug = "ignore")]
-    pub xmp: Vec<u8>,
+    plane_buffers: [Vec<u8>; 4],
 
     pub color_primaries: ColorPrimaries,
     pub transfer_characteristics: TransferCharacteristics,
@@ -39,14 +45,30 @@ pub struct ImageInfo {
     pub irot_angle: Option<u8>,
     pub imir_axis: Option<u8>,
 
-    // TODO: these can go in a "global" image info struct. which can then
-    // contain an ImageInfo as well.
-    pub image_sequence_track_present: bool,
+    #[derivative(Debug = "ignore")]
+    pub exif: Vec<u8>,
+    #[derivative(Debug = "ignore")]
+    pub icc: Vec<u8>,
+    #[derivative(Debug = "ignore")]
+    pub xmp: Vec<u8>,
 
+    pub image_sequence_track_present: bool,
     pub progressive_state: ProgressiveState,
+    // TODO: gainmap image ?
 }
 
-impl ImageInfo {
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct PlaneData<'a> {
+    #[derivative(Debug = "ignore")]
+    pub data: &'a [u8],
+    pub width: u32,
+    pub height: u32,
+    pub row_bytes: u32,
+    pub pixel_size: u32,
+}
+
+impl Image {
     // TODO: replace plane_index with an enum.
     pub fn height(&self, plane_index: usize) -> usize {
         assert!(plane_index <= 3);
@@ -85,44 +107,18 @@ impl ImageInfo {
             PixelFormat::Yuv420 | PixelFormat::Yuv422 => (value as usize + 1) / 2,
         }
     }
-}
 
-#[derive(Derivative, Default)]
-#[derivative(Debug)]
-pub struct Image {
-    pub info: ImageInfo,
-    pub planes: [Option<*const u8>; 4],
-    pub row_bytes: [u32; 4], // TODO: named constant
-    pub image_owns_planes: bool,
-    pub image_owns_alpha_plane: bool,
-    // TODO: gainmap image ?
-    #[derivative(Debug = "ignore")]
-    plane_buffers: [Vec<u8>; 4],
-}
-
-#[derive(Derivative)]
-#[derivative(Debug)]
-pub struct PlaneData<'a> {
-    #[derivative(Debug = "ignore")]
-    pub data: &'a [u8],
-    pub width: u32,
-    pub height: u32,
-    pub row_bytes: u32,
-    pub pixel_size: u32,
-}
-
-impl Image {
     pub fn plane(&self, plane: usize) -> Option<PlaneData> {
         assert!(plane < 4);
         self.planes[plane]?;
-        let pixel_size = if self.info.depth == 8 { 1 } else { 2 };
-        let height = self.info.height(plane);
+        let pixel_size = if self.depth == 8 { 1 } else { 2 };
+        let height = self.height(plane);
         let row_bytes = self.row_bytes[plane] as usize;
         let plane_size = height * row_bytes;
         let data = unsafe { std::slice::from_raw_parts(self.planes[plane].unwrap(), plane_size) };
         Some(PlaneData {
             data,
-            width: self.info.width(plane) as u32,
+            width: self.width(plane) as u32,
             height: height as u32,
             row_bytes: row_bytes as u32,
             pixel_size,
@@ -132,13 +128,13 @@ impl Image {
     pub fn allocate_planes(&mut self, category: usize) -> AvifResult<()> {
         // TODO : assumes 444. do other stuff.
         // TODO: do not realloc if size is already big enough.
-        let pixel_size: u32 = if self.info.depth == 8 { 1 } else { 2 };
-        let plane_size = (self.info.width * self.info.height * pixel_size) as usize;
+        let pixel_size: u32 = if self.depth == 8 { 1 } else { 2 };
+        let plane_size = (self.width * self.height * pixel_size) as usize;
         if category == 0 || category == 2 {
             for plane_index in 0usize..3 {
                 self.plane_buffers[plane_index].reserve(plane_size);
                 self.plane_buffers[plane_index].resize(plane_size, 0);
-                self.row_bytes[plane_index] = self.info.width * pixel_size;
+                self.row_bytes[plane_index] = self.width * pixel_size;
                 self.planes[plane_index] = Some(self.plane_buffers[plane_index].as_ptr());
             }
             self.image_owns_planes = true;
@@ -146,7 +142,7 @@ impl Image {
             assert!(category == 1);
             self.plane_buffers[3].reserve(plane_size);
             self.plane_buffers[3].resize(plane_size, 255);
-            self.row_bytes[3] = self.info.width * pixel_size;
+            self.row_bytes[3] = self.width * pixel_size;
             self.planes[3] = Some(self.plane_buffers[3].as_ptr());
             self.image_owns_alpha_plane = true;
         }
@@ -161,14 +157,14 @@ impl Image {
     ) -> AvifResult<()> {
         // TODO: deal with integer math safety in this function.
         self.allocate_planes(category)?;
-        let pixel_size: usize = if self.info.depth == 8 { 1 } else { 2 };
+        let pixel_size: usize = if self.depth == 8 { 1 } else { 2 };
         // TODO: if width == stride, the whole thing can be one copy.
         if category == 0 || category == 2 {
             let mut src_offset = 0;
             for plane_index in 0usize..3 {
-                let plane_stride = self.info.subsampled_value(stride, plane_index);
-                let width = self.info.width(plane_index);
-                let height = self.info.height(plane_index);
+                let plane_stride = self.subsampled_value(stride, plane_index);
+                let width = self.width(plane_index);
+                let height = self.height(plane_index);
                 let row_width = width * pixel_size;
                 let mut dst_offset = 0;
                 for _y in 0usize..height {
@@ -190,8 +186,8 @@ impl Image {
         } else {
             assert!(category == 1);
             let mut src_offset = 0;
-            let width = self.info.width(3);
-            let height = self.info.height(3);
+            let width = self.width(3);
+            let height = self.height(3);
             let row_width = width * pixel_size;
             let mut dst_offset = 0;
             for _y in 0usize..height {
@@ -258,7 +254,7 @@ impl Image {
                 let width_so_far = u64::from(src_plane.width)
                     .checked_mul(column_index)
                     .ok_or(err)?;
-                u64_from_usize(self.info.width(plane_index))?
+                u64_from_usize(self.width(plane_index))?
                     .checked_sub(width_so_far)
                     .ok_or(err)?
             } else {
@@ -276,7 +272,7 @@ impl Image {
                 let height_so_far = u64::from(src_plane.height)
                     .checked_mul(row_index)
                     .ok_or(err)?;
-                u64_from_usize(self.info.height(plane_index))?
+                u64_from_usize(self.height(plane_index))?
                     .checked_sub(height_so_far)
                     .ok_or(err)?
             } else {

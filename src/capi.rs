@@ -386,39 +386,33 @@ impl Default for avifImage {
     }
 }
 
-impl From<&ImageInfo> for avifImage {
-    fn from(info: &ImageInfo) -> Self {
-        avifImage {
-            width: info.width,
-            height: info.height,
-            depth: info.depth as u32,
-            yuvFormat: info.yuv_format.into(),
-            yuvRange: info.full_range.into(),
-            yuvChromaSamplePosition: info.chroma_sample_position.into(),
-            alphaPremultiplied: info.alpha_premultiplied as avifBool,
-            icc: (&info.icc).into(),
-            colorPrimaries: info.color_primaries,
-            transferCharacteristics: info.transfer_characteristics,
-            matrixCoefficients: info.matrix_coefficients,
-            clli: info.clli.unwrap_or_default(),
-            pasp: info.pasp.unwrap_or_default(),
-            clap: (&info.clap).into(),
-            irot: avifImageRotation {
-                angle: info.irot_angle.unwrap_or_default(),
-            },
-            imir: avifImageMirror {
-                axis: info.imir_axis.unwrap_or_default(),
-            },
-            exif: (&info.exif).into(),
-            xmp: (&info.xmp).into(),
-            ..Self::default()
-        }
-    }
-}
-
 impl From<&Image> for avifImage {
     fn from(image: &Image) -> Self {
-        let mut dst_image: avifImage = (&image.info).into();
+        let mut dst_image: avifImage = avifImage {
+            width: image.width,
+            height: image.height,
+            depth: image.depth as u32,
+            yuvFormat: image.yuv_format.into(),
+            yuvRange: image.full_range.into(),
+            yuvChromaSamplePosition: image.chroma_sample_position,
+            alphaPremultiplied: image.alpha_premultiplied as avifBool,
+            icc: (&image.icc).into(),
+            colorPrimaries: image.color_primaries,
+            transferCharacteristics: image.transfer_characteristics,
+            matrixCoefficients: image.matrix_coefficients,
+            clli: image.clli.unwrap_or_default(),
+            pasp: image.pasp.unwrap_or_default(),
+            clap: (&image.clap).into(),
+            irot: avifImageRotation {
+                angle: image.irot_angle.unwrap_or_default(),
+            },
+            imir: avifImageMirror {
+                axis: image.imir_axis.unwrap_or_default(),
+            },
+            exif: (&image.exif).into(),
+            xmp: (&image.xmp).into(),
+            ..Self::default()
+        };
         for i in 0usize..3 {
             if image.planes[i].is_none() {
                 continue;
@@ -627,15 +621,14 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
         return to_avifResult(&res);
     }
 
-    // Copy image info.
-    let info = res.unwrap();
-    (*decoder).image_object = info.into();
+    // Copy image.
+    let image = res.unwrap();
+    (*decoder).image_object = image.into();
 
-    // Copy decoder properties. Properties from |info| must be copied first to
-    // not mess with the borrow checker.
-    (*decoder).alphaPresent = to_avifBool(info.alpha_present);
-    (*decoder).imageSequenceTrackPresent = to_avifBool(info.image_sequence_track_present);
-    (*decoder).progressiveState = info.progressive_state.into();
+    // Copy decoder properties.
+    (*decoder).alphaPresent = to_avifBool(image.alpha_present);
+    (*decoder).imageSequenceTrackPresent = to_avifBool(image.image_sequence_track_present);
+    (*decoder).progressiveState = image.progressive_state;
     (*decoder).imageCount = rust_decoder.image_count as i32;
     if rust_decoder.gainmap_present {
         (*decoder).gainMapPresent = AVIF_TRUE;
@@ -662,11 +655,10 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
     let image = res.unwrap();
     (*decoder).image_object = image.into();
 
-    // Copy decoder properties. Properties from |image.info| must be copied first to
-    // not mess with the borrow checker.
-    (*decoder).alphaPresent = to_avifBool(image.info.alpha_present);
-    (*decoder).imageSequenceTrackPresent = to_avifBool(image.info.image_sequence_track_present);
-    (*decoder).progressiveState = image.info.progressive_state.into();
+    // Copy decoder properties.
+    (*decoder).alphaPresent = to_avifBool(image.alpha_present);
+    (*decoder).imageSequenceTrackPresent = to_avifBool(image.image_sequence_track_present);
+    (*decoder).progressiveState = image.progressive_state;
     (*decoder).imageCount = rust_decoder.image_count as i32;
     (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
 

@@ -302,10 +302,10 @@ impl Decoder {
             .ok_or(AvifError::InvalidToneMappedImage)?;
         if let Ok(nclx) = find_nclx(&gainmap_item.properties) {
             println!("found nclx: {:#?}", nclx);
-            self.gainmap.image.info.color_primaries = nclx.color_primaries;
-            self.gainmap.image.info.transfer_characteristics = nclx.transfer_characteristics;
-            self.gainmap.image.info.matrix_coefficients = nclx.matrix_coefficients;
-            self.gainmap.image.info.full_range = nclx.full_range;
+            self.gainmap.image.color_primaries = nclx.color_primaries;
+            self.gainmap.image.transfer_characteristics = nclx.transfer_characteristics;
+            self.gainmap.image.matrix_coefficients = nclx.matrix_coefficients;
+            self.gainmap.image.full_range = nclx.full_range;
         }
         // Find and adopt all colr boxes "at most one for a given value of colour type"
         // (HEIF 6.5.5.1, from Amendment 3) Accept one of each type, and bail out if more than one
@@ -362,7 +362,6 @@ impl Decoder {
                 let mut stream = exif.1.stream(self.io.as_mut().unwrap())?;
                 exif::parse(&mut stream)?;
                 self.image
-                    .info
                     .exif
                     .extend_from_slice(stream.get_slice(stream.bytes_left())?);
             }
@@ -371,7 +370,6 @@ impl Decoder {
             if let Some(xmp) = self.items.iter().find(|x| x.1.is_xmp(color_item_index)) {
                 let mut stream = xmp.1.stream(self.io.as_mut().unwrap())?;
                 self.image
-                    .info
                     .xmp
                     .extend_from_slice(stream.get_slice(stream.bytes_left())?);
             }
@@ -438,10 +436,10 @@ impl Decoder {
         let sample = &self.tiles[0][0].input.samples[0];
         match obu::parse_sequence_header(sample.data(io)?) {
             Ok(sequence_header) => {
-                self.image.info.color_primaries = sequence_header.color_primaries;
-                self.image.info.transfer_characteristics = sequence_header.transfer_characteristics;
-                self.image.info.matrix_coefficients = sequence_header.matrix_coefficients;
-                self.image.info.full_range = sequence_header.full_range;
+                self.image.color_primaries = sequence_header.color_primaries;
+                self.image.transfer_characteristics = sequence_header.transfer_characteristics;
+                self.image.matrix_coefficients = sequence_header.matrix_coefficients;
+                self.image.full_range = sequence_header.full_range;
             }
             Err(_) => {
                 println!("errored :(");
@@ -510,7 +508,7 @@ impl Decoder {
     }
 
     #[allow(non_snake_case)]
-    pub fn parse(&mut self) -> AvifResult<&ImageInfo> {
+    pub fn parse(&mut self) -> AvifResult<&Image> {
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
         }
@@ -520,7 +518,7 @@ impl Decoder {
         for item in self.items.values_mut() {
             item.harvest_ispe(self.settings.strictness.alpha_ispe_required())?;
         }
-        self.image.info.image_sequence_track_present = !self.tracks.is_empty();
+        self.image.image_sequence_track_present = !self.tracks.is_empty();
         //println!("{:#?}", self.items);
 
         self.source = match self.settings.source {
@@ -561,8 +559,8 @@ impl Decoder {
                     self.tiles[1].push(Tile::create_from_track(alpha_track)?);
                     //println!("alpha_tile: {:#?}", self.tiles[1]);
                     self.tile_info[1].tile_count = 1;
-                    self.image.info.alpha_present = true;
-                    self.image.info.alpha_premultiplied = color_track.prem_by_id == alpha_track.id;
+                    self.image.alpha_present = true;
+                    self.image.alpha_premultiplied = color_track.prem_by_id == alpha_track.id;
                 }
 
                 self.image_index = -1;
@@ -581,8 +579,8 @@ impl Decoder {
                 println!("timescale: {}", self.timescale);
                 println!("duration_in_timescales: {}", self.duration_in_timescales);
 
-                self.image.info.width = color_track.width;
-                self.image.info.height = color_track.height;
+                self.image.width = color_track.width;
+                self.image.height = color_track.height;
             }
             Source::PrimaryItem => {
                 // 0 color, 1 alpha, 2 gainmap
@@ -685,16 +683,16 @@ impl Decoder {
                 }
 
                 let color_item = self.items.get(&item_ids[0]).unwrap();
-                self.image.info.width = color_item.width;
-                self.image.info.height = color_item.height;
-                self.image.info.alpha_present = item_ids[1] != 0;
+                self.image.width = color_item.width;
+                self.image.height = color_item.height;
+                self.image.alpha_present = item_ids[1] != 0;
                 // alphapremultiplied.
 
                 if color_item.progressive {
-                    self.image.info.progressive_state = ProgressiveState::Available;
+                    self.image.progressive_state = ProgressiveState::Available;
                     let sample_count = self.tiles[0][0].input.samples.len();
                     if sample_count > 1 {
-                        self.image.info.progressive_state = ProgressiveState::Active;
+                        self.image.progressive_state = ProgressiveState::Active;
                         self.image_count = sample_count as u32;
                     }
                 }
@@ -702,12 +700,12 @@ impl Decoder {
                 if item_ids[2] != 0 {
                     self.gainmap_present = true;
                     let gainmap_item = self.items.get(&item_ids[2]).unwrap();
-                    self.gainmap.image.info.width = gainmap_item.width;
-                    self.gainmap.image.info.height = gainmap_item.height;
+                    self.gainmap.image.width = gainmap_item.width;
+                    self.gainmap.image.height = gainmap_item.height;
                     let av1C = gainmap_item.av1C().ok_or(AvifError::BmffParseFailed)?;
-                    self.gainmap.image.info.depth = av1C.depth();
-                    self.gainmap.image.info.yuv_format = av1C.pixel_format();
-                    self.gainmap.image.info.chroma_sample_position = av1C.chroma_sample_position;
+                    self.gainmap.image.depth = av1C.depth();
+                    self.gainmap.image.yuv_format = av1C.pixel_format();
+                    self.gainmap.image.chroma_sample_position = av1C.chroma_sample_position;
                 }
 
                 // This borrow has to be in the end of this branch.
@@ -735,10 +733,10 @@ impl Decoder {
         let mut cicp_set = false;
         match find_nclx(color_properties) {
             Ok(nclx) => {
-                self.image.info.color_primaries = nclx.color_primaries;
-                self.image.info.transfer_characteristics = nclx.transfer_characteristics;
-                self.image.info.matrix_coefficients = nclx.matrix_coefficients;
-                self.image.info.full_range = nclx.full_range;
+                self.image.color_primaries = nclx.color_primaries;
+                self.image.transfer_characteristics = nclx.transfer_characteristics;
+                self.image.matrix_coefficients = nclx.matrix_coefficients;
+                self.image.full_range = nclx.full_range;
                 cicp_set = true;
             }
             Err(multiple_nclx_found) => {
@@ -750,7 +748,7 @@ impl Decoder {
         }
         match find_icc(color_properties) {
             Ok(icc) => {
-                self.image.info.icc = icc;
+                self.image.icc = icc;
             }
             Err(multiple_icc_found) => {
                 if multiple_icc_found {
@@ -760,23 +758,23 @@ impl Decoder {
             }
         }
 
-        self.image.info.clli = find_clli(color_properties);
-        self.image.info.pasp = find_pasp(color_properties);
-        self.image.info.clap = find_clap(color_properties);
-        self.image.info.irot_angle = find_irot_angle(color_properties);
-        self.image.info.imir_axis = find_imir_axis(color_properties);
+        self.image.clli = find_clli(color_properties);
+        self.image.pasp = find_pasp(color_properties);
+        self.image.clap = find_clap(color_properties);
+        self.image.irot_angle = find_irot_angle(color_properties);
+        self.image.imir_axis = find_imir_axis(color_properties);
 
         let av1C = find_av1C(color_properties).ok_or(AvifError::BmffParseFailed)?;
-        self.image.info.depth = av1C.depth();
-        self.image.info.yuv_format = av1C.pixel_format();
-        self.image.info.chroma_sample_position = av1C.chroma_sample_position;
+        self.image.depth = av1C.depth();
+        self.image.yuv_format = av1C.pixel_format();
+        self.image.chroma_sample_position = av1C.chroma_sample_position;
 
         if !cicp_set {
             // If cicp was not set, try to harvest it from the sequence header.
             self.harvest_cicp_from_sequence_header()?;
         }
 
-        Ok(&self.image.info)
+        Ok(&self.image)
     }
 
     fn read_and_parse_item(&mut self, item_id: u32, category: usize) -> AvifResult<()> {
@@ -978,17 +976,17 @@ impl Decoder {
                 } else {
                     // Non grid path, steal planes from the only tile.
                     if category == 0 {
-                        self.image.info.width = tile.image.info.width;
-                        self.image.info.height = tile.image.info.height;
-                        self.image.info.depth = tile.image.info.depth;
-                        self.image.info.yuv_format = tile.image.info.yuv_format;
+                        self.image.width = tile.image.width;
+                        self.image.height = tile.image.height;
+                        self.image.depth = tile.image.depth;
+                        self.image.yuv_format = tile.image.yuv_format;
                     } else if category == 1 {
                         // check width height mismatch.
                     } else if category == 2 {
-                        self.gainmap.image.info.width = tile.image.info.width;
-                        self.gainmap.image.info.height = tile.image.info.height;
-                        self.gainmap.image.info.depth = tile.image.info.depth;
-                        self.gainmap.image.info.yuv_format = tile.image.info.yuv_format;
+                        self.gainmap.image.width = tile.image.width;
+                        self.gainmap.image.height = tile.image.height;
+                        self.gainmap.image.depth = tile.image.depth;
+                        self.gainmap.image.yuv_format = tile.image.yuv_format;
                     }
 
                     if category == 0 || category == 1 {

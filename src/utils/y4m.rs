@@ -32,16 +32,14 @@ impl Y4MWriter {
         }
         self.write_alpha = false;
 
-        if image.info.alpha_present
-            && (image.info.depth != 8 || image.info.yuv_format != PixelFormat::Yuv444)
-        {
+        if image.alpha_present && (image.depth != 8 || image.yuv_format != PixelFormat::Yuv444) {
             println!("WARNING: writing alpha is currently only supported in 8bpc YUV444, ignoring alpha channel");
         }
 
-        let y4m_format = match image.info.depth {
-            8 => match image.info.yuv_format {
+        let y4m_format = match image.depth {
+            8 => match image.yuv_format {
                 PixelFormat::Yuv444 => {
-                    if image.info.alpha_present {
+                    if image.alpha_present {
                         self.write_alpha = true;
                         "C444alpha XYSCSS=444"
                     } else {
@@ -52,31 +50,31 @@ impl Y4MWriter {
                 PixelFormat::Yuv420 => "C420jpeg XYSCSS=420JPEG",
                 PixelFormat::Monochrome => "Cmono XYSCSS=400",
             },
-            10 => match image.info.yuv_format {
+            10 => match image.yuv_format {
                 PixelFormat::Yuv444 => "C444p10 XYSCSS=444P10",
                 PixelFormat::Yuv422 => "C422p10 XYSCSS=422P10",
                 PixelFormat::Yuv420 => "C420p10 XYSCSS=420P10",
                 PixelFormat::Monochrome => "Cmono10 XYSCSS=400",
             },
-            12 => match image.info.yuv_format {
+            12 => match image.yuv_format {
                 PixelFormat::Yuv444 => "C444p12 XYSCSS=444P12",
                 PixelFormat::Yuv422 => "C422p12 XYSCSS=422P12",
                 PixelFormat::Yuv420 => "C420p12 XYSCSS=420P12",
                 PixelFormat::Monochrome => "Cmono12 XYSCSS=400",
             },
             _ => {
-                println!("image depth is invalid: {}", image.info.depth);
+                println!("image depth is invalid: {}", image.depth);
                 return false;
             }
         };
-        let y4m_color_range = if image.info.full_range {
+        let y4m_color_range = if image.full_range {
             "XCOLORRANGE=FULL"
         } else {
             "XCOLORRANGE=LIMITED"
         };
         let header = format!(
             "YUV4MPEG2 W{} H{} F25:1 Ip A0:0 {y4m_format} {y4m_color_range}\n",
-            image.info.width, image.info.height
+            image.width, image.height
         );
         println!("{header}");
         if self.file.is_none() {

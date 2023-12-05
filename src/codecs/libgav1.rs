@@ -92,42 +92,42 @@ impl Decoder for Libgav1 {
 
             let gav1_image = &self.image.unwrap();
             if category == 0 {
-                image.info.width = gav1_image.displayed_width[0] as u32;
-                image.info.height = gav1_image.displayed_height[0] as u32;
-                image.info.depth = gav1_image.bitdepth as u8;
+                image.width = gav1_image.displayed_width[0] as u32;
+                image.height = gav1_image.displayed_height[0] as u32;
+                image.depth = gav1_image.bitdepth as u8;
 
-                image.info.yuv_format = match gav1_image.image_format {
+                image.yuv_format = match gav1_image.image_format {
                     Libgav1ImageFormat_kLibgav1ImageFormatMonochrome400 => PixelFormat::Monochrome,
                     Libgav1ImageFormat_kLibgav1ImageFormatYuv420 => PixelFormat::Yuv420,
                     Libgav1ImageFormat_kLibgav1ImageFormatYuv422 => PixelFormat::Yuv422,
                     Libgav1ImageFormat_kLibgav1ImageFormatYuv444 => PixelFormat::Yuv444,
                     _ => PixelFormat::Yuv420, // not reached.
                 };
-                image.info.full_range =
+                image.full_range =
                     gav1_image.color_range != Libgav1ColorRange_kLibgav1ColorRangeStudio;
-                image.info.chroma_sample_position = gav1_image.chroma_sample_position.into();
+                image.chroma_sample_position = gav1_image.chroma_sample_position.into();
 
-                image.info.color_primaries = (gav1_image.color_primary as u16).into();
-                image.info.transfer_characteristics =
+                image.color_primaries = (gav1_image.color_primary as u16).into();
+                image.transfer_characteristics =
                     (gav1_image.transfer_characteristics as u16).into();
-                image.info.matrix_coefficients = (gav1_image.matrix_coefficients as u16).into();
+                image.matrix_coefficients = (gav1_image.matrix_coefficients as u16).into();
 
                 // TODO: call free planes.
-                for plane in 0usize..image.info.yuv_format.plane_count() {
+                for plane in 0usize..image.yuv_format.plane_count() {
                     image.planes[plane] = Some(gav1_image.plane[plane] as *const u8);
                     image.row_bytes[plane] = gav1_image.stride[plane] as u32;
                 }
                 image.image_owns_planes = false;
             } else if category == 1 {
                 // TODO: make sure alpha plane matches previous alpha plane.
-                image.info.width = gav1_image.displayed_width[0] as u32;
-                image.info.height = gav1_image.displayed_height[0] as u32;
-                image.info.depth = gav1_image.bitdepth as u8;
+                image.width = gav1_image.displayed_width[0] as u32;
+                image.height = gav1_image.displayed_height[0] as u32;
+                image.depth = gav1_image.bitdepth as u8;
                 // TODO: call image freeplanes.
                 image.planes[3] = Some(gav1_image.plane[0] as *const u8);
                 image.row_bytes[3] = gav1_image.stride[0] as u32;
                 image.image_owns_alpha_plane = false;
-                image.info.full_range =
+                image.full_range =
                     gav1_image.color_range != Libgav1ColorRange_kLibgav1ColorRangeStudio;
             }
             // TODO: gainmap category.

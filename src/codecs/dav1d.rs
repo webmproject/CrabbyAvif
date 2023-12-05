@@ -132,11 +132,11 @@ impl Decoder for Dav1d {
         let dav1d_picture = &self.picture.unwrap();
         if category == 0 {
             // if image dimensinos/yuv format does not match, deallocate the image.
-            image.info.width = dav1d_picture.p.w as u32;
-            image.info.height = dav1d_picture.p.h as u32;
-            image.info.depth = dav1d_picture.p.bpc as u8;
+            image.width = dav1d_picture.p.w as u32;
+            image.height = dav1d_picture.p.h as u32;
+            image.depth = dav1d_picture.p.bpc as u8;
 
-            image.info.yuv_format = match dav1d_picture.p.layout {
+            image.yuv_format = match dav1d_picture.p.layout {
                 0 => PixelFormat::Monochrome,
                 1 => PixelFormat::Yuv420,
                 2 => PixelFormat::Yuv422,
@@ -144,15 +144,15 @@ impl Decoder for Dav1d {
                 _ => PixelFormat::Yuv420, // not reached.
             };
             let seq_hdr = unsafe { *dav1d_picture.seq_hdr };
-            image.info.full_range = seq_hdr.color_range != 0;
-            image.info.chroma_sample_position = seq_hdr.chr.into();
+            image.full_range = seq_hdr.color_range != 0;
+            image.chroma_sample_position = seq_hdr.chr.into();
 
-            image.info.color_primaries = (seq_hdr.pri as u16).into();
-            image.info.transfer_characteristics = (seq_hdr.trc as u16).into();
-            image.info.matrix_coefficients = (seq_hdr.mtrx as u16).into();
+            image.color_primaries = (seq_hdr.pri as u16).into();
+            image.transfer_characteristics = (seq_hdr.trc as u16).into();
+            image.matrix_coefficients = (seq_hdr.mtrx as u16).into();
 
             // TODO: call image freeplanes.
-            for plane in 0usize..image.info.yuv_format.plane_count() {
+            for plane in 0usize..image.yuv_format.plane_count() {
                 image.planes[plane] = Some(dav1d_picture.data[plane] as *const u8);
                 let stride_index = if plane == 0 { 0 } else { 1 };
                 image.row_bytes[plane] = dav1d_picture.stride[stride_index] as u32;
@@ -168,15 +168,15 @@ impl Decoder for Dav1d {
                 return false;
             }
             */
-            image.info.width = dav1d_picture.p.w as u32;
-            image.info.height = dav1d_picture.p.h as u32;
-            image.info.depth = dav1d_picture.p.bpc as u8;
+            image.width = dav1d_picture.p.w as u32;
+            image.height = dav1d_picture.p.h as u32;
+            image.depth = dav1d_picture.p.bpc as u8;
             // TODO: call image freeplanes.
             image.planes[3] = Some(dav1d_picture.data[0] as *const u8);
             image.row_bytes[3] = dav1d_picture.stride[0] as u32;
             image.image_owns_alpha_plane = false;
             let seq_hdr = unsafe { *dav1d_picture.seq_hdr };
-            image.info.full_range = seq_hdr.color_range != 0;
+            image.full_range = seq_hdr.color_range != 0;
         }
         // TODO: gainmap category.
         Ok(())

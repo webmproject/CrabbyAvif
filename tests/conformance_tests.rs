@@ -28,20 +28,20 @@ struct ExpectedImageInfo<'a> {
     matrix_coefficients: u16,
 }
 
-fn verify_info(expected_info: &ExpectedImageInfo, info: &ImageInfo) {
-    assert_eq!(info.width, expected_info.width);
-    assert_eq!(info.height, expected_info.height);
-    assert_eq!(info.depth, expected_info.depth);
-    assert_eq!(info.yuv_format, expected_info.yuv_format);
-    assert_eq!(info.alpha_present, expected_info.alpha_present);
-    assert_eq!(info.full_range, expected_info.full_range);
-    assert_eq!(info.color_primaries, expected_info.color_primaries.into());
+fn verify_info(expected_info: &ExpectedImageInfo, image: &Image) {
+    assert_eq!(image.width, expected_info.width);
+    assert_eq!(image.height, expected_info.height);
+    assert_eq!(image.depth, expected_info.depth);
+    assert_eq!(image.yuv_format, expected_info.yuv_format);
+    assert_eq!(image.alpha_present, expected_info.alpha_present);
+    assert_eq!(image.full_range, expected_info.full_range);
+    assert_eq!(image.color_primaries, expected_info.color_primaries.into());
     assert_eq!(
-        info.transfer_characteristics,
+        image.transfer_characteristics,
         expected_info.transfer_characteristics.into()
     );
     assert_eq!(
-        info.matrix_coefficients,
+        image.matrix_coefficients,
         expected_info.matrix_coefficients.into()
     );
 }
@@ -101,15 +101,15 @@ fn decode_and_verify(expected_info: &ExpectedImageInfo) {
     let _ = decoder.set_io_file(&filename).expect("Failed to set IO");
     let res = decoder.parse();
     assert!(res.is_ok());
-    let info = res.unwrap();
-    verify_info(expected_info, info);
+    let image = res.unwrap();
+    verify_info(expected_info, &image);
     let res = decoder.next_image();
     assert!(res.is_ok());
     let image = res.unwrap();
     // Link-U 422 files have wrong subsampling in the Avif header(decoded one
     // is right).
     if !filename.contains("Link-U") || !filename.contains("yuv422") {
-        verify_info(expected_info, &image.info);
+        verify_info(expected_info, &image);
     }
 
     // Write y4m.

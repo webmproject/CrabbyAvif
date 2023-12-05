@@ -160,10 +160,10 @@ impl Decoder for MediaCodec {
         println!("stride: {:#?}", stride);
         println!("color_format: {:#?}", color_format);
         if category == 0 {
-            image.info.width = width as u32;
-            image.info.height = height as u32;
-            image.info.depth = 8; // TODO: 10?
-            image.info.yuv_format = match color_format {
+            image.width = width as u32;
+            image.height = height as u32;
+            image.depth = 8; // TODO: 10?
+            image.yuv_format = match color_format {
                 // Android maps all AV1 8-bit images into yuv 420.
                 19 | 2135033992 => PixelFormat::Yuv420,
                 _ => {
@@ -171,20 +171,20 @@ impl Decoder for MediaCodec {
                     return Err(AvifError::UnknownError);
                 }
             };
-            image.info.full_range = format.i32("color-range").unwrap_or(0) == 1;
-            image.info.chroma_sample_position = ChromaSamplePosition::Unknown;
+            image.full_range = format.i32("color-range").unwrap_or(0) == 1;
+            image.chroma_sample_position = ChromaSamplePosition::Unknown;
 
-            image.info.color_primaries = ColorPrimaries::Unspecified;
-            image.info.transfer_characteristics = TransferCharacteristics::Unspecified;
-            image.info.matrix_coefficients = MatrixCoefficients::Unspecified;
+            image.color_primaries = ColorPrimaries::Unspecified;
+            image.transfer_characteristics = TransferCharacteristics::Unspecified;
+            image.matrix_coefficients = MatrixCoefficients::Unspecified;
 
             image.copy_from_slice(buffer.buffer(), stride as u32, category)?;
         } else if category == 1 {
             // TODO: make sure alpha plane matches previous alpha plane.
-            image.info.width = width as u32;
-            image.info.height = height as u32;
-            image.info.depth = 8; // TODO: 10?
-            image.info.full_range = format.i32("color-range").unwrap_or(0) == 1;
+            image.width = width as u32;
+            image.height = height as u32;
+            image.depth = 8; // TODO: 10?
+            image.full_range = format.i32("color-range").unwrap_or(0) == 1;
 
             image.copy_from_slice(buffer.buffer(), stride as u32, category)?;
         }
