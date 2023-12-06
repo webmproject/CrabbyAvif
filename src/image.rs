@@ -40,8 +40,7 @@ pub struct Image {
 
     pub planes: [Option<*const u8>; MAX_PLANE_COUNT],
     pub row_bytes: [u32; MAX_PLANE_COUNT],
-    pub image_owns_planes: bool,
-    pub image_owns_alpha_plane: bool,
+    pub image_owns_planes: [bool; MAX_PLANE_COUNT],
     #[derivative(Debug = "ignore")]
     plane_buffers: [Vec<u8>; MAX_PLANE_COUNT],
 
@@ -124,25 +123,21 @@ impl Image {
     }
 
     pub fn allocate_planes(&mut self, category: usize) -> AvifResult<()> {
-        // TODO : assumes 444. do other stuff.
-        // TODO: do not realloc if size is already big enough.
-        let pixel_size: u32 = if self.depth == 8 { 1 } else { 2 };
-        let plane_size = (self.width * self.height * pixel_size) as usize;
-        if category == 0 || category == 2 {
-            for plane_index in 0usize..3 {
+        let pixel_size: usize = if self.depth == 8 { 1 } else { 2 };
+        let planes: &[Plane] = if category == 1 { &A_PLANE } else { &YUV_PLANES };
+        for plane in planes {
+            let plane = *plane;
+            let plane_index = plane.to_usize().unwrap();
+            let width = self.width(plane);
+            let plane_size = width * self.height(plane) * pixel_size;
+            if self.plane_buffers[plane_index].capacity() < plane_size {
                 self.plane_buffers[plane_index].reserve(plane_size);
-                self.plane_buffers[plane_index].resize(plane_size, 0);
-                self.row_bytes[plane_index] = self.width * pixel_size;
-                self.planes[plane_index] = Some(self.plane_buffers[plane_index].as_ptr());
             }
-            self.image_owns_planes = true;
-        } else {
-            assert!(category == 1);
-            self.plane_buffers[3].reserve(plane_size);
-            self.plane_buffers[3].resize(plane_size, 255);
-            self.row_bytes[3] = self.width * pixel_size;
-            self.planes[3] = Some(self.plane_buffers[3].as_ptr());
-            self.image_owns_alpha_plane = true;
+            let default_value = if plane == Plane::A { 255 } else { 0 };
+            self.plane_buffers[plane_index].resize(plane_size, default_value);
+            self.row_bytes[plane_index] = u32_from_usize(width * pixel_size)?;
+            self.planes[plane_index] = Some(self.plane_buffers[plane_index].as_ptr());
+            self.image_owns_planes[plane_index] = true;
         }
         Ok(())
     }

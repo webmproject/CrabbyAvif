@@ -156,8 +156,8 @@ impl Decoder for Dav1d {
                 image.planes[plane] = Some(dav1d_picture.data[plane] as *const u8);
                 let stride_index = if plane == 0 { 0 } else { 1 };
                 image.row_bytes[plane] = dav1d_picture.stride[stride_index] as u32;
+                image.image_owns_planes[plane] = false;
             }
-            image.image_owns_planes = false;
         } else if category == 1 {
             /*
             if image.width != (dav1d_picture.p.w as u32)
@@ -174,7 +174,7 @@ impl Decoder for Dav1d {
             // TODO: call image freeplanes.
             image.planes[3] = Some(dav1d_picture.data[0] as *const u8);
             image.row_bytes[3] = dav1d_picture.stride[0] as u32;
-            image.image_owns_alpha_plane = false;
+            image.image_owns_planes[3] = false;
             let seq_hdr = unsafe { *dav1d_picture.seq_hdr };
             image.full_range = seq_hdr.color_range != 0;
         }

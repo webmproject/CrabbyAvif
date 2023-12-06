@@ -116,8 +116,8 @@ impl Decoder for Libgav1 {
                 for plane in 0usize..image.yuv_format.plane_count() {
                     image.planes[plane] = Some(gav1_image.plane[plane] as *const u8);
                     image.row_bytes[plane] = gav1_image.stride[plane] as u32;
+                    image.image_owns_planes[plane] = false;
                 }
-                image.image_owns_planes = false;
             } else if category == 1 {
                 // TODO: make sure alpha plane matches previous alpha plane.
                 image.width = gav1_image.displayed_width[0] as u32;
@@ -126,7 +126,7 @@ impl Decoder for Libgav1 {
                 // TODO: call image freeplanes.
                 image.planes[3] = Some(gav1_image.plane[0] as *const u8);
                 image.row_bytes[3] = gav1_image.stride[0] as u32;
-                image.image_owns_alpha_plane = false;
+                image.image_owns_planes[3] = false;
                 image.full_range =
                     gav1_image.color_range != Libgav1ColorRange_kLibgav1ColorRangeStudio;
             }
