@@ -168,16 +168,14 @@ impl IStream<'_> {
     }
 
     pub fn read_uxx(&mut self, xx: u8) -> AvifResult<u64> {
-        // TODO: implement uxx for other values of xx.
-        let value: u64;
-        if xx == 0 {
-            value = 0;
-        } else if xx == 4 {
-            value = self.read_u32()? as u64;
-        } else {
+        let n: usize = xx.into();
+        if n == 0 {
+            return Ok(0);
+        }
+        if n > 8 {
             return Err(AvifError::NotImplemented);
         }
-        Ok(value)
+        Ok(BigEndian::read_uint(self.get_slice(n)?, n))
     }
 
     pub fn read_c_string(&mut self) -> AvifResult<String> {
