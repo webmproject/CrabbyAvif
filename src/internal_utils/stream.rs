@@ -43,11 +43,8 @@ impl IBitStream<'_> {
         Ok(bit == 1)
     }
 
-    pub fn skip(&mut self, n: usize) -> AvifResult<()> {
-        // TODO: this function need not return result.
+    pub fn skip(&mut self, n: usize) {
         self.bit_offset += n;
-        // println!("skipping {n} bits");
-        Ok(())
     }
 
     pub fn skip_uvlc(&mut self) -> AvifResult<()> {
@@ -58,7 +55,8 @@ impl IBitStream<'_> {
                 return Err(AvifError::BmffParseFailed);
             }
         }
-        self.skip(bit_count)
+        self.skip(bit_count);
+        Ok(())
     }
 }
 
