@@ -23,7 +23,7 @@ use crate::internal_utils::*;
 use crate::parser::exif;
 use crate::parser::mp4box;
 use crate::parser::mp4box::*;
-use crate::parser::obu;
+use crate::parser::obu::Av1SequenceHeader;
 use crate::*;
 
 use std::collections::HashSet;
@@ -434,7 +434,7 @@ impl Decoder {
         self.prepare_sample(0, 0, 0)?;
         let io = &mut self.io.as_mut().unwrap();
         let sample = &self.tiles[0][0].input.samples[0];
-        match obu::parse_sequence_header(sample.data(io)?) {
+        match Av1SequenceHeader::parse_from_obus(sample.data(io)?) {
             Ok(sequence_header) => {
                 self.image.color_primaries = sequence_header.color_primaries;
                 self.image.transfer_characteristics = sequence_header.transfer_characteristics;
