@@ -572,7 +572,7 @@ impl Decoder {
                 } else {
                     self.duration = 0.0;
                 }
-                self.repetition_count = color_track.repetition_count;
+                self.repetition_count = color_track.repetition_count()?;
                 // TODO: self.image timing.
 
                 println!("image_count: {}", self.image_count);

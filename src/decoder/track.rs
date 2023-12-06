@@ -1,5 +1,5 @@
-use crate::parser::mp4box::ItemProperty;
 use crate::internal_utils::*;
+use crate::parser::mp4box::ItemProperty;
 use crate::*;
 
 #[derive(Debug, Default)]
@@ -12,7 +12,6 @@ pub struct Track {
     pub track_duration: u64,
     pub segment_duration: u64,
     pub is_repeating: bool,
-    pub repetition_count: i32,
     pub width: u32,
     pub height: u32,
     pub sample_table: Option<SampleTable>,
@@ -40,7 +39,45 @@ impl Track {
         self.sample_table.as_ref()?.get_properties()
     }
 
-    // TODO: repetition count can be moved here.
+    pub fn repetition_count(&self) -> AvifResult<i32> {
+        if !self.elst_seen {
+            return Ok(-2);
+        }
+        if self.is_repeating {
+            if self.track_duration == u64::MAX {
+                // If isRepeating is true and the track duration is unknown/indefinite, then set the
+                // repetition count to infinite(Section 9.6.1 of ISO/IEC 23008-12 Part 12).
+                return Ok(-1);
+            } else {
+                // Section 9.6.1. of ISO/IEC 23008-12 Part 12: 1, the entire edit list is repeated a
+                // sufficient number of times to equal the track duration.
+                //
+                // Since libavif uses repetitionCount (which is 0-based), we subtract the value by 1
+                // to derive the number of repetitions.
+                assert!(self.segment_duration != 0);
+                // We specifically check for trackDuration == 0 here and not when it is actually
+                // read in order to accept files which inadvertently has a trackDuration of 0
+                // without any edit lists.
+                if self.track_duration == 0 {
+                    println!("invalid track duration 0");
+                    return Err(AvifError::BmffParseFailed);
+                }
+                let remainder = if self.track_duration % self.segment_duration != 0 {
+                    1u64
+                } else {
+                    0u64
+                };
+                let repetition_count: u64 =
+                    (self.track_duration / self.segment_duration) + remainder - 1u64;
+                if repetition_count > (i32::MAX as u64) {
+                    return Ok(-1);
+                } else {
+                    return Ok(repetition_count as i32);
+                }
+            }
+        }
+        return Ok(0);
+    }
 }
 
 #[derive(Debug)]
