@@ -1,3 +1,4 @@
+use crabby_avif::image::*;
 use crabby_avif::*;
 
 fn get_test_file(filename: &str) -> String {
@@ -44,7 +45,7 @@ fn alpha_no_ispe() {
     let res = decoder.next_image();
     assert!(res.is_ok());
     let image = res.unwrap();
-    let alpha_plane = image.plane(3);
+    let alpha_plane = image.plane(Plane::A);
     assert!(alpha_plane.is_some());
     assert!(alpha_plane.unwrap().row_bytes > 0);
 }
@@ -100,7 +101,7 @@ fn color_grid_alpha_no_grid() {
     let res = decoder.next_image();
     assert!(res.is_ok());
     let image = res.unwrap();
-    let alpha_plane = image.plane(3);
+    let alpha_plane = image.plane(Plane::A);
     assert!(alpha_plane.is_some());
     assert!(alpha_plane.unwrap().row_bytes > 0);
 }

@@ -1,4 +1,4 @@
-use crate::image::Image;
+use crate::image::*;
 use crate::*;
 use std::fs::File;
 use std::io::prelude::*;
@@ -112,9 +112,13 @@ impl Y4MWriter {
         {
             return false;
         }
-        let plane_count = if self.write_alpha { 4 } else { 3 };
-        for plane in 0usize..plane_count {
-            let avif_plane = image.plane(plane);
+        let planes: &[Plane] = if self.write_alpha {
+            &ALL_PLANES
+        } else {
+            &YUV_PLANES
+        };
+        for plane in planes {
+            let avif_plane = image.plane(*plane);
             println!("{:#?}", avif_plane);
             if avif_plane.is_none() {
                 continue;

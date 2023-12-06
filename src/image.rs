@@ -4,15 +4,25 @@ use crate::internal_utils::*;
 use crate::parser::mp4box::*;
 use crate::*;
 
+use num_derive::ToPrimitive;
+use num_traits::cast::ToPrimitive;
+
 // TODO: needed only for debug to Image and PlaneData. Can be removed it those
 // do not have to be debug printable.
 use derivative::Derivative;
 
-#[derive(Derivative, Default)]
-#[derivative(Debug)]
-pub struct ImageInfo {}
+#[derive(PartialEq, ToPrimitive, Copy, Clone)]
+pub enum Plane {
+    Y = 0,
+    U = 1,
+    V = 2,
+    A = 3,
+}
 
-impl ImageInfo {}
+pub const MAX_PLANE_COUNT: usize = 4;
+pub const YUV_PLANES: [Plane; 3] = [Plane::Y, Plane::U, Plane::V];
+pub const A_PLANE: [Plane; 1] = [Plane::A];
+pub const ALL_PLANES: [Plane; MAX_PLANE_COUNT] = [Plane::Y, Plane::U, Plane::V, Plane::A];
 
 #[derive(Derivative, Default)]
 #[derivative(Debug)]
@@ -28,12 +38,12 @@ pub struct Image {
     pub alpha_present: bool,
     pub alpha_premultiplied: bool,
 
-    pub planes: [Option<*const u8>; 4],
-    pub row_bytes: [u32; 4], // TODO: named constant
+    pub planes: [Option<*const u8>; MAX_PLANE_COUNT],
+    pub row_bytes: [u32; MAX_PLANE_COUNT],
     pub image_owns_planes: bool,
     pub image_owns_alpha_plane: bool,
     #[derivative(Debug = "ignore")]
-    plane_buffers: [Vec<u8>; 4],
+    plane_buffers: [Vec<u8>; MAX_PLANE_COUNT],
 
     pub color_primaries: ColorPrimaries,
     pub transfer_characteristics: TransferCharacteristics,
@@ -69,53 +79,41 @@ pub struct PlaneData<'a> {
 }
 
 impl Image {
-    // TODO: replace plane_index with an enum.
-    pub fn height(&self, plane_index: usize) -> usize {
-        assert!(plane_index <= 3);
-        if plane_index == 0 || plane_index == 3 {
-            // Y and Alpha planes are never subsampled.
-            return self.height as usize;
-        }
-        match self.yuv_format {
-            PixelFormat::Yuv444 | PixelFormat::Yuv422 | PixelFormat::Monochrome => {
-                self.height as usize
-            }
-            PixelFormat::Yuv420 => (self.height as usize + 1) / 2,
+    pub fn subsampled_width(&self, width: u32, plane: Plane) -> usize {
+        match plane {
+            Plane::Y | Plane::A => width as usize,
+            _ => match self.yuv_format {
+                PixelFormat::Yuv444 | PixelFormat::Monochrome => width as usize,
+                PixelFormat::Yuv420 | PixelFormat::Yuv422 => (width as usize + 1) / 2,
+            },
         }
     }
 
-    pub fn width(&self, plane_index: usize) -> usize {
-        assert!(plane_index <= 3);
-        if plane_index == 0 || plane_index == 3 {
-            // Y and Alpha planes are never subsampled.
-            return self.width as usize;
-        }
-        match self.yuv_format {
-            PixelFormat::Yuv444 | PixelFormat::Monochrome => self.width as usize,
-            PixelFormat::Yuv420 | PixelFormat::Yuv422 => (self.width as usize + 1) / 2,
+    pub fn width(&self, plane: Plane) -> usize {
+        self.subsampled_width(self.width, plane)
+    }
+
+    pub fn height(&self, plane: Plane) -> usize {
+        match plane {
+            Plane::Y | Plane::A => self.height as usize,
+            _ => match self.yuv_format {
+                PixelFormat::Yuv444 | PixelFormat::Monochrome | PixelFormat::Yuv422 => {
+                    self.height as usize
+                }
+                PixelFormat::Yuv420 => (self.height as usize + 1) / 2,
+            },
         }
     }
 
-    pub fn subsampled_value(&self, value: u32, plane_index: usize) -> usize {
-        assert!(plane_index <= 3);
-        if plane_index == 0 || plane_index == 3 {
-            // Y and Alpha planes are never subsampled.
-            return value as usize;
-        }
-        match self.yuv_format {
-            PixelFormat::Yuv444 | PixelFormat::Monochrome => value as usize,
-            PixelFormat::Yuv420 | PixelFormat::Yuv422 => (value as usize + 1) / 2,
-        }
-    }
-
-    pub fn plane(&self, plane: usize) -> Option<PlaneData> {
-        assert!(plane < 4);
-        self.planes[plane]?;
+    pub fn plane(&self, plane: Plane) -> Option<PlaneData> {
+        let plane_index = plane.to_usize().unwrap();
+        self.planes[plane_index]?;
         let pixel_size = if self.depth == 8 { 1 } else { 2 };
         let height = self.height(plane);
-        let row_bytes = self.row_bytes[plane] as usize;
+        let row_bytes = self.row_bytes[plane_index] as usize;
         let plane_size = height * row_bytes;
-        let data = unsafe { std::slice::from_raw_parts(self.planes[plane].unwrap(), plane_size) };
+        let data =
+            unsafe { std::slice::from_raw_parts(self.planes[plane_index].unwrap(), plane_size) };
         Some(PlaneData {
             data,
             width: self.width(plane) as u32,
@@ -161,12 +159,13 @@ impl Image {
         // TODO: if width == stride, the whole thing can be one copy.
         if category == 0 || category == 2 {
             let mut src_offset = 0;
-            for plane_index in 0usize..3 {
-                let plane_stride = self.subsampled_value(stride, plane_index);
-                let width = self.width(plane_index);
-                let height = self.height(plane_index);
+            for plane in YUV_PLANES {
+                let plane_stride = self.subsampled_width(stride, plane);
+                let width = self.width(plane);
+                let height = self.height(plane);
                 let row_width = width * pixel_size;
                 let mut dst_offset = 0;
+                let plane_index = plane.to_usize().unwrap();
                 for _y in 0usize..height {
                     let src_y_start = src_offset;
                     let src_y_end = src_y_start + row_width;
@@ -178,7 +177,6 @@ impl Image {
 
                     dst_slice.copy_from_slice(src_slice);
 
-                    // TODO: does plane_stride account for pixel size?
                     src_offset += plane_stride;
                     dst_offset += self.row_bytes[plane_index] as usize;
                 }
@@ -186,8 +184,8 @@ impl Image {
         } else {
             assert!(category == 1);
             let mut src_offset = 0;
-            let width = self.width(3);
-            let height = self.height(3);
+            let width = self.width(Plane::A);
+            let height = self.height(Plane::A);
             let row_width = width * pixel_size;
             let mut dst_offset = 0;
             for _y in 0usize..height {
@@ -201,7 +199,6 @@ impl Image {
 
                 dst_slice.copy_from_slice(src_slice);
 
-                // TODO: does stride account for pixel size?
                 src_offset += stride as usize;
                 dst_offset += self.row_bytes[3] as usize;
             }
@@ -241,20 +238,21 @@ impl Image {
         let column_index = u64::from(tile_index % tile_info.grid.columns);
         //println!("copying tile {tile_index} {row_index} {column_index}");
 
-        let plane_range = if category == 1 { 3usize..4 } else { 0usize..3 };
-        for plane_index in plane_range {
-            //println!("plane_index {plane_index}");
-            let src_plane = tile.plane(plane_index);
+        let planes: &[Plane] = if category == 1 { &A_PLANE } else { &YUV_PLANES };
+        for plane in planes {
+            let plane = *plane;
+            let src_plane = tile.plane(plane);
             if src_plane.is_none() {
                 continue;
             }
+            let plane_index = plane.to_usize().unwrap();
             let src_plane = src_plane.unwrap();
             // If this is the last tile column, clamp to left over width.
             let src_width_to_copy = if column_index == (tile_info.grid.columns - 1).into() {
                 let width_so_far = u64::from(src_plane.width)
                     .checked_mul(column_index)
                     .ok_or(err)?;
-                u64_from_usize(self.width(plane_index))?
+                u64_from_usize(self.width(plane))?
                     .checked_sub(width_so_far)
                     .ok_or(err)?
             } else {
@@ -272,7 +270,7 @@ impl Image {
                 let height_so_far = u64::from(src_plane.height)
                     .checked_mul(row_index)
                     .ok_or(err)?;
-                u64_from_usize(self.height(plane_index))?
+                u64_from_usize(self.height(plane))?
                     .checked_sub(height_so_far)
                     .ok_or(err)?
             } else {

@@ -1,4 +1,5 @@
 use crate::image::Image;
+use crate::image::ALL_PLANES;
 use std::fs::File;
 use std::io::prelude::*;
 
@@ -32,7 +33,7 @@ impl RawWriter {
         if !self.write_header() {
             return false;
         }
-        for plane in 0usize..4 {
+        for plane in ALL_PLANES {
             let avif_plane = image.plane(plane);
             println!("{:#?}", avif_plane);
             if avif_plane.is_none() {

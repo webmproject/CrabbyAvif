@@ -152,6 +152,7 @@ impl Decoder for MediaCodec {
         println!("getting height");
         let height = format.i32("height").ok_or(AvifError::UnknownError)?;
         println!("getting stride");
+        // TODO: Figure out if this stride accounts for pixel size.
         let stride = format.i32("stride").ok_or(AvifError::UnknownError)?;
         // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Planar
         let color_format = format.i32("color-format").unwrap_or(19);

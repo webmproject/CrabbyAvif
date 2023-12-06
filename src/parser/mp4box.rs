@@ -1,6 +1,7 @@
 use crate::decoder::gainmap::GainMapMetadata;
 use crate::decoder::track::*;
 use crate::decoder::GenericIO;
+use crate::image::MAX_PLANE_COUNT;
 use crate::internal_utils::stream::*;
 use crate::internal_utils::*;
 use crate::*;
@@ -64,8 +65,6 @@ pub struct ItemLocationBox {
     base_offset_size: u8,
     pub items: Vec<ItemLocationEntry>,
 }
-
-const MAX_PLANE_COUNT: usize = 4;
 
 #[derive(Debug, Clone)]
 pub struct ImageSpatialExtents {
