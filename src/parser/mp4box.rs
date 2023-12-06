@@ -349,7 +349,6 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
                 // unsigned int(offset_size*8) extent_offset;
                 offset: stream.read_uxx(iloc.offset_size)?,
                 // unsigned int(length_size*8) extent_length;
-                // TODO: this comment is incorrect in libavif.
                 length: stream.read_uxx(iloc.length_size)?,
             };
             entry.extents.push(extent);
@@ -922,9 +921,6 @@ fn parse_tkhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         println!("invalid track dimensions");
         return Err(AvifError::BmffParseFailed);
     }
-
-    // TODO: check if track dims are too large.
-
     Ok(())
 }
 
@@ -972,7 +968,6 @@ fn parse_stco(
     sample_table.chunk_offsets.reserve(entry_count);
     for _ in 0..entry_count {
         let chunk_offset: u64 = if large_offset {
-            // TODO: this comment is wrong in libavif.
             // unsigned int(64) chunk_offset;
             stream.read_u64()?
         } else {
