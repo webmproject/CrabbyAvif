@@ -2,6 +2,11 @@ use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 
+fn path_buf(inputs: &[&str]) -> PathBuf {
+    let path: PathBuf = inputs.iter().collect();
+    path
+}
+
 fn add_native_library(
     library_name: &str,
     library_dir: &str,
@@ -60,9 +65,9 @@ fn main() {
     add_native_library(
         "dav1d",
         "dav1d",
-        PathBuf::from("build/src"),
-        PathBuf::from("include/dav1d/dav1d.h"),
-        PathBuf::from("build/include/dav1d"),
+        path_buf(&["build", "src"]),
+        path_buf(&["include", "dav1d", "dav1d.h"]),
+        path_buf(&["build", "include", "dav1d"]),
     );
 
     #[cfg(feature = "libgav1")]
@@ -70,9 +75,9 @@ fn main() {
         add_native_library(
             "gav1",
             "libgav1",
-            PathBuf::from("build"),
-            PathBuf::from("src/gav1/decoder.h"),
-            PathBuf::from("src"),
+            path_buf(&["build"]),
+            path_buf(&["src", "gav1", "decoder.h"]),
+            path_buf(&["src"]),
         );
         // libgav1 needs libstdc++ on *nix and libc++ on mac. TODO: what about windows?
         if cfg!(target_os = "macos") {
