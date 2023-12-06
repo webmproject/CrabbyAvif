@@ -1228,7 +1228,7 @@ fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
             "mdia" => parse_mdia(&mut sub_stream, &mut track)?,
             "tref" => parse_tref(&mut sub_stream, &mut track)?,
             "edts" => parse_edts(&mut sub_stream, &mut track)?,
-            // TODO: track meta can be ignored? probably not becuase of xmp/exif.
+            "meta" => track.meta = Some(parse_meta(&mut sub_stream)?),
             _ => println!("skipping box {}", header.box_type),
         }
     }

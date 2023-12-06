@@ -557,7 +557,6 @@ impl Decoder {
 
                 if let Some(alpha_track) = self.tracks.iter().find(|x| x.is_aux(color_track.id)) {
                     self.tiles[1].push(Tile::create_from_track(alpha_track)?);
-                    //println!("alpha_tile: {:#?}", self.tiles[1]);
                     self.tile_info[1].tile_count = 1;
                     self.image.alpha_present = true;
                     self.image.alpha_premultiplied = color_track.prem_by_id == alpha_track.id;

@@ -1,5 +1,6 @@
 use crate::internal_utils::*;
 use crate::parser::mp4box::ItemProperty;
+use crate::parser::mp4box::MetaBox;
 use crate::*;
 
 #[derive(Debug, Default)]
@@ -16,6 +17,7 @@ pub struct Track {
     pub height: u32,
     pub sample_table: Option<SampleTable>,
     pub elst_seen: bool,
+    pub meta: Option<MetaBox>,
 }
 
 impl Track {
