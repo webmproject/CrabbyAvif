@@ -624,8 +624,6 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
     let (version, flags) = stream.read_version_and_flags()?;
     // unsigned int(32) entry_count;
     let entry_count = stream.read_u32()?;
-    // TODO: there is no need for this. can simply look up the vector.
-    let mut previous_item_id = 0;
     let mut ipma: Vec<ItemPropertyAssociation> = Vec::new();
     for _i in 0..entry_count {
         let mut entry = ItemPropertyAssociation {
@@ -648,11 +646,13 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
             println!("invalid item id in ipma");
             return Err(AvifError::BmffParseFailed);
         }
-        if entry.item_id <= previous_item_id {
-            println!("ipma item ids are not ordered by increasing id");
-            return Err(AvifError::BmffParseFailed);
+        if !ipma.is_empty() {
+            let previous_item_id = ipma.last().unwrap().item_id;
+            if entry.item_id <= previous_item_id {
+                println!("ipma item ids are not ordered by increasing id");
+                return Err(AvifError::BmffParseFailed);
+            }
         }
-        previous_item_id = entry.item_id;
         // unsigned int(8) association_count;
         let association_count = stream.read_u8()?;
         for _j in 0..association_count {
