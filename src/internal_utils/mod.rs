@@ -7,29 +7,20 @@ use crate::*;
 pub type Fraction = (i32, u32);
 pub type UFraction = (u32, u32);
 
-pub fn usize_from_u64(value: u64) -> AvifResult<usize> {
-    usize::try_from(value).or(Err(AvifError::BmffParseFailed))
+macro_rules! conversion_function {
+    ($func:ident, $to: ident, $from:ty) => {
+        pub fn $func(value: $from) -> AvifResult<$to> {
+            $to::try_from(value).or(Err(AvifError::BmffParseFailed))
+        }
+    };
 }
 
-pub fn usize_from_u32(value: u32) -> AvifResult<usize> {
-    usize::try_from(value).or(Err(AvifError::BmffParseFailed))
-}
-
-pub fn usize_from_u16(value: u16) -> AvifResult<usize> {
-    usize::try_from(value).or(Err(AvifError::BmffParseFailed))
-}
-
-pub fn u64_from_usize(value: usize) -> AvifResult<u64> {
-    u64::try_from(value).or(Err(AvifError::BmffParseFailed))
-}
-
-pub fn u32_from_usize(value: usize) -> AvifResult<u32> {
-    u32::try_from(value).or(Err(AvifError::BmffParseFailed))
-}
-
-pub fn u32_from_u64(value: u64) -> AvifResult<u32> {
-    u32::try_from(value).or(Err(AvifError::BmffParseFailed))
-}
+conversion_function!(usize_from_u64, usize, u64);
+conversion_function!(usize_from_u32, usize, u32);
+conversion_function!(usize_from_u16, usize, u16);
+conversion_function!(u64_from_usize, u64, usize);
+conversion_function!(u32_from_usize, u32, usize);
+conversion_function!(u32_from_u64, u32, u64);
 
 pub fn find_nclx(properties: &[ItemProperty]) -> Result<&Nclx, bool> {
     let nclx_properties: Vec<_> = properties
