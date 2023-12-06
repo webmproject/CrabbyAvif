@@ -421,7 +421,11 @@ impl Decoder {
                     .items
                     .get_mut(grid_item_id)
                     .ok_or(AvifError::InvalidImageGrid)?;
-                let mut tile = Tile::create_from_item(grid_item, self.settings.allow_progressive)?;
+                let mut tile = Tile::create_from_item(
+                    grid_item,
+                    self.settings.allow_progressive,
+                    self.settings.image_count_limit,
+                )?;
                 tile.input.category = category as u8;
                 tiles.push(tile);
             }
@@ -442,7 +446,11 @@ impl Decoder {
                 .items
                 .get_mut(&item_id)
                 .ok_or(AvifError::MissingImageItem)?;
-            let mut tile = Tile::create_from_item(item, self.settings.allow_progressive)?;
+            let mut tile = Tile::create_from_item(
+                item,
+                self.settings.allow_progressive,
+                self.settings.image_count_limit,
+            )?;
             tile.input.category = category as u8;
             tiles.push(tile);
         }

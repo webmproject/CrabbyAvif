@@ -81,7 +81,6 @@ impl Decoder for Dav1d {
                 if !data.data.is_null() {
                     let res = dav1d_send_data(self.context.unwrap(), &mut data);
                     println!("dav1d_send_data returned {res}");
-                    // TODO: need to handle the error macros better.
                     if res < 0 && res != dav1d_error(EAGAIN) {
                         dav1d_data_unref(&mut data);
                         return Err(AvifError::UnknownError);

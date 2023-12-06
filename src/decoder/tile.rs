@@ -56,7 +56,11 @@ pub struct Tile {
 }
 
 impl Tile {
-    pub fn create_from_item(item: &mut Item, allow_progressive: bool) -> AvifResult<Tile> {
+    pub fn create_from_item(
+        item: &mut Item,
+        allow_progressive: bool,
+        image_count_limit: u32,
+    ) -> AvifResult<Tile> {
         let mut tile = Tile {
             width: item.width,
             height: item.height,
@@ -148,9 +152,10 @@ impl Tile {
         } else if item.progressive && allow_progressive {
             // Progressive image. Decode all layers and expose them all to the
             // user.
-
-            // TODO: check image count limit.
-
+            if image_count_limit != 0 && layer_count as u32 > image_count_limit {
+                println!("exceeded image_count_limit (progressive)");
+                return Err(AvifError::BmffParseFailed);
+            }
             tile.input.all_layers = true;
             let mut offset = 0;
             for (i, layer_size) in layer_sizes.iter().take(layer_count).enumerate() {
