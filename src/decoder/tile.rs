@@ -183,18 +183,32 @@ impl Tile {
         Ok(tile)
     }
 
-    pub fn create_from_track(track: &Track) -> AvifResult<Tile> {
+    pub fn create_from_track(track: &Track, mut image_count_limit: u32) -> AvifResult<Tile> {
         let mut tile = Tile {
             width: track.width,
             height: track.height,
             operating_point: 0, // No way to set operating point via tracks
             ..Tile::default()
         };
+        let sample_table = &track.sample_table.as_ref().unwrap();
 
-        // TODO: implement the imagecount check in avifCodecDecodeInputFillFromSampleTable.
+        if image_count_limit != 0 {
+            for (chunk_index, _chunk_offset) in sample_table.chunk_offsets.iter().enumerate() {
+                // Figure out how many samples are in this chunk.
+                let sample_count = sample_table.get_sample_count_of_chunk(chunk_index as u32);
+                if sample_count == 0 {
+                    println!("chunk with 0 samples found");
+                    return Err(AvifError::BmffParseFailed);
+                }
+                if sample_count > image_count_limit {
+                    println!("exceeded image_count_limit");
+                    return Err(AvifError::BmffParseFailed);
+                }
+                image_count_limit -= sample_count;
+            }
+        }
 
         let mut sample_size_index: usize = 0;
-        let sample_table = &track.sample_table.as_ref().unwrap();
         for (chunk_index, chunk_offset) in sample_table.chunk_offsets.iter().enumerate() {
             // Figure out how many samples are in this chunk.
             let sample_count = sample_table.get_sample_count_of_chunk(chunk_index as u32);

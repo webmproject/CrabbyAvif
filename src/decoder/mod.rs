@@ -112,6 +112,7 @@ pub struct Settings {
     pub codec_choice: CodecChoice,
     pub image_size_limit: u32,
     pub image_dimension_limit: u32,
+    pub image_count_limit: u32,
 }
 
 impl Default for Settings {
@@ -127,6 +128,7 @@ impl Default for Settings {
             codec_choice: Default::default(),
             image_size_limit: 16384 * 16384,
             image_dimension_limit: 32768,
+            image_count_limit: 12 * 3600 * 60,
         }
     }
 }
@@ -586,11 +588,17 @@ impl Decoder {
 
                 // TODO: exif/xmp from meta.
 
-                self.tiles[0].push(Tile::create_from_track(color_track)?);
+                self.tiles[0].push(Tile::create_from_track(
+                    color_track,
+                    self.settings.image_count_limit,
+                )?);
                 self.tile_info[0].tile_count = 1;
 
                 if let Some(alpha_track) = self.tracks.iter().find(|x| x.is_aux(color_track.id)) {
-                    self.tiles[1].push(Tile::create_from_track(alpha_track)?);
+                    self.tiles[1].push(Tile::create_from_track(
+                        alpha_track,
+                        self.settings.image_count_limit,
+                    )?);
                     self.tile_info[1].tile_count = 1;
                     self.image.alpha_present = true;
                     self.image.alpha_premultiplied = color_track.prem_by_id == alpha_track.id;
