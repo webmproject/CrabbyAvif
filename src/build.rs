@@ -13,6 +13,7 @@ fn add_native_library(
     library_path: PathBuf,
     header_file: PathBuf,
     extra_include_dir: PathBuf,
+    allowlist_items: &[&str],
 ) {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let third_party = PathBuf::from(&project_root).join("third_party");
@@ -30,12 +31,17 @@ fn add_native_library(
     let abs_header_file = PathBuf::from(&abs_library_dir).join(header_file);
     let extra_includes = PathBuf::from(&abs_library_dir).join(extra_include_dir);
     let extra_includes_str = format!("-I{}", extra_includes.display());
-    let bindings = bindgen::Builder::default()
+    let mut bindings = bindgen::Builder::default()
         .header(abs_header_file.into_os_string().into_string().unwrap())
         .clang_arg(extra_includes_str)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .layout_tests(false)
-        .raw_line("#![allow(warnings)]")
+        .generate_comments(false)
+        .raw_line("#![allow(warnings)]");
+    for allowlist_item in allowlist_items {
+        bindings = bindings.allowlist_item(allowlist_item);
+    }
+    let bindings = bindings
         .generate()
         .unwrap_or_else(|_| panic!("Unable to generate bindings for {library_dir}"));
 
@@ -77,6 +83,18 @@ fn main() {
         path_buf(&[build_dir, "src"]),
         path_buf(&["include", "dav1d", "dav1d.h"]),
         path_buf(&[build_dir, "include", "dav1d"]),
+        &[
+            "EAGAIN",
+            "dav1d_close",
+            "dav1d_data_unref",
+            "dav1d_data_wrap",
+            "dav1d_default_settings",
+            "dav1d_error",
+            "dav1d_get_picture",
+            "dav1d_open",
+            "dav1d_picture_unref",
+            "dav1d_send_data",
+        ],
     );
 
     #[cfg(feature = "libgav1")]
@@ -87,6 +105,13 @@ fn main() {
             path_buf(&[build_dir]),
             path_buf(&["src", "gav1", "decoder.h"]),
             path_buf(&["src"]),
+            &[
+                "Libgav1DecoderCreate",
+                "Libgav1DecoderDequeueFrame",
+                "Libgav1DecoderDestroy",
+                "Libgav1DecoderEnqueueFrame",
+                "Libgav1DecoderSettingsInitDefault",
+            ],
         );
         // libgav1 needs libstdc++ on *nix and libc++ on mac. TODO: what about windows?
         if cfg!(target_os = "macos") {
