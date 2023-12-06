@@ -54,7 +54,13 @@ impl Item {
         Ok(IStream::create(io_data))
     }
 
-    pub fn read_and_parse(&self, io: &mut GenericIO, grid: &mut Grid) -> AvifResult<()> {
+    pub fn read_and_parse(
+        &self,
+        io: &mut GenericIO,
+        grid: &mut Grid,
+        size_limit: u32,
+        dimension_limit: u32,
+    ) -> AvifResult<()> {
         // TODO: this function also has to extract codec type.
         if self.item_type != "grid" {
             return Ok(());
@@ -89,8 +95,11 @@ impl Item {
             println!("invalid dimensions in grid box");
             return Err(AvifError::InvalidImageGrid);
         }
+        if !check_limits(grid.width, grid.height, size_limit, dimension_limit) {
+            println!("grid dimensions too large");
+            return Err(AvifError::InvalidImageGrid);
+        }
         println!("grid: {:#?}", grid);
-        // TODO: check for too large of a grid.
         Ok(())
     }
 
@@ -101,7 +110,12 @@ impl Item {
         }
     }
 
-    pub fn harvest_ispe(&mut self, alpha_ispe_required: bool) -> AvifResult<()> {
+    pub fn harvest_ispe(
+        &mut self,
+        alpha_ispe_required: bool,
+        size_limit: u32,
+        dimension_limit: u32,
+    ) -> AvifResult<()> {
         if self.size == 0 {
             return Ok(());
         }
@@ -122,6 +136,10 @@ impl Item {
                     self.height = x.height;
                     if self.width == 0 || self.height == 0 {
                         println!("item id has invalid size.");
+                        return Err(AvifError::BmffParseFailed);
+                    }
+                    if !check_limits(x.width, x.height, size_limit, dimension_limit) {
+                        println!("item dimensions too large.");
                         return Err(AvifError::BmffParseFailed);
                     }
                 }

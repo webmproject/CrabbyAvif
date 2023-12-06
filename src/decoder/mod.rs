@@ -100,7 +100,7 @@ pub enum Source {
     // TODO: Thumbnail,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Settings {
     pub source: Source,
     pub ignore_exif: bool,
@@ -110,6 +110,25 @@ pub struct Settings {
     pub enable_decoding_gainmap: bool,
     pub enable_parsing_gainmap_metadata: bool,
     pub codec_choice: CodecChoice,
+    pub image_size_limit: u32,
+    pub image_dimension_limit: u32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            source: Default::default(),
+            ignore_exif: false,
+            ignore_xmp: false,
+            strictness: Default::default(),
+            allow_progressive: false,
+            enable_decoding_gainmap: false,
+            enable_parsing_gainmap_metadata: false,
+            codec_choice: Default::default(),
+            image_size_limit: 16384 * 16384,
+            image_dimension_limit: 32768,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -126,15 +145,6 @@ pub enum Strictness {
     All,
     SpecificInclude(Vec<StrictnessFlag>),
     SpecificExclude(Vec<StrictnessFlag>),
-}
-
-#[repr(C)]
-#[derive(Debug, Default, Copy, Clone)]
-pub enum ProgressiveState {
-    #[default]
-    Unavailable = 0,
-    Available = 1,
-    Active = 2,
 }
 
 impl Strictness {
@@ -163,6 +173,15 @@ impl Strictness {
             _ => false,
         }
     }
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+pub enum ProgressiveState {
+    #[default]
+    Unavailable = 0,
+    Available = 1,
+    Active = 2,
 }
 
 #[derive(Default)]
@@ -514,11 +533,26 @@ impl Decoder {
         }
         let avif_boxes = mp4box::parse(self.io.as_mut().unwrap())?;
         self.tracks = avif_boxes.tracks;
+        if !self.tracks.is_empty() {
+            self.image.image_sequence_track_present = true;
+            for track in &self.tracks {
+                if !track.check_limits(
+                    self.settings.image_size_limit,
+                    self.settings.image_dimension_limit,
+                ) {
+                    println!("track dimension too large");
+                    return Err(AvifError::BmffParseFailed);
+                }
+            }
+        }
         self.items = construct_items(&avif_boxes.meta)?;
         for item in self.items.values_mut() {
-            item.harvest_ispe(self.settings.strictness.alpha_ispe_required())?;
+            item.harvest_ispe(
+                self.settings.strictness.alpha_ispe_required(),
+                self.settings.image_size_limit,
+                self.settings.image_dimension_limit,
+            )?;
         }
-        self.image.image_sequence_track_present = !self.tracks.is_empty();
         //println!("{:#?}", self.items);
 
         self.source = match self.settings.source {
@@ -783,6 +817,8 @@ impl Decoder {
         self.items.get(&item_id).unwrap().read_and_parse(
             self.io.as_mut().unwrap(),
             &mut self.tile_info[category].grid,
+            self.settings.image_size_limit,
+            self.settings.image_dimension_limit,
         )
     }
 

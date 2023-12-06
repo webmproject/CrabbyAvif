@@ -21,6 +21,9 @@ pub struct Track {
 }
 
 impl Track {
+    pub fn check_limits(&self, size_limit: u32, dimension_limit: u32) -> bool {
+        check_limits(self.width, self.height, size_limit, dimension_limit)
+    }
     pub fn is_aux(&self, primary_track_id: u32) -> bool {
         if self.sample_table.is_none() || self.id == 0 {
             return false;

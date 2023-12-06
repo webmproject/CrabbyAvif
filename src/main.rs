@@ -27,14 +27,10 @@ fn main() {
     let image_count;
     {
         let settings = Settings {
-            source: Source::Auto,
-            ignore_exif: false,
-            ignore_xmp: false,
             strictness: Strictness::None,
-            allow_progressive: false,
             enable_decoding_gainmap: true,
             enable_parsing_gainmap_metadata: true,
-            codec_choice: CodecChoice::Auto,
+            ..Settings::default()
         };
         let mut decoder: Decoder = Default::default();
         decoder.settings = settings;
