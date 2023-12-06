@@ -14,14 +14,6 @@ fn add_native_library(
     header_file: PathBuf,
     extra_include_dir: PathBuf,
 ) {
-    if cfg!(target_os = "android") {
-        // android arm64
-        println!(
-            "cargo:rustc-link-search=/Users/vigneshv/code/libavif/ext/dav1d/build/arm64-v8a/src"
-        );
-        println!("cargo:rustc-link-lib=static=dav1d");
-        return;
-    }
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let third_party = PathBuf::from(&project_root).join("third_party");
     let abs_library_dir = PathBuf::from(&third_party).join(library_dir);
@@ -61,13 +53,30 @@ fn add_native_library(
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
+    let build_target = std::env::var("TARGET").unwrap();
+    let build_dir = if build_target.contains("android") {
+        if build_target.contains("x86_64") {
+            "build.android/x86_64"
+        } else if build_target.contains("x86") {
+            "build.android/x86"
+        } else if build_target.contains("aarch64") {
+            "build.android/aarch64"
+        } else if build_target.contains("arm") {
+            "build.android/arm"
+        } else {
+            panic!("Unknown target_arch for android. Must be one of x86, x86_64, arm, aarch64.");
+        }
+    } else {
+        "build"
+    };
+
     #[cfg(feature = "dav1d")]
     add_native_library(
         "dav1d",
         "dav1d",
-        path_buf(&["build", "src"]),
+        path_buf(&[build_dir, "src"]),
         path_buf(&["include", "dav1d", "dav1d.h"]),
-        path_buf(&["build", "include", "dav1d"]),
+        path_buf(&[build_dir, "include", "dav1d"]),
     );
 
     #[cfg(feature = "libgav1")]
@@ -75,7 +84,7 @@ fn main() {
         add_native_library(
             "gav1",
             "libgav1",
-            path_buf(&["build"]),
+            path_buf(&[build_dir]),
             path_buf(&["src", "gav1", "decoder.h"]),
             path_buf(&["src"]),
         );
