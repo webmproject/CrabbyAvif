@@ -100,6 +100,10 @@ pub enum Source {
     // TODO: Thumbnail,
 }
 
+pub const DEFAULT_IMAGE_SIZE_LIMIT: u32 = 16384 * 16384;
+pub const DEFAULT_IMAGE_DIMENSION_LIMIT: u32 = 32768;
+pub const DEFAULT_IMAGE_COUNT_LIMIT: u32 = 12 * 3600 * 60;
+
 #[derive(Debug)]
 pub struct Settings {
     pub source: Source,
@@ -126,9 +130,9 @@ impl Default for Settings {
             enable_decoding_gainmap: false,
             enable_parsing_gainmap_metadata: false,
             codec_choice: Default::default(),
-            image_size_limit: 16384 * 16384,
-            image_dimension_limit: 32768,
-            image_count_limit: 12 * 3600 * 60,
+            image_size_limit: DEFAULT_IMAGE_SIZE_LIMIT,
+            image_dimension_limit: DEFAULT_IMAGE_DIMENSION_LIMIT,
+            image_count_limit: DEFAULT_IMAGE_COUNT_LIMIT,
         }
     }
 }

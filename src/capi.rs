@@ -459,9 +459,9 @@ pub struct avifDecoder {
     pub allowProgressive: avifBool,
     pub ignoreExif: avifBool,
     pub ignoreXMP: avifBool,
-    // uint32_t imageSizeLimit;
-    // uint32_t imageDimensionLimit;
-    // uint32_t imageCountLimit;
+    pub imageSizeLimit: u32,
+    pub imageDimensionLimit: u32,
+    pub imageCountLimit: u32,
     pub strictFlags: avifStrictFlags,
 
     // Output params.
@@ -503,6 +503,9 @@ impl Default for avifDecoder {
             allowProgressive: AVIF_FALSE,
             ignoreExif: AVIF_FALSE,
             ignoreXMP: AVIF_FALSE,
+            imageSizeLimit: DEFAULT_IMAGE_SIZE_LIMIT,
+            imageDimensionLimit: DEFAULT_IMAGE_DIMENSION_LIMIT,
+            imageCountLimit: DEFAULT_IMAGE_COUNT_LIMIT,
             strictFlags: AVIF_STRICT_ENABLED,
             image: std::ptr::null_mut(),
             imageIndex: -1,
@@ -604,6 +607,9 @@ impl From<&avifDecoder> for Settings {
             ignore_xmp: decoder.ignoreXMP == AVIF_TRUE,
             enable_decoding_gainmap: decoder.enableDecodingGainMap == AVIF_TRUE,
             enable_parsing_gainmap_metadata: decoder.enableParsingGainMapMetadata == AVIF_TRUE,
+            image_size_limit: decoder.imageSizeLimit,
+            image_dimension_limit: decoder.imageDimensionLimit,
+            image_count_limit: decoder.imageCountLimit,
             ..Self::default()
         }
     }
