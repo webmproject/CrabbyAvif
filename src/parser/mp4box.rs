@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 #[derive(Debug)]
 struct BoxHeader {
-    size: u64,
+    size: usize,
     box_type: String,
 }
 
@@ -227,7 +227,7 @@ pub struct AvifBoxes {
 
 fn parse_header(stream: &mut IStream) -> AvifResult<BoxHeader> {
     let start_offset = stream.offset;
-    let mut size: u64 = stream.read_u32()? as u64;
+    let mut size = stream.read_u32()? as u64;
     let box_type = stream.read_string(4)?;
     println!("box_type: {}", box_type);
     if size == 1 {
@@ -236,10 +236,12 @@ fn parse_header(stream: &mut IStream) -> AvifResult<BoxHeader> {
     if box_type == "uuid" {
         stream.skip(16)?;
     }
-    size -= (stream.offset - start_offset) as u64;
+    size = size
+        .checked_sub((stream.offset - start_offset) as u64)
+        .ok_or(AvifError::BmffParseFailed)?;
     Ok(BoxHeader {
         box_type,
-        size, // TODO: check if size will fit in usize.
+        size: usize_from_u64(size)?,
     })
 }
 
@@ -595,7 +597,7 @@ fn parse_ipco(stream: &mut IStream) -> AvifResult<Vec<ItemProperty>> {
     let mut properties: Vec<ItemProperty> = Vec::new();
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
-        let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
+        let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
             "ispe" => properties.push(parse_ispe(&mut sub_stream)?),
             "pixi" => properties.push(parse_pixi(&mut sub_stream)?),
@@ -683,7 +685,7 @@ fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
     let mut iprp = ItemPropertyBox::default();
     // Parse ipco box.
     {
-        let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
+        let mut sub_stream = stream.sub_stream(header.size)?;
         iprp.properties = parse_ipco(&mut sub_stream)?;
     }
     // Parse ipma boxes.
@@ -693,7 +695,7 @@ fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
             println!("Found non ipma box in iprp");
             return Err(AvifError::BmffParseFailed);
         }
-        let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
+        let mut sub_stream = stream.sub_stream(header.size)?;
         iprp.associations.append(&mut parse_ipma(&mut sub_stream)?);
     }
     println!("end of iprp, skiping {} bytes", stream.bytes_left());
@@ -761,7 +763,7 @@ fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
             println!("Found non infe box in iinf");
             return Err(AvifError::BmffParseFailed);
         }
-        let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
+        let mut sub_stream = stream.sub_stream(header.size)?;
         iinf.push(parse_infe(&mut sub_stream)?);
     }
     println!("end of iinf, skiping {} bytes", stream.bytes_left());
@@ -836,7 +838,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
             println!("first box in meta is not hdlr");
             return Err(AvifError::BmffParseFailed);
         }
-        let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
+        let mut sub_stream = stream.sub_stream(header.size)?;
         parse_hdlr(&mut sub_stream)?;
     }
 
@@ -853,7 +855,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
             }
             _ => {}
         }
-        let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
+        let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
             "iloc" => meta.iloc = parse_iloc(&mut sub_stream)?,
             "pitm" => meta.primary_item_id = parse_pitm(&mut sub_stream)?,
@@ -1080,7 +1082,7 @@ fn parse_stsd(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
                 println!("Not enough bytes to parse stsd");
                 return Err(AvifError::BmffParseFailed);
             }
-            let mut sub_stream = stream.sub_stream(usize_from_u64(header.size - 78)?)?;
+            let mut sub_stream = stream.sub_stream(header.size - 78)?;
             stsd.properties = parse_ipco(&mut sub_stream)?;
         }
         sample_table.sample_descriptions.push(stsd);
@@ -1096,7 +1098,7 @@ fn parse_stbl(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     let mut sample_table = SampleTable::default();
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
-        let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
+        let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
             "stco" => parse_stco(&mut sub_stream, &mut sample_table, false)?,
             "co64" => parse_stco(&mut sub_stream, &mut sample_table, true)?,
@@ -1115,7 +1117,7 @@ fn parse_stbl(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 fn parse_minf(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
-        let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
+        let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
             "stbl" => parse_stbl(&mut sub_stream, track)?,
             _ => println!("skipping box {}", header.box_type),
@@ -1127,7 +1129,7 @@ fn parse_minf(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 fn parse_mdia(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
-        let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
+        let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
             "mdhd" => parse_mdhd(&mut sub_stream, track)?,
             "minf" => parse_minf(&mut sub_stream, track)?,
@@ -1140,7 +1142,7 @@ fn parse_mdia(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 fn parse_tref(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
-        let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
+        let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
             "auxl" => {
                 // unsigned int(32) track_IDs[];
@@ -1202,7 +1204,7 @@ fn parse_edts(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     }
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
-        let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
+        let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
             "elst" => parse_elst(&mut sub_stream, track)?,
             _ => println!("skipping box {}", header.box_type),
@@ -1220,7 +1222,7 @@ fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
     println!("parsing trak size: {}", stream.bytes_left());
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
-        let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
+        let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
             "tkhd" => parse_tkhd(&mut sub_stream, &mut track)?,
             "mdia" => parse_mdia(&mut sub_stream, &mut track)?,
@@ -1239,7 +1241,7 @@ fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
     let mut tracks: Vec<Track> = Vec::new();
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
-        let mut sub_stream = stream.sub_stream(usize_from_u64(header.size)?)?;
+        let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
             "trak" => tracks.push(parse_trak(&mut sub_stream)?),
             _ => println!("skipping box {}", header.box_type),
@@ -1263,13 +1265,15 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
         let mut header_stream = IStream::create(header_data);
         let header = parse_header(&mut header_stream)?;
         println!("{:#?}", header);
-        parse_offset += header_stream.offset as u64;
+        parse_offset = parse_offset
+            .checked_add(header_stream.offset as u64)
+            .ok_or(AvifError::BmffParseFailed)?;
 
         // Read the rest of the box if necessary.
         match header.box_type.as_str() {
             "ftyp" | "meta" | "moov" => {
-                let box_data = io.read(parse_offset, usize_from_u64(header.size)?)?;
-                if box_data.len() != usize_from_u64(header.size)? {
+                let box_data = io.read(parse_offset, header.size)?;
+                if box_data.len() != header.size {
                     return Err(AvifError::TruncatedData);
                 }
                 let mut box_stream = IStream::create(box_data);
@@ -1301,7 +1305,9 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
                 println!("skipping box: {}", header.box_type);
             }
         }
-        parse_offset += header.size;
+        parse_offset = parse_offset
+            .checked_add(header.size as u64)
+            .ok_or(AvifError::BmffParseFailed)?;
     }
     if ftyp.is_none() {
         return Err(AvifError::InvalidFtyp);
