@@ -9,7 +9,9 @@ use std::io::Read;
 use std::process::Command;
 use tempfile::NamedTempFile;
 
-const TEST_DATA_PATH: &str = "/Users/vigneshv/code/av1-avif/testFiles";
+const TEST_DATA_PATH: &str = "/home2/files/avif/av1-avif/testFiles";
+//const AVIFDEC_PATH: &str = "/opt/homebrew/bin/avifdec";
+const AVIFDEC_PATH: &str = "/usr/local/google/home/vigneshv/code/libavif/build/avifdec";
 
 #[derive(Copy, Clone)]
 struct ExpectedImageInfo<'a> {
@@ -65,7 +67,7 @@ fn write_y4m(image: &Image) -> String {
 fn run_avifdec(filename: &String) -> String {
     let mut outfile = get_tempfile();
     outfile.push_str(".y4m");
-    let avifdec = Command::new("/opt/homebrew/bin/avifdec")
+    let avifdec = Command::new(AVIFDEC_PATH)
         .arg("--no-strict")
         .arg("--jobs")
         .arg("8")

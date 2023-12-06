@@ -1,9 +1,8 @@
 use crabby_avif::*;
 
-const TEST_DATA_PATH: &str = "/Users/vigneshv/code/rust_pg/rust-libavif/tests/data";
-
 fn get_test_file(filename: &str) -> String {
-    String::from(format!("{TEST_DATA_PATH}/{filename}"))
+    let project_root = env!("CARGO_MANIFEST_DIR");
+    String::from(format!("{project_root}/tests/data/{filename}"))
 }
 
 fn get_decoder(filename: &str) -> decoder::Decoder {
