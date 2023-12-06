@@ -23,6 +23,14 @@ pub fn u64_from_usize(value: usize) -> AvifResult<u64> {
     u64::try_from(value).or(Err(AvifError::BmffParseFailed))
 }
 
+pub fn u32_from_usize(value: usize) -> AvifResult<u32> {
+    u32::try_from(value).or(Err(AvifError::BmffParseFailed))
+}
+
+pub fn u32_from_u64(value: u64) -> AvifResult<u32> {
+    u32::try_from(value).or(Err(AvifError::BmffParseFailed))
+}
+
 pub fn find_nclx(properties: &[ItemProperty]) -> Result<&Nclx, bool> {
     let nclx_properties: Vec<_> = properties
         .iter()

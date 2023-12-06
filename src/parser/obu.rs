@@ -246,7 +246,7 @@ impl Av1SequenceHeader {
         let size = if obu_has_size_field {
             stream.read_uleb128()?
         } else {
-            stream.bytes_left() as u32 // TODO: Check if this will fit in u32.
+            u32_from_usize(stream.bytes_left())?
         };
 
         Ok(ObuHeader { obu_type, size })

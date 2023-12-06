@@ -226,11 +226,7 @@ impl IStream<'_> {
             let byte = self.read_u8()?;
             val |= ((byte & 0x7F) << (i * 7)) as u64;
             if (byte & 0x80) == 0 {
-                if val > u32::MAX as u64 {
-                    println!("uleb value will not fit in u32.");
-                    return Err(AvifError::BmffParseFailed);
-                }
-                return Ok(val as u32);
+                return u32_from_u64(val);
             }
         }
         println!("uleb value did not terminate after 8 bytes");

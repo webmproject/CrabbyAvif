@@ -74,11 +74,7 @@ impl Track {
                 };
                 let repetition_count: u64 =
                     (self.track_duration / self.segment_duration) + remainder - 1u64;
-                if repetition_count > (i32::MAX as u64) {
-                    return Ok(-1);
-                } else {
-                    return Ok(repetition_count as i32);
-                }
+                return Ok(i32::try_from(repetition_count).unwrap_or(-1));
             }
         }
         return Ok(0);
