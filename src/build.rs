@@ -2,8 +2,6 @@ use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 
-use bindgen::CargoCallbacks;
-
 fn add_native_library(
     library_name: &str,
     library_dir: &str,
@@ -38,7 +36,7 @@ fn add_native_library(
     let bindings = bindgen::Builder::default()
         .header(abs_header_file.into_os_string().into_string().unwrap())
         .clang_arg(extra_includes_str)
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .layout_tests(false)
         .raw_line("#![allow(warnings)]")
         .generate()
