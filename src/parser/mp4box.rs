@@ -814,7 +814,6 @@ fn parse_iref(stream: &mut IStream) -> AvifResult<Vec<ItemReference>> {
 }
 
 fn parse_idat(stream: &mut IStream) -> AvifResult<Vec<u8>> {
-    // TODO: check if multiple idats were seen for this meta box.
     if !stream.has_bytes_left() {
         println!("Invalid idat size");
         return Err(AvifError::BmffParseFailed);
@@ -861,7 +860,13 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
             "iprp" => meta.iprp = parse_iprp(&mut sub_stream)?,
             "iinf" => meta.iinf = parse_iinf(&mut sub_stream)?,
             "iref" => meta.iref = parse_iref(&mut sub_stream)?,
-            "idat" => meta.idat = parse_idat(&mut sub_stream)?,
+            "idat" => {
+                if !meta.idat.is_empty() {
+                    println!("meta contains multiple idat boxes");
+                    return Err(AvifError::BmffParseFailed);
+                }
+                meta.idat = parse_idat(&mut sub_stream)?;
+            }
             _ => println!("skipping box {}", header.box_type),
         }
     }
