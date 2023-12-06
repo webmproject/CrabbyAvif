@@ -24,6 +24,7 @@ impl Decoder for MediaCodec {
             return Ok(()); // Already initialized.
         }
         self.codec = NdkMediaCodec::from_decoder_type("video/av01");
+        //self.codec = NdkMediaCodec::from_codec_name("c2.android.av1.decoder");
         if self.codec.is_none() {
             return Err(AvifError::NoCodecAvailable);
         }
