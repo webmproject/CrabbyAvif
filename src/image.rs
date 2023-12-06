@@ -150,7 +150,25 @@ impl Image {
     ) -> AvifResult<()> {
         self.allocate_planes(category)?;
         let pixel_size: u64 = if self.depth == 8 { 1 } else { 2 };
-        // TODO: if width == stride, the whole thing can be one copy.
+        if self.width == stride {
+            // When width is the same as stride, we can do a full plane copy (instead of
+            // row-by-row).
+            let planes: &[Plane] = if category == 1 { &A_PLANE } else { &YUV_PLANES };
+            let mut src_offset = 0;
+            for plane in planes {
+                let plane = *plane;
+                let plane_index = plane.to_usize().unwrap();
+                let width = self.width(plane);
+                let height = self.height(plane);
+                let plane_size = width * height; // Pixel size does not matter because stride is
+                                                 // the same as width.
+                let src_slice = &source[src_offset..src_offset + plane_size];
+                let dst_slice = &mut self.plane_buffers[plane_index][0..plane_size];
+                dst_slice.copy_from_slice(src_slice);
+                src_offset += plane_size;
+            }
+            return Ok(());
+        }
         if category == 0 || category == 2 {
             let mut src_offset: u64 = 0;
             for plane in YUV_PLANES {
