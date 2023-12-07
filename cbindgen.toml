@@ -12,6 +12,9 @@ usize_is_size_t = true
 "ProgressiveState" = "avifProgressiveState"
 "Source" = "avifDecoderSource"
 "TransferCharacteristics" = "avifTransferCharacteristics"
+"DEFAULT_IMAGE_COUNT_LIMIT" = "AVIF_DEFAULT_IMAGE_COUNT_LIMIT"
+"DEFAULT_IMAGE_DIMENSION_LIMIT" = "AVIF_DEFAULT_IMAGE_DIMENSION_LIMIT"
+"DEFAULT_IMAGE_SIZE_LIMIT" = "AVIF_DEFAULT_IMAGE_SIZE_LIMIT"
 
 [enum]
 rename_variants = "QualifiedScreamingSnakeCase"

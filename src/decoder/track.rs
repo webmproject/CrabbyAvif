@@ -4,6 +4,14 @@ use crate::parser::mp4box::MetaBox;
 use crate::*;
 
 #[derive(Debug, Default)]
+pub enum RepetitionCount {
+    #[default]
+    Unknown,
+    Infinite,
+    Finite(i32),
+}
+
+#[derive(Debug, Default)]
 pub struct Track {
     pub id: u32,
     pub aux_for_id: u32,
@@ -44,15 +52,15 @@ impl Track {
         self.sample_table.as_ref()?.get_properties()
     }
 
-    pub fn repetition_count(&self) -> AvifResult<i32> {
+    pub fn repetition_count(&self) -> AvifResult<RepetitionCount> {
         if !self.elst_seen {
-            return Ok(-2);
+            return Ok(RepetitionCount::Unknown);
         }
         if self.is_repeating {
             if self.track_duration == u64::MAX {
                 // If isRepeating is true and the track duration is unknown/indefinite, then set the
                 // repetition count to infinite(Section 9.6.1 of ISO/IEC 23008-12 Part 12).
-                return Ok(-1);
+                return Ok(RepetitionCount::Infinite);
             } else {
                 // Section 9.6.1. of ISO/IEC 23008-12 Part 12: 1, the entire edit list is repeated a
                 // sufficient number of times to equal the track duration.
@@ -74,10 +82,13 @@ impl Track {
                 };
                 let repetition_count: u64 =
                     (self.track_duration / self.segment_duration) + remainder - 1u64;
-                return Ok(i32::try_from(repetition_count).unwrap_or(-1));
+                return match i32::try_from(repetition_count) {
+                    Ok(value) => Ok(RepetitionCount::Finite(value)),
+                    Err(_) => Ok(RepetitionCount::Infinite),
+                };
             }
         }
-        Ok(0)
+        Ok(RepetitionCount::Finite(0))
     }
 }
 

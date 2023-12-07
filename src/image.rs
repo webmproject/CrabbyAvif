@@ -19,6 +19,7 @@ pub enum Plane {
     A = 3,
 }
 
+/// cbindgen:ignore
 pub const MAX_PLANE_COUNT: usize = 4;
 pub const YUV_PLANES: [Plane; 3] = [Plane::Y, Plane::U, Plane::V];
 pub const A_PLANE: [Plane; 1] = [Plane::A];

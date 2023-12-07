@@ -202,7 +202,7 @@ pub struct Decoder {
     pub timescale: u32,
     pub duration_in_timescales: u64,
     pub duration: f64,
-    pub repetition_count: i32,
+    pub repetition_count: RepetitionCount,
     pub gainmap: GainMap,
     pub gainmap_present: bool,
     items: Items,

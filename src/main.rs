@@ -55,7 +55,7 @@ fn main() {
         println!("timescale: {}", decoder.timescale);
         println!("duration_in_timescales: {}", decoder.duration_in_timescales);
         println!("duration: {}", decoder.duration);
-        println!("repetition_count: {}", decoder.repetition_count);
+        println!("repetition_count: {:#?}", decoder.repetition_count);
         println!("$$$ end decoder public properties $$$\n");
 
         image_count = decoder.image_count;

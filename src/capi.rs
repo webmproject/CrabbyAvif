@@ -10,6 +10,7 @@ use std::ffi::CStr;
 use std::slice;
 
 use crate::decoder::gainmap::*;
+use crate::decoder::track::*;
 use crate::decoder::*;
 use crate::image::*;
 use crate::parser::mp4box::*;
@@ -654,6 +655,12 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
     (*decoder).imageSequenceTrackPresent = to_avifBool(image.image_sequence_track_present);
     (*decoder).progressiveState = image.progressive_state;
     (*decoder).imageCount = rust_decoder.image_count as i32;
+    (*decoder).repetitionCount = match rust_decoder.repetition_count {
+        RepetitionCount::Unknown => AVIF_REPETITION_COUNT_UNKNOWN,
+        RepetitionCount::Infinite => AVIF_REPETITION_COUNT_INFINITE,
+        RepetitionCount::Finite(x) => x,
+    };
+
     if rust_decoder.gainmap_present {
         (*decoder).gainMapPresent = AVIF_TRUE;
         (*decoder).gainmap_image_object = (&rust_decoder.gainmap.image).into();
@@ -684,6 +691,12 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
     (*decoder).imageSequenceTrackPresent = to_avifBool(image.image_sequence_track_present);
     (*decoder).progressiveState = image.progressive_state;
     (*decoder).imageCount = rust_decoder.image_count as i32;
+    (*decoder).repetitionCount = match rust_decoder.repetition_count {
+        RepetitionCount::Unknown => AVIF_REPETITION_COUNT_UNKNOWN,
+        RepetitionCount::Infinite => AVIF_REPETITION_COUNT_INFINITE,
+        RepetitionCount::Finite(x) => x,
+    };
+
     (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
 
     avifResult::Ok
@@ -701,7 +714,12 @@ pub unsafe extern "C" fn avifImageDestroy(_image: *mut avifImage) {
 
 #[no_mangle]
 pub unsafe extern "C" fn avifResultToString(_res: avifResult) -> *const c_char {
-    println!("hello:23232232");
+    println!("hello:2323322");
     // TODO: implement this function.
     std::ptr::null()
 }
+
+// Constants and definitions from libavif that are not used in rust.
+pub const AVIF_PLANE_COUNT_YUV: u8 = 3;
+pub const AVIF_REPETITION_COUNT_INFINITE: i32 = -1;
+pub const AVIF_REPETITION_COUNT_UNKNOWN: i32 = -2;
