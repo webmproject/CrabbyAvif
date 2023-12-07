@@ -90,6 +90,29 @@ impl Track {
         }
         Ok(RepetitionCount::Finite(0))
     }
+
+    pub fn image_timing(&self, image_index: u32) -> AvifResult<ImageTiming> {
+        let sample_table = self.sample_table.as_ref().ok_or(AvifError::NoContent)?;
+        let mut image_timing = ImageTiming {
+            timescale: self.media_timescale as u64,
+            pts_in_timescales: 0,
+            ..ImageTiming::default()
+        };
+        for i in 0..image_index as usize {
+            image_timing.pts_in_timescales += sample_table.image_delta(i) as u64;
+        }
+        image_timing.duration_in_timescales = sample_table.image_delta(image_index as usize) as u64;
+        if image_timing.timescale > 0 {
+            image_timing.pts =
+                image_timing.pts_in_timescales as f64 / image_timing.timescale as f64;
+            image_timing.duration =
+                image_timing.duration_in_timescales as f64 / image_timing.timescale as f64;
+        } else {
+            image_timing.pts = 0.0;
+            image_timing.duration = 0.0;
+        }
+        Ok(image_timing)
+    }
 }
 
 #[derive(Debug)]
@@ -172,4 +195,26 @@ impl SampleTable {
             }
         })
     }
+
+    pub fn image_delta(&self, index: usize) -> u32 {
+        let mut max_index = 0;
+        for (i, time_to_sample) in self.time_to_sample.iter().enumerate() {
+            max_index += time_to_sample.sample_count;
+            if index < max_index as usize || i == self.time_to_sample.len() - 1 {
+                return time_to_sample.sample_delta;
+            }
+        }
+        return 1;
+    }
+}
+
+/// cbindgen:rename-all=CamelCase
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct ImageTiming {
+    pub timescale: u64,
+    pub pts: f64,
+    pub pts_in_timescales: u64,
+    pub duration: f64,
+    pub duration_in_timescales: u64,
 }

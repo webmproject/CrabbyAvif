@@ -1,9 +1,8 @@
 smaller tasks:
-* imagetiming
-[done] * c-api IO
 * yuv -> rgb
 * limited to full
 * one shot decode functions
+* nthimage max extent (used by chromium)
 
 ===
 

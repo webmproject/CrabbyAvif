@@ -199,7 +199,8 @@ pub struct Decoder {
     tiles: [Vec<Tile>; 3],
     image_index: i32,
     pub image_count: u32,
-    pub timescale: u32,
+    pub image_timing: ImageTiming,
+    pub timescale: u64,
     pub duration_in_timescales: u64,
     pub duration: f64,
     pub repetition_count: RepetitionCount,
@@ -211,6 +212,7 @@ pub struct Decoder {
     // could be part of the initialization.
     io: Option<GenericIO>,
     codecs: Vec<Codec>,
+    color_track_id: Option<u32>,
 }
 
 impl Decoder {
@@ -599,6 +601,7 @@ impl Decoder {
                     .iter()
                     .find(|x| x.is_color())
                     .ok_or(AvifError::NoContent)?;
+                self.color_track_id = Some(color_track.id);
                 color_properties = color_track
                     .get_properties()
                     .ok_or(AvifError::BmffParseFailed)?;
@@ -623,7 +626,7 @@ impl Decoder {
 
                 self.image_index = -1;
                 self.image_count = self.tiles[0][0].input.samples.len() as u32;
-                self.timescale = color_track.media_timescale;
+                self.timescale = color_track.media_timescale as u64;
                 self.duration_in_timescales = color_track.media_duration;
                 if self.timescale != 0 {
                     self.duration = (self.duration_in_timescales as f64) / (self.timescale as f64);
@@ -631,11 +634,7 @@ impl Decoder {
                     self.duration = 0.0;
                 }
                 self.repetition_count = color_track.repetition_count()?;
-                // TODO: self.image timing.
-
-                println!("image_count: {}", self.image_count);
-                println!("timescale: {}", self.timescale);
-                println!("duration_in_timescales: {}", self.duration_in_timescales);
+                self.image_timing = Default::default();
 
                 self.image.width = color_track.width;
                 self.image.height = color_track.height;
@@ -711,7 +710,9 @@ impl Decoder {
                 self.image_count = 1;
                 self.timescale = 1;
                 self.duration_in_timescales = 1;
-                // TODO: duration, imagetiming.
+                self.image_timing.timescale = 1;
+                self.image_timing.duration = 1.0;
+                self.image_timing.duration_in_timescales = 1;
 
                 for (index, item_id) in item_ids.iter().enumerate() {
                     if *item_id == 0 {
@@ -1076,8 +1077,24 @@ impl Decoder {
         self.prepare_samples(next_image_index as usize)?;
         self.decode_tiles(next_image_index as usize)?;
         self.image_index = next_image_index;
-        // TODO provide timing info for tracks.
+        self.image_timing = self.nth_image_timing(self.image_index as u32)?;
         Ok(&self.image)
+    }
+
+    pub fn nth_image_timing(&self, n: u32) -> AvifResult<ImageTiming> {
+        if n > self.settings.image_count_limit {
+            return Err(AvifError::NoImagesRemaining);
+        }
+        if self.color_track_id.is_none() {
+            return Ok(self.image_timing);
+        }
+        let color_track_id = self.color_track_id.unwrap();
+        let color_track = self
+            .tracks
+            .iter()
+            .find(|x| x.id == color_track_id)
+            .ok_or(AvifError::NoContent)?;
+        color_track.image_timing(n)
     }
 
     pub fn peek_compatible_file_type(data: &[u8]) -> bool {

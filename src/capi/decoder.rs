@@ -28,7 +28,7 @@ pub struct avifDecoder {
     pub imageIndex: i32,
     pub imageCount: i32,
     pub progressiveState: ProgressiveState,
-    // avifImageTiming imageTiming;
+    imageTiming: ImageTiming,
     pub timescale: u64,
     pub duration: f64,
     pub durationInTimescales: u64,
@@ -71,6 +71,7 @@ impl Default for avifDecoder {
             imageIndex: -1,
             imageCount: 0,
             progressiveState: ProgressiveState::Unavailable,
+            imageTiming: ImageTiming::default(),
             timescale: 0,
             duration: 0.0,
             durationInTimescales: 0,
@@ -193,6 +194,7 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
     (*decoder).alphaPresent = to_avifBool(image.alpha_present);
     (*decoder).imageSequenceTrackPresent = to_avifBool(image.image_sequence_track_present);
     (*decoder).progressiveState = image.progressive_state;
+    (*decoder).imageTiming = rust_decoder.image_timing;
     (*decoder).imageCount = rust_decoder.image_count as i32;
     (*decoder).repetitionCount = match rust_decoder.repetition_count {
         RepetitionCount::Unknown => AVIF_REPETITION_COUNT_UNKNOWN,
@@ -229,6 +231,7 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
     (*decoder).alphaPresent = to_avifBool(image.alpha_present);
     (*decoder).imageSequenceTrackPresent = to_avifBool(image.image_sequence_track_present);
     (*decoder).progressiveState = image.progressive_state;
+    (*decoder).imageTiming = rust_decoder.image_timing;
     (*decoder).imageCount = rust_decoder.image_count as i32;
     (*decoder).repetitionCount = match rust_decoder.repetition_count {
         RepetitionCount::Unknown => AVIF_REPETITION_COUNT_UNKNOWN,
@@ -239,6 +242,20 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
     (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
 
     avifResult::Ok
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifDecoderNthImageTiming(
+    decoder: *const avifDecoder,
+    frameIndex: u32,
+    outTiming: *mut ImageTiming,
+) -> avifResult {
+    let rust_decoder = &(*decoder).rust_decoder;
+    let image_timing = rust_decoder.nth_image_timing(frameIndex);
+    if let Ok(timing) = image_timing {
+        *outTiming = timing;
+    }
+    to_avifResult(&image_timing)
 }
 
 #[no_mangle]

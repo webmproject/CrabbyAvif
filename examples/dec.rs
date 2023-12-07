@@ -59,7 +59,7 @@ fn main() {
         println!("$$$ end decoder public properties $$$\n");
 
         image_count = decoder.image_count;
-        //image_count = 1;
+        //image_count = 3;
         let mut writer: crabby_avif::utils::y4m::Y4MWriter = Default::default();
         //let mut writer: crabby_avif::utils::raw::RawWriter = Default::default();
         writer.filename = Some(args[2].clone());
@@ -71,12 +71,12 @@ fn main() {
                 println!("next_image failed! {:#?}", image);
                 std::process::exit(1);
             }
-
             let ret = writer.write_frame(image.unwrap());
             if !ret {
                 println!("error writing y4m file");
                 std::process::exit(1);
             }
+            println!("timing: {:#?}", decoder.image_timing);
         }
         println!("wrote {} frames into {}", image_count, args[2]);
     }
