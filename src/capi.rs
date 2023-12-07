@@ -440,14 +440,17 @@ pub type avifStrictFlags = u32;
 #[repr(C)]
 pub struct avifDecoderData {}
 
+pub const AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE: usize = 256;
 #[repr(C)]
 pub struct avifDiagnostics {
-    error: [c_char; 256],
+    error: [c_char; AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE],
 }
 
 impl Default for avifDiagnostics {
     fn default() -> Self {
-        Self { error: [0; 256] }
+        Self {
+            error: [0; AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE],
+        }
     }
 }
 
@@ -714,12 +717,40 @@ pub unsafe extern "C" fn avifImageDestroy(_image: *mut avifImage) {
 
 #[no_mangle]
 pub unsafe extern "C" fn avifResultToString(_res: avifResult) -> *const c_char {
-    println!("hello:2323322");
+    println!("hello:23232");
     // TODO: implement this function.
     std::ptr::null()
 }
 
 // Constants and definitions from libavif that are not used in rust.
+
 pub const AVIF_PLANE_COUNT_YUV: u8 = 3;
 pub const AVIF_REPETITION_COUNT_INFINITE: i32 = -1;
 pub const AVIF_REPETITION_COUNT_UNKNOWN: i32 = -2;
+pub const AVIF_XXXXX: i64 = 1;
+pub const AVIF_YYYY: i64 = 1;
+
+/// cbindgen:rename-all=ScreamingSnakeCase
+#[repr(C)]
+pub enum avifPlanesFlag {
+    AvifPlanesYuv = 1 << 0,
+    AvifPlanesA = 1 << 1,
+    AvifPlanesAll = 0xFF,
+}
+pub type avifPlanesFlags = u32;
+
+/// cbindgen:rename-all=ScreamingSnakeCase
+#[repr(C)]
+pub enum avifChannelIndex {
+    AvifChanY = 0,
+    AvifChanU = 1,
+    AvifChanV = 2,
+    AvifChanA = 3,
+}
+
+/// cbindgen:rename-all=ScreamingSnakeCase
+#[repr(C)]
+pub enum avifHeaderFormat {
+    AvifHeaderFull,
+    AvifHeaderReduced,
+}

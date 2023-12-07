@@ -1,6 +1,8 @@
 use crate::decoder::*;
 use crate::*;
 
+pub const MAX_AV1_LAYER_COUNT: usize = 4;
+
 #[derive(Debug, Default)]
 pub struct DecodeSample {
     pub item_id: u32,
@@ -68,7 +70,7 @@ impl Tile {
             image: Image::default(),
             ..Tile::default()
         };
-        let mut layer_sizes: [usize; 4] = [0; 4];
+        let mut layer_sizes: [usize; MAX_AV1_LAYER_COUNT] = [0; MAX_AV1_LAYER_COUNT];
         let mut layer_count: usize = 0;
         let a1lx = item.a1lx();
         let has_a1lx = a1lx.is_some();

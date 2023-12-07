@@ -15,6 +15,15 @@ usize_is_size_t = true
 "DEFAULT_IMAGE_COUNT_LIMIT" = "AVIF_DEFAULT_IMAGE_COUNT_LIMIT"
 "DEFAULT_IMAGE_DIMENSION_LIMIT" = "AVIF_DEFAULT_IMAGE_DIMENSION_LIMIT"
 "DEFAULT_IMAGE_SIZE_LIMIT" = "AVIF_DEFAULT_IMAGE_SIZE_LIMIT"
+"MAX_AV1_LAYER_COUNT" = "AVIF_MAX_AV1_LAYER_COUNT"
 
 [enum]
 rename_variants = "QualifiedScreamingSnakeCase"
+
+[export]
+include = [
+  "avifChannelIndex",
+  "avifHeaderFormat",
+  "avifPlanesFlag",
+  "avifPlanesFlags",
+]
