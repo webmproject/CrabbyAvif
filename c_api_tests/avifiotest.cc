@@ -16,10 +16,14 @@ namespace {
 // Used to pass the data folder path to the GoogleTest suites.
 const char* data_path = nullptr;
 
+std::string get_file_name() {
+  const char* file_name = "colors-animated-8bpc.avif";
+  return std::string(data_path) + file_name;
+}
+
 std::vector<uint8_t> read_file() {
   const char* file_name = "colors-animated-8bpc.avif";
-  std::ifstream file((std::string(data_path) + file_name).c_str(),
-                     std::ios::binary);
+  std::ifstream file(get_file_name().c_str(), std::ios::binary);
   EXPECT_TRUE(file.is_open());
   // Get file size.
   file.seekg(0, std::ios::end);
@@ -81,6 +85,48 @@ TEST(AvifDecodeTest, SetCustomIO) {
   for (int i = 0; i < 5; ++i) {
     EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
   }
+}
+
+TEST(AvifDecodeTest, IOMemoryReader) {
+  auto data = read_file();
+  avifIO* io = avifIOCreateMemoryReader(data.data(), data.size());
+  ASSERT_NE(io, nullptr);
+  EXPECT_EQ(io->sizeHint, data.size());
+  avifROData ro_data;
+  // Read 10 bytes from the beginning.
+  io->read(io, 0, 0, 10, &ro_data);
+  EXPECT_EQ(ro_data.size, 10);
+  for (int i = 0; i < 10; ++i) {
+    EXPECT_EQ(ro_data.data[i], data[i]);
+  }
+  // Read 10 bytes from the middle.
+  io->read(io, 0, 50, 10, &ro_data);
+  EXPECT_EQ(ro_data.size, 10);
+  for (int i = 0; i < 10; ++i) {
+    EXPECT_EQ(ro_data.data[i], data[i + 50]);
+  }
+  avifIODestroy(io);
+}
+
+TEST(AvifDecodeTest, IOFileReader) {
+  auto data = read_file();
+  avifIO* io = avifIOCreateFileReader(get_file_name().c_str());
+  ASSERT_NE(io, nullptr);
+  EXPECT_EQ(io->sizeHint, data.size());
+  avifROData ro_data;
+  // Read 10 bytes from the beginning.
+  io->read(io, 0, 0, 10, &ro_data);
+  EXPECT_EQ(ro_data.size, 10);
+  for (int i = 0; i < 10; ++i) {
+    EXPECT_EQ(ro_data.data[i], data[i]);
+  }
+  // Read 10 bytes from the middle.
+  io->read(io, 0, 50, 10, &ro_data);
+  EXPECT_EQ(ro_data.size, 10);
+  for (int i = 0; i < 10; ++i) {
+    EXPECT_EQ(ro_data.data[i], data[i + 50]);
+  }
+  avifIODestroy(io);
 }
 
 }  // namespace

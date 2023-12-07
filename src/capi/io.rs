@@ -1,7 +1,12 @@
 use super::types::*;
 
+use std::ffi::CStr;
+use std::os::raw::c_char;
 use std::os::raw::c_void;
 
+use crate::decoder::GenericIO;
+use crate::internal_utils::io::DecoderFileIO;
+use crate::internal_utils::io::DecoderRawIO;
 use crate::*;
 
 #[repr(C)]
@@ -44,16 +49,21 @@ impl From<&Vec<u8>> for avifRWData {
     }
 }
 
-pub type avifIODestroyFunc = fn(io: *mut avifIO);
-pub type avifIOReadFunc = fn(
+pub type avifIODestroyFunc = unsafe extern "C" fn(io: *mut avifIO);
+pub type avifIOReadFunc = unsafe extern "C" fn(
     io: *mut avifIO,
     readFlags: u32,
     offset: u64,
     size: usize,
     out: *mut avifROData,
 ) -> avifResult;
-pub type avifIOWriteFunc =
-    fn(io: *mut avifIO, writeFlags: u32, offset: u64, data: *const u8, size: usize) -> avifResult;
+pub type avifIOWriteFunc = unsafe extern "C" fn(
+    io: *mut avifIO,
+    writeFlags: u32,
+    offset: u64,
+    data: *const u8,
+    size: usize,
+) -> avifResult;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -82,13 +92,15 @@ impl avifIOWrapper {
 
 impl crate::decoder::IO for avifIOWrapper {
     fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]> {
-        let res = (self.io.read)(
-            &mut self.io as *mut avifIO,
-            0,
-            offset,
-            size,
-            &mut self.data as *mut avifROData,
-        );
+        let res = unsafe {
+            (self.io.read)(
+                &mut self.io as *mut avifIO,
+                0,
+                offset,
+                size,
+                &mut self.data as *mut avifROData,
+            )
+        };
         if res != avifResult::Ok {
             // TODO: Some other return values may be allowed?
             return Err(AvifError::IoError);
@@ -101,4 +113,93 @@ impl crate::decoder::IO for avifIOWrapper {
     fn persistent(&self) -> bool {
         self.io.persistent != 0
     }
+}
+
+pub struct avifCIOWrapper {
+    io: GenericIO,
+    buf: Vec<u8>,
+}
+
+#[no_mangle]
+unsafe extern "C" fn cioDestroy(_io: *mut avifIO) {}
+
+#[no_mangle]
+unsafe extern "C" fn cioRead(
+    io: *mut avifIO,
+    _readFlags: u32,
+    offset: u64,
+    size: usize,
+    out: *mut avifROData,
+) -> avifResult {
+    if io.is_null() {
+        return avifResult::IoError;
+    }
+    let cio = (*io).data as *mut avifCIOWrapper;
+    match (*cio).io.read(offset, size) {
+        Ok(data) => {
+            (*cio).buf.clear();
+            (*cio).buf.reserve(data.len());
+            (*cio).buf.extend_from_slice(data);
+        }
+        Err(_) => return avifResult::IoError,
+    }
+    (*out).data = (*cio).buf.as_ptr();
+    (*out).size = (*cio).buf.len();
+    return avifResult::Ok;
+}
+
+#[no_mangle]
+unsafe extern "C" fn cioWrite(
+    _io: *mut avifIO,
+    _writeFlags: u32,
+    _offset: u64,
+    _data: *const u8,
+    _size: usize,
+) -> avifResult {
+    return avifResult::Ok;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifIOCreateMemoryReader(data: *const u8, size: usize) -> *mut avifIO {
+    let cio = Box::new(avifCIOWrapper {
+        io: Box::new(DecoderRawIO::create(data, size)),
+        buf: Vec::new(),
+    });
+    let io = Box::new(avifIO {
+        destroy: cioDestroy,
+        read: cioRead,
+        write: cioWrite,
+        sizeHint: size as u64,
+        persistent: 0,
+        data: Box::into_raw(cio) as *mut c_void,
+    });
+    Box::into_raw(io)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifIOCreateFileReader(filename: *const c_char) -> *mut avifIO {
+    let filename = String::from(CStr::from_ptr(filename).to_str().unwrap_or(""));
+    let file_io = match DecoderFileIO::create(&filename) {
+        Ok(x) => x,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let cio = Box::new(avifCIOWrapper {
+        io: Box::new(file_io),
+        buf: Vec::new(),
+    });
+    let io = Box::new(avifIO {
+        destroy: cioDestroy,
+        read: cioRead,
+        write: cioWrite,
+        sizeHint: cio.io.size_hint(),
+        persistent: 0,
+        data: Box::into_raw(cio) as *mut c_void,
+    });
+    Box::into_raw(io)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifIODestroy(io: *mut avifIO) {
+    let _ = Box::from_raw((*io).data as *mut avifCIOWrapper);
+    let _ = Box::from_raw(io);
 }
