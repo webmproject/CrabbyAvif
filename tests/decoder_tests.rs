@@ -288,3 +288,18 @@ fn clli(filename: &str, max_cll: u16, max_pall: u16) {
         assert_eq!(clli.max_pall, max_pall);
     }
 }
+
+#[test]
+fn raw_io() {
+    let data =
+        std::fs::read(get_test_file("colors-animated-8bpc.avif")).expect("Unable to read file");
+    let mut decoder = decoder::Decoder::default();
+    let _ = decoder
+        .set_io_raw(data.as_ptr(), data.len())
+        .expect("Failed to set IO");
+    assert!(decoder.parse().is_ok());
+    assert_eq!(decoder.image_count, 5);
+    for _ in 0..5 {
+        assert!(decoder.next_image().is_ok());
+    }
+}

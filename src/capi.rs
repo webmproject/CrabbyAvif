@@ -4,11 +4,13 @@
 
 use std::os::raw::c_char;
 use std::os::raw::c_int;
+use std::os::raw::c_void;
 
 use std::ffi::CStr;
 
 use std::slice;
 
+use crate::decoder;
 use crate::decoder::gainmap::*;
 use crate::decoder::track::*;
 use crate::decoder::*;
@@ -20,6 +22,15 @@ use crate::*;
 pub struct avifROData {
     pub data: *const u8,
     pub size: usize,
+}
+
+impl Default for avifROData {
+    fn default() -> Self {
+        avifROData {
+            data: std::ptr::null(),
+            size: 0,
+        }
+    }
 }
 
 #[repr(C)]
@@ -589,6 +600,65 @@ fn to_avifResult<T>(res: &AvifResult<T>) -> avifResult {
     }
 }
 
+pub type avifIODestroyFunc = fn(io: *mut avifIO);
+pub type avifIOReadFunc = fn(
+    io: *mut avifIO,
+    readFlags: u32,
+    offset: u64,
+    size: usize,
+    out: *mut avifROData,
+) -> avifResult;
+pub type avifIOWriteFunc =
+    fn(io: *mut avifIO, writeFlags: u32, offset: u64, data: *const u8, size: usize) -> avifResult;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct avifIO {
+    destroy: avifIODestroyFunc,
+    read: avifIOReadFunc,
+    write: avifIOWriteFunc,
+    sizeHint: u64,
+    persistent: avifBool,
+    data: *mut c_void,
+}
+
+pub struct avifIOWrapper {
+    data: avifROData,
+    io: avifIO,
+}
+
+impl avifIOWrapper {
+    pub fn create(io: avifIO) -> Self {
+        Self {
+            io,
+            data: Default::default(),
+        }
+    }
+}
+
+impl decoder::IO for avifIOWrapper {
+    fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]> {
+        let res = (self.io.read)(
+            &mut self.io as *mut avifIO,
+            0,
+            offset,
+            size,
+            &mut self.data as *mut avifROData,
+        );
+        if res != avifResult::Ok {
+            // TODO: Some other return values may be allowed?
+            return Err(AvifError::IoError);
+        }
+        Ok(unsafe { std::slice::from_raw_parts(self.data.data, self.data.size) })
+    }
+    fn size_hint(&self) -> u64 {
+        self.io.sizeHint
+    }
+    fn persistent(&self) -> bool {
+        self.io.persistent != 0
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn avifPeekCompatibleFileType(input: *const avifROData) -> avifBool {
     let data = slice::from_raw_parts((*input).data, (*input).size);
@@ -601,14 +671,29 @@ pub unsafe extern "C" fn avifDecoderCreate() -> *mut avifDecoder {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn avifDecoderSetIO(decoder: *mut avifDecoder, io: *mut avifIO) {
+    let rust_decoder = &mut (*decoder).rust_decoder;
+    rust_decoder.set_io(Box::new(avifIOWrapper::create(*io)));
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn avifDecoderSetIOFile(
     decoder: *mut avifDecoder,
     filename: *const c_char,
 ) -> avifResult {
     let rust_decoder = &mut (*decoder).rust_decoder;
-    let filename = CStr::from_ptr(filename).to_str().unwrap_or("");
-    let filename = String::from(filename);
+    let filename = String::from(CStr::from_ptr(filename).to_str().unwrap_or(""));
     to_avifResult(&rust_decoder.set_io_file(&filename))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifDecoderSetIOMemory(
+    decoder: *mut avifDecoder,
+    data: *const u8,
+    size: usize,
+) -> avifResult {
+    let rust_decoder = &mut (*decoder).rust_decoder;
+    to_avifResult(&rust_decoder.set_io_raw(data, size))
 }
 
 #[no_mangle]

@@ -1,6 +1,8 @@
 use crate::decoder;
+use crate::internal_utils::*;
 use crate::AvifError;
 use crate::AvifResult;
+
 use std::fs::File;
 use std::os::unix::fs::FileExt; // TODO: what happens when this is compiled for windows?
 
@@ -62,5 +64,43 @@ impl decoder::IO for DecoderFileIO {
 
     fn persistent(&self) -> bool {
         false
+    }
+}
+
+pub struct DecoderRawIO<'a> {
+    pub data: &'a [u8],
+}
+
+impl DecoderRawIO<'_> {
+    pub fn create(data: *const u8, size: usize) -> Self {
+        Self {
+            data: unsafe { std::slice::from_raw_parts(data, size) },
+        }
+    }
+}
+
+impl decoder::IO for DecoderRawIO<'_> {
+    fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]> {
+        let data_len = self.data.len() as u64;
+        if offset > data_len {
+            return Err(AvifError::IoError);
+        }
+        let available_size: usize = (data_len - offset) as usize;
+        let size_to_read: usize = if size > available_size {
+            available_size
+        } else {
+            size
+        };
+        let slice_start = usize_from_u64(offset)?;
+        let slice_end = slice_start + size_to_read;
+        Ok(&self.data[slice_start..slice_end])
+    }
+
+    fn size_hint(&self) -> u64 {
+        self.data.len() as u64
+    }
+
+    fn persistent(&self) -> bool {
+        true
     }
 }

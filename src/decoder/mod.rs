@@ -219,9 +219,14 @@ impl Decoder {
         Ok(())
     }
 
-    pub fn set_io(&mut self, io: GenericIO) -> AvifResult<()> {
-        self.io = Some(io);
+    // This has an unsafe block and is intended for use only from the C API.
+    pub fn set_io_raw(&mut self, data: *const u8, size: usize) -> AvifResult<()> {
+        self.io = Some(Box::new(DecoderRawIO::create(data, size)));
         Ok(())
+    }
+
+    pub fn set_io(&mut self, io: GenericIO) {
+        self.io = Some(io);
     }
 
     #[allow(non_snake_case)]
