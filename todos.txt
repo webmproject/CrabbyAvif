@@ -1,9 +1,14 @@
 smaller tasks:
 * imagetiming
-* c-api IO
+[done] * c-api IO
 * yuv -> rgb
 * limited to full
 * one shot decode functions
+
+===
+
+tensorflow io libavif usage is wrong: missing setio call.
+https://github.com/tensorflow/io/blob/master/tensorflow_io/core/kernels/image_avif_kernels.cc
 
 ===
 
