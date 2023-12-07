@@ -766,7 +766,7 @@ pub unsafe extern "C" fn avifGetPixelFormatInfo(
     format: avifPixelFormat,
     info: *mut avifPixelFormatInfo,
 ) {
-    if info == std::ptr::null_mut() {
+    if info.is_null() {
         return;
     }
     let info = &mut (*info);
@@ -793,4 +793,12 @@ pub unsafe extern "C" fn avifGetPixelFormatInfo(
         }
         _ => {}
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifDiagnosticsClearError(diag: *mut avifDiagnostics) {
+    if diag.is_null() {
+        return;
+    }
+    (*diag).error[0] = 0;
 }
