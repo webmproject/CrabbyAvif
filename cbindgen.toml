@@ -23,7 +23,10 @@ rename_variants = "QualifiedScreamingSnakeCase"
 [export]
 include = [
   "avifChannelIndex",
+  "avifCodecFlag",
+  "avifCodecFlags",
   "avifHeaderFormat",
   "avifPlanesFlag",
   "avifPlanesFlags",
+  "avifStrictFlag",
 ]

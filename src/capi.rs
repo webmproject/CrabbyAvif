@@ -149,6 +149,28 @@ impl From<PixelFormat> for avifPixelFormat {
     }
 }
 
+impl avifPixelFormat {
+    // TODO: these functions can be removed if avifPixelFormat can be aliased to PixelFormat (with
+    // constants None and Count.
+    fn is_monochrome(&self) -> bool {
+        matches!(self, Self::Yuv400)
+    }
+
+    fn chroma_shift_x(&self) -> u32 {
+        match self {
+            Self::Yuv422 | Self::Yuv420 => 1,
+            _ => 0,
+        }
+    }
+
+    fn chroma_shift_y(&self) -> u32 {
+        match self {
+            Self::Yuv420 => 1,
+            _ => 0,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Debug)]
 pub enum avifRange {
@@ -331,8 +353,8 @@ pub struct avifImage {
     yuvFormat: avifPixelFormat,
     yuvRange: avifRange,
     yuvChromaSamplePosition: ChromaSamplePosition,
-    yuvPlanes: [*mut u8; 3],
-    yuvRowBytes: [u32; 3],
+    yuvPlanes: [*mut u8; AVIF_PLANE_COUNT_YUV],
+    yuvRowBytes: [u32; AVIF_PLANE_COUNT_YUV],
     imageOwnsYUVPlanes: avifBool,
 
     alphaPlane: *mut u8,
@@ -346,7 +368,7 @@ pub struct avifImage {
     matrixCoefficients: MatrixCoefficients,
 
     clli: avifContentLightLevelInformationBox,
-    // avifTransformFlags transformFlags;
+    // TODO: avifTransformFlags transformFlags;
     pasp: avifPixelAspectRatioBox,
     clap: avifCleanApertureBox,
     irot: avifImageRotation,
@@ -469,11 +491,11 @@ pub enum avifCodecChoice {
 
 #[repr(C)]
 pub struct avifDecoder {
-    codecChoice: avifCodecChoice,
+    pub codecChoice: avifCodecChoice,
     pub maxThreads: i32,
     pub requestedSource: Source,
-    pub allowIncremental: avifBool,
     pub allowProgressive: avifBool,
+    pub allowIncremental: avifBool,
     pub ignoreExif: avifBool,
     pub ignoreXMP: avifBool,
     pub imageSizeLimit: u32,
@@ -494,13 +516,13 @@ pub struct avifDecoder {
 
     pub alphaPresent: avifBool,
 
-    //avifIOStats ioStats;
+    pub ioStats: avifIOStats,
     pub diag: avifDiagnostics,
     //avifIO * io;
-    data: *mut avifDecoderData,
-    gainMapPresent: avifBool,
-    enableDecodingGainMap: avifBool,
-    enableParsingGainMapMetadata: avifBool,
+    pub data: *mut avifDecoderData,
+    pub gainMapPresent: avifBool,
+    pub enableDecodingGainMap: avifBool,
+    pub enableParsingGainMapMetadata: avifBool,
     // avifBool ignoreColorAndAlpha;
     pub imageSequenceTrackPresent: avifBool,
 
@@ -534,6 +556,7 @@ impl Default for avifDecoder {
             durationInTimescales: 0,
             repetitionCount: 0,
             alphaPresent: AVIF_FALSE,
+            ioStats: Default::default(),
             diag: avifDiagnostics::default(),
             data: std::ptr::null_mut(),
             gainMapPresent: AVIF_FALSE,
@@ -714,7 +737,7 @@ pub unsafe extern "C" fn avifDecoderDestroy(decoder: *mut avifDecoder) {
 
 #[no_mangle]
 pub unsafe extern "C" fn avifImageDestroy(_image: *mut avifImage) {
-    // Nothing to do.
+    // TODO: implement.
 }
 
 #[no_mangle]
@@ -725,7 +748,7 @@ pub unsafe extern "C" fn avifResultToString(_res: avifResult) -> *const c_char {
 
 // Constants and definitions from libavif that are not used in rust.
 
-pub const AVIF_PLANE_COUNT_YUV: u8 = 3;
+pub const AVIF_PLANE_COUNT_YUV: usize = 3;
 pub const AVIF_REPETITION_COUNT_INFINITE: i32 = -1;
 pub const AVIF_REPETITION_COUNT_UNKNOWN: i32 = -2;
 
@@ -801,4 +824,106 @@ pub unsafe extern "C" fn avifDiagnosticsClearError(diag: *mut avifDiagnostics) {
         return;
     }
     (*diag).error[0] = 0;
+}
+
+#[repr(C)]
+pub enum avifCodecFlag {
+    CanDecode = (1 << 0),
+    CanEncode = (1 << 1),
+}
+pub type avifCodecFlags = u32;
+
+// TODO: This can be moved into the rust layer and renamed.
+#[repr(C)]
+#[derive(Default)]
+pub struct avifIOStats {
+    colorOBUSize: usize,
+    alphaOBUSize: usize,
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifImageUsesU16(image: *const avifImage) -> avifBool {
+    to_avifBool(!image.is_null() && (*image).depth > 8)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifImageIsOpaque(image: *const avifImage) -> avifBool {
+    // TODO: Check for pixel level opacity as well.
+    to_avifBool(!image.is_null() && !(*image).alphaPlane.is_null())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifImagePlane(image: *const avifImage, channel: c_int) -> *mut u8 {
+    if image.is_null() {
+        return std::ptr::null_mut();
+    }
+    match channel {
+        0 | 1 | 2 => (*image).yuvPlanes[channel as usize],
+        3 => (*image).alphaPlane,
+        _ => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifImagePlaneRowBytes(image: *const avifImage, channel: c_int) -> u32 {
+    if image.is_null() {
+        return 0;
+    }
+    match channel {
+        0 | 1 | 2 => (*image).yuvRowBytes[channel as usize],
+        3 => (*image).alphaRowBytes,
+        _ => 0,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifImagePlaneWidth(image: *const avifImage, channel: c_int) -> u32 {
+    if image.is_null() {
+        return 0;
+    }
+    match channel {
+        0 => (*image).width,
+        1 | 2 => {
+            if (*image).yuvFormat.is_monochrome() {
+                0
+            } else {
+                let shift_x = (*image).yuvFormat.chroma_shift_x();
+                ((*image).width + shift_x) >> shift_x
+            }
+        }
+        3 => {
+            if !(*image).alphaPlane.is_null() {
+                (*image).width
+            } else {
+                0
+            }
+        }
+        _ => 0,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifImagePlaneHeight(image: *const avifImage, channel: c_int) -> u32 {
+    if image.is_null() {
+        return 0;
+    }
+    match channel {
+        0 => (*image).height,
+        1 | 2 => {
+            if (*image).yuvFormat.is_monochrome() {
+                0
+            } else {
+                let shift_y = (*image).yuvFormat.chroma_shift_y();
+                ((*image).height + shift_y) >> shift_y
+            }
+        }
+        3 => {
+            if !(*image).alphaPlane.is_null() {
+                (*image).height
+            } else {
+                0
+            }
+        }
+        _ => 0,
+    }
 }
