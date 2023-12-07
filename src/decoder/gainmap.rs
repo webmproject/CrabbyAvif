@@ -27,8 +27,8 @@ pub struct GainMap {
     pub alt_matrix_coefficients: MatrixCoefficients,
     pub alt_full_range: bool,
 
-    pub alt_clli: ContentLightLevelInformation,
-
     pub alt_plane_count: u8,
     pub alt_plane_depth: u8,
+
+    pub alt_clli: ContentLightLevelInformation,
 }

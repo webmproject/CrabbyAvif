@@ -238,7 +238,7 @@ pub struct avifGainMap {
     altYUVRange: avifRange,
     altDepth: u32,
     altPlaneCount: u32,
-    //avifContentLightLevelInformationBox altCLLI;
+    altCLLI: avifContentLightLevelInformationBox,
 }
 
 impl Default for avifGainMap {
@@ -253,6 +253,7 @@ impl Default for avifGainMap {
             altYUVRange: avifRange::Full,
             altDepth: 0,
             altPlaneCount: 0,
+            altCLLI: Default::default(),
         }
     }
 }
@@ -268,6 +269,7 @@ impl From<&GainMap> for avifGainMap {
             altYUVRange: gainmap.alt_full_range.into(),
             altDepth: u32::from(gainmap.alt_plane_depth),
             altPlaneCount: u32::from(gainmap.alt_plane_count),
+            altCLLI: gainmap.alt_clli,
             ..Self::default()
         }
     }
@@ -726,8 +728,6 @@ pub unsafe extern "C" fn avifResultToString(_res: avifResult) -> *const c_char {
 pub const AVIF_PLANE_COUNT_YUV: u8 = 3;
 pub const AVIF_REPETITION_COUNT_INFINITE: i32 = -1;
 pub const AVIF_REPETITION_COUNT_UNKNOWN: i32 = -2;
-pub const AVIF_XXXXX: i64 = 1;
-pub const AVIF_YYYY: i64 = 1;
 
 /// cbindgen:rename-all=ScreamingSnakeCase
 #[repr(C)]
