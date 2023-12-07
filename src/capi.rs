@@ -717,7 +717,6 @@ pub unsafe extern "C" fn avifImageDestroy(_image: *mut avifImage) {
 
 #[no_mangle]
 pub unsafe extern "C" fn avifResultToString(_res: avifResult) -> *const c_char {
-    println!("hello:23232");
     // TODO: implement this function.
     std::ptr::null()
 }
@@ -753,4 +752,45 @@ pub enum avifChannelIndex {
 pub enum avifHeaderFormat {
     AvifHeaderFull,
     AvifHeaderReduced,
+}
+
+#[repr(C)]
+pub struct avifPixelFormatInfo {
+    monochrome: avifBool,
+    chromaShiftX: c_int,
+    chromaShiftY: c_int,
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifGetPixelFormatInfo(
+    format: avifPixelFormat,
+    info: *mut avifPixelFormatInfo,
+) {
+    if info == std::ptr::null_mut() {
+        return;
+    }
+    let info = &mut (*info);
+    match format {
+        avifPixelFormat::Yuv444 => {
+            info.chromaShiftX = 0;
+            info.chromaShiftY = 0;
+            info.monochrome = AVIF_FALSE;
+        }
+        avifPixelFormat::Yuv422 => {
+            info.chromaShiftX = 1;
+            info.chromaShiftY = 0;
+            info.monochrome = AVIF_FALSE;
+        }
+        avifPixelFormat::Yuv420 => {
+            info.chromaShiftX = 1;
+            info.chromaShiftY = 1;
+            info.monochrome = AVIF_FALSE;
+        }
+        avifPixelFormat::Yuv400 => {
+            info.chromaShiftX = 1;
+            info.chromaShiftY = 1;
+            info.monochrome = AVIF_TRUE;
+        }
+        _ => {}
+    }
 }
