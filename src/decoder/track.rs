@@ -77,7 +77,7 @@ impl Track {
                 return Ok(i32::try_from(repetition_count).unwrap_or(-1));
             }
         }
-        return Ok(0);
+        Ok(0)
     }
 }
 

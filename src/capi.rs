@@ -451,8 +451,19 @@ impl Default for avifDiagnostics {
 }
 
 #[repr(C)]
+pub enum avifCodecChoice {
+    Auto = 0,
+    Aom = 1,
+    Dav1d = 2,
+    Libgav1 = 3,
+    Rav1e = 4,
+    Svt = 5,
+    Avm = 6,
+}
+
+#[repr(C)]
 pub struct avifDecoder {
-    // avifCodecChoice codecChoice;
+    codecChoice: avifCodecChoice,
     pub maxThreads: i32,
     pub requestedSource: Source,
     pub allowIncremental: avifBool,
@@ -497,6 +508,7 @@ pub struct avifDecoder {
 impl Default for avifDecoder {
     fn default() -> Self {
         Self {
+            codecChoice: avifCodecChoice::Auto,
             maxThreads: 1,
             requestedSource: Source::Auto,
             allowIncremental: AVIF_FALSE,
@@ -607,10 +619,16 @@ impl From<&avifDecoder> for Settings {
             ignore_xmp: decoder.ignoreXMP == AVIF_TRUE,
             enable_decoding_gainmap: decoder.enableDecodingGainMap == AVIF_TRUE,
             enable_parsing_gainmap_metadata: decoder.enableParsingGainMapMetadata == AVIF_TRUE,
+            codec_choice: match decoder.codecChoice {
+                avifCodecChoice::Auto => CodecChoice::Auto,
+                avifCodecChoice::Dav1d => CodecChoice::Dav1d,
+                avifCodecChoice::Libgav1 => CodecChoice::Libgav1,
+                // Silently treat all other choices the same as Auto.
+                _ => CodecChoice::Auto,
+            },
             image_size_limit: decoder.imageSizeLimit,
             image_dimension_limit: decoder.imageDimensionLimit,
             image_count_limit: decoder.imageCountLimit,
-            ..Self::default()
         }
     }
 }

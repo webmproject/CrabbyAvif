@@ -1,3 +1,8 @@
+// Build the required native library bindings.
+
+// Not everything in this file is used in all the configurations.
+#![allow(dead_code, unused_variables)]
+
 use std::env;
 use std::path::Path;
 use std::path::PathBuf;

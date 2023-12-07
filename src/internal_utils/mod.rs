@@ -104,5 +104,5 @@ pub fn check_limits(width: u32, height: u32, size_limit: u32, dimension_limit: u
     if dimension_limit != 0 && (width > dimension_limit || height > dimension_limit) {
         return false;
     }
-    return true;
+    true
 }
