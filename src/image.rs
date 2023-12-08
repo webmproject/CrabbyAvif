@@ -2,6 +2,7 @@ use crate::decoder::tile::TileInfo;
 use crate::decoder::ProgressiveState;
 use crate::internal_utils::*;
 use crate::parser::mp4box::*;
+use crate::utils::clap::CleanAperture;
 use crate::*;
 
 use num_derive::ToPrimitive;

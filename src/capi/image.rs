@@ -4,6 +4,7 @@ use super::types::*;
 
 use crate::image::*;
 use crate::parser::mp4box::*;
+use crate::utils::clap::*;
 use crate::*;
 
 use std::os::raw::c_int;

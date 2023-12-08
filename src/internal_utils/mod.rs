@@ -2,6 +2,7 @@ pub mod io;
 pub mod stream;
 
 use crate::parser::mp4box::*;
+use crate::utils::clap::*;
 use crate::*;
 
 pub type Fraction = (i32, u32);

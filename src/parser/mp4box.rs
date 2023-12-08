@@ -4,6 +4,7 @@ use crate::decoder::GenericIO;
 use crate::image::MAX_PLANE_COUNT;
 use crate::internal_utils::stream::*;
 use crate::internal_utils::*;
+use crate::utils::clap::CleanAperture;
 use crate::*;
 
 use std::collections::HashSet;
@@ -136,15 +137,6 @@ pub enum ColorInformation {
 pub struct PixelAspectRatio {
     pub h_spacing: u32,
     pub v_spacing: u32,
-}
-
-#[derive(Debug, Clone, Copy)]
-#[allow(unused)]
-pub struct CleanAperture {
-    pub width: UFraction,
-    pub height: UFraction,
-    pub horiz_off: UFraction,
-    pub vert_off: UFraction,
 }
 
 /// cbindgen:field-names=[maxCLL, maxPALL]
