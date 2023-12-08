@@ -156,11 +156,11 @@ impl IStream<'_> {
     }
 
     pub fn read_fraction(&mut self) -> AvifResult<Fraction> {
-        Ok((self.read_i32()?, self.read_u32()?))
+        Ok(Fraction(self.read_i32()?, self.read_u32()?))
     }
 
     pub fn read_ufraction(&mut self) -> AvifResult<UFraction> {
-        Ok((self.read_u32()?, self.read_u32()?))
+        Ok(UFraction(self.read_u32()?, self.read_u32()?))
     }
 
     pub fn read_string(&mut self, size: usize) -> AvifResult<String> {
