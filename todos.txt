@@ -3,6 +3,7 @@ smaller tasks:
 * limited to full
 * one shot decode functions
 * nthimage max extent (used by chromium)
+* image creation functions
 
 ===
 

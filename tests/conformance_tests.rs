@@ -96,7 +96,9 @@ fn compare_files(file1: &String, file2: &String) -> bool {
     true
 }
 
-fn decode_and_verify(expected_info: &ExpectedImageInfo) {
+#[test_case::test_matrix(0usize..172)]
+fn test_conformance(index: usize) {
+    let expected_info = &EXPECTED_INFOS[index];
     let filename = String::from(format!("{TEST_DATA_PATH}/{}", expected_info.filename));
     let mut decoder = decoder::Decoder::default();
     decoder.settings.strictness = decoder::Strictness::None;
@@ -108,6 +110,7 @@ fn decode_and_verify(expected_info: &ExpectedImageInfo) {
     let res = decoder.next_image();
     assert!(res.is_ok());
     let image = res.unwrap();
+
     // Link-U 422 files have wrong subsampling in the Avif header(decoded one
     // is right).
     if !filename.contains("Link-U") || !filename.contains("yuv422") {
@@ -2364,17 +2367,3 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         matrix_coefficients: 2,
     },
 ];
-
-macro_rules! generate_tests {
-    ($from: expr, $to: expr) => {
-        seq_macro::seq!(N in $from..$to {
-            #(#[test_case::test_case(N)])*
-            fn test_conformance(index: usize) {
-                decode_and_verify(&EXPECTED_INFOS[index]);
-            }
-        });
-    };
-}
-
-generate_tests!(0, 172);
-//generate_tests!(102, 103);
