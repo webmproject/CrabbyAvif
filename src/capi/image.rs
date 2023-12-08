@@ -79,7 +79,7 @@ pub struct avifImage {
     pub matrixCoefficients: MatrixCoefficients,
 
     pub clli: avifContentLightLevelInformationBox,
-    // TODO: avifTransformFlags transformFlags;
+    pub transformFlags: avifTransformFlags,
     pub pasp: avifPixelAspectRatioBox,
     pub clap: avifCleanApertureBox,
     pub irot: avifImageRotation,
@@ -111,6 +111,7 @@ impl Default for avifImage {
             transferCharacteristics: Default::default(),
             matrixCoefficients: Default::default(),
             clli: Default::default(),
+            transformFlags: AVIF_TRANSFORM_NONE,
             pasp: Default::default(),
             clap: Default::default(),
             irot: Default::default(),
@@ -137,6 +138,22 @@ impl From<&Image> for avifImage {
             transferCharacteristics: image.transfer_characteristics,
             matrixCoefficients: image.matrix_coefficients,
             clli: image.clli.unwrap_or_default(),
+            transformFlags: {
+                let mut flags = 0;
+                if image.pasp.is_some() {
+                    flags |= AVIF_TRANSFORM_PASP;
+                }
+                if image.clap.is_some() {
+                    flags |= AVIF_TRANSFORM_CLAP;
+                }
+                if image.irot_angle.is_some() {
+                    flags |= AVIF_TRANSFORM_IROT;
+                }
+                if image.imir_axis.is_some() {
+                    flags |= AVIF_TRANSFORM_IMIR;
+                }
+                flags
+            },
             pasp: image.pasp.unwrap_or_default(),
             clap: (&image.clap).into(),
             irot: avifImageRotation {

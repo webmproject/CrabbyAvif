@@ -297,3 +297,10 @@ pub struct avifIOStats {
     colorOBUSize: usize,
     alphaOBUSize: usize,
 }
+
+pub const AVIF_TRANSFORM_NONE: u32 = 0;
+pub const AVIF_TRANSFORM_PASP: u32 = 1 << 0;
+pub const AVIF_TRANSFORM_CLAP: u32 = 1 << 1;
+pub const AVIF_TRANSFORM_IROT: u32 = 1 << 2;
+pub const AVIF_TRANSFORM_IMIR: u32 = 1 << 3;
+pub type avifTransformFlags = u32;
