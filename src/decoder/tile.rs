@@ -10,13 +10,20 @@ pub struct DecodeSample {
     pub size: usize,
     pub spatial_id: u8,
     pub sync: bool,
-    pub data_buffer: Option<Vec<u8>>,
 }
 
 impl DecodeSample {
-    pub fn data<'a>(&'a self, io: &'a mut Box<impl decoder::IO + ?Sized>) -> AvifResult<&[u8]> {
-        match &self.data_buffer {
-            Some(data_buffer) => Ok(data_buffer),
+    pub fn data<'a>(
+        &'a self,
+        io: &'a mut Box<impl decoder::IO + ?Sized>,
+        buffer: &'a Option<Vec<u8>>,
+    ) -> AvifResult<&[u8]> {
+        match buffer {
+            Some(x) => {
+                let start_offset = usize_from_u64(self.offset)?;
+                let end_offset = start_offset + self.size;
+                Ok(&x[start_offset..end_offset])
+            }
             None => io.read(self.offset, self.size),
         }
     }
@@ -116,9 +123,9 @@ impl Tile {
         // lsel.
         item.progressive = has_a1lx && (!has_lsel || lsel == 0xFFFF);
         if has_lsel && lsel != 0xFFFF {
-            // Layer selection. This requires that the underlying AV1 codec decodes all layers, and then
-            // only returns the requested layer as a single frame. To the user of libavif, this appears
-            // to be a single frame.
+            // Layer selection. This requires that the underlying AV1 codec decodes all layers, and
+            // then only returns the requested layer as a single frame. To the user of libavif,
+            // this appears to be a single frame.
             tile.input.all_layers = true;
             let mut sample_size: usize = 0;
             let layer_id = usize_from_u16(lsel)?;
@@ -148,7 +155,6 @@ impl Tile {
                 size: sample_size,
                 spatial_id: lsel as u8,
                 sync: true,
-                data_buffer: None,
             };
             tile.input.samples.push(sample);
         } else if item.progressive && allow_progressive {
@@ -167,7 +173,6 @@ impl Tile {
                     size: *layer_size,
                     spatial_id: 0xff,
                     sync: i == 0, // Assume all layers depend on the first layer.
-                    data_buffer: None,
                 };
                 tile.input.samples.push(sample);
                 offset += *layer_size as u64;
@@ -179,11 +184,10 @@ impl Tile {
                 item_id: item.id,
                 offset: 0,
                 size: item.size,
-                // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel value for "do not
-                // filter by spatial_id"
+                // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel value for
+                // "do not filter by spatial_id"
                 spatial_id: 0xff,
                 sync: true,
-                data_buffer: None,
             };
             tile.input.samples.push(sample);
         }
@@ -236,7 +240,6 @@ impl Tile {
                     spatial_id: 0xff,
                     // Assume first sample is always sync (in case stss box was missing).
                     sync: tile.input.samples.is_empty(),
-                    data_buffer: None,
                 };
                 tile.input.samples.push(sample);
                 sample_offset = sample_offset

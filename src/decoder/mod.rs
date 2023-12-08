@@ -474,7 +474,12 @@ impl Decoder {
         self.prepare_sample(0, 0, 0)?;
         let io = &mut self.io.as_mut().unwrap();
         let sample = &self.tiles[0][0].input.samples[0];
-        match Av1SequenceHeader::parse_from_obus(sample.data(io)?) {
+        let item_data_buffer = if sample.item_id == 0 {
+            &None
+        } else {
+            &self.items.get(&sample.item_id).unwrap().data_buffer
+        };
+        match Av1SequenceHeader::parse_from_obus(sample.data(io, &item_data_buffer)?) {
             Ok(sequence_header) => {
                 self.image.color_primaries = sequence_header.color_primaries;
                 self.image.transfer_characteristics = sequence_header.transfer_characteristics;
@@ -944,7 +949,6 @@ impl Decoder {
         category: usize,
         tile_index: usize,
     ) -> AvifResult<()> {
-        // TODO: this function can probably be moved into DecodeSample.data().
         // println!(
         //     "prepare sample: image_index {image_index} category {category} tile_index {tile_index}"
         // );
@@ -962,15 +966,16 @@ impl Decoder {
         // TODO: the rest of the code can be in sample struct.
         let item = self
             .items
-            .get(&sample.item_id)
+            .get_mut(&sample.item_id)
             .ok_or(AvifError::BmffParseFailed)?;
         if item.extents.len() == 1 {
             // Item has only one extent. Nothing to prepare.
+            // TODO: does this overwrite the offset written in lsel?
             sample.offset = item.data_offset();
             return Ok(());
         }
         // Item has multiple extents, merge them into a contiguous buffer.
-        if sample.data_buffer.is_some() {
+        if item.data_buffer.is_some() {
             // Extents have already been merged.
             return Ok(());
         }
@@ -981,7 +986,7 @@ impl Decoder {
             // TODO: check if enough bytes were actually read.
             data.extend_from_slice(io.read(extent.offset, usize_from_u64(extent.length)?)?);
         }
-        sample.data_buffer = Some(data);
+        item.data_buffer = Some(data);
         Ok(())
     }
 
@@ -1011,8 +1016,13 @@ impl Decoder {
                 // TODO: is this explicit block necessary?
                 {
                     let codec = &mut self.codecs[tile.codec_index];
+                    let item_data_buffer = if sample.item_id == 0 {
+                        &None
+                    } else {
+                        &self.items.get(&sample.item_id).unwrap().data_buffer
+                    };
                     codec.get_next_image(
-                        sample.data(io)?,
+                        sample.data(io, &item_data_buffer)?,
                         sample.spatial_id,
                         &mut tile.image,
                         category,

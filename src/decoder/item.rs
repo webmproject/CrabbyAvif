@@ -26,6 +26,7 @@ pub struct Item {
     pub progressive: bool,
     pub idat: Vec<u8>,
     pub grid_item_ids: Vec<u32>,
+    pub data_buffer: Option<Vec<u8>>,
 }
 
 macro_rules! find_property {
