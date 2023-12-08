@@ -179,8 +179,6 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
     let rust_decoder = &mut (*decoder).rust_decoder;
     rust_decoder.settings = (&(*decoder)).into();
 
-    println!("settings: {:#?}", rust_decoder.settings);
-
     let res = rust_decoder.parse();
     if res.is_err() {
         return to_avifResult(&res);

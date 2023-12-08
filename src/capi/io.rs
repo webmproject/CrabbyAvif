@@ -49,6 +49,50 @@ impl From<&Vec<u8>> for avifRWData {
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn avifRWDataRealloc(raw: *mut avifRWData, newSize: usize) -> avifResult {
+    if (*raw).size == newSize {
+        return avifResult::Ok;
+    }
+    // Ok to use size as capacity here since we use reserve_exact.
+    let mut newData: Vec<u8> = Vec::new();
+    newData.reserve_exact(newSize);
+    if !(*raw).data.is_null() {
+        let oldData = Box::from_raw(std::slice::from_raw_parts_mut((*raw).data, (*raw).size));
+        let sizeToCopy = std::cmp::min(newSize, oldData.len());
+        newData.extend_from_slice(&oldData[..sizeToCopy]);
+    }
+    newData.resize(newSize, 0);
+    let mut b = newData.into_boxed_slice();
+    (*raw).data = b.as_mut_ptr();
+    std::mem::forget(b);
+    (*raw).size = newSize;
+    return avifResult::Ok;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifRWDataSet(
+    raw: *mut avifRWData,
+    data: *const u8,
+    size: usize,
+) -> avifResult {
+    if size != 0 {
+        let res = avifRWDataRealloc(raw, size);
+        if res != avifResult::Ok {
+            return res;
+        }
+        std::ptr::copy_nonoverlapping(data, (*raw).data, size);
+    } else {
+        avifRWDataFree(raw);
+    }
+    return avifResult::Ok;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifRWDataFree(raw: *mut avifRWData) {
+    let _ = Box::from_raw(std::slice::from_raw_parts_mut((*raw).data, (*raw).size));
+}
+
 pub type avifIODestroyFunc = unsafe extern "C" fn(io: *mut avifIO);
 pub type avifIOReadFunc = unsafe extern "C" fn(
     io: *mut avifIO,
