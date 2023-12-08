@@ -702,7 +702,7 @@ impl Decoder {
                     println!("gainmap: {:#?}", self.gainmap);
                 }
 
-                println!("item ids: {:#?}", item_ids);
+                //println!("item ids: {:#?}", item_ids);
 
                 self.search_exif_or_xmp_metadata(item_ids[0])?;
 
@@ -898,6 +898,9 @@ impl Decoder {
     }
 
     fn create_codecs(&mut self) -> AvifResult<()> {
+        if !self.codecs.is_empty() {
+            return Ok(());
+        }
         if matches!(self.source, Source::Tracks) {
             // In this case, we will use at most two codec instances (one for the color planes and
             // one for the alpha plane). Gain maps are not supported.
@@ -958,13 +961,15 @@ impl Decoder {
                 .items
                 .get(&sample.item_id)
                 .ok_or(AvifError::BmffParseFailed)?;
-            if item.extents.len() > 1 {
+            if item.extents.len() > 1 || true {
                 // Item has multiple extents, merge them into a contiguous buffer.
+                // TODO: When len == 1, this copy can be avoided.
                 if sample.data_buffer.is_none() {
                     let mut data: Vec<u8> = Vec::new();
                     data.reserve(item.size);
                     for extent in &item.extents {
                         let io = self.io.as_mut().unwrap();
+                        // TODO: check if enough bytes were actually read.
                         data.extend_from_slice(
                             io.read(extent.offset, usize_from_u64(extent.length)?)?,
                         );
@@ -975,7 +980,16 @@ impl Decoder {
                 sample.offset = item.data_offset();
             }
         } else {
-            // TODO: handle tracks.
+            // TODO: add sizehint failure check.
+            let mut data = Vec::new();
+            data.reserve(sample.size);
+            let io = self.io.as_mut().unwrap();
+            // TODO: avoid this copy if persistent is allowed.
+            data.extend_from_slice(io.read(sample.offset, sample.size)?);
+            if data.len() != sample.size {
+                return Err(AvifError::TruncatedData);
+            }
+            sample.data_buffer = Some(data);
         }
         Ok(())
     }
@@ -1069,11 +1083,7 @@ impl Decoder {
             return Err(AvifError::NoContent);
         }
         let next_image_index = self.image_index + 1;
-        if next_image_index == 0 {
-            // TODO: this may accidentally create more when nth image is added. so make sure this
-            // function is called only once.
-            self.create_codecs()?;
-        }
+        self.create_codecs()?;
         self.prepare_samples(next_image_index as usize)?;
         self.decode_tiles(next_image_index as usize)?;
         self.image_index = next_image_index;

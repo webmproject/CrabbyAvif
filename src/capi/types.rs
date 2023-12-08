@@ -79,6 +79,45 @@ impl From<&AvifError> for avifResult {
     }
 }
 
+impl From<avifResult> for AvifError {
+    fn from(res: avifResult) -> Self {
+        match res {
+            avifResult::Ok => AvifError::Ok,
+            avifResult::UnknownError => AvifError::UnknownError,
+            avifResult::InvalidFtyp => AvifError::InvalidFtyp,
+            avifResult::NoContent => AvifError::NoContent,
+            avifResult::NoYuvFormatSelected => AvifError::NoYuvFormatSelected,
+            avifResult::ReformatFailed => AvifError::ReformatFailed,
+            avifResult::UnsupportedDepth => AvifError::UnsupportedDepth,
+            avifResult::EncodeColorFailed => AvifError::EncodeColorFailed,
+            avifResult::EncodeAlphaFailed => AvifError::EncodeAlphaFailed,
+            avifResult::BmffParseFailed => AvifError::BmffParseFailed,
+            avifResult::MissingImageItem => AvifError::MissingImageItem,
+            avifResult::DecodeColorFailed => AvifError::DecodeColorFailed,
+            avifResult::DecodeAlphaFailed => AvifError::DecodeAlphaFailed,
+            avifResult::ColorAlphaSizeMismatch => AvifError::ColorAlphaSizeMismatch,
+            avifResult::IspeSizeMismatch => AvifError::IspeSizeMismatch,
+            avifResult::NoCodecAvailable => AvifError::NoCodecAvailable,
+            avifResult::NoImagesRemaining => AvifError::NoImagesRemaining,
+            avifResult::InvalidExifPayload => AvifError::InvalidExifPayload,
+            avifResult::InvalidImageGrid => AvifError::InvalidImageGrid,
+            avifResult::InvalidCodecSpecificOption => AvifError::InvalidCodecSpecificOption,
+            avifResult::TruncatedData => AvifError::TruncatedData,
+            avifResult::IoNotSet => AvifError::IoNotSet,
+            avifResult::IoError => AvifError::IoError,
+            avifResult::WaitingOnIo => AvifError::WaitingOnIo,
+            avifResult::InvalidArgument => AvifError::InvalidArgument,
+            avifResult::NotImplemented => AvifError::NotImplemented,
+            avifResult::OutOfMemory => AvifError::OutOfMemory,
+            avifResult::CannotChangeSetting => AvifError::CannotChangeSetting,
+            avifResult::IncompatibleImage => AvifError::IncompatibleImage,
+            avifResult::EncodeGainMapFailed => AvifError::EncodeGainMapFailed,
+            avifResult::DecodeGainMapFailed => AvifError::DecodeGainMapFailed,
+            avifResult::InvalidToneMappedImage => AvifError::InvalidToneMappedImage,
+        }
+    }
+}
+
 pub type avifBool = c_int;
 pub const AVIF_TRUE: c_int = 1;
 pub const AVIF_FALSE: c_int = 0;

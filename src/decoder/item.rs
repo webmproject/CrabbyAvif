@@ -163,7 +163,7 @@ impl Item {
 
     #[allow(non_snake_case)]
     pub fn validate_properties(&self, items: &Items, pixi_required: bool) -> AvifResult<()> {
-        println!("validating item: {:#?}", self);
+        //println!("validating item: {:#?}", self);
         let av1C = self.av1C().ok_or(AvifError::BmffParseFailed)?;
         if self.item_type == "grid" {
             for grid_item_id in &self.grid_item_ids {

@@ -180,7 +180,7 @@ find_property_function!(find_irot_angle, ImageRotation, u8);
 find_property_function!(find_imir_axis, ImageMirror, u8);
 
 pub fn check_limits(width: u32, height: u32, size_limit: u32, dimension_limit: u32) -> bool {
-    println!("w: {width} h: {height} s: {size_limit} d: {dimension_limit}");
+    //println!("w: {width} h: {height} s: {size_limit} d: {dimension_limit}");
     if height == 0 {
         return false;
     }

@@ -220,7 +220,7 @@ fn parse_header(stream: &mut IStream) -> AvifResult<BoxHeader> {
     let start_offset = stream.offset;
     let mut size = stream.read_u32()? as u64;
     let box_type = stream.read_string(4)?;
-    println!("box_type: {}", box_type);
+    //println!("box_type: {}", box_type);
     if size == 1 {
         size = stream.read_u64()?;
     }
@@ -268,14 +268,11 @@ fn parse_hdlr(stream: &mut IStream) -> AvifResult<()> {
     stream.skip(4 * 3)?;
     // string name;
     // Verify that a valid string is here, but don't bother to store it.
-    let name = stream.read_c_string()?;
-    println!("hdlr: {name}");
+    stream.read_c_string()?;
     Ok(())
 }
 
 fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
-    let start_offset = stream.offset;
-    println!("iloc start: {start_offset}");
     let (version, _flags) = stream.read_version_and_flags()?;
     if version > 2 {
         println!("Invalid version in iloc.");
@@ -346,8 +343,6 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
         }
         iloc.items.push(entry);
     }
-
-    println!("end of iloc, skiping {} bytes", stream.bytes_left());
     Ok(iloc)
 }
 
@@ -435,7 +430,6 @@ fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // }
     // unsigned int(8) configOBUs[];
     // We skip all these.
-    println!("end of av1C, skiping {} bytes", stream.bytes_left());
     Ok(ItemProperty::CodecConfiguration(av1C))
 }
 
@@ -666,7 +660,6 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
 }
 
 fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
-    println!("iprp start: {}", stream.offset);
     let header = parse_header(stream)?;
     if header.box_type != "ipco" {
         println!("First box in iprp is not ipco");
@@ -688,7 +681,6 @@ fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
         let mut sub_stream = stream.sub_stream(header.size)?;
         iprp.associations.append(&mut parse_ipma(&mut sub_stream)?);
     }
-    println!("end of iprp, skiping {} bytes", stream.bytes_left());
     Ok(iprp)
 }
 
@@ -756,7 +748,6 @@ fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
         let mut sub_stream = stream.sub_stream(header.size)?;
         iinf.push(parse_infe(&mut sub_stream)?);
     }
-    println!("end of iinf, skiping {} bytes", stream.bytes_left());
     Ok(iinf)
 }
 
@@ -801,7 +792,6 @@ fn parse_iref(stream: &mut IStream) -> AvifResult<Vec<ItemReference>> {
             }
         }
     }
-    println!("end of iref, skiping {} bytes", stream.bytes_left());
     Ok(iref)
 }
 
@@ -817,7 +807,6 @@ fn parse_idat(stream: &mut IStream) -> AvifResult<Vec<u8>> {
 }
 
 fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
-    println!("parsing meta size: {}", stream.data.len());
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
     let mut meta = MetaBox::default();
 
@@ -1250,7 +1239,6 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
         }
         let mut header_stream = IStream::create(header_data);
         let header = parse_header(&mut header_stream)?;
-        println!("{:#?}", header);
         parse_offset = parse_offset
             .checked_add(header_stream.offset as u64)
             .ok_or(AvifError::BmffParseFailed)?;

@@ -34,3 +34,12 @@ add_avif_gtest(avifgainmaptest)
 add_avif_gtest(avifiotest)
 add_avif_gtest(avifmetadatatest)
 add_avif_gtest(avifprogressivetest)
+
+macro(add_avif_test TEST_NAME)
+    add_executable(${TEST_NAME} ${TEST_NAME}.c)
+    target_include_directories(${TEST_NAME} PRIVATE ${CRABBY_AVIF_INCLUDE_DIR})
+    target_link_libraries(${TEST_NAME} PRIVATE ${CRABBY_AVIF_LIBRARIES})
+    add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME} ${CARGO_ROOT_DIR}/tests/data/)
+endmacro()
+
+add_avif_test(aviftest)
