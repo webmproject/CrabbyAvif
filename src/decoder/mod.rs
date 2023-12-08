@@ -954,43 +954,34 @@ impl Decoder {
             return Err(AvifError::NoImagesRemaining);
         }
         let sample = &mut tile.input.samples[image_index];
-        // the rest of the code can be in sample struct.
-        if sample.item_id != 0 {
-            // Data comes from an item.
-            let item = self
-                .items
-                .get(&sample.item_id)
-                .ok_or(AvifError::BmffParseFailed)?;
-            if item.extents.len() > 1 || true {
-                // Item has multiple extents, merge them into a contiguous buffer.
-                // TODO: When len == 1, this copy can be avoided.
-                if sample.data_buffer.is_none() {
-                    let mut data: Vec<u8> = Vec::new();
-                    data.reserve(item.size);
-                    for extent in &item.extents {
-                        let io = self.io.as_mut().unwrap();
-                        // TODO: check if enough bytes were actually read.
-                        data.extend_from_slice(
-                            io.read(extent.offset, usize_from_u64(extent.length)?)?,
-                        );
-                    }
-                    sample.data_buffer = Some(data);
-                }
-            } else {
-                sample.offset = item.data_offset();
-            }
-        } else {
-            // TODO: add sizehint failure check.
-            let mut data = Vec::new();
-            data.reserve(sample.size);
-            let io = self.io.as_mut().unwrap();
-            // TODO: avoid this copy if persistent is allowed.
-            data.extend_from_slice(io.read(sample.offset, sample.size)?);
-            if data.len() != sample.size {
-                return Err(AvifError::TruncatedData);
-            }
-            sample.data_buffer = Some(data);
+        if sample.item_id == 0 {
+            // Data comes from a track. Nothing to prepare.
+            return Ok(());
         }
+        // Data comes from an item.
+        // TODO: the rest of the code can be in sample struct.
+        let item = self
+            .items
+            .get(&sample.item_id)
+            .ok_or(AvifError::BmffParseFailed)?;
+        if item.extents.len() == 1 {
+            // Item has only one extent. Nothing to prepare.
+            sample.offset = item.data_offset();
+            return Ok(());
+        }
+        // Item has multiple extents, merge them into a contiguous buffer.
+        if sample.data_buffer.is_some() {
+            // Extents have already been merged.
+            return Ok(());
+        }
+        let mut data: Vec<u8> = Vec::new();
+        data.reserve(item.size);
+        for extent in &item.extents {
+            let io = self.io.as_mut().unwrap();
+            // TODO: check if enough bytes were actually read.
+            data.extend_from_slice(io.read(extent.offset, usize_from_u64(extent.length)?)?);
+        }
+        sample.data_buffer = Some(data);
         Ok(())
     }
 
@@ -1017,6 +1008,7 @@ impl Decoder {
             for (tile_index, tile) in self.tiles[category].iter_mut().enumerate() {
                 let sample = &tile.input.samples[image_index];
                 let io = &mut self.io.as_mut().unwrap();
+                // TODO: is this explicit block necessary?
                 {
                     let codec = &mut self.codecs[tile.codec_index];
                     codec.get_next_image(
