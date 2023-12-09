@@ -303,3 +303,40 @@ fn raw_io() {
         assert!(decoder.next_image().is_ok());
     }
 }
+
+struct CustomIO {
+    data: Vec<u8>,
+}
+
+impl decoder::IO for CustomIO {
+    fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]> {
+        let start = usize::try_from(offset).unwrap();
+        let end = start + size;
+        if start > self.data.len() || end > self.data.len() {
+            return Err(AvifError::TruncatedData);
+        }
+        Ok(&self.data[start..end])
+    }
+
+    fn size_hint(&self) -> u64 {
+        self.data.len() as u64
+    }
+
+    fn persistent(&self) -> bool {
+        false
+    }
+}
+
+#[test]
+fn custom_io() {
+    let data =
+        std::fs::read(get_test_file("colors-animated-8bpc.avif")).expect("Unable to read file");
+    let mut decoder = decoder::Decoder::default();
+    let io = Box::new(CustomIO { data });
+    decoder.set_io(io);
+    assert!(decoder.parse().is_ok());
+    assert_eq!(decoder.image_count, 5);
+    for _ in 0..5 {
+        assert!(decoder.next_image().is_ok());
+    }
+}
