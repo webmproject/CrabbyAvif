@@ -111,6 +111,7 @@ pub struct Settings {
     pub ignore_xmp: bool,
     pub strictness: Strictness,
     pub allow_progressive: bool,
+    pub allow_incremental: bool,
     pub enable_decoding_gainmap: bool,
     pub enable_parsing_gainmap_metadata: bool,
     pub codec_choice: CodecChoice,
@@ -127,6 +128,7 @@ impl Default for Settings {
             ignore_xmp: false,
             strictness: Default::default(),
             allow_progressive: false,
+            allow_incremental: false,
             enable_decoding_gainmap: false,
             enable_parsing_gainmap_metadata: false,
             codec_choice: Default::default(),
@@ -1010,7 +1012,9 @@ impl Decoder {
                     self.image.allocate_planes(category)?;
                 }
             }
-            for (tile_index, tile) in self.tiles[category].iter_mut().enumerate() {
+            let previous_decoded_tile_count = self.tile_info[category].decoded_tile_count;
+            for tile_index in previous_decoded_tile_count as usize..self.tiles[category].len() {
+                let tile = &mut self.tiles[category][tile_index];
                 let sample = &tile.input.samples[image_index];
                 let io = &mut self.io.as_mut().unwrap();
                 // TODO: is this explicit block necessary?
@@ -1021,12 +1025,9 @@ impl Decoder {
                     } else {
                         &self.items.get(&sample.item_id).unwrap().data_buffer
                     };
-                    codec.get_next_image(
-                        sample.data(io, &item_data_buffer)?,
-                        sample.spatial_id,
-                        &mut tile.image,
-                        category,
-                    )?;
+                    let data = sample.data(io, &item_data_buffer)?;
+                    codec.get_next_image(data, sample.spatial_id, &mut tile.image, category)?;
+                    self.tile_info[category].decoded_tile_count += 1;
                 }
 
                 // TODO: convert alpha from limited range to full range.
@@ -1111,6 +1112,24 @@ impl Decoder {
             .find(|x| x.id == color_track_id)
             .ok_or(AvifError::NoContent)?;
         color_track.image_timing(n)
+    }
+
+    pub fn decoded_row_count(&self) -> u32 {
+        let mut min_row_count = self.image.height;
+        for category in 0usize..3 {
+            if self.tiles[category].is_empty() {
+                continue;
+            }
+            if category == 2 {
+                // TODO: handle gainmap.
+                panic!("gainmap not supported in decoded_row_count");
+            }
+            let first_tile_height = self.tiles[category][0].height;
+            let row_count =
+                self.tile_info[category].decoded_row_count(&self.image, first_tile_height);
+            min_row_count = std::cmp::min(min_row_count, row_count);
+        }
+        min_row_count
     }
 
     pub fn peek_compatible_file_type(data: &[u8]) -> bool {

@@ -47,9 +47,26 @@ pub struct Grid {
 #[derive(Debug, Default)]
 pub struct TileInfo {
     pub tile_count: u32,
-    #[allow(unused)]
     pub decoded_tile_count: u32,
     pub grid: Grid,
+}
+
+impl TileInfo {
+    pub fn decoded_row_count(&self, image: &Image, tile_height: u32) -> u32 {
+        if self.decoded_tile_count == 0 {
+            return 0;
+        }
+        // TODO: add is_grid function and use it everywhere.
+        if self.decoded_tile_count == self.tile_count
+            || (self.grid.rows == 0 && self.grid.columns == 0)
+        {
+            return image.height;
+        }
+        std::cmp::min(
+            (self.decoded_tile_count / self.grid.columns) * tile_height,
+            image.height,
+        )
+    }
 }
 
 #[derive(Debug, Default)]

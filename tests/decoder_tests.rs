@@ -2,6 +2,9 @@ use crabby_avif::decoder::track::RepetitionCount;
 use crabby_avif::image::*;
 use crabby_avif::*;
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 fn get_test_file(filename: &str) -> String {
     let project_root = env!("CARGO_MANIFEST_DIR");
     String::from(format!("{project_root}/tests/data/{filename}"))
@@ -306,14 +309,28 @@ fn raw_io() {
 
 struct CustomIO {
     data: Vec<u8>,
+    available_size_rc: Rc<RefCell<usize>>,
 }
 
 impl decoder::IO for CustomIO {
     fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]> {
+        let available_size = self.available_size_rc.borrow();
+        println!(
+            "### read: offset {offset} size {size} available size: {}",
+            *available_size
+        );
         let start = usize::try_from(offset).unwrap();
         let end = start + size;
         if start > self.data.len() || end > self.data.len() {
-            return Err(AvifError::TruncatedData);
+            return Err(AvifError::IoError);
+        }
+        let mut ssize = size;
+        if ssize > self.data.len() - start {
+            ssize = self.data.len() - start;
+        }
+        let end = start + ssize;
+        if *available_size < end {
+            return Err(AvifError::WaitingOnIo);
         }
         Ok(&self.data[start..end])
     }
@@ -332,11 +349,162 @@ fn custom_io() {
     let data =
         std::fs::read(get_test_file("colors-animated-8bpc.avif")).expect("Unable to read file");
     let mut decoder = decoder::Decoder::default();
-    let io = Box::new(CustomIO { data });
+    let available_size_rc = Rc::new(RefCell::new(data.len()));
+    let io = Box::new(CustomIO {
+        available_size_rc: available_size_rc.clone(),
+        data,
+    });
     decoder.set_io(io);
     assert!(decoder.parse().is_ok());
     assert_eq!(decoder.image_count, 5);
     for _ in 0..5 {
         assert!(decoder.next_image().is_ok());
     }
+}
+
+fn expected_min_decoded_row_count(
+    height: u32,
+    cell_height: u32,
+    cell_columns: u32,
+    available_size: usize,
+    size: usize,
+    grid_cell_offsets: &Vec<usize>,
+) -> u32 {
+    if available_size >= size {
+        return height;
+    }
+    let mut cell_index: Option<usize> = None;
+    for (index, offset) in grid_cell_offsets.iter().enumerate().rev() {
+        if available_size >= *offset {
+            cell_index = Some(index);
+            break;
+        }
+    }
+    if cell_index.is_none() {
+        return 0;
+    }
+    let cell_index = cell_index.unwrap() as u32;
+    let cell_row = cell_index / cell_columns;
+    let cell_column = cell_index % cell_columns;
+    let cell_rows_decoded = if cell_column == cell_columns - 1 {
+        cell_row + 1
+    } else {
+        cell_row
+    };
+    cell_rows_decoded * cell_height
+}
+
+#[test]
+fn expected_min_decoded_row_count_computation() {
+    let grid_cell_offsets: Vec<usize> = vec![3258, 10643, 17846, 22151, 25409, 30000];
+    let cell_height = 154;
+    assert_eq!(
+        0,
+        expected_min_decoded_row_count(770, cell_height, 1, 1000, 30000, &grid_cell_offsets)
+    );
+    assert_eq!(
+        1 * cell_height,
+        expected_min_decoded_row_count(770, cell_height, 1, 4000, 30000, &grid_cell_offsets)
+    );
+    assert_eq!(
+        2 * cell_height,
+        expected_min_decoded_row_count(770, cell_height, 1, 12000, 30000, &grid_cell_offsets)
+    );
+    assert_eq!(
+        3 * cell_height,
+        expected_min_decoded_row_count(770, cell_height, 1, 17846, 30000, &grid_cell_offsets)
+    );
+    assert_eq!(
+        1 * cell_height,
+        expected_min_decoded_row_count(462, cell_height, 2, 17846, 30000, &grid_cell_offsets)
+    );
+    assert_eq!(
+        2 * cell_height,
+        expected_min_decoded_row_count(462, cell_height, 2, 23000, 30000, &grid_cell_offsets)
+    );
+    assert_eq!(
+        1 * cell_height,
+        expected_min_decoded_row_count(308, cell_height, 3, 23000, 30000, &grid_cell_offsets)
+    );
+    assert_eq!(
+        2 * cell_height,
+        expected_min_decoded_row_count(308, cell_height, 3, 30000, 30000, &grid_cell_offsets)
+    );
+}
+
+#[test]
+fn incremental_decode() {
+    // Grid item offsets for sofa_grid1x5_420.avif:
+    // Each line is "$extent_offset + $extent_length".
+    let grid_cell_offsets: Vec<usize> = vec![
+        578 + 2680,
+        3258 + 7385,
+        10643 + 7203,
+        17846 + 4305,
+        22151 + 3258,
+    ];
+
+    let data = std::fs::read(get_test_file("sofa_grid1x5_420.avif")).expect("Unable to read file");
+    let len = data.len();
+    let available_size_rc = Rc::new(RefCell::new(0usize));
+    let mut decoder = decoder::Decoder::default();
+    decoder.settings.allow_incremental = true;
+    let io = Box::new(CustomIO {
+        available_size_rc: available_size_rc.clone(),
+        data,
+    });
+    decoder.set_io(io);
+    let step: usize = std::cmp::max(1, len / 10000) as usize;
+    println!("### step: {step}");
+
+    // Parsing is not incremental.
+    let mut parse_result = decoder.parse();
+    while parse_result.is_err() && parse_result.err().unwrap() == AvifError::WaitingOnIo {
+        {
+            let mut available_size = available_size_rc.borrow_mut();
+            if *available_size >= len {
+                println!("parse returned waiting on io after full file.");
+                assert!(false);
+            }
+            *available_size = std::cmp::min(*available_size + step, len);
+            println!("### available size after increment: {}", *available_size);
+        }
+        parse_result = decoder.parse();
+    }
+    assert!(parse_result.is_ok());
+    println!("parse succeeded");
+
+    // Decoding is incremental.
+    let mut previous_decoded_row_count = 0;
+    let mut decode_result = decoder.next_image();
+    while decode_result.is_err() && decode_result.err().unwrap() == AvifError::WaitingOnIo {
+        {
+            let mut available_size = available_size_rc.borrow_mut();
+            if *available_size >= len {
+                println!("next_image returned waiting on io after full file.");
+                assert!(false);
+            }
+            let decoded_row_count = decoder.decoded_row_count();
+            assert!(decoded_row_count >= previous_decoded_row_count);
+            let expected_min_decoded_row_count = expected_min_decoded_row_count(
+                decoder.image().height,
+                154,
+                1,
+                *available_size,
+                len,
+                &grid_cell_offsets,
+            );
+            println!("expected_min_decoded_row_count: {expected_min_decoded_row_count}");
+            assert!(decoded_row_count >= expected_min_decoded_row_count);
+            previous_decoded_row_count = decoded_row_count;
+            println!("decoded_row_count: {decoded_row_count}");
+            println!("### available size after increment: {}", *available_size);
+            *available_size = std::cmp::min(*available_size + step, len);
+        }
+        decode_result = decoder.next_image();
+    }
+    assert!(decode_result.is_ok());
+    assert_eq!(decoder.decoded_row_count(), decoder.image().height);
+
+    // TODO: check if incremental and non incremental produces same output.
 }
