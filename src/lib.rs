@@ -1,5 +1,6 @@
 pub mod decoder;
 pub mod image;
+pub mod reformat;
 pub mod utils;
 
 #[cfg(feature = "capi")]

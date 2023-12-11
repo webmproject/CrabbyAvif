@@ -6,7 +6,9 @@
 /out_comparison.txt
 /src/codecs/bindings/dav1d.rs
 /src/codecs/bindings/libgav1.rs
+/src/reformat/bindings/libyuv.rs
 /target
 /third_party/dav1d
 /third_party/googletest
 /third_party/libgav1
+/third_party/libyuv

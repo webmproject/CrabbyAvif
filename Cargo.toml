@@ -28,6 +28,7 @@ default = ["dav1d"]
 capi = []
 dav1d = []
 libgav1 = []
+libyuv = []
 android_mediacodec = ["dep:ndk"]
 
 [package.metadata.capi.header]

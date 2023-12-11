@@ -19,6 +19,7 @@ fn add_native_library(
     header_file: PathBuf,
     extra_include_dir: PathBuf,
     allowlist_items: &[&str],
+    bindings_path: PathBuf,
 ) {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let third_party = PathBuf::from(&project_root).join("third_party");
@@ -49,13 +50,6 @@ fn add_native_library(
     let bindings = bindings
         .generate()
         .unwrap_or_else(|_| panic!("Unable to generate bindings for {library_dir}"));
-
-    let rs_file = format!("{library_dir}.rs");
-    let bindings_path = PathBuf::from(&project_root)
-        .join("src")
-        .join("codecs")
-        .join("bindings")
-        .join(rs_file);
     bindings
         .write_to_file(bindings_path.as_path())
         .unwrap_or_else(|_| panic!("Couldn't write bindings for {library_dir}"));
@@ -100,6 +94,7 @@ fn main() {
             "dav1d_picture_unref",
             "dav1d_send_data",
         ],
+        path_buf(&["src", "codecs", "bindings", "dav1d.rs"]),
     );
 
     #[cfg(feature = "libgav1")]
@@ -117,6 +112,7 @@ fn main() {
                 "Libgav1DecoderEnqueueFrame",
                 "Libgav1DecoderSettingsInitDefault",
             ],
+            path_buf(&["src", "codecs", "bindings", "libgav1.rs"]),
         );
         // libgav1 needs libstdc++ on *nix and libc++ on mac. TODO: what about windows?
         if cfg!(target_os = "macos") {
@@ -125,4 +121,15 @@ fn main() {
             println!("cargo:rustc-link-arg=-lstdc++");
         }
     }
+
+    #[cfg(feature = "libyuv")]
+    add_native_library(
+        "yuv",
+        "libyuv",
+        path_buf(&[build_dir]),
+        path_buf(&["include", "libyuv.h"]),
+        path_buf(&["include"]),
+        &Vec::new(),
+        path_buf(&["src", "reformat", "bindings", "libyuv.rs"]),
+    );
 }
