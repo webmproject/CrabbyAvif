@@ -13,7 +13,7 @@ use std::os::raw::c_int;
 pub type avifPixelAspectRatioBox = PixelAspectRatio;
 
 /// cbindgen:rename-all=CamelCase
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 #[repr(C)]
 pub struct avifCleanApertureBox {
     pub width_n: u32,
@@ -55,20 +55,20 @@ impl From<&avifCleanApertureBox> for CleanAperture {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 #[repr(C)]
 pub struct avifImageRotation {
     pub angle: u8,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 #[repr(C)]
 pub struct avifImageMirror {
     pub axis: u8,
 }
 
+#[derive(Debug, Clone)]
 #[repr(C)]
-#[derive(Debug)]
 pub struct avifImage {
     pub width: u32,
     pub height: u32,

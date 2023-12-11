@@ -1,10 +1,7 @@
 // Copyright 2023 Google LLC
 // SPDX-License-Identifier: BSD-2-Clause
 
-#include <fstream>
 #include <iostream>
-#include <iterator>
-#include <vector>
 
 #include "avif/avif.h"
 #include "aviftest_helpers.h"
@@ -21,24 +18,10 @@ std::string get_file_name() {
   return std::string(data_path) + file_name;
 }
 
-std::vector<uint8_t> read_file() {
-  const char* file_name = "colors-animated-8bpc.avif";
-  std::ifstream file(get_file_name().c_str(), std::ios::binary);
-  EXPECT_TRUE(file.is_open());
-  // Get file size.
-  file.seekg(0, std::ios::end);
-  auto size = file.tellg();
-  file.seekg(0, std::ios::beg);
-  std::vector<uint8_t> data(size);
-  file.read(reinterpret_cast<char*>(data.data()), size);
-  file.close();
-  return data;
-}
-
 TEST(AvifDecodeTest, SetRawIO) {
   DecoderPtr decoder(avifDecoderCreate());
   ASSERT_NE(decoder, nullptr);
-  auto data = read_file();
+  auto data = testutil::read_file(get_file_name().c_str());
   ASSERT_EQ(avifDecoderSetIOMemory(decoder.get(), data.data(), data.size()),
             AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
@@ -69,7 +52,7 @@ avifResult io_read(struct avifIO* io, uint32_t flags, uint64_t offset,
 TEST(AvifDecodeTest, SetCustomIO) {
   DecoderPtr decoder(avifDecoderCreate());
   ASSERT_NE(decoder, nullptr);
-  auto data = read_file();
+  auto data = testutil::read_file(get_file_name().c_str());
   avifROData ro_data = {.data = data.data(), .size = data.size()};
   avifIO io = {.destroy = nullptr,
                .read = io_read,
@@ -88,7 +71,7 @@ TEST(AvifDecodeTest, SetCustomIO) {
 }
 
 TEST(AvifDecodeTest, IOMemoryReader) {
-  auto data = read_file();
+  auto data = testutil::read_file(get_file_name().c_str());
   avifIO* io = avifIOCreateMemoryReader(data.data(), data.size());
   ASSERT_NE(io, nullptr);
   EXPECT_EQ(io->sizeHint, data.size());
@@ -109,7 +92,7 @@ TEST(AvifDecodeTest, IOMemoryReader) {
 }
 
 TEST(AvifDecodeTest, IOFileReader) {
-  auto data = read_file();
+  auto data = testutil::read_file(get_file_name().c_str());
   avifIO* io = avifIOCreateFileReader(get_file_name().c_str());
   ASSERT_NE(io, nullptr);
   EXPECT_EQ(io->sizeHint, data.size());

@@ -175,6 +175,34 @@ impl From<&avifDecoder> for Settings {
     }
 }
 
+fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
+    // Copy image.
+    let image = src.image();
+    dst.image_object = image.into();
+
+    // Copy decoder properties.
+    dst.alphaPresent = to_avifBool(image.alpha_present);
+    dst.imageSequenceTrackPresent = to_avifBool(image.image_sequence_track_present);
+    dst.progressiveState = image.progressive_state;
+
+    dst.imageTiming = src.image_timing;
+    dst.imageCount = src.image_count as i32;
+    dst.repetitionCount = match src.repetition_count {
+        RepetitionCount::Unknown => AVIF_REPETITION_COUNT_UNKNOWN,
+        RepetitionCount::Infinite => AVIF_REPETITION_COUNT_INFINITE,
+        RepetitionCount::Finite(x) => x,
+    };
+
+    if src.gainmap_present {
+        dst.gainMapPresent = AVIF_TRUE;
+        dst.gainmap_image_object = (&src.gainmap.image).into();
+        dst.gainmap_object = (&src.gainmap).into();
+        dst.gainmap_object.image = (&mut dst.gainmap_image_object) as *mut avifImage;
+        dst.image_object.gainMap = (&mut dst.gainmap_object) as *mut avifGainMap;
+    }
+    dst.image = (&mut dst.image_object) as *mut avifImage;
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResult {
     let rust_decoder = &mut (*decoder).rust_decoder;
@@ -184,32 +212,7 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
     if res.is_err() {
         return to_avifResult(&res);
     }
-
-    // Copy image.
-    let image = rust_decoder.image();
-    (*decoder).image_object = image.into();
-
-    // Copy decoder properties.
-    (*decoder).alphaPresent = to_avifBool(image.alpha_present);
-    (*decoder).imageSequenceTrackPresent = to_avifBool(image.image_sequence_track_present);
-    (*decoder).progressiveState = image.progressive_state;
-    (*decoder).imageTiming = rust_decoder.image_timing;
-    (*decoder).imageCount = rust_decoder.image_count as i32;
-    (*decoder).repetitionCount = match rust_decoder.repetition_count {
-        RepetitionCount::Unknown => AVIF_REPETITION_COUNT_UNKNOWN,
-        RepetitionCount::Infinite => AVIF_REPETITION_COUNT_INFINITE,
-        RepetitionCount::Finite(x) => x,
-    };
-
-    if rust_decoder.gainmap_present {
-        (*decoder).gainMapPresent = AVIF_TRUE;
-        (*decoder).gainmap_image_object = (&rust_decoder.gainmap.image).into();
-        (*decoder).gainmap_object = (&rust_decoder.gainmap).into();
-        (*decoder).gainmap_object.image = (&mut (*decoder).gainmap_image_object) as *mut avifImage;
-        (*decoder).image_object.gainMap = (&mut (*decoder).gainmap_object) as *mut avifGainMap;
-    }
-    (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
-
+    rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
     avifResult::Ok
 }
 
@@ -221,25 +224,7 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
     if res.is_err() {
         return to_avifResult(&res);
     }
-
-    // Copy image.
-    let image = rust_decoder.image();
-    (*decoder).image_object = image.into();
-
-    // Copy decoder properties.
-    (*decoder).alphaPresent = to_avifBool(image.alpha_present);
-    (*decoder).imageSequenceTrackPresent = to_avifBool(image.image_sequence_track_present);
-    (*decoder).progressiveState = image.progressive_state;
-    (*decoder).imageTiming = rust_decoder.image_timing;
-    (*decoder).imageCount = rust_decoder.image_count as i32;
-    (*decoder).repetitionCount = match rust_decoder.repetition_count {
-        RepetitionCount::Unknown => AVIF_REPETITION_COUNT_UNKNOWN,
-        RepetitionCount::Infinite => AVIF_REPETITION_COUNT_INFINITE,
-        RepetitionCount::Finite(x) => x,
-    };
-
-    (*decoder).image = (&mut (*decoder).image_object) as *mut avifImage;
-
+    rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
     avifResult::Ok
 }
 
@@ -260,6 +245,54 @@ pub unsafe extern "C" fn avifDecoderNthImageTiming(
 #[no_mangle]
 pub unsafe extern "C" fn avifDecoderDestroy(decoder: *mut avifDecoder) {
     let _ = Box::from_raw(decoder);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifDecoderRead(
+    decoder: *mut avifDecoder,
+    image: *mut avifImage,
+) -> avifResult {
+    let rust_decoder = &mut (*decoder).rust_decoder;
+    rust_decoder.settings = (&(*decoder)).into();
+
+    let res = rust_decoder.parse();
+    if res.is_err() {
+        return to_avifResult(&res);
+    }
+    let res = rust_decoder.next_image();
+    if res.is_err() {
+        return to_avifResult(&res);
+    }
+    rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
+    *image = (*decoder).image_object.clone();
+    avifResult::Ok
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifDecoderReadMemory(
+    decoder: *mut avifDecoder,
+    image: *mut avifImage,
+    data: *const u8,
+    size: usize,
+) -> avifResult {
+    let res = avifDecoderSetIOMemory(decoder, data, size);
+    if res != avifResult::Ok {
+        return res;
+    }
+    avifDecoderRead(decoder, image)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifDecoderReadFile(
+    decoder: *mut avifDecoder,
+    image: *mut avifImage,
+    filename: *const c_char,
+) -> avifResult {
+    let res = avifDecoderSetIOFile(decoder, filename);
+    if res != avifResult::Ok {
+        return res;
+    }
+    avifDecoderRead(decoder, image)
 }
 
 #[no_mangle]

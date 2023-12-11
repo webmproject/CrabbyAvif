@@ -34,6 +34,7 @@ add_avif_gtest(avifdecodetest)
 add_avif_gtest(avifgainmaptest)
 add_avif_gtest(avifiotest)
 add_avif_gtest(avifmetadatatest)
+add_avif_gtest(avifoneshottest)
 add_avif_gtest(avifprogressivetest)
 
 macro(add_avif_test TEST_NAME)
