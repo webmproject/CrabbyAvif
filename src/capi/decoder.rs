@@ -296,6 +296,47 @@ pub unsafe extern "C" fn avifDecoderReadFile(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn avifDecoderIsKeyframe(
+    decoder: *const avifDecoder,
+    frameIndex: u32,
+) -> avifBool {
+    let rust_decoder = &(*decoder).rust_decoder;
+    to_avifBool(rust_decoder.is_keyframe(frameIndex))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifDecoderNearestKeyframe(
+    decoder: *const avifDecoder,
+    frameIndex: u32,
+) -> u32 {
+    let rust_decoder = &(*decoder).rust_decoder;
+    rust_decoder.nearest_keyframe(frameIndex)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifDecoderDecodedRowCount(decoder: *const avifDecoder) -> u32 {
+    let rust_decoder = &(*decoder).rust_decoder;
+    rust_decoder.decoded_row_count()
+}
+
+pub type avifExtent = Extent;
+
+#[no_mangle]
+pub unsafe extern "C" fn avifDecoderNthImageMaxExtent(
+    decoder: *const avifDecoder,
+    frameIndex: u32,
+    outExtent: *mut avifExtent,
+) -> avifResult {
+    let rust_decoder = &(*decoder).rust_decoder;
+    let res = rust_decoder.nth_image_max_extent(frameIndex);
+    if res.is_err() {
+        return to_avifResult(&res);
+    }
+    *outExtent = res.unwrap();
+    avifResult::Ok
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn avifPeekCompatibleFileType(input: *const avifROData) -> avifBool {
     let data = std::slice::from_raw_parts((*input).data, (*input).size);
     to_avifBool(Decoder::peek_compatible_file_type(data))

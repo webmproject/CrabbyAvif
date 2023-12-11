@@ -38,6 +38,7 @@ add_avif_gtest(avifoneshottest)
 add_avif_gtest(avifprogressivetest)
 
 macro(add_avif_test TEST_NAME)
+    set(CMAKE_C_FLAGS "-Wno-error=incompatible-function-pointer-types")
     add_executable(${TEST_NAME} ${TEST_NAME}.c)
     target_include_directories(${TEST_NAME} PRIVATE ${CRABBY_AVIF_INCLUDE_DIR})
     target_link_libraries(${TEST_NAME} PRIVATE ${CRABBY_AVIF_LIBRARIES})

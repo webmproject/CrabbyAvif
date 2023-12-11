@@ -282,39 +282,45 @@ impl Item {
         let mut remaining_size = sample.size;
         let mut min_offset = u64::MAX;
         let mut max_offset = 0;
-        for extent in &self.extents {
-            let mut start_offset = extent.offset;
-            let mut length = extent.length;
-            let lengthu64 = u64_from_usize(length)?;
-            if remaining_offset != 0 {
-                if remaining_offset >= lengthu64 {
-                    remaining_offset -= lengthu64;
-                    continue;
-                } else {
-                    start_offset = start_offset
-                        .checked_add(remaining_offset)
-                        .ok_or(AvifError::BmffParseFailed)?;
-                    length -= usize_from_u64(remaining_offset)?;
-                    remaining_offset = 0;
+        if self.extents.len() > 1 {
+            for extent in &self.extents {
+                let mut start_offset = extent.offset;
+                let mut size = extent.size;
+                let sizeu64 = u64_from_usize(size)?;
+                if remaining_offset != 0 {
+                    if remaining_offset >= sizeu64 {
+                        remaining_offset -= sizeu64;
+                        continue;
+                    } else {
+                        start_offset = start_offset
+                            .checked_add(remaining_offset)
+                            .ok_or(AvifError::BmffParseFailed)?;
+                        size -= usize_from_u64(remaining_offset)?;
+                        remaining_offset = 0;
+                    }
+                }
+                let used_extent_size = std::cmp::min(size, remaining_size);
+                let end_offset = start_offset
+                    .checked_add(u64_from_usize(used_extent_size)?)
+                    .ok_or(AvifError::BmffParseFailed)?;
+                min_offset = std::cmp::min(min_offset, start_offset);
+                max_offset = std::cmp::max(max_offset, end_offset);
+                remaining_size -= used_extent_size;
+                if remaining_size == 0 {
+                    break;
                 }
             }
-            let used_extent_size = std::cmp::min(length, remaining_size);
-            let end_offset = start_offset
-                .checked_add(u64_from_usize(used_extent_size)?)
-                .ok_or(AvifError::BmffParseFailed)?;
-            min_offset = std::cmp::min(min_offset, start_offset);
-            max_offset = std::cmp::max(max_offset, end_offset);
-            remaining_size -= used_extent_size;
-            if remaining_size == 0 {
-                break;
-            }
+        } else {
+            min_offset = sample.offset;
+            max_offset = sample.offset + u64_from_usize(sample.size)?;
+            remaining_size = 0;
         }
         if remaining_size != 0 {
             return Err(AvifError::TruncatedData);
         }
         Ok(Extent {
             offset: min_offset,
-            length: usize_from_u64(max_offset - min_offset)?,
+            size: usize_from_u64(max_offset - min_offset)?,
         })
     }
 }
@@ -348,11 +354,11 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
         for extent in &iloc.extents {
             item.extents.push(Extent {
                 offset: iloc.base_offset + extent.offset,
-                length: extent.length,
+                size: extent.size,
             });
             item.size = item
                 .size
-                .checked_add(extent.length)
+                .checked_add(extent.size)
                 .ok_or(AvifError::BmffParseFailed)?;
         }
     }

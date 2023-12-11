@@ -199,7 +199,11 @@ impl Tile {
             // Typical case: Use the entire item's payload for a single frame output
             let sample = DecodeSample {
                 item_id: item.id,
-                offset: 0,
+                offset: if item.extents.len() == 1 {
+                    item.extents[0].offset
+                } else {
+                    0
+                },
                 size: item.size,
                 // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel value for
                 // "do not filter by spatial_id"

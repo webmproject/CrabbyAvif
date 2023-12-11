@@ -150,8 +150,8 @@ static avifIO * avifIOCreateTestReader(const uint8_t * data, size_t size)
     printf("### creating reader of size: %zu\n", size);
     avifIO * io = malloc(sizeof(avifIO));
     memset(io, 0, sizeof(avifIO));
-    io->destroy = avifIOTestReaderDestroy;
-    io->read = avifIOTestReaderRead;
+    io->destroy = &avifIOTestReaderDestroy;
+    io->read = &avifIOTestReaderRead;
     io->sizeHint = size;
     io->persistent = AVIF_TRUE;
     avifIOMeta * meta = malloc(sizeof(avifIOMeta));
@@ -260,8 +260,8 @@ static int runIOTests(const char * dataDir)
 
             if (parseResult == AVIF_RESULT_OK) {
                 for (; meta->availableBytes <= io->sizeHint; ++meta->availableBytes) {
-                    //avifExtent extent;
-                    avifResult extentResult = AVIF_RESULT_OK; //avifDecoderNthImageMaxExtent(decoder, 0, &extent);
+                    avifExtent extent;
+                    avifResult extentResult = avifDecoderNthImageMaxExtent(decoder, 0, &extent);
                     if (extentResult != AVIF_RESULT_OK) {
                         retCode = 1;
 
@@ -287,9 +287,8 @@ static int runIOTests(const char * dataDir)
                                io->sizeHint,
                                io->persistent ? "Persistent" : "NonPersistent",
                                decoder->ignoreExif ? "IgnoreMetadata" : "Metadata",
-                               0, 0,
-                               //extent.offset,
-                               //extent.size,
+                               extent.offset,
+                               extent.size,
                                nextImageResult,
                                avifResultToString(nextImageResult));
                     }

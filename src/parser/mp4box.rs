@@ -332,7 +332,7 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
                 // unsigned int(offset_size*8) extent_offset;
                 offset: stream.read_uxx(iloc.offset_size)?,
                 // unsigned int(length_size*8) extent_length;
-                length: usize_from_u64(stream.read_uxx(iloc.length_size)?)?,
+                size: usize_from_u64(stream.read_uxx(iloc.length_size)?)?,
             };
             entry.extents.push(extent);
         }

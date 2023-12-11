@@ -142,24 +142,25 @@ impl Default for Settings {
 }
 
 #[derive(Debug, Default, Copy, Clone)]
+#[repr(C)]
 pub struct Extent {
     pub offset: u64,
-    pub length: usize,
+    pub size: usize,
 }
 
 impl Extent {
     fn merge(&mut self, extent: &Extent) -> AvifResult<()> {
-        if self.length == 0 {
+        if self.size == 0 {
             *self = *extent;
             return Ok(());
         }
-        if extent.length == 0 {
+        if extent.size == 0 {
             return Ok(());
         }
-        let max_extent_1 = self.offset + u64_from_usize(self.length)?;
-        let max_extent_2 = extent.offset + u64_from_usize(extent.length)?;
+        let max_extent_1 = self.offset + u64_from_usize(self.size)?;
+        let max_extent_2 = extent.offset + u64_from_usize(extent.size)?;
         self.offset = min(self.offset, extent.offset);
-        self.length = usize_from_u64(max(max_extent_1, max_extent_2) - self.offset)?;
+        self.size = usize_from_u64(max(max_extent_1, max_extent_2) - self.offset)?;
         Ok(())
     }
 }
@@ -984,7 +985,7 @@ impl Decoder {
             println!("sample for index {image_index} not found.");
             return Err(AvifError::NoImagesRemaining);
         }
-        let sample = &mut tile.input.samples[image_index];
+        let sample = &tile.input.samples[image_index];
         if sample.item_id == 0 {
             // Data comes from a track. Nothing to prepare.
             return Ok(());
@@ -997,21 +998,19 @@ impl Decoder {
             .ok_or(AvifError::BmffParseFailed)?;
         if item.extents.len() == 1 {
             // Item has only one extent. Nothing to prepare.
-            // TODO: does this overwrite the offset written in lsel?
-            sample.offset = item.data_offset();
             return Ok(());
         }
-        // Item has multiple extents, merge them into a contiguous buffer.
         if item.data_buffer.is_some() {
             // Extents have already been merged.
             return Ok(());
         }
+        // Item has multiple extents, merge them into a contiguous buffer.
         let mut data: Vec<u8> = Vec::new();
         data.reserve(item.size);
         for extent in &item.extents {
             let io = self.io.as_mut().unwrap();
             // TODO: check if enough bytes were actually read.
-            data.extend_from_slice(io.read(extent.offset, extent.length)?);
+            data.extend_from_slice(io.read(extent.offset, extent.size)?);
         }
         item.data_buffer = Some(data);
         Ok(())
@@ -1200,7 +1199,7 @@ impl Decoder {
         let mut extent = Extent::default();
         let start_index = self.nearest_keyframe(index) as usize;
         let end_index = index as usize;
-        for current_index in start_index..end_index {
+        for current_index in start_index..=end_index {
             for category in 0usize..3 {
                 for tile in &self.tiles[category] {
                     if current_index >= tile.input.samples.len() {
@@ -1208,11 +1207,12 @@ impl Decoder {
                     }
                     let sample = &tile.input.samples[current_index];
                     let sample_extent = if sample.item_id != 0 {
-                        Extent::default()
+                        let item = self.items.get(&sample.item_id).unwrap();
+                        item.max_extent(&sample)?
                     } else {
                         Extent {
                             offset: sample.offset,
-                            length: sample.size,
+                            size: sample.size,
                         }
                     };
                     extent.merge(&sample_extent)?;
@@ -1234,17 +1234,24 @@ mod tests {
 
     #[test_case(10, 20, 50, 100, 10, 140 ; "case 1")]
     #[test_case(100, 20, 50, 100, 50, 100 ; "case 2")]
-    fn merge_extents(o1: u64, l1: usize, o2: u64, l2: usize, eo: u64, el: usize) {
+    fn merge_extents(
+        offset1: u64,
+        size1: usize,
+        offset2: u64,
+        size2: usize,
+        expected_offset: u64,
+        expected_size: usize,
+    ) {
         let mut e1 = Extent {
-            offset: o1,
-            length: l1,
+            offset: offset1,
+            size: size1,
         };
         let e2 = Extent {
-            offset: o2,
-            length: l2,
+            offset: offset2,
+            size: size2,
         };
         assert!(e1.merge(&e2).is_ok());
-        assert_eq!(e1.offset, eo);
-        assert_eq!(e1.length, el);
+        assert_eq!(e1.offset, expected_offset);
+        assert_eq!(e1.size, expected_size);
     }
 }
