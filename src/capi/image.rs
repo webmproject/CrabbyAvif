@@ -195,8 +195,28 @@ impl From<&Image> for avifImage {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImageDestroy(_image: *mut avifImage) {
-    // TODO: implement.
+pub unsafe extern "C" fn avifImageCreateEmpty() -> *mut avifImage {
+    Box::into_raw(Box::<avifImage>::default())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifImageCreate(
+    width: u32,
+    height: u32,
+    depth: u32,
+    yuvFormat: avifPixelFormat,
+) -> *mut avifImage {
+    Box::into_raw(Box::new(avifImage {
+        width,
+        height,
+        depth,
+        yuvFormat,
+        ..avifImage::default()
+    }))
+}
+#[no_mangle]
+pub unsafe extern "C" fn avifImageDestroy(image: *mut avifImage) {
+    let _ = Box::from_raw(image);
 }
 
 #[no_mangle]

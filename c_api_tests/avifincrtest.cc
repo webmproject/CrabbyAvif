@@ -247,13 +247,12 @@ TEST(IncrementalTest, Decode) {
   avifRWData encoded_avif = {.data = file_data.data(),
                              .size = file_data.size()};
   ASSERT_NE(encoded_avif.size, 0u);
-  // ImagePtr reference(avifImageCreateEmpty());
-  // ASSERT_NE(reference, nullptr);
-  avifImage reference;
+  ImagePtr reference(avifImageCreateEmpty());
+  ASSERT_NE(reference, nullptr);
   DecoderPtr decoder(avifDecoderCreate());
   ASSERT_NE(decoder, nullptr);
-  ASSERT_EQ(avifDecoderReadMemory(decoder.get(), &reference, encoded_avif.data,
-                                  encoded_avif.size),
+  ASSERT_EQ(avifDecoderReadMemory(decoder.get(), reference.get(),
+                                  encoded_avif.data, encoded_avif.size),
             AVIF_RESULT_OK);
 
   DecoderPtr decoder2(avifDecoderCreate());
@@ -263,7 +262,7 @@ TEST(IncrementalTest, Decode) {
   // encoded payload.
   ASSERT_EQ(DecodeIncrementally(encoded_avif, decoder2.get(),
                                 /*is_persistent=*/true, /*give_size_hint=*/true,
-                                /*use_nth_image_api=*/false, reference,
+                                /*use_nth_image_api=*/false, *reference,
                                 /*cell_height=*/154,
                                 /*enable_fine_incremental_check=*/true, true),
             AVIF_RESULT_OK);
