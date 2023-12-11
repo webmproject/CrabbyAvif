@@ -14,7 +14,7 @@ pub struct Item {
     pub height: u32,
     pub content_type: String,
     pub properties: Vec<ItemProperty>,
-    pub extents: Vec<ItemLocationExtent>,
+    pub extents: Vec<Extent>,
     // TODO mergedExtents stuff.
     pub thumbnail_for_id: u32,
     pub aux_for_id: u32,
@@ -267,6 +267,56 @@ impl Item {
     pub fn is_tmap(&self) -> bool {
         self.is_metadata("tmap", 0) && self.thumbnail_for_id == 0
     }
+
+    pub fn max_extent(&self, sample: &DecodeSample) -> AvifResult<Extent> {
+        if self.extents.is_empty() {
+            return Err(AvifError::TruncatedData);
+        }
+        if !self.idat.is_empty() {
+            return Ok(Extent::default());
+        }
+        if sample.size == 0 {
+            return Err(AvifError::TruncatedData);
+        }
+        let mut remaining_offset = sample.offset;
+        let mut remaining_size = sample.size;
+        let mut min_offset = u64::MAX;
+        let mut max_offset = 0;
+        for extent in &self.extents {
+            let mut start_offset = extent.offset;
+            let mut length = extent.length;
+            let lengthu64 = u64_from_usize(length)?;
+            if remaining_offset != 0 {
+                if remaining_offset >= lengthu64 {
+                    remaining_offset -= lengthu64;
+                    continue;
+                } else {
+                    start_offset = start_offset
+                        .checked_add(remaining_offset)
+                        .ok_or(AvifError::BmffParseFailed)?;
+                    length -= usize_from_u64(remaining_offset)?;
+                    remaining_offset = 0;
+                }
+            }
+            let used_extent_size = std::cmp::min(length, remaining_size);
+            let end_offset = start_offset
+                .checked_add(u64_from_usize(used_extent_size)?)
+                .ok_or(AvifError::BmffParseFailed)?;
+            min_offset = std::cmp::min(min_offset, start_offset);
+            max_offset = std::cmp::max(max_offset, end_offset);
+            remaining_size -= used_extent_size;
+            if remaining_size == 0 {
+                break;
+            }
+        }
+        if remaining_size != 0 {
+            return Err(AvifError::TruncatedData);
+        }
+        Ok(Extent {
+            offset: min_offset,
+            length: usize_from_u64(max_offset - min_offset)?,
+        })
+    }
 }
 
 pub type Items = HashMap<u32, Item>;
@@ -296,13 +346,13 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
             item.idat = meta.idat.clone();
         }
         for extent in &iloc.extents {
-            item.extents.push(ItemLocationExtent {
+            item.extents.push(Extent {
                 offset: iloc.base_offset + extent.offset,
                 length: extent.length,
             });
             item.size = item
                 .size
-                .checked_add(usize_from_u64(extent.length)?)
+                .checked_add(extent.length)
                 .ok_or(AvifError::BmffParseFailed)?;
         }
     }

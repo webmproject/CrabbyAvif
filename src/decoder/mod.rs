@@ -26,6 +26,8 @@ use crate::parser::mp4box::*;
 use crate::parser::obu::Av1SequenceHeader;
 use crate::*;
 
+use std::cmp::max;
+use std::cmp::min;
 use std::collections::HashSet;
 
 pub trait IO {
@@ -139,6 +141,29 @@ impl Default for Settings {
     }
 }
 
+#[derive(Debug, Default, Copy, Clone)]
+pub struct Extent {
+    pub offset: u64,
+    pub length: usize,
+}
+
+impl Extent {
+    fn merge(&mut self, extent: &Extent) -> AvifResult<()> {
+        if self.length == 0 {
+            *self = *extent;
+            return Ok(());
+        }
+        if extent.length == 0 {
+            return Ok(());
+        }
+        let max_extent_1 = self.offset + u64_from_usize(self.length)?;
+        let max_extent_2 = extent.offset + u64_from_usize(extent.length)?;
+        self.offset = min(self.offset, extent.offset);
+        self.length = usize_from_u64(max(max_extent_1, max_extent_2) - self.offset)?;
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub enum StrictnessFlag {
     PixiRequired,
@@ -195,11 +220,6 @@ pub enum ProgressiveState {
 #[derive(Default)]
 pub struct Decoder {
     pub settings: Settings,
-    image: Image,
-    source: Source,
-    tile_info: [TileInfo; 3],
-    tiles: [Vec<Tile>; 3],
-    image_index: i32,
     pub image_count: u32,
     pub image_timing: ImageTiming,
     pub timescale: u64,
@@ -208,6 +228,11 @@ pub struct Decoder {
     pub repetition_count: RepetitionCount,
     pub gainmap: GainMap,
     pub gainmap_present: bool,
+    image: Image,
+    source: Source,
+    tile_info: [TileInfo; 3],
+    tiles: [Vec<Tile>; 3],
+    image_index: i32,
     items: Items,
     tracks: Vec<Track>,
     // To replicate the C-API, we need to keep this optional. Otherwise this
@@ -986,7 +1011,7 @@ impl Decoder {
         for extent in &item.extents {
             let io = self.io.as_mut().unwrap();
             // TODO: check if enough bytes were actually read.
-            data.extend_from_slice(io.read(extent.offset, usize_from_u64(extent.length)?)?);
+            data.extend_from_slice(io.read(extent.offset, extent.length)?);
         }
         item.data_buffer = Some(data);
         Ok(())
@@ -1082,7 +1107,7 @@ impl Decoder {
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
         }
-        if self.tiles[0].is_empty() {
+        if !self.parsing_complete() {
             return Err(AvifError::NoContent);
         }
         let next_image_index = self.image_index + 1;
@@ -1095,10 +1120,14 @@ impl Decoder {
     }
 
     pub fn image(&self) -> &Image {
+        // TODO: make this optional and reutrn none if parsing is not complete.
         &self.image
     }
 
     pub fn nth_image_timing(&self, n: u32) -> AvifResult<ImageTiming> {
+        if !self.parsing_complete() {
+            return Err(AvifError::NoContent);
+        }
         if n > self.settings.image_count_limit {
             return Err(AvifError::NoImagesRemaining);
         }
@@ -1132,7 +1161,90 @@ impl Decoder {
         min_row_count
     }
 
+    fn parsing_complete(&self) -> bool {
+        !self.tiles[0].is_empty()
+    }
+
+    pub fn is_keyframe(&self, index: u32) -> bool {
+        if !self.parsing_complete() {
+            return false;
+        }
+        let index = index as usize;
+        // All the tiles for the requested index must be a keyframe.
+        for category in 0usize..3 {
+            for tile in &self.tiles[category] {
+                if index >= tile.input.samples.len() || !tile.input.samples[index].sync {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    pub fn nearest_keyframe(&self, index: u32) -> u32 {
+        if !self.parsing_complete() {
+            return 0;
+        }
+        for i in (0..index).rev() {
+            if self.is_keyframe(i) {
+                return i;
+            }
+        }
+        0
+    }
+
+    pub fn nth_image_max_extent(&self, index: u32) -> AvifResult<Extent> {
+        if !self.parsing_complete() {
+            return Err(AvifError::NoContent);
+        }
+        let mut extent = Extent::default();
+        let start_index = self.nearest_keyframe(index) as usize;
+        let end_index = index as usize;
+        for current_index in start_index..end_index {
+            for category in 0usize..3 {
+                for tile in &self.tiles[category] {
+                    if current_index >= tile.input.samples.len() {
+                        return Err(AvifError::NoImagesRemaining);
+                    }
+                    let sample = &tile.input.samples[current_index];
+                    let sample_extent = if sample.item_id != 0 {
+                        Extent::default()
+                    } else {
+                        Extent {
+                            offset: sample.offset,
+                            length: sample.size,
+                        }
+                    };
+                    extent.merge(&sample_extent)?;
+                }
+            }
+        }
+        Ok(extent)
+    }
+
     pub fn peek_compatible_file_type(data: &[u8]) -> bool {
         mp4box::peek_compatible_file_type(data).unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_case::test_case;
+
+    #[test_case(10, 20, 50, 100, 10, 140 ; "case 1")]
+    #[test_case(100, 20, 50, 100, 50, 100 ; "case 2")]
+    fn merge_extents(o1: u64, l1: usize, o2: u64, l2: usize, eo: u64, el: usize) {
+        let mut e1 = Extent {
+            offset: o1,
+            length: l1,
+        };
+        let e2 = Extent {
+            offset: o2,
+            length: l2,
+        };
+        assert!(e1.merge(&e2).is_ok());
+        assert_eq!(e1.offset, eo);
+        assert_eq!(e1.length, el);
     }
 }

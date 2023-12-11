@@ -1,5 +1,6 @@
 use crate::decoder::gainmap::GainMapMetadata;
 use crate::decoder::track::*;
+use crate::decoder::Extent;
 use crate::decoder::GenericIO;
 use crate::image::MAX_PLANE_COUNT;
 use crate::internal_utils::stream::*;
@@ -44,19 +45,13 @@ impl FileTypeBox {
     }
 }
 
-#[derive(Debug)]
-pub struct ItemLocationExtent {
-    pub offset: u64,
-    pub length: u64,
-}
-
 #[derive(Debug, Default)]
 pub struct ItemLocationEntry {
     pub item_id: u32,
     pub construction_method: u8,
     pub base_offset: u64,
     pub extent_count: u16,
-    pub extents: Vec<ItemLocationExtent>,
+    pub extents: Vec<Extent>,
 }
 
 #[derive(Debug, Default)]
@@ -333,11 +328,11 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
         // unsigned int(16) extent_count;
         entry.extent_count = stream.read_u16()?;
         for _j in 0..entry.extent_count {
-            let extent = ItemLocationExtent {
+            let extent = Extent {
                 // unsigned int(offset_size*8) extent_offset;
                 offset: stream.read_uxx(iloc.offset_size)?,
                 // unsigned int(length_size*8) extent_length;
-                length: stream.read_uxx(iloc.length_size)?,
+                length: usize_from_u64(stream.read_uxx(iloc.length_size)?)?,
             };
             entry.extents.push(extent);
         }
