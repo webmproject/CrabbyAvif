@@ -12,7 +12,7 @@ use num_traits::cast::ToPrimitive;
 // do not have to be debug printable.
 use derivative::Derivative;
 
-#[derive(PartialEq, ToPrimitive, Copy, Clone)]
+#[derive(PartialEq, ToPrimitive, Copy, Clone, Debug)]
 pub enum Plane {
     Y = 0,
     U = 1,
@@ -132,6 +132,10 @@ impl Image {
             let plane_index = plane.to_usize().unwrap();
             let width = self.width(plane);
             let plane_size = width * self.height(plane) * pixel_size;
+            if self.plane_buffers[plane_index].len() == plane_size {
+                // TODO: need to memset maybe?
+                continue;
+            }
             if self.plane_buffers[plane_index].capacity() < plane_size {
                 self.plane_buffers[plane_index].reserve(plane_size);
             }

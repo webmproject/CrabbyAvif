@@ -8,6 +8,7 @@ use std::os::raw::c_char;
 
 use crate::decoder::track::*;
 use crate::decoder::*;
+use crate::*;
 
 #[repr(C)]
 pub struct avifDecoder {
@@ -221,11 +222,11 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
     let rust_decoder = &mut (*decoder).rust_decoder;
 
     let res = rust_decoder.next_image();
-    if res.is_err() {
+    if res.is_err() && res.err().unwrap() != AvifError::WaitingOnIo {
         return to_avifResult(&res);
     }
     rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
-    avifResult::Ok
+    to_avifResult(&res)
 }
 
 #[no_mangle]
