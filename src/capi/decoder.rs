@@ -185,7 +185,7 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
     }
 
     // Copy image.
-    let image = res.unwrap();
+    let image = rust_decoder.image();
     (*decoder).image_object = image.into();
 
     // Copy decoder properties.
@@ -222,7 +222,7 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
     }
 
     // Copy image.
-    let image = res.unwrap();
+    let image = rust_decoder.image();
     (*decoder).image_object = image.into();
 
     // Copy decoder properties.

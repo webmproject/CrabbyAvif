@@ -553,7 +553,7 @@ impl Decoder {
     }
 
     #[allow(non_snake_case)]
-    pub fn parse(&mut self) -> AvifResult<&Image> {
+    pub fn parse(&mut self) -> AvifResult<()> {
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
         }
@@ -838,7 +838,7 @@ impl Decoder {
             self.harvest_cicp_from_sequence_header()?;
         }
 
-        Ok(&self.image)
+        Ok(())
     }
 
     fn read_and_parse_item(&mut self, item_id: u32, category: usize) -> AvifResult<()> {
@@ -1077,7 +1077,7 @@ impl Decoder {
         Ok(())
     }
 
-    pub fn next_image(&mut self) -> AvifResult<&Image> {
+    pub fn next_image(&mut self) -> AvifResult<()> {
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
         }
@@ -1090,7 +1090,11 @@ impl Decoder {
         self.decode_tiles(next_image_index as usize)?;
         self.image_index = next_image_index;
         self.image_timing = self.nth_image_timing(self.image_index as u32)?;
-        Ok(&self.image)
+        Ok(())
+    }
+
+    pub fn image(&self) -> &Image {
+        &self.image
     }
 
     pub fn nth_image_timing(&self, n: u32) -> AvifResult<ImageTiming> {

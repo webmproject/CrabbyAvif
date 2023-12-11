@@ -40,12 +40,12 @@ fn alpha_no_ispe() {
         decoder::Strictness::SpecificExclude(vec![decoder::StrictnessFlag::AlphaIspeRequired]);
     let res = decoder.parse();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
     assert!(image.alpha_present);
     assert!(!image.image_sequence_track_present);
     let res = decoder.next_image();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
     let alpha_plane = image.plane(Plane::A);
     assert!(alpha_plane.is_some());
     assert!(alpha_plane.unwrap().row_bytes > 0);
@@ -57,7 +57,7 @@ fn animated_image() {
     let mut decoder = get_decoder("colors-animated-8bpc.avif");
     let res = decoder.parse();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
     assert!(!image.alpha_present);
     assert!(image.image_sequence_track_present);
     assert_eq!(decoder.image_count, 5);
@@ -77,7 +77,7 @@ fn animated_image_with_source_set_to_primary_item() {
     decoder.settings.source = decoder::Source::PrimaryItem;
     let res = decoder.parse();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
     assert!(!image.alpha_present);
     // This will be reported as true irrespective of the preferred source.
     assert!(image.image_sequence_track_present);
@@ -99,12 +99,12 @@ fn color_grid_alpha_no_grid() {
     let mut decoder = get_decoder("color_grid_alpha_nogrid.avif");
     let res = decoder.parse();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
     assert!(image.alpha_present);
     assert!(!image.image_sequence_track_present);
     let res = decoder.next_image();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
     let alpha_plane = image.plane(Plane::A);
     assert!(alpha_plane.is_some());
     assert!(alpha_plane.unwrap().row_bytes > 0);
@@ -123,7 +123,7 @@ fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     decoder.settings.allow_progressive = false;
     let res = decoder.parse();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
     assert!(matches!(
         image.progressive_state,
         decoder::ProgressiveState::Available
@@ -132,7 +132,7 @@ fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     decoder.settings.allow_progressive = true;
     let res = decoder.parse();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
     assert!(matches!(
         image.progressive_state,
         decoder::ProgressiveState::Active
@@ -143,7 +143,7 @@ fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     for _i in 0..decoder.image_count {
         let res = decoder.next_image();
         assert!(res.is_ok());
-        // let _image = res.unwrap();
+        // let _image = decoder.image();
         // TODO: Check width and height after scaling is implemented.
         // assert_eq!(image.image.width, width);
         // assert_eq!(image.image.height, height);
@@ -160,7 +160,7 @@ fn decoder_parse_icc_exif_xmp() {
     decoder.settings.ignore_exif = true;
     let res = decoder.parse();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
 
     assert_eq!(image.icc.len(), 596);
     assert_eq!(image.icc[0], 0);
@@ -175,7 +175,7 @@ fn decoder_parse_icc_exif_xmp() {
     decoder.settings.ignore_exif = false;
     let res = decoder.parse();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
 
     assert_eq!(image.exif.len(), 1126);
     assert_eq!(image.exif[0], 73);
@@ -198,7 +198,7 @@ fn color_grid_gainmap_different_grid() {
     decoder.settings.enable_parsing_gainmap_metadata = true;
     let res = decoder.parse();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
     // Color+alpha: 4x3 grid of 128x200 tiles.
     assert_eq!(image.width, 128 * 4);
     assert_eq!(image.height, 200 * 3);
@@ -222,7 +222,7 @@ fn color_grid_alpha_grid_gainmap_nogrid() {
     decoder.settings.enable_parsing_gainmap_metadata = true;
     let res = decoder.parse();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
     // Color+alpha: 4x3 grid of 128x200 tiles.
     assert_eq!(image.width, 128 * 4);
     assert_eq!(image.height, 200 * 3);
@@ -246,7 +246,7 @@ fn color_nogrid_alpha_nogrid_gainmap_grid() {
     decoder.settings.enable_parsing_gainmap_metadata = true;
     let res = decoder.parse();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
     // Color+alpha: single image of size 128x200.
     assert_eq!(image.width, 128);
     assert_eq!(image.height, 200);
@@ -278,7 +278,7 @@ fn clli(filename: &str, max_cll: u16, max_pall: u16) {
     let mut decoder = get_decoder(&filename_with_prefix);
     let res = decoder.parse();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
     if max_cll == 0 && max_pall == 0 {
         assert!(image.clli.is_none());
     } else {

@@ -105,11 +105,11 @@ fn test_conformance(index: usize) {
     let _ = decoder.set_io_file(&filename).expect("Failed to set IO");
     let res = decoder.parse();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
     verify_info(expected_info, &image);
     let res = decoder.next_image();
     assert!(res.is_ok());
-    let image = res.unwrap();
+    let image = decoder.image();
 
     // Link-U 422 files have wrong subsampling in the Avif header(decoded one
     // is right).

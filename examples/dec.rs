@@ -41,13 +41,12 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        let image = match decoder.parse() {
-            Ok(x) => x,
-            Err(err) => {
-                println!("decoder.parse failed: {:#?}", err);
-                std::process::exit(1);
-            }
-        };
+        let res = decoder.parse();
+        if res.is_err() {
+            println!("parse failed! {:#?}", res);
+            std::process::exit(1);
+        }
+        let image = decoder.image();
         println!("image after parse: {:#?}", image);
 
         println!("\n^^^ decoder public properties ^^^");
@@ -65,13 +64,14 @@ fn main() {
         writer.filename = Some(args[2].clone());
 
         for _i in 0..image_count {
-            let image = decoder.next_image();
-            println!("image after decode: {:#?}", image);
-            if image.is_err() {
-                println!("next_image failed! {:#?}", image);
+            let res = decoder.next_image();
+            if res.is_err() {
+                println!("next_image failed! {:#?}", res);
                 std::process::exit(1);
             }
-            let ret = writer.write_frame(image.unwrap());
+            let image = decoder.image();
+            println!("image after decode: {:#?}", image);
+            let ret = writer.write_frame(image);
             if !ret {
                 println!("error writing y4m file");
                 std::process::exit(1);
