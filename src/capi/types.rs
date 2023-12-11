@@ -1,6 +1,9 @@
+use super::image::*;
+
 use std::os::raw::c_char;
 use std::os::raw::c_int;
 
+use crate::utils::clap::*;
 use crate::*;
 
 #[repr(C)]
@@ -252,6 +255,25 @@ pub fn to_avifResult<T>(res: &AvifResult<T>) -> avifResult {
 pub unsafe extern "C" fn avifResultToString(_res: avifResult) -> *const c_char {
     // TODO: implement this function.
     std::ptr::null()
+}
+
+pub type avifCropRect = CropRect;
+
+#[no_mangle]
+pub unsafe extern "C" fn avifCropRectConvertCleanApertureBox(
+    cropRect: *mut avifCropRect,
+    clap: *const avifCleanApertureBox,
+    imageW: u32,
+    imageH: u32,
+    yuvFormat: avifPixelFormat,
+    _diag: *mut avifDiagnostics,
+) -> avifBool {
+    let rust_clap: CleanAperture = (&(*clap)).into();
+    *cropRect = match CropRect::create_from(&rust_clap, imageW, imageH, yuvFormat.into()) {
+        Ok(x) => x,
+        Err(_) => return AVIF_FALSE,
+    };
+    AVIF_TRUE
 }
 
 // Constants and definitions from libavif that are not used in rust.
