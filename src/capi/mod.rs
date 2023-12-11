@@ -10,3 +10,4 @@ mod gainmap;
 mod image;
 mod io;
 mod types;
+mod utils;

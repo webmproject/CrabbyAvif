@@ -144,6 +144,18 @@ impl From<PixelFormat> for avifPixelFormat {
     }
 }
 
+impl From<avifPixelFormat> for PixelFormat {
+    fn from(format: avifPixelFormat) -> Self {
+        match format {
+            avifPixelFormat::Yuv444 => Self::Yuv444,
+            avifPixelFormat::Yuv422 => Self::Yuv422,
+            avifPixelFormat::Yuv420 => Self::Yuv420,
+            avifPixelFormat::Yuv400 => Self::Monochrome,
+            _ => PixelFormat::Yuv420,
+        }
+    }
+}
+
 impl avifPixelFormat {
     // TODO: these functions can be removed if avifPixelFormat can be aliased to PixelFormat (with
     // constants None and Count.

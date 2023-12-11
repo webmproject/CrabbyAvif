@@ -6,6 +6,7 @@
 * avifanimationtest.cc
 * avifdecodetest.cc
 * avifprogressivetest.cc
+* avifclaptest.cc
 
 ### Copied with changes
 

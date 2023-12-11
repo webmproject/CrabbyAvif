@@ -3,6 +3,7 @@ use super::io::*;
 use super::types::*;
 
 use crate::image::*;
+use crate::internal_utils::*;
 use crate::parser::mp4box::*;
 use crate::utils::clap::*;
 use crate::*;
@@ -39,6 +40,17 @@ impl From<&Option<CleanAperture>> for avifCleanApertureBox {
                 vert_off_d: clap.vert_off.1,
             },
             None => Self::default(),
+        }
+    }
+}
+
+impl From<&avifCleanApertureBox> for CleanAperture {
+    fn from(clap: &avifCleanApertureBox) -> Self {
+        Self {
+            width: UFraction(clap.width_n, clap.width_d),
+            height: UFraction(clap.height_n, clap.height_d),
+            horiz_off: UFraction(clap.horiz_off_n, clap.horiz_off_d),
+            vert_off: UFraction(clap.vert_off_n, clap.vert_off_d),
         }
     }
 }
