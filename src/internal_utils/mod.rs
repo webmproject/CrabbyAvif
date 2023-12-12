@@ -73,7 +73,7 @@ impl IFraction {
     }
 
     pub fn add(&mut self, val: &IFraction) -> AvifResult<()> {
-        let mut val = val.clone();
+        let mut val = *val;
         val.simplify();
         self.common_denominator(&mut val)?;
         self.0 = self.0.checked_add(val.0).ok_or(AvifError::UnknownError)?;
@@ -82,7 +82,7 @@ impl IFraction {
     }
 
     pub fn sub(&mut self, val: &IFraction) -> AvifResult<()> {
-        let mut val = val.clone();
+        let mut val = *val;
         val.simplify();
         self.common_denominator(&mut val)?;
         self.0 = self.0.checked_sub(val.0).ok_or(AvifError::UnknownError)?;

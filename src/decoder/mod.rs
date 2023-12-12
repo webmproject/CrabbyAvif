@@ -507,7 +507,7 @@ impl Decoder {
         } else {
             &self.items.get(&sample.item_id).unwrap().data_buffer
         };
-        match Av1SequenceHeader::parse_from_obus(sample.data(io, &item_data_buffer)?) {
+        match Av1SequenceHeader::parse_from_obus(sample.data(io, item_data_buffer)?) {
             Ok(sequence_header) => {
                 self.image.color_primaries = sequence_header.color_primaries;
                 self.image.transfer_characteristics = sequence_header.transfer_characteristics;
@@ -1049,7 +1049,7 @@ impl Decoder {
                     } else {
                         &self.items.get(&sample.item_id).unwrap().data_buffer
                     };
-                    let data = sample.data(io, &item_data_buffer)?;
+                    let data = sample.data(io, item_data_buffer)?;
                     codec.get_next_image(data, sample.spatial_id, &mut tile.image, category)?;
                     self.tile_info[category].decoded_tile_count += 1;
                 }
@@ -1208,7 +1208,7 @@ impl Decoder {
                     let sample = &tile.input.samples[current_index];
                     let sample_extent = if sample.item_id != 0 {
                         let item = self.items.get(&sample.item_id).unwrap();
-                        item.max_extent(&sample)?
+                        item.max_extent(sample)?
                     } else {
                         Extent {
                             offset: sample.offset,

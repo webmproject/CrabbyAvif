@@ -68,7 +68,7 @@ pub unsafe extern "C" fn avifRWDataRealloc(raw: *mut avifRWData, newSize: usize)
     (*raw).data = b.as_mut_ptr();
     std::mem::forget(b);
     (*raw).size = newSize;
-    return avifResult::Ok;
+    avifResult::Ok
 }
 
 #[no_mangle]
@@ -86,7 +86,7 @@ pub unsafe extern "C" fn avifRWDataSet(
     } else {
         avifRWDataFree(raw);
     }
-    return avifResult::Ok;
+    avifResult::Ok
 }
 
 #[no_mangle]
@@ -191,7 +191,7 @@ unsafe extern "C" fn cioRead(
     }
     (*out).data = (*cio).buf.as_ptr();
     (*out).size = (*cio).buf.len();
-    return avifResult::Ok;
+    avifResult::Ok
 }
 
 #[no_mangle]
@@ -202,7 +202,7 @@ unsafe extern "C" fn cioWrite(
     _data: *const u8,
     _size: usize,
 ) -> avifResult {
-    return avifResult::Ok;
+    avifResult::Ok
 }
 
 #[no_mangle]

@@ -204,7 +204,7 @@ impl SampleTable {
                 return time_to_sample.sample_delta;
             }
         }
-        return 1;
+        1
     }
 }
 
