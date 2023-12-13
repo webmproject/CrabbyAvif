@@ -268,8 +268,9 @@ pub unsafe extern "C" fn avifCropRectConvertCleanApertureBox(
     yuvFormat: avifPixelFormat,
     _diag: *mut avifDiagnostics,
 ) -> avifBool {
-    let rust_clap: CleanAperture = (&(*clap)).into();
-    *cropRect = match CropRect::create_from(&rust_clap, imageW, imageH, yuvFormat.into()) {
+    let rust_clap: CleanAperture = unsafe { (&(*clap)).into() };
+    let rect = unsafe { &mut (*cropRect) };
+    *rect = match CropRect::create_from(&rust_clap, imageW, imageH, yuvFormat.into()) {
         Ok(x) => x,
         Err(_) => return AVIF_FALSE,
     };
@@ -322,7 +323,7 @@ pub unsafe extern "C" fn avifGetPixelFormatInfo(
     if info.is_null() {
         return;
     }
-    let info = &mut (*info);
+    let info = unsafe { &mut (*info) };
     match format {
         avifPixelFormat::Yuv444 => {
             info.chromaShiftX = 0;
@@ -353,7 +354,9 @@ pub unsafe extern "C" fn avifDiagnosticsClearError(diag: *mut avifDiagnostics) {
     if diag.is_null() {
         return;
     }
-    (*diag).error[0] = 0;
+    unsafe {
+        (*diag).error[0] = 0;
+    }
 }
 
 #[repr(C)]

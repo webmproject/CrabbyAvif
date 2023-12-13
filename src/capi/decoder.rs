@@ -100,8 +100,10 @@ pub unsafe extern "C" fn avifDecoderCreate() -> *mut avifDecoder {
 
 #[no_mangle]
 pub unsafe extern "C" fn avifDecoderSetIO(decoder: *mut avifDecoder, io: *mut avifIO) {
-    let rust_decoder = &mut (*decoder).rust_decoder;
-    rust_decoder.set_io(Box::new(avifIOWrapper::create(*io)));
+    unsafe {
+        let rust_decoder = &mut (*decoder).rust_decoder;
+        rust_decoder.set_io(Box::new(avifIOWrapper::create(*io)));
+    }
 }
 
 #[no_mangle]
@@ -109,9 +111,11 @@ pub unsafe extern "C" fn avifDecoderSetIOFile(
     decoder: *mut avifDecoder,
     filename: *const c_char,
 ) -> avifResult {
-    let rust_decoder = &mut (*decoder).rust_decoder;
-    let filename = String::from(CStr::from_ptr(filename).to_str().unwrap_or(""));
-    to_avifResult(&rust_decoder.set_io_file(&filename))
+    unsafe {
+        let rust_decoder = &mut (*decoder).rust_decoder;
+        let filename = String::from(CStr::from_ptr(filename).to_str().unwrap_or(""));
+        to_avifResult(&rust_decoder.set_io_file(&filename))
+    }
 }
 
 #[no_mangle]
@@ -120,7 +124,7 @@ pub unsafe extern "C" fn avifDecoderSetIOMemory(
     data: *const u8,
     size: usize,
 ) -> avifResult {
-    let rust_decoder = &mut (*decoder).rust_decoder;
+    let rust_decoder = unsafe { &mut (*decoder).rust_decoder };
     to_avifResult(&rust_decoder.set_io_raw(data, size))
 }
 
@@ -129,7 +133,9 @@ pub unsafe extern "C" fn avifDecoderSetSource(
     decoder: *mut avifDecoder,
     source: Source,
 ) -> avifResult {
-    (*decoder).requestedSource = source;
+    unsafe {
+        (*decoder).requestedSource = source;
+    }
     // TODO: should decoder be reset here in case this is called after parse?
     avifResult::Ok
 }
@@ -206,27 +212,31 @@ fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
 
 #[no_mangle]
 pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResult {
-    let rust_decoder = &mut (*decoder).rust_decoder;
-    rust_decoder.settings = (&(*decoder)).into();
+    unsafe {
+        let rust_decoder = &mut (*decoder).rust_decoder;
+        rust_decoder.settings = (&(*decoder)).into();
 
-    let res = rust_decoder.parse();
-    if res.is_err() {
-        return to_avifResult(&res);
+        let res = rust_decoder.parse();
+        if res.is_err() {
+            return to_avifResult(&res);
+        }
+        rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
+        avifResult::Ok
     }
-    rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
-    avifResult::Ok
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avifResult {
-    let rust_decoder = &mut (*decoder).rust_decoder;
+    unsafe {
+        let rust_decoder = &mut (*decoder).rust_decoder;
 
-    let res = rust_decoder.next_image();
-    if res.is_err() && res.err().unwrap() != AvifError::WaitingOnIo {
-        return to_avifResult(&res);
+        let res = rust_decoder.next_image();
+        if res.is_err() && res.err().unwrap() != AvifError::WaitingOnIo {
+            return to_avifResult(&res);
+        }
+        rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
+        to_avifResult(&res)
     }
-    rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
-    to_avifResult(&res)
 }
 
 #[no_mangle]
@@ -235,17 +245,21 @@ pub unsafe extern "C" fn avifDecoderNthImageTiming(
     frameIndex: u32,
     outTiming: *mut ImageTiming,
 ) -> avifResult {
-    let rust_decoder = &(*decoder).rust_decoder;
+    let rust_decoder = unsafe { &(*decoder).rust_decoder };
     let image_timing = rust_decoder.nth_image_timing(frameIndex);
     if let Ok(timing) = image_timing {
-        *outTiming = timing;
+        unsafe {
+            *outTiming = timing;
+        }
     }
     to_avifResult(&image_timing)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn avifDecoderDestroy(decoder: *mut avifDecoder) {
-    let _ = Box::from_raw(decoder);
+    unsafe {
+        let _ = Box::from_raw(decoder);
+    }
 }
 
 #[no_mangle]
@@ -253,20 +267,22 @@ pub unsafe extern "C" fn avifDecoderRead(
     decoder: *mut avifDecoder,
     image: *mut avifImage,
 ) -> avifResult {
-    let rust_decoder = &mut (*decoder).rust_decoder;
-    rust_decoder.settings = (&(*decoder)).into();
+    unsafe {
+        let rust_decoder = &mut (*decoder).rust_decoder;
+        rust_decoder.settings = (&(*decoder)).into();
 
-    let res = rust_decoder.parse();
-    if res.is_err() {
-        return to_avifResult(&res);
+        let res = rust_decoder.parse();
+        if res.is_err() {
+            return to_avifResult(&res);
+        }
+        let res = rust_decoder.next_image();
+        if res.is_err() {
+            return to_avifResult(&res);
+        }
+        rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
+        *image = (*decoder).image_object.clone();
+        avifResult::Ok
     }
-    let res = rust_decoder.next_image();
-    if res.is_err() {
-        return to_avifResult(&res);
-    }
-    rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
-    *image = (*decoder).image_object.clone();
-    avifResult::Ok
 }
 
 #[no_mangle]
@@ -276,11 +292,13 @@ pub unsafe extern "C" fn avifDecoderReadMemory(
     data: *const u8,
     size: usize,
 ) -> avifResult {
-    let res = avifDecoderSetIOMemory(decoder, data, size);
-    if res != avifResult::Ok {
-        return res;
+    unsafe {
+        let res = avifDecoderSetIOMemory(decoder, data, size);
+        if res != avifResult::Ok {
+            return res;
+        }
+        avifDecoderRead(decoder, image)
     }
-    avifDecoderRead(decoder, image)
 }
 
 #[no_mangle]
@@ -289,11 +307,13 @@ pub unsafe extern "C" fn avifDecoderReadFile(
     image: *mut avifImage,
     filename: *const c_char,
 ) -> avifResult {
-    let res = avifDecoderSetIOFile(decoder, filename);
-    if res != avifResult::Ok {
-        return res;
+    unsafe {
+        let res = avifDecoderSetIOFile(decoder, filename);
+        if res != avifResult::Ok {
+            return res;
+        }
+        avifDecoderRead(decoder, image)
     }
-    avifDecoderRead(decoder, image)
 }
 
 #[no_mangle]
@@ -301,7 +321,7 @@ pub unsafe extern "C" fn avifDecoderIsKeyframe(
     decoder: *const avifDecoder,
     frameIndex: u32,
 ) -> avifBool {
-    let rust_decoder = &(*decoder).rust_decoder;
+    let rust_decoder = unsafe { &(*decoder).rust_decoder };
     to_avifBool(rust_decoder.is_keyframe(frameIndex))
 }
 
@@ -310,13 +330,13 @@ pub unsafe extern "C" fn avifDecoderNearestKeyframe(
     decoder: *const avifDecoder,
     frameIndex: u32,
 ) -> u32 {
-    let rust_decoder = &(*decoder).rust_decoder;
+    let rust_decoder = unsafe { &(*decoder).rust_decoder };
     rust_decoder.nearest_keyframe(frameIndex)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn avifDecoderDecodedRowCount(decoder: *const avifDecoder) -> u32 {
-    let rust_decoder = &(*decoder).rust_decoder;
+    let rust_decoder = unsafe { &(*decoder).rust_decoder };
     rust_decoder.decoded_row_count()
 }
 
@@ -328,17 +348,19 @@ pub unsafe extern "C" fn avifDecoderNthImageMaxExtent(
     frameIndex: u32,
     outExtent: *mut avifExtent,
 ) -> avifResult {
-    let rust_decoder = &(*decoder).rust_decoder;
+    let rust_decoder = unsafe { &(*decoder).rust_decoder };
     let res = rust_decoder.nth_image_max_extent(frameIndex);
     if res.is_err() {
         return to_avifResult(&res);
     }
-    *outExtent = res.unwrap();
+    unsafe {
+        *outExtent = res.unwrap();
+    }
     avifResult::Ok
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn avifPeekCompatibleFileType(input: *const avifROData) -> avifBool {
-    let data = std::slice::from_raw_parts((*input).data, (*input).size);
+    let data = unsafe { std::slice::from_raw_parts((*input).data, (*input).size) };
     to_avifBool(Decoder::peek_compatible_file_type(data))
 }

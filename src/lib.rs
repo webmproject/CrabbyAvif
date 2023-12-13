@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 pub mod decoder;
 pub mod image;
 pub mod reformat;

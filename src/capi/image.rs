@@ -216,18 +216,22 @@ pub unsafe extern "C" fn avifImageCreate(
 }
 #[no_mangle]
 pub unsafe extern "C" fn avifImageDestroy(image: *mut avifImage) {
-    let _ = Box::from_raw(image);
+    unsafe {
+        let _ = Box::from_raw(image);
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn avifImageUsesU16(image: *const avifImage) -> avifBool {
-    to_avifBool(!image.is_null() && (*image).depth > 8)
+    unsafe { to_avifBool(!image.is_null() && (*image).depth > 8) }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn avifImageIsOpaque(image: *const avifImage) -> avifBool {
-    // TODO: Check for pixel level opacity as well.
-    to_avifBool(!image.is_null() && !(*image).alphaPlane.is_null())
+    unsafe {
+        // TODO: Check for pixel level opacity as well.
+        to_avifBool(!image.is_null() && !(*image).alphaPlane.is_null())
+    }
 }
 
 #[no_mangle]
@@ -235,10 +239,12 @@ pub unsafe extern "C" fn avifImagePlane(image: *const avifImage, channel: c_int)
     if image.is_null() {
         return std::ptr::null_mut();
     }
-    match channel {
-        0 | 1 | 2 => (*image).yuvPlanes[channel as usize],
-        3 => (*image).alphaPlane,
-        _ => std::ptr::null_mut(),
+    unsafe {
+        match channel {
+            0 | 1 | 2 => (*image).yuvPlanes[channel as usize],
+            3 => (*image).alphaPlane,
+            _ => std::ptr::null_mut(),
+        }
     }
 }
 
@@ -247,10 +253,12 @@ pub unsafe extern "C" fn avifImagePlaneRowBytes(image: *const avifImage, channel
     if image.is_null() {
         return 0;
     }
-    match channel {
-        0 | 1 | 2 => (*image).yuvRowBytes[channel as usize],
-        3 => (*image).alphaRowBytes,
-        _ => 0,
+    unsafe {
+        match channel {
+            0 | 1 | 2 => (*image).yuvRowBytes[channel as usize],
+            3 => (*image).alphaRowBytes,
+            _ => 0,
+        }
     }
 }
 
@@ -259,24 +267,26 @@ pub unsafe extern "C" fn avifImagePlaneWidth(image: *const avifImage, channel: c
     if image.is_null() {
         return 0;
     }
-    match channel {
-        0 => (*image).width,
-        1 | 2 => {
-            if (*image).yuvFormat.is_monochrome() {
-                0
-            } else {
-                let shift_x = (*image).yuvFormat.chroma_shift_x();
-                ((*image).width + shift_x) >> shift_x
+    unsafe {
+        match channel {
+            0 => (*image).width,
+            1 | 2 => {
+                if (*image).yuvFormat.is_monochrome() {
+                    0
+                } else {
+                    let shift_x = (*image).yuvFormat.chroma_shift_x();
+                    ((*image).width + shift_x) >> shift_x
+                }
             }
-        }
-        3 => {
-            if !(*image).alphaPlane.is_null() {
-                (*image).width
-            } else {
-                0
+            3 => {
+                if !(*image).alphaPlane.is_null() {
+                    (*image).width
+                } else {
+                    0
+                }
             }
+            _ => 0,
         }
-        _ => 0,
     }
 }
 
@@ -285,23 +295,25 @@ pub unsafe extern "C" fn avifImagePlaneHeight(image: *const avifImage, channel: 
     if image.is_null() {
         return 0;
     }
-    match channel {
-        0 => (*image).height,
-        1 | 2 => {
-            if (*image).yuvFormat.is_monochrome() {
-                0
-            } else {
-                let shift_y = (*image).yuvFormat.chroma_shift_y();
-                ((*image).height + shift_y) >> shift_y
+    unsafe {
+        match channel {
+            0 => (*image).height,
+            1 | 2 => {
+                if (*image).yuvFormat.is_monochrome() {
+                    0
+                } else {
+                    let shift_y = (*image).yuvFormat.chroma_shift_y();
+                    ((*image).height + shift_y) >> shift_y
+                }
             }
-        }
-        3 => {
-            if !(*image).alphaPlane.is_null() {
-                (*image).height
-            } else {
-                0
+            3 => {
+                if !(*image).alphaPlane.is_null() {
+                    (*image).height
+                } else {
+                    0
+                }
             }
+            _ => 0,
         }
-        _ => 0,
     }
 }
