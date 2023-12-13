@@ -79,7 +79,6 @@ impl_from_primitive!(u16, from_u16, ColorPrimaries, Unspecified);
 
 #[allow(non_camel_case_types, non_upper_case_globals)]
 impl ColorPrimaries {
-    // TODO: expose these in the capi?
     pub const Bt709: Self = Self::Srgb;
     pub const Iec61966_2_4: Self = Self::Srgb;
     pub const Bt2100: Self = Self::Bt2020;
