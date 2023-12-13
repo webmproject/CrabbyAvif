@@ -7,7 +7,7 @@ use crate::internal_utils::*;
 use crate::*;
 
 #[repr(C)]
-#[derive(Default, PartialEq)]
+#[derive(Default, PartialEq, Copy, Clone)]
 pub enum Format {
     Rgb,
     #[default]
@@ -20,6 +20,7 @@ pub enum Format {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub enum ChromaUpsampling {
     Automatic,
     Fastest,
@@ -29,6 +30,7 @@ pub enum ChromaUpsampling {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub enum ChromaDownsampling {
     Automatic,
     Fastest,
@@ -37,8 +39,6 @@ pub enum ChromaDownsampling {
     SharpYuv,
 }
 
-/// cbindgen:rename-all=CamelCase
-#[repr(C)]
 pub struct Image {
     pub width: u32,
     pub height: u32,
@@ -52,7 +52,7 @@ pub struct Image {
     pub max_threads: i32,
     pub pixels: *mut u8, // TODO: slice?
     pub row_bytes: u32,
-    pixel_buffer: Box<Vec<u8>>,
+    pub pixel_buffer: Vec<u8>,
 }
 
 struct RgbColorSpaceInfo {
@@ -209,7 +209,7 @@ impl Image {
             max_threads: 1,
             pixels: std::ptr::null_mut(),
             row_bytes: 0,
-            pixel_buffer: Box::new(Vec::new()),
+            pixel_buffer: Vec::new(),
         }
     }
 

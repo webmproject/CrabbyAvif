@@ -14,7 +14,62 @@ use crate::*;
 
 use std::os::raw::c_int;
 
-pub type avifRGBImage = rgb::Image;
+/// cbindgen:rename-all=CamelCase
+#[repr(C)]
+pub struct avifRGBImage {
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+    pub format: rgb::Format,
+    pub chroma_upsampling: rgb::ChromaUpsampling,
+    pub chroma_downsampling: rgb::ChromaDownsampling,
+    pub ignore_alpha: bool,
+    pub alpha_premultiplied: bool,
+    pub is_float: bool,
+    pub max_threads: i32,
+    pub pixels: *mut u8,
+    pub row_bytes: u32,
+}
+
+impl From<rgb::Image> for avifRGBImage {
+    fn from(rgb: rgb::Image) -> avifRGBImage {
+        avifRGBImage {
+            width: rgb.width,
+            height: rgb.height,
+            depth: rgb.depth,
+            format: rgb.format,
+            chroma_upsampling: rgb.chroma_upsampling,
+            chroma_downsampling: rgb.chroma_downsampling,
+            ignore_alpha: rgb.ignore_alpha,
+            alpha_premultiplied: rgb.alpha_premultiplied,
+            is_float: rgb.is_float,
+            max_threads: rgb.max_threads,
+            pixels: rgb.pixels,
+            row_bytes: rgb.row_bytes,
+        }
+    }
+}
+
+impl From<*mut avifRGBImage> for rgb::Image {
+    fn from(rgb: *mut avifRGBImage) -> rgb::Image {
+        let rgb = unsafe { &(*rgb) };
+        rgb::Image {
+            width: rgb.width,
+            height: rgb.height,
+            depth: rgb.depth,
+            format: rgb.format,
+            chroma_upsampling: rgb.chroma_upsampling,
+            chroma_downsampling: rgb.chroma_downsampling,
+            ignore_alpha: rgb.ignore_alpha,
+            alpha_premultiplied: rgb.alpha_premultiplied,
+            is_float: rgb.is_float,
+            max_threads: rgb.max_threads,
+            pixels: rgb.pixels,
+            row_bytes: rgb.row_bytes,
+            pixel_buffer: Vec::new(),
+        }
+    }
+}
 
 impl From<*const avifImage> for image::Image {
     // Only copies fields necessary for reformatting.
@@ -51,7 +106,7 @@ impl From<*const avifImage> for image::Image {
 pub unsafe extern "C" fn avifRGBImageSetDefaults(rgb: *mut avifRGBImage, image: *const avifImage) {
     let rgb = unsafe { &mut (*rgb) };
     let image: image::Image = image.into();
-    *rgb = rgb::Image::create_from_yuv(&image);
+    *rgb = rgb::Image::create_from_yuv(&image).into();
 }
 
 #[no_mangle]
@@ -59,7 +114,7 @@ pub unsafe extern "C" fn avifImageYUVToRGB(
     image: *const avifImage,
     rgb: *mut avifRGBImage,
 ) -> avifResult {
-    let rgb = unsafe { &mut (*rgb) };
+    let mut rgb: rgb::Image = rgb.into();
     let image: image::Image = image.into();
     to_avifResult(&rgb.convert_from_yuv(&image))
 }
