@@ -182,7 +182,7 @@ impl avifPixelFormat {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum avifRange {
     Limited = 0,
     Full = 1,

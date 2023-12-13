@@ -9,4 +9,5 @@ mod decoder;
 mod gainmap;
 mod image;
 mod io;
+mod reformat;
 mod types;

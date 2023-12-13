@@ -4,6 +4,7 @@ use crate::image::Plane;
 use crate::internal_utils::*;
 use crate::*;
 
+#[repr(C)]
 #[derive(Default, PartialEq)]
 pub enum Format {
     Rgb,
@@ -16,6 +17,7 @@ pub enum Format {
     Rgb565,
 }
 
+#[repr(C)]
 pub enum ChromaUpsampling {
     Automatic,
     Fastest,
@@ -24,6 +26,7 @@ pub enum ChromaUpsampling {
     Bilinear,
 }
 
+#[repr(C)]
 pub enum ChromaDownsampling {
     Automatic,
     Fastest,
@@ -32,6 +35,8 @@ pub enum ChromaDownsampling {
     SharpYuv,
 }
 
+/// cbindgen:rename-all=CamelCase
+#[repr(C)]
 pub struct Image {
     pub width: u32,
     pub height: u32,
