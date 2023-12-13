@@ -52,7 +52,7 @@ pub struct Image {
     pub max_threads: i32,
     pub pixels: *mut u8, // TODO: slice?
     pub row_bytes: u32,
-    pixel_buffer: Vec<u8>,
+    pixel_buffer: Box<Vec<u8>>,
 }
 
 struct RgbColorSpaceInfo {
@@ -209,7 +209,7 @@ impl Image {
             max_threads: 1,
             pixels: std::ptr::null_mut(),
             row_bytes: 0,
-            pixel_buffer: Vec::new(),
+            pixel_buffer: Box::new(Vec::new()),
         }
     }
 
