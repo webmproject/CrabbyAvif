@@ -107,6 +107,18 @@ enum ConversionFunction {
     YUVAToRGBMatrixHighBitDepth(YUVAToRGBMatrixHighBitDepth),
 }
 
+impl ConversionFunction {
+    fn is_yuva(&self) -> bool {
+        match self {
+            YUVAToRGBMatrixFilter(_)
+            | YUVAToRGBMatrix(_)
+            | YUVAToRGBMatrixFilterHighBitDepth(_)
+            | YUVAToRGBMatrixHighBitDepth(_) => true,
+            _ => false,
+        }
+    }
+}
+
 fn find_conversion_function(
     yuv_format: PixelFormat,
     yuv_depth: u8,
@@ -238,7 +250,11 @@ fn find_conversion_function(
     None
 }
 
-pub fn yuv_to_rgb(image: &image::Image, rgb: &rgb::Image, reformat_alpha: bool) -> AvifResult<()> {
+pub fn yuv_to_rgb(
+    mut image: &image::Image,
+    rgb: &rgb::Image,
+    reformat_alpha: bool,
+) -> AvifResult<()> {
     if rgb.depth != 8 || (image.depth != 8 && image.depth != 10 && image.depth != 12) {
         return Err(AvifError::NotImplemented);
     }
@@ -252,7 +268,6 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &rgb::Image, reformat_alpha: bool) 
         _ => false,
     };
     let matrix = if is_yvu { matrix_yvu } else { matrix_yuv };
-    let mut result: c_int = -1;
     let u_plane_index: usize = if is_yvu { 2 } else { 1 };
     let v_plane_index: usize = if is_yvu { 1 } else { 2 };
     let filter = match rgb.chroma_upsampling {
@@ -282,9 +297,88 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &rgb::Image, reformat_alpha: bool) 
     let rgb_row_bytes = i32_from_u32(rgb.row_bytes)?;
     let width = i32_from_u32(image.width)?;
     let height = i32_from_u32(image.height)?;
+    let mut result: c_int = -1;
     unsafe {
-        // TODO: highbd.
-        // TODO: image downshift.
+        let mut high_bd_matched = true;
+        // Apply one of the high bitdepth functions if possible.
+        result = match conversion_function {
+            ConversionFunction::YUVToRGBMatrixFilterHighBitDepth(func) => func(
+                plane_u8[0] as *const u16,
+                plane_row_bytes[0] / 2,
+                plane_u8[u_plane_index] as *const u16,
+                plane_row_bytes[u_plane_index] / 2,
+                plane_u8[v_plane_index] as *const u16,
+                plane_row_bytes[v_plane_index] / 2,
+                rgb.pixels,
+                rgb_row_bytes,
+                matrix,
+                width,
+                height,
+                filter,
+            ),
+            ConversionFunction::YUVAToRGBMatrixFilterHighBitDepth(func) => func(
+                plane_u8[0] as *const u16,
+                plane_row_bytes[0] / 2,
+                plane_u8[u_plane_index] as *const u16,
+                plane_row_bytes[u_plane_index] / 2,
+                plane_u8[v_plane_index] as *const u16,
+                plane_row_bytes[v_plane_index] / 2,
+                plane_u8[3] as *const u16,
+                plane_row_bytes[3] / 2,
+                rgb.pixels,
+                rgb_row_bytes,
+                matrix,
+                width,
+                height,
+                0, // attenuate
+                filter,
+            ),
+            ConversionFunction::YUVToRGBMatrixHighBitDepth(func) => func(
+                plane_u8[0] as *const u16,
+                plane_row_bytes[0] / 2,
+                plane_u8[u_plane_index] as *const u16,
+                plane_row_bytes[u_plane_index] / 2,
+                plane_u8[v_plane_index] as *const u16,
+                plane_row_bytes[v_plane_index] / 2,
+                rgb.pixels,
+                rgb_row_bytes,
+                matrix,
+                width,
+                height,
+            ),
+            ConversionFunction::YUVAToRGBMatrixHighBitDepth(func) => func(
+                plane_u8[0] as *const u16,
+                plane_row_bytes[0] / 2,
+                plane_u8[u_plane_index] as *const u16,
+                plane_row_bytes[u_plane_index] / 2,
+                plane_u8[v_plane_index] as *const u16,
+                plane_row_bytes[v_plane_index] / 2,
+                plane_u8[3] as *const u16,
+                plane_row_bytes[3] / 2,
+                rgb.pixels,
+                rgb_row_bytes,
+                matrix,
+                width,
+                height,
+                0, // attenuate
+            ),
+            _ => {
+                high_bd_matched = false;
+                -1
+            }
+        };
+        if high_bd_matched {
+            return if result == 0 {
+                Ok(())
+            } else {
+                Err(AvifError::ReformatFailed)
+            };
+        }
+        let image8: image::Image;
+        if image.depth > 8 {
+            // TODO: image downshift.
+            //image = &image8;
+        }
         result = match conversion_function {
             ConversionFunction::YUV400ToRGBMatrix(func) => func(
                 plane_u8[0],
