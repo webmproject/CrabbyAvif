@@ -240,6 +240,23 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn avifDecoderNthImage(
+    decoder: *mut avifDecoder,
+    frameIndex: u32,
+) -> avifResult {
+    unsafe {
+        let rust_decoder = &mut (*decoder).rust_decoder;
+
+        let res = rust_decoder.nth_image(frameIndex);
+        if res.is_err() && res.err().unwrap() != AvifError::WaitingOnIo {
+            return to_avifResult(&res);
+        }
+        rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
+        to_avifResult(&res)
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn avifDecoderNthImageTiming(
     decoder: *const avifDecoder,
     frameIndex: u32,

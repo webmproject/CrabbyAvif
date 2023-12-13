@@ -1110,14 +1110,17 @@ impl Decoder {
         if !self.parsing_complete() {
             return Err(AvifError::NoContent);
         }
+        if self.is_current_frame_fully_decoded() {
+            for category in 0usize..3 {
+                self.tile_info[category].decoded_tile_count = 0;
+            }
+        }
+
         let next_image_index = self.image_index + 1;
         self.create_codecs()?;
         self.prepare_samples(next_image_index as usize)?;
         self.decode_tiles(next_image_index as usize)?;
         self.image_index = next_image_index;
-        for category in 0usize..3 {
-            self.tile_info[category].decoded_tile_count = 0;
-        }
         self.image_timing = self.nth_image_timing(self.image_index as u32)?;
         Ok(())
     }
