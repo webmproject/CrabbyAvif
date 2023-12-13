@@ -1,3 +1,5 @@
+#![allow(dead_code, unused)] // TODO: remove
+
 use super::gainmap::*;
 use super::image::*;
 use super::io::*;

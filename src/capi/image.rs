@@ -318,6 +318,7 @@ pub unsafe extern "C" fn avifImagePlaneHeight(image: *const avifImage, channel: 
     }
 }
 
+#[no_mangle]
 pub unsafe extern "C" fn avifImageSetViewRect(
     dstImage: *mut avifImage,
     srcImage: *const avifImage,

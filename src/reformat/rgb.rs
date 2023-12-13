@@ -1,3 +1,5 @@
+#![allow(dead_code, unused)] // TODO: remove
+
 use super::libyuv;
 use crate::image;
 use crate::image::Plane;
