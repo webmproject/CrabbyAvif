@@ -24,7 +24,7 @@ exitcode = "1.1.2"
 bindgen = "0.69.1"
 
 [features]
-default = ["dav1d"]
+default = ["dav1d", "libyuv"]
 capi = []
 dav1d = []
 libgav1 = []
