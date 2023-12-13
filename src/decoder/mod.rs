@@ -489,6 +489,7 @@ impl Decoder {
             tile.input.category = category as u8;
             tiles.push(tile);
         }
+        self.tile_info[category].tile_count = u32_from_usize(tiles.len())?;
         Ok(tiles)
     }
 
@@ -1114,7 +1115,57 @@ impl Decoder {
         self.prepare_samples(next_image_index as usize)?;
         self.decode_tiles(next_image_index as usize)?;
         self.image_index = next_image_index;
+        for category in 0usize..3 {
+            self.tile_info[category].decoded_tile_count = 0;
+        }
         self.image_timing = self.nth_image_timing(self.image_index as u32)?;
+        Ok(())
+    }
+
+    fn is_current_frame_fully_decoded(&self) -> bool {
+        if !self.parsing_complete() {
+            return false;
+        }
+        for category in 0usize..3 {
+            if !self.tile_info[category].is_fully_decoded() {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn nth_image(&mut self, index: u32) -> AvifResult<()> {
+        if !self.parsing_complete() {
+            return Err(AvifError::NoContent);
+        }
+        if index >= self.image_count {
+            return Err(AvifError::NoImagesRemaining);
+        }
+        let requested_index = i32_from_u32(index)?;
+        if requested_index == (self.image_index + 1) {
+            return self.next_image();
+        }
+        if requested_index == self.image_index {
+            if self.is_current_frame_fully_decoded() {
+                // Current frame which is already fully decoded has been requested. Do nothing.
+                return Ok(());
+            }
+            // Next image (self.image_index + 1) has been partially decoded, but the previous image
+            // was requested. Fall through and decode again from the nearest keyframe.
+        }
+        let nearest_keyframe = i32_from_u32(self.nearest_keyframe(index))?;
+        if nearest_keyframe > (self.image_index + 1) || requested_index <= self.image_index {
+            // Start decoding from the nearest keyframe.
+            self.image_index = nearest_keyframe - 1;
+            // TODO: reset codecs?
+        }
+        loop {
+            println!("decoding next image: {}", self.image_index + 1);
+            self.next_image()?;
+            if requested_index == self.image_index {
+                break;
+            }
+        }
         Ok(())
     }
 

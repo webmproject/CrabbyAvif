@@ -67,6 +67,10 @@ impl TileInfo {
             image.height,
         )
     }
+
+    pub fn is_fully_decoded(&self) -> bool {
+        self.tile_count == self.decoded_tile_count
+    }
 }
 
 #[derive(Debug, Default)]

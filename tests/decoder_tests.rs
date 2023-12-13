@@ -508,3 +508,17 @@ fn incremental_decode() {
 
     // TODO: check if incremental and non incremental produces same output.
 }
+
+#[test]
+fn nth_image() {
+    let mut decoder = get_decoder("colors-animated-8bpc.avif");
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    assert_eq!(decoder.image_count, 5);
+    assert!(decoder.nth_image(3).is_ok());
+    assert!(decoder.next_image().is_ok());
+    assert!(decoder.next_image().is_err());
+    assert!(decoder.nth_image(1).is_ok());
+    assert!(decoder.nth_image(4).is_ok());
+    assert!(decoder.nth_image(50).is_err());
+}
