@@ -26,9 +26,9 @@ use crate::parser::mp4box::*;
 use crate::parser::obu::Av1SequenceHeader;
 use crate::*;
 
+use ahash::AHashSet;
 use std::cmp::max;
 use std::cmp::min;
-use std::collections::HashSet;
 
 pub trait IO {
     fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]>;

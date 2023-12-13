@@ -8,7 +8,7 @@ use crate::internal_utils::*;
 use crate::utils::clap::CleanAperture;
 use crate::*;
 
-use std::collections::HashSet;
+use ahash::AHashSet;
 
 #[derive(Debug)]
 struct BoxHeader {
@@ -816,7 +816,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
         parse_hdlr(&mut sub_stream)?;
     }
 
-    let mut boxes_seen = HashSet::from([String::from("hdlr")]);
+    let mut boxes_seen = AHashSet::from([String::from("hdlr")]);
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
         match header.box_type.as_str() {

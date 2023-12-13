@@ -8,6 +8,7 @@ edition = "2021"
 build = "src/build.rs"
 
 [dependencies]
+ahash = "0.8.6"
 byteorder = "1.5.0"
 derivative = "2.2.0"
 num-traits = "0.2"
