@@ -59,12 +59,13 @@ fn main() {
 
         //image_count = decoder.image_count;
         image_count = 1;
-        let mut writer: crabby_avif::utils::y4m::Y4MWriter = Default::default();
-        //let mut writer: crabby_avif::utils::raw::RawWriter = Default::default();
+        //let mut writer: crabby_avif::utils::y4m::Y4MWriter = Default::default();
+        let mut writer: crabby_avif::utils::raw::RawWriter = Default::default();
         writer.filename = Some(args[2].clone());
+        writer.rgb = true;
 
         for _i in 0..image_count {
-            let res = decoder.nth_image(100);
+            let res = decoder.next_image();
             if res.is_err() {
                 println!("next_image failed! {:#?}", res);
                 std::process::exit(1);

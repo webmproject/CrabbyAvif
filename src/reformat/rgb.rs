@@ -45,6 +45,7 @@ pub struct Image {
     pub max_threads: i32,
     pub pixels: *mut u8, // TODO: slice?
     pub row_bytes: u32,
+    pixel_buffer: Vec<u8>,
 }
 
 struct RgbColorSpaceInfo {
@@ -187,6 +188,34 @@ enum AlphaMultiplyMode {
 }
 
 impl Image {
+    pub fn create_from_yuv(image: &image::Image) -> Self {
+        Self {
+            width: image.width,
+            height: image.height,
+            depth: image.depth as u32,
+            format: Format::Rgba,
+            chroma_upsampling: ChromaUpsampling::Automatic,
+            chroma_downsampling: ChromaDownsampling::Automatic,
+            ignore_alpha: false,
+            alpha_premultiplied: false,
+            is_float: false,
+            max_threads: 1,
+            pixels: std::ptr::null_mut(),
+            row_bytes: 0,
+            pixel_buffer: Vec::new(),
+        }
+    }
+
+    pub fn allocate(&mut self) -> AvifResult<()> {
+        let row_bytes = self.width * self.pixel_size();
+        let buffer_size: usize = usize_from_u32(row_bytes * self.height)?;
+        self.pixel_buffer.reserve(buffer_size);
+        self.pixel_buffer.resize(buffer_size, 0);
+        self.pixels = self.pixel_buffer.as_mut_ptr();
+        self.row_bytes = row_bytes;
+        Ok(())
+    }
+
     fn depth_valid(&self) -> bool {
         match self.depth {
             8 | 10 | 12 | 16 => true,
@@ -217,7 +246,7 @@ impl Image {
         }
     }
 
-    fn pixel_size(&self) -> u32 {
+    pub fn pixel_size(&self) -> u32 {
         if self.format == Format::Rgb565 {
             return 2;
         }
@@ -253,7 +282,7 @@ impl Image {
             && (!self.ignore_alpha || alpha_multiply_mode != AlphaMultiplyMode::NoOp);
         // TODO: alpha_reformatted_with_libyuv.
         if alpha_multiply_mode == AlphaMultiplyMode::NoOp || self.has_alpha() {
-            libyuv::yuv_to_rgb(image, &self, reformat_alpha)?;
+            return libyuv::yuv_to_rgb(image, &self, reformat_alpha);
         }
         Err(AvifError::ReformatFailed)
     }

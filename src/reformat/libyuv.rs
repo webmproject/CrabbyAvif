@@ -95,6 +95,7 @@ type YUVAToRGBMatrixHighBitDepth = unsafe extern "C" fn(
     *const u16, c_int, *const u16, c_int, *const u16, c_int, *const u16, c_int, *mut u8, c_int,
     *const YuvConstants, c_int, c_int, c_int) -> c_int;
 
+#[derive(Debug)]
 enum ConversionFunction {
     YUV400ToRGBMatrix(YUV400ToRGBMatrix),
     YUVToRGBMatrixFilter(YUVToRGBMatrixFilter),
@@ -110,10 +111,10 @@ enum ConversionFunction {
 impl ConversionFunction {
     fn is_yuva(&self) -> bool {
         match self {
-            YUVAToRGBMatrixFilter(_)
-            | YUVAToRGBMatrix(_)
-            | YUVAToRGBMatrixFilterHighBitDepth(_)
-            | YUVAToRGBMatrixHighBitDepth(_) => true,
+            ConversionFunction::YUVAToRGBMatrixFilter(_)
+            | ConversionFunction::YUVAToRGBMatrix(_)
+            | ConversionFunction::YUVAToRGBMatrixFilterHighBitDepth(_)
+            | ConversionFunction::YUVAToRGBMatrixHighBitDepth(_) => true,
             _ => false,
         }
     }
@@ -250,11 +251,7 @@ fn find_conversion_function(
     None
 }
 
-pub fn yuv_to_rgb(
-    mut image: &image::Image,
-    rgb: &rgb::Image,
-    reformat_alpha: bool,
-) -> AvifResult<()> {
+pub fn yuv_to_rgb(image: &image::Image, rgb: &rgb::Image, reformat_alpha: bool) -> AvifResult<()> {
     if rgb.depth != 8 || (image.depth != 8 && image.depth != 10 && image.depth != 12) {
         return Err(AvifError::NotImplemented);
     }
@@ -274,26 +271,36 @@ pub fn yuv_to_rgb(
         ChromaUpsampling::Fastest | ChromaUpsampling::Nearest => FilterMode_kFilterNone,
         _ => FilterMode_kFilterBilinear,
     };
-    let pd: [Option<PlaneData>; 4] = [
+    let mut pd: [Option<PlaneData>; 4] = [
         image.plane(Plane::Y),
         image.plane(Plane::U),
         image.plane(Plane::V),
         image.plane(Plane::A),
     ];
-    #[rustfmt::skip]
-    let plane_u8: [*const u8; 4] = [
-        if pd[0].is_some() { pd[0].as_ref().unwrap().data.as_ptr() } else { std::ptr::null() },
-        if pd[1].is_some() { pd[1].as_ref().unwrap().data.as_ptr() } else { std::ptr::null() },
-        if pd[2].is_some() { pd[2].as_ref().unwrap().data.as_ptr() } else { std::ptr::null() },
-        if pd[3].is_some() { pd[3].as_ref().unwrap().data.as_ptr() } else { std::ptr::null() },
-    ];
-    #[rustfmt::skip]
-    let plane_row_bytes: [i32; 4] = [
-        if pd[0].is_some() { i32_from_u32(pd[0].as_ref().unwrap().row_bytes)?  } else { 0 },
-        if pd[1].is_some() { i32_from_u32(pd[1].as_ref().unwrap().row_bytes)?  } else { 0 },
-        if pd[2].is_some() { i32_from_u32(pd[2].as_ref().unwrap().row_bytes)?  } else { 0 },
-        if pd[3].is_some() { i32_from_u32(pd[3].as_ref().unwrap().row_bytes)?  } else { 0 },
-    ];
+    let mut plane_u8: [*const u8; 4] = pd
+        .iter()
+        .map(|x| {
+            if x.is_some() {
+                x.as_ref().unwrap().data.as_ptr()
+            } else {
+                std::ptr::null()
+            }
+        })
+        .collect::<Vec<*const u8>>()
+        .try_into()
+        .unwrap();
+    let mut plane_row_bytes: [i32; 4] = pd
+        .iter()
+        .map(|x| {
+            if x.is_some() {
+                i32_from_u32(x.as_ref().unwrap().row_bytes).unwrap_or_default()
+            } else {
+                0
+            }
+        })
+        .collect::<Vec<i32>>()
+        .try_into()
+        .unwrap();
     let rgb_row_bytes = i32_from_u32(rgb.row_bytes)?;
     let width = i32_from_u32(image.width)?;
     let height = i32_from_u32(image.height)?;
@@ -374,10 +381,39 @@ pub fn yuv_to_rgb(
                 Err(AvifError::ReformatFailed)
             };
         }
-        let image8: image::Image;
+        let mut image8 = image::Image::default();
         if image.depth > 8 {
-            // TODO: image downshift.
-            //image = &image8;
+            downshift_to_8bit(&image, &mut image8, conversion_function.is_yuva())?;
+            pd = [
+                image8.plane(Plane::Y),
+                image8.plane(Plane::U),
+                image8.plane(Plane::V),
+                image8.plane(Plane::A),
+            ];
+            plane_u8 = pd
+                .iter()
+                .map(|x| {
+                    if x.is_some() {
+                        x.as_ref().unwrap().data.as_ptr()
+                    } else {
+                        std::ptr::null()
+                    }
+                })
+                .collect::<Vec<*const u8>>()
+                .try_into()
+                .unwrap();
+            plane_row_bytes = pd
+                .iter()
+                .map(|x| {
+                    if x.is_some() {
+                        i32_from_u32(x.as_ref().unwrap().row_bytes).unwrap_or_default()
+                    } else {
+                        0
+                    }
+                })
+                .collect::<Vec<i32>>()
+                .try_into()
+                .unwrap();
         }
         result = match conversion_function {
             ConversionFunction::YUV400ToRGBMatrix(func) => func(
@@ -457,4 +493,43 @@ pub fn yuv_to_rgb(
     } else {
         Err(AvifError::ReformatFailed)
     }
+}
+
+fn downshift_to_8bit(
+    image: &image::Image,
+    image8: &mut image::Image,
+    alpha: bool,
+) -> AvifResult<()> {
+    image8.width = image.width;
+    image8.height = image.height;
+    image8.depth = image.depth;
+    image8.yuv_format = image.yuv_format;
+    image8.allocate_planes(0)?;
+    if alpha {
+        image8.allocate_planes(1)?;
+    }
+    let scale = (1 << (24 - image.depth)) as i32;
+    for plane in ALL_PLANES {
+        let pd = image.plane(plane);
+        if pd.is_none() {
+            continue;
+        }
+        let pd = pd.unwrap();
+        if pd.width == 0 {
+            continue;
+        }
+        let mut pd8 = image8.plane(plane).unwrap();
+        unsafe {
+            Convert16To8Plane(
+                pd.data.as_ptr() as *const u16,
+                i32_from_u32(pd.row_bytes / 2)?,
+                pd8.data.as_ptr() as *mut u8,
+                i32_from_u32(pd8.row_bytes)?,
+                scale,
+                i32_from_u32(pd.width)?,
+                i32_from_u32(pd.height)?,
+            );
+        }
+    }
+    Ok(())
 }
