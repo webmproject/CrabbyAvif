@@ -80,6 +80,12 @@ pub struct PlaneData<'a> {
 }
 
 impl Image {
+    pub fn depth_valid(&self) -> bool {
+        match self.depth {
+            8 | 10 | 12 | 16 => true,
+            _ => false,
+        }
+    }
     pub fn subsampled_width(&self, width: u32, plane: Plane) -> usize {
         match plane {
             Plane::Y | Plane::A => width as usize,
