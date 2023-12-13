@@ -8,7 +8,7 @@ usize_is_size_t = true
 [export.rename]
 "ChromaSamplePosition" = "avifChromaSamplePosition"
 "ColorPrimaries" = "avifColorPrimaries"
-"Format" = "avifRGBImageFormat"
+"Format" = "avifRGBFormat"
 "ImageTiming" = "avifImageTiming"
 "MatrixCoefficients" = "avifMatrixCoefficients"
 "ProgressiveState" = "avifProgressiveState"
