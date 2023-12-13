@@ -13,7 +13,7 @@ use std::os::raw::c_int;
 pub type avifPixelAspectRatioBox = PixelAspectRatio;
 
 /// cbindgen:rename-all=CamelCase
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Copy, Clone)]
 #[repr(C)]
 pub struct avifCleanApertureBox {
     pub width_n: u32,
@@ -55,13 +55,13 @@ impl From<&avifCleanApertureBox> for CleanAperture {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Copy, Clone)]
 #[repr(C)]
 pub struct avifImageRotation {
     pub angle: u8,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Copy, Clone)]
 #[repr(C)]
 pub struct avifImageMirror {
     pub axis: u8,
@@ -316,4 +316,80 @@ pub unsafe extern "C" fn avifImagePlaneHeight(image: *const avifImage, channel: 
             _ => 0,
         }
     }
+}
+
+pub unsafe extern "C" fn avifImageSetViewRect(
+    dstImage: *mut avifImage,
+    srcImage: *const avifImage,
+    rect: *const avifCropRect,
+) -> avifResult {
+    let dst = unsafe { &mut (*dstImage) };
+    let src = unsafe { &(*srcImage) };
+    let rect = unsafe { &(*rect) };
+    if rect.width > src.width
+        || rect.height > src.height
+        || rect.x > (src.width - rect.width)
+        || rect.y > (src.height - rect.height)
+    {
+        return avifResult::InvalidArgument;
+    }
+    if !src.yuvFormat.is_monochrome()
+        && ((rect.x & src.yuvFormat.chroma_shift_x()) != 0
+            || (rect.y & src.yuvFormat.chroma_shift_y()) != 0)
+    {
+        return avifResult::InvalidArgument;
+    }
+    // TODO: This is avifimagecopynoalloc.
+    *dst = avifImage {
+        width: src.width,
+        height: src.height,
+        depth: src.depth,
+        yuvFormat: src.yuvFormat,
+        yuvRange: src.yuvRange,
+        yuvChromaSamplePosition: src.yuvChromaSamplePosition,
+        alphaPremultiplied: src.alphaPremultiplied,
+        colorPrimaries: src.colorPrimaries,
+        transferCharacteristics: src.transferCharacteristics,
+        matrixCoefficients: src.matrixCoefficients,
+        clli: src.clli,
+        transformFlags: src.transformFlags,
+        pasp: src.pasp,
+        clap: src.clap,
+        irot: src.irot,
+        imir: src.imir,
+        ..avifImage::default()
+    };
+    dst.width = rect.width;
+    dst.height = rect.height;
+    let pixel_size: u32 = if src.depth == 8 { 1 } else { 2 };
+    for plane in 0usize..3 {
+        if src.yuvPlanes[plane].is_null() {
+            continue;
+        }
+        let x = if plane == 0 {
+            rect.x
+        } else {
+            rect.x >> src.yuvFormat.chroma_shift_x()
+        };
+        let y = if plane == 0 {
+            rect.y
+        } else {
+            rect.y >> src.yuvFormat.chroma_shift_y()
+        };
+        let offset = match isize_from_u32(y * src.yuvRowBytes[plane] + x * pixel_size) {
+            Ok(x) => x,
+            _ => return avifResult::InvalidArgument,
+        };
+        dst.yuvPlanes[plane] = unsafe { src.yuvPlanes[plane].offset(offset) };
+        dst.yuvRowBytes[plane] = src.yuvRowBytes[plane];
+    }
+    if !src.alphaPlane.is_null() {
+        let offset = match isize_from_u32(rect.y * src.alphaRowBytes + rect.x * pixel_size) {
+            Ok(x) => x,
+            _ => return avifResult::InvalidArgument,
+        };
+        dst.alphaPlane = unsafe { src.alphaPlane.offset(offset) };
+        dst.alphaRowBytes = src.alphaRowBytes;
+    }
+    avifResult::Ok
 }
