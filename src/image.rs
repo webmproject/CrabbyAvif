@@ -115,6 +115,9 @@ impl Image {
     pub fn plane(&self, plane: Plane) -> Option<PlaneData> {
         let plane_index = plane.to_usize().unwrap();
         self.planes[plane_index]?;
+        if self.planes[plane_index].unwrap().is_null() || self.row_bytes[plane_index] == 0 {
+            return None;
+        }
         let pixel_size = if self.depth == 8 { 1 } else { 2 };
         let height = self.height(plane);
         let row_bytes = self.row_bytes[plane_index] as usize;

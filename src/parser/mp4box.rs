@@ -1189,7 +1189,6 @@ fn parse_edts(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 
 fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
     let mut track = Track::default();
-    println!("parsing trak size: {}", stream.bytes_left());
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
@@ -1202,12 +1201,10 @@ fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
             _ => println!("skipping box {}", header.box_type),
         }
     }
-    println!("track: {:#?}", track);
     Ok(track)
 }
 
 fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
-    println!("parsing moov size: {}", stream.bytes_left());
     let mut tracks: Vec<Track> = Vec::new();
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
