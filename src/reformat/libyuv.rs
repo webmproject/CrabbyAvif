@@ -659,3 +659,28 @@ fn downshift_to_8bit(
     }
     Ok(())
 }
+
+pub fn premultiply_alpha(rgb: &mut rgb::Image) -> AvifResult<()> {
+    if rgb.depth != 8 {
+        return Err(AvifError::NotImplemented);
+    }
+    match rgb.format {
+        Format::Rgba | Format::Bgra => {}
+        _ => return Err(AvifError::NotImplemented),
+    }
+    let result = unsafe {
+        ARGBAttenuate(
+            rgb.pixels,
+            i32_from_u32(rgb.row_bytes)?,
+            rgb.pixels,
+            i32_from_u32(rgb.row_bytes)?,
+            i32_from_u32(rgb.width)?,
+            i32_from_u32(rgb.height)?,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(AvifError::ReformatFailed)
+    }
+}

@@ -227,7 +227,7 @@ impl Image {
         }
     }
 
-    fn has_alpha(&self) -> bool {
+    pub fn has_alpha(&self) -> bool {
         match self.format {
             Format::Rgb | Format::Bgr | Format::Rgb565 => false,
             _ => true,
@@ -309,9 +309,7 @@ impl Image {
             unimplemented!("libyuv could not convet this");
         }
         match alpha_multiply_mode {
-            AlphaMultiplyMode::Multiply => {
-                unimplemented!("needs alpha multiply!");
-            }
+            AlphaMultiplyMode::Multiply => self.premultiply_alpha()?,
             AlphaMultiplyMode::UnMultiply => {
                 unimplemented!("needs alpha unmultiply!");
             }
@@ -320,6 +318,6 @@ impl Image {
         if self.is_float {
             unimplemented!("needs is float");
         }
-        Err(AvifError::ReformatFailed)
+        Ok(())
     }
 }
