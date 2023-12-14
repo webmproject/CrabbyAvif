@@ -103,7 +103,6 @@ impl Tile {
         let a1lx = item.a1lx();
         let has_a1lx = a1lx.is_some();
         if let Some(a1lx) = a1lx {
-            println!("item size: {} a1lx: {:#?}", item.size, a1lx);
             let mut remaining_size: usize = item.size;
             for i in 0usize..3 {
                 layer_count += 1;
@@ -126,7 +125,6 @@ impl Tile {
                 layer_count += 1;
                 layer_sizes[3] = remaining_size;
             }
-            println!("layer count: {layer_count} layer_sizes: {:#?}", layer_sizes);
         }
         let lsel;
         let has_lsel;
@@ -198,7 +196,6 @@ impl Tile {
                 tile.input.samples.push(sample);
                 offset += *layer_size as u64;
             }
-            println!("input samples: {:#?}", tile.input.samples);
         } else {
             // Typical case: Use the entire item's payload for a single frame output
             let sample = DecodeSample {
