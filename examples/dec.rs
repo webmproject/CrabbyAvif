@@ -65,7 +65,7 @@ fn main() {
         writer.rgb = true;
 
         for _i in 0..image_count {
-            let res = decoder.next_image();
+            let res = decoder.nth_image(0);
             if res.is_err() {
                 println!("next_image failed! {:#?}", res);
                 std::process::exit(1);

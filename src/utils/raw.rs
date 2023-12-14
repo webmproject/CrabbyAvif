@@ -39,6 +39,7 @@ impl RawWriter {
         if self.rgb {
             let mut rgb = rgb::Image::create_from_yuv(image);
             rgb.format = rgb::Format::Bgra;
+            rgb.depth = 8;
             if let Err(_) = rgb.allocate() {
                 return false;
             }

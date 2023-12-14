@@ -135,7 +135,115 @@ fn find_conversion_function(
     alpha_preferred: bool,
 ) -> Option<ConversionFunction> {
     if yuv_depth > 8 {
-        // implement
+        if yuv_format != PixelFormat::Yuv444 {
+            if alpha_preferred {
+                match yuv_depth {
+                    10 => match rgb.format {
+                        Format::Rgba | Format::Bgra => match yuv_format {
+                            PixelFormat::Yuv422 => {
+                                return Some(ConversionFunction::YUVAToRGBMatrixFilterHighBitDepth(
+                                    I210AlphaToARGBMatrixFilter,
+                                ))
+                            }
+                            PixelFormat::Yuv420 => {
+                                return Some(ConversionFunction::YUVAToRGBMatrixFilterHighBitDepth(
+                                    I010AlphaToARGBMatrixFilter,
+                                ))
+                            }
+                            _ => {}
+                        },
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+            match yuv_depth {
+                10 => match rgb.format {
+                    Format::Rgba | Format::Bgra => match yuv_format {
+                        PixelFormat::Yuv422 => {
+                            return Some(ConversionFunction::YUVToRGBMatrixFilterHighBitDepth(
+                                I210ToARGBMatrixFilter,
+                            ))
+                        }
+                        PixelFormat::Yuv420 => {
+                            return Some(ConversionFunction::YUVToRGBMatrixFilterHighBitDepth(
+                                I010ToARGBMatrixFilter,
+                            ))
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        if yuv_format == PixelFormat::Yuv444
+            || rgb.chroma_upsampling.nearest_neighbor_filter_allowed()
+        {
+            if alpha_preferred {
+                match yuv_depth {
+                    10 => match rgb.format {
+                        Format::Rgba | Format::Bgra => match yuv_format {
+                            PixelFormat::Yuv444 => {
+                                return Some(ConversionFunction::YUVAToRGBMatrixHighBitDepth(
+                                    I410AlphaToARGBMatrix,
+                                ))
+                            }
+                            PixelFormat::Yuv422 => {
+                                return Some(ConversionFunction::YUVAToRGBMatrixHighBitDepth(
+                                    I210AlphaToARGBMatrix,
+                                ))
+                            }
+                            PixelFormat::Yuv420 => {
+                                return Some(ConversionFunction::YUVAToRGBMatrixHighBitDepth(
+                                    I010AlphaToARGBMatrix,
+                                ))
+                            }
+                            _ => {}
+                        },
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+            match yuv_depth {
+                10 => match rgb.format {
+                    Format::Rgba | Format::Bgra => match yuv_format {
+                        PixelFormat::Yuv444 => {
+                            return Some(ConversionFunction::YUVToRGBMatrixHighBitDepth(
+                                I410ToARGBMatrix,
+                            ))
+                        }
+                        PixelFormat::Yuv422 => {
+                            return Some(ConversionFunction::YUVToRGBMatrixHighBitDepth(
+                                I210ToARGBMatrix,
+                            ))
+                        }
+                        PixelFormat::Yuv420 => {
+                            return Some(ConversionFunction::YUVToRGBMatrixHighBitDepth(
+                                I010ToARGBMatrix,
+                            ))
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                },
+                12 => match rgb.format {
+                    Format::Rgba | Format::Bgra => match yuv_format {
+                        PixelFormat::Yuv420 => {
+                            return Some(ConversionFunction::YUVToRGBMatrixHighBitDepth(
+                                I012ToARGBMatrix,
+                            ))
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        // The fall through here is intentional. If a high bitdepth function was not found, try to
+        // see if we can use a low bitdepth function with a downshift.
     }
     if yuv_format == PixelFormat::Monochrome {
         return match rgb.format {
@@ -193,9 +301,8 @@ fn find_conversion_function(
             },
             _ => {}
         }
-        match rgb.chroma_upsampling {
-            ChromaUpsampling::Bilinear | ChromaUpsampling::BestQuality => return None,
-            _ => {}
+        if !rgb.chroma_upsampling.nearest_neighbor_filter_allowed() {
+            return None;
         }
     }
     if alpha_preferred {
@@ -278,9 +385,10 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &rgb::Image, reformat_alpha: bool) 
     let matrix = if is_yvu { matrix_yvu } else { matrix_yuv };
     let u_plane_index: usize = if is_yvu { 2 } else { 1 };
     let v_plane_index: usize = if is_yvu { 1 } else { 2 };
-    let filter = match rgb.chroma_upsampling {
-        ChromaUpsampling::Fastest | ChromaUpsampling::Nearest => FilterMode_kFilterNone,
-        _ => FilterMode_kFilterBilinear,
+    let filter = if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() {
+        FilterMode_kFilterNone
+    } else {
+        FilterMode_kFilterBilinear
     };
     let mut pd: [Option<PlaneData>; 4] = [
         image.plane(Plane::Y),

@@ -29,6 +29,15 @@ pub enum ChromaUpsampling {
     Bilinear,
 }
 
+impl ChromaUpsampling {
+    pub fn nearest_neighbor_filter_allowed(&self) -> bool {
+        match self {
+            Self::Bilinear | Self::BestQuality | Self::Automatic => false,
+            _ => true,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub enum ChromaDownsampling {
