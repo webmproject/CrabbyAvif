@@ -258,7 +258,10 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &rgb::Image, reformat_alpha: bool) 
         return Err(AvifError::NotImplemented);
     }
     let (matrix_yuv, matrix_yvu) = find_constants(image).ok_or(AvifError::NotImplemented)?;
-    let alpha_preferred = reformat_alpha && image.planes[3].is_some();
+    let alpha_preferred = reformat_alpha
+        && image.planes[3].is_some()
+        && !image.planes[3].unwrap().is_null()
+        && image.row_bytes[3] > 0;
     let conversion_function =
         find_conversion_function(image.yuv_format, image.depth, rgb, alpha_preferred)
             .ok_or(AvifError::NotImplemented)?;
