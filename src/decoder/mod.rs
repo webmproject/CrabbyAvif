@@ -241,22 +241,26 @@ pub struct Decoder {
     io: Option<GenericIO>,
     codecs: Vec<Codec>,
     color_track_id: Option<u32>,
+    parsing_complete: bool,
 }
 
 impl Decoder {
     pub fn set_io_file(&mut self, filename: &String) -> AvifResult<()> {
         self.io = Some(Box::new(DecoderFileIO::create(filename)?));
+        self.parsing_complete = false;
         Ok(())
     }
 
     // This has an unsafe block and is intended for use only from the C API.
     pub fn set_io_raw(&mut self, data: *const u8, size: usize) -> AvifResult<()> {
         self.io = Some(Box::new(DecoderRawIO::create(data, size)));
+        self.parsing_complete = false;
         Ok(())
     }
 
     pub fn set_io(&mut self, io: GenericIO) {
         self.io = Some(io);
+        self.parsing_complete = false;
     }
 
     #[allow(non_snake_case)]
@@ -572,11 +576,37 @@ impl Decoder {
         Ok(())
     }
 
+    fn reset(&mut self) {
+        let decoder = Decoder::default();
+        // Reset all fields to default except the following: settings, io, source.
+        self.image_count = decoder.image_count;
+        self.image_timing = decoder.image_timing;
+        self.timescale = decoder.timescale;
+        self.duration_in_timescales = decoder.duration_in_timescales;
+        self.duration = decoder.duration;
+        self.repetition_count = decoder.repetition_count;
+        self.gainmap = decoder.gainmap;
+        self.gainmap_present = decoder.gainmap_present;
+        self.image = decoder.image;
+        self.tile_info = decoder.tile_info;
+        self.tiles = decoder.tiles;
+        self.image_index = decoder.image_index;
+        self.items = decoder.items;
+        self.tracks = decoder.tracks;
+        self.codecs = decoder.codecs;
+        self.color_track_id = decoder.color_track_id;
+        self.parsing_complete = decoder.parsing_complete;
+    }
+
     #[allow(non_snake_case)]
     pub fn parse(&mut self) -> AvifResult<()> {
+        if self.parsing_complete {
+            return Ok(());
+        }
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
         }
+        self.reset();
         let avif_boxes = mp4box::parse(self.io.as_mut().unwrap())?;
         self.tracks = avif_boxes.tracks;
         if !self.tracks.is_empty() {
@@ -857,7 +887,7 @@ impl Decoder {
             // If cicp was not set, try to harvest it from the sequence header.
             self.harvest_cicp_from_sequence_header()?;
         }
-
+        self.parsing_complete = true;
         Ok(())
     }
 
@@ -1098,7 +1128,7 @@ impl Decoder {
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
         }
-        if !self.parsing_complete() {
+        if !self.parsing_complete {
             return Err(AvifError::NoContent);
         }
         if self.is_current_frame_fully_decoded() {
@@ -1117,7 +1147,7 @@ impl Decoder {
     }
 
     fn is_current_frame_fully_decoded(&self) -> bool {
-        if !self.parsing_complete() {
+        if !self.parsing_complete {
             return false;
         }
         for category in 0usize..3 {
@@ -1129,7 +1159,7 @@ impl Decoder {
     }
 
     pub fn nth_image(&mut self, index: u32) -> AvifResult<()> {
-        if !self.parsing_complete() {
+        if !self.parsing_complete {
             return Err(AvifError::NoContent);
         }
         if index >= self.image_count {
@@ -1154,7 +1184,7 @@ impl Decoder {
             // TODO: reset codecs?
         }
         loop {
-            println!("decoding next image: {}", self.image_index + 1);
+            //println!("decoding next image: {}", self.image_index + 1);
             self.next_image()?;
             if requested_index == self.image_index {
                 break;
@@ -1169,7 +1199,7 @@ impl Decoder {
     }
 
     pub fn nth_image_timing(&self, n: u32) -> AvifResult<ImageTiming> {
-        if !self.parsing_complete() {
+        if !self.parsing_complete {
             return Err(AvifError::NoContent);
         }
         if n > self.settings.image_count_limit {
@@ -1205,12 +1235,8 @@ impl Decoder {
         min_row_count
     }
 
-    fn parsing_complete(&self) -> bool {
-        !self.tiles[0].is_empty()
-    }
-
     pub fn is_keyframe(&self, index: u32) -> bool {
-        if !self.parsing_complete() {
+        if !self.parsing_complete {
             return false;
         }
         let index = index as usize;
@@ -1226,7 +1252,7 @@ impl Decoder {
     }
 
     pub fn nearest_keyframe(&self, index: u32) -> u32 {
-        if !self.parsing_complete() {
+        if !self.parsing_complete {
             return 0;
         }
         for i in (0..index).rev() {
@@ -1238,7 +1264,7 @@ impl Decoder {
     }
 
     pub fn nth_image_max_extent(&self, index: u32) -> AvifResult<Extent> {
-        if !self.parsing_complete() {
+        if !self.parsing_complete {
             return Err(AvifError::NoContent);
         }
         let mut extent = Extent::default();
