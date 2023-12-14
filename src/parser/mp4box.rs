@@ -840,7 +840,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
                 }
                 meta.idat = parse_idat(&mut sub_stream)?;
             }
-            _ => println!("skipping box {}", header.box_type),
+            _ => {}
         }
     }
     Ok(meta)
@@ -1074,7 +1074,7 @@ fn parse_stbl(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
             "stss" => parse_stss(&mut sub_stream, &mut sample_table)?,
             "stts" => parse_stts(&mut sub_stream, &mut sample_table)?,
             "stsd" => parse_stsd(&mut sub_stream, &mut sample_table)?,
-            _ => println!("skipping box {}", header.box_type),
+            _ => {}
         }
     }
     track.sample_table = Some(sample_table);
@@ -1087,7 +1087,7 @@ fn parse_minf(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
             "stbl" => parse_stbl(&mut sub_stream, track)?,
-            _ => println!("skipping box {}", header.box_type),
+            _ => {}
         }
     }
     Ok(())
@@ -1100,7 +1100,7 @@ fn parse_mdia(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         match header.box_type.as_str() {
             "mdhd" => parse_mdhd(&mut sub_stream, track)?,
             "minf" => parse_minf(&mut sub_stream, track)?,
-            _ => println!("skipping box {}", header.box_type),
+            _ => {}
         }
     }
     Ok(())
@@ -1121,7 +1121,7 @@ fn parse_tref(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
                 // Use only the first one and skip the rest.
                 track.prem_by_id = sub_stream.read_u32()?;
             }
-            _ => println!("skipping box {}", header.box_type),
+            _ => {}
         }
     }
     Ok(())
@@ -1174,7 +1174,7 @@ fn parse_edts(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
             "elst" => parse_elst(&mut sub_stream, track)?,
-            _ => println!("skipping box {}", header.box_type),
+            _ => {}
         }
     }
     if !track.elst_seen {
@@ -1195,7 +1195,7 @@ fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
             "tref" => parse_tref(&mut sub_stream, &mut track)?,
             "edts" => parse_edts(&mut sub_stream, &mut track)?,
             "meta" => track.meta = Some(parse_meta(&mut sub_stream)?),
-            _ => println!("skipping box {}", header.box_type),
+            _ => {}
         }
     }
     Ok(track)
@@ -1208,7 +1208,7 @@ fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
         let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
             "trak" => tracks.push(parse_trak(&mut sub_stream)?),
-            _ => println!("skipping box {}", header.box_type),
+            _ => {}
         }
     }
     Ok(tracks)
@@ -1264,9 +1264,7 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
                     }
                 }
             }
-            _ => {
-                println!("skipping box: {}", header.box_type);
-            }
+            _ => {}
         }
         parse_offset = parse_offset
             .checked_add(header.size as u64)
