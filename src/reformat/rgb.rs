@@ -183,7 +183,7 @@ struct State {
     yuv: YuvColorSpaceInfo,
 }
 
-#[derive(Default, PartialEq)]
+#[derive(Default, Debug, PartialEq)]
 enum AlphaMultiplyMode {
     #[default]
     NoOp,
@@ -267,7 +267,7 @@ impl Image {
             yuv: YuvColorSpaceInfo::create_from(image)?,
         };
         let mut alpha_multiply_mode = AlphaMultiplyMode::NoOp;
-        if image.planes[3].is_none() {
+        if image.has_alpha() {
             if !self.has_alpha() || self.ignore_alpha {
                 if !image.alpha_premultiplied {
                     alpha_multiply_mode = AlphaMultiplyMode::Multiply;
@@ -284,9 +284,41 @@ impl Image {
         let mut converted_with_libyuv: bool = false;
         let reformat_alpha = self.has_alpha()
             && (!self.ignore_alpha || alpha_multiply_mode != AlphaMultiplyMode::NoOp);
-        // TODO: alpha_reformatted_with_libyuv.
+        println!(
+            "alpha_multiply_mode: {:#?} reformat_alpha: {reformat_alpha}",
+            alpha_multiply_mode
+        );
+        let mut alpha_reformatted_with_libyuv = false;
         if alpha_multiply_mode == AlphaMultiplyMode::NoOp || self.has_alpha() {
-            return libyuv::yuv_to_rgb(image, &self, reformat_alpha);
+            match libyuv::yuv_to_rgb(image, &self, reformat_alpha) {
+                Ok(alpha_reformatted) => {
+                    alpha_reformatted_with_libyuv = alpha_reformatted;
+                    converted_with_libyuv = true;
+                }
+                Err(err) => {
+                    if err != AvifError::NotImplemented {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+        if reformat_alpha && !alpha_reformatted_with_libyuv {
+            unimplemented!("needs alpha reformat");
+        }
+        if !converted_with_libyuv {
+            unimplemented!("libyuv could not convet this");
+        }
+        match alpha_multiply_mode {
+            AlphaMultiplyMode::Multiply => {
+                unimplemented!("needs alpha multiply!");
+            }
+            AlphaMultiplyMode::UnMultiply => {
+                unimplemented!("needs alpha unmultiply!");
+            }
+            _ => {}
+        }
+        if self.is_float {
+            unimplemented!("needs is float");
         }
         Err(AvifError::ReformatFailed)
     }

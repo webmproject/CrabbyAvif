@@ -366,7 +366,11 @@ fn find_conversion_function(
     None
 }
 
-pub fn yuv_to_rgb(image: &image::Image, rgb: &rgb::Image, reformat_alpha: bool) -> AvifResult<()> {
+pub fn yuv_to_rgb(
+    image: &image::Image,
+    rgb: &rgb::Image,
+    reformat_alpha: bool,
+) -> AvifResult<(bool)> {
     if rgb.depth != 8 || (image.depth != 8 && image.depth != 10 && image.depth != 12) {
         return Err(AvifError::NotImplemented);
     }
@@ -378,6 +382,7 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &rgb::Image, reformat_alpha: bool) 
     let conversion_function =
         find_conversion_function(image.yuv_format, image.depth, rgb, alpha_preferred)
             .ok_or(AvifError::NotImplemented)?;
+    println!("conversion_function: {:#?}", conversion_function);
     let is_yvu = match rgb.format {
         Format::Rgb | Format::Rgba | Format::Argb => true,
         _ => false,
@@ -496,7 +501,11 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &rgb::Image, reformat_alpha: bool) 
             }
         };
         if high_bd_matched {
-            return if result == 0 { Ok(()) } else { Err(AvifError::ReformatFailed) };
+            return if result == 0 {
+                Ok(!image.has_alpha() || conversion_function.is_yuva())
+            } else {
+                Err(AvifError::ReformatFailed)
+            };
         }
         let mut image8 = image::Image::default();
         if image.depth > 8 {
@@ -606,7 +615,7 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &rgb::Image, reformat_alpha: bool) 
         };
     }
     if result == 0 {
-        Ok(())
+        Ok(!image.has_alpha() || conversion_function.is_yuva())
     } else {
         Err(AvifError::ReformatFailed)
     }

@@ -86,6 +86,11 @@ impl Image {
             _ => false,
         }
     }
+
+    pub fn has_alpha(&self) -> bool {
+        self.planes[3].is_some() && !self.planes[3].unwrap().is_null() && self.row_bytes[3] > 0
+    }
+
     pub fn subsampled_width(&self, width: u32, plane: Plane) -> usize {
         match plane {
             Plane::Y | Plane::A => width as usize,
