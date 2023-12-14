@@ -486,7 +486,6 @@ impl Decoder {
     }
 
     fn harvest_cicp_from_sequence_header(&mut self) -> AvifResult<()> {
-        println!("HARVESTING!");
         if self.tiles[0].is_empty() {
             return Ok(());
         }

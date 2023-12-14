@@ -157,7 +157,6 @@ impl Av1SequenceHeader {
         if self.config.seq_profile != 1 {
             self.config.monochrome = bits.read_bool()?;
         }
-        println!("bitreader before color desc: {:#?}", bits);
         // color_description_present_flag
         if bits.read_bool()? {
             // color_primaries
