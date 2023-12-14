@@ -343,11 +343,8 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
 
 fn parse_pitm(stream: &mut IStream) -> AvifResult<u32> {
     let (version, _flags) = stream.read_version_and_flags()?;
-    let primary_item_id = if version == 0 {
-        stream.read_u16()? as u32
-    } else {
-        stream.read_u32()?
-    };
+    let primary_item_id =
+        if version == 0 { stream.read_u16()? as u32 } else { stream.read_u32()? };
     Ok(primary_item_id)
 }
 

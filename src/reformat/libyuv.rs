@@ -284,13 +284,15 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &rgb::Image, reformat_alpha: bool) 
     ];
     let mut plane_u8: [*const u8; 4] = pd
         .iter()
-        .map(|x| {
-            if x.is_some() {
-                x.as_ref().unwrap().data.as_ptr()
-            } else {
-                std::ptr::null()
-            }
-        })
+        .map(
+            |x| {
+                if x.is_some() {
+                    x.as_ref().unwrap().data.as_ptr()
+                } else {
+                    std::ptr::null()
+                }
+            },
+        )
         .collect::<Vec<*const u8>>()
         .try_into()
         .unwrap();
@@ -380,11 +382,7 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &rgb::Image, reformat_alpha: bool) 
             }
         };
         if high_bd_matched {
-            return if result == 0 {
-                Ok(())
-            } else {
-                Err(AvifError::ReformatFailed)
-            };
+            return if result == 0 { Ok(()) } else { Err(AvifError::ReformatFailed) };
         }
         let mut image8 = image::Image::default();
         if image.depth > 8 {
@@ -395,18 +393,18 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &rgb::Image, reformat_alpha: bool) 
                 image8.plane(Plane::V),
                 image8.plane(Plane::A),
             ];
-            plane_u8 = pd
-                .iter()
-                .map(|x| {
-                    if x.is_some() {
-                        x.as_ref().unwrap().data.as_ptr()
-                    } else {
-                        std::ptr::null()
-                    }
-                })
-                .collect::<Vec<*const u8>>()
-                .try_into()
-                .unwrap();
+            plane_u8 =
+                pd.iter()
+                    .map(|x| {
+                        if x.is_some() {
+                            x.as_ref().unwrap().data.as_ptr()
+                        } else {
+                            std::ptr::null()
+                        }
+                    })
+                    .collect::<Vec<*const u8>>()
+                    .try_into()
+                    .unwrap();
             plane_row_bytes = pd
                 .iter()
                 .map(|x| {

@@ -67,11 +67,8 @@ impl Y4MWriter {
                 return false;
             }
         };
-        let y4m_color_range = if image.full_range {
-            "XCOLORRANGE=FULL"
-        } else {
-            "XCOLORRANGE=LIMITED"
-        };
+        let y4m_color_range =
+            if image.full_range { "XCOLORRANGE=FULL" } else { "XCOLORRANGE=LIMITED" };
         let header = format!(
             "YUV4MPEG2 W{} H{} F25:1 Ip A0:0 {y4m_format} {y4m_color_range}\n",
             image.width, image.height
@@ -112,11 +109,7 @@ impl Y4MWriter {
         {
             return false;
         }
-        let planes: &[Plane] = if self.write_alpha {
-            &ALL_PLANES
-        } else {
-            &YUV_PLANES
-        };
+        let planes: &[Plane] = if self.write_alpha { &ALL_PLANES } else { &YUV_PLANES };
         for plane in planes {
             let avif_plane = image.plane(*plane);
             println!("{:#?}", avif_plane);

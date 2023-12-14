@@ -75,11 +75,8 @@ impl Track {
                     println!("invalid track duration 0");
                     return Err(AvifError::BmffParseFailed);
                 }
-                let remainder = if self.track_duration % self.segment_duration != 0 {
-                    1u64
-                } else {
-                    0u64
-                };
+                let remainder =
+                    if self.track_duration % self.segment_duration != 0 { 1u64 } else { 0u64 };
                 let repetition_count: u64 =
                     (self.track_duration / self.segment_duration) + remainder - 1u64;
                 return match i32::try_from(repetition_count) {

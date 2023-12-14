@@ -29,11 +29,7 @@ impl decoder::IO for DecoderFileIO {
             return Err(AvifError::IoError);
         }
         let available_size: usize = (file_size - offset) as usize;
-        let size_to_read: usize = if size > available_size {
-            available_size
-        } else {
-            size
-        };
+        let size_to_read: usize = if size > available_size { available_size } else { size };
         if size_to_read > 0 {
             if self.buffer.capacity() < size_to_read {
                 self.buffer.reserve(size_to_read);
@@ -86,11 +82,7 @@ impl decoder::IO for DecoderRawIO<'_> {
             return Err(AvifError::IoError);
         }
         let available_size: usize = (data_len - offset) as usize;
-        let size_to_read: usize = if size > available_size {
-            available_size
-        } else {
-            size
-        };
+        let size_to_read: usize = if size > available_size { available_size } else { size };
         let slice_start = usize_from_u64(offset)?;
         let slice_end = slice_start + size_to_read;
         Ok(&self.data[slice_start..slice_end])

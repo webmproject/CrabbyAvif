@@ -159,22 +159,10 @@ impl YuvColorSpaceInfo {
             depth: image.depth as u32,
             full_range: image.full_range,
             max_channel,
-            bias_y: if image.full_range {
-                0.0
-            } else {
-                (16 << (image.depth - 8)) as f32
-            },
+            bias_y: if image.full_range { 0.0 } else { (16 << (image.depth - 8)) as f32 },
             bias_uv: (1 << (image.depth - 1)) as f32,
-            range_y: if image.full_range {
-                max_channel
-            } else {
-                219 << (image.depth - 8)
-            } as f32,
-            range_uv: if image.full_range {
-                max_channel
-            } else {
-                224 << (image.depth - 8)
-            } as f32,
+            range_y: if image.full_range { max_channel } else { 219 << (image.depth - 8) } as f32,
+            range_uv: if image.full_range { max_channel } else { 224 << (image.depth - 8) } as f32,
             format: image.yuv_format,
             mode,
         })

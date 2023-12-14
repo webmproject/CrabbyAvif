@@ -386,11 +386,7 @@ fn expected_min_decoded_row_count(
     let cell_index = cell_index.unwrap() as u32;
     let cell_row = cell_index / cell_columns;
     let cell_column = cell_index % cell_columns;
-    let cell_rows_decoded = if cell_column == cell_columns - 1 {
-        cell_row + 1
-    } else {
-        cell_row
-    };
+    let cell_rows_decoded = if cell_column == cell_columns - 1 { cell_row + 1 } else { cell_row };
     cell_rows_decoded * cell_height
 }
 

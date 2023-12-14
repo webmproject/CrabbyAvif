@@ -367,16 +367,8 @@ pub unsafe extern "C" fn avifImageSetViewRect(
         if src.yuvPlanes[plane].is_null() {
             continue;
         }
-        let x = if plane == 0 {
-            rect.x
-        } else {
-            rect.x >> src.yuvFormat.chroma_shift_x()
-        };
-        let y = if plane == 0 {
-            rect.y
-        } else {
-            rect.y >> src.yuvFormat.chroma_shift_y()
-        };
+        let x = if plane == 0 { rect.x } else { rect.x >> src.yuvFormat.chroma_shift_x() };
+        let y = if plane == 0 { rect.y } else { rect.y >> src.yuvFormat.chroma_shift_y() };
         let offset = match isize_from_u32(y * src.yuvRowBytes[plane] + x * pixel_size) {
             Ok(x) => x,
             _ => return avifResult::InvalidArgument,

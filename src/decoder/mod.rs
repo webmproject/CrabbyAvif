@@ -321,19 +321,11 @@ impl Decoder {
                 println!("Expected tmap to have 2 dimg items");
                 return Err(AvifError::InvalidToneMappedImage);
             }
-            let item0 = if dimg_items[0].dimg_index == 0 {
-                dimg_items[0]
-            } else {
-                dimg_items[1]
-            };
+            let item0 = if dimg_items[0].dimg_index == 0 { dimg_items[0] } else { dimg_items[1] };
             if item0.id != color_item_id {
                 continue;
             }
-            let item1 = if dimg_items[0].dimg_index == 0 {
-                dimg_items[1]
-            } else {
-                dimg_items[0]
-            };
+            let item1 = if dimg_items[0].dimg_index == 0 { dimg_items[1] } else { dimg_items[0] };
             return Ok((item.id, item1.id));
         }
         Ok((0, 0))
