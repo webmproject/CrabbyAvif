@@ -17,8 +17,9 @@ pub enum Format {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub enum ChromaUpsampling {
+    #[default]
     Automatic,
     Fastest,
     BestQuality,
@@ -33,8 +34,9 @@ impl ChromaUpsampling {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub enum ChromaDownsampling {
+    #[default]
     Automatic,
     Fastest,
     BestQuality,
@@ -45,8 +47,10 @@ pub enum ChromaDownsampling {
 pub enum Pixels {
     Pointer(*mut u8),
     Buffer(Vec<u8>),
+    Buffer16(Vec<u16>),
 }
 
+#[derive(Default)]
 pub struct Image {
     pub width: u32,
     pub height: u32,
@@ -219,16 +223,105 @@ impl Image {
         match self.pixels.as_mut().unwrap() {
             Pixels::Pointer(ptr) => *ptr,
             Pixels::Buffer(buffer) => buffer.as_mut_ptr(),
+            Pixels::Buffer16(buffer) => buffer.as_mut_ptr() as *mut u8,
         }
+    }
+
+    pub fn row(&self, row: u32) -> AvifResult<&[u8]> {
+        if self.pixels.is_none() {
+            return Err(AvifError::NoContent);
+        }
+        let row_bytes = usize_from_u32(self.row_bytes)?;
+        let start = usize_from_u32(row * self.row_bytes)?;
+        let end = start + row_bytes;
+        Ok(match self.pixels.as_ref().unwrap() {
+            Pixels::Pointer(ptr) => unsafe {
+                std::slice::from_raw_parts((*ptr).offset(isize_from_usize(start)?), row_bytes)
+            },
+            Pixels::Buffer(buffer) => &buffer[start..end],
+            Pixels::Buffer16(_) => return Err(AvifError::UnknownError),
+        })
+    }
+
+    pub fn mut_row(&mut self, row: u32) -> AvifResult<&mut [u8]> {
+        if self.pixels.is_none() {
+            return Err(AvifError::NoContent);
+        }
+        let row_bytes = usize_from_u32(self.row_bytes)?;
+        let start = usize_from_u32(row * self.row_bytes)?;
+        let end = start + row_bytes;
+        Ok(match self.pixels.as_mut().unwrap() {
+            Pixels::Pointer(ptr) => unsafe {
+                std::slice::from_raw_parts_mut((*ptr).offset(isize_from_usize(start)?), row_bytes)
+            },
+            Pixels::Buffer(buffer) => &mut buffer[start..end],
+            Pixels::Buffer16(_) => return Err(AvifError::UnknownError),
+        })
+    }
+
+    pub fn row16(&self, row: u32) -> AvifResult<&[u16]> {
+        if self.pixels.is_none() {
+            return Err(AvifError::NoContent);
+        }
+        let row_bytes = usize_from_u32(self.row_bytes)?;
+        Ok(match self.pixels.as_ref().unwrap() {
+            Pixels::Pointer(ptr) => {
+                let start = usize_from_u32(row * self.row_bytes)?;
+                unsafe {
+                    std::slice::from_raw_parts(
+                        (*ptr).offset(isize_from_usize(start)?) as *const u16,
+                        row_bytes / 2,
+                    )
+                }
+            }
+            Pixels::Buffer16(buffer) => {
+                let start = usize_from_u32(row * self.row_bytes / 2)?;
+                let end = start + row_bytes / 2;
+                &buffer[start..end]
+            }
+            Pixels::Buffer(_) => return Err(AvifError::UnknownError),
+        })
+    }
+
+    pub fn mut_row16(&mut self, row: u32) -> AvifResult<&mut [u16]> {
+        if self.pixels.is_none() {
+            return Err(AvifError::NoContent);
+        }
+        let row_bytes = usize_from_u32(self.row_bytes)?;
+        Ok(match self.pixels.as_mut().unwrap() {
+            Pixels::Pointer(ptr) => {
+                let start = usize_from_u32(row * self.row_bytes)?;
+                unsafe {
+                    std::slice::from_raw_parts_mut(
+                        (*ptr).offset(isize_from_usize(start)?) as *mut u16,
+                        row_bytes / 2,
+                    )
+                }
+            }
+            Pixels::Buffer16(buffer) => {
+                let start = usize_from_u32(row * self.row_bytes / 2)?;
+                let end = start + row_bytes / 2;
+                &mut buffer[start..end]
+            }
+            Pixels::Buffer(_) => return Err(AvifError::UnknownError),
+        })
     }
 
     pub fn allocate(&mut self) -> AvifResult<()> {
         let row_bytes = self.width * self.pixel_size();
-        let buffer_size: usize = usize_from_u32(row_bytes * self.height)?;
-        let mut buffer: Vec<u8> = Vec::new();
-        buffer.reserve(buffer_size);
-        buffer.resize(buffer_size, 0);
-        self.pixels = Some(Pixels::Buffer(buffer));
+        if self.channel_size() == 1 {
+            let buffer_size: usize = usize_from_u32(row_bytes * self.height)?;
+            let mut buffer: Vec<u8> = Vec::new();
+            buffer.reserve(buffer_size);
+            buffer.resize(buffer_size, 0);
+            self.pixels = Some(Pixels::Buffer(buffer));
+        } else {
+            let buffer_size: usize = usize_from_u32((row_bytes / 2) * self.height)?;
+            let mut buffer: Vec<u16> = Vec::new();
+            buffer.reserve(buffer_size);
+            buffer.resize(buffer_size, 0);
+            self.pixels = Some(Pixels::Buffer16(buffer));
+        }
         self.row_bytes = row_bytes;
         Ok(())
     }

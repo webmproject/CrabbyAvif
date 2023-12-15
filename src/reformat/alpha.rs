@@ -50,7 +50,7 @@ impl rgb::Image {
                     as *mut u16;
                 for x in 0..isize_from_u32(self.width)? {
                     unsafe {
-                        *ptr.offset(x + offset_bytes_a) = max_channel;
+                        *ptr.offset((x * 4) + offset_bytes_a) = max_channel;
                     }
                 }
             }
@@ -59,7 +59,67 @@ impl rgb::Image {
                 let ptr = unsafe { self.pixels().offset(isize_from_u32(y * self.row_bytes)?) };
                 for x in 0..isize_from_u32(self.width)? {
                     unsafe {
-                        *ptr.offset(x + offset_bytes_a) = 255;
+                        *ptr.offset((x * 4) + offset_bytes_a) = 255;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use test_case::test_matrix;
+
+    #[test_matrix(20, 10, [8, 10, 12, 16], 0..=3, [true, false])]
+    fn fill_alpha_rgb_buffer(
+        width: u32,
+        height: u32,
+        depth: u32,
+        alpha_byte_offset: usize,
+        use_pointer: bool,
+    ) -> AvifResult<()> {
+        let mut rgb = rgb::Image {
+            width,
+            height,
+            depth,
+            ..rgb::Image::default()
+        };
+        let mut buffer: Vec<u8> = Vec::new();
+        if use_pointer {
+            let pixel_size = if depth == 8 { 1 } else { 2 };
+            let buffer_size = (width * height * 4 * pixel_size) as usize;
+            buffer.reserve_exact(buffer_size);
+            buffer.resize(buffer_size, 0);
+            rgb.pixels = Some(rgb::Pixels::Pointer(buffer.as_mut_ptr()));
+            rgb.row_bytes = width * 4 * pixel_size;
+        } else {
+            rgb.allocate()?;
+        }
+        rgb.fill_alpha(alpha_byte_offset as isize)?;
+        if depth == 8 {
+            for y in 0..height {
+                let row = rgb.row(y)?;
+                assert_eq!(row.len(), (width * 4) as usize);
+                for x in 0..width as usize {
+                    for idx in 0usize..4 {
+                        let expected_value = if idx == alpha_byte_offset { 255 } else { 0 };
+                        assert_eq!(row[(x * 4) + idx], expected_value);
+                    }
+                }
+            }
+        } else {
+            let max_channel = ((1 << depth) - 1) as u16;
+            for y in 0..height {
+                let row = rgb.row16(y)?;
+                assert_eq!(row.len(), (width * 4) as usize);
+                for x in 0..width as usize {
+                    for idx in 0usize..4 {
+                        let expected_value = if idx == alpha_byte_offset { max_channel } else { 0 };
+                        assert_eq!(row[(x * 4) + idx], expected_value);
                     }
                 }
             }
