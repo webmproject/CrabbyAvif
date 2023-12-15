@@ -71,10 +71,10 @@ pub struct Image {
 struct RgbColorSpaceInfo {
     channel_bytes: u32,
     pixel_bytes: u32,
-    offset_bytes_r: isize,
-    offset_bytes_g: isize,
-    offset_bytes_b: isize,
-    offset_bytes_a: isize,
+    offset_bytes_r: usize,
+    offset_bytes_g: usize,
+    offset_bytes_b: usize,
+    offset_bytes_a: usize,
     max_channel: i32,
     max_channel_f: f32,
 }
@@ -100,10 +100,10 @@ impl RgbColorSpaceInfo {
         Ok(Self {
             channel_bytes: rgb.channel_size(),
             pixel_bytes: rgb.pixel_size(),
-            offset_bytes_r: (rgb.channel_size() * offsets[0]) as isize,
-            offset_bytes_g: (rgb.channel_size() * offsets[1]) as isize,
-            offset_bytes_b: (rgb.channel_size() * offsets[2]) as isize,
-            offset_bytes_a: (rgb.channel_size() * offsets[3]) as isize,
+            offset_bytes_r: (rgb.channel_size() * offsets[0]) as usize,
+            offset_bytes_g: (rgb.channel_size() * offsets[1]) as usize,
+            offset_bytes_b: (rgb.channel_size() * offsets[2]) as usize,
+            offset_bytes_a: (rgb.channel_size() * offsets[3]) as usize,
             max_channel,
             max_channel_f: max_channel as f32,
         })
