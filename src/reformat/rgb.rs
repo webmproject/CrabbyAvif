@@ -42,6 +42,11 @@ pub enum ChromaDownsampling {
     SharpYuv,
 }
 
+pub enum Pixels {
+    Pointer(*mut u8),
+    Buffer(Vec<u8>),
+}
+
 pub struct Image {
     pub width: u32,
     pub height: u32,
@@ -53,7 +58,7 @@ pub struct Image {
     pub alpha_premultiplied: bool,
     pub is_float: bool,
     pub max_threads: i32,
-    pub pixels: *mut u8, // TODO: slice?
+    pub pixels: Option<Pixels>,
     pub row_bytes: u32,
     pub pixel_buffer: Vec<u8>,
 }
@@ -201,18 +206,29 @@ impl Image {
             alpha_premultiplied: false,
             is_float: false,
             max_threads: 1,
-            pixels: std::ptr::null_mut(),
+            pixels: None,
             row_bytes: 0,
             pixel_buffer: Vec::new(),
+        }
+    }
+
+    pub fn pixels(&mut self) -> *mut u8 {
+        if self.pixels.is_none() {
+            return std::ptr::null_mut();
+        }
+        match self.pixels.as_mut().unwrap() {
+            Pixels::Pointer(ptr) => *ptr,
+            Pixels::Buffer(buffer) => buffer.as_mut_ptr(),
         }
     }
 
     pub fn allocate(&mut self) -> AvifResult<()> {
         let row_bytes = self.width * self.pixel_size();
         let buffer_size: usize = usize_from_u32(row_bytes * self.height)?;
-        self.pixel_buffer.reserve(buffer_size);
-        self.pixel_buffer.resize(buffer_size, 0);
-        self.pixels = self.pixel_buffer.as_mut_ptr();
+        let mut buffer: Vec<u8> = Vec::new();
+        buffer.reserve(buffer_size);
+        buffer.resize(buffer_size, 0);
+        self.pixels = Some(Pixels::Buffer(buffer));
         self.row_bytes = row_bytes;
         Ok(())
     }

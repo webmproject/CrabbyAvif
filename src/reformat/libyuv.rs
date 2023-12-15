@@ -367,7 +367,7 @@ fn find_conversion_function(
 
 pub fn yuv_to_rgb(
     image: &image::Image,
-    rgb: &rgb::Image,
+    rgb: &mut rgb::Image,
     reformat_alpha: bool,
 ) -> AvifResult<bool> {
     if rgb.depth != 8 || (image.depth != 8 && image.depth != 10 && image.depth != 12) {
@@ -438,7 +438,7 @@ pub fn yuv_to_rgb(
                 plane_row_bytes[u_plane_index] / 2,
                 plane_u8[v_plane_index] as *const u16,
                 plane_row_bytes[v_plane_index] / 2,
-                rgb.pixels,
+                rgb.pixels(),
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -454,7 +454,7 @@ pub fn yuv_to_rgb(
                 plane_row_bytes[v_plane_index] / 2,
                 plane_u8[3] as *const u16,
                 plane_row_bytes[3] / 2,
-                rgb.pixels,
+                rgb.pixels(),
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -469,7 +469,7 @@ pub fn yuv_to_rgb(
                 plane_row_bytes[u_plane_index] / 2,
                 plane_u8[v_plane_index] as *const u16,
                 plane_row_bytes[v_plane_index] / 2,
-                rgb.pixels,
+                rgb.pixels(),
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -484,7 +484,7 @@ pub fn yuv_to_rgb(
                 plane_row_bytes[v_plane_index] / 2,
                 plane_u8[3] as *const u16,
                 plane_row_bytes[3] / 2,
-                rgb.pixels,
+                rgb.pixels(),
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -541,7 +541,7 @@ pub fn yuv_to_rgb(
             ConversionFunction::YUV400ToRGBMatrix(func) => func(
                 plane_u8[0],
                 plane_row_bytes[0],
-                rgb.pixels,
+                rgb.pixels(),
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -554,7 +554,7 @@ pub fn yuv_to_rgb(
                 plane_row_bytes[u_plane_index],
                 plane_u8[v_plane_index],
                 plane_row_bytes[v_plane_index],
-                rgb.pixels,
+                rgb.pixels(),
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -570,7 +570,7 @@ pub fn yuv_to_rgb(
                 plane_row_bytes[v_plane_index],
                 plane_u8[3],
                 plane_row_bytes[3],
-                rgb.pixels,
+                rgb.pixels(),
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -585,7 +585,7 @@ pub fn yuv_to_rgb(
                 plane_row_bytes[u_plane_index],
                 plane_u8[v_plane_index],
                 plane_row_bytes[v_plane_index],
-                rgb.pixels,
+                rgb.pixels(),
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -600,7 +600,7 @@ pub fn yuv_to_rgb(
                 plane_row_bytes[v_plane_index],
                 plane_u8[3],
                 plane_row_bytes[3],
-                rgb.pixels,
+                rgb.pixels(),
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -667,18 +667,18 @@ pub fn process_alpha(rgb: &mut rgb::Image, multiply: bool) -> AvifResult<()> {
     let result = unsafe {
         if multiply {
             ARGBAttenuate(
-                rgb.pixels,
+                rgb.pixels(),
                 i32_from_u32(rgb.row_bytes)?,
-                rgb.pixels,
+                rgb.pixels(),
                 i32_from_u32(rgb.row_bytes)?,
                 i32_from_u32(rgb.width)?,
                 i32_from_u32(rgb.height)?,
             )
         } else {
             ARGBUnattenuate(
-                rgb.pixels,
+                rgb.pixels(),
                 i32_from_u32(rgb.row_bytes)?,
-                rgb.pixels,
+                rgb.pixels(),
                 i32_from_u32(rgb.row_bytes)?,
                 i32_from_u32(rgb.width)?,
                 i32_from_u32(rgb.height)?,

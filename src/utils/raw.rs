@@ -47,7 +47,7 @@ impl RawWriter {
             }
             for y in 0..rgb.height {
                 let stride_offset = (y * rgb.row_bytes) as isize;
-                let ptr = unsafe { rgb.pixels.offset(stride_offset) };
+                let ptr = unsafe { rgb.pixels().offset(stride_offset) };
                 let byte_count = (rgb.width * rgb.pixel_size()) as usize;
                 let pixels = unsafe { std::slice::from_raw_parts(ptr, byte_count) };
                 if self.file.as_ref().unwrap().write_all(pixels).is_err() {

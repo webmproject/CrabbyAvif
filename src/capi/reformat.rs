@@ -32,7 +32,7 @@ pub struct avifRGBImage {
 }
 
 impl From<rgb::Image> for avifRGBImage {
-    fn from(rgb: rgb::Image) -> avifRGBImage {
+    fn from(mut rgb: rgb::Image) -> avifRGBImage {
         avifRGBImage {
             width: rgb.width,
             height: rgb.height,
@@ -44,7 +44,7 @@ impl From<rgb::Image> for avifRGBImage {
             alpha_premultiplied: rgb.alpha_premultiplied,
             is_float: rgb.is_float,
             max_threads: rgb.max_threads,
-            pixels: rgb.pixels,
+            pixels: rgb.pixels(),
             row_bytes: rgb.row_bytes,
         }
     }
@@ -64,7 +64,7 @@ impl From<*mut avifRGBImage> for rgb::Image {
             alpha_premultiplied: rgb.alpha_premultiplied,
             is_float: rgb.is_float,
             max_threads: rgb.max_threads,
-            pixels: rgb.pixels,
+            pixels: Some(rgb::Pixels::Pointer(rgb.pixels)),
             row_bytes: rgb.row_bytes,
             pixel_buffer: Vec::new(),
         }

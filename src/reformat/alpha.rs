@@ -6,7 +6,7 @@ use crate::*;
 
 impl rgb::Image {
     pub fn premultiply_alpha(&mut self) -> AvifResult<()> {
-        if self.pixels.is_null() || self.row_bytes == 0 {
+        if self.pixels().is_null() || self.row_bytes == 0 {
             return Err(AvifError::ReformatFailed);
         }
         if !self.has_alpha() {
@@ -24,7 +24,7 @@ impl rgb::Image {
     }
 
     pub fn unpremultiply_alpha(&mut self) -> AvifResult<()> {
-        if self.pixels.is_null() || self.row_bytes == 0 {
+        if self.pixels().is_null() || self.row_bytes == 0 {
             return Err(AvifError::ReformatFailed);
         }
         if !self.has_alpha() {
@@ -45,8 +45,8 @@ impl rgb::Image {
         if self.depth > 8 {
             let max_channel = ((1 << self.depth) - 1) as u16;
             for y in 0..self.height {
-                let ptr =
-                    unsafe { self.pixels.offset(isize_from_u32(y * self.row_bytes)?) } as *mut u16;
+                let ptr = unsafe { self.pixels().offset(isize_from_u32(y * self.row_bytes)?) }
+                    as *mut u16;
                 for x in 0..isize_from_u32(self.width)? {
                     unsafe {
                         *ptr.offset(x + offset_bytes_a) = max_channel;
@@ -55,7 +55,7 @@ impl rgb::Image {
             }
         } else {
             for y in 0..self.height {
-                let ptr = unsafe { self.pixels.offset(isize_from_u32(y * self.row_bytes)?) };
+                let ptr = unsafe { self.pixels().offset(isize_from_u32(y * self.row_bytes)?) };
                 for x in 0..isize_from_u32(self.width)? {
                     unsafe {
                         *ptr.offset(x + offset_bytes_a) = 255;
