@@ -2,6 +2,7 @@ use super::image::*;
 
 use std::os::raw::c_char;
 use std::os::raw::c_int;
+use std::os::raw::c_void;
 
 use crate::utils::clap::*;
 use crate::*;
@@ -126,7 +127,7 @@ pub const AVIF_TRUE: c_int = 1;
 pub const AVIF_FALSE: c_int = 0;
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum avifPixelFormat {
     None,
     Yuv444,
@@ -386,3 +387,21 @@ pub const AVIF_COLOR_PRIMARIES_IEC61966_2_4: u32 = 1;
 pub const AVIF_COLOR_PRIMARIES_BT2100: u32 = 9;
 pub const AVIF_COLOR_PRIMARIES_DCI_P3: u32 = 12;
 pub const AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084: u32 = 16;
+
+#[no_mangle]
+pub unsafe extern "C" fn avifAlloc(size: usize) -> *mut c_void {
+    let mut data: Vec<u8> = Vec::new();
+    data.reserve_exact(size);
+    data.resize(size, 0);
+    let mut boxed_slice = data.into_boxed_slice();
+    let ptr = boxed_slice.as_mut_ptr();
+    std::mem::forget(boxed_slice);
+    ptr as *mut c_void
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifFree(p: *mut c_void) {
+    if !p.is_null() {
+        let _ = unsafe { Box::from_raw(p) };
+    }
+}

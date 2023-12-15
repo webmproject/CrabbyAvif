@@ -9,6 +9,7 @@ use crate::utils::clap::*;
 use crate::*;
 
 use std::os::raw::c_int;
+use std::os::raw::c_void;
 
 pub type avifPixelAspectRatioBox = PixelAspectRatio;
 
@@ -214,6 +215,85 @@ pub unsafe extern "C" fn avifImageCreate(
         ..avifImage::default()
     }))
 }
+
+fn avif_image_allocate_planes_helper(
+    image: &mut avifImage,
+    planes: avifPlanesFlags,
+) -> AvifResult<()> {
+    if image.width == 0 || image.height == 0 {
+        return Err(AvifError::InvalidArgument);
+    }
+    let channel_size = if image.depth == 8 { 1 } else { 2 };
+    let y_row_bytes = usize_from_u32(image.width * channel_size)?;
+    let y_size = y_row_bytes
+        .checked_mul(usize_from_u32(image.height)?)
+        .ok_or(avifResult::InvalidArgument)?;
+    if (planes & 1) != 0 && image.yuvFormat != avifPixelFormat::None {
+        image.imageOwnsYUVPlanes = AVIF_TRUE;
+        if image.yuvPlanes[0].is_null() {
+            image.yuvRowBytes[0] = u32_from_usize(y_row_bytes)?;
+            image.yuvPlanes[0] = unsafe { avifAlloc(y_size) as *mut u8 };
+        }
+        if !image.yuvFormat.is_monochrome() {
+            let csx = image.yuvFormat.chroma_shift_x() as u64;
+            let width = ((image.width as u64) + csx) >> csx;
+            let csy = image.yuvFormat.chroma_shift_y() as u64;
+            let height = ((image.height as u64) + csy) >> csy;
+            let uv_row_bytes = usize_from_u64(width * channel_size as u64)?;
+            let uv_size = usize_from_u64(uv_row_bytes as u64 * height)?;
+            for plane in 1usize..=2 {
+                if !image.yuvPlanes[plane].is_null() {
+                    continue;
+                }
+                image.yuvRowBytes[1] = u32_from_usize(uv_row_bytes)?;
+                image.yuvPlanes[1] = unsafe { avifAlloc(uv_size) as *mut u8 };
+            }
+        }
+    }
+    if (planes & 2) != 0 {
+        image.imageOwnsAlphaPlane = AVIF_TRUE;
+        image.alphaRowBytes = u32_from_usize(y_row_bytes)?;
+        image.alphaPlane = unsafe { avifAlloc(y_size) as *mut u8 };
+    }
+    Ok(())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifImageAllocatePlanes(
+    image: *mut avifImage,
+    planes: avifPlanesFlags,
+) -> avifResult {
+    let image = unsafe { &mut (*image) };
+    to_avifResult(&avif_image_allocate_planes_helper(image, planes))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn avifImageFreePlanes(image: *mut avifImage, planes: avifPlanesFlags) {
+    let image = unsafe { &mut (*image) };
+    if (planes & 1) != 0 {
+        for plane in 0usize..3 {
+            if image.imageOwnsYUVPlanes == AVIF_TRUE {
+                unsafe {
+                    avifFree(image.yuvPlanes[plane] as *mut c_void);
+                }
+            }
+            image.yuvPlanes[plane] = std::ptr::null_mut();
+            image.yuvRowBytes[plane] = 0;
+        }
+        image.imageOwnsYUVPlanes = AVIF_FALSE;
+    }
+    if (planes & 2) != 0 {
+        if image.imageOwnsAlphaPlane == AVIF_TRUE {
+            unsafe {
+                avifFree(image.alphaPlane as *mut c_void);
+            }
+        }
+        image.alphaPlane = std::ptr::null_mut();
+        image.alphaRowBytes = 0;
+        image.imageOwnsAlphaPlane = AVIF_FALSE;
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn avifImageDestroy(image: *mut avifImage) {
     unsafe {
