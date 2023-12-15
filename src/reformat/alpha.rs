@@ -42,6 +42,7 @@ impl rgb::Image {
     }
 
     pub fn fill_alpha(&mut self, offset_bytes_a: isize) -> AvifResult<()> {
+        // TODO: use slices in this function and get rid of unsafe.
         if self.depth > 8 {
             let max_channel = ((1 << self.depth) - 1) as u16;
             for y in 0..self.height {
