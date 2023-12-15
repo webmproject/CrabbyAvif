@@ -39,19 +39,24 @@ impl RawWriter {
         if self.rgb {
             let mut rgb = rgb::Image::create_from_yuv(image);
             rgb.format = rgb::Format::Bgr;
-            //rgb.depth = 8;
+            rgb.depth = 8;
             //rgb.alpha_premultiplied = true;
             if rgb.allocate().is_err() || rgb.convert_from_yuv(image).is_err() {
                 println!("conversion failed");
                 return false;
             }
             for y in 0..rgb.height {
-                let stride_offset = (y * rgb.row_bytes) as isize;
-                let ptr = unsafe { rgb.pixels().offset(stride_offset) };
-                let byte_count = (rgb.width * rgb.pixel_size()) as usize;
-                let pixels = unsafe { std::slice::from_raw_parts(ptr, byte_count) };
-                if self.file.as_ref().unwrap().write_all(pixels).is_err() {
-                    return false;
+                if rgb.depth == 8 {
+                    let row = rgb.row(y).unwrap();
+                    if self.file.as_ref().unwrap().write_all(row).is_err() {
+                        return false;
+                    }
+                } else {
+                    unimplemented!("rgb bitdepth higher than 8");
+                    //let row = rgb.row16(y).unwrap();
+                    //if self.file.as_ref().unwrap().write_all(row).is_err() {
+                    //    return false;
+                    //}
                 }
             }
             return true;
