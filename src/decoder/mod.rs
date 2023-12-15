@@ -613,7 +613,8 @@ impl Decoder {
     #[allow(non_snake_case)]
     pub fn parse(&mut self) -> AvifResult<()> {
         if self.parsing_complete() {
-            return Ok(());
+            // Parse was called again. Reset the data and start over.
+            self.parse_state = ParseState::None;
         }
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
