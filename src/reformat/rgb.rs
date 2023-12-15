@@ -67,10 +67,10 @@ pub struct Image {
 struct RgbColorSpaceInfo {
     channel_bytes: u32,
     pixel_bytes: u32,
-    offset_bytes_r: u32,
-    offset_bytes_g: u32,
-    offset_bytes_b: u32,
-    offset_bytes_a: u32,
+    offset_bytes_r: isize,
+    offset_bytes_g: isize,
+    offset_bytes_b: isize,
+    offset_bytes_a: isize,
     max_channel: i32,
     max_channel_f: f32,
 }
@@ -96,10 +96,10 @@ impl RgbColorSpaceInfo {
         Ok(Self {
             channel_bytes: rgb.channel_size(),
             pixel_bytes: rgb.pixel_size(),
-            offset_bytes_r: rgb.channel_size() * offsets[0],
-            offset_bytes_g: rgb.channel_size() * offsets[1],
-            offset_bytes_b: rgb.channel_size() * offsets[2],
-            offset_bytes_a: rgb.channel_size() * offsets[3],
+            offset_bytes_r: (rgb.channel_size() * offsets[0]) as isize,
+            offset_bytes_g: (rgb.channel_size() * offsets[1]) as isize,
+            offset_bytes_b: (rgb.channel_size() * offsets[2]) as isize,
+            offset_bytes_a: (rgb.channel_size() * offsets[3]) as isize,
             max_channel,
             max_channel_f: max_channel as f32,
         })
@@ -303,7 +303,11 @@ impl Image {
             yuv: YuvColorSpaceInfo::create_from(image)?,
         };
         if reformat_alpha && !alpha_reformatted_with_libyuv {
-            unimplemented!("needs alpha reformat");
+            if image.has_alpha() {
+                unimplemented!("reformat_alpha");
+            } else {
+                self.fill_alpha(state.rgb.offset_bytes_a)?;
+            }
         }
         if !converted_with_libyuv {
             unimplemented!("libyuv could not convet this");
