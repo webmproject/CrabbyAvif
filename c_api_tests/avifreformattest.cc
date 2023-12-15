@@ -16,8 +16,8 @@ constexpr uint8_t kPlaneSize = 16;
 constexpr uint8_t kUOffset = 16;
 constexpr uint8_t kVOffset = 32;
 constexpr uint8_t kWhite[] = {
-    0xeb, 0xeb, 0xeb, 0xeb, 0xeb, 0xeb, 0xeb, 0xeb, 0xeb, 0xeb, 0xeb, 0xeb,
-    0xeb, 0xeb, 0xeb, 0xeb, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
     0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
     0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80};
 constexpr uint8_t kWhiteRGBA[] = {0xff, 0xff, 0xff, 0xff};
@@ -25,7 +25,6 @@ constexpr uint8_t kWhiteRGBA[] = {0xff, 0xff, 0xff, 0xff};
 TEST(AvifDecodeTest, YUVToRGBConversion) {
   ImagePtr image(avifImageCreate(kWidth, kHeight, 8, AVIF_PIXEL_FORMAT_YUV444));
   ASSERT_NE(image, nullptr);
-  image->yuvRange = AVIF_RANGE_FULL;
   fprintf(stderr, "### im here\n");
   ASSERT_EQ(avifImageAllocatePlanes(image.get(), AVIF_PLANES_YUV),
             AVIF_RESULT_OK);
@@ -36,9 +35,12 @@ TEST(AvifDecodeTest, YUVToRGBConversion) {
   avifRGBImageSetDefaults(&rgb, image.get());
   std::vector<uint8_t> rgb_pixels(kPlaneSize * 4);
   rgb.pixels = rgb_pixels.data();
-  rgb.rowBytes = kWidth;
+  rgb.rowBytes = kWidth * 4;
   ASSERT_EQ(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
-  for (int i = 0; i < 1; ++i) {
+  for (int i = 0; i < kPlaneSize; ++i) {
+    fprintf(stderr, "### %d %d %d %d\n", rgb.pixels[i * 4],
+            rgb.pixels[i * 4 + 1], rgb.pixels[i * 4 + 2],
+            rgb.pixels[i * 4 + 3]);
     EXPECT_EQ(rgb.pixels[i * 4], kWhiteRGBA[0]);
     EXPECT_EQ(rgb.pixels[i * 4 + 1], kWhiteRGBA[1]);
     EXPECT_EQ(rgb.pixels[i * 4 + 2], kWhiteRGBA[2]);
