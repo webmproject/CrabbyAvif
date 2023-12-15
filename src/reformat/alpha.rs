@@ -13,7 +13,7 @@ impl rgb::Image {
         if !self.has_alpha() {
             return Err(AvifError::InvalidArgument);
         }
-        match libyuv::premultiply_alpha(self) {
+        match libyuv::process_alpha(self, true) {
             Ok(_) => return Ok(()),
             Err(err) => {
                 if err != AvifError::NotImplemented {
@@ -22,5 +22,23 @@ impl rgb::Image {
             }
         }
         unimplemented!("native alpha multiply implementation");
+    }
+
+    pub fn unpremultiply_alpha(&mut self) -> AvifResult<()> {
+        if self.pixels.is_null() || self.row_bytes == 0 {
+            return Err(AvifError::ReformatFailed);
+        }
+        if !self.has_alpha() {
+            return Err(AvifError::InvalidArgument);
+        }
+        match libyuv::process_alpha(self, false) {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                if err != AvifError::NotImplemented {
+                    return Err(err);
+                }
+            }
+        }
+        unimplemented!("native alpha unmultiply implementation");
     }
 }

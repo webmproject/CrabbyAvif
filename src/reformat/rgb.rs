@@ -144,7 +144,7 @@ impl YuvColorSpaceInfo {
         }
         if image.matrix_coefficients == MatrixCoefficients::Identity
             && image.yuv_format != PixelFormat::Yuv444
-            && image.yuv_format != PixelFormat::Yuv420
+            && image.yuv_format != PixelFormat::Monochrome
         {
             return Err(AvifError::ReformatFailed);
         }
@@ -262,10 +262,6 @@ impl Image {
         if image.planes[0].is_none() {
             return Err(AvifError::ReformatFailed);
         }
-        let state = State {
-            rgb: RgbColorSpaceInfo::create_from(self)?,
-            yuv: YuvColorSpaceInfo::create_from(image)?,
-        };
         let mut alpha_multiply_mode = AlphaMultiplyMode::NoOp;
         if image.has_alpha() {
             if !self.has_alpha() || self.ignore_alpha {
@@ -302,6 +298,10 @@ impl Image {
                 }
             }
         }
+        let state = State {
+            rgb: RgbColorSpaceInfo::create_from(self)?,
+            yuv: YuvColorSpaceInfo::create_from(image)?,
+        };
         if reformat_alpha && !alpha_reformatted_with_libyuv {
             unimplemented!("needs alpha reformat");
         }

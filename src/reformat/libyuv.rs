@@ -660,7 +660,7 @@ fn downshift_to_8bit(
     Ok(())
 }
 
-pub fn premultiply_alpha(rgb: &mut rgb::Image) -> AvifResult<()> {
+pub fn process_alpha(rgb: &mut rgb::Image, multiply: bool) -> AvifResult<()> {
     if rgb.depth != 8 {
         return Err(AvifError::NotImplemented);
     }
@@ -669,14 +669,25 @@ pub fn premultiply_alpha(rgb: &mut rgb::Image) -> AvifResult<()> {
         _ => return Err(AvifError::NotImplemented),
     }
     let result = unsafe {
-        ARGBAttenuate(
-            rgb.pixels,
-            i32_from_u32(rgb.row_bytes)?,
-            rgb.pixels,
-            i32_from_u32(rgb.row_bytes)?,
-            i32_from_u32(rgb.width)?,
-            i32_from_u32(rgb.height)?,
-        )
+        if multiply {
+            ARGBAttenuate(
+                rgb.pixels,
+                i32_from_u32(rgb.row_bytes)?,
+                rgb.pixels,
+                i32_from_u32(rgb.row_bytes)?,
+                i32_from_u32(rgb.width)?,
+                i32_from_u32(rgb.height)?,
+            )
+        } else {
+            ARGBUnattenuate(
+                rgb.pixels,
+                i32_from_u32(rgb.row_bytes)?,
+                rgb.pixels,
+                i32_from_u32(rgb.row_bytes)?,
+                i32_from_u32(rgb.width)?,
+                i32_from_u32(rgb.height)?,
+            )
+        }
     };
     if result == 0 {
         Ok(())
