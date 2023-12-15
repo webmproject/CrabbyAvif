@@ -1,5 +1,3 @@
-#![allow(dead_code, unused)] // TODO: remove
-
 use super::rgb;
 use super::rgb::*;
 
@@ -118,16 +116,17 @@ enum ConversionFunction {
 
 impl ConversionFunction {
     fn is_yuva(&self) -> bool {
-        match self {
+        matches!(
+            self,
             ConversionFunction::YUVAToRGBMatrixFilter(_)
-            | ConversionFunction::YUVAToRGBMatrix(_)
-            | ConversionFunction::YUVAToRGBMatrixFilterHighBitDepth(_)
-            | ConversionFunction::YUVAToRGBMatrixHighBitDepth(_) => true,
-            _ => false,
-        }
+                | ConversionFunction::YUVAToRGBMatrix(_)
+                | ConversionFunction::YUVAToRGBMatrixFilterHighBitDepth(_)
+                | ConversionFunction::YUVAToRGBMatrixHighBitDepth(_)
+        )
     }
 }
 
+#[allow(clippy::single_match)]
 fn find_conversion_function(
     yuv_format: PixelFormat,
     yuv_depth: u8,
@@ -370,7 +369,7 @@ pub fn yuv_to_rgb(
     image: &image::Image,
     rgb: &rgb::Image,
     reformat_alpha: bool,
-) -> AvifResult<(bool)> {
+) -> AvifResult<bool> {
     if rgb.depth != 8 || (image.depth != 8 && image.depth != 10 && image.depth != 12) {
         return Err(AvifError::NotImplemented);
     }
@@ -383,10 +382,7 @@ pub fn yuv_to_rgb(
         find_conversion_function(image.yuv_format, image.depth, rgb, alpha_preferred)
             .ok_or(AvifError::NotImplemented)?;
     println!("conversion_function: {:#?}", conversion_function);
-    let is_yvu = match rgb.format {
-        Format::Rgb | Format::Rgba | Format::Argb => true,
-        _ => false,
-    };
+    let is_yvu = matches!(rgb.format, Format::Rgb | Format::Rgba | Format::Argb);
     let matrix = if is_yvu { matrix_yvu } else { matrix_yuv };
     let u_plane_index: usize = if is_yvu { 2 } else { 1 };
     let v_plane_index: usize = if is_yvu { 1 } else { 2 };
@@ -430,7 +426,7 @@ pub fn yuv_to_rgb(
     let rgb_row_bytes = i32_from_u32(rgb.row_bytes)?;
     let width = i32_from_u32(image.width)?;
     let height = i32_from_u32(image.height)?;
-    let mut result: c_int = -1;
+    let mut result: c_int;
     unsafe {
         let mut high_bd_matched = true;
         // Apply one of the high bitdepth functions if possible.
@@ -509,7 +505,7 @@ pub fn yuv_to_rgb(
         }
         let mut image8 = image::Image::default();
         if image.depth > 8 {
-            downshift_to_8bit(&image, &mut image8, conversion_function.is_yuva())?;
+            downshift_to_8bit(image, &mut image8, conversion_function.is_yuva())?;
             pd = [
                 image8.plane(Plane::Y),
                 image8.plane(Plane::U),
@@ -634,7 +630,7 @@ fn downshift_to_8bit(
     if alpha {
         image8.allocate_planes(1)?;
     }
-    let scale = (1 << (24 - image.depth)) as i32;
+    let scale = 1 << (24 - image.depth);
     for plane in ALL_PLANES {
         let pd = image.plane(plane);
         if pd.is_none() {
@@ -644,7 +640,7 @@ fn downshift_to_8bit(
         if pd.width == 0 {
             continue;
         }
-        let mut pd8 = image8.plane(plane).unwrap();
+        let pd8 = image8.plane(plane).unwrap();
         unsafe {
             Convert16To8Plane(
                 pd.data.as_ptr() as *const u16,

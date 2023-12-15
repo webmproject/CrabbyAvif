@@ -1190,13 +1190,9 @@ impl Decoder {
         if requested_index == (self.image_index + 1) {
             return self.next_image();
         }
-        if requested_index == self.image_index {
-            if self.is_current_frame_fully_decoded() {
-                // Current frame which is already fully decoded has been requested. Do nothing.
-                return Ok(());
-            }
-            // Next image (self.image_index + 1) has been partially decoded, but the previous image
-            // was requested. Fall through and decode again from the nearest keyframe.
+        if requested_index == self.image_index && self.is_current_frame_fully_decoded() {
+            // Current frame which is already fully decoded has been requested. Do nothing.
+            return Ok(());
         }
         let nearest_keyframe = i32_from_u32(self.nearest_keyframe(index))?;
         if nearest_keyframe > (self.image_index + 1) || requested_index <= self.image_index {

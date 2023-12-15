@@ -1085,9 +1085,8 @@ fn parse_minf(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
-        match header.box_type.as_str() {
-            "stbl" => parse_stbl(&mut sub_stream, track)?,
-            _ => {}
+        if header.box_type == "stbl" {
+            parse_stbl(&mut sub_stream, track)?;
         }
     }
     Ok(())
@@ -1172,9 +1171,8 @@ fn parse_edts(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
-        match header.box_type.as_str() {
-            "elst" => parse_elst(&mut sub_stream, track)?,
-            _ => {}
+        if header.box_type == "elst" {
+            parse_elst(&mut sub_stream, track)?;
         }
     }
     if !track.elst_seen {
@@ -1206,9 +1204,8 @@ fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
-        match header.box_type.as_str() {
-            "trak" => tracks.push(parse_trak(&mut sub_stream)?),
-            _ => {}
+        if header.box_type == "trak" {
+            tracks.push(parse_trak(&mut sub_stream)?);
         }
     }
     Ok(tracks)

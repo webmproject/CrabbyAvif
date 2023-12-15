@@ -41,10 +41,7 @@ impl RawWriter {
             rgb.format = rgb::Format::Bgr;
             //rgb.depth = 8;
             //rgb.alpha_premultiplied = true;
-            if let Err(_) = rgb.allocate() {
-                return false;
-            }
-            if let Err(_) = rgb.convert_from_yuv(image) {
+            if rgb.allocate().is_err() || rgb.convert_from_yuv(image).is_err() {
                 println!("conversion failed");
                 return false;
             }

@@ -1,8 +1,5 @@
-#![allow(dead_code, unused)] // TODO: remove
-
 use super::libyuv;
 use crate::image;
-use crate::image::Plane;
 use crate::internal_utils::*;
 use crate::*;
 
@@ -31,10 +28,7 @@ pub enum ChromaUpsampling {
 
 impl ChromaUpsampling {
     pub fn nearest_neighbor_filter_allowed(&self) -> bool {
-        match self {
-            Self::Bilinear | Self::BestQuality | Self::Automatic => false,
-            _ => true,
-        }
+        !matches!(self, Self::Bilinear | Self::BestQuality | Self::Automatic)
     }
 }
 
@@ -64,6 +58,7 @@ pub struct Image {
     pub pixel_buffer: Vec<u8>,
 }
 
+#[allow(unused)]
 struct RgbColorSpaceInfo {
     channel_bytes: u32,
     pixel_bytes: u32,
@@ -90,7 +85,7 @@ impl RgbColorSpaceInfo {
             Format::Bgr => [2, 1, 0, 0],
             Format::Bgra => [2, 1, 0, 3],
             Format::Abgr => [3, 2, 1, 0],
-            Format::Rgb565 | _ => [0; 4],
+            Format::Rgb565 => [0; 4],
         };
         let max_channel = i32_from_u32((1 << rgb.depth) - 1)?;
         Ok(Self {
@@ -112,6 +107,7 @@ enum Mode {
     Ycgco,
 }
 
+#[allow(unused)]
 struct YuvColorSpaceInfo {
     kr: f32,
     kg: f32,
@@ -148,9 +144,9 @@ impl YuvColorSpaceInfo {
         {
             return Err(AvifError::ReformatFailed);
         }
-        let mut kr: f32 = 0.0;
-        let mut kg: f32 = 0.0;
-        let mut kb: f32 = 0.0;
+        let kr: f32 = 0.0;
+        let kg: f32 = 0.0;
+        let kb: f32 = 0.0;
         let mode = match image.matrix_coefficients {
             MatrixCoefficients::Identity => Mode::Identity,
             MatrixCoefficients::Ycgco => Mode::Ycgco,
@@ -159,7 +155,7 @@ impl YuvColorSpaceInfo {
                 Mode::YuvCoefficients
             }
         };
-        let max_channel = ((1 << image.depth) - 1) as i32;
+        let max_channel = (1 << image.depth) - 1;
         Ok(Self {
             kr,
             kg,
@@ -180,6 +176,7 @@ impl YuvColorSpaceInfo {
 
 struct State {
     rgb: RgbColorSpaceInfo,
+    #[allow(unused)]
     yuv: YuvColorSpaceInfo,
 }
 
@@ -221,17 +218,11 @@ impl Image {
     }
 
     fn depth_valid(&self) -> bool {
-        match self.depth {
-            8 | 10 | 12 | 16 => true,
-            _ => false,
-        }
+        matches!(self.depth, 8 | 10 | 12 | 16)
     }
 
     pub fn has_alpha(&self) -> bool {
-        match self.format {
-            Format::Rgb | Format::Bgr | Format::Rgb565 => false,
-            _ => true,
-        }
+        !matches!(self.format, Format::Rgb | Format::Bgr | Format::Rgb565)
     }
 
     fn channel_size(&self) -> u32 {
@@ -268,12 +259,10 @@ impl Image {
                 if !image.alpha_premultiplied {
                     alpha_multiply_mode = AlphaMultiplyMode::Multiply;
                 }
-            } else {
-                if !image.alpha_premultiplied && self.alpha_premultiplied {
-                    alpha_multiply_mode = AlphaMultiplyMode::Multiply;
-                } else if image.alpha_premultiplied && !self.alpha_premultiplied {
-                    alpha_multiply_mode = AlphaMultiplyMode::UnMultiply;
-                }
+            } else if !image.alpha_premultiplied && self.alpha_premultiplied {
+                alpha_multiply_mode = AlphaMultiplyMode::Multiply;
+            } else if image.alpha_premultiplied && !self.alpha_premultiplied {
+                alpha_multiply_mode = AlphaMultiplyMode::UnMultiply;
             }
         }
 
@@ -286,7 +275,7 @@ impl Image {
         );
         let mut alpha_reformatted_with_libyuv = false;
         if alpha_multiply_mode == AlphaMultiplyMode::NoOp || self.has_alpha() {
-            match libyuv::yuv_to_rgb(image, &self, reformat_alpha) {
+            match libyuv::yuv_to_rgb(image, self, reformat_alpha) {
                 Ok(alpha_reformatted) => {
                     alpha_reformatted_with_libyuv = alpha_reformatted;
                     converted_with_libyuv = true;

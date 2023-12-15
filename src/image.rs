@@ -81,10 +81,7 @@ pub struct PlaneData<'a> {
 
 impl Image {
     pub fn depth_valid(&self) -> bool {
-        match self.depth {
-            8 | 10 | 12 | 16 => true,
-            _ => false,
-        }
+        matches!(self.depth, 8 | 10 | 12 | 16)
     }
 
     pub fn has_alpha(&self) -> bool {
