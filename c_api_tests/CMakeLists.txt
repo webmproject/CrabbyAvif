@@ -37,6 +37,7 @@ add_avif_gtest(avifincrtest)
 add_avif_gtest(avifiotest)
 add_avif_gtest(avifmetadatatest)
 add_avif_gtest(avifprogressivetest)
+add_avif_gtest(avifreformattest)
 
 macro(add_avif_test TEST_NAME)
     set(CMAKE_C_FLAGS "-Wno-error=incompatible-function-pointer-types")

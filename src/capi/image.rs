@@ -228,11 +228,14 @@ fn avif_image_allocate_planes_helper(
     let y_size = y_row_bytes
         .checked_mul(usize_from_u32(image.height)?)
         .ok_or(avifResult::InvalidArgument)?;
+    println!("planes: {planes}");
     if (planes & 1) != 0 && image.yuvFormat != avifPixelFormat::None {
         image.imageOwnsYUVPlanes = AVIF_TRUE;
+        println!("is null? {}", image.yuvPlanes[0].is_null());
         if image.yuvPlanes[0].is_null() {
             image.yuvRowBytes[0] = u32_from_usize(y_row_bytes)?;
             image.yuvPlanes[0] = unsafe { avifAlloc(y_size) as *mut u8 };
+            println!("allocated {y_size} for y plane");
         }
         if !image.yuvFormat.is_monochrome() {
             let csx = image.yuvFormat.chroma_shift_x() as u64;
@@ -245,8 +248,9 @@ fn avif_image_allocate_planes_helper(
                 if !image.yuvPlanes[plane].is_null() {
                     continue;
                 }
-                image.yuvRowBytes[1] = u32_from_usize(uv_row_bytes)?;
-                image.yuvPlanes[1] = unsafe { avifAlloc(uv_size) as *mut u8 };
+                image.yuvRowBytes[plane] = u32_from_usize(uv_row_bytes)?;
+                image.yuvPlanes[plane] = unsafe { avifAlloc(uv_size) as *mut u8 };
+                println!("allocated {uv_size} for uv plane");
             }
         }
     }
