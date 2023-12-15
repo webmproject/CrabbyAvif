@@ -40,7 +40,7 @@ pub struct Image {
     pub alpha_present: bool,
     pub alpha_premultiplied: bool,
 
-    pub planes: [Option<*const u8>; MAX_PLANE_COUNT],
+    pub planes: [Option<*mut u8>; MAX_PLANE_COUNT],
     pub row_bytes: [u32; MAX_PLANE_COUNT],
     pub image_owns_planes: [bool; MAX_PLANE_COUNT],
     #[derivative(Debug = "ignore")]
@@ -77,6 +77,18 @@ pub struct PlaneData<'a> {
     pub height: u32,
     pub row_bytes: u32,
     pub pixel_size: u32,
+}
+
+// TODO: unify this into the struct above with an enum for mut/const.
+#[derive(Derivative)]
+#[derivative(Debug)]
+struct PlaneMutData<'a> {
+    #[derivative(Debug = "ignore")]
+    data: &'a mut [u8],
+    width: u32,
+    height: u32,
+    row_bytes: u32,
+    pixel_size: u32,
 }
 
 impl Image {
@@ -135,6 +147,44 @@ impl Image {
         })
     }
 
+    fn plane_mut(&mut self, plane: Plane) -> Option<PlaneMutData> {
+        let plane_index = plane.to_usize().unwrap();
+        self.planes[plane_index]?;
+        if self.planes[plane_index].unwrap().is_null() || self.row_bytes[plane_index] == 0 {
+            return None;
+        }
+        let pixel_size = if self.depth == 8 { 1 } else { 2 };
+        let height = self.height(plane);
+        let row_bytes = self.row_bytes[plane_index] as usize;
+        let plane_size = height * row_bytes;
+        let data = unsafe {
+            std::slice::from_raw_parts_mut(self.planes[plane_index].unwrap(), plane_size)
+        };
+        Some(PlaneMutData {
+            data,
+            width: self.width(plane) as u32,
+            height: height as u32,
+            row_bytes: row_bytes as u32,
+            pixel_size,
+        })
+    }
+
+    pub fn row(&self, plane: Plane, row: u32) -> AvifResult<&[u8]> {
+        let plane = self.plane(plane).ok_or(AvifError::NoContent)?;
+        let row_bytes = usize_from_u32(plane.row_bytes)?;
+        let start = usize_from_u32(row * plane.row_bytes)?;
+        let end = start + row_bytes;
+        Ok(&plane.data[start..end])
+    }
+
+    pub fn mut_row(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u8]> {
+        let plane = self.plane_mut(plane).ok_or(AvifError::NoContent)?;
+        let row_bytes = usize_from_u32(plane.row_bytes)?;
+        let start = usize_from_u32(row * plane.row_bytes)?;
+        let end = start + row_bytes;
+        Ok(&mut plane.data[start..end])
+    }
+
     pub fn allocate_planes(&mut self, category: usize) -> AvifResult<()> {
         let pixel_size: usize = if self.depth == 8 { 1 } else { 2 };
         let planes: &[Plane] = if category == 1 { &A_PLANE } else { &YUV_PLANES };
@@ -153,7 +203,7 @@ impl Image {
             let default_value = if plane == Plane::A { 255 } else { 0 };
             self.plane_buffers[plane_index].resize(plane_size, default_value);
             self.row_bytes[plane_index] = u32_from_usize(width * pixel_size)?;
-            self.planes[plane_index] = Some(self.plane_buffers[plane_index].as_ptr());
+            self.planes[plane_index] = Some(self.plane_buffers[plane_index].as_mut_ptr());
             self.image_owns_planes[plane_index] = true;
         }
         Ok(())

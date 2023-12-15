@@ -16,6 +16,24 @@ pub enum Format {
     Rgb565,
 }
 
+impl Format {
+    fn offsets(&self) -> [usize; 4] {
+        match self {
+            Format::Rgb => [0, 1, 2, 0],
+            Format::Rgba => [0, 1, 2, 3],
+            Format::Argb => [1, 2, 3, 0],
+            Format::Bgr => [2, 1, 0, 0],
+            Format::Bgra => [2, 1, 0, 3],
+            Format::Abgr => [3, 2, 1, 0],
+            Format::Rgb565 => [0; 4],
+        }
+    }
+
+    pub fn alpha_offset(&self) -> usize {
+        self.offsets()[3]
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
 pub enum ChromaUpsampling {
@@ -87,23 +105,15 @@ impl RgbColorSpaceInfo {
         {
             return Err(AvifError::ReformatFailed);
         }
-        let offsets: [u32; 4] = match rgb.format {
-            Format::Rgb => [0, 1, 2, 0],
-            Format::Rgba => [0, 1, 2, 3],
-            Format::Argb => [1, 2, 3, 0],
-            Format::Bgr => [2, 1, 0, 0],
-            Format::Bgra => [2, 1, 0, 3],
-            Format::Abgr => [3, 2, 1, 0],
-            Format::Rgb565 => [0; 4],
-        };
+        let offsets = rgb.format.offsets();
         let max_channel = i32_from_u32((1 << rgb.depth) - 1)?;
         Ok(Self {
             channel_bytes: rgb.channel_size(),
             pixel_bytes: rgb.pixel_size(),
-            offset_bytes_r: (rgb.channel_size() * offsets[0]) as usize,
-            offset_bytes_g: (rgb.channel_size() * offsets[1]) as usize,
-            offset_bytes_b: (rgb.channel_size() * offsets[2]) as usize,
-            offset_bytes_a: (rgb.channel_size() * offsets[3]) as usize,
+            offset_bytes_r: (rgb.channel_size() as usize * offsets[0]),
+            offset_bytes_g: (rgb.channel_size() as usize * offsets[1]),
+            offset_bytes_b: (rgb.channel_size() as usize * offsets[2]),
+            offset_bytes_a: (rgb.channel_size() as usize * offsets[3]),
             max_channel,
             max_channel_f: max_channel as f32,
         })
@@ -184,6 +194,7 @@ impl YuvColorSpaceInfo {
 }
 
 struct State {
+    #[allow(unused)]
     rgb: RgbColorSpaceInfo,
     #[allow(unused)]
     yuv: YuvColorSpaceInfo,
@@ -396,15 +407,15 @@ impl Image {
                 }
             }
         }
-        let state = State {
+        let _state = State {
             rgb: RgbColorSpaceInfo::create_from(self)?,
             yuv: YuvColorSpaceInfo::create_from(image)?,
         };
         if reformat_alpha && !alpha_reformatted_with_libyuv {
             if image.has_alpha() {
-                unimplemented!("reformat_alpha");
+                self.reformat_alpha(image)?;
             } else {
-                self.fill_alpha(state.rgb.offset_bytes_a)?;
+                self.fill_alpha()?;
             }
         }
         if !converted_with_libyuv {

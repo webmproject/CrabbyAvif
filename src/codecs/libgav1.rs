@@ -114,7 +114,7 @@ impl Decoder for Libgav1 {
 
                 // TODO: call free planes.
                 for plane in 0usize..image.yuv_format.plane_count() {
-                    image.planes[plane] = Some(gav1_image.plane[plane] as *const u8);
+                    image.planes[plane] = Some(gav1_image.plane[plane] as *mut u8);
                     image.row_bytes[plane] = gav1_image.stride[plane] as u32;
                     image.image_owns_planes[plane] = false;
                 }
@@ -124,7 +124,7 @@ impl Decoder for Libgav1 {
                 image.height = gav1_image.displayed_height[0] as u32;
                 image.depth = gav1_image.bitdepth as u8;
                 // TODO: call image freeplanes.
-                image.planes[3] = Some(gav1_image.plane[0] as *const u8);
+                image.planes[3] = Some(gav1_image.plane[0] as *mut u8);
                 image.row_bytes[3] = gav1_image.stride[0] as u32;
                 image.image_owns_planes[3] = false;
                 image.full_range =
