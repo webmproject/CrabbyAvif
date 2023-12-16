@@ -394,17 +394,34 @@ pub fn yuv_to_rgb(
         image.plane(Plane::V),
         image.plane(Plane::A),
     ];
-    // TODO: use data16 in this file?
     let mut plane_u8: [*const u8; 4] = pd
         .iter()
         .map(|x| {
             if x.is_some() {
-                x.as_ref().unwrap().data.unwrap().as_ptr()
+                match x.as_ref().unwrap().data {
+                    Some(data) => data.as_ptr(),
+                    None => std::ptr::null(),
+                }
             } else {
                 std::ptr::null()
             }
         })
         .collect::<Vec<*const u8>>()
+        .try_into()
+        .unwrap();
+    let plane_u16: [*const u16; 4] = pd
+        .iter()
+        .map(|x| {
+            if x.is_some() {
+                match x.as_ref().unwrap().data16 {
+                    Some(data16) => data16.as_ptr(),
+                    None => std::ptr::null(),
+                }
+            } else {
+                std::ptr::null()
+            }
+        })
+        .collect::<Vec<*const u16>>()
         .try_into()
         .unwrap();
     let mut plane_row_bytes: [i32; 4] = pd
@@ -428,11 +445,11 @@ pub fn yuv_to_rgb(
         // Apply one of the high bitdepth functions if possible.
         result = match conversion_function {
             ConversionFunction::YUVToRGBMatrixFilterHighBitDepth(func) => func(
-                plane_u8[0] as *const u16,
+                plane_u16[0],
                 plane_row_bytes[0] / 2,
-                plane_u8[u_plane_index] as *const u16,
+                plane_u16[u_plane_index],
                 plane_row_bytes[u_plane_index] / 2,
-                plane_u8[v_plane_index] as *const u16,
+                plane_u16[v_plane_index],
                 plane_row_bytes[v_plane_index] / 2,
                 rgb.pixels(),
                 rgb_row_bytes,
@@ -442,13 +459,13 @@ pub fn yuv_to_rgb(
                 filter,
             ),
             ConversionFunction::YUVAToRGBMatrixFilterHighBitDepth(func) => func(
-                plane_u8[0] as *const u16,
+                plane_u16[0],
                 plane_row_bytes[0] / 2,
-                plane_u8[u_plane_index] as *const u16,
+                plane_u16[u_plane_index],
                 plane_row_bytes[u_plane_index] / 2,
-                plane_u8[v_plane_index] as *const u16,
+                plane_u16[v_plane_index],
                 plane_row_bytes[v_plane_index] / 2,
-                plane_u8[3] as *const u16,
+                plane_u16[3],
                 plane_row_bytes[3] / 2,
                 rgb.pixels(),
                 rgb_row_bytes,
@@ -459,11 +476,11 @@ pub fn yuv_to_rgb(
                 filter,
             ),
             ConversionFunction::YUVToRGBMatrixHighBitDepth(func) => func(
-                plane_u8[0] as *const u16,
+                plane_u16[0],
                 plane_row_bytes[0] / 2,
-                plane_u8[u_plane_index] as *const u16,
+                plane_u16[u_plane_index],
                 plane_row_bytes[u_plane_index] / 2,
-                plane_u8[v_plane_index] as *const u16,
+                plane_u16[v_plane_index],
                 plane_row_bytes[v_plane_index] / 2,
                 rgb.pixels(),
                 rgb_row_bytes,
@@ -472,13 +489,13 @@ pub fn yuv_to_rgb(
                 height,
             ),
             ConversionFunction::YUVAToRGBMatrixHighBitDepth(func) => func(
-                plane_u8[0] as *const u16,
+                plane_u16[0],
                 plane_row_bytes[0] / 2,
-                plane_u8[u_plane_index] as *const u16,
+                plane_u16[u_plane_index],
                 plane_row_bytes[u_plane_index] / 2,
-                plane_u8[v_plane_index] as *const u16,
+                plane_u16[v_plane_index],
                 plane_row_bytes[v_plane_index] / 2,
-                plane_u8[3] as *const u16,
+                plane_u16[3],
                 plane_row_bytes[3] / 2,
                 rgb.pixels(),
                 rgb_row_bytes,
@@ -620,7 +637,7 @@ fn downshift_to_8bit(
 ) -> AvifResult<()> {
     image8.width = image.width;
     image8.height = image.height;
-    image8.depth = image.depth;
+    image8.depth = 8;
     image8.yuv_format = image.yuv_format;
     image8.allocate_planes(0)?;
     if alpha {
@@ -628,6 +645,9 @@ fn downshift_to_8bit(
     }
     let scale = 1 << (24 - image.depth);
     for plane in ALL_PLANES {
+        if plane == Plane::A && !alpha {
+            continue;
+        }
         let pd = image.plane(plane);
         if pd.is_none() {
             continue;
@@ -636,12 +656,12 @@ fn downshift_to_8bit(
         if pd.width == 0 {
             continue;
         }
-        let pd8 = image8.plane(plane).unwrap();
+        let pd8 = image8.plane_mut(plane).unwrap();
         unsafe {
             Convert16To8Plane(
-                pd.data.unwrap().as_ptr() as *const u16,
+                pd.data16.unwrap().as_ptr(),
                 i32_from_u32(pd.row_bytes / 2)?,
-                pd8.data.unwrap().as_ptr() as *mut u8,
+                pd8.data.unwrap().as_mut_ptr(),
                 i32_from_u32(pd8.row_bytes)?,
                 scale,
                 i32_from_u32(pd.width)?,

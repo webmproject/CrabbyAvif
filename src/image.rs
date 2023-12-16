@@ -96,15 +96,15 @@ pub struct PlaneData<'a> {
 // TODO: unify this into the struct above with an enum for mut/const.
 #[derive(Derivative)]
 #[derivative(Debug)]
-struct PlaneMutData<'a> {
+pub struct PlaneMutData<'a> {
     #[derivative(Debug = "ignore")]
-    data: Option<&'a mut [u8]>,
+    pub data: Option<&'a mut [u8]>,
     #[derivative(Debug = "ignore")]
-    data16: Option<&'a mut [u16]>,
-    width: u32,
-    height: u32,
-    row_bytes: u32,
-    pixel_size: u32,
+    pub data16: Option<&'a mut [u16]>,
+    pub width: u32,
+    pub height: u32,
+    pub row_bytes: u32,
+    pub pixel_size: u32,
 }
 
 impl Image {
@@ -171,7 +171,7 @@ impl Image {
         })
     }
 
-    fn plane_mut(&mut self, plane: Plane) -> Option<PlaneMutData> {
+    pub fn plane_mut(&mut self, plane: Plane) -> Option<PlaneMutData> {
         if !self.has_plane(plane) {
             return None;
         }
