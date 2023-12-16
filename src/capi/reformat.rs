@@ -83,11 +83,11 @@ impl From<*const avifImage> for image::Image {
         ret.full_range = image.yuvRange == avifRange::Full;
         ret.alpha_present = !image.alphaPlane.is_null();
         ret.alpha_premultiplied = image.alphaPremultiplied == AVIF_TRUE;
-        ret.planes = [
-            Some(image.yuvPlanes[0]),
-            Some(image.yuvPlanes[1]),
-            Some(image.yuvPlanes[2]),
-            Some(image.alphaPlane),
+        ret.planes2 = [
+            Some(Pixels::Pointer(image.yuvPlanes[0])),
+            Some(Pixels::Pointer(image.yuvPlanes[1])),
+            Some(Pixels::Pointer(image.yuvPlanes[2])),
+            Some(Pixels::Pointer(image.alphaPlane)),
         ];
         ret.row_bytes = [
             image.yuvRowBytes[0],

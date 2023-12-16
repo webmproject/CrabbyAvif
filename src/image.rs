@@ -21,6 +21,17 @@ pub enum Plane {
     A = 3,
 }
 
+impl From<usize> for Plane {
+    fn from(plane: usize) -> Self {
+        match plane {
+            1 => Plane::U,
+            2 => Plane::V,
+            3 => Plane::A,
+            _ => Plane::Y,
+        }
+    }
+}
+
 /// cbindgen:ignore
 pub const MAX_PLANE_COUNT: usize = 4;
 pub const YUV_PLANES: [Plane; 3] = [Plane::Y, Plane::U, Plane::V];
