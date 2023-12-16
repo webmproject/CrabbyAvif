@@ -331,15 +331,27 @@ impl Image {
         // This function is used only when both src and self contains only pointers.
         match category {
             0 | 2 => {
-                self.planes2[0] = Some(Pixels::Pointer(src.planes2[0].as_ref().unwrap().pointer()));
-                self.planes2[1] = Some(Pixels::Pointer(src.planes2[1].as_ref().unwrap().pointer()));
-                self.planes2[2] = Some(Pixels::Pointer(src.planes2[2].as_ref().unwrap().pointer()));
+                if src.planes2[0].is_some() {
+                    self.planes2[0] =
+                        Some(Pixels::Pointer(src.planes2[0].as_ref().unwrap().pointer()));
+                }
+                if src.planes2[1].is_some() {
+                    self.planes2[1] =
+                        Some(Pixels::Pointer(src.planes2[1].as_ref().unwrap().pointer()));
+                }
+                if src.planes2[2].is_some() {
+                    self.planes2[2] =
+                        Some(Pixels::Pointer(src.planes2[2].as_ref().unwrap().pointer()));
+                }
                 self.row_bytes[0] = src.row_bytes[0];
                 self.row_bytes[1] = src.row_bytes[1];
                 self.row_bytes[2] = src.row_bytes[2];
             }
             1 => {
-                self.planes2[3] = Some(Pixels::Pointer(src.planes2[3].as_ref().unwrap().pointer()));
+                if src.planes2[3].is_some() {
+                    self.planes2[3] =
+                        Some(Pixels::Pointer(src.planes2[3].as_ref().unwrap().pointer()));
+                }
                 self.row_bytes[3] = src.row_bytes[3];
             }
             _ => {
