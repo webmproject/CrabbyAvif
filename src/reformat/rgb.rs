@@ -1,5 +1,6 @@
 use super::libyuv;
 use crate::image;
+use crate::image::Plane;
 use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
 use crate::*;
@@ -311,7 +312,7 @@ impl Image {
 
     pub fn convert_from_yuv(&mut self, image: &image::Image) -> AvifResult<()> {
         // TODO: use plane constant here and elsewhere.
-        if image.planes[0].is_none() {
+        if !image.has_plane(Plane::Y) {
             return Err(AvifError::ReformatFailed);
         }
         let mut alpha_multiply_mode = AlphaMultiplyMode::NoOp;

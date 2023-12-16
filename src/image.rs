@@ -41,11 +41,8 @@ pub struct Image {
     pub alpha_present: bool,
     pub alpha_premultiplied: bool,
 
-    pub planes: [Option<*mut u8>; MAX_PLANE_COUNT],
     pub row_bytes: [u32; MAX_PLANE_COUNT],
     pub image_owns_planes: [bool; MAX_PLANE_COUNT],
-    #[derivative(Debug = "ignore")]
-    plane_buffers: [Vec<u8>; MAX_PLANE_COUNT],
 
     #[derivative(Debug = "ignore")]
     pub planes2: [Option<Pixels>; MAX_PLANE_COUNT],
@@ -224,24 +221,6 @@ impl Image {
             let plane = *plane;
             let plane_index = plane.to_usize().unwrap();
             let width = self.width(plane);
-            let plane_size = width * self.height(plane) * pixel_size;
-            if self.plane_buffers[plane_index].len() == plane_size {
-                // TODO: need to memset maybe?
-                continue;
-            }
-            if self.plane_buffers[plane_index].capacity() < plane_size {
-                self.plane_buffers[plane_index].reserve(plane_size);
-            }
-            let default_value = if plane == Plane::A { 255 } else { 0 };
-            self.plane_buffers[plane_index].resize(plane_size, default_value);
-            self.row_bytes[plane_index] = u32_from_usize(width * pixel_size)?;
-            self.planes[plane_index] = Some(self.plane_buffers[plane_index].as_mut_ptr());
-            self.image_owns_planes[plane_index] = true;
-        }
-        for plane in planes {
-            let plane = *plane;
-            let plane_index = plane.to_usize().unwrap();
-            let width = self.width(plane);
             let plane_size = width * self.height(plane);
             let default_value =
                 if plane == Plane::A { ((1i32 << self.depth) - 1) as u16 } else { 0 };
@@ -352,9 +331,6 @@ impl Image {
         // This function is used only when both src and self contains only pointers.
         match category {
             0 | 2 => {
-                self.planes[0] = src.planes[0];
-                self.planes[1] = src.planes[1];
-                self.planes[2] = src.planes[2];
                 self.planes2[0] = Some(Pixels::Pointer(src.planes2[0].as_ref().unwrap().pointer()));
                 self.planes2[1] = Some(Pixels::Pointer(src.planes2[1].as_ref().unwrap().pointer()));
                 self.planes2[2] = Some(Pixels::Pointer(src.planes2[2].as_ref().unwrap().pointer()));
@@ -363,7 +339,6 @@ impl Image {
                 self.row_bytes[2] = src.row_bytes[2];
             }
             1 => {
-                self.planes[3] = src.planes[3];
                 self.planes2[3] = Some(Pixels::Pointer(src.planes2[3].as_ref().unwrap().pointer()));
                 self.row_bytes[3] = src.row_bytes[3];
             }
