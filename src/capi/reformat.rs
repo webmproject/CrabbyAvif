@@ -6,6 +6,7 @@ use super::io::*;
 use super::types::*;
 
 use crate::image;
+use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
 use crate::parser::mp4box::*;
 use crate::reformat::rgb;
@@ -64,9 +65,8 @@ impl From<*mut avifRGBImage> for rgb::Image {
             alpha_premultiplied: rgb.alpha_premultiplied,
             is_float: rgb.is_float,
             max_threads: rgb.max_threads,
-            pixels: Some(rgb::Pixels::Pointer(rgb.pixels)),
+            pixels: Some(Pixels::Pointer(rgb.pixels)),
             row_bytes: rgb.row_bytes,
-            pixel_buffer: Vec::new(),
         }
     }
 }

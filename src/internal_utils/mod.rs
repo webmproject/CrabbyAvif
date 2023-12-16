@@ -1,4 +1,5 @@
 pub mod io;
+pub mod pixels;
 pub mod stream;
 
 use crate::parser::mp4box::*;

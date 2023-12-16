@@ -5,6 +5,8 @@ use crate::reformat::rgb;
 use std::fs::File;
 use std::io::prelude::*;
 
+use byteorder::{BigEndian, WriteBytesExt};
+
 #[derive(Default)]
 pub struct RawWriter {
     pub filename: Option<String>,
@@ -39,7 +41,8 @@ impl RawWriter {
         if self.rgb {
             let mut rgb = rgb::Image::create_from_yuv(image);
             rgb.format = rgb::Format::Bgr;
-            rgb.depth = 8;
+            rgb.depth = 16;
+            //rgb.depth = 8;
             //rgb.alpha_premultiplied = true;
             if rgb.allocate().is_err() || rgb.convert_from_yuv(image).is_err() {
                 println!("conversion failed");
@@ -52,11 +55,14 @@ impl RawWriter {
                         return false;
                     }
                 } else {
-                    unimplemented!("rgb bitdepth higher than 8");
-                    //let row = rgb.row16(y).unwrap();
-                    //if self.file.as_ref().unwrap().write_all(row).is_err() {
-                    //    return false;
-                    //}
+                    let row = rgb.row16(y).unwrap();
+                    let mut row16: Vec<u8> = Vec::new();
+                    for &pixel in row {
+                        let _ = row16.write_u16::<BigEndian>(pixel);
+                    }
+                    if self.file.as_ref().unwrap().write_all(&row16[..]).is_err() {
+                        return false;
+                    }
                 }
             }
             return true;

@@ -177,7 +177,7 @@ impl Image {
         Ok(&plane.data[start..end])
     }
 
-    pub fn mut_row(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u8]> {
+    pub fn row_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u8]> {
         let plane = self.plane_mut(plane).ok_or(AvifError::NoContent)?;
         let row_bytes = usize_from_u32(plane.row_bytes)?;
         let start = usize_from_u32(row * plane.row_bytes)?;

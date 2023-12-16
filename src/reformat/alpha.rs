@@ -48,7 +48,7 @@ impl rgb::Image {
             let max_channel = ((1 << self.depth) - 1) as u16;
             for y in 0..self.height {
                 let width = usize_from_u32(self.width)?;
-                let row = self.mut_row16(y)?;
+                let row = self.row16_mut(y)?;
                 for x in 0..width {
                     row[(x * 4) + alpha_offset] = max_channel;
                 }
@@ -56,7 +56,7 @@ impl rgb::Image {
         } else {
             for y in 0..self.height {
                 let width = usize_from_u32(self.width)?;
-                let row = self.mut_row(y)?;
+                let row = self.row_mut(y)?;
                 for x in 0..width {
                     row[(x * 4) + alpha_offset] = 255;
                 }
@@ -74,7 +74,7 @@ impl rgb::Image {
                 /*
                 TODO: uncomment after image.row16 is implemented.
                 for y in 0..self.height {
-                    let dst_row = self.mut_row16(y)?;
+                    let dst_row = self.row16_mut(y)?;
                     let src_row = image.row16(Plane::A, y)?;
                     for x in 0..width as usize {
                         dst_row[x * dst_pixel_size + dst_alpha_offset] = src_row[x];
@@ -83,7 +83,7 @@ impl rgb::Image {
                 */
             } else {
                 for y in 0..self.height {
-                    let dst_row = self.mut_row(y)?;
+                    let dst_row = self.row_mut(y)?;
                     let src_row = image.row(Plane::A, y)?;
                     for x in 0..width as usize {
                         dst_row[x * dst_pixel_size + dst_alpha_offset] = src_row[x];
@@ -98,6 +98,7 @@ impl rgb::Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::internal_utils::pixels::*;
 
     use rand::Rng;
     use test_case::test_matrix;
@@ -129,7 +130,7 @@ mod tests {
             let buffer_size = (width * height * 4 * pixel_size) as usize;
             buffer.reserve_exact(buffer_size);
             buffer.resize(buffer_size, 0);
-            rgb.pixels = Some(rgb::Pixels::Pointer(buffer.as_mut_ptr()));
+            rgb.pixels = Some(Pixels::Pointer(buffer.as_mut_ptr()));
             rgb.row_bytes = width * 4 * pixel_size;
         } else {
             rgb.allocate()?;
@@ -200,7 +201,7 @@ mod tests {
 
         let mut rng = rand::thread_rng();
         for y in 0..height {
-            let row = image.mut_row(Plane::A, y)?;
+            let row = image.row_mut(Plane::A, y)?;
             for x in 0..width as usize {
                 // TODO: this can just be 0..255.
                 row[x] = rng.gen_range(0..(1i32 << yuv_depth)) as u8;
