@@ -80,7 +80,7 @@ impl RawWriter {
             for y in 0..avif_plane.height {
                 let stride_offset: usize = (y * avif_plane.row_bytes).try_into().unwrap();
                 //println!("{y}: {stride_offset} plane_height: {}", avif_plane.height);
-                let pixels = &avif_plane.data[stride_offset..stride_offset + byte_count];
+                let pixels = &avif_plane.data.unwrap()[stride_offset..stride_offset + byte_count];
                 if self.file.as_ref().unwrap().write_all(pixels).is_err() {
                     return false;
                 }

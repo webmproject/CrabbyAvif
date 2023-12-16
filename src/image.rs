@@ -47,6 +47,7 @@ pub struct Image {
     #[derivative(Debug = "ignore")]
     plane_buffers: [Vec<u8>; MAX_PLANE_COUNT],
 
+    #[derivative(Debug = "ignore")]
     pub planes2: [Option<Pixels>; MAX_PLANE_COUNT],
 
     pub color_primaries: ColorPrimaries,
@@ -75,7 +76,9 @@ pub struct Image {
 #[derivative(Debug)]
 pub struct PlaneData<'a> {
     #[derivative(Debug = "ignore")]
-    pub data: &'a [u8],
+    pub data: Option<&'a [u8]>,
+    #[derivative(Debug = "ignore")]
+    pub data16: Option<&'a [u16]>,
     pub width: u32,
     pub height: u32,
     pub row_bytes: u32,
@@ -87,7 +90,9 @@ pub struct PlaneData<'a> {
 #[derivative(Debug)]
 struct PlaneMutData<'a> {
     #[derivative(Debug = "ignore")]
-    data: &'a mut [u8],
+    data: Option<&'a mut [u8]>,
+    #[derivative(Debug = "ignore")]
+    data16: Option<&'a mut [u16]>,
     width: u32,
     height: u32,
     row_bytes: u32,
@@ -145,10 +150,19 @@ impl Image {
         let height = self.height(plane);
         let row_bytes = self.row_bytes[plane_index] as usize;
         let plane_size = height * row_bytes;
-        let data =
-            unsafe { std::slice::from_raw_parts(self.planes[plane_index].unwrap(), plane_size) };
+        let data = self.planes2[plane_index]
+            .as_ref()
+            .unwrap()
+            .slice(0, plane_size as u32)
+            .ok();
+        let data16 = self.planes2[plane_index]
+            .as_ref()
+            .unwrap()
+            .slice16(0, plane_size as u32)
+            .ok();
         Some(PlaneData {
             data,
+            data16,
             width: self.width(plane) as u32,
             height: height as u32,
             row_bytes: row_bytes as u32,
@@ -163,14 +177,15 @@ impl Image {
         let plane_index = plane.to_usize().unwrap();
         let pixel_size = if self.depth == 8 { 1 } else { 2 };
         let height = self.height(plane);
+        let width = self.width(plane) as u32;
         let row_bytes = self.row_bytes[plane_index] as usize;
         let plane_size = height * row_bytes;
-        let data = unsafe {
-            std::slice::from_raw_parts_mut(self.planes[plane_index].unwrap(), plane_size)
-        };
+        let planes2 = self.planes2[plane_index].as_mut().unwrap();
+        let (data, data16) = planes2.slices_mut(0, plane_size as u32).unwrap();
         Some(PlaneMutData {
             data,
-            width: self.width(plane) as u32,
+            data16,
+            width,
             height: height as u32,
             row_bytes: row_bytes as u32,
             pixel_size,
@@ -182,7 +197,7 @@ impl Image {
         let row_bytes = usize_from_u32(plane.row_bytes)?;
         let start = usize_from_u32(row * plane.row_bytes)?;
         let end = start + row_bytes;
-        Ok(&plane.data[start..end])
+        Ok(&plane.data.unwrap()[start..end])
     }
 
     pub fn row_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u8]> {
@@ -190,7 +205,23 @@ impl Image {
         let row_bytes = usize_from_u32(plane.row_bytes)?;
         let start = usize_from_u32(row * plane.row_bytes)?;
         let end = start + row_bytes;
-        Ok(&mut plane.data[start..end])
+        Ok(&mut plane.data.unwrap()[start..end])
+    }
+
+    pub fn row16(&self, plane: Plane, row: u32) -> AvifResult<&[u16]> {
+        let plane = self.plane(plane).ok_or(AvifError::NoContent)?;
+        let row_bytes = usize_from_u32(plane.row_bytes)?;
+        let start = usize_from_u32(row * plane.row_bytes)?;
+        let end = start + row_bytes;
+        Ok(&plane.data16.unwrap()[start..end])
+    }
+
+    pub fn row16_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u16]> {
+        let plane = self.plane_mut(plane).ok_or(AvifError::NoContent)?;
+        let row_bytes = usize_from_u32(plane.row_bytes)?;
+        let start = usize_from_u32(row * plane.row_bytes)?;
+        let end = start + row_bytes;
+        Ok(&mut plane.data16.unwrap()[start..end])
     }
 
     pub fn allocate_planes(&mut self, category: usize) -> AvifResult<()> {
@@ -369,7 +400,6 @@ impl Image {
             if src_plane.is_none() {
                 continue;
             }
-            let plane_index = plane.to_usize().unwrap();
             let src_plane = src_plane.unwrap();
             // If this is the last tile column, clamp to left over width.
             let src_width_to_copy = if column_index == (tile_info.grid.columns - 1).into() {
@@ -382,12 +412,7 @@ impl Image {
             } else {
                 u64::from(src_plane.width)
             };
-            //println!("src_width_to_copy: {src_width_to_copy}");
-            let src_byte_count = src_width_to_copy * u64::from(src_plane.pixel_size);
-            let dst_row_bytes = u64::from(self.row_bytes[plane_index]);
-            let dst_base_offset = (row_index * (u64::from(src_plane.height) * dst_row_bytes))
-                + (column_index * u64::from(src_plane.width * src_plane.pixel_size));
-            //println!("dst base_offset: {dst_base_offset}");
+            let src_width_to_copy = usize_from_u64(src_width_to_copy)?;
 
             // If this is the last tile row, clamp to left over height.
             let src_height_to_copy = if row_index == (tile_info.grid.rows - 1).into() {
@@ -401,19 +426,25 @@ impl Image {
                 u64::from(src_plane.height)
             };
 
-            //println!("src_height_to_copy: {src_height_to_copy}");
-            for y in 0..src_height_to_copy {
-                let src_stride_offset = y.checked_mul(u64::from(src_plane.row_bytes)).ok_or(err)?;
-                let src_end_offset = src_stride_offset.checked_add(src_byte_count).ok_or(err)?;
-                let dst_row_offset = y.checked_mul(dst_row_bytes).ok_or(err)?;
-                let dst_stride_offset = dst_base_offset.checked_add(dst_row_offset).ok_or(err)?;
-                let dst_end_offset = dst_stride_offset.checked_add(src_byte_count).ok_or(err)?;
-
-                let src_slice = &src_plane.data
-                    [usize_from_u64(src_stride_offset)?..usize_from_u64(src_end_offset)?];
-                let dst_slice = &mut self.plane_buffers[plane_index]
-                    [usize_from_u64(dst_stride_offset)?..usize_from_u64(dst_end_offset)?];
-                dst_slice.copy_from_slice(src_slice);
+            let dst_y_start = row_index * u64::from(src_plane.height);
+            let dst_x_offset = usize_from_u64(column_index * u64::from(src_plane.width))?;
+            // TODO: src_height_to_copy can just be u32?
+            if self.depth == 8 {
+                for y in 0..src_height_to_copy {
+                    let src_row = tile.row(plane, u32_from_u64(y)?)?;
+                    let src_slice = &src_row[0..src_width_to_copy];
+                    let dst_row = self.row_mut(plane, u32_from_u64(dst_y_start + y)?)?;
+                    let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset + src_width_to_copy];
+                    dst_slice.copy_from_slice(src_slice);
+                }
+            } else {
+                for y in 0..src_height_to_copy {
+                    let src_row = tile.row16(plane, u32_from_u64(y)?)?;
+                    let src_slice = &src_row[0..src_width_to_copy];
+                    let dst_row = self.row16_mut(plane, u32_from_u64(dst_y_start + y)?)?;
+                    let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset + src_width_to_copy];
+                    dst_slice.copy_from_slice(src_slice);
+                }
             }
         }
         Ok(())

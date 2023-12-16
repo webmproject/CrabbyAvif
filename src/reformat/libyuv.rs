@@ -394,17 +394,16 @@ pub fn yuv_to_rgb(
         image.plane(Plane::V),
         image.plane(Plane::A),
     ];
+    // TODO: use data16 in this file?
     let mut plane_u8: [*const u8; 4] = pd
         .iter()
-        .map(
-            |x| {
-                if x.is_some() {
-                    x.as_ref().unwrap().data.as_ptr()
-                } else {
-                    std::ptr::null()
-                }
-            },
-        )
+        .map(|x| {
+            if x.is_some() {
+                x.as_ref().unwrap().data.unwrap().as_ptr()
+            } else {
+                std::ptr::null()
+            }
+        })
         .collect::<Vec<*const u8>>()
         .try_into()
         .unwrap();
@@ -509,18 +508,18 @@ pub fn yuv_to_rgb(
                 image8.plane(Plane::V),
                 image8.plane(Plane::A),
             ];
-            plane_u8 =
-                pd.iter()
-                    .map(|x| {
-                        if x.is_some() {
-                            x.as_ref().unwrap().data.as_ptr()
-                        } else {
-                            std::ptr::null()
-                        }
-                    })
-                    .collect::<Vec<*const u8>>()
-                    .try_into()
-                    .unwrap();
+            plane_u8 = pd
+                .iter()
+                .map(|x| {
+                    if x.is_some() {
+                        x.as_ref().unwrap().data.unwrap().as_ptr()
+                    } else {
+                        std::ptr::null()
+                    }
+                })
+                .collect::<Vec<*const u8>>()
+                .try_into()
+                .unwrap();
             plane_row_bytes = pd
                 .iter()
                 .map(|x| {
@@ -640,9 +639,9 @@ fn downshift_to_8bit(
         let pd8 = image8.plane(plane).unwrap();
         unsafe {
             Convert16To8Plane(
-                pd.data.as_ptr() as *const u16,
+                pd.data.unwrap().as_ptr() as *const u16,
                 i32_from_u32(pd.row_bytes / 2)?,
-                pd8.data.as_ptr() as *mut u8,
+                pd8.data.unwrap().as_ptr() as *mut u8,
                 i32_from_u32(pd8.row_bytes)?,
                 scale,
                 i32_from_u32(pd.width)?,
