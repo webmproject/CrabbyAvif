@@ -1,5 +1,6 @@
 use crate::decoder::tile::TileInfo;
 use crate::decoder::ProgressiveState;
+use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
 use crate::parser::mp4box::*;
 use crate::utils::clap::CleanAperture;
@@ -45,6 +46,8 @@ pub struct Image {
     pub image_owns_planes: [bool; MAX_PLANE_COUNT],
     #[derivative(Debug = "ignore")]
     plane_buffers: [Vec<u8>; MAX_PLANE_COUNT],
+
+    pub planes2: [Option<Pixels>; MAX_PLANE_COUNT],
 
     pub color_primaries: ColorPrimaries,
     pub transfer_characteristics: TransferCharacteristics,
@@ -211,9 +214,36 @@ impl Image {
             self.planes[plane_index] = Some(self.plane_buffers[plane_index].as_mut_ptr());
             self.image_owns_planes[plane_index] = true;
         }
+        for plane in planes {
+            let plane = *plane;
+            let plane_index = plane.to_usize().unwrap();
+            let width = self.width(plane);
+            let plane_size = width * self.height(plane);
+            let default_value =
+                if plane == Plane::A { ((1i32 << self.depth) - 1) as u16 } else { 0 };
+            if self.planes2[plane_index].is_some()
+                && self.planes2[plane_index].as_ref().unwrap().size() == plane_size
+            {
+                // TODO: need to memset to 0 maybe?
+                continue;
+            }
+            if self.planes2[plane_index].is_none() {
+                self.planes2[plane_index] = Some(if self.depth == 8 {
+                    Pixels::Buffer(Vec::new())
+                } else {
+                    Pixels::Buffer16(Vec::new())
+                });
+            }
+            let pixels = self.planes2[plane_index].as_mut().unwrap();
+            pixels.resize(plane_size, default_value);
+            self.row_bytes[plane_index] = u32_from_usize(width * pixel_size)?;
+            self.image_owns_planes[plane_index] = true;
+        }
         Ok(())
     }
 
+    /*
+    // TODO: enable this function after fixing it with Pixels.
     pub fn copy_from_slice(
         &mut self,
         source: &[u8],
@@ -292,19 +322,25 @@ impl Image {
         }
         Ok(())
     }
+    */
 
     pub fn steal_from(&mut self, src: &Image, category: usize) {
+        // This function is used only when both src and self contains only pointers.
         match category {
             0 | 2 => {
                 self.planes[0] = src.planes[0];
                 self.planes[1] = src.planes[1];
                 self.planes[2] = src.planes[2];
+                self.planes2[0] = Some(Pixels::Pointer(src.planes2[0].as_ref().unwrap().pointer()));
+                self.planes2[1] = Some(Pixels::Pointer(src.planes2[1].as_ref().unwrap().pointer()));
+                self.planes2[2] = Some(Pixels::Pointer(src.planes2[2].as_ref().unwrap().pointer()));
                 self.row_bytes[0] = src.row_bytes[0];
                 self.row_bytes[1] = src.row_bytes[1];
                 self.row_bytes[2] = src.row_bytes[2];
             }
             1 => {
                 self.planes[3] = src.planes[3];
+                self.planes2[3] = Some(Pixels::Pointer(src.planes2[3].as_ref().unwrap().pointer()));
                 self.row_bytes[3] = src.row_bytes[3];
             }
             _ => {
@@ -320,6 +356,7 @@ impl Image {
         tile_index: u32,
         category: usize,
     ) -> AvifResult<()> {
+        // This function is used only when |tile| contains pointers and self contains buffers.
         let err = AvifError::BmffParseFailed;
         let row_index = u64::from(tile_index / tile_info.grid.columns);
         let column_index = u64::from(tile_index % tile_info.grid.columns);

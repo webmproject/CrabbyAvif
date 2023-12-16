@@ -1,6 +1,7 @@
 use crate::internal_utils::*;
 use crate::*;
 
+#[derive(Debug)]
 pub enum Pixels {
     // Intended for use from the C API. Used for all bitdepths.
     Pointer(*mut u8),
@@ -11,6 +12,43 @@ pub enum Pixels {
 }
 
 impl Pixels {
+    pub fn size(&self) -> usize {
+        match self {
+            Pixels::Pointer(_) => 0,
+            Pixels::Buffer(buffer) => buffer.len(),
+            Pixels::Buffer16(buffer) => buffer.len(),
+        }
+    }
+
+    pub fn resize(&mut self, size: usize, default: u16) {
+        match self {
+            Pixels::Pointer(_) => {}
+            Pixels::Buffer(buffer) => {
+                if buffer.capacity() < size {
+                    buffer.reserve(size);
+                }
+                buffer.resize(size, default as u8);
+            }
+            Pixels::Buffer16(buffer) => {
+                if buffer.capacity() < size {
+                    buffer.reserve(size);
+                }
+                buffer.resize(size, default);
+            }
+        }
+    }
+
+    pub fn is_pointer(&self) -> bool {
+        matches!(self, Pixels::Pointer(_))
+    }
+
+    pub fn pointer(&self) -> *mut u8 {
+        match self {
+            Pixels::Pointer(ptr) => *ptr,
+            _ => std::ptr::null_mut(),
+        }
+    }
+
     pub fn slice(&self, offset: u32, size: u32) -> AvifResult<&[u8]> {
         let offset: usize = usize_from_u32(offset)?;
         let size: usize = usize_from_u32(size)?;
