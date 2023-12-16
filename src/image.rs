@@ -96,8 +96,15 @@ impl Image {
         matches!(self.depth, 8 | 10 | 12 | 16)
     }
 
+    pub fn has_plane(&self, plane: Plane) -> bool {
+        let plane_index = plane.to_usize().unwrap();
+        self.planes[plane_index].is_some()
+            && !self.planes[plane_index].unwrap().is_null()
+            && self.row_bytes[plane_index] > 0
+    }
+
     pub fn has_alpha(&self) -> bool {
-        self.planes[3].is_some() && !self.planes[3].unwrap().is_null() && self.row_bytes[3] > 0
+        self.has_plane(Plane::A)
     }
 
     pub fn subsampled_width(&self, width: u32, plane: Plane) -> usize {
@@ -127,11 +134,10 @@ impl Image {
     }
 
     pub fn plane(&self, plane: Plane) -> Option<PlaneData> {
-        let plane_index = plane.to_usize().unwrap();
-        self.planes[plane_index]?;
-        if self.planes[plane_index].unwrap().is_null() || self.row_bytes[plane_index] == 0 {
+        if !self.has_plane(plane) {
             return None;
         }
+        let plane_index = plane.to_usize().unwrap();
         let pixel_size = if self.depth == 8 { 1 } else { 2 };
         let height = self.height(plane);
         let row_bytes = self.row_bytes[plane_index] as usize;
@@ -148,11 +154,10 @@ impl Image {
     }
 
     fn plane_mut(&mut self, plane: Plane) -> Option<PlaneMutData> {
-        let plane_index = plane.to_usize().unwrap();
-        self.planes[plane_index]?;
-        if self.planes[plane_index].unwrap().is_null() || self.row_bytes[plane_index] == 0 {
+        if !self.has_plane(plane) {
             return None;
         }
+        let plane_index = plane.to_usize().unwrap();
         let pixel_size = if self.depth == 8 { 1 } else { 2 };
         let height = self.height(plane);
         let row_bytes = self.row_bytes[plane_index] as usize;
