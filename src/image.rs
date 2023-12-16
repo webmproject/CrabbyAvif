@@ -106,9 +106,10 @@ impl Image {
 
     pub fn has_plane(&self, plane: Plane) -> bool {
         let plane_index = plane.to_usize().unwrap();
-        self.planes[plane_index].is_some()
-            && !self.planes[plane_index].unwrap().is_null()
-            && self.row_bytes[plane_index] > 0
+        if self.planes2[plane_index].is_none() || self.row_bytes[plane_index] == 0 {
+            return false;
+        }
+        self.planes2[plane_index].as_ref().unwrap().has_data()
     }
 
     pub fn has_alpha(&self) -> bool {

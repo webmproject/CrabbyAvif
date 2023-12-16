@@ -19,6 +19,14 @@ impl Pixels {
         }
     }
 
+    pub fn has_data(&self) -> bool {
+        match self {
+            Pixels::Pointer(ptr) => !ptr.is_null(),
+            Pixels::Buffer(buffer) => !buffer.is_empty(),
+            Pixels::Buffer16(buffer) => !buffer.is_empty(),
+        }
+    }
+
     pub fn resize(&mut self, size: usize, default: u16) {
         match self {
             Pixels::Pointer(_) => {}
