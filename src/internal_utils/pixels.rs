@@ -114,12 +114,29 @@ impl Pixels {
         }
     }
 
+    pub fn slices(&self, offset: u32, size: u32) -> AvifResult<(Option<&[u8]>, Option<&[u16]>)> {
+        match self {
+            Pixels::Pointer(ptr) => {
+                let offset = isize_from_u32(offset)?;
+                let size = usize_from_u32(size)?;
+                let ptr16 = (*ptr) as *const u16;
+                unsafe {
+                    Ok((
+                        Some(std::slice::from_raw_parts(ptr.offset(offset), size)),
+                        Some(std::slice::from_raw_parts(ptr16.offset(offset), size)),
+                    ))
+                }
+            }
+            Pixels::Buffer(_) => Ok((Some(self.slice(offset, size)?), None)),
+            Pixels::Buffer16(_) => Ok((None, Some(self.slice16(offset, size / 2)?))),
+        }
+    }
+
     pub fn slices_mut(
         &mut self,
         offset: u32,
         size: u32,
     ) -> AvifResult<(Option<&mut [u8]>, Option<&mut [u16]>)> {
-        // How to deal with pointers here?
         match self {
             Pixels::Pointer(ptr) => {
                 let offset = isize_from_u32(offset)?;
@@ -133,7 +150,7 @@ impl Pixels {
                 }
             }
             Pixels::Buffer(_) => Ok((Some(self.slice_mut(offset, size)?), None)),
-            Pixels::Buffer16(_) => Ok((None, Some(self.slice16_mut(offset, size)?))),
+            Pixels::Buffer16(_) => Ok((None, Some(self.slice16_mut(offset, size / 2)?))),
         }
     }
 }

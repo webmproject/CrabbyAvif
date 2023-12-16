@@ -3,6 +3,8 @@ use crate::*;
 use std::fs::File;
 use std::io::prelude::*;
 
+use byteorder::{LittleEndian, WriteBytesExt};
+
 #[derive(Default)]
 pub struct Y4MWriter {
     pub filename: Option<String>,
@@ -111,21 +113,38 @@ impl Y4MWriter {
         }
         let planes: &[Plane] = if self.write_alpha { &ALL_PLANES } else { &YUV_PLANES };
         for plane in planes {
-            let avif_plane = image.plane(*plane);
-            println!("{:#?}", avif_plane);
-            if avif_plane.is_none() {
+            let plane = *plane;
+            if !image.has_plane(plane) {
                 continue;
             }
-            let avif_plane = avif_plane.unwrap();
-            let byte_count: usize = (avif_plane.width * avif_plane.pixel_size)
-                .try_into()
-                .unwrap();
-            for y in 0..avif_plane.height {
-                let stride_offset: usize = (y * avif_plane.row_bytes).try_into().unwrap();
-                //println!("{y}: {stride_offset} plane_height: {}", avif_plane.height);
-                let pixels = &avif_plane.data.unwrap()[stride_offset..stride_offset + byte_count];
-                if self.file.as_ref().unwrap().write_all(pixels).is_err() {
-                    return false;
+            if image.depth == 8 {
+                for y in 0..image.height(plane) {
+                    let row = if let Ok(row) = image.row(plane, y as u32) {
+                        row
+                    } else {
+                        return false;
+                    };
+                    let pixels = &row[..image.width(plane)];
+                    if self.file.as_ref().unwrap().write_all(pixels).is_err() {
+                        return false;
+                    }
+                }
+            } else {
+                for y in 0..image.height(plane) {
+                    let row16 = if let Ok(row16) = image.row16(plane, y as u32) {
+                        row16
+                    } else {
+                        return false;
+                    };
+                    let pixels16 = &row16[..image.width(plane)];
+                    let mut pixels: Vec<u8> = Vec::new();
+                    // y4m is always little endian.
+                    for &pixel16 in pixels16 {
+                        let _ = pixels.write_u16::<LittleEndian>(pixel16);
+                    }
+                    if self.file.as_ref().unwrap().write_all(&pixels[..]).is_err() {
+                        return false;
+                    }
                 }
             }
         }

@@ -150,16 +150,8 @@ impl Image {
         let height = self.height(plane);
         let row_bytes = self.row_bytes[plane_index] as usize;
         let plane_size = height * row_bytes;
-        let data = self.planes2[plane_index]
-            .as_ref()
-            .unwrap()
-            .slice(0, plane_size as u32)
-            .ok();
-        let data16 = self.planes2[plane_index]
-            .as_ref()
-            .unwrap()
-            .slice16(0, plane_size as u32)
-            .ok();
+        let planes2 = self.planes2[plane_index].as_ref().unwrap();
+        let (data, data16) = planes2.slices(0, plane_size as u32).unwrap();
         Some(PlaneData {
             data,
             data16,
@@ -210,16 +202,16 @@ impl Image {
 
     pub fn row16(&self, plane: Plane, row: u32) -> AvifResult<&[u16]> {
         let plane = self.plane(plane).ok_or(AvifError::NoContent)?;
-        let row_bytes = usize_from_u32(plane.row_bytes)?;
-        let start = usize_from_u32(row * plane.row_bytes)?;
+        let row_bytes = usize_from_u32(plane.row_bytes)? / 2;
+        let start = usize_from_u32(row * plane.row_bytes / 2)?;
         let end = start + row_bytes;
         Ok(&plane.data16.unwrap()[start..end])
     }
 
     pub fn row16_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u16]> {
         let plane = self.plane_mut(plane).ok_or(AvifError::NoContent)?;
-        let row_bytes = usize_from_u32(plane.row_bytes)?;
-        let start = usize_from_u32(row * plane.row_bytes)?;
+        let row_bytes = usize_from_u32(plane.row_bytes)? / 2;
+        let start = usize_from_u32(row * plane.row_bytes / 2)?;
         let end = start + row_bytes;
         Ok(&mut plane.data16.unwrap()[start..end])
     }
