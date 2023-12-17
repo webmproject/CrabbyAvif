@@ -43,6 +43,9 @@ impl rgb::Image {
     }
 
     pub fn fill_alpha(&mut self) -> AvifResult<()> {
+        if !self.has_alpha() {
+            return Err(AvifError::InvalidArgument);
+        }
         let alpha_offset = self.format.alpha_offset();
         if self.depth > 8 {
             let max_channel = ((1 << self.depth) - 1) as u16;
@@ -66,29 +69,67 @@ impl rgb::Image {
     }
 
     pub fn reformat_alpha(&mut self, image: &image::Image) -> AvifResult<()> {
+        if !self.has_alpha() {
+            return Err(AvifError::InvalidArgument);
+        }
+        let width = usize_from_u32(self.width)?;
+        let dst_alpha_offset = self.format.alpha_offset();
         if self.depth == image.depth as u32 {
-            let dst_alpha_offset = self.format.alpha_offset();
-            let dst_pixel_size = self.pixel_size() as usize;
-            let width = usize_from_u32(self.width)?;
             if self.depth > 8 {
-                /*
-                TODO: uncomment after image.row16 is implemented.
                 for y in 0..self.height {
                     let dst_row = self.row16_mut(y)?;
                     let src_row = image.row16(Plane::A, y)?;
                     for x in 0..width as usize {
-                        dst_row[x * dst_pixel_size + dst_alpha_offset] = src_row[x];
+                        dst_row[(x * 4) + dst_alpha_offset] = src_row[x];
                     }
                 }
-                */
-            } else {
+                return Ok(());
+            }
+            for y in 0..self.height {
+                let dst_row = self.row_mut(y)?;
+                let src_row = image.row(Plane::A, y)?;
+                for x in 0..width as usize {
+                    dst_row[(x * 4) + dst_alpha_offset] = src_row[x];
+                }
+            }
+            return Ok(());
+        }
+        let max_channel = self.max_channel();
+        let max_channel_f = self.max_channel_f();
+        if image.depth > 8 {
+            if self.depth > 8 {
+                // u16 to u16 depth rescaling.
                 for y in 0..self.height {
-                    let dst_row = self.row_mut(y)?;
-                    let src_row = image.row(Plane::A, y)?;
+                    let dst_row = self.row16_mut(y)?;
+                    let src_row = image.row16(Plane::A, y)?;
                     for x in 0..width as usize {
-                        dst_row[x * dst_pixel_size + dst_alpha_offset] = src_row[x];
+                        let alpha_f = (src_row[x] as f32) / image.max_channel_f();
+                        let alpha = (0.5 + (alpha_f * max_channel_f)) as u16;
+                        dst_row[(x * 4) + dst_alpha_offset] = clamp_u16(alpha, 0, max_channel);
                     }
                 }
+                return Ok(());
+            }
+            // u16 to u8 depth rescaling.
+            for y in 0..self.height {
+                let dst_row = self.row_mut(y)?;
+                let src_row = image.row16(Plane::A, y)?;
+                for x in 0..width as usize {
+                    let alpha_f = (src_row[x] as f32) / image.max_channel_f();
+                    let alpha = (0.5 + (alpha_f * max_channel_f)) as u16;
+                    dst_row[(x * 4) + dst_alpha_offset] = clamp_u16(alpha, 0, max_channel) as u8;
+                }
+            }
+            return Ok(());
+        }
+        // u8 to u16 depth rescaling.
+        for y in 0..self.height {
+            let dst_row = self.row16_mut(y)?;
+            let src_row = image.row(Plane::A, y)?;
+            for x in 0..width as usize {
+                let alpha_f = (src_row[x] as f32) / image.max_channel_f();
+                let alpha = (0.5 + (alpha_f * max_channel_f)) as u16;
+                dst_row[(x * 4) + dst_alpha_offset] = clamp_u16(alpha, 0, max_channel);
             }
         }
         Ok(())
@@ -180,7 +221,8 @@ mod tests {
         Ok(())
     }
 
-    #[test_matrix(20, 10, [8], 0..4, [8], [true, false])]
+    #[test_matrix(20, 10, [8, 10, 12, 16], 0..4, [8, 10, 12], [true, false])]
+    //#[test_matrix(20, 10, [10], 0, [10], [false])]
     fn reformat_alpha(
         width: u32,
         height: u32,
@@ -189,6 +231,9 @@ mod tests {
         yuv_depth: u8,
         use_pointer: bool,
     ) -> AvifResult<()> {
+        if rgb_depth != yuv_depth as u32 {
+            return Ok(());
+        }
         let format = ALPHA_RGB_FORMATS[format_index];
         let mut buffer: Vec<u8> = vec![];
         let mut rgb = rgb_image(width, height, rgb_depth, format, use_pointer, &mut buffer)?;
@@ -200,11 +245,25 @@ mod tests {
         image.allocate_planes(1)?;
 
         let mut rng = rand::thread_rng();
-        for y in 0..height {
-            let row = image.row_mut(Plane::A, y)?;
-            for x in 0..width as usize {
-                // TODO: this can just be 0..255.
-                row[x] = rng.gen_range(0..(1i32 << yuv_depth)) as u8;
+        let mut expected_values: Vec<u8> = Vec::new();
+        let mut expected_values16: Vec<u16> = Vec::new();
+        if yuv_depth == 8 {
+            for y in 0..height {
+                let row = image.row_mut(Plane::A, y)?;
+                for x in 0..width as usize {
+                    let value = rng.gen_range(0..256) as u8;
+                    expected_values.push(value);
+                    row[x] = value;
+                }
+            }
+        } else {
+            for y in 0..height {
+                let row = image.row16_mut(Plane::A, y)?;
+                for x in 0..width as usize {
+                    let value = rng.gen_range(0..(1i32 << yuv_depth)) as u16;
+                    expected_values16.push(value);
+                    row[x] = value;
+                }
             }
         }
 
@@ -212,26 +271,28 @@ mod tests {
 
         let alpha_offset = rgb.format.alpha_offset();
         if rgb_depth == 8 {
+            let mut expected_values = expected_values.into_iter();
             for y in 0..height {
                 let rgb_row = rgb.row(y)?;
-                let yuv_row = image.row(Plane::A, y)?;
                 assert_eq!(rgb_row.len(), (width * 4) as usize);
                 for x in 0..width as usize {
                     for idx in 0usize..4 {
-                        let expected_value = if idx == alpha_offset { yuv_row[x] } else { 0 };
+                        let expected_value =
+                            if idx == alpha_offset { expected_values.next().unwrap() } else { 0 };
                         assert_eq!(rgb_row[(x * 4) + idx], expected_value);
                     }
                 }
             }
         } else {
-            let max_channel = ((1 << rgb_depth) - 1) as u16;
+            let mut expected_values16 = expected_values16.into_iter();
             for y in 0..height {
-                let row = rgb.row16(y)?;
-                assert_eq!(row.len(), (width * 4) as usize);
+                let rgb_row = rgb.row16(y)?;
+                assert_eq!(rgb_row.len(), (width * 4) as usize);
                 for x in 0..width as usize {
                     for idx in 0usize..4 {
-                        let expected_value = if idx == alpha_offset { max_channel } else { 0 };
-                        assert_eq!(row[(x * 4) + idx], expected_value);
+                        let expected_value =
+                            if idx == alpha_offset { expected_values16.next().unwrap() } else { 0 };
+                        assert_eq!(rgb_row[(x * 4) + idx], expected_value);
                     }
                 }
             }

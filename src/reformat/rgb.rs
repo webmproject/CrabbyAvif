@@ -204,6 +204,14 @@ enum AlphaMultiplyMode {
 }
 
 impl Image {
+    pub fn max_channel(&self) -> u16 {
+        ((1i32 << self.depth) - 1) as u16
+    }
+
+    pub fn max_channel_f(&self) -> f32 {
+        self.max_channel() as f32
+    }
+
     pub fn create_from_yuv(image: &image::Image) -> Self {
         Self {
             width: image.width,

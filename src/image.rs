@@ -112,6 +112,14 @@ impl Image {
         matches!(self.depth, 8 | 10 | 12 | 16)
     }
 
+    pub fn max_channel(&self) -> u16 {
+        ((1i32 << self.depth) - 1) as u16
+    }
+
+    pub fn max_channel_f(&self) -> f32 {
+        self.max_channel() as f32
+    }
+
     pub fn has_plane(&self, plane: Plane) -> bool {
         let plane_index = plane.to_usize().unwrap();
         if self.planes2[plane_index].is_none() || self.row_bytes[plane_index] == 0 {
