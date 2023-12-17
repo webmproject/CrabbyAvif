@@ -68,6 +68,14 @@ impl rgb::Image {
         Ok(())
     }
 
+    // TODO: Add test for this function.
+    fn rescale_alpha_value(value: u16, src_max_channel_f: f32, dst_max_channel: u16) -> u16 {
+        let alpha_f = (value as f32) / src_max_channel_f;
+        let dst_max_channel_f = dst_max_channel as f32;
+        let alpha = (0.5 + (alpha_f * dst_max_channel_f)) as u16;
+        clamp_u16(alpha, 0, dst_max_channel)
+    }
+
     pub fn reformat_alpha(&mut self, image: &image::Image) -> AvifResult<()> {
         if !self.has_alpha() {
             return Err(AvifError::InvalidArgument);
@@ -79,7 +87,7 @@ impl rgb::Image {
                 for y in 0..self.height {
                     let dst_row = self.row16_mut(y)?;
                     let src_row = image.row16(Plane::A, y)?;
-                    for x in 0..width as usize {
+                    for x in 0..width {
                         dst_row[(x * 4) + dst_alpha_offset] = src_row[x];
                     }
                 }
@@ -88,24 +96,25 @@ impl rgb::Image {
             for y in 0..self.height {
                 let dst_row = self.row_mut(y)?;
                 let src_row = image.row(Plane::A, y)?;
-                for x in 0..width as usize {
+                for x in 0..width {
                     dst_row[(x * 4) + dst_alpha_offset] = src_row[x];
                 }
             }
             return Ok(());
         }
         let max_channel = self.max_channel();
-        let max_channel_f = self.max_channel_f();
         if image.depth > 8 {
             if self.depth > 8 {
                 // u16 to u16 depth rescaling.
                 for y in 0..self.height {
                     let dst_row = self.row16_mut(y)?;
                     let src_row = image.row16(Plane::A, y)?;
-                    for x in 0..width as usize {
-                        let alpha_f = (src_row[x] as f32) / image.max_channel_f();
-                        let alpha = (0.5 + (alpha_f * max_channel_f)) as u16;
-                        dst_row[(x * 4) + dst_alpha_offset] = clamp_u16(alpha, 0, max_channel);
+                    for x in 0..width {
+                        dst_row[(x * 4) + dst_alpha_offset] = Self::rescale_alpha_value(
+                            src_row[x],
+                            image.max_channel_f(),
+                            max_channel,
+                        );
                     }
                 }
                 return Ok(());
@@ -114,10 +123,10 @@ impl rgb::Image {
             for y in 0..self.height {
                 let dst_row = self.row_mut(y)?;
                 let src_row = image.row16(Plane::A, y)?;
-                for x in 0..width as usize {
-                    let alpha_f = (src_row[x] as f32) / image.max_channel_f();
-                    let alpha = (0.5 + (alpha_f * max_channel_f)) as u16;
-                    dst_row[(x * 4) + dst_alpha_offset] = clamp_u16(alpha, 0, max_channel) as u8;
+                for x in 0..width {
+                    dst_row[(x * 4) + dst_alpha_offset] =
+                        Self::rescale_alpha_value(src_row[x], image.max_channel_f(), max_channel)
+                            as u8;
                 }
             }
             return Ok(());
@@ -126,10 +135,12 @@ impl rgb::Image {
         for y in 0..self.height {
             let dst_row = self.row16_mut(y)?;
             let src_row = image.row(Plane::A, y)?;
-            for x in 0..width as usize {
-                let alpha_f = (src_row[x] as f32) / image.max_channel_f();
-                let alpha = (0.5 + (alpha_f * max_channel_f)) as u16;
-                dst_row[(x * 4) + dst_alpha_offset] = clamp_u16(alpha, 0, max_channel);
+            for x in 0..width {
+                dst_row[(x * 4) + dst_alpha_offset] = Self::rescale_alpha_value(
+                    src_row[x] as u16,
+                    image.max_channel_f(),
+                    max_channel,
+                );
             }
         }
         Ok(())
@@ -222,7 +233,6 @@ mod tests {
     }
 
     #[test_matrix(20, 10, [8, 10, 12, 16], 0..4, [8, 10, 12], [true, false])]
-    //#[test_matrix(20, 10, [10], 0, [10], [false])]
     fn reformat_alpha(
         width: u32,
         height: u32,
@@ -231,9 +241,9 @@ mod tests {
         yuv_depth: u8,
         use_pointer: bool,
     ) -> AvifResult<()> {
-        if rgb_depth != yuv_depth as u32 {
-            return Ok(());
-        }
+        // Note: This test simply makes sure reformat_alpha puts the alpha pixels in the right
+        // place in the rgb image (with scaling). It does not check for the actual validity of the
+        // scaled pixels.
         let format = ALPHA_RGB_FORMATS[format_index];
         let mut buffer: Vec<u8> = vec![];
         let mut rgb = rgb_image(width, height, rgb_depth, format, use_pointer, &mut buffer)?;
@@ -245,14 +255,22 @@ mod tests {
         image.allocate_planes(1)?;
 
         let mut rng = rand::thread_rng();
-        let mut expected_values: Vec<u8> = Vec::new();
-        let mut expected_values16: Vec<u16> = Vec::new();
+        let mut expected_values: Vec<u16> = Vec::new();
+        let image_max_channel_f = image.max_channel_f();
         if yuv_depth == 8 {
             for y in 0..height {
                 let row = image.row_mut(Plane::A, y)?;
                 for x in 0..width as usize {
                     let value = rng.gen_range(0..256) as u8;
-                    expected_values.push(value);
+                    if rgb.depth == 8 {
+                        expected_values.push(value as u16);
+                    } else {
+                        expected_values.push(rgb::Image::rescale_alpha_value(
+                            value as u16,
+                            image_max_channel_f,
+                            rgb.max_channel(),
+                        ));
+                    }
                     row[x] = value;
                 }
             }
@@ -261,7 +279,15 @@ mod tests {
                 let row = image.row16_mut(Plane::A, y)?;
                 for x in 0..width as usize {
                     let value = rng.gen_range(0..(1i32 << yuv_depth)) as u16;
-                    expected_values16.push(value);
+                    if rgb.depth == yuv_depth as u32 {
+                        expected_values.push(value);
+                    } else {
+                        expected_values.push(rgb::Image::rescale_alpha_value(
+                            value as u16,
+                            image_max_channel_f,
+                            rgb.max_channel(),
+                        ));
+                    }
                     row[x] = value;
                 }
             }
@@ -270,8 +296,8 @@ mod tests {
         rgb.reformat_alpha(&image)?;
 
         let alpha_offset = rgb.format.alpha_offset();
+        let mut expected_values = expected_values.into_iter();
         if rgb_depth == 8 {
-            let mut expected_values = expected_values.into_iter();
             for y in 0..height {
                 let rgb_row = rgb.row(y)?;
                 assert_eq!(rgb_row.len(), (width * 4) as usize);
@@ -279,19 +305,18 @@ mod tests {
                     for idx in 0usize..4 {
                         let expected_value =
                             if idx == alpha_offset { expected_values.next().unwrap() } else { 0 };
-                        assert_eq!(rgb_row[(x * 4) + idx], expected_value);
+                        assert_eq!(rgb_row[(x * 4) + idx], expected_value as u8);
                     }
                 }
             }
         } else {
-            let mut expected_values16 = expected_values16.into_iter();
             for y in 0..height {
                 let rgb_row = rgb.row16(y)?;
                 assert_eq!(rgb_row.len(), (width * 4) as usize);
                 for x in 0..width as usize {
                     for idx in 0usize..4 {
                         let expected_value =
-                            if idx == alpha_offset { expected_values16.next().unwrap() } else { 0 };
+                            if idx == alpha_offset { expected_values.next().unwrap() } else { 0 };
                         assert_eq!(rgb_row[(x * 4) + idx], expected_value);
                     }
                 }
