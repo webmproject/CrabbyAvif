@@ -709,3 +709,22 @@ pub fn process_alpha(rgb: &mut rgb::Image, multiply: bool) -> AvifResult<()> {
         Err(AvifError::ReformatFailed)
     }
 }
+
+pub fn convert_to_half_float(rgb: &mut rgb::Image, scale: f32) -> AvifResult<()> {
+    let res = unsafe {
+        HalfFloatPlane(
+            rgb.pixels() as *const u16,
+            i32_from_u32(rgb.row_bytes)?,
+            rgb.pixels() as *mut u16,
+            i32_from_u32(rgb.row_bytes)?,
+            scale,
+            i32_from_u32(rgb.width * rgb.channel_count())?,
+            i32_from_u32(rgb.height)?,
+        )
+    };
+    if res == 0 {
+        Ok(())
+    } else {
+        Err(AvifError::InvalidArgument)
+    }
+}

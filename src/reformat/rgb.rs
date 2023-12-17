@@ -303,7 +303,7 @@ impl Image {
         }
     }
 
-    fn channel_count(&self) -> u32 {
+    pub fn channel_count(&self) -> u32 {
         if self.has_alpha() {
             4
         } else {
@@ -316,6 +316,28 @@ impl Image {
             return 2;
         }
         self.channel_count() * self.channel_size()
+    }
+
+    fn convert_to_half_float(&mut self) -> AvifResult<()> {
+        let scale = 1.0 / self.max_channel_f();
+        match libyuv::convert_to_half_float(self, scale) {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                if err != AvifError::NotImplemented {
+                    return Err(err);
+                }
+            }
+        }
+        // This constant comes from libyuv. For details, see here:
+        // https://chromium.googlesource.com/libyuv/libyuv/+/2f87e9a7/source/row_common.cc#3537
+        let multiplier = 1.9259299444e-34 * scale;
+        for y in 0..self.height {
+            let row = self.row16_mut(y)?;
+            for pixel in row {
+                *pixel = ((((*pixel as f32) * multiplier) as u32) >> 13) as u16;
+            }
+        }
+        Ok(())
     }
 
     pub fn convert_from_yuv(&mut self, image: &image::Image) -> AvifResult<()> {
@@ -377,7 +399,7 @@ impl Image {
             _ => {}
         }
         if self.is_float {
-            unimplemented!("needs is float");
+            self.convert_to_half_float()?;
         }
         Ok(())
     }
