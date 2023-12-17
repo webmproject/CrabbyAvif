@@ -17,12 +17,14 @@ fn find_constants(image: &image::Image) -> Option<(&YuvConstants, &YuvConstants)
     } else {
         image.matrix_coefficients
     };
+    /*
     // TODO: workaround to allow identity for now.
     let matrix_coefficients = if matrix_coefficients == MatrixCoefficients::Identity {
         MatrixCoefficients::Bt601
     } else {
         matrix_coefficients
     };
+    */
     unsafe {
         match image.full_range {
             true => match matrix_coefficients {
