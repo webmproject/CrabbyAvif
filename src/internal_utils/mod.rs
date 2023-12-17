@@ -111,15 +111,21 @@ conversion_function!(i32_from_u32, i32, u32);
 conversion_function!(isize_from_u32, isize, u32);
 conversion_function!(isize_from_usize, isize, usize);
 
-pub fn clamp_u16(val: u16, low: u16, high: u16) -> u16 {
-    if val < low {
-        low
-    } else if val > high {
-        high
-    } else {
-        val
-    }
+macro_rules! clamp_function {
+    ($func:ident, $type:ty) => {
+        pub fn $func(value: $type, low: $type, high: $type) -> $type {
+            if value < low {
+                low
+            } else if value > high {
+                high
+            } else {
+                value
+            }
+        }
+    };
 }
+
+clamp_function!(clamp_u16, u16);
 
 pub fn find_nclx(properties: &[ItemProperty]) -> Result<&Nclx, bool> {
     let nclx_properties: Vec<_> = properties
