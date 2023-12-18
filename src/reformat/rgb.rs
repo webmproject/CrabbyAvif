@@ -168,6 +168,14 @@ impl Image {
         }
     }
 
+    pub fn rows_mut(&mut self, row: u32) -> AvifResult<(Option<&mut [u8]>, Option<&mut [u16]>)> {
+        if self.depth == 8 {
+            Ok((Some(self.row_mut(row)?), None))
+        } else {
+            Ok((None, Some(self.row16_mut(row)?)))
+        }
+    }
+
     pub fn allocate(&mut self) -> AvifResult<()> {
         let row_bytes = self.width * self.pixel_size();
         if self.channel_size() == 1 {
