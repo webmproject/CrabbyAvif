@@ -127,6 +127,7 @@ fn identity_yuv8_to_rgb8_full_range(image: &image::Image, rgb: &mut rgb::Image) 
     let g_offset = rgb.format.g_offset();
     let b_offset = rgb.format.b_offset();
     let rgb565 = rgb.format == Format::Rgb565;
+    let channel_count = rgb.channel_count() as usize;
     for i in 0..image.height {
         let y = image.row(Plane::Y, i)?;
         let u = image.row(Plane::U, i)?;
@@ -136,9 +137,9 @@ fn identity_yuv8_to_rgb8_full_range(image: &image::Image, rgb: &mut rgb::Image) 
             unimplemented!("rgb 565 is not implemented");
         } else {
             for j in 0..image.width as usize {
-                rgb_pixels[j + r_offset] = v[j];
-                rgb_pixels[j + g_offset] = y[j];
-                rgb_pixels[j + b_offset] = u[j];
+                rgb_pixels[(j * channel_count) + r_offset] = v[j];
+                rgb_pixels[(j * channel_count) + g_offset] = y[j];
+                rgb_pixels[(j * channel_count) + b_offset] = u[j];
             }
         }
     }
