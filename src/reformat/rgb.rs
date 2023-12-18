@@ -63,7 +63,8 @@ pub enum ChromaUpsampling {
 
 impl ChromaUpsampling {
     pub fn nearest_neighbor_filter_allowed(&self) -> bool {
-        !matches!(self, Self::Bilinear | Self::BestQuality | Self::Automatic)
+        // TODO: this function has to return different values based on whether libyuv is used.
+        !matches!(self, Self::Bilinear | Self::BestQuality)
     }
 }
 
