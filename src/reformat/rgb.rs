@@ -1,4 +1,6 @@
 use super::libyuv;
+use super::rgb_impl;
+
 use crate::image;
 use crate::image::Plane;
 use crate::internal_utils::pixels::*;
@@ -19,7 +21,7 @@ pub enum Format {
 }
 
 impl Format {
-    fn offsets(&self) -> [usize; 4] {
+    pub fn offsets(&self) -> [usize; 4] {
         match self {
             Format::Rgb => [0, 1, 2, 0],
             Format::Rgba => [0, 1, 2, 3],
@@ -29,6 +31,18 @@ impl Format {
             Format::Abgr => [3, 2, 1, 0],
             Format::Rgb565 => [0; 4],
         }
+    }
+
+    pub fn r_offset(&self) -> usize {
+        self.offsets()[0]
+    }
+
+    pub fn g_offset(&self) -> usize {
+        self.offsets()[1]
+    }
+
+    pub fn b_offset(&self) -> usize {
+        self.offsets()[2]
     }
 
     pub fn alpha_offset(&self) -> usize {
@@ -78,121 +92,6 @@ pub struct Image {
     pub max_threads: i32,
     pub pixels: Option<Pixels>,
     pub row_bytes: u32,
-}
-
-#[allow(unused)]
-struct RgbColorSpaceInfo {
-    channel_bytes: u32,
-    pixel_bytes: u32,
-    offset_bytes_r: usize,
-    offset_bytes_g: usize,
-    offset_bytes_b: usize,
-    offset_bytes_a: usize,
-    max_channel: i32,
-    max_channel_f: f32,
-}
-
-impl RgbColorSpaceInfo {
-    fn create_from(rgb: &Image) -> AvifResult<Self> {
-        if !rgb.depth_valid()
-            || (rgb.is_float && rgb.depth != 16)
-            || (rgb.format == Format::Rgb565 && rgb.depth != 8)
-        {
-            return Err(AvifError::ReformatFailed);
-        }
-        let offsets = rgb.format.offsets();
-        let max_channel = i32_from_u32((1 << rgb.depth) - 1)?;
-        Ok(Self {
-            channel_bytes: rgb.channel_size(),
-            pixel_bytes: rgb.pixel_size(),
-            offset_bytes_r: (rgb.channel_size() as usize * offsets[0]),
-            offset_bytes_g: (rgb.channel_size() as usize * offsets[1]),
-            offset_bytes_b: (rgb.channel_size() as usize * offsets[2]),
-            offset_bytes_a: (rgb.channel_size() as usize * offsets[3]),
-            max_channel,
-            max_channel_f: max_channel as f32,
-        })
-    }
-}
-
-enum Mode {
-    YuvCoefficients,
-    Identity,
-    Ycgco,
-}
-
-#[allow(unused)]
-struct YuvColorSpaceInfo {
-    kr: f32,
-    kg: f32,
-    kb: f32,
-    channel_bytes: u32,
-    depth: u32,
-    full_range: bool,
-    max_channel: i32,
-    bias_y: f32,
-    bias_uv: f32,
-    range_y: f32,
-    range_uv: f32,
-    format: PixelFormat,
-    mode: Mode,
-}
-
-impl YuvColorSpaceInfo {
-    fn create_from(image: &image::Image) -> AvifResult<Self> {
-        if !image.depth_valid() {
-            return Err(AvifError::ReformatFailed);
-        }
-        // Unsupported matrix coefficients.
-        match image.matrix_coefficients {
-            MatrixCoefficients::Ycgco
-            | MatrixCoefficients::Bt2020Cl
-            | MatrixCoefficients::Smpte2085
-            | MatrixCoefficients::ChromaDerivedCl
-            | MatrixCoefficients::Ictcp => return Err(AvifError::ReformatFailed),
-            _ => {}
-        }
-        if image.matrix_coefficients == MatrixCoefficients::Identity
-            && image.yuv_format != PixelFormat::Yuv444
-            && image.yuv_format != PixelFormat::Monochrome
-        {
-            return Err(AvifError::ReformatFailed);
-        }
-        let kr: f32 = 0.0;
-        let kg: f32 = 0.0;
-        let kb: f32 = 0.0;
-        let mode = match image.matrix_coefficients {
-            MatrixCoefficients::Identity => Mode::Identity,
-            MatrixCoefficients::Ycgco => Mode::Ycgco,
-            _ => {
-                // TODO: compute kr, kg and kb here.
-                Mode::YuvCoefficients
-            }
-        };
-        let max_channel = (1 << image.depth) - 1;
-        Ok(Self {
-            kr,
-            kg,
-            kb,
-            channel_bytes: if image.depth == 8 { 1 } else { 2 },
-            depth: image.depth as u32,
-            full_range: image.full_range,
-            max_channel,
-            bias_y: if image.full_range { 0.0 } else { (16 << (image.depth - 8)) as f32 },
-            bias_uv: (1 << (image.depth - 1)) as f32,
-            range_y: if image.full_range { max_channel } else { 219 << (image.depth - 8) } as f32,
-            range_uv: if image.full_range { max_channel } else { 224 << (image.depth - 8) } as f32,
-            format: image.yuv_format,
-            mode,
-        })
-    }
-}
-
-struct State {
-    #[allow(unused)]
-    rgb: RgbColorSpaceInfo,
-    #[allow(unused)]
-    yuv: YuvColorSpaceInfo,
 }
 
 #[derive(Default, Debug, PartialEq)]
@@ -287,7 +186,7 @@ impl Image {
         Ok(())
     }
 
-    fn depth_valid(&self) -> bool {
+    pub fn depth_valid(&self) -> bool {
         matches!(self.depth, 8 | 10 | 12 | 16)
     }
 
@@ -295,7 +194,7 @@ impl Image {
         !matches!(self.format, Format::Rgb | Format::Bgr | Format::Rgb565)
     }
 
-    fn channel_size(&self) -> u32 {
+    pub fn channel_size(&self) -> u32 {
         if self.depth == 8 {
             1
         } else {
@@ -379,10 +278,6 @@ impl Image {
                 }
             }
         }
-        let _state = State {
-            rgb: RgbColorSpaceInfo::create_from(self)?,
-            yuv: YuvColorSpaceInfo::create_from(image)?,
-        };
         if reformat_alpha && !alpha_reformatted_with_libyuv {
             if image.has_alpha() {
                 self.reformat_alpha(image)?;
@@ -391,7 +286,7 @@ impl Image {
             }
         }
         if !converted_with_libyuv {
-            unimplemented!("libyuv could not convet this");
+            rgb_impl::yuv_to_rgb(image, self)?;
         }
         match alpha_multiply_mode {
             AlphaMultiplyMode::Multiply => self.premultiply_alpha()?,
