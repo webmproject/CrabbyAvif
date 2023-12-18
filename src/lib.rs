@@ -132,7 +132,7 @@ impl TransferCharacteristics {
 }
 
 #[repr(C)]
-#[derive(Debug, Default, PartialEq, Copy, Clone, FromPrimitive)]
+#[derive(Debug, Default, PartialEq, Eq, Copy, Clone, FromPrimitive, Hash)]
 pub enum MatrixCoefficients {
     Identity = 0,
     Bt709 = 1,

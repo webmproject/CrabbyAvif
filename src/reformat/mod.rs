@@ -6,6 +6,8 @@ pub mod bindings;
 #[cfg(feature = "libyuv")]
 pub mod alpha;
 #[cfg(feature = "libyuv")]
+pub mod coeffs;
+#[cfg(feature = "libyuv")]
 pub mod libyuv;
 #[cfg(feature = "libyuv")]
 pub mod rgb;
