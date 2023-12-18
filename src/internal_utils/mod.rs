@@ -126,6 +126,7 @@ macro_rules! clamp_function {
 }
 
 clamp_function!(clamp_u16, u16);
+clamp_function!(clamp_f32, f32);
 
 pub fn find_nclx(properties: &[ItemProperty]) -> Result<&Nclx, bool> {
     let nclx_properties: Vec<_> = properties

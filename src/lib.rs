@@ -33,6 +33,20 @@ impl PixelFormat {
             PixelFormat::Yuv420 | PixelFormat::Yuv422 | PixelFormat::Yuv444 => 3,
         }
     }
+
+    pub fn chroma_shift_x(&self) -> u32 {
+        match self {
+            Self::Yuv422 | Self::Yuv420 => 1,
+            _ => 0,
+        }
+    }
+
+    pub fn chroma_shift_y(&self) -> u32 {
+        match self {
+            Self::Yuv420 => 1,
+            _ => 0,
+        }
+    }
 }
 
 macro_rules! impl_from_primitive {

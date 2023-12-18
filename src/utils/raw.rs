@@ -40,10 +40,11 @@ impl RawWriter {
         }
         if self.rgb {
             let mut rgb = rgb::Image::create_from_yuv(image);
-            rgb.format = rgb::Format::Bgra;
-            //rgb.depth = 16;
-            rgb.depth = 8;
+            rgb.format = rgb::Format::Rgba;
+            rgb.depth = 16;
+            //rgb.depth = 8;
             //rgb.alpha_premultiplied = true;
+            rgb.is_float = true;
             if rgb.allocate().is_err() || rgb.convert_from_yuv(image).is_err() {
                 println!("conversion failed");
                 return false;

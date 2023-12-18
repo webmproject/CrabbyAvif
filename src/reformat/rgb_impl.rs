@@ -6,6 +6,8 @@ use crate::image::Plane;
 use crate::internal_utils::*;
 use crate::*;
 
+use std::cmp::min;
+
 #[allow(unused)]
 struct RgbColorSpaceInfo {
     channel_bytes: u32,
@@ -56,13 +58,21 @@ struct YuvColorSpaceInfo {
     channel_bytes: u32,
     depth: u32,
     full_range: bool,
-    max_channel: i32,
+    max_channel: u16,
     bias_y: f32,
     bias_uv: f32,
     range_y: f32,
     range_uv: f32,
     format: PixelFormat,
     mode: Mode,
+}
+
+fn calculate_yuv_coefficients(image: &image::Image) -> [f32; 3] {
+    let kr = 0.299;
+    let kb = 0.114;
+    let kg = 1.0 - kr - kb;
+    // TODO: cal from cicp.
+    [kr, kg, kb]
 }
 
 impl YuvColorSpaceInfo {
@@ -85,14 +95,17 @@ impl YuvColorSpaceInfo {
         {
             return Err(AvifError::ReformatFailed);
         }
-        let kr: f32 = 0.0;
-        let kg: f32 = 0.0;
-        let kb: f32 = 0.0;
+        let mut kr: f32 = 0.0;
+        let mut kg: f32 = 0.0;
+        let mut kb: f32 = 0.0;
         let mode = match image.matrix_coefficients {
             MatrixCoefficients::Identity => Mode::Identity,
             MatrixCoefficients::Ycgco => Mode::Ycgco,
             _ => {
-                // TODO: compute kr, kg and kb here.
+                let coeffs = calculate_yuv_coefficients(image);
+                kr = coeffs[0];
+                kg = coeffs[1];
+                kb = coeffs[2];
                 Mode::YuvCoefficients
             }
         };
@@ -164,4 +177,179 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> 
         return Err(AvifError::NotImplemented);
     }
     Err(AvifError::NotImplemented)
+}
+
+fn unorm_lookup_tables(depth: u8, state: &State) -> (Vec<f32>, Vec<f32>) {
+    let count = (1i32 << depth) as usize;
+    let mut table_y: Vec<f32> = Vec::new();
+    for cp in 0..count {
+        table_y.push(((cp as f32) - state.yuv.bias_y) / state.yuv.range_y);
+    }
+    let mut table_uv: Vec<f32> = Vec::new();
+    if state.yuv.mode == Mode::Identity {
+        table_uv.extend_from_slice(&table_y[..]);
+    } else {
+        for cp in 0..count {
+            table_uv.push(((cp as f32) - state.yuv.bias_uv) / state.yuv.range_uv);
+        }
+    }
+    (table_y, table_uv)
+}
+
+pub fn yuv_to_rgb_any(
+    image: &image::Image,
+    rgb: &mut rgb::Image,
+    alpha_multiply_mode: AlphaMultiplyMode,
+) -> AvifResult<()> {
+    let state = State {
+        rgb: RgbColorSpaceInfo::create_from(rgb)?,
+        yuv: YuvColorSpaceInfo::create_from(image)?,
+    };
+    let kr = state.yuv.kr;
+    let kg = state.yuv.kg;
+    let kb = state.yuv.kb;
+    let (table_y, table_uv) = unorm_lookup_tables(image.depth, &state);
+    let yuv_channel_bytes = state.yuv.channel_bytes;
+    let rgb_pixel_bytes = state.rgb.pixel_bytes;
+    let r_offset = rgb.format.r_offset();
+    let g_offset = rgb.format.g_offset();
+    let b_offset = rgb.format.b_offset();
+    let rgb_channel_count = rgb.channel_count() as usize;
+    let chroma_upsampling = rgb.chroma_upsampling;
+    let has_color = image.has_plane(Plane::U)
+        && image.has_plane(Plane::V)
+        && image.yuv_format != PixelFormat::Monochrome;
+    let yuv_max_channel = state.yuv.max_channel;
+    let rgb_max_channel_f = state.rgb.max_channel_f;
+    if image.depth > 8 && rgb.depth > 8 {
+        for j in 0..image.height as usize {
+            let uv_j = j >> image.yuv_format.chroma_shift_y();
+            let y_row = image.row16(Plane::Y, j as u32)?;
+            let u_row = image.row16(Plane::U, uv_j as u32);
+            let v_row = image.row16(Plane::V, uv_j as u32);
+            let rgb_row = rgb.row16_mut(j as u32)?;
+            for i in 0..image.width as usize {
+                let Y = table_y[min(yuv_max_channel, y_row[i]) as usize];
+                let mut Cb = 0.5;
+                let mut Cr = 0.5;
+                if has_color {
+                    let u_row = u_row.as_ref().unwrap();
+                    let v_row = v_row.as_ref().unwrap();
+                    let uv_i = i >> image.yuv_format.chroma_shift_x();
+                    if image.yuv_format == PixelFormat::Yuv444 {
+                        Cb = table_uv[min(yuv_max_channel, u_row[uv_i]) as usize];
+                        Cr = table_uv[min(yuv_max_channel, v_row[uv_i]) as usize];
+                    } else {
+                        // TODO: all computation is needed only for bilinear. This code can be
+                        // refactored.
+                        let image_width_minus_1 = (image.width - 1) as usize;
+                        let uv_adj_col: i32 =
+                            if i == 0 || (i == image_width_minus_1 && (i % 2) != 0) {
+                                0
+                            } else {
+                                if (i % 2) != 0 {
+                                    1
+                                } else {
+                                    -1
+                                }
+                            };
+                        let u_adj_row;
+                        let v_adj_row;
+                        let image_height_minus_1 = (image.height - 1) as usize;
+                        if j == 0
+                            || (j != image_height_minus_1 && (j % 2) != 0)
+                            || image.yuv_format == PixelFormat::Yuv422
+                        {
+                            u_adj_row = *u_row;
+                            v_adj_row = *v_row;
+                        } else {
+                            if (j % 2) != 0 {
+                                u_adj_row = image.row16(Plane::U, (uv_j + 1) as u32)?;
+                                v_adj_row = image.row16(Plane::V, (uv_j + 1) as u32)?;
+                            } else {
+                                u_adj_row = image.row16(Plane::U, (uv_j - 1) as u32)?;
+                                v_adj_row = image.row16(Plane::V, (uv_j - 1) as u32)?;
+                            }
+                        }
+                        let mut unorm_u: [[u16; 2]; 2] = [[0; 2]; 2];
+                        let mut unorm_v: [[u16; 2]; 2] = [[0; 2]; 2];
+                        unorm_u[0][0] = u_row[uv_i];
+                        unorm_v[0][0] = v_row[uv_i];
+                        unorm_u[1][0] = u_row[((uv_i as i32) + uv_adj_col) as usize];
+                        unorm_v[1][0] = v_row[((uv_i as i32) + uv_adj_col) as usize];
+                        unorm_u[0][1] = u_adj_row[uv_i];
+                        unorm_v[0][1] = v_adj_row[uv_i];
+                        unorm_u[1][1] = u_adj_row[((uv_i as i32) + uv_adj_col) as usize];
+                        unorm_v[1][1] = v_adj_row[((uv_i as i32) + uv_adj_col) as usize];
+                        for yy in 0..2 {
+                            for xx in 0..2 {
+                                unorm_u[yy][xx] = min(yuv_max_channel, unorm_u[yy][xx]);
+                                unorm_v[yy][xx] = min(yuv_max_channel, unorm_v[yy][xx]);
+                            }
+                        }
+                        match chroma_upsampling {
+                            ChromaUpsampling::Fastest | ChromaUpsampling::Nearest => {
+                                Cb = table_uv[unorm_u[0][0] as usize];
+                                Cr = table_uv[unorm_v[0][0] as usize];
+                            }
+                            _ => {
+                                // Bilinear filtering with weights.
+                                Cb = (table_uv[unorm_u[0][0] as usize] * (9.0 / 16.0))
+                                    + (table_uv[unorm_u[1][0] as usize] * (3.0 / 16.0))
+                                    + (table_uv[unorm_u[0][1] as usize] * (3.0 / 16.0))
+                                    + (table_uv[unorm_u[1][1] as usize] * (1.0 / 16.0));
+                                Cr = (table_uv[unorm_v[0][0] as usize] * (9.0 / 16.0))
+                                    + (table_uv[unorm_v[1][0] as usize] * (3.0 / 16.0))
+                                    + (table_uv[unorm_v[0][1] as usize] * (3.0 / 16.0))
+                                    + (table_uv[unorm_v[1][1] as usize] * (1.0 / 16.0));
+                            }
+                        }
+                    }
+                }
+                let R: f32;
+                let G: f32;
+                let B: f32;
+                if has_color {
+                    match state.yuv.mode {
+                        Mode::Identity => {
+                            G = Y;
+                            B = Cb;
+                            R = Cr;
+                        }
+                        Mode::Ycgco => {
+                            let t = Y - Cb;
+                            G = Y + Cb;
+                            B = t - Cr;
+                            R = t + Cr;
+                        }
+                        // TODO: This can be a containing enum which contains kr, kg and kb.
+                        Mode::YuvCoefficients => {
+                            R = Y + (2.0 * (1.0 - kr)) * Cr;
+                            B = Y + (2.0 * (1.0 - kb)) * Cb;
+                            G = Y
+                                - ((2.0 * ((kr * (1.0 - kr) * Cr) + (kb * (1.0 - kb) * Cb))) / kg);
+                        }
+                    }
+                } else {
+                    R = Y;
+                    G = Y;
+                    B = Y;
+                }
+                let Rc = clamp_f32(R, 0.0, 1.0);
+                let Gc = clamp_f32(G, 0.0, 1.0);
+                let Bc = clamp_f32(B, 0.0, 1.0);
+
+                // TODO: handle alpha multiply mode.
+
+                rgb_row[(i * rgb_channel_count) + r_offset] =
+                    (0.5 + (Rc * rgb_max_channel_f)) as u16;
+                rgb_row[(i * rgb_channel_count) + g_offset] =
+                    (0.5 + (Gc * rgb_max_channel_f)) as u16;
+                rgb_row[(i * rgb_channel_count) + b_offset] =
+                    (0.5 + (Bc * rgb_max_channel_f)) as u16;
+            }
+        }
+        return Ok(());
+    }
+    unimplemented!("in any alpha mode: {:#?}!", alpha_multiply_mode);
 }
