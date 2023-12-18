@@ -1,16 +1,10 @@
-use super::rgb;
-use super::rgb::*;
-
-use crate::image;
-use crate::image::Plane;
-use crate::internal_utils::*;
 use crate::*;
 
 use ahash::AHashMap;
 
 impl ColorPrimaries {
     pub fn y_coeffs(&self) -> [f32; 3] {
-        todo!();
+        // TODO: implement.
         [0.0, 0.0, 0.0]
     }
 }

@@ -1,3 +1,5 @@
+#![allow(non_snake_case)] // TODO: remove
+
 use super::coeffs::*;
 use super::rgb;
 use super::rgb::*;
@@ -223,8 +225,6 @@ pub fn yuv_to_rgb_any(
         yuv: YuvColorSpaceInfo::create_from(image)?,
     };
     let (table_y, table_uv) = unorm_lookup_tables(image.depth, &state);
-    let yuv_channel_bytes = state.yuv.channel_bytes;
-    let rgb_pixel_bytes = state.rgb.pixel_bytes;
     let r_offset = rgb.format.r_offset();
     let g_offset = rgb.format.g_offset();
     let b_offset = rgb.format.b_offset();
