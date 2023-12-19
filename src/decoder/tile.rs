@@ -13,25 +13,28 @@ pub struct DecodeSample {
 }
 
 impl DecodeSample {
+    pub fn partial_data<'a>(
+        &'a self,
+        io: &'a mut Box<impl decoder::IO + ?Sized>,
+        buffer: &'a Option<Vec<u8>>,
+        size: usize,
+    ) -> AvifResult<&[u8]> {
+        match buffer {
+            Some(x) => {
+                let start_offset = usize_from_u64(self.offset)?;
+                let end_offset = start_offset + size;
+                Ok(&x[start_offset..end_offset])
+            }
+            None => io.read(self.offset, size),
+        }
+    }
+
     pub fn data<'a>(
         &'a self,
         io: &'a mut Box<impl decoder::IO + ?Sized>,
         buffer: &'a Option<Vec<u8>>,
     ) -> AvifResult<&[u8]> {
-        match buffer {
-            Some(x) => {
-                let start_offset = usize_from_u64(self.offset)?;
-                let end_offset = start_offset + self.size;
-                Ok(&x[start_offset..end_offset])
-            }
-            None => {
-                println!(
-                    "reading sample from offset: {} size: {}",
-                    self.offset, self.size
-                );
-                io.read(self.offset, self.size)
-            }
-        }
+        self.partial_data(io, buffer, self.size)
     }
 }
 

@@ -505,8 +505,8 @@ impl Decoder {
         if self.tiles[0].is_empty() {
             return Ok(());
         }
-        // TODO: do this incrementally instead of preparing whole sample. Start with 64 and go up to
-        // 4096 incrementally.
+        // TODO: This will read the entire first sample if there are multiple extents. Might want
+        // to fix that.
         self.prepare_sample(0, 0, 0)?;
         let io = &mut self.io.as_mut().unwrap();
         let sample = &self.tiles[0][0].input.samples[0];
@@ -515,16 +515,25 @@ impl Decoder {
         } else {
             &self.items.get(&sample.item_id).unwrap().data_buffer
         };
-        match Av1SequenceHeader::parse_from_obus(sample.data(io, item_data_buffer)?) {
-            Ok(sequence_header) => {
-                self.image.color_primaries = sequence_header.color_primaries;
-                self.image.transfer_characteristics = sequence_header.transfer_characteristics;
-                self.image.matrix_coefficients = sequence_header.matrix_coefficients;
-                self.image.full_range = sequence_header.full_range;
+        let mut search_size = 64;
+        while search_size < 4096 {
+            match Av1SequenceHeader::parse_from_obus(sample.partial_data(
+                io,
+                item_data_buffer,
+                search_size,
+            )?) {
+                Ok(sequence_header) => {
+                    self.image.color_primaries = sequence_header.color_primaries;
+                    self.image.transfer_characteristics = sequence_header.transfer_characteristics;
+                    self.image.matrix_coefficients = sequence_header.matrix_coefficients;
+                    self.image.full_range = sequence_header.full_range;
+                    break;
+                }
+                Err(_) => {
+                    println!("errored :(");
+                }
             }
-            Err(_) => {
-                println!("errored :(");
-            }
+            search_size += 64;
         }
         Ok(())
     }
