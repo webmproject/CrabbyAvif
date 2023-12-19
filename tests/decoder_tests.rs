@@ -118,6 +118,8 @@ fn color_grid_alpha_no_grid() {
 #[test_case::test_case("progressive_layered_grid.avif", 2, 512, 256; "progressive_layered_grid")]
 #[test_case::test_case("progressive_quality_change.avif", 2, 256, 256; "progressive_quality_change")]
 #[test_case::test_case("progressive_same_layers.avif", 4, 256, 256; "progressive_same_layers")]
+#[test_case::test_case("tiger_3layer_1res.avif", 3, 1216, 832; "tiger_3layer_1res")]
+#[test_case::test_case("tiger_3layer_3res.avif", 3, 1216, 832; "tiger_3layer_3res")]
 fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     let mut filename_with_prefix = String::from("progressive/");
     filename_with_prefix.push_str(filename);
