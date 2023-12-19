@@ -24,7 +24,13 @@ impl DecodeSample {
                 let end_offset = start_offset + self.size;
                 Ok(&x[start_offset..end_offset])
             }
-            None => io.read(self.offset, self.size),
+            None => {
+                println!(
+                    "reading sample from offset: {} size: {}",
+                    self.offset, self.size
+                );
+                io.read(self.offset, self.size)
+            }
         }
     }
 }
@@ -141,6 +147,7 @@ impl Tile {
         // Progressive images offer layers via the a1lxProp, but don't specify a layer selection with
         // lsel.
         item.progressive = has_a1lx && (!has_lsel || lsel == 0xFFFF);
+        let base_item_offset = if item.extents.len() == 1 { item.extents[0].offset } else { 0 };
         if has_lsel && lsel != 0xFFFF {
             // Layer selection. This requires that the underlying AV1 codec decodes all layers, and
             // then only returns the requested layer as a single frame. To the user of libavif,
@@ -170,7 +177,7 @@ impl Tile {
             }
             let sample = DecodeSample {
                 item_id: item.id,
-                offset: 0,
+                offset: base_item_offset,
                 size: sample_size,
                 spatial_id: lsel as u8,
                 sync: true,
@@ -188,7 +195,7 @@ impl Tile {
             for (i, layer_size) in layer_sizes.iter().take(layer_count).enumerate() {
                 let sample = DecodeSample {
                     item_id: item.id,
-                    offset,
+                    offset: base_item_offset + offset,
                     size: *layer_size,
                     spatial_id: 0xff,
                     sync: i == 0, // Assume all layers depend on the first layer.
@@ -200,7 +207,7 @@ impl Tile {
             // Typical case: Use the entire item's payload for a single frame output
             let sample = DecodeSample {
                 item_id: item.id,
-                offset: if item.extents.len() == 1 { item.extents[0].offset } else { 0 },
+                offset: base_item_offset,
                 size: item.size,
                 // Legal spatial_id values are [0,1,2,3], so this serves as a sentinel value for
                 // "do not filter by spatial_id"

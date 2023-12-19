@@ -18,11 +18,13 @@ TEST(AvifDecodeTest, Progressive) {
     uint32_t height;
     uint32_t layer_count;
   };
-  Params params[4] = {
+  Params params[] = {
     {"progressive/progressive_dimension_change.avif", 256, 256, 2},
     {"progressive/progressive_layered_grid.avif", 512, 256, 2},
     {"progressive/progressive_quality_change.avif", 256, 256, 2},
     {"progressive/progressive_same_layers.avif", 256, 256, 4},
+    {"progressive/tiger_3layer_1res.avif", 1216, 832, 3},
+    {"progressive/tiger_3layer_3res.avif", 1216, 832, 3},
   };
   for (const auto& param : params) {
     DecoderPtr decoder(avifDecoderCreate());
