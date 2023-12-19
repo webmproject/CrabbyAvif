@@ -215,6 +215,21 @@ fn compute_rgb(Y: f32, Cb: f32, Cr: f32, has_color: bool, mode: Mode) -> (f32, f
     )
 }
 
+fn clamped_pixel(
+    depth: u8,
+    // Technically, these two are options since one of them will always be Ok.
+    row: &AvifResult<&[u8]>,
+    row16: &AvifResult<&[u16]>,
+    index: usize,
+    max_channel: u16,
+) -> u16 {
+    if depth == 8 {
+        row.unwrap()[index] as u16
+    } else {
+        min(max_channel, row16.unwrap()[index])
+    }
+}
+
 fn unorm_value(
     depth: u8,
     // Technically, these two are options since one of them will always be Ok.
@@ -224,18 +239,13 @@ fn unorm_value(
     max_channel: u16,
     table: &Vec<f32>,
 ) -> f32 {
-    let clamped_pixel = if depth == 8 {
-        row.unwrap()[index] as u16
-    } else {
-        min(max_channel, row16.unwrap()[index])
-    };
-    table[clamped_pixel as usize]
+    table[clamped_pixel(depth, row, row16, index, max_channel) as usize]
 }
 
 pub fn yuv_to_rgb_any(
     image: &image::Image,
     rgb: &mut rgb::Image,
-    _alpha_multiply_mode: AlphaMultiplyMode,
+    alpha_multiply_mode: AlphaMultiplyMode,
 ) -> AvifResult<()> {
     let state = State {
         rgb: RgbColorSpaceInfo::create_from(rgb)?,
@@ -258,9 +268,11 @@ pub fn yuv_to_rgb_any(
         let y_row = image.row(Plane::Y, j as u32);
         let u_row = image.row(Plane::U, uv_j as u32);
         let v_row = image.row(Plane::V, uv_j as u32);
+        let a_row = image.row(Plane::A, uv_j as u32);
         let y_row16 = image.row16(Plane::Y, j as u32);
         let u_row16 = image.row16(Plane::U, uv_j as u32);
         let v_row16 = image.row16(Plane::V, uv_j as u32);
+        let a_row16 = image.row16(Plane::A, j as u32);
         let (mut rgb_row, mut rgb_row16) = rgb.rows_mut(j as u32)?;
         for i in 0..image.width as usize {
             let Y = unorm_value(image.depth, &y_row, &y_row16, i, yuv_max_channel, &table_y);
@@ -404,8 +416,30 @@ pub fn yuv_to_rgb_any(
                         + (unorm_v[1][1] * (1.0 / 16.0));
                 }
             }
-            let (Rc, Gc, Bc) = compute_rgb(Y, Cb, Cr, has_color, state.yuv.mode);
-            // TODO: handle alpha multiply mode.
+            let (mut Rc, mut Gc, mut Bc) = compute_rgb(Y, Cb, Cr, has_color, state.yuv.mode);
+            if alpha_multiply_mode != AlphaMultiplyMode::NoOp {
+                let unorm_a = clamped_pixel(image.depth, &a_row, &a_row16, i, yuv_max_channel);
+                let Ac = clamp_f32((unorm_a as f32) / (yuv_max_channel as f32), 0.0, 1.0);
+                if Ac == 0.0 {
+                    Rc = 0.0;
+                    Gc = 0.0;
+                    Bc = 0.0;
+                } else if Ac < 1.0 {
+                    match alpha_multiply_mode {
+                        AlphaMultiplyMode::Multiply => {
+                            Rc *= Ac;
+                            Gc *= Ac;
+                            Bc *= Ac;
+                        }
+                        AlphaMultiplyMode::UnMultiply => {
+                            Rc = f32::min(Rc / Ac, 1.0);
+                            Gc = f32::min(Gc / Ac, 1.0);
+                            Bc = f32::min(Bc / Ac, 1.0);
+                        }
+                        _ => {} // Not reached.
+                    }
+                }
+            }
             if rgb_depth == 8 {
                 let dst = rgb_row.as_mut().unwrap();
                 dst[(i * rgb_channel_count) + r_offset] = (0.5 + (Rc * rgb_max_channel_f)) as u8;
