@@ -249,7 +249,9 @@ impl Image {
                 // TODO: need to memset to 0 maybe?
                 continue;
             }
-            if self.planes2[plane_index].is_none() {
+            if self.planes2[plane_index].is_none()
+                || self.planes2[plane_index].as_ref().unwrap().is_pointer()
+            {
                 self.planes2[plane_index] = Some(if self.depth == 8 {
                     Pixels::Buffer(Vec::new())
                 } else {

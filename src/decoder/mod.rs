@@ -1108,9 +1108,9 @@ impl Decoder {
                 }
 
                 // TODO: convert alpha from limited range to full range.
-                // TODO: scale tile to match output dimension.
 
                 if is_grid {
+                    tile.image.scale(tile.width, tile.height)?;
                     // TODO: make sure all tiles decoded properties match. Need to figure out a way
                     // to do it with proper borrows.
                     if category == 2 {
@@ -1149,6 +1149,8 @@ impl Decoder {
                     } else {
                         self.gainmap.image.steal_from(&tile.image, category);
                     }
+                    // TODO: This likely may not work with android mediacodec since it does not use pointer.
+                    self.image.scale(tile.width, tile.height)?;
                 }
             }
         }

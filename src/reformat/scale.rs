@@ -50,6 +50,7 @@ impl Image {
             row_bytes: self.row_bytes,
             ..image::Image::default()
         };
+
         self.width = width;
         self.height = height;
         if src.has_plane(Plane::Y) || src.has_plane(Plane::A) {
@@ -69,30 +70,32 @@ impl Image {
             }
             let src_pd = src.plane(plane).unwrap();
             let pd = self.plane_mut(plane).unwrap();
-            let ret = if self.depth > 8 {
-                ScalePlane_12(
-                    src_pd.data16.unwrap().as_ptr(),
-                    i32_from_u32(src_pd.row_bytes / 2)?,
-                    i32_from_u32(src_pd.width)?,
-                    i32_from_u32(src_pd.height)?,
-                    pd.data16.unwrap().as_mut_ptr(),
-                    i32_from_u32(pd.row_bytes / 2)?,
-                    i32_from_u32(pd.width)?,
-                    i32_from_u32(pd.height)?,
-                    FilterMode_kFilterBox,
-                )
-            } else {
-                ScalePlane(
-                    src_pd.data.unwrap().as_ptr(),
-                    i32_from_u32(src_pd.row_bytes)?,
-                    i32_from_u32(src_pd.width)?,
-                    i32_from_u32(src_pd.height)?,
-                    pd.data.unwrap().as_mut_ptr(),
-                    i32_from_u32(pd.row_bytes)?,
-                    i32_from_u32(pd.width)?,
-                    i32_from_u32(pd.height)?,
-                    FilterMode_kFilterBox,
-                )
+            let ret = unsafe {
+                if src.depth > 8 {
+                    ScalePlane_12(
+                        src_pd.data16.unwrap().as_ptr(),
+                        i32_from_u32(src_pd.row_bytes / 2)?,
+                        i32_from_u32(src_pd.width)?,
+                        i32_from_u32(src_pd.height)?,
+                        pd.data16.unwrap().as_mut_ptr(),
+                        i32_from_u32(pd.row_bytes / 2)?,
+                        i32_from_u32(pd.width)?,
+                        i32_from_u32(pd.height)?,
+                        FilterMode_kFilterBox,
+                    )
+                } else {
+                    ScalePlane(
+                        src_pd.data.unwrap().as_ptr(),
+                        i32_from_u32(src_pd.row_bytes)?,
+                        i32_from_u32(src_pd.width)?,
+                        i32_from_u32(src_pd.height)?,
+                        pd.data.unwrap().as_mut_ptr(),
+                        i32_from_u32(pd.row_bytes)?,
+                        i32_from_u32(pd.width)?,
+                        i32_from_u32(pd.height)?,
+                        FilterMode_kFilterBox,
+                    )
+                }
             };
             if ret != 0 {
                 return Err(if ret == 1 {
