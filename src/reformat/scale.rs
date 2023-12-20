@@ -70,7 +70,9 @@ impl Image {
             }
             let src_pd = src.plane(plane).unwrap();
             let pd = self.plane_mut(plane).unwrap();
-            let ret = unsafe {
+            // libyuv versions >= 1880 reports a return value here. Older versions do not. Ignore
+            // the return value for now.
+            let _ret = unsafe {
                 if src.depth > 8 {
                     ScalePlane_12(
                         src_pd.data16.unwrap().as_ptr(),
@@ -97,13 +99,6 @@ impl Image {
                     )
                 }
             };
-            if ret != 0 {
-                return Err(if ret == 1 {
-                    AvifError::OutOfMemory
-                } else {
-                    AvifError::UnknownError
-                });
-            }
         }
         Ok(())
     }
