@@ -61,7 +61,7 @@ pub struct TileInfo {
 }
 
 impl TileInfo {
-    pub fn decoded_row_count(&self, image: &Image, tile_height: u32) -> u32 {
+    pub fn decoded_row_count(&self, image_height: u32, tile_height: u32) -> u32 {
         if self.decoded_tile_count == 0 {
             return 0;
         }
@@ -69,11 +69,11 @@ impl TileInfo {
         if self.decoded_tile_count == self.tile_count
             || (self.grid.rows == 0 && self.grid.columns == 0)
         {
-            return image.height;
+            return image_height;
         }
         std::cmp::min(
             (self.decoded_tile_count / self.grid.columns) * tile_height,
-            image.height,
+            image_height,
         )
     }
 

@@ -1251,7 +1251,7 @@ impl Decoder {
             }
             let first_tile_height = self.tiles[category][0].height;
             let row_count =
-                self.tile_info[category].decoded_row_count(&self.image, first_tile_height);
+                self.tile_info[category].decoded_row_count(self.image.height, first_tile_height);
             min_row_count = std::cmp::min(min_row_count, row_count);
         }
         min_row_count

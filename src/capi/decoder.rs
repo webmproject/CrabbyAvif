@@ -230,9 +230,25 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
 pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avifResult {
     unsafe {
         let rust_decoder = &mut (*decoder).rust_decoder;
+        rust_decoder.settings = (&(*decoder)).into();
+
+        let previous_decoded_row_count = rust_decoder.decoded_row_count();
 
         let res = rust_decoder.next_image();
-        if res.is_err() && res.err().unwrap() != AvifError::WaitingOnIo {
+        let mut early_return = false;
+        if res.is_err() {
+            early_return = true;
+            if rust_decoder.settings.allow_incremental
+                && res.err().unwrap() == AvifError::WaitingOnIo
+            {
+                if previous_decoded_row_count != rust_decoder.decoded_row_count() {
+                    early_return = false;
+                } else {
+                    early_return = true;
+                }
+            }
+        }
+        if early_return {
             return to_avifResult(&res);
         }
         rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
@@ -247,9 +263,28 @@ pub unsafe extern "C" fn avifDecoderNthImage(
 ) -> avifResult {
     unsafe {
         let rust_decoder = &mut (*decoder).rust_decoder;
+        rust_decoder.settings = (&(*decoder)).into();
+
+        let previous_decoded_row_count = rust_decoder.decoded_row_count();
+        let image_index = (rust_decoder.image_index + 1) as u32;
 
         let res = rust_decoder.nth_image(frameIndex);
-        if res.is_err() && res.err().unwrap() != AvifError::WaitingOnIo {
+        let mut early_return = false;
+        if res.is_err() {
+            early_return = true;
+            if rust_decoder.settings.allow_incremental
+                && res.err().unwrap() == AvifError::WaitingOnIo
+            {
+                if image_index != frameIndex {
+                    early_return = false;
+                } else if previous_decoded_row_count != rust_decoder.decoded_row_count() {
+                    early_return = false;
+                } else {
+                    early_return = true;
+                }
+            }
+        }
+        if early_return {
             return to_avifResult(&res);
         }
         rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
