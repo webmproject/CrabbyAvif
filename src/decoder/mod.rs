@@ -1249,7 +1249,6 @@ impl Decoder {
             }
             if category == 2 {
                 // TODO: handle gainmap.
-                panic!("gainmap not supported in decoded_row_count");
             }
             let first_tile_height = self.tiles[category][0].height;
             let row_count =

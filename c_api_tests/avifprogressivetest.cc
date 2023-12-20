@@ -40,9 +40,8 @@ TEST(AvifDecodeTest, Progressive) {
     for (uint32_t layer = 0; layer < param.layer_count; ++layer) {
       ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
       // libavif scales frame automatically.
-      // TODO: These needs to be enabled once scale is implemented.
-      // ASSERT_EQ(decoder->image->width, expect_width);
-      // ASSERT_EQ(decoder->image->height, expect_height);
+      ASSERT_EQ(decoder->image->width, param.width);
+      ASSERT_EQ(decoder->image->height, param.height);
     }
   }
 }

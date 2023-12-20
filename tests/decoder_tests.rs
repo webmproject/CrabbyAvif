@@ -148,10 +148,9 @@ fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     for _i in 0..decoder.image_count {
         let res = decoder.next_image();
         assert!(res.is_ok());
-        // let _image = decoder.image();
-        // TODO: Check width and height after scaling is implemented.
-        // assert_eq!(image.image.width, width);
-        // assert_eq!(image.image.height, height);
+        let image = decoder.image();
+        assert_eq!(image.width, width);
+        assert_eq!(image.height, height);
     }
 }
 
