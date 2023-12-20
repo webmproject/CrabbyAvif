@@ -237,7 +237,7 @@ fn unorm_value(
     row16: &AvifResult<&[u16]>,
     index: usize,
     max_channel: u16,
-    table: &Vec<f32>,
+    table: &[f32],
 ) -> f32 {
     table[clamped_pixel(depth, row, row16, index, max_channel) as usize]
 }
@@ -307,12 +307,10 @@ pub fn yuv_to_rgb_any(
                     let image_width_minus_1 = (image.width - 1) as usize;
                     let uv_adj_col: i32 = if i == 0 || (i == image_width_minus_1 && (i % 2) != 0) {
                         0
+                    } else if (i % 2) != 0 {
+                        1
                     } else {
-                        if (i % 2) != 0 {
-                            1
-                        } else {
-                            -1
-                        }
+                        -1
                     };
                     let u_adj_row;
                     let u_adj_row16;
@@ -327,18 +325,16 @@ pub fn yuv_to_rgb_any(
                         u_adj_row16 = u_row16;
                         v_adj_row = v_row;
                         v_adj_row16 = v_row16;
+                    } else if (j % 2) != 0 {
+                        u_adj_row = image.row(Plane::U, (uv_j + 1) as u32);
+                        v_adj_row = image.row(Plane::V, (uv_j + 1) as u32);
+                        u_adj_row16 = image.row16(Plane::U, (uv_j + 1) as u32);
+                        v_adj_row16 = image.row16(Plane::V, (uv_j + 1) as u32);
                     } else {
-                        if (j % 2) != 0 {
-                            u_adj_row = image.row(Plane::U, (uv_j + 1) as u32);
-                            v_adj_row = image.row(Plane::V, (uv_j + 1) as u32);
-                            u_adj_row16 = image.row16(Plane::U, (uv_j + 1) as u32);
-                            v_adj_row16 = image.row16(Plane::V, (uv_j + 1) as u32);
-                        } else {
-                            u_adj_row = image.row(Plane::U, (uv_j - 1) as u32);
-                            v_adj_row = image.row(Plane::V, (uv_j - 1) as u32);
-                            u_adj_row16 = image.row16(Plane::U, (uv_j - 1) as u32);
-                            v_adj_row16 = image.row16(Plane::V, (uv_j - 1) as u32);
-                        }
+                        u_adj_row = image.row(Plane::U, (uv_j - 1) as u32);
+                        v_adj_row = image.row(Plane::V, (uv_j - 1) as u32);
+                        u_adj_row16 = image.row16(Plane::U, (uv_j - 1) as u32);
+                        v_adj_row16 = image.row16(Plane::V, (uv_j - 1) as u32);
                     }
                     let mut unorm_u: [[f32; 2]; 2] = [[0.0; 2]; 2];
                     let mut unorm_v: [[f32; 2]; 2] = [[0.0; 2]; 2];

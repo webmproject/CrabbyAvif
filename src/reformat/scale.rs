@@ -72,6 +72,7 @@ impl Image {
             let pd = self.plane_mut(plane).unwrap();
             // libyuv versions >= 1880 reports a return value here. Older versions do not. Ignore
             // the return value for now.
+            #[allow(clippy::let_unit_value)]
             let _ret = unsafe {
                 if src.depth > 8 {
                     ScalePlane_12(

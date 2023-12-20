@@ -238,7 +238,7 @@ impl Image {
         }
         // This constant comes from libyuv. For details, see here:
         // https://chromium.googlesource.com/libyuv/libyuv/+/2f87e9a7/source/row_common.cc#3537
-        let multiplier = 1.9259299444e-34 * scale;
+        let multiplier = 1.925_93e-34 * scale;
         for y in 0..self.height {
             let row = self.row16_mut(y)?;
             for pixel in row {
