@@ -1139,11 +1139,13 @@ impl Decoder {
 
                     if category == 0 || category == 1 {
                         self.image.steal_from(&tile.image, category);
+                        // TODO: This likely may not work with android mediacodec since it does not
+                        // use pointer.
+                        self.image.scale(tile.width, tile.height)?;
                     } else {
                         self.gainmap.image.steal_from(&tile.image, category);
+                        self.gainmap.image.scale(tile.width, tile.height)?;
                     }
-                    // TODO: This likely may not work with android mediacodec since it does not use pointer.
-                    self.image.scale(tile.width, tile.height)?;
                 }
             }
         }
