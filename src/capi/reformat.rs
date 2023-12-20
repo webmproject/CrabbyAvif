@@ -114,6 +114,11 @@ pub unsafe extern "C" fn avifImageYUVToRGB(
     image: *const avifImage,
     rgb: *mut avifRGBImage,
 ) -> avifResult {
+    unsafe {
+        if (*image).yuvPlanes[0].is_null() {
+            return avifResult::Ok;
+        }
+    }
     let mut rgb: rgb::Image = rgb.into();
     let image: image::Image = image.into();
     to_avifResult(&rgb.convert_from_yuv(&image))

@@ -194,6 +194,7 @@ fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
 
     dst.imageTiming = src.image_timing;
     dst.imageCount = src.image_count as i32;
+    dst.imageIndex = src.image_index as i32;
     dst.repetitionCount = match src.repetition_count {
         RepetitionCount::Unknown => AVIF_REPETITION_COUNT_UNKNOWN,
         RepetitionCount::Infinite => AVIF_REPETITION_COUNT_INFINITE,

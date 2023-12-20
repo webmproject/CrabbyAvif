@@ -100,7 +100,6 @@ impl Item {
             println!("grid dimensions too large");
             return Err(AvifError::InvalidImageGrid);
         }
-        println!("grid: {:#?}", grid);
         Ok(())
     }
 

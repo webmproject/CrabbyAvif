@@ -230,6 +230,7 @@ enum ParseState {
 pub struct Decoder {
     pub settings: Settings,
     pub image_count: u32,
+    pub image_index: i32,
     pub image_timing: ImageTiming,
     pub timescale: u64,
     pub duration_in_timescales: u64,
@@ -241,7 +242,6 @@ pub struct Decoder {
     source: Source,
     tile_info: [TileInfo; 3],
     tiles: [Vec<Tile>; 3],
-    image_index: i32,
     items: Items,
     tracks: Vec<Track>,
     // To replicate the C-API, we need to keep this optional. Otherwise this
@@ -298,7 +298,7 @@ impl Decoder {
                 Some(item) => alpha_item_indices.push(*item.0),
                 None => {
                     // TODO: This case must be an error.
-                    println!("alpha aux item was not found for color tile.");
+                    //println!("alpha aux item was not found for color tile.");
                     return (0, None);
                 }
             }
@@ -327,7 +327,6 @@ impl Decoder {
     fn find_tone_mapped_image_item(&self, color_item_id: u32) -> AvifResult<(u32, u32)> {
         let tmap_items: Vec<_> = self.items.values().filter(|x| x.is_tmap()).collect();
         for item in tmap_items {
-            println!("found a tonemapped item: {:#?}", item.id);
             let dimg_items: Vec<_> = self
                 .items
                 .values()
@@ -352,7 +351,6 @@ impl Decoder {
         if tonemap_id == 0 || gainmap_id == 0 {
             return Ok((0, 0));
         }
-        println!("tonemap_id: {tonemap_id} gainmap_id: {gainmap_id}");
         let gainmap_item = self
             .items
             .get(&gainmap_id)
@@ -457,7 +455,6 @@ impl Decoder {
                 println!("multiple dimg items were found but image is not grid.");
                 return Err(AvifError::InvalidImageGrid);
             }
-            println!("grid###: {:#?}", grid);
             let grid_item_ids = item.grid_item_ids.clone();
             for grid_item_id in &grid_item_ids {
                 let grid_item = self
@@ -578,10 +575,6 @@ impl Decoder {
             }
             grid_item_ids.push(item_info.item_id);
         }
-        println!(
-            "### category {category} grid item ids: {:#?}",
-            grid_item_ids
-        );
         let grid_count = self.tile_info[category].grid.rows * self.tile_info[category].grid.columns;
         if grid_item_ids.len() as u32 != grid_count {
             println!("Expected number of tiles not found");
@@ -779,7 +772,7 @@ impl Decoder {
                             println!("tonemap stream size: {}", stream.data.len());
                             self.gainmap.metadata = mp4box::parse_tmap(&mut stream)?;
                         }
-                        println!("gainmap: {:#?}", self.gainmap);
+                        //println!("gainmap: {:#?}", self.gainmap);
                     }
 
                     //println!("item ids: {:#?}", item_ids);
