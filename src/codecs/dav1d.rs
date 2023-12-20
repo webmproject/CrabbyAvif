@@ -63,7 +63,7 @@ impl Decoder for Dav1d {
         }
         let got_picture;
         let av1_payload_len = av1_payload.len();
-        println!("paylaoad len: {av1_payload_len}");
+        //println!("paylaoad len: {av1_payload_len}");
         unsafe {
             let mut data: Dav1dData = std::mem::zeroed();
             let res = dav1d_data_wrap(
@@ -73,7 +73,7 @@ impl Decoder for Dav1d {
                 Some(avif_dav1d_free_callback),
                 /*cookie=*/ std::ptr::null_mut(),
             );
-            println!("dav1d_data_wrap returned {res}");
+            //println!("dav1d_data_wrap returned {res}");
             if res != 0 {
                 return Err(AvifError::UnknownError);
             }
@@ -81,7 +81,7 @@ impl Decoder for Dav1d {
             loop {
                 if !data.data.is_null() {
                     let res = dav1d_send_data(self.context.unwrap(), &mut data);
-                    println!("dav1d_send_data returned {res}");
+                    //println!("dav1d_send_data returned {res}");
                     if res < 0 && res != dav1d_error(EAGAIN) {
                         dav1d_data_unref(&mut data);
                         return Err(AvifError::UnknownError);
@@ -89,7 +89,7 @@ impl Decoder for Dav1d {
                 }
 
                 let res = dav1d_get_picture(self.context.unwrap(), &mut next_frame);
-                println!("dav1d_get_picture returned {res}");
+                //println!("dav1d_get_picture returned {res}");
                 if res == dav1d_error(EAGAIN) {
                     // send more data.
                     if !data.data.is_null() {
@@ -186,11 +186,11 @@ impl Decoder for Dav1d {
 impl Drop for Dav1d {
     fn drop(&mut self) {
         if self.picture.is_some() {
-            println!("unreffing dav1d picture");
+            //println!("unreffing dav1d picture");
             unsafe { dav1d_picture_unref(&mut self.picture.unwrap()) };
         }
         if self.context.is_some() {
-            println!("closing dav1d");
+            //println!("closing dav1d");
             unsafe { dav1d_close(&mut self.context.unwrap()) };
         }
     }

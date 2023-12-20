@@ -269,10 +269,6 @@ impl Image {
         let mut converted_with_libyuv: bool = false;
         let reformat_alpha = self.has_alpha()
             && (!self.ignore_alpha || alpha_multiply_mode != AlphaMultiplyMode::NoOp);
-        println!(
-            "alpha_multiply_mode: {:#?} reformat_alpha: {reformat_alpha}",
-            alpha_multiply_mode
-        );
         let mut alpha_reformatted_with_libyuv = false;
         if alpha_multiply_mode == AlphaMultiplyMode::NoOp || self.has_alpha() {
             match libyuv::yuv_to_rgb(image, self, reformat_alpha) {

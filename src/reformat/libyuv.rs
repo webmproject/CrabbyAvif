@@ -380,7 +380,6 @@ pub fn yuv_to_rgb(
     let conversion_function =
         find_conversion_function(image.yuv_format, image.depth, rgb, alpha_preferred)
             .ok_or(AvifError::NotImplemented)?;
-    println!("conversion_function: {:#?}", conversion_function);
     let is_yvu = matches!(rgb.format, Format::Rgb | Format::Rgba | Format::Argb);
     let matrix = if is_yvu { matrix_yvu } else { matrix_yuv };
     let u_plane_index: usize = if is_yvu { 2 } else { 1 };

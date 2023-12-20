@@ -256,7 +256,6 @@ impl Av1SequenceHeader {
 
         while stream.has_bytes_left() {
             let obu = Self::parse_obu_header(&mut stream)?;
-            println!("obu header: {:#?}", obu);
             if obu.obu_type != 1 {
                 // Not a sequence header. Skip this obu.
                 stream.skip(usize_from_u32(obu.size)?)?;
