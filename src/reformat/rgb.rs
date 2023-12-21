@@ -310,3 +310,155 @@ impl Image {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::image::ALL_PLANES;
+    use crate::image::MAX_PLANE_COUNT;
+
+    use num_traits::cast::ToPrimitive;
+    use test_case::test_matrix;
+
+    const WIDTH: usize = 3;
+    const HEIGHT: usize = 3;
+    struct YuvParams {
+        width: u32,
+        height: u32,
+        depth: u8,
+        format: PixelFormat,
+        full_range: bool,
+        color_primaries: ColorPrimaries,
+        matrix_coefficients: MatrixCoefficients,
+        planes: [[&'static [u16]; HEIGHT]; MAX_PLANE_COUNT],
+    }
+
+    const YUV_PARAMS: [YuvParams; 1] = [YuvParams {
+        width: WIDTH as u32,
+        height: HEIGHT as u32,
+        depth: 12,
+        format: PixelFormat::Yuv420,
+        full_range: false,
+        color_primaries: ColorPrimaries::Srgb,
+        matrix_coefficients: MatrixCoefficients::Bt709,
+        planes: [
+            [
+                &[1001, 1001, 1001],
+                &[1001, 1001, 1001],
+                &[1001, 1001, 1001],
+            ],
+            [&[1637, 1637], &[1637, 1637], &[1637, 1637]],
+            [&[3840, 3840], &[3840, 3840], &[3840, 3840]],
+            [&[0, 0, 2039], &[0, 2039, 4095], &[2039, 4095, 4095]],
+        ],
+    }];
+
+    struct RgbParams {
+        params: (
+            /*yuv_param_index:*/ usize,
+            /*format:*/ Format,
+            /*depth:*/ u32,
+            /*alpha_premultiplied:*/ bool,
+            /*is_float:*/ bool,
+        ),
+        expected_rgba: [&'static [u16]; HEIGHT],
+    }
+
+    const RGB_PARAMS: [RgbParams; 5] = [
+        RgbParams {
+            params: (0, Format::Rgba, 16, true, false),
+            expected_rgba: [
+                &[0, 0, 0, 0, 0, 0, 0, 0, 32631, 1, 0, 32631],
+                &[0, 0, 0, 0, 32631, 1, 0, 32631, 65535, 2, 0, 65535],
+                &[32631, 1, 0, 32631, 65535, 2, 0, 65535, 65535, 2, 0, 65535],
+            ],
+        },
+        RgbParams {
+            params: (0, Format::Rgba, 16, true, true),
+            expected_rgba: [
+                &[0, 0, 0, 0, 0, 0, 0, 0, 14327, 256, 0, 14327],
+                &[0, 0, 0, 0, 14327, 256, 0, 14327, 15360, 512, 0, 15360],
+                &[
+                    14327, 256, 0, 14327, 15360, 512, 0, 15360, 15360, 512, 0, 15360,
+                ],
+            ],
+        },
+        RgbParams {
+            params: (0, Format::Rgba, 16, false, true),
+            expected_rgba: [
+                &[15360, 512, 0, 0, 15360, 512, 0, 0, 15360, 512, 0, 14327],
+                &[15360, 512, 0, 0, 15360, 512, 0, 14327, 15360, 512, 0, 15360],
+                &[
+                    15360, 512, 0, 14327, 15360, 512, 0, 15360, 15360, 512, 0, 15360,
+                ],
+            ],
+        },
+        RgbParams {
+            params: (0, Format::Rgba, 16, false, false),
+            expected_rgba: [
+                &[65535, 2, 0, 0, 65535, 2, 0, 0, 65535, 2, 0, 32631],
+                &[65535, 2, 0, 0, 65535, 2, 0, 32631, 65535, 2, 0, 65535],
+                &[65535, 2, 0, 32631, 65535, 2, 0, 65535, 65535, 2, 0, 65535],
+            ],
+        },
+        RgbParams {
+            params: (0, Format::Bgra, 16, true, false),
+            expected_rgba: [
+                &[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 32631, 32631],
+                &[0, 0, 0, 0, 0, 1, 32631, 32631, 0, 2, 65535, 65535],
+                &[0, 1, 32631, 32631, 0, 2, 65535, 65535, 0, 2, 65535, 65535],
+            ],
+        },
+    ];
+
+    #[test_matrix(0usize..5)]
+    fn rgb_conversion(rgb_param_index: usize) -> AvifResult<()> {
+        let rgb_params = &RGB_PARAMS[rgb_param_index];
+        let yuv_params = &YUV_PARAMS[rgb_params.params.0];
+        let mut image = image::Image {
+            width: yuv_params.width,
+            height: yuv_params.height,
+            depth: yuv_params.depth,
+            yuv_format: yuv_params.format,
+            color_primaries: yuv_params.color_primaries,
+            matrix_coefficients: yuv_params.matrix_coefficients,
+            full_range: yuv_params.full_range,
+            ..image::Image::default()
+        };
+        image.allocate_planes(0)?;
+        image.allocate_planes(1)?;
+        let yuva_planes = &yuv_params.planes;
+        for plane in ALL_PLANES {
+            let plane_index = plane.to_usize().unwrap();
+            if yuva_planes[plane_index].is_empty() {
+                continue;
+            }
+            for y in 0..image.height(plane) {
+                let row16 = image.row16_mut(plane, y as u32)?;
+                assert_eq!(row16.len(), yuva_planes[plane_index][y].len());
+                let dst = &mut row16[..];
+                dst.copy_from_slice(yuva_planes[plane_index][y]);
+            }
+        }
+
+        let mut rgb = Image::create_from_yuv(&image);
+        assert_eq!(rgb.width, image.width);
+        assert_eq!(rgb.height, image.height);
+        assert_eq!(rgb.depth, image.depth as u32);
+
+        rgb.format = rgb_params.params.1;
+        rgb.depth = rgb_params.params.2;
+        rgb.alpha_premultiplied = rgb_params.params.3;
+        rgb.is_float = rgb_params.params.4;
+
+        rgb.allocate()?;
+        rgb.convert_from_yuv(&image)?;
+
+        for y in 0..rgb.height as usize {
+            let row16 = rgb.row16(y as u32)?;
+            assert_eq!(&row16[..], rgb_params.expected_rgba[y]);
+        }
+        Ok(())
+    }
+}

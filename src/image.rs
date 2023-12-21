@@ -206,7 +206,7 @@ impl Image {
         let row_bytes = usize_from_u32(plane.row_bytes)?;
         let start = usize_from_u32(row * plane.row_bytes)?;
         let end = start + row_bytes;
-        Ok(&plane.data.unwrap()[start..end])
+        Ok(&plane.data.ok_or(AvifError::NoContent)?[start..end])
     }
 
     pub fn row_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u8]> {
@@ -214,7 +214,7 @@ impl Image {
         let row_bytes = usize_from_u32(plane.row_bytes)?;
         let start = usize_from_u32(row * plane.row_bytes)?;
         let end = start + row_bytes;
-        Ok(&mut plane.data.unwrap()[start..end])
+        Ok(&mut plane.data.ok_or(AvifError::NoContent)?[start..end])
     }
 
     pub fn row16(&self, plane: Plane, row: u32) -> AvifResult<&[u16]> {
@@ -222,7 +222,7 @@ impl Image {
         let row_bytes = usize_from_u32(plane.row_bytes)? / 2;
         let start = usize_from_u32(row * plane.row_bytes / 2)?;
         let end = start + row_bytes;
-        Ok(&plane.data16.unwrap()[start..end])
+        Ok(&plane.data16.ok_or(AvifError::NoContent)?[start..end])
     }
 
     pub fn row16_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u16]> {
@@ -230,7 +230,7 @@ impl Image {
         let row_bytes = usize_from_u32(plane.row_bytes)? / 2;
         let start = usize_from_u32(row * plane.row_bytes / 2)?;
         let end = start + row_bytes;
-        Ok(&mut plane.data16.unwrap()[start..end])
+        Ok(&mut plane.data16.ok_or(AvifError::NoContent)?[start..end])
     }
 
     pub fn allocate_planes(&mut self, category: usize) -> AvifResult<()> {
