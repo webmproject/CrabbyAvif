@@ -127,6 +127,7 @@ macro_rules! clamp_function {
 
 clamp_function!(clamp_u16, u16);
 clamp_function!(clamp_f32, f32);
+clamp_function!(clamp_i32, i32);
 
 pub fn find_nclx(properties: &[ItemProperty]) -> Result<&Nclx, bool> {
     let nclx_properties: Vec<_> = properties
@@ -211,4 +212,22 @@ pub fn check_limits(width: u32, height: u32, size_limit: u32, dimension_limit: u
         return false;
     }
     true
+}
+
+fn limited_to_full(min: i32, max: i32, full: i32, v: u16) -> u16 {
+    let v = v as i32;
+    clamp_i32(
+        (((v - min) * full) + ((max - min) / 2)) / (max - min),
+        0,
+        full,
+    ) as u16
+}
+
+pub fn limited_to_full_y(depth: u8, v: u16) -> u16 {
+    match depth {
+        8 => limited_to_full(16, 235, 255, v),
+        10 => limited_to_full(64, 940, 1023, v),
+        12 => limited_to_full(256, 3760, 4095, v),
+        _ => 0,
+    }
 }
