@@ -151,7 +151,6 @@ impl Decoder for Dav1d {
             image.transfer_characteristics = (seq_hdr.trc as u16).into();
             image.matrix_coefficients = (seq_hdr.mtrx as u16).into();
 
-            // TODO: call image freeplanes.
             for plane in 0usize..image.yuv_format.plane_count() {
                 image.planes2[plane] = Some(Pixels::Pointer(dav1d_picture.data[plane] as *mut u8));
                 let stride_index = if plane == 0 { 0 } else { 1 };
@@ -171,7 +170,6 @@ impl Decoder for Dav1d {
             image.width = dav1d_picture.p.w as u32;
             image.height = dav1d_picture.p.h as u32;
             image.depth = dav1d_picture.p.bpc as u8;
-            // TODO: call image freeplanes.
             image.planes2[3] = Some(Pixels::Pointer(dav1d_picture.data[0] as *mut u8));
             image.row_bytes[3] = dav1d_picture.stride[0] as u32;
             image.image_owns_planes[3] = false;

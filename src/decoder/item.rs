@@ -15,7 +15,6 @@ pub struct Item {
     pub content_type: String,
     pub properties: Vec<ItemProperty>,
     pub extents: Vec<Extent>,
-    // TODO mergedExtents stuff.
     pub thumbnail_for_id: u32,
     pub aux_for_id: u32,
     pub desc_for_id: u32,
@@ -62,7 +61,6 @@ impl Item {
         size_limit: u32,
         dimension_limit: u32,
     ) -> AvifResult<()> {
-        // TODO: this function also has to extract codec type.
         if self.item_type != "grid" {
             return Ok(());
         }

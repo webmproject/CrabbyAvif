@@ -144,7 +144,6 @@ fn identity_yuv8_to_rgb8_full_range(image: &image::Image, rgb: &mut rgb::Image) 
 }
 
 pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
-    // TODO: This function is equivalent to libavif's "fast" path. Implement the slow path too.
     let state = State {
         rgb: RgbColorSpaceInfo::create_from(rgb)?,
         yuv: YuvColorSpaceInfo::create_from(image)?,

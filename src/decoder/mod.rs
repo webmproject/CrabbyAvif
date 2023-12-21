@@ -1023,9 +1023,6 @@ impl Decoder {
         category: usize,
         tile_index: usize,
     ) -> AvifResult<()> {
-        // println!(
-        //     "prepare sample: image_index {image_index} category {category} tile_index {tile_index}"
-        // );
         let tile = &mut self.tiles[category][tile_index];
         if tile.input.samples.len() <= image_index {
             println!("sample for index {image_index} not found.");
@@ -1037,7 +1034,6 @@ impl Decoder {
             return Ok(());
         }
         // Data comes from an item.
-        // TODO: the rest of the code can be in sample struct.
         let item = self
             .items
             .get_mut(&sample.item_id)
@@ -1087,18 +1083,16 @@ impl Decoder {
                 let tile = &mut self.tiles[category][tile_index];
                 let sample = &tile.input.samples[image_index];
                 let io = &mut self.io.as_mut().unwrap();
-                // TODO: is this explicit block necessary?
-                {
-                    let codec = &mut self.codecs[tile.codec_index];
-                    let item_data_buffer = if sample.item_id == 0 {
-                        &None
-                    } else {
-                        &self.items.get(&sample.item_id).unwrap().data_buffer
-                    };
-                    let data = sample.data(io, item_data_buffer)?;
-                    codec.get_next_image(data, sample.spatial_id, &mut tile.image, category)?;
-                    self.tile_info[category].decoded_tile_count += 1;
-                }
+
+                let codec = &mut self.codecs[tile.codec_index];
+                let item_data_buffer = if sample.item_id == 0 {
+                    &None
+                } else {
+                    &self.items.get(&sample.item_id).unwrap().data_buffer
+                };
+                let data = sample.data(io, item_data_buffer)?;
+                codec.get_next_image(data, sample.spatial_id, &mut tile.image, category)?;
+                self.tile_info[category].decoded_tile_count += 1;
 
                 if is_grid {
                     if category == 1 && !tile.image.full_range {
@@ -1209,10 +1203,8 @@ impl Decoder {
         if nearest_keyframe > (self.image_index + 1) || requested_index <= self.image_index {
             // Start decoding from the nearest keyframe.
             self.image_index = nearest_keyframe - 1;
-            // TODO: reset codecs?
         }
         loop {
-            //println!("decoding next image: {}", self.image_index + 1);
             self.next_image()?;
             if requested_index == self.image_index {
                 break;
