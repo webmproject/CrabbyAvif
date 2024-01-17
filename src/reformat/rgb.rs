@@ -318,7 +318,6 @@ mod tests {
     use crate::image::ALL_PLANES;
     use crate::image::MAX_PLANE_COUNT;
 
-    use num_traits::cast::ToPrimitive;
     use test_case::test_matrix;
 
     const WIDTH: usize = 3;
@@ -430,7 +429,7 @@ mod tests {
         image.allocate_planes(1)?;
         let yuva_planes = &yuv_params.planes;
         for plane in ALL_PLANES {
-            let plane_index = plane.to_usize().unwrap();
+            let plane_index = plane.to_usize();
             if yuva_planes[plane_index].is_empty() {
                 continue;
             }

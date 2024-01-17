@@ -6,14 +6,11 @@ use crate::parser::mp4box::*;
 use crate::utils::clap::CleanAperture;
 use crate::*;
 
-use num_derive::ToPrimitive;
-use num_traits::cast::ToPrimitive;
-
 // TODO: needed only for debug to Image and PlaneData. Can be removed it those
 // do not have to be debug printable.
 use derivative::Derivative;
 
-#[derive(PartialEq, ToPrimitive, Copy, Clone, Debug)]
+#[derive(PartialEq, Copy, Clone, Debug)]
 pub enum Plane {
     Y = 0,
     U = 1,
@@ -28,6 +25,17 @@ impl From<usize> for Plane {
             2 => Plane::V,
             3 => Plane::A,
             _ => Plane::Y,
+        }
+    }
+}
+
+impl Plane {
+    pub fn to_usize(&self) -> usize {
+        match self {
+            Plane::Y => 0,
+            Plane::U => 1,
+            Plane::V => 2,
+            Plane::A => 3,
         }
     }
 }
@@ -121,7 +129,7 @@ impl Image {
     }
 
     pub fn has_plane(&self, plane: Plane) -> bool {
-        let plane_index = plane.to_usize().unwrap();
+        let plane_index = plane.to_usize();
         if self.planes2[plane_index].is_none() || self.row_bytes[plane_index] == 0 {
             return false;
         }
@@ -162,7 +170,7 @@ impl Image {
         if !self.has_plane(plane) {
             return None;
         }
-        let plane_index = plane.to_usize().unwrap();
+        let plane_index = plane.to_usize();
         let pixel_size = if self.depth == 8 { 1 } else { 2 };
         let height = self.height(plane);
         let row_bytes = self.row_bytes[plane_index] as usize;
@@ -183,7 +191,7 @@ impl Image {
         if !self.has_plane(plane) {
             return None;
         }
-        let plane_index = plane.to_usize().unwrap();
+        let plane_index = plane.to_usize();
         let pixel_size = if self.depth == 8 { 1 } else { 2 };
         let height = self.height(plane);
         let width = self.width(plane) as u32;
@@ -238,7 +246,7 @@ impl Image {
         let planes: &[Plane] = if category == 1 { &A_PLANE } else { &YUV_PLANES };
         for plane in planes {
             let plane = *plane;
-            let plane_index = plane.to_usize().unwrap();
+            let plane_index = plane.to_usize();
             let width = self.width(plane);
             let plane_size = width * self.height(plane);
             let default_value =
@@ -283,7 +291,7 @@ impl Image {
             let mut src_offset = 0;
             for plane in planes {
                 let plane = *plane;
-                let plane_index = plane.to_usize().unwrap();
+                let plane_index = plane.to_usize();
                 let width = self.width(plane);
                 let height = self.height(plane);
                 let plane_size = width * height; // Pixel size does not matter because stride is
@@ -303,7 +311,7 @@ impl Image {
                 let height = self.height(plane);
                 let row_width = width * pixel_size;
                 let mut dst_offset: u64 = 0;
-                let plane_index = plane.to_usize().unwrap();
+                let plane_index = plane.to_usize();
                 for _y in 0..height {
                     let src_y_start = src_offset;
                     let src_y_end = src_y_start + row_width;

@@ -14,9 +14,6 @@ mod codecs;
 mod internal_utils;
 mod parser;
 
-use num_derive::FromPrimitive;
-use num_traits::cast::FromPrimitive;
-
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum PixelFormat {
     Yuv444,
@@ -49,18 +46,8 @@ impl PixelFormat {
     }
 }
 
-macro_rules! impl_from_primitive {
-    ($from:ty, $from_func: ident, $to: ident, $default: ident) => {
-        impl From<$from> for $to {
-            fn from(value: $from) -> Self {
-                $to::$from_func(value).unwrap_or($to::$default)
-            }
-        }
-    };
-}
-
 #[repr(C)]
-#[derive(Debug, Default, PartialEq, Copy, Clone, FromPrimitive)]
+#[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum ChromaSamplePosition {
     #[default]
     Unknown = 0,
@@ -68,10 +55,19 @@ pub enum ChromaSamplePosition {
     Colocated = 2,
 }
 
-impl_from_primitive!(u32, from_u32, ChromaSamplePosition, Unknown);
+impl From<u32> for ChromaSamplePosition {
+    fn from(value: u32) -> Self {
+        match value {
+            0 => Self::Unknown,
+            1 => Self::Vertical,
+            2 => Self::Colocated,
+            _ => Self::default(),
+        }
+    }
+}
 
 #[repr(C)]
-#[derive(Debug, Default, PartialEq, Copy, Clone, FromPrimitive)]
+#[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum ColorPrimaries {
     Unknown = 0,
     Srgb = 1,
@@ -89,7 +85,26 @@ pub enum ColorPrimaries {
     Ebu3213 = 22,
 }
 
-impl_from_primitive!(u16, from_u16, ColorPrimaries, Unspecified);
+impl From<u16> for ColorPrimaries {
+    fn from(value: u16) -> Self {
+        match value {
+            0 => Self::Unknown,
+            1 => Self::Srgb,
+            2 => Self::Unspecified,
+            4 => Self::Bt470m,
+            5 => Self::Bt470bg,
+            6 => Self::Bt601,
+            7 => Self::Smpte240,
+            8 => Self::GenericFilm,
+            9 => Self::Bt2020,
+            10 => Self::Xyz,
+            11 => Self::Smpte431,
+            12 => Self::Smpte432,
+            22 => Self::Ebu3213,
+            _ => Self::default(),
+        }
+    }
+}
 
 #[allow(non_camel_case_types, non_upper_case_globals)]
 impl ColorPrimaries {
@@ -100,7 +115,7 @@ impl ColorPrimaries {
 }
 
 #[repr(C)]
-#[derive(Debug, Default, PartialEq, Copy, Clone, FromPrimitive)]
+#[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum TransferCharacteristics {
     Unknown = 0,
     Bt709 = 1,
@@ -119,12 +134,35 @@ pub enum TransferCharacteristics {
     Bt2020_10bit = 14,
     Bt2020_12bit = 15,
     Pq = 16, // Perceptual Quantizer (HDR); BT.2100 PQ
-
     Smpte428 = 17,
     Hlg = 18, // Hybrid Log-Gamma (HDR); ARIB STD-B67; BT.2100 HLG
 }
 
-impl_from_primitive!(u16, from_u16, TransferCharacteristics, Unspecified);
+impl From<u16> for TransferCharacteristics {
+    fn from(value: u16) -> Self {
+        match value {
+            0 => Self::Unknown,
+            1 => Self::Bt709,
+            2 => Self::Unspecified,
+            4 => Self::Bt470m,
+            5 => Self::Bt470bg,
+            6 => Self::Bt601,
+            7 => Self::Smpte240,
+            8 => Self::Linear,
+            9 => Self::Log100,
+            10 => Self::Log100Sqrt10,
+            11 => Self::Iec61966,
+            12 => Self::Bt1361,
+            13 => Self::Srgb,
+            14 => Self::Bt2020_10bit,
+            15 => Self::Bt2020_12bit,
+            16 => Self::Pq,
+            17 => Self::Smpte428,
+            18 => Self::Hlg,
+            _ => Self::default(),
+        }
+    }
+}
 
 #[allow(non_upper_case_globals)]
 impl TransferCharacteristics {
@@ -132,7 +170,7 @@ impl TransferCharacteristics {
 }
 
 #[repr(C)]
-#[derive(Debug, Default, PartialEq, Eq, Copy, Clone, FromPrimitive, Hash)]
+#[derive(Debug, Default, PartialEq, Eq, Copy, Clone, Hash)]
 pub enum MatrixCoefficients {
     Identity = 0,
     Bt709 = 1,
@@ -153,7 +191,29 @@ pub enum MatrixCoefficients {
     YcgcoRo = 16,
 }
 
-impl_from_primitive!(u16, from_u16, MatrixCoefficients, Unspecified);
+impl From<u16> for MatrixCoefficients {
+    fn from(value: u16) -> Self {
+        match value {
+            0 => Self::Identity,
+            1 => Self::Bt709,
+            2 => Self::Unspecified,
+            4 => Self::Fcc,
+            5 => Self::Bt470bg,
+            6 => Self::Bt601,
+            7 => Self::Smpte240,
+            8 => Self::Ycgco,
+            9 => Self::Bt2020Ncl,
+            10 => Self::Bt2020Cl,
+            11 => Self::Smpte2085,
+            12 => Self::ChromaDerivedNcl,
+            13 => Self::ChromaDerivedCl,
+            14 => Self::Ictcp,
+            15 => Self::YcgcoRe,
+            16 => Self::YcgcoRo,
+            _ => Self::default(),
+        }
+    }
+}
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum AvifError {
