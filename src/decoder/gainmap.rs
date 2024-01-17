@@ -16,7 +16,7 @@ pub struct GainMapMetadata {
     pub use_base_color_space: bool,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct GainMap {
     pub image: Image,
     pub metadata: GainMapMetadata,

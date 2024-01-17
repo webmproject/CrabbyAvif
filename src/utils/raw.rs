@@ -70,7 +70,6 @@ impl RawWriter {
         }
         for plane in ALL_PLANES {
             let avif_plane = image.plane(plane);
-            println!("{:#?}", avif_plane);
             if avif_plane.is_none() {
                 continue;
             }

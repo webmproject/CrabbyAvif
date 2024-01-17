@@ -47,8 +47,7 @@ fn main() {
             println!("parse failed! {:#?}", res);
             std::process::exit(1);
         }
-        let image = decoder.image();
-        println!("image after parse: {:#?}", image);
+        let _image = decoder.image();
 
         println!("\n^^^ decoder public properties ^^^");
         println!("image_count: {}", decoder.image_count);
@@ -72,7 +71,6 @@ fn main() {
                 std::process::exit(1);
             }
             let image = decoder.image();
-            println!("image after decode: {:#?}", image);
             let ret = writer.write_frame(image);
             if !ret {
                 println!("error writing y4m file");

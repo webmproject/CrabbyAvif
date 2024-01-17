@@ -6,10 +6,6 @@ use crate::parser::mp4box::*;
 use crate::utils::clap::CleanAperture;
 use crate::*;
 
-// TODO: needed only for debug to Image and PlaneData. Can be removed it those
-// do not have to be debug printable.
-use derivative::Derivative;
-
 #[derive(PartialEq, Copy, Clone, Debug)]
 pub enum Plane {
     Y = 0,
@@ -46,8 +42,7 @@ pub const YUV_PLANES: [Plane; 3] = [Plane::Y, Plane::U, Plane::V];
 pub const A_PLANE: [Plane; 1] = [Plane::A];
 pub const ALL_PLANES: [Plane; MAX_PLANE_COUNT] = [Plane::Y, Plane::U, Plane::V, Plane::A];
 
-#[derive(Derivative, Default)]
-#[derivative(Debug)]
+#[derive(Default)]
 pub struct Image {
     pub width: u32,
     pub height: u32,
@@ -63,7 +58,6 @@ pub struct Image {
     pub row_bytes: [u32; MAX_PLANE_COUNT],
     pub image_owns_planes: [bool; MAX_PLANE_COUNT],
 
-    #[derivative(Debug = "ignore")]
     pub planes2: [Option<Pixels>; MAX_PLANE_COUNT],
 
     pub color_primaries: ColorPrimaries,
@@ -76,11 +70,8 @@ pub struct Image {
     pub irot_angle: Option<u8>,
     pub imir_axis: Option<u8>,
 
-    #[derivative(Debug = "ignore")]
     pub exif: Vec<u8>,
-    #[derivative(Debug = "ignore")]
     pub icc: Vec<u8>,
-    #[derivative(Debug = "ignore")]
     pub xmp: Vec<u8>,
 
     pub image_sequence_track_present: bool,
@@ -88,12 +79,8 @@ pub struct Image {
     // TODO: gainmap image ?
 }
 
-#[derive(Derivative)]
-#[derivative(Debug)]
 pub struct PlaneData<'a> {
-    #[derivative(Debug = "ignore")]
     pub data: Option<&'a [u8]>,
-    #[derivative(Debug = "ignore")]
     pub data16: Option<&'a [u16]>,
     pub width: u32,
     pub height: u32,
@@ -102,12 +89,8 @@ pub struct PlaneData<'a> {
 }
 
 // TODO: unify this into the struct above with an enum for mut/const.
-#[derive(Derivative)]
-#[derivative(Debug)]
 pub struct PlaneMutData<'a> {
-    #[derivative(Debug = "ignore")]
     pub data: Option<&'a mut [u8]>,
-    #[derivative(Debug = "ignore")]
     pub data16: Option<&'a mut [u16]>,
     pub width: u32,
     pub height: u32,

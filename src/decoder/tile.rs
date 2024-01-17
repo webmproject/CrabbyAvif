@@ -82,7 +82,7 @@ impl TileInfo {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Tile {
     #[allow(unused)]
     pub width: u32,
