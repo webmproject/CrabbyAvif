@@ -1,7 +1,5 @@
 use crate::*;
 
-use ahash::AHashMap;
-
 impl ColorPrimaries {
     pub fn y_coeffs(&self) -> [f32; 3] {
         // TODO: implement.
@@ -16,7 +14,7 @@ fn calculate_yuv_coefficients_from_cicp(
     match matrix_coefficients {
         MatrixCoefficients::ChromaDerivedNcl => Some(color_primaries.y_coeffs()),
         _ => {
-            let lookup = AHashMap::from([
+            let lookup = HashMap::from([
                 (MatrixCoefficients::Bt709, (0.2126f32, 0.0722)),
                 (MatrixCoefficients::Fcc, (0.30, 0.11)),
                 (MatrixCoefficients::Bt470bg, (0.299, 0.114)),

@@ -8,7 +8,7 @@ edition = "2021"
 build = "src/build.rs"
 
 [dependencies]
-ahash = "0.8.6"
+ahash = {version = "0.8.6", optional = true}
 byteorder = "1.5.0"
 derivative = "2.2.0"
 ndk = {version = "0.8.0", features = ["media"], optional = true}
@@ -30,6 +30,7 @@ dav1d = []
 libgav1 = []
 libyuv = []
 android_mediacodec = ["dep:ndk"]
+use_ahash = ["dep:ahash"]
 
 [package.metadata.capi.header]
 name = "avif"

@@ -14,6 +14,15 @@ mod codecs;
 mod internal_utils;
 mod parser;
 
+#[cfg(feature = "use_ahash")]
+type HashMap<K, V> = ahash::AHashMap<K, V>;
+#[cfg(feature = "use_ahash")]
+type HashSet<K> = ahash::AHashSet<K>;
+#[cfg(not(feature = "use_ahash"))]
+type HashMap<K, V> = std::collections::HashMap<K, V>;
+#[cfg(not(feature = "use_ahash"))]
+type HashSet<K> = std::collections::HashSet<K>;
+
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum PixelFormat {
     Yuv444,
