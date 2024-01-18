@@ -452,8 +452,7 @@ impl Decoder {
             .get(&item_id)
             .ok_or(AvifError::MissingImageItem)?;
         if !item.grid_item_ids.is_empty() {
-            let grid = &self.tile_info[category].grid;
-            if grid.rows == 0 || grid.columns == 0 {
+            if !self.tile_info[category].is_grid() {
                 println!("multiple dimg items were found but image is not grid.");
                 return Err(AvifError::InvalidImageGrid);
             }
@@ -577,8 +576,7 @@ impl Decoder {
             }
             grid_item_ids.push(item_info.item_id);
         }
-        let grid_count = self.tile_info[category].grid.rows * self.tile_info[category].grid.columns;
-        if grid_item_ids.len() as u32 != grid_count {
+        if grid_item_ids.len() as u32 != self.tile_info[category].grid_tile_count() {
             println!("Expected number of tiles not found");
             return Err(AvifError::InvalidImageGrid);
         }
@@ -1069,8 +1067,7 @@ impl Decoder {
 
     fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
         for category in 0usize..3 {
-            let grid = &self.tile_info[category].grid;
-            let is_grid = grid.rows > 0 && grid.columns > 0;
+            let is_grid = self.tile_info[category].is_grid();
             if is_grid {
                 if category == 2 {
                     self.gainmap.image.allocate_planes(category)?;

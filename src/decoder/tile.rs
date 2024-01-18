@@ -61,14 +61,23 @@ pub struct TileInfo {
 }
 
 impl TileInfo {
+    pub fn is_grid(&self) -> bool {
+        self.grid.rows > 0 && self.grid.columns > 0
+    }
+
+    pub fn grid_tile_count(&self) -> u32 {
+        if self.is_grid() {
+            self.grid.rows * self.grid.columns
+        } else {
+            1
+        }
+    }
+
     pub fn decoded_row_count(&self, image_height: u32, tile_height: u32) -> u32 {
         if self.decoded_tile_count == 0 {
             return 0;
         }
-        // TODO: add is_grid function and use it everywhere.
-        if self.decoded_tile_count == self.tile_count
-            || (self.grid.rows == 0 && self.grid.columns == 0)
-        {
+        if self.decoded_tile_count == self.tile_count || !self.is_grid() {
             return image_height;
         }
         std::cmp::min(
