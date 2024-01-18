@@ -360,7 +360,7 @@ impl Decoder {
         Ok((tonemap_id, gainmap_id))
     }
 
-    fn validate_gainmap_item(&mut self, gainmap_id: u32) -> AvifResult<()> {
+    fn validate_gainmap_item(&mut self, gainmap_id: u32, tonemap_id: u32) -> AvifResult<()> {
         let gainmap_item = self
             .items
             .get(&gainmap_id)
@@ -372,12 +372,15 @@ impl Decoder {
             self.gainmap.image.matrix_coefficients = nclx.matrix_coefficients;
             self.gainmap.image.full_range = nclx.full_range;
         }
+        if tonemap_id == 0 {
+            return Ok(());
+        }
         // Find and adopt all colr boxes "at most one for a given value of colour type"
         // (HEIF 6.5.5.1, from Amendment 3) Accept one of each type, and bail out if more than one
         // of a given type is provided.
         let tonemap_item = self
             .items
-            .get(&gainmap_id)
+            .get(&tonemap_id)
             .ok_or(AvifError::InvalidToneMappedImage)?;
         match find_nclx(&tonemap_item.properties) {
             Ok(nclx) => {
@@ -756,11 +759,10 @@ impl Decoder {
                     if tonemap_id != 0 && gainmap_id != 0 {
                         self.read_and_parse_item(gainmap_id, 2)?;
                         self.populate_grid_item_ids(&avif_boxes.meta.iinf, gainmap_id, 2)?;
+                        self.validate_gainmap_item(gainmap_id, tonemap_id)?;
+                        self.gainmap_present = true;
                         if self.settings.enable_decoding_gainmap {
-                            self.validate_gainmap_item(gainmap_id)?;
                             item_ids[2] = gainmap_id;
-                        } else {
-                            self.gainmap_present = true;
                         }
                         if self.settings.enable_parsing_gainmap_metadata {
                             let tonemap_item = self
@@ -829,7 +831,6 @@ impl Decoder {
                     }
 
                     if item_ids[2] != 0 {
-                        self.gainmap_present = true;
                         let gainmap_item = self.items.get(&item_ids[2]).unwrap();
                         self.gainmap.image.width = gainmap_item.width;
                         self.gainmap.image.height = gainmap_item.height;
