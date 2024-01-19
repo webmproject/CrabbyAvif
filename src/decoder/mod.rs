@@ -1077,7 +1077,10 @@ impl Decoder {
             }
             let previous_decoded_tile_count = self.tile_info[category].decoded_tile_count;
             for tile_index in previous_decoded_tile_count as usize..self.tiles[category].len() {
-                let tile = &mut self.tiles[category][tile_index];
+                // Split the tiles array into two mutable arrays so that we can validate the
+                // properties of tiles with index > 0 with that of the first tile.
+                let (tiles_slice1, tiles_slice2) = self.tiles[category].split_at_mut(tile_index);
+                let tile = &mut tiles_slice2[0];
                 let sample = &tile.input.samples[image_index];
                 let io = &mut self.io.as_mut().unwrap();
 
@@ -1092,12 +1095,27 @@ impl Decoder {
                 self.tile_info[category].decoded_tile_count += 1;
 
                 if is_grid {
+                    if !tiles_slice1.is_empty() {
+                        let first_tile_image = &tiles_slice1[0].image;
+                        if tile.image.width != first_tile_image.width
+                            || tile.image.height != first_tile_image.height
+                            || tile.image.depth != first_tile_image.depth
+                            || tile.image.yuv_format != first_tile_image.yuv_format
+                            || tile.image.full_range != first_tile_image.full_range
+                            || tile.image.color_primaries != first_tile_image.color_primaries
+                            || tile.image.transfer_characteristics
+                                != first_tile_image.transfer_characteristics
+                            || tile.image.matrix_coefficients
+                                != first_tile_image.matrix_coefficients
+                        {
+                            println!("grid image contains mismatched tiles");
+                            return Err(AvifError::InvalidImageGrid);
+                        }
+                    }
                     if category == 1 && !tile.image.full_range {
                         tile.image.alpha_to_full_range()?;
                     }
                     tile.image.scale(tile.width, tile.height)?;
-                    // TODO: make sure all tiles decoded properties match. Need to figure out a way
-                    // to do it with proper borrows.
                     if category == 2 {
                         self.gainmap.image.copy_from_tile(
                             &tile.image,

@@ -130,7 +130,7 @@ impl Decoder for Dav1d {
         }
 
         let dav1d_picture = &self.picture.unwrap();
-        if category == 0 {
+        if category == 0 || category == 2 {
             // if image dimensinos/yuv format does not match, deallocate the image.
             image.width = dav1d_picture.p.w as u32;
             image.height = dav1d_picture.p.h as u32;
@@ -176,7 +176,6 @@ impl Decoder for Dav1d {
             let seq_hdr = unsafe { *dav1d_picture.seq_hdr };
             image.full_range = seq_hdr.color_range != 0;
         }
-        // TODO: gainmap category.
         Ok(())
     }
 }
