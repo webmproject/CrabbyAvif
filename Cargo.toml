@@ -10,6 +10,7 @@ build = "src/build.rs"
 [dependencies]
 ahash = {version = "0.8.6", optional = true}
 byteorder = "1.5.0"
+libc = {version = "0.2.152", optional = true}
 ndk = {version = "0.8.0", features = ["media"], optional = true}
 
 [dev-dependencies]
@@ -25,7 +26,7 @@ bindgen = "0.69.1"
 [features]
 default = ["dav1d", "libyuv"]
 capi = []
-dav1d = []
+dav1d = ["dep:libc"]
 libgav1 = []
 libyuv = []
 android_mediacodec = ["dep:ndk"]

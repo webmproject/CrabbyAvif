@@ -19,10 +19,7 @@ unsafe extern "C" fn avif_dav1d_free_callback(
     // Do nothing. The buffers are owned by the decoder.
 }
 
-fn dav1d_error(err: u32) -> i32 {
-    let e: i32 = err.try_into().unwrap();
-    -e
-}
+const DAV1D_EAGAIN: i32 = -libc::EAGAIN;
 
 impl Decoder for Dav1d {
     fn initialize(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
@@ -82,7 +79,7 @@ impl Decoder for Dav1d {
                 if !data.data.is_null() {
                     let res = dav1d_send_data(self.context.unwrap(), &mut data);
                     //println!("dav1d_send_data returned {res}");
-                    if res < 0 && res != dav1d_error(EAGAIN) {
+                    if res < 0 && res != DAV1D_EAGAIN {
                         dav1d_data_unref(&mut data);
                         return Err(AvifError::UnknownError);
                     }
@@ -90,7 +87,7 @@ impl Decoder for Dav1d {
 
                 let res = dav1d_get_picture(self.context.unwrap(), &mut next_frame);
                 //println!("dav1d_get_picture returned {res}");
-                if res == dav1d_error(EAGAIN) {
+                if res == DAV1D_EAGAIN {
                     // send more data.
                     if !data.data.is_null() {
                         continue;

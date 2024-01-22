@@ -83,7 +83,6 @@ fn main() {
         path_buf(&["include", "dav1d", "dav1d.h"]),
         path_buf(&[build_dir, "include", "dav1d"]),
         &[
-            "EAGAIN",
             "dav1d_close",
             "dav1d_data_unref",
             "dav1d_data_wrap",
