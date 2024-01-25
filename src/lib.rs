@@ -75,7 +75,7 @@ impl From<u32> for ChromaSamplePosition {
     }
 }
 
-#[repr(C)]
+#[repr(u16)]
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum ColorPrimaries {
     Unknown = 0,
@@ -123,7 +123,7 @@ impl ColorPrimaries {
     pub const Dci_p3: Self = Self::Smpte432;
 }
 
-#[repr(C)]
+#[repr(u16)]
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum TransferCharacteristics {
     Unknown = 0,
@@ -178,7 +178,7 @@ impl TransferCharacteristics {
     pub const Smpte2084: Self = Self::Pq;
 }
 
-#[repr(C)]
+#[repr(u16)]
 #[derive(Debug, Default, PartialEq, Eq, Copy, Clone, Hash)]
 pub enum MatrixCoefficients {
     Identity = 0,
