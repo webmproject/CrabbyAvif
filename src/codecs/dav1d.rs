@@ -126,7 +126,7 @@ impl Decoder for Dav1d {
             }
         }
 
-        let dav1d_picture = &self.picture.unwrap();
+        let dav1d_picture = self.picture.as_ref().unwrap();
         if category == 0 || category == 2 {
             // if image dimensinos/yuv format does not match, deallocate the image.
             image.width = dav1d_picture.p.w as u32;
@@ -181,7 +181,7 @@ impl Drop for Dav1d {
     fn drop(&mut self) {
         if self.picture.is_some() {
             //println!("unreffing dav1d picture");
-            unsafe { dav1d_picture_unref(&mut self.picture.unwrap()) };
+            unsafe { dav1d_picture_unref(self.picture.as_mut().unwrap()) };
         }
         if self.context.is_some() {
             //println!("closing dav1d");
