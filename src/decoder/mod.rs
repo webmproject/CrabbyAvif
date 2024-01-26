@@ -947,7 +947,7 @@ impl Decoder {
             if self.tile_info[category].tile_count > 0 {
                 image_buffers += 1;
             }
-            if self.tile_info[category].tile_count > 1 {
+            if self.tile_info[category].tile_count == 1 {
                 stolen_image_buffers += 1;
             }
         }
