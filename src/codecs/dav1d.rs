@@ -37,7 +37,7 @@ impl Decoder for Dav1d {
 
         unsafe {
             let mut dec = MaybeUninit::uninit();
-            let ret = dav1d_open(dec.as_mut_ptr(), &settings);
+            let ret = dav1d_open(dec.as_mut_ptr(), (&settings) as *const _);
             if ret != 0 {
                 // TODO: carry forward the error within the enum as a string.
                 // Here and elsewhere in this file.
@@ -64,7 +64,7 @@ impl Decoder for Dav1d {
         unsafe {
             let mut data: Dav1dData = std::mem::zeroed();
             let res = dav1d_data_wrap(
-                &mut data,
+                (&mut data) as *mut _,
                 av1_payload.as_ptr(),
                 av1_payload_len,
                 Some(avif_dav1d_free_callback),
@@ -77,15 +77,15 @@ impl Decoder for Dav1d {
             let mut next_frame: Dav1dPicture = std::mem::zeroed();
             loop {
                 if !data.data.is_null() {
-                    let res = dav1d_send_data(self.context.unwrap(), &mut data);
+                    let res = dav1d_send_data(self.context.unwrap(), (&mut data) as *mut _);
                     //println!("dav1d_send_data returned {res}");
                     if res < 0 && res != DAV1D_EAGAIN {
-                        dav1d_data_unref(&mut data);
+                        dav1d_data_unref((&mut data) as *mut _);
                         return Err(AvifError::UnknownError);
                     }
                 }
 
-                let res = dav1d_get_picture(self.context.unwrap(), &mut next_frame);
+                let res = dav1d_get_picture(self.context.unwrap(), (&mut next_frame) as *mut _);
                 //println!("dav1d_get_picture returned {res}");
                 if res == DAV1D_EAGAIN {
                     // send more data.
@@ -95,7 +95,7 @@ impl Decoder for Dav1d {
                     return Err(AvifError::UnknownError);
                 } else if res < 0 {
                     if !data.data.is_null() {
-                        dav1d_data_unref(&mut data);
+                        dav1d_data_unref((&mut data) as *mut _);
                     }
                     return Err(AvifError::UnknownError);
                 } else {
@@ -103,7 +103,7 @@ impl Decoder for Dav1d {
                     let frame_spatial_id = (*next_frame.frame_hdr).spatial_id as u8;
                     if spatial_id != 0xFF && spatial_id != frame_spatial_id {
                         // layer selection: skip this unwanted layer.
-                        dav1d_picture_unref(&mut next_frame);
+                        dav1d_picture_unref((&mut next_frame) as *mut _);
                     } else {
                         got_picture = true;
                         break;
@@ -111,13 +111,14 @@ impl Decoder for Dav1d {
                 }
             }
             if !data.data.is_null() {
-                dav1d_data_unref(&mut data);
+                dav1d_data_unref((&mut data) as *mut _);
             }
 
             if got_picture {
                 // unref previous frame.
                 if self.picture.is_some() {
-                    dav1d_picture_unref(&mut self.picture.unwrap());
+                    let mut previous_picture = self.picture.unwrap();
+                    dav1d_picture_unref((&mut previous_picture) as *mut _);
                 }
                 self.picture = Some(next_frame);
                 // store other fields like color range, etc.
@@ -140,7 +141,7 @@ impl Decoder for Dav1d {
                 3 => PixelFormat::Yuv444,
                 _ => PixelFormat::Yuv420, // not reached.
             };
-            let seq_hdr = unsafe { *dav1d_picture.seq_hdr };
+            let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
             image.full_range = seq_hdr.color_range != 0;
             image.chroma_sample_position = seq_hdr.chr.into();
 
@@ -170,7 +171,7 @@ impl Decoder for Dav1d {
             image.planes2[3] = Some(Pixels::Pointer(dav1d_picture.data[0] as *mut u8));
             image.row_bytes[3] = dav1d_picture.stride[0] as u32;
             image.image_owns_planes[3] = false;
-            let seq_hdr = unsafe { *dav1d_picture.seq_hdr };
+            let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
             image.full_range = seq_hdr.color_range != 0;
         }
         Ok(())
@@ -181,7 +182,7 @@ impl Drop for Dav1d {
     fn drop(&mut self) {
         if self.picture.is_some() {
             //println!("unreffing dav1d picture");
-            unsafe { dav1d_picture_unref(self.picture.as_mut().unwrap()) };
+            unsafe { dav1d_picture_unref(self.picture.as_mut().unwrap() as *mut _) };
         }
         if self.context.is_some() {
             //println!("closing dav1d");
