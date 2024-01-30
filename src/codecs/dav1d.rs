@@ -1,8 +1,9 @@
-use crate::codecs::bindings::dav1d::*;
 use crate::codecs::Decoder;
 use crate::image::Image;
 use crate::internal_utils::pixels::*;
 use crate::*;
+
+use dav1d_sys::bindings::*;
 
 use std::mem::MaybeUninit;
 

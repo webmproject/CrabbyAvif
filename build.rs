@@ -75,27 +75,6 @@ fn main() {
         "build"
     };
 
-    #[cfg(feature = "dav1d")]
-    add_native_library(
-        "dav1d",
-        "dav1d",
-        path_buf(&[build_dir, "src"]),
-        path_buf(&["include", "dav1d", "dav1d.h"]),
-        path_buf(&[build_dir, "include", "dav1d"]),
-        &[
-            "dav1d_close",
-            "dav1d_data_unref",
-            "dav1d_data_wrap",
-            "dav1d_default_settings",
-            "dav1d_error",
-            "dav1d_get_picture",
-            "dav1d_open",
-            "dav1d_picture_unref",
-            "dav1d_send_data",
-        ],
-        path_buf(&["src", "codecs", "bindings", "dav1d.rs"]),
-    );
-
     #[cfg(feature = "libgav1")]
     {
         add_native_library(
