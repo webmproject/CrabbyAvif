@@ -1,8 +1,9 @@
 use crate::image::*;
 use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
-use crate::reformat::bindings::libyuv::*;
 use crate::*;
+
+use libyuv_sys::bindings::*;
 
 impl Image {
     pub fn scale(&mut self, width: u32, height: u32) -> AvifResult<()> {

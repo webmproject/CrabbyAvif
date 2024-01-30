@@ -4,8 +4,9 @@ use super::rgb::*;
 use crate::image;
 use crate::image::*;
 use crate::internal_utils::*;
-use crate::reformat::bindings::libyuv::*;
 use crate::*;
+
+use libyuv_sys::bindings::*;
 
 use std::os::raw::c_int;
 

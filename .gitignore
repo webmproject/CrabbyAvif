@@ -6,7 +6,8 @@
 /out_comparison.txt
 /sys/dav1d-sys/src/dav1d.rs
 /sys/dav1d-sys/dav1d
+/sys/libyuv-sys/src/libyuv.rs
+/sys/libyuv-sys/libyuv
 /target
 /third_party/googletest
 /third_party/libgav1
-/third_party/libyuv
