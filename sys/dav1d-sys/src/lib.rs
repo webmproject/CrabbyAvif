@@ -1,4 +1,4 @@
 pub mod bindings {
     #![allow(warnings)]
-    include!("dav1d.rs");
+    include!(env!("CRABBYAVIF_DAV1D_BINDINGS_RS"));
 }

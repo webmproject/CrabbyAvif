@@ -37,6 +37,10 @@ pub fn generate_bindings(header_file: PathBuf, version_dir: PathBuf, outfile: Pa
     bindings
         .write_to_file(outfile.as_path())
         .unwrap_or_else(|_| panic!("Couldn't write bindings for dav1d"));
+    println!(
+        "cargo:rustc-env=CRABBYAVIF_DAV1D_BINDINGS_RS={}",
+        outfile.display()
+    );
 }
 
 fn add_native_library(
@@ -59,7 +63,8 @@ fn add_native_library(
 
     let abs_header_file = PathBuf::from(&abs_library_dir).join(header_file);
     let extra_includes = PathBuf::from(&abs_library_dir).join(extra_include_dir);
-    generate_bindings(abs_header_file, extra_includes, bindings_path);
+    let outfile = PathBuf::from(&project_root).join(bindings_path);
+    generate_bindings(abs_header_file, extra_includes, outfile);
 }
 
 fn main() {
