@@ -198,7 +198,6 @@ impl image::Image {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::internal_utils::pixels::*;
 
     use rand::Rng;
     use test_case::test_matrix;
