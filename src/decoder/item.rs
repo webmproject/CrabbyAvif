@@ -323,7 +323,7 @@ impl Item {
 pub type Items = HashMap<u32, Item>;
 
 pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
-    let mut items: Items = HashMap::new();
+    let mut items: Items = HashMap::with_hasher(NonRandomHasherState);
     for iinf in &meta.iinf {
         items.insert(
             iinf.item_id,
@@ -357,7 +357,7 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
                 .ok_or(AvifError::BmffParseFailed)?;
         }
     }
-    let mut ipma_seen: HashSet<u32> = HashSet::new();
+    let mut ipma_seen: HashSet<u32> = HashSet::with_hasher(NonRandomHasherState);
     for association in &meta.iprp.associations {
         if ipma_seen.contains(&association.item_id) {
             println!("item has duplictate ipma.");

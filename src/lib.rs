@@ -14,14 +14,19 @@ mod codecs;
 mod internal_utils;
 mod parser;
 
-#[cfg(feature = "use_ahash")]
-type HashMap<K, V> = ahash::AHashMap<K, V>;
-#[cfg(feature = "use_ahash")]
-type HashSet<K> = ahash::AHashSet<K>;
-#[cfg(not(feature = "use_ahash"))]
-type HashMap<K, V> = std::collections::HashMap<K, V>;
-#[cfg(not(feature = "use_ahash"))]
-type HashSet<K> = std::collections::HashSet<K>;
+// Workaround for https://bugs.chromium.org/p/chromium/issues/detail?id=1516634.
+#[derive(Default)]
+pub struct NonRandomHasherState;
+
+impl std::hash::BuildHasher for NonRandomHasherState {
+    type Hasher = std::collections::hash_map::DefaultHasher;
+    fn build_hasher(&self) -> std::collections::hash_map::DefaultHasher {
+        std::collections::hash_map::DefaultHasher::new()
+    }
+}
+
+pub type HashMap<K, V> = std::collections::HashMap<K, V, NonRandomHasherState>;
+pub type HashSet<K> = std::collections::HashSet<K, NonRandomHasherState>;
 
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum PixelFormat {

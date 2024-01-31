@@ -811,7 +811,8 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
         parse_hdlr(&mut sub_stream)?;
     }
 
-    let mut boxes_seen = HashSet::from([String::from("hdlr")]);
+    let mut boxes_seen: HashSet<String> = HashSet::with_hasher(NonRandomHasherState);
+    boxes_seen.insert(String::from("hdlr"));
     while stream.has_bytes_left() {
         let header = parse_header(stream)?;
         match header.box_type.as_str() {
