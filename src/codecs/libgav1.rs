@@ -1,8 +1,9 @@
-use crate::codecs::bindings::libgav1::*;
 use crate::codecs::Decoder;
 use crate::image::Image;
 use crate::internal_utils::pixels::*;
 use crate::*;
+
+use libgav1_sys::bindings::*;
 
 use std::mem::MaybeUninit;
 

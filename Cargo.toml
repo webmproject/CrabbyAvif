@@ -1,4 +1,4 @@
-workspace = { members = ["sys/dav1d-sys", "sys/libyuv-sys"] }
+workspace = { members = ["sys/dav1d-sys", "sys/libyuv-sys", "sys/libgav1-sys"] }
 
 [package]
 name = "crabby-avif"
@@ -14,6 +14,7 @@ byteorder = "1.5.0"
 libc = {version = "0.2.152", optional = true}
 ndk = {version = "0.8.0", features = ["media"], optional = true}
 dav1d-sys = { version = "0.1.0", path="sys/dav1d-sys", optional = true}
+libgav1-sys = { version = "0.1.0", path="sys/libgav1-sys", optional = true}
 libyuv-sys = { version = "0.1.0", path="sys/libyuv-sys", optional = true}
 
 [dev-dependencies]
@@ -30,7 +31,7 @@ bindgen = "0.69.1"
 default = ["dav1d", "libyuv"]
 capi = []
 dav1d = ["dep:libc", "dep:dav1d-sys"]
-libgav1 = []
+libgav1 = ["dep:libgav1-sys"]
 libyuv = ["dep:libyuv-sys"]
 android_mediacodec = ["dep:ndk"]
 use_ahash = ["dep:ahash"]
