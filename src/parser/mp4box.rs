@@ -790,8 +790,7 @@ fn parse_idat(stream: &mut IStream) -> AvifResult<Vec<u8>> {
         println!("Invalid idat size");
         return Err(AvifError::BmffParseFailed);
     }
-    let mut idat: Vec<u8> = Vec::new();
-    idat.reserve(stream.bytes_left());
+    let mut idat: Vec<u8> = Vec::with_capacity(stream.bytes_left());
     idat.extend_from_slice(stream.get_slice(stream.bytes_left())?);
     Ok(idat)
 }
@@ -989,8 +988,7 @@ fn parse_stsz(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
         sample_table.sample_size = SampleSize::FixedSize(sample_size);
         return Ok(());
     }
-    let mut sample_sizes: Vec<u32> = Vec::new();
-    sample_sizes.reserve(sample_count);
+    let mut sample_sizes: Vec<u32> = Vec::with_capacity(sample_count);
     for _ in 0..sample_count {
         // unsigned int(32) entry_size;
         sample_sizes.push(stream.read_u32()?);

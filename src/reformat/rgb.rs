@@ -180,15 +180,11 @@ impl Image {
         let row_bytes = self.width * self.pixel_size();
         if self.channel_size() == 1 {
             let buffer_size: usize = usize_from_u32(row_bytes * self.height)?;
-            let mut buffer: Vec<u8> = Vec::new();
-            buffer.reserve(buffer_size);
-            buffer.resize(buffer_size, 0);
+            let buffer: Vec<u8> = vec![0; buffer_size];
             self.pixels = Some(Pixels::Buffer(buffer));
         } else {
             let buffer_size: usize = usize_from_u32((row_bytes / 2) * self.height)?;
-            let mut buffer: Vec<u16> = Vec::new();
-            buffer.reserve(buffer_size);
-            buffer.resize(buffer_size, 0);
+            let buffer: Vec<u16> = vec![0; buffer_size];
             self.pixels = Some(Pixels::Buffer16(buffer));
         }
         self.row_bytes = row_bytes;

@@ -1045,8 +1045,7 @@ impl Decoder {
             return Ok(());
         }
         // Item has multiple extents, merge them into a contiguous buffer.
-        let mut data: Vec<u8> = Vec::new();
-        data.reserve(item.size);
+        let mut data: Vec<u8> = Vec::with_capacity(item.size);
         for extent in &item.extents {
             let io = self.io.as_mut().unwrap();
             // TODO: check if enough bytes were actually read.

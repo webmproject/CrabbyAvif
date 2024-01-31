@@ -33,8 +33,7 @@ fn main() {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let abs_library_dir = PathBuf::from(&project_root).join("dav1d");
     let abs_object_dir = PathBuf::from(&abs_library_dir).join(library_path);
-    let object_file = format!("libdav1d.a");
-    let library_file = PathBuf::from(&abs_object_dir).join(object_file);
+    let library_file = PathBuf::from(&abs_object_dir).join("libdav1d.a");
     if !Path::new(&library_file).exists() {
         panic!("dav1d not found. Run dav1d.cmd.");
     }
