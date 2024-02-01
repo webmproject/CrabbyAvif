@@ -27,22 +27,27 @@ impl Pixels {
         }
     }
 
-    pub fn resize(&mut self, size: usize, default: u16) {
+    pub fn resize(&mut self, size: usize, default: u16) -> AvifResult<()> {
         match self {
             Pixels::Pointer(_) => {}
             Pixels::Buffer(buffer) => {
                 if buffer.capacity() < size {
-                    buffer.reserve(size);
+                    if buffer.try_reserve_exact(size).is_err() {
+                        return Err(AvifError::OutOfMemory);
+                    }
                 }
                 buffer.resize(size, default as u8);
             }
             Pixels::Buffer16(buffer) => {
                 if buffer.capacity() < size {
-                    buffer.reserve(size);
+                    if buffer.try_reserve_exact(size).is_err() {
+                        return Err(AvifError::OutOfMemory);
+                    }
                 }
                 buffer.resize(size, default);
             }
         }
+        Ok(())
     }
 
     pub fn is_pointer(&self) -> bool {

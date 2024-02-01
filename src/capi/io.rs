@@ -58,7 +58,9 @@ pub unsafe extern "C" fn avifRWDataRealloc(raw: *mut avifRWData, newSize: usize)
         }
         // Ok to use size as capacity here since we use reserve_exact.
         let mut newData: Vec<u8> = Vec::new();
-        newData.reserve_exact(newSize);
+        if newData.try_reserve_exact(newSize).is_err() {
+            return avifResult::OutOfMemory;
+        }
         if !(*raw).data.is_null() {
             let oldData = Box::from_raw(std::slice::from_raw_parts_mut((*raw).data, (*raw).size));
             let sizeToCopy = std::cmp::min(newSize, oldData.len());
@@ -191,7 +193,9 @@ unsafe extern "C" fn cioRead(
         match (*cio).io.read(offset, size) {
             Ok(data) => {
                 (*cio).buf.clear();
-                (*cio).buf.reserve(data.len());
+                if (*cio).buf.try_reserve_exact(data.len()).is_err() {
+                    return avifResult::OutOfMemory;
+                }
                 (*cio).buf.extend_from_slice(data);
             }
             Err(_) => return avifResult::IoError,

@@ -31,8 +31,10 @@ impl decoder::IO for DecoderFileIO {
         let available_size: usize = (file_size - offset) as usize;
         let size_to_read: usize = if size > available_size { available_size } else { size };
         if size_to_read > 0 {
-            if self.buffer.capacity() < size_to_read {
-                self.buffer.reserve(size_to_read);
+            if self.buffer.capacity() < size_to_read
+                && self.buffer.try_reserve_exact(size_to_read).is_err()
+            {
+                return Err(AvifError::OutOfMemory);
             }
             self.buffer.resize(size_to_read, 0);
             if self

@@ -250,7 +250,7 @@ impl Image {
                 });
             }
             let pixels = self.planes2[plane_index].as_mut().unwrap();
-            pixels.resize(plane_size, default_value);
+            pixels.resize(plane_size, default_value)?;
             self.row_bytes[plane_index] = u32_from_usize(width * pixel_size)?;
             self.image_owns_planes[plane_index] = true;
         }

@@ -231,3 +231,11 @@ pub fn limited_to_full_y(depth: u8, v: u16) -> u16 {
         _ => 0,
     }
 }
+
+pub fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
+    let mut v = Vec::<T>::new();
+    if v.try_reserve_exact(size).is_err() {
+        return Err(AvifError::OutOfMemory);
+    }
+    Ok(v)
+}

@@ -232,7 +232,10 @@ fn parse_header(stream: &mut IStream) -> AvifResult<BoxHeader> {
 fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
     let major_brand = stream.read_string(4)?;
     let minor_version = stream.read_u32()?;
-    let mut compatible_brands: Vec<String> = Vec::new();
+    if stream.bytes_left() % 4 != 0 {
+        return Err(AvifError::BmffParseFailed);
+    }
+    let mut compatible_brands: Vec<String> = create_vec_exact(stream.bytes_left() / 4)?;
     while stream.has_bytes_left() {
         compatible_brands.push(stream.read_string(4)?);
     }
@@ -600,7 +603,7 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
     let (version, flags) = stream.read_version_and_flags()?;
     // unsigned int(32) entry_count;
     let entry_count = stream.read_u32()?;
-    let mut ipma: Vec<ItemPropertyAssociation> = Vec::new();
+    let mut ipma: Vec<ItemPropertyAssociation> = create_vec_exact(usize_from_u32(entry_count)?)?;
     for _i in 0..entry_count {
         let mut entry = ItemPropertyAssociation {
             version,
@@ -728,7 +731,7 @@ fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
         // unsigned int(32) entry_count;
         stream.read_u32()?
     };
-    let mut iinf: Vec<ItemInfo> = Vec::new();
+    let mut iinf: Vec<ItemInfo> = create_vec_exact(usize_from_u32(entry_count)?)?;
     for _i in 0..entry_count {
         let header = parse_header(stream)?;
         if header.box_type != "infe" {
