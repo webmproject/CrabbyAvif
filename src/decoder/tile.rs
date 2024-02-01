@@ -168,11 +168,6 @@ impl Tile {
             let mut sample_size: usize = 0;
             let layer_id = usize_from_u16(lsel)?;
             if layer_count > 0 {
-                // TODO: test this with a case?
-                if true {
-                    println!("in lsel case!");
-                    return Err(AvifError::InvalidImageGrid);
-                }
                 // Optimization: If we're selecting a layer that doesn't require the entire image's
                 // payload (hinted via the a1lx box).
                 if layer_id >= layer_count {
