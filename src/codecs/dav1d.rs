@@ -25,7 +25,7 @@ const DAV1D_EAGAIN: i32 = -libc::EAGAIN;
 impl Decoder for Dav1d {
     fn initialize(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
         if self.context.is_some() {
-            return Ok(()); // Already initialized.
+            return Ok(());
         }
         let mut settings_uninit: MaybeUninit<Dav1dSettings> = MaybeUninit::uninit();
         unsafe { dav1d_default_settings(settings_uninit.as_mut_ptr()) };
@@ -40,8 +40,6 @@ impl Decoder for Dav1d {
             let mut dec = MaybeUninit::uninit();
             let ret = dav1d_open(dec.as_mut_ptr(), (&settings) as *const _);
             if ret != 0 {
-                // TODO: carry forward the error within the enum as a string.
-                // Here and elsewhere in this file.
                 return Err(AvifError::UnknownError);
             }
             self.context = Some(dec.assume_init());
@@ -61,7 +59,6 @@ impl Decoder for Dav1d {
         }
         let got_picture;
         let av1_payload_len = av1_payload.len();
-        //println!("paylaoad len: {av1_payload_len}");
         unsafe {
             let mut data: Dav1dData = std::mem::zeroed();
             let res = dav1d_data_wrap(
@@ -71,7 +68,6 @@ impl Decoder for Dav1d {
                 Some(avif_dav1d_free_callback),
                 /*cookie=*/ std::ptr::null_mut(),
             );
-            //println!("dav1d_data_wrap returned {res}");
             if res != 0 {
                 return Err(AvifError::UnknownError);
             }
@@ -79,7 +75,6 @@ impl Decoder for Dav1d {
             loop {
                 if !data.data.is_null() {
                     let res = dav1d_send_data(self.context.unwrap(), (&mut data) as *mut _);
-                    //println!("dav1d_send_data returned {res}");
                     if res < 0 && res != DAV1D_EAGAIN {
                         dav1d_data_unref((&mut data) as *mut _);
                         return Err(AvifError::UnknownError);
@@ -87,7 +82,6 @@ impl Decoder for Dav1d {
                 }
 
                 let res = dav1d_get_picture(self.context.unwrap(), (&mut next_frame) as *mut _);
-                //println!("dav1d_get_picture returned {res}");
                 if res == DAV1D_EAGAIN {
                     // send more data.
                     if !data.data.is_null() {
@@ -122,15 +116,17 @@ impl Decoder for Dav1d {
                     dav1d_picture_unref((&mut previous_picture) as *mut _);
                 }
                 self.picture = Some(next_frame);
-                // store other fields like color range, etc.
             } else {
-                // TODO: handle alpha special case.
+                if category == 1 && self.picture.is_some() {
+                    // Special case for alpha, re-use last frame.
+                } else {
+                    return Err(AvifError::UnknownError);
+                }
             }
         }
 
         let dav1d_picture = self.picture.as_ref().unwrap();
         if category == 0 || category == 2 {
-            // if image dimensinos/yuv format does not match, deallocate the image.
             image.width = dav1d_picture.p.w as u32;
             image.height = dav1d_picture.p.h as u32;
             image.depth = dav1d_picture.p.bpc as u8;
@@ -157,15 +153,15 @@ impl Decoder for Dav1d {
                 image.image_owns_planes[plane] = false;
             }
         } else if category == 1 {
-            /*
-            if image.width != (dav1d_picture.p.w as u32)
-                || image.height != (dav1d_picture.p.h as u32)
-                || image.depth != (dav1d_picture.p.bpc as u8)
+            if image.width > 0
+                && image.height > 0
+                && (image.width != (dav1d_picture.p.w as u32)
+                    || image.height != (dav1d_picture.p.h as u32)
+                    || image.depth != (dav1d_picture.p.bpc as u8))
             {
                 // Alpha plane does not match the previous alpha plane.
-                return false;
+                return Err(AvifError::UnknownError);
             }
-            */
             image.width = dav1d_picture.p.w as u32;
             image.height = dav1d_picture.p.h as u32;
             image.depth = dav1d_picture.p.bpc as u8;
@@ -182,11 +178,9 @@ impl Decoder for Dav1d {
 impl Drop for Dav1d {
     fn drop(&mut self) {
         if self.picture.is_some() {
-            //println!("unreffing dav1d picture");
             unsafe { dav1d_picture_unref(self.picture.as_mut().unwrap() as *mut _) };
         }
         if self.context.is_some() {
-            //println!("closing dav1d");
             unsafe { dav1d_close(&mut self.context.unwrap()) };
         }
     }
