@@ -11,4 +11,6 @@
 /sys/libyuv-sys/src/libyuv.rs
 /sys/libyuv-sys/libyuv
 /target
+/third_party/av1-avif
 /third_party/googletest
+/third_party/libavif
