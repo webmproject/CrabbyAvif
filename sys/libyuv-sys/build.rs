@@ -19,9 +19,9 @@ fn main() {
         } else if build_target.contains("x86") {
             "build.android/x86"
         } else if build_target.contains("aarch64") {
-            "build.android/aarch64"
+            "build.android/arm64-v8a"
         } else if build_target.contains("arm") {
-            "build.android/arm"
+            "build.android/armeabi-v7a"
         } else {
             panic!("Unknown target_arch for android. Must be one of x86, x86_64, arm, aarch64.");
         }

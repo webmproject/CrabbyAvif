@@ -257,8 +257,6 @@ impl Image {
         Ok(())
     }
 
-    /*
-    // TODO: enable this function after fixing it with Pixels.
     pub fn copy_from_slice(
         &mut self,
         source: &[u8],
@@ -266,26 +264,31 @@ impl Image {
         category: usize,
     ) -> AvifResult<()> {
         self.allocate_planes(category)?;
-        let pixel_size: u64 = if self.depth == 8 { 1 } else { 2 };
         if self.width == stride {
+            println!("width and stride are the same");
             // When width is the same as stride, we can do a full plane copy (instead of
             // row-by-row).
             let planes: &[Plane] = if category == 1 { &A_PLANE } else { &YUV_PLANES };
             let mut src_offset = 0;
             for plane in planes {
                 let plane = *plane;
-                let plane_index = plane.to_usize();
                 let width = self.width(plane);
                 let height = self.height(plane);
                 let plane_size = width * height; // Pixel size does not matter because stride is
                                                  // the same as width.
                 let src_slice = &source[src_offset..src_offset + plane_size];
-                let dst_slice = &mut self.plane_buffers[plane_index][0..plane_size];
+                let plane_mut = self.plane_mut(plane).unwrap();
+                let dst_slice = &mut plane_mut.data.unwrap()[0..plane_size]; // Assumes 8-bit.
                 dst_slice.copy_from_slice(src_slice);
+                println!("copied {plane_size} bytes");
                 src_offset += plane_size;
             }
             return Ok(());
         }
+        panic!("width and stride are not the same. not implmented.");
+        /*
+        TODO: enable this function after fixing it with Pixels.
+        let pixel_size: u64 = if self.depth == 8 { 1 } else { 2 };
         if category == 0 || category == 2 {
             let mut src_offset: u64 = 0;
             for plane in YUV_PLANES {
@@ -336,8 +339,8 @@ impl Image {
             }
         }
         Ok(())
+        */
     }
-    */
 
     pub fn steal_from(&mut self, src: &Image, category: usize) {
         // This function is used only when both src and self contains only pointers.

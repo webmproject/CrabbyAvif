@@ -929,9 +929,10 @@ impl Decoder {
     fn can_use_single_codec(&self) -> bool {
         #[cfg(feature = "android_mediacodec")]
         {
-            // Android MediaCodec does not support using a single codec
-            // instance for images of varying formats (which could happen
-            // when image contains alpha).
+            // Android MediaCodec does not support using a single codec instance for images of
+            // varying formats (which could happen when image contains alpha).
+            // TODO: return false for now. But investigate cases where it is possible to use a
+            // single codec instance.
             return false;
         }
         let total_tile_count = self.tiles[0].len() + self.tiles[1].len() + self.tiles[2].len();
@@ -1148,8 +1149,6 @@ impl Decoder {
 
                     if category == 0 || category == 1 {
                         self.image.steal_from(&tile.image, category);
-                        // TODO: These likely may not work with android mediacodec since it does
-                        // not use pointer.
                         if category == 1 && !tile.image.full_range {
                             self.image.alpha_to_full_range()?;
                         }

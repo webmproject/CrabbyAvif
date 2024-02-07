@@ -108,6 +108,7 @@ conversion_function!(u32_from_usize, u32, usize);
 conversion_function!(u32_from_u64, u32, u64);
 conversion_function!(u32_from_i32, u32, i32);
 conversion_function!(i32_from_u32, i32, u32);
+conversion_function!(isize_from_i32, isize, i32);
 conversion_function!(isize_from_u32, isize, u32);
 conversion_function!(isize_from_usize, isize, usize);
 

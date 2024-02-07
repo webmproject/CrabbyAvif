@@ -1,5 +1,7 @@
 use crate::codecs::Decoder;
 use crate::image::Image;
+use crate::internal_utils::pixels::*;
+use crate::internal_utils::*;
 use crate::*;
 
 use ndk::media::media_codec::DequeuedInputBufferResult;
@@ -23,8 +25,8 @@ impl Decoder for MediaCodec {
         if self.codec.is_some() {
             return Ok(()); // Already initialized.
         }
-        self.codec = NdkMediaCodec::from_decoder_type("video/av01");
-        //self.codec = NdkMediaCodec::from_codec_name("c2.android.av1.decoder");
+        //self.codec = NdkMediaCodec::from_decoder_type("video/av01");
+        self.codec = NdkMediaCodec::from_codec_name("c2.android.av1.decoder");
         if self.codec.is_none() {
             return Err(AvifError::NoCodecAvailable);
         }
@@ -33,11 +35,8 @@ impl Decoder for MediaCodec {
         format.set_i32("width", 200);
         format.set_i32("height", 200);
 
-        // TODO: Need to set it to 2135033992 but seems to be having some
-        // stride issues. Investigate.
-
-        // format.set_i32("color-format", 2135033992);
-        // format.set_i32("color-format", 19);
+        // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Flexible
+        format.set_i32("color-format", 2135033992);
 
         // TODO: for 10-bit need to set format to 54 in order to get 10-bit
         // output. Or maybe it is possible to get RGB 1010102 itself?
@@ -155,8 +154,7 @@ impl Decoder for MediaCodec {
         println!("getting stride");
         // TODO: Figure out if this stride accounts for pixel size.
         let stride = format.i32("stride").ok_or(AvifError::UnknownError)?;
-        // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Planar
-        let color_format = format.i32("color-format").unwrap_or(19);
+        let color_format = format.i32("color-format").unwrap_or(2135033992);
         println!("width: {:#?}", width);
         println!("height: {:#?}", height);
         println!("stride: {:#?}", stride);
@@ -167,7 +165,7 @@ impl Decoder for MediaCodec {
             image.depth = 8; // TODO: 10?
             image.yuv_format = match color_format {
                 // Android maps all AV1 8-bit images into yuv 420.
-                19 | 2135033992 => PixelFormat::Yuv420,
+                2135033992 => PixelFormat::Yuv420,
                 _ => {
                     println!("unknown color format: {color_format}");
                     return Err(AvifError::UnknownError);
@@ -180,15 +178,31 @@ impl Decoder for MediaCodec {
             image.transfer_characteristics = TransferCharacteristics::Unspecified;
             image.matrix_coefficients = MatrixCoefficients::Unspecified;
 
-            image.copy_from_slice(buffer.buffer(), stride as u32, category)?;
+            let ptr = buffer.buffer().as_ptr();
+            image.planes2[0] = Some(Pixels::Pointer(ptr as *mut u8));
+            // TODO: u and v order must be inverted for color format 19.
+            let u_plane_offset = isize_from_i32(stride * height)?;
+            image.planes2[2] = Some(Pixels::Pointer(
+                unsafe { ptr.offset(u_plane_offset) } as *mut u8
+            ));
+            let u_plane_size = isize_from_i32(((width + 1) / 2) * ((height + 1) / 2))?;
+            let v_plane_offset = u_plane_offset + u_plane_size;
+            image.planes2[1] = Some(Pixels::Pointer(
+                unsafe { ptr.offset(v_plane_offset) } as *mut u8
+            ));
+
+            image.row_bytes[0] = stride as u32;
+            image.row_bytes[1] = ((stride + 1) / 2) as u32;
+            image.row_bytes[2] = ((stride + 1) / 2) as u32;
         } else if category == 1 {
             // TODO: make sure alpha plane matches previous alpha plane.
             image.width = width as u32;
             image.height = height as u32;
             image.depth = 8; // TODO: 10?
             image.full_range = format.i32("color-range").unwrap_or(0) == 1;
-
-            image.copy_from_slice(buffer.buffer(), stride as u32, category)?;
+            let ptr = buffer.buffer().as_ptr();
+            image.planes2[3] = Some(Pixels::Pointer(ptr as *mut u8));
+            image.row_bytes[3] = stride as u32;
         }
         // TODO: gainmap category.
         Ok(())
