@@ -103,11 +103,14 @@ macro_rules! conversion_function {
 conversion_function!(usize_from_u64, usize, u64);
 conversion_function!(usize_from_u32, usize, u32);
 conversion_function!(usize_from_u16, usize, u16);
+#[cfg(feature = "android_mediacodec")]
+conversion_function!(usize_from_isize, usize, isize);
 conversion_function!(u64_from_usize, u64, usize);
 conversion_function!(u32_from_usize, u32, usize);
 conversion_function!(u32_from_u64, u32, u64);
 conversion_function!(u32_from_i32, u32, i32);
 conversion_function!(i32_from_u32, i32, u32);
+#[cfg(feature = "android_mediacodec")]
 conversion_function!(isize_from_i32, isize, i32);
 conversion_function!(isize_from_u32, isize, u32);
 conversion_function!(isize_from_usize, isize, usize);

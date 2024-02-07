@@ -932,7 +932,7 @@ impl Decoder {
             // Android MediaCodec does not support using a single codec instance for images of
             // varying formats (which could happen when image contains alpha).
             // TODO: return false for now. But investigate cases where it is possible to use a
-            // single codec instance.
+            // single codec instance (it may work for grids).
             return false;
         }
         let total_tile_count = self.tiles[0].len() + self.tiles[1].len() + self.tiles[2].len();
