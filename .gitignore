@@ -8,8 +8,9 @@
 /sys/dav1d-sys/dav1d
 /sys/libgav1-sys/src/libgav1.rs
 /sys/libgav1-sys/libgav1
-/sys/libyuv-sys/src/libyuv.rs
 /sys/libyuv-sys/libyuv
+/sys/libyuv-sys/src/libyuv.rs
+/sys/ndk-sys/src/bindings.rs
 /target
 /third_party/av1-avif
 /third_party/googletest
