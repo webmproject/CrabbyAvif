@@ -68,6 +68,11 @@ fn main() {
         "AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED",
         "AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED",
         "AMEDIACODEC_INFO_TRY_AGAIN_LATER",
+        "AMEDIAFORMAT_KEY_COLOR_FORMAT",
+        "AMEDIAFORMAT_KEY_HEIGHT",
+        "AMEDIAFORMAT_KEY_MIME",
+        "AMEDIAFORMAT_KEY_STRIDE",
+        "AMEDIAFORMAT_KEY_WIDTH",
     ];
     for allowlist_var in allowlist_vars {
         bindings = bindings.allowlist_var(allowlist_var);
