@@ -31,24 +31,47 @@ fn main() {
         .clang_arg(format!("--sysroot={sysroot}"))
         .clang_arg(format!("--target={build_target}"))
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .derive_default(true)
         .layout_tests(false)
         .generate_comments(false);
-    /*
     let allowlist_items = &[
-        "dav1d_close",
-        "dav1d_data_unref",
-        "dav1d_data_wrap",
-        "dav1d_default_settings",
-        "dav1d_error",
-        "dav1d_get_picture",
-        "dav1d_open",
-        "dav1d_picture_unref",
-        "dav1d_send_data",
+        "AMediaCodec",
+        "AMediaCodecBufferInfo",
+        "AMediaCodec_configure",
+        "AMediaCodec_createCodecByName",
+        "AMediaCodec_createDecoderByType",
+        "AMediaCodec_delete",
+        "AMediaCodec_dequeueInputBuffer",
+        "AMediaCodec_dequeueOutputBuffer",
+        "AMediaCodec_getInputBuffer",
+        "AMediaCodec_getOutputBuffer",
+        "AMediaCodec_getOutputFormat",
+        "AMediaCodec_queueInputBuffer",
+        "AMediaCodec_releaseOutputBuffer",
+        "AMediaCodec_releaseOutputBuffer",
+        "AMediaCodec_start",
+        "AMediaCodec_stop",
+        "AMediaFormat",
+        "AMediaFormat_delete",
+        "AMediaFormat_getInt32",
+        "AMediaFormat_new",
+        "AMediaFormat_setInt32",
+        "AMediaFormat_setString",
     ];
     for allowlist_item in allowlist_items {
         bindings = bindings.allowlist_item(allowlist_item);
     }
-    */
+    // Ideally, we should be able to merge this list with the one above. But somehow bindgen does
+    // not generate bindings for these when they are called with allowlist_item instead of
+    // allowlist_var.
+    let allowlist_vars = &[
+        "AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED",
+        "AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED",
+        "AMEDIACODEC_INFO_TRY_AGAIN_LATER",
+    ];
+    for allowlist_var in allowlist_vars {
+        bindings = bindings.allowlist_var(allowlist_var);
+    }
     let bindings = bindings
         .generate()
         .unwrap_or_else(|_| panic!("Unable to generate bindings for dav1d."));

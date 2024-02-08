@@ -7,7 +7,6 @@ use crate::*;
 use ndk_sys::bindings::*;
 
 use std::ffi::CString;
-use std::mem::MaybeUninit;
 use std::ptr;
 
 #[derive(Debug, Default)]
@@ -51,13 +50,16 @@ impl Decoder for MediaCodec {
             AMediaFormat_setInt32(format, height_str, 200);
 
             // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Flexible
-            c_str!(color_format_str, color_format_str_tmp, "color-format");
+            //c_str!(color_format_str, color_format_str_tmp, "color-format");
             //AMediaFormat_setInt32(format, color_format_str, 2135033992);
-            AMediaFormat_setInt32(format, color_format_str, 19);
+            //AMediaFormat_setInt32(format, color_format_str, 19);
 
             // TODO: for 10-bit need to set format to 54 in order to get 10-bit
             // output. Or maybe it is possible to get RGB 1010102 itself?
             // int32_t COLOR_FormatYUVP010 = 54;
+            // rgb 1010102 = 2130750114
+            //c_str!(color_format_str, color_format_str_tmp, "color-format");
+            //AMediaFormat_setInt32(format, color_format_str, 54);
 
             // TODO: may have to set width and height.
             // fox is 1204x800.
@@ -131,7 +133,7 @@ impl Decoder for MediaCodec {
         let mut buffer: Option<*mut u8> = None;
         let mut buffer_size: usize = 0;
         let mut retry_count = 0;
-        let mut buffer_info: AMediaCodecBufferInfo = unsafe { MaybeUninit::zeroed().assume_init() };
+        let mut buffer_info = AMediaCodecBufferInfo::default();
         while retry_count < 100 {
             retry_count += 1;
             //println!("mediacodec trying to dequeue output");
@@ -168,7 +170,7 @@ impl Decoder for MediaCodec {
                     //println!("try again!");
                     continue;
                 } else {
-                    println!("mediacodec dequeue_output_buffer");
+                    println!("mediacodec dequeue_output_buffer failed: {output_index}");
                     return Err(AvifError::UnknownError);
                 }
             }
