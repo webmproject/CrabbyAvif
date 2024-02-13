@@ -1,13 +1,9 @@
 // Build rust library and bindings for dav1d.
 
 use std::env;
-use std::path::Path;
 use std::path::PathBuf;
 
-fn path_buf(inputs: &[&str]) -> PathBuf {
-    let path: PathBuf = inputs.iter().collect();
-    path
-}
+extern crate pkg_config;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -29,27 +25,37 @@ fn main() {
         "build"
     };
 
-    let library_path = path_buf(&[build_dir, "src"]);
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let abs_library_dir = PathBuf::from(&project_root).join("dav1d");
-    let abs_object_dir = PathBuf::from(&abs_library_dir).join(library_path);
-    let library_file = PathBuf::from(&abs_object_dir).join("libdav1d.a");
-    if !Path::new(&library_file).exists() {
-        panic!("dav1d not found. Run dav1d.cmd.");
+    // Prefer locally built dav1d if available.
+    env::set_var(
+        "PKG_CONFIG_PATH",
+        format!("dav1d/{build_dir}/meson-uninstalled"),
+    );
+    let library = pkg_config::Config::new().probe("dav1d");
+    if library.is_err() {
+        println!(
+            "dav1d could not be found with pkg-config. Install the system library or run dav1d.cmd"
+        );
     }
-    println!("cargo:rustc-link-search={}", abs_object_dir.display());
-    println!("cargo:rustc-link-lib=static=dav1d");
+    let library = library.unwrap();
+    for lib in &library.libs {
+        println!("cargo:rustc-link-lib={lib}");
+    }
+    for link_path in &library.link_paths {
+        println!("cargo:rustc-link-search={}", link_path.display());
+    }
+    let mut include_str = String::new();
+    for include_path in &library.include_paths {
+        include_str.push_str("-I");
+        include_str.push_str(&include_path.to_str().unwrap());
+    }
 
     // Generate bindings.
-    let header_file =
-        PathBuf::from(&abs_library_dir).join(path_buf(&["include", "dav1d", "dav1d.h"]));
-    let version_dir =
-        PathBuf::from(&abs_library_dir).join(path_buf(&[build_dir, "include", "dav1d"]));
-    let outfile = PathBuf::from(&project_root).join(path_buf(&["src", "dav1d.rs"]));
-    let extra_includes_str = format!("-I{}", version_dir.display());
+    let header_file = PathBuf::from(&project_root).join("wrapper.h");
+    let outfile = PathBuf::from(&project_root).join("dav1d.rs");
     let mut bindings = bindgen::Builder::default()
         .header(header_file.into_os_string().into_string().unwrap())
-        .clang_arg(extra_includes_str)
+        .clang_arg(include_str)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .layout_tests(false)
         .generate_comments(false);
