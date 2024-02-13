@@ -33,17 +33,40 @@ fn main() {
     let abs_library_dir = PathBuf::from(&project_root).join("libyuv");
     let abs_object_dir = PathBuf::from(&abs_library_dir).join(build_dir);
     let library_file = PathBuf::from(&abs_object_dir).join("libyuv.a");
-    if !Path::new(&library_file).exists() {
-        panic!("libyuv not found. Run libyuv.cmd.");
+    let extra_includes_str;
+    if Path::new(&library_file).exists() {
+        println!("cargo:rustc-link-lib=static=yuv");
+        println!("cargo:rustc-link-search={}", abs_object_dir.display());
+        let version_dir = PathBuf::from(&abs_library_dir).join(path_buf(&["include"]));
+        extra_includes_str = format!("-I{}", version_dir.display());
+    } else {
+        // Local library was not found. Look for a system library.
+        match pkg_config::Config::new().probe("yuv") {
+            Ok(library) => {
+                for lib in &library.libs {
+                    println!("cargo:rustc-link-lib={lib}");
+                }
+                for link_path in &library.link_paths {
+                    println!("cargo:rustc-link-search={}", link_path.display());
+                }
+                let mut include_str = String::new();
+                for include_path in &library.include_paths {
+                    include_str.push_str("-I");
+                    include_str.push_str(&include_path.to_str().unwrap());
+                }
+                extra_includes_str = include_str;
+            }
+            Err(_) => {
+                // Try to build without any extra flags.
+                println!("cargo:rustc-link-lib=yuv");
+                extra_includes_str = String::new();
+            }
+        }
     }
-    println!("cargo:rustc-link-search={}", abs_object_dir.display());
-    println!("cargo:rustc-link-lib=static=yuv");
 
     // Generate bindings.
-    let header_file = PathBuf::from(&abs_library_dir).join(path_buf(&["include", "libyuv.h"]));
-    let version_dir = PathBuf::from(&abs_library_dir).join(path_buf(&["include"]));
+    let header_file = PathBuf::from(&project_root).join("wrapper.h");
     let outfile = PathBuf::from(&project_root).join(path_buf(&["src", "libyuv.rs"]));
-    let extra_includes_str = format!("-I{}", version_dir.display());
     let mut bindings = bindgen::Builder::default()
         .header(header_file.into_os_string().into_string().unwrap())
         .clang_arg(extra_includes_str)
