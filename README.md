@@ -11,8 +11,12 @@ Avif parser/decoder implementation in Rust.
 
 ```sh
 git clone https://github.com/webmproject/CrabbyAvif.git
+# If dav1d system library can be found with pkg-config, this step can be
+skipped.
 cd CrabbyAvif/sys/dav1d-sys
 ./dav1d.cmd
+# If libyuv system library can be found with pkg-config, this step can be
+skipped.
 cd ../libyuv-sys
 ./libyuv.cmd
 cd ../..
@@ -31,10 +35,10 @@ cargo test -- --skip test_conformance
 git clone https://github.com/AOMediaCodec/av1-avif.git third_party/av1-avif
 git clone https://github.com/AOMediaCodec/libavif.git third_party/libavif
 cd third_party/libavif/ext
-./aom.cmd
+./dav1d.cmd
 cd ../../..
-cmake -S third_party/libavif -B third_party/libavif/build -DAVIF_CODEC_AOM=LOCAL -DAVIF_BUILD_APPS=ON
-cmake --build third_party/libavif/build --parallel
+cmake -S third_party/libavif -B third_party/libavif/build -DAVIF_CODEC_DAV1D=LOCAL -DAVIF_BUILD_APPS=ON
+cmake --build third_party/libavif/build --parallel -t avifdec
 cargo test -- test_conformance
 ```
 
