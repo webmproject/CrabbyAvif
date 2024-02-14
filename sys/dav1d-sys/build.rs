@@ -47,7 +47,7 @@ fn main() {
     let mut include_str = String::new();
     for include_path in &library.include_paths {
         include_str.push_str("-I");
-        include_str.push_str(&include_path.to_str().unwrap());
+        include_str.push_str(include_path.to_str().unwrap());
     }
 
     // Generate bindings.

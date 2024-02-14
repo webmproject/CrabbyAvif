@@ -1,3 +1,4 @@
+#[cfg(feature = "capi")]
 use std::path::PathBuf;
 
 fn main() {

@@ -31,18 +31,14 @@ impl Pixels {
         match self {
             Pixels::Pointer(_) => {}
             Pixels::Buffer(buffer) => {
-                if buffer.capacity() < size {
-                    if buffer.try_reserve_exact(size).is_err() {
-                        return Err(AvifError::OutOfMemory);
-                    }
+                if buffer.capacity() < size && buffer.try_reserve_exact(size).is_err() {
+                    return Err(AvifError::OutOfMemory);
                 }
                 buffer.resize(size, default as u8);
             }
             Pixels::Buffer16(buffer) => {
-                if buffer.capacity() < size {
-                    if buffer.try_reserve_exact(size).is_err() {
-                        return Err(AvifError::OutOfMemory);
-                    }
+                if buffer.capacity() < size && buffer.try_reserve_exact(size).is_err() {
+                    return Err(AvifError::OutOfMemory);
                 }
                 buffer.resize(size, default);
             }
