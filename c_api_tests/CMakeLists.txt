@@ -13,8 +13,8 @@ set(GTEST_INCLUDE_DIR "${CARGO_ROOT_DIR}/third_party/googletest/googletest/inclu
 set(GTEST_LIBRARIES "${CARGO_ROOT_DIR}/third_party/googletest/build/lib/libgtest.a")
 set(GTEST_MAIN_LIBRARIES "${CARGO_ROOT_DIR}/third_party/googletest/build/lib/libgtest_main.a")
 
-set(CRABBY_AVIF_INCLUDE_DIR "${CARGO_ROOT_DIR}/c_build/usr/local/include/")
-set(CRABBY_AVIF_LIBRARIES "${CARGO_ROOT_DIR}/c_build/usr/local/lib/libcrabby_avif.a")
+set(CRABBY_AVIF_INCLUDE_DIR "${CARGO_ROOT_DIR}/include")
+set(CRABBY_AVIF_LIBRARIES "${CARGO_ROOT_DIR}/target/release/libcrabby_avif.so")
 
 macro(add_avif_gtest TEST_NAME)
     add_executable(${TEST_NAME} ${TEST_NAME}.cc)

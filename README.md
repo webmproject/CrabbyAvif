@@ -19,13 +19,13 @@ cd ../..
 cargo build
 ```
 
-### Tests
+## Tests
 
 ```sh
 cargo test -- --skip test_conformance
 ```
 
-#### Conformance tests
+### Conformance Tests
 
 ```sh
 git clone https://github.com/AOMediaCodec/av1-avif.git third_party/av1-avif
@@ -36,4 +36,21 @@ cd ../../..
 cmake -S third_party/libavif -B third_party/libavif/build -DAVIF_CODEC_AOM=LOCAL -DAVIF_BUILD_APPS=ON
 cmake --build third_party/libavif/build --parallel
 cargo test -- test_conformance
+```
+
+### C API Tests
+
+```sh
+# Build google test
+cd third_party
+./googletest.cmd
+cd ..
+# Build the library with C API enabled
+cargo build --features capi --release
+# Build and run the C/C++ Tests
+mkdir c_build
+cd c_build
+cmake ../c_api_tests/
+make
+make test
 ```
