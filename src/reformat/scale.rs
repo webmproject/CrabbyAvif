@@ -1,3 +1,4 @@
+use crate::decoder::Category;
 use crate::image::*;
 use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
@@ -59,10 +60,10 @@ impl Image {
                 return Err(AvifError::NotImplemented);
             }
             if src.has_plane(Plane::Y) {
-                self.allocate_planes(0)?;
+                self.allocate_planes(Category::Color)?;
             }
             if src.has_plane(Plane::A) {
-                self.allocate_planes(1)?;
+                self.allocate_planes(Category::Alpha)?;
             }
         }
         for plane in ALL_PLANES {

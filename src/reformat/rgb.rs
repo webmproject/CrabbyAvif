@@ -311,6 +311,7 @@ impl Image {
 mod tests {
     use super::*;
 
+    use crate::decoder::Category;
     use crate::image::ALL_PLANES;
     use crate::image::MAX_PLANE_COUNT;
 
@@ -421,8 +422,8 @@ mod tests {
             full_range: yuv_params.full_range,
             ..image::Image::default()
         };
-        image.allocate_planes(0)?;
-        image.allocate_planes(1)?;
+        image.allocate_planes(Category::Color)?;
+        image.allocate_planes(Category::Alpha)?;
         let yuva_planes = &yuv_params.planes;
         for plane in ALL_PLANES {
             let plane_index = plane.to_usize();

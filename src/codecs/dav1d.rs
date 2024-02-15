@@ -1,4 +1,5 @@
 use crate::codecs::Decoder;
+use crate::decoder::Category;
 use crate::image::Image;
 use crate::internal_utils::pixels::*;
 use crate::*;
@@ -52,7 +53,7 @@ impl Decoder for Dav1d {
         av1_payload: &[u8],
         spatial_id: u8,
         image: &mut Image,
-        category: usize,
+        category: Category,
     ) -> AvifResult<()> {
         if self.context.is_none() {
             self.initialize(0, true)?;
@@ -117,7 +118,7 @@ impl Decoder for Dav1d {
                 }
                 self.picture = Some(next_frame);
             } else {
-                if category == 1 && self.picture.is_some() {
+                if category == Category::Alpha && self.picture.is_some() {
                     // Special case for alpha, re-use last frame.
                 } else {
                     return Err(AvifError::UnknownError);
@@ -126,50 +127,54 @@ impl Decoder for Dav1d {
         }
 
         let dav1d_picture = self.picture.as_ref().unwrap();
-        if category == 0 || category == 2 {
-            image.width = dav1d_picture.p.w as u32;
-            image.height = dav1d_picture.p.h as u32;
-            image.depth = dav1d_picture.p.bpc as u8;
-
-            image.yuv_format = match dav1d_picture.p.layout {
-                0 => PixelFormat::Monochrome,
-                1 => PixelFormat::Yuv420,
-                2 => PixelFormat::Yuv422,
-                3 => PixelFormat::Yuv444,
-                _ => PixelFormat::Yuv420, // not reached.
-            };
-            let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
-            image.full_range = seq_hdr.color_range != 0;
-            image.chroma_sample_position = seq_hdr.chr.into();
-
-            image.color_primaries = (seq_hdr.pri as u16).into();
-            image.transfer_characteristics = (seq_hdr.trc as u16).into();
-            image.matrix_coefficients = (seq_hdr.mtrx as u16).into();
-
-            for plane in 0usize..image.yuv_format.plane_count() {
-                image.planes2[plane] = Some(Pixels::Pointer(dav1d_picture.data[plane] as *mut u8));
-                let stride_index = if plane == 0 { 0 } else { 1 };
-                image.row_bytes[plane] = dav1d_picture.stride[stride_index] as u32;
-                image.image_owns_planes[plane] = false;
+        match category {
+            Category::Alpha => {
+                if image.width > 0
+                    && image.height > 0
+                    && (image.width != (dav1d_picture.p.w as u32)
+                        || image.height != (dav1d_picture.p.h as u32)
+                        || image.depth != (dav1d_picture.p.bpc as u8))
+                {
+                    // Alpha plane does not match the previous alpha plane.
+                    return Err(AvifError::UnknownError);
+                }
+                image.width = dav1d_picture.p.w as u32;
+                image.height = dav1d_picture.p.h as u32;
+                image.depth = dav1d_picture.p.bpc as u8;
+                image.planes2[3] = Some(Pixels::Pointer(dav1d_picture.data[0] as *mut u8));
+                image.row_bytes[3] = dav1d_picture.stride[0] as u32;
+                image.image_owns_planes[3] = false;
+                let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
+                image.full_range = seq_hdr.color_range != 0;
             }
-        } else if category == 1 {
-            if image.width > 0
-                && image.height > 0
-                && (image.width != (dav1d_picture.p.w as u32)
-                    || image.height != (dav1d_picture.p.h as u32)
-                    || image.depth != (dav1d_picture.p.bpc as u8))
-            {
-                // Alpha plane does not match the previous alpha plane.
-                return Err(AvifError::UnknownError);
+            _ => {
+                image.width = dav1d_picture.p.w as u32;
+                image.height = dav1d_picture.p.h as u32;
+                image.depth = dav1d_picture.p.bpc as u8;
+
+                image.yuv_format = match dav1d_picture.p.layout {
+                    0 => PixelFormat::Monochrome,
+                    1 => PixelFormat::Yuv420,
+                    2 => PixelFormat::Yuv422,
+                    3 => PixelFormat::Yuv444,
+                    _ => PixelFormat::Yuv420, // not reached.
+                };
+                let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
+                image.full_range = seq_hdr.color_range != 0;
+                image.chroma_sample_position = seq_hdr.chr.into();
+
+                image.color_primaries = (seq_hdr.pri as u16).into();
+                image.transfer_characteristics = (seq_hdr.trc as u16).into();
+                image.matrix_coefficients = (seq_hdr.mtrx as u16).into();
+
+                for plane in 0usize..image.yuv_format.plane_count() {
+                    image.planes2[plane] =
+                        Some(Pixels::Pointer(dav1d_picture.data[plane] as *mut u8));
+                    let stride_index = if plane == 0 { 0 } else { 1 };
+                    image.row_bytes[plane] = dav1d_picture.stride[stride_index] as u32;
+                    image.image_owns_planes[plane] = false;
+                }
             }
-            image.width = dav1d_picture.p.w as u32;
-            image.height = dav1d_picture.p.h as u32;
-            image.depth = dav1d_picture.p.bpc as u8;
-            image.planes2[3] = Some(Pixels::Pointer(dav1d_picture.data[0] as *mut u8));
-            image.row_bytes[3] = dav1d_picture.stride[0] as u32;
-            image.image_owns_planes[3] = false;
-            let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
-            image.full_range = seq_hdr.color_range != 0;
         }
         Ok(())
     }

@@ -42,7 +42,7 @@ impl DecodeSample {
 pub struct DecodeInput {
     pub samples: Vec<DecodeSample>,
     pub all_layers: bool,
-    pub category: u8,
+    pub category: Category,
 }
 
 #[derive(Debug, Default, Copy, Clone)]

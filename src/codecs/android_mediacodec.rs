@@ -1,4 +1,5 @@
 use crate::codecs::Decoder;
+use crate::decoder::Category;
 use crate::image::Image;
 use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
@@ -93,7 +94,7 @@ impl Decoder for MediaCodec {
         av1_payload: &[u8],
         _spatial_id: u8,
         image: &mut Image,
-        category: usize,
+        category: Category,
     ) -> AvifResult<()> {
         if self.codec.is_none() {
             self.initialize(0, true)?;
@@ -198,53 +199,56 @@ impl Decoder for MediaCodec {
         // color-range is documented but the key variable is not exposed in the NDK:
         // https://developer.android.com/reference/android/media/MediaFormat#KEY_COLOR_RANGE
         let color_range = get_i32_from_str(format, "color-range").unwrap_or(2);
-        if category == 0 {
-            image.width = width as u32;
-            image.height = height as u32;
-            image.depth = 8; // TODO: 10?
-            let mut reverse_uv = true;
-            image.yuv_format = match color_format {
-                // Android maps all AV1 8-bit images into yuv 420.
-                2135033992 => PixelFormat::Yuv420,
-                19 => {
-                    reverse_uv = false;
-                    PixelFormat::Yuv420
-                }
-                _ => {
-                    println!("unknown color format: {color_format}");
-                    return Err(AvifError::UnknownError);
-                }
-            };
-            image.full_range = color_range == 1;
-            image.chroma_sample_position = ChromaSamplePosition::Unknown;
+        match category {
+            Category::Alpha => {
+                // TODO: make sure alpha plane matches previous alpha plane.
+                image.width = width as u32;
+                image.height = height as u32;
+                image.depth = 8; // TODO: 10?
+                image.full_range = color_range == 1;
+                image.planes2[3] = Some(Pixels::Pointer(buffer));
+                image.row_bytes[3] = stride as u32;
+            }
+            _ => {
+                image.width = width as u32;
+                image.height = height as u32;
+                image.depth = 8; // TODO: 10?
+                let mut reverse_uv = true;
+                image.yuv_format = match color_format {
+                    // Android maps all AV1 8-bit images into yuv 420.
+                    2135033992 => PixelFormat::Yuv420,
+                    19 => {
+                        reverse_uv = false;
+                        PixelFormat::Yuv420
+                    }
+                    _ => {
+                        println!("unknown color format: {color_format}");
+                        return Err(AvifError::UnknownError);
+                    }
+                };
+                image.full_range = color_range == 1;
+                image.chroma_sample_position = ChromaSamplePosition::Unknown;
 
-            image.color_primaries = ColorPrimaries::Unspecified;
-            image.transfer_characteristics = TransferCharacteristics::Unspecified;
-            image.matrix_coefficients = MatrixCoefficients::Unspecified;
+                image.color_primaries = ColorPrimaries::Unspecified;
+                image.transfer_characteristics = TransferCharacteristics::Unspecified;
+                image.matrix_coefficients = MatrixCoefficients::Unspecified;
 
-            image.planes2[0] = Some(Pixels::Pointer(buffer));
-            // TODO: u and v order must be inverted for color format 19.
-            let u_plane_offset = isize_from_i32(stride * height)?;
-            let u_index = if reverse_uv { 2 } else { 1 };
-            image.planes2[u_index] =
-                Some(Pixels::Pointer(unsafe { buffer.offset(u_plane_offset) }));
-            let u_plane_size = isize_from_i32(((width + 1) / 2) * ((height + 1) / 2))?;
-            let v_plane_offset = u_plane_offset + u_plane_size;
-            let v_index = if reverse_uv { 1 } else { 2 };
-            image.planes2[v_index] =
-                Some(Pixels::Pointer(unsafe { buffer.offset(v_plane_offset) }));
+                image.planes2[0] = Some(Pixels::Pointer(buffer));
+                // TODO: u and v order must be inverted for color format 19.
+                let u_plane_offset = isize_from_i32(stride * height)?;
+                let u_index = if reverse_uv { 2 } else { 1 };
+                image.planes2[u_index] =
+                    Some(Pixels::Pointer(unsafe { buffer.offset(u_plane_offset) }));
+                let u_plane_size = isize_from_i32(((width + 1) / 2) * ((height + 1) / 2))?;
+                let v_plane_offset = u_plane_offset + u_plane_size;
+                let v_index = if reverse_uv { 1 } else { 2 };
+                image.planes2[v_index] =
+                    Some(Pixels::Pointer(unsafe { buffer.offset(v_plane_offset) }));
 
-            image.row_bytes[0] = stride as u32;
-            image.row_bytes[1] = ((stride + 1) / 2) as u32;
-            image.row_bytes[2] = ((stride + 1) / 2) as u32;
-        } else if category == 1 {
-            // TODO: make sure alpha plane matches previous alpha plane.
-            image.width = width as u32;
-            image.height = height as u32;
-            image.depth = 8; // TODO: 10?
-            image.full_range = color_range == 1;
-            image.planes2[3] = Some(Pixels::Pointer(buffer));
-            image.row_bytes[3] = stride as u32;
+                image.row_bytes[0] = stride as u32;
+                image.row_bytes[1] = ((stride + 1) / 2) as u32;
+                image.row_bytes[2] = ((stride + 1) / 2) as u32;
+            }
         }
         // TODO: gainmap category.
         Ok(())

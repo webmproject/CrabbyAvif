@@ -1,6 +1,7 @@
 use super::libyuv;
 use super::rgb;
 
+use crate::decoder::Category;
 use crate::image::Plane;
 use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
@@ -171,7 +172,7 @@ impl image::Image {
             row_bytes: [0, 0, 0, self.row_bytes[3]],
             ..image::Image::default()
         };
-        self.allocate_planes(1)?;
+        self.allocate_planes(Category::Alpha)?;
         let width = self.width as usize;
         let depth = self.depth;
         if depth > 8 {
@@ -299,7 +300,7 @@ mod tests {
         image.width = width;
         image.height = height;
         image.depth = yuv_depth;
-        image.allocate_planes(1)?;
+        image.allocate_planes(Category::Alpha)?;
 
         let mut rng = rand::thread_rng();
         let mut expected_values: Vec<u16> = Vec::new();

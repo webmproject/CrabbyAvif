@@ -7,6 +7,7 @@ pub mod libgav1;
 #[cfg(feature = "android_mediacodec")]
 pub mod android_mediacodec;
 
+use crate::decoder::Category;
 use crate::image::Image;
 use crate::AvifResult;
 
@@ -17,7 +18,7 @@ pub trait Decoder {
         av1_payload: &[u8],
         spatial_id: u8,
         image: &mut Image,
-        category: usize,
+        category: Category,
     ) -> AvifResult<()>;
     // Destruction must be implemented using Drop.
 }

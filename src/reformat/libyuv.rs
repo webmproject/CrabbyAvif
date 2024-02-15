@@ -1,6 +1,7 @@
 use super::rgb;
 use super::rgb::*;
 
+use crate::decoder::Category;
 use crate::image;
 use crate::image::*;
 use crate::internal_utils::*;
@@ -641,9 +642,9 @@ fn downshift_to_8bit(
     image8.height = image.height;
     image8.depth = 8;
     image8.yuv_format = image.yuv_format;
-    image8.allocate_planes(0)?;
+    image8.allocate_planes(Category::Color)?;
     if alpha {
-        image8.allocate_planes(1)?;
+        image8.allocate_planes(Category::Alpha)?;
     }
     let scale = 1 << (24 - image.depth);
     for plane in ALL_PLANES {

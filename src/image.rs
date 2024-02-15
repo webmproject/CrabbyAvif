@@ -1,4 +1,5 @@
 use crate::decoder::tile::TileInfo;
+use crate::decoder::Category;
 use crate::decoder::ProgressiveState;
 use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
@@ -224,10 +225,9 @@ impl Image {
         Ok(&mut plane.data16.ok_or(AvifError::NoContent)?[start..end])
     }
 
-    pub fn allocate_planes(&mut self, category: usize) -> AvifResult<()> {
+    pub fn allocate_planes(&mut self, category: Category) -> AvifResult<()> {
         let pixel_size: usize = if self.depth == 8 { 1 } else { 2 };
-        let planes: &[Plane] = if category == 1 { &A_PLANE } else { &YUV_PLANES };
-        for plane in planes {
+        for plane in category.planes() {
             let plane = *plane;
             let plane_index = plane.to_usize();
             let width = self.width(plane);
@@ -257,95 +257,17 @@ impl Image {
         Ok(())
     }
 
-    pub fn copy_from_slice(
-        &mut self,
-        source: &[u8],
-        stride: u32,
-        category: usize,
-    ) -> AvifResult<()> {
-        self.allocate_planes(category)?;
-        if self.width == stride {
-            println!("width and stride are the same");
-            // When width is the same as stride, we can do a full plane copy (instead of
-            // row-by-row).
-            let planes: &[Plane] = if category == 1 { &A_PLANE } else { &YUV_PLANES };
-            let mut src_offset = 0;
-            for plane in planes {
-                let plane = *plane;
-                let width = self.width(plane);
-                let height = self.height(plane);
-                let plane_size = width * height; // Pixel size does not matter because stride is
-                                                 // the same as width.
-                let src_slice = &source[src_offset..src_offset + plane_size];
-                let plane_mut = self.plane_mut(plane).unwrap();
-                let dst_slice = &mut plane_mut.data.unwrap()[0..plane_size]; // Assumes 8-bit.
-                dst_slice.copy_from_slice(src_slice);
-                println!("copied {plane_size} bytes");
-                src_offset += plane_size;
-            }
-            return Ok(());
-        }
-        panic!("width and stride are not the same. not implmented.");
-        /*
-        TODO: enable this function after fixing it with Pixels.
-        let pixel_size: u64 = if self.depth == 8 { 1 } else { 2 };
-        if category == 0 || category == 2 {
-            let mut src_offset: u64 = 0;
-            for plane in YUV_PLANES {
-                let plane_stride = u64_from_usize(self.subsampled_width(stride, plane))?;
-                let width = u64_from_usize(self.width(plane))?;
-                let height = self.height(plane);
-                let row_width = width * pixel_size;
-                let mut dst_offset: u64 = 0;
-                let plane_index = plane.to_usize();
-                for _y in 0..height {
-                    let src_y_start = src_offset;
-                    let src_y_end = src_y_start + row_width;
-                    let src_slice =
-                        &source[usize_from_u64(src_y_start)?..usize_from_u64(src_y_end)?];
-
-                    let dst_y_start = dst_offset;
-                    let dst_y_end = dst_y_start + row_width;
-                    let dst_slice = &mut self.plane_buffers[plane_index]
-                        [usize_from_u64(dst_y_start)?..usize_from_u64(dst_y_end)?];
-
-                    dst_slice.copy_from_slice(src_slice);
-
-                    src_offset += plane_stride;
-                    dst_offset += u64::from(self.row_bytes[plane_index]);
-                }
-            }
-        } else {
-            assert!(category == 1);
-            let mut src_offset: u64 = 0;
-            let width = u64_from_usize(self.width(Plane::A))?;
-            let height = self.height(Plane::A);
-            let row_width = width * pixel_size;
-            let mut dst_offset: u64 = 0;
-            for _y in 0..height {
-                let src_y_start = src_offset;
-                let src_y_end = src_y_start + row_width;
-                let src_slice = &source[usize_from_u64(src_y_start)?..usize_from_u64(src_y_end)?];
-
-                let dst_y_start = dst_offset;
-                let dst_y_end = dst_y_start + row_width;
-                let dst_slice = &mut self.plane_buffers[3]
-                    [usize_from_u64(dst_y_start)?..usize_from_u64(dst_y_end)?];
-
-                dst_slice.copy_from_slice(src_slice);
-
-                src_offset += u64::from(stride);
-                dst_offset += u64::from(self.row_bytes[3]);
-            }
-        }
-        Ok(())
-        */
-    }
-
-    pub fn steal_from(&mut self, src: &Image, category: usize) {
+    pub fn steal_from(&mut self, src: &Image, category: Category) {
         // This function is used only when both src and self contains only pointers.
         match category {
-            0 | 2 => {
+            Category::Alpha => {
+                if src.planes2[3].is_some() {
+                    self.planes2[3] =
+                        Some(Pixels::Pointer(src.planes2[3].as_ref().unwrap().pointer()));
+                }
+                self.row_bytes[3] = src.row_bytes[3];
+            }
+            _ => {
                 if src.planes2[0].is_some() {
                     self.planes2[0] =
                         Some(Pixels::Pointer(src.planes2[0].as_ref().unwrap().pointer()));
@@ -362,16 +284,6 @@ impl Image {
                 self.row_bytes[1] = src.row_bytes[1];
                 self.row_bytes[2] = src.row_bytes[2];
             }
-            1 => {
-                if src.planes2[3].is_some() {
-                    self.planes2[3] =
-                        Some(Pixels::Pointer(src.planes2[3].as_ref().unwrap().pointer()));
-                }
-                self.row_bytes[3] = src.row_bytes[3];
-            }
-            _ => {
-                panic!("invalid category in steal planes");
-            }
         }
     }
 
@@ -380,16 +292,14 @@ impl Image {
         tile: &Image,
         tile_info: &TileInfo,
         tile_index: u32,
-        category: usize,
+        category: Category,
     ) -> AvifResult<()> {
         // This function is used only when |tile| contains pointers and self contains buffers.
         let err = AvifError::BmffParseFailed;
         let row_index = u64::from(tile_index / tile_info.grid.columns);
         let column_index = u64::from(tile_index % tile_info.grid.columns);
         //println!("copying tile {tile_index} {row_index} {column_index}");
-
-        let planes: &[Plane] = if category == 1 { &A_PLANE } else { &YUV_PLANES };
-        for plane in planes {
+        for plane in category.planes() {
             let plane = *plane;
             let src_plane = tile.plane(plane);
             if src_plane.is_none() {
