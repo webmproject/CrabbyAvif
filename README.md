@@ -58,3 +58,19 @@ cmake ../c_api_tests/
 make
 make test
 ```
+
+### Android Tests
+
+The decoder tests can be run on Android using [dinghy](https://crates.io/crates/cargo-dinghy).
+
+```sh
+# One time set up
+cargo install cargo-dinghy
+# Set path to NDK
+export ANDROID_NDK_HOME=<path_to_ndk>
+# Install rust toolchain for target
+rustup target add aarch64-linux-android
+# End of One time set up
+# Make sure the device/emulator is available via adb.
+cargo dinghy -d android test --no-default-features --features android_mediacodec,libyuv --target aarch64-linux-android --test decoder_tests
+```

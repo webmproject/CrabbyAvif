@@ -6,8 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 fn get_test_file(filename: &str) -> String {
-    let project_root = env!("CARGO_MANIFEST_DIR");
-    String::from(format!("{project_root}/tests/data/{filename}"))
+    String::from(format!("tests/data/{filename}"))
 }
 
 fn get_decoder(filename: &str) -> decoder::Decoder {
@@ -114,6 +113,7 @@ fn color_grid_alpha_no_grid() {
 }
 
 // From avifprogressivetest.cc
+#[cfg(not(feature = "android_mediacodec"))]
 #[test_case::test_case("progressive_dimension_change.avif", 2, 256, 256; "progressive_dimension_change")]
 #[test_case::test_case("progressive_layered_grid.avif", 2, 512, 256; "progressive_layered_grid")]
 #[test_case::test_case("progressive_quality_change.avif", 2, 256, 256; "progressive_quality_change")]
