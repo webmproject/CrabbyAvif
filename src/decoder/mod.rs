@@ -1123,12 +1123,6 @@ impl Decoder {
     fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
         for category in Category::ALL {
             let is_grid = self.tile_info[category.usize()].is_grid();
-            if is_grid {
-                match category {
-                    Category::Gainmap => self.gainmap.image.allocate_planes(category)?,
-                    _ => self.image.allocate_planes(category)?,
-                }
-            }
             let previous_decoded_tile_count = self.tile_info[category.usize()].decoded_tile_count;
             for tile_index in
                 previous_decoded_tile_count as usize..self.tiles[category.usize()].len()
@@ -1152,6 +1146,23 @@ impl Decoder {
                 self.tile_info[category.usize()].decoded_tile_count += 1;
 
                 if is_grid {
+                    if tile_index == 0 {
+                        // When using android mediacodec, the decoded image may have a different
+                        // yuv format than the one reported in the headers. use the decoded image
+                        // format in that case.
+                        match category {
+                            Category::Gainmap => {
+                                self.gainmap.image.yuv_format = tile.image.yuv_format;
+                                self.gainmap.image.depth = tile.image.depth;
+                                self.gainmap.image.allocate_planes(category)?;
+                            }
+                            _ => {
+                                self.image.yuv_format = tile.image.yuv_format;
+                                self.image.depth = tile.image.depth;
+                                self.image.allocate_planes(category)?;
+                            }
+                        }
+                    }
                     if !tiles_slice1.is_empty() {
                         let first_tile_image = &tiles_slice1[0].image;
                         if tile.image.width != first_tile_image.width
@@ -1180,12 +1191,14 @@ impl Decoder {
                             tile_index as u32,
                             category,
                         )?,
-                        _ => self.image.copy_from_tile(
-                            &tile.image,
-                            &self.tile_info[category.usize()],
-                            tile_index as u32,
-                            category,
-                        )?,
+                        _ => {
+                            self.image.copy_from_tile(
+                                &tile.image,
+                                &self.tile_info[category.usize()],
+                                tile_index as u32,
+                                category,
+                            )?;
+                        }
                     }
                 } else {
                     // Non grid path, steal planes from the only tile.

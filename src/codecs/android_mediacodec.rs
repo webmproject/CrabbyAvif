@@ -68,7 +68,7 @@ impl Decoder for MediaCodec {
 
             // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Flexible
             //AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_FORMAT, 2135033992);
-            //AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_FORMAT, 19);
+            AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_FORMAT, 19);
 
             // TODO: for 10-bit need to set format to 54 in order to get 10-bit
             // output. Or maybe it is possible to get RGB 1010102 itself?

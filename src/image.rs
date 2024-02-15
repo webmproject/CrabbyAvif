@@ -236,19 +236,18 @@ impl Image {
                 if plane == Plane::A { ((1i32 << self.depth) - 1) as u16 } else { 0 };
             if self.planes2[plane_index].is_some()
                 && self.planes2[plane_index].as_ref().unwrap().size() == plane_size
+                && (self.planes2[plane_index].as_ref().unwrap().pixel_bit_size() == 0
+                    || self.planes2[plane_index].as_ref().unwrap().pixel_bit_size()
+                        == pixel_size * 8)
             {
                 // TODO: need to memset to 0 maybe?
                 continue;
             }
-            if self.planes2[plane_index].is_none()
-                || self.planes2[plane_index].as_ref().unwrap().is_pointer()
-            {
-                self.planes2[plane_index] = Some(if self.depth == 8 {
-                    Pixels::Buffer(Vec::new())
-                } else {
-                    Pixels::Buffer16(Vec::new())
-                });
-            }
+            self.planes2[plane_index] = Some(if self.depth == 8 {
+                Pixels::Buffer(Vec::new())
+            } else {
+                Pixels::Buffer16(Vec::new())
+            });
             let pixels = self.planes2[plane_index].as_mut().unwrap();
             pixels.resize(plane_size, default_value)?;
             self.row_bytes[plane_index] = u32_from_usize(width * pixel_size)?;

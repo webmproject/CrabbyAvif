@@ -113,7 +113,6 @@ fn color_grid_alpha_no_grid() {
 }
 
 // From avifprogressivetest.cc
-#[cfg(not(feature = "android_mediacodec"))]
 #[test_case::test_case("progressive_dimension_change.avif", 2, 256, 256; "progressive_dimension_change")]
 #[test_case::test_case("progressive_layered_grid.avif", 2, 512, 256; "progressive_layered_grid")]
 #[test_case::test_case("progressive_quality_change.avif", 2, 256, 256; "progressive_quality_change")]
