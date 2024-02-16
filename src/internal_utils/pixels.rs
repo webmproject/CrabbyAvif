@@ -29,7 +29,7 @@ impl Pixels {
 
     pub fn resize(&mut self, size: usize, default: u16) -> AvifResult<()> {
         match self {
-            Pixels::Pointer(_) => {}
+            Pixels::Pointer(_) => return Err(AvifError::InvalidArgument),
             Pixels::Buffer(buffer) => {
                 if buffer.capacity() < size && buffer.try_reserve_exact(size).is_err() {
                     return Err(AvifError::OutOfMemory);
