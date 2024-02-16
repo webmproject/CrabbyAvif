@@ -44,8 +44,12 @@ impl rgb::Image {
         unimplemented!("native alpha unmultiply implementation");
     }
 
-    pub fn fill_alpha(&mut self) -> AvifResult<()> {
+    pub fn set_opaque(&mut self) -> AvifResult<()> {
         if !self.has_alpha() {
+            return Ok(());
+        }
+        if self.alpha_premultiplied {
+            // unpremultiply_alpha() should be called first.
             return Err(AvifError::InvalidArgument);
         }
         let alpha_offset = self.format.alpha_offset();
@@ -250,7 +254,7 @@ mod tests {
         let mut buffer: Vec<u8> = vec![];
         let mut rgb = rgb_image(width, height, depth, format, use_pointer, &mut buffer)?;
 
-        rgb.fill_alpha()?;
+        rgb.set_opaque()?;
 
         let alpha_offset = rgb.format.alpha_offset();
         if depth == 8 {
