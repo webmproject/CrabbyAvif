@@ -283,7 +283,7 @@ impl Image {
             if image.has_alpha() {
                 self.reformat_alpha(image)?;
             } else {
-                self.fill_alpha()?;
+                self.set_opaque()?;
             }
         }
         if !converted_with_libyuv {
