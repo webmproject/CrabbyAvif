@@ -1,6 +1,7 @@
 // Build rust library and bindings for dav1d.
 
 use std::env;
+use std::path::Path;
 use std::path::PathBuf;
 
 extern crate pkg_config;
@@ -27,27 +28,37 @@ fn main() {
 
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     // Prefer locally built dav1d if available.
-    env::set_var(
-        "PKG_CONFIG_PATH",
-        format!("dav1d/{build_dir}/meson-uninstalled"),
-    );
-    let library = pkg_config::Config::new().probe("dav1d");
-    if library.is_err() {
-        println!(
-            "dav1d could not be found with pkg-config. Install the system library or run dav1d.cmd"
-        );
-    }
-    let library = library.unwrap();
-    for lib in &library.libs {
-        println!("cargo:rustc-link-lib={lib}");
-    }
-    for link_path in &library.link_paths {
-        println!("cargo:rustc-link-search={}", link_path.display());
-    }
-    let mut include_str = String::new();
-    for include_path in &library.include_paths {
-        include_str.push_str("-I");
-        include_str.push_str(include_path.to_str().unwrap());
+    let abs_library_dir = PathBuf::from(&project_root).join("dav1d");
+    let abs_object_dir = PathBuf::from(&abs_library_dir).join(build_dir).join("src");
+    let library_file = PathBuf::from(&abs_object_dir).join("libdav1d.a");
+    let mut include_paths: Vec<String> = Vec::new();
+    if Path::new(&library_file).exists() {
+        println!("cargo:rustc-link-search={}", abs_object_dir.display());
+        println!("cargo:rustc-link-lib=static=dav1d");
+        let version_dir = PathBuf::from(&abs_library_dir)
+            .join(build_dir)
+            .join("include")
+            .join("dav1d");
+        include_paths.push(format!("-I{}", version_dir.display()));
+        let include_dir = PathBuf::from(&abs_library_dir).join("include");
+        include_paths.push(format!("-I{}", include_dir.display()));
+    } else {
+        let library = pkg_config::Config::new().probe("dav1d");
+        if library.is_err() {
+            println!(
+                "dav1d could not be found with pkg-config. Install the system library or run dav1d.cmd"
+            );
+        }
+        let library = library.unwrap();
+        for lib in &library.libs {
+            println!("cargo:rustc-link-lib={lib}");
+        }
+        for link_path in &library.link_paths {
+            println!("cargo:rustc-link-search={}", link_path.display());
+        }
+        for include_path in &library.include_paths {
+            include_paths.push(format!("-I{}", include_path.display()));
+        }
     }
 
     // Generate bindings.
@@ -55,7 +66,7 @@ fn main() {
     let outfile = PathBuf::from(&project_root).join("dav1d.rs");
     let mut bindings = bindgen::Builder::default()
         .header(header_file.into_os_string().into_string().unwrap())
-        .clang_arg(include_str)
+        .clang_args(&include_paths)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .layout_tests(false)
         .generate_comments(false);
