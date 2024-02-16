@@ -60,6 +60,7 @@ fn main() {
             include_paths.push(format!("-I{}", include_path.display()));
         }
     }
+    println!("cargo:include={include_str}");
 
     // Generate bindings.
     let header_file = PathBuf::from(&project_root).join("wrapper.h");

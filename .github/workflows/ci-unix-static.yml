@@ -1,0 +1,56 @@
+name: CI Unix Static
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+# Cancel the workflow if a new one is triggered from the same PR, branch, or tag, except on main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build-static:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    # Dependencies
+
+    - name: Cache external dependencies
+      id: cache-sys
+      uses: actions/cache@13aacd865c20de90d75de3b17ebe84f7a17d57d2 # v4.0.0
+      with:
+        path: sys
+        key: ${{ runner.os }}-${{ hashFiles('sys/dav1d-sys/build.rs', 'sys/dav1d-sys/cargo.toml', 'sys/dav1d-sys/dav1d.cmd', 'sys/libyuv-sys/build.rs', 'sys/libyuv-sys/cargo.toml', 'sys/libyuv-sys/libyuv.cmd') }}
+
+    - uses: jwlawson/actions-setup-cmake@d06b37b47cfd043ec794ffa3e40e0b6b5858a7ec # v1.14.2
+      if: steps.cache-sys.outputs.cache-hit != 'true'
+    - uses: ilammy/setup-nasm@13cbeb366c45c4379d3478cdcbadd8295feb5028 # v1.5.1
+      if: steps.cache-sys.outputs.cache-hit != 'true'
+    - uses: seanmiddleditch/gha-setup-ninja@8b297075da4cd2a5f1fd21fe011b499edf06e9d2 # v4
+      if: steps.cache-sys.outputs.cache-hit != 'true'
+    - run: pip install meson
+      if: steps.cache-sys.outputs.cache-hit != 'true'
+
+    - name: Build dav1d
+      if: steps.cache-sys.outputs.cache-hit != 'true'
+      working-directory: ./sys/dav1d-sys
+      run: bash -e dav1d.cmd
+    - name: Build libyuv
+      if: steps.cache-sys.outputs.cache-hit != 'true'
+      working-directory: ./sys/libyuv-sys
+      run: bash -e libyuv.cmd
+
+    - uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af # v1.0.7
+      with:
+        toolchain: stable
+
+    # Build and test CrabbyAvif
+
+    - run: cargo test -- --skip test_conformance
