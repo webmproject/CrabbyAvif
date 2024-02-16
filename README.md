@@ -11,12 +11,10 @@ Avif parser/decoder implementation in Rust.
 
 ```sh
 git clone https://github.com/webmproject/CrabbyAvif.git
-# If dav1d system library can be found with pkg-config, this step can be
-skipped.
+# If dav1d system library can be found with pkg-config, this step can be skipped.
 cd CrabbyAvif/sys/dav1d-sys
 ./dav1d.cmd
-# If libyuv system library can be found with pkg-config, this step can be
-skipped.
+# If libyuv system library can be found with pkg-config, this step can be skipped.
 cd ../libyuv-sys
 ./libyuv.cmd
 cd ../..
