@@ -27,7 +27,7 @@ jobs:
       uses: actions/cache@13aacd865c20de90d75de3b17ebe84f7a17d57d2 # v4.0.0
       with:
         path: sys
-        key: ${{ runner.os }}-${{ hashFiles('sys/dav1d-sys/build.rs', 'sys/dav1d-sys/cargo.toml', 'sys/dav1d-sys/dav1d.cmd', 'sys/libyuv-sys/build.rs', 'sys/libyuv-sys/cargo.toml', 'sys/libyuv-sys/libyuv.cmd') }}
+        key: ${{ runner.os }}-${{ hashFiles('sys/dav1d-sys/Cargo.toml', 'sys/dav1d-sys/dav1d.cmd', 'sys/dav1d-sys/build.rs', 'sys/libyuv-sys/Cargo.toml', 'sys/libyuv-sys/libyuv.cmd', 'sys/libyuv-sys/build.rs', 'third_party/googletest.cmd') }}
 
     - uses: jwlawson/actions-setup-cmake@d06b37b47cfd043ec794ffa3e40e0b6b5858a7ec # v1.14.2
       if: steps.cache-sys.outputs.cache-hit != 'true'
@@ -51,6 +51,21 @@ jobs:
       with:
         toolchain: stable
 
-    # Build and test CrabbyAvif
+    - name: Build and run the Rust tests
+      run: cargo test -- --skip test_conformance
 
-    - run: cargo test -- --skip test_conformance
+    - name: Build GoogleTest
+      if: steps.cache-ext.outputs.cache-hit != 'true'
+      working-directory: ./third_party
+      run: bash -e googletest.cmd
+
+    - name: Build and run the C++ tests
+      # TODO: This step fails on macos. So run it on linux only for now.
+      if: runner.os == 'Linux'
+      run: |
+        cargo build --features capi --release
+        mkdir c_build
+        cd c_build
+        cmake ../c_api_tests/
+        make
+        make test
