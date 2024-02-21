@@ -124,6 +124,10 @@ impl Image {
         self.has_plane(Plane::A)
     }
 
+    pub fn has_same_properties(&self, other: &Image) -> bool {
+        self.width == other.width && self.height == other.height && self.depth == other.depth
+    }
+
     pub fn subsampled_width(&self, width: u32, plane: Plane) -> usize {
         match plane {
             Plane::Y | Plane::A => width as usize,

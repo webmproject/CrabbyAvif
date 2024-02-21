@@ -1212,7 +1212,10 @@ impl Decoder {
                             self.image.scale(tile.width, tile.height)?;
                         }
                         Category::Alpha => {
-                            // TODO: check width height mismatch.
+                            if !self.image.has_same_properties(&tile.image) {
+                                println!("Color image item does not match alpha image item");
+                                return Err(AvifError::DecodeAlphaFailed);
+                            }
                             self.image.steal_from(&tile.image, category);
                             if !tile.image.full_range {
                                 self.image.alpha_to_full_range()?;

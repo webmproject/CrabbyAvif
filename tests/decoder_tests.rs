@@ -518,3 +518,17 @@ fn nth_image() {
     assert!(decoder.nth_image(4).is_ok());
     assert!(decoder.nth_image(50).is_err());
 }
+
+#[test]
+fn color_and_alpha_dimensions_do_not_match() {
+    let mut decoder = get_decoder("invalid_color10x10_alpha5x5.avif");
+    // Parsing should succeed.
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let image = decoder.image();
+    assert_eq!(image.width, 10);
+    assert_eq!(image.height, 10);
+    // Decoding should fail.
+    let res = decoder.next_image();
+    assert!(res.is_err());
+}
