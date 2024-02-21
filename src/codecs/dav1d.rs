@@ -117,12 +117,10 @@ impl Decoder for Dav1d {
                     dav1d_picture_unref((&mut previous_picture) as *mut _);
                 }
                 self.picture = Some(next_frame);
+            } else if category == Category::Alpha && self.picture.is_some() {
+                // Special case for alpha, re-use last frame.
             } else {
-                if category == Category::Alpha && self.picture.is_some() {
-                    // Special case for alpha, re-use last frame.
-                } else {
-                    return Err(AvifError::UnknownError);
-                }
+                return Err(AvifError::UnknownError);
             }
         }
 
