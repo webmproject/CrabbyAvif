@@ -281,7 +281,7 @@ impl Image {
         }
         if reformat_alpha && !alpha_reformatted_with_libyuv {
             if image.has_alpha() {
-                self.reformat_alpha(image)?;
+                self.import_alpha_from(image)?;
             } else {
                 self.set_opaque()?;
             }
