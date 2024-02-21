@@ -22,6 +22,7 @@ seq-macro = "0.3.5"
 tempfile = "3.8.1"
 exitcode = "1.1.2"
 rand = "0.8.5"
+float-cmp = "0.9.0"
 
 [build-dependencies]
 bindgen = "0.69.1"
