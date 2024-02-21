@@ -73,4 +73,5 @@ jobs:
         toolchain: stable
 
     - name: Build and run the Rust tests
+      # TODO: https://github.com/AOMediaCodec/av1-avif/issues/217 - Enable test 166
       run: cargo test -- test_conformance --skip test_conformance::_166_expects
