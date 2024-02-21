@@ -34,9 +34,10 @@ git clone https://github.com/AOMediaCodec/av1-avif.git third_party/av1-avif
 git clone https://github.com/AOMediaCodec/libavif.git third_party/libavif
 cd third_party/libavif/ext
 ./dav1d.cmd
-cd ../../..
-cmake -S third_party/libavif -B third_party/libavif/build -DAVIF_CODEC_DAV1D=LOCAL -DAVIF_BUILD_APPS=ON
-cmake --build third_party/libavif/build --parallel -t avifdec
+cd ..
+cmake -S . -B build -DAVIF_CODEC_DAV1D=LOCAL -DAVIF_LIBYUV=OFF -DAVIF_BUILD_APPS=ON
+cmake --build build --parallel -t avifdec
+cd ../..
 cargo test -- test_conformance
 ```
 
