@@ -130,243 +130,202 @@ impl ConversionFunction {
     }
 }
 
-#[allow(clippy::single_match)]
 fn find_conversion_function(
     yuv_format: PixelFormat,
     yuv_depth: u8,
     rgb: &rgb::Image,
     alpha_preferred: bool,
 ) -> Option<ConversionFunction> {
-    if yuv_depth > 8 {
-        if yuv_format != PixelFormat::Yuv444 {
-            if alpha_preferred {
-                match yuv_depth {
-                    10 => match rgb.format {
-                        Format::Rgba | Format::Bgra => match yuv_format {
-                            PixelFormat::Yuv422 => {
-                                return Some(ConversionFunction::YUVAToRGBMatrixFilterHighBitDepth(
-                                    I210AlphaToARGBMatrixFilter,
-                                ))
-                            }
-                            PixelFormat::Yuv420 => {
-                                return Some(ConversionFunction::YUVAToRGBMatrixFilterHighBitDepth(
-                                    I010AlphaToARGBMatrixFilter,
-                                ))
-                            }
-                            _ => {}
-                        },
-                        _ => {}
-                    },
-                    _ => {}
-                }
-            }
-            match yuv_depth {
-                10 => match rgb.format {
-                    Format::Rgba | Format::Bgra => match yuv_format {
-                        PixelFormat::Yuv422 => {
-                            return Some(ConversionFunction::YUVToRGBMatrixFilterHighBitDepth(
-                                I210ToARGBMatrixFilter,
-                            ))
-                        }
-                        PixelFormat::Yuv420 => {
-                            return Some(ConversionFunction::YUVToRGBMatrixFilterHighBitDepth(
-                                I010ToARGBMatrixFilter,
-                            ))
-                        }
-                        _ => {}
-                    },
-                    _ => {}
-                },
-                _ => {}
-            }
-        }
-        if yuv_format == PixelFormat::Yuv444
-            || rgb.chroma_upsampling.nearest_neighbor_filter_allowed()
+    match (alpha_preferred, yuv_depth, rgb.format, yuv_format) {
+        (true, 10, Format::Rgba | Format::Bgra, PixelFormat::Yuv422)
+            if rgb.chroma_upsampling.bilinear_or_better_filter_allowed() =>
         {
-            if alpha_preferred {
-                match yuv_depth {
-                    10 => match rgb.format {
-                        Format::Rgba | Format::Bgra => match yuv_format {
-                            PixelFormat::Yuv444 => {
-                                return Some(ConversionFunction::YUVAToRGBMatrixHighBitDepth(
-                                    I410AlphaToARGBMatrix,
-                                ))
-                            }
-                            PixelFormat::Yuv422 => {
-                                return Some(ConversionFunction::YUVAToRGBMatrixHighBitDepth(
-                                    I210AlphaToARGBMatrix,
-                                ))
-                            }
-                            PixelFormat::Yuv420 => {
-                                return Some(ConversionFunction::YUVAToRGBMatrixHighBitDepth(
-                                    I010AlphaToARGBMatrix,
-                                ))
-                            }
-                            _ => {}
-                        },
-                        _ => {}
-                    },
-                    _ => {}
-                }
-            }
-            match yuv_depth {
-                10 => match rgb.format {
-                    Format::Rgba | Format::Bgra => match yuv_format {
-                        PixelFormat::Yuv444 => {
-                            return Some(ConversionFunction::YUVToRGBMatrixHighBitDepth(
-                                I410ToARGBMatrix,
-                            ))
-                        }
-                        PixelFormat::Yuv422 => {
-                            return Some(ConversionFunction::YUVToRGBMatrixHighBitDepth(
-                                I210ToARGBMatrix,
-                            ))
-                        }
-                        PixelFormat::Yuv420 => {
-                            return Some(ConversionFunction::YUVToRGBMatrixHighBitDepth(
-                                I010ToARGBMatrix,
-                            ))
-                        }
-                        _ => {}
-                    },
-                    _ => {}
-                },
-                12 => match rgb.format {
-                    Format::Rgba | Format::Bgra => match yuv_format {
-                        PixelFormat::Yuv420 => {
-                            return Some(ConversionFunction::YUVToRGBMatrixHighBitDepth(
-                                I012ToARGBMatrix,
-                            ))
-                        }
-                        _ => {}
-                    },
-                    _ => {}
-                },
-                _ => {}
-            }
+            Some(ConversionFunction::YUVAToRGBMatrixFilterHighBitDepth(
+                I210AlphaToARGBMatrixFilter,
+            ))
         }
+        (true, 10, Format::Rgba | Format::Bgra, PixelFormat::Yuv420)
+            if rgb.chroma_upsampling.bilinear_or_better_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVAToRGBMatrixFilterHighBitDepth(
+                I010AlphaToARGBMatrixFilter,
+            ))
+        }
+        (_, 10, Format::Rgba | Format::Bgra, PixelFormat::Yuv422)
+            if rgb.chroma_upsampling.bilinear_or_better_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrixFilterHighBitDepth(
+                I210ToARGBMatrixFilter,
+            ))
+        }
+        (_, 10, Format::Rgba | Format::Bgra, PixelFormat::Yuv420)
+            if rgb.chroma_upsampling.bilinear_or_better_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrixFilterHighBitDepth(
+                I010ToARGBMatrixFilter,
+            ))
+        }
+
+        (true, 10, Format::Rgba | Format::Bgra, PixelFormat::Yuv444) => Some(
+            ConversionFunction::YUVAToRGBMatrixHighBitDepth(I410AlphaToARGBMatrix),
+        ),
+        (true, 10, Format::Rgba | Format::Bgra, PixelFormat::Yuv422)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVAToRGBMatrixHighBitDepth(
+                I210AlphaToARGBMatrix,
+            ))
+        }
+        (true, 10, Format::Rgba | Format::Bgra, PixelFormat::Yuv420)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVAToRGBMatrixHighBitDepth(
+                I010AlphaToARGBMatrix,
+            ))
+        }
+        (_, 10, Format::Rgba | Format::Bgra, PixelFormat::Yuv444) => Some(
+            ConversionFunction::YUVToRGBMatrixHighBitDepth(I410ToARGBMatrix),
+        ),
+        (_, 10, Format::Rgba | Format::Bgra, PixelFormat::Yuv422)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrixHighBitDepth(
+                I210ToARGBMatrix,
+            ))
+        }
+        (_, 10, Format::Rgba | Format::Bgra, PixelFormat::Yuv420)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrixHighBitDepth(
+                I010ToARGBMatrix,
+            ))
+        }
+        (_, 12, Format::Rgba | Format::Bgra, PixelFormat::Yuv420)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrixHighBitDepth(
+                I012ToARGBMatrix,
+            ))
+        }
+
         // The fall through here is intentional. If a high bitdepth function was not found, try to
         // see if we can use a low bitdepth function with a downshift.
-    }
-    if yuv_format == PixelFormat::Monochrome {
-        return match rgb.format {
-            Format::Rgba | Format::Bgra => {
-                Some(ConversionFunction::YUV400ToRGBMatrix(I400ToARGBMatrix))
-            }
-            _ => None,
-        };
-    }
-    if yuv_format != PixelFormat::Yuv444 {
-        if alpha_preferred {
-            match rgb.format {
-                Format::Rgba | Format::Bgra => match yuv_format {
-                    PixelFormat::Yuv422 => {
-                        return Some(ConversionFunction::YUVAToRGBMatrixFilter(
-                            I422AlphaToARGBMatrixFilter,
-                        ))
-                    }
-                    PixelFormat::Yuv420 => {
-                        return Some(ConversionFunction::YUVAToRGBMatrixFilter(
-                            I420AlphaToARGBMatrixFilter,
-                        ))
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
+        //
+        (_, _, Format::Rgba | Format::Bgra, PixelFormat::Monochrome) => {
+            Some(ConversionFunction::YUV400ToRGBMatrix(I400ToARGBMatrix))
         }
-        match rgb.format {
-            Format::Rgb | Format::Bgr => match yuv_format {
-                PixelFormat::Yuv422 => {
-                    return Some(ConversionFunction::YUVToRGBMatrixFilter(
-                        I422ToRGB24MatrixFilter,
-                    ))
-                }
-                PixelFormat::Yuv420 => {
-                    return Some(ConversionFunction::YUVToRGBMatrixFilter(
-                        I420ToRGB24MatrixFilter,
-                    ))
-                }
-                _ => {}
-            },
-            Format::Rgba | Format::Bgra => match yuv_format {
-                PixelFormat::Yuv422 => {
-                    return Some(ConversionFunction::YUVToRGBMatrixFilter(
-                        I422ToARGBMatrixFilter,
-                    ))
-                }
-                PixelFormat::Yuv420 => {
-                    return Some(ConversionFunction::YUVToRGBMatrixFilter(
-                        I420ToARGBMatrixFilter,
-                    ))
-                }
-                _ => {}
-            },
-            _ => {}
+
+        (true, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv422)
+            if rgb.chroma_upsampling.bilinear_or_better_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVAToRGBMatrixFilter(
+                I422AlphaToARGBMatrixFilter,
+            ))
         }
-        if !rgb.chroma_upsampling.nearest_neighbor_filter_allowed() {
-            return None;
+        (true, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv420)
+            if rgb.chroma_upsampling.bilinear_or_better_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVAToRGBMatrixFilter(
+                I420AlphaToARGBMatrixFilter,
+            ))
         }
-    }
-    if alpha_preferred {
-        match rgb.format {
-            Format::Rgba | Format::Bgra => match yuv_format {
-                PixelFormat::Yuv444 => {
-                    return Some(ConversionFunction::YUVAToRGBMatrix(I444AlphaToARGBMatrix))
-                }
-                PixelFormat::Yuv422 => {
-                    return Some(ConversionFunction::YUVAToRGBMatrix(I422AlphaToARGBMatrix))
-                }
-                PixelFormat::Yuv420 => {
-                    return Some(ConversionFunction::YUVAToRGBMatrix(I420AlphaToARGBMatrix))
-                }
-                _ => {}
-            },
-            _ => {}
+
+        (_, _, Format::Rgb | Format::Bgr, PixelFormat::Yuv422)
+            if rgb.chroma_upsampling.bilinear_or_better_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrixFilter(
+                I422ToRGB24MatrixFilter,
+            ))
         }
+        (_, _, Format::Rgb | Format::Bgr, PixelFormat::Yuv420)
+            if rgb.chroma_upsampling.bilinear_or_better_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrixFilter(
+                I420ToRGB24MatrixFilter,
+            ))
+        }
+        (_, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv422)
+            if rgb.chroma_upsampling.bilinear_or_better_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrixFilter(
+                I422ToARGBMatrixFilter,
+            ))
+        }
+        (_, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv420)
+            if rgb.chroma_upsampling.bilinear_or_better_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrixFilter(
+                I420ToARGBMatrixFilter,
+            ))
+        }
+
+        (true, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv444)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVAToRGBMatrix(I444AlphaToARGBMatrix))
+        }
+        (true, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv422)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVAToRGBMatrix(I422AlphaToARGBMatrix))
+        }
+        (true, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv420)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVAToRGBMatrix(I420AlphaToARGBMatrix))
+        }
+
+        (_, _, Format::Rgb | Format::Bgr, PixelFormat::Yuv444)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrix(I444ToRGB24Matrix))
+        }
+        (_, _, Format::Rgb | Format::Bgr, PixelFormat::Yuv420)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrix(I420ToRGB24Matrix))
+        }
+
+        (_, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv444)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrix(I444ToARGBMatrix))
+        }
+        (_, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv422)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrix(I422ToARGBMatrix))
+        }
+        (_, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv420)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrix(I420ToARGBMatrix))
+        }
+
+        (_, _, Format::Argb | Format::Abgr, PixelFormat::Yuv422)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrix(I422ToRGBAMatrix))
+        }
+        (_, _, Format::Argb | Format::Abgr, PixelFormat::Yuv420)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrix(I420ToRGBAMatrix))
+        }
+
+        (_, _, Format::Rgb565, PixelFormat::Yuv422)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrix(I422ToRGB565Matrix))
+        }
+        (_, _, Format::Rgb565, PixelFormat::Yuv420)
+            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
+        {
+            Some(ConversionFunction::YUVToRGBMatrix(I420ToRGB565Matrix))
+        }
+
+        _ => None,
     }
-    match rgb.format {
-        Format::Rgb | Format::Bgr => match yuv_format {
-            PixelFormat::Yuv444 => {
-                return Some(ConversionFunction::YUVToRGBMatrix(I444ToRGB24Matrix))
-            }
-            PixelFormat::Yuv420 => {
-                return Some(ConversionFunction::YUVToRGBMatrix(I420ToRGB24Matrix))
-            }
-            _ => {}
-        },
-        Format::Rgba | Format::Bgra => match yuv_format {
-            PixelFormat::Yuv444 => {
-                return Some(ConversionFunction::YUVToRGBMatrix(I444ToARGBMatrix))
-            }
-            PixelFormat::Yuv422 => {
-                return Some(ConversionFunction::YUVToRGBMatrix(I422ToARGBMatrix))
-            }
-            PixelFormat::Yuv420 => {
-                return Some(ConversionFunction::YUVToRGBMatrix(I420ToARGBMatrix))
-            }
-            _ => {}
-        },
-        Format::Argb | Format::Abgr => match yuv_format {
-            PixelFormat::Yuv422 => {
-                return Some(ConversionFunction::YUVToRGBMatrix(I422ToRGBAMatrix))
-            }
-            PixelFormat::Yuv420 => {
-                return Some(ConversionFunction::YUVToRGBMatrix(I420ToRGBAMatrix))
-            }
-            _ => {}
-        },
-        Format::Rgb565 => match yuv_format {
-            PixelFormat::Yuv422 => {
-                return Some(ConversionFunction::YUVToRGBMatrix(I422ToRGB565Matrix))
-            }
-            PixelFormat::Yuv420 => {
-                return Some(ConversionFunction::YUVToRGBMatrix(I420ToRGB565Matrix))
-            }
-            _ => {}
-        },
-    }
-    None
 }
 
 pub fn yuv_to_rgb(
