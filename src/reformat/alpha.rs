@@ -1,7 +1,9 @@
 use super::libyuv;
 use super::rgb;
 
+use crate::decoder::Category;
 use crate::image::Plane;
+use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
 use crate::*;
 
@@ -52,7 +54,7 @@ impl rgb::Image {
         if !self.has_alpha() {
             return Ok(());
         }
-if self.format == rgb::Format::Rgb565 {
+        if self.format == rgb::Format::Rgb565 {
             return Err(AvifError::NotImplemented);
         }
         if self.alpha_premultiplied {
@@ -71,7 +73,7 @@ if self.format == rgb::Format::Rgb565 {
             }
         } else {
             for y in 0..self.height {
-                                let row = self.row_mut(y)?;
+                let row = self.row_mut(y)?;
                 for x in 0..width {
                     row[(x * 4) + alpha_offset] = 255;
                 }
@@ -245,7 +247,7 @@ mod tests {
             buffer.reserve_exact(buffer_size);
             buffer.resize(buffer_size, 0);
             // Use a pointer to mimic C API calls.
-            rgb.pixels = Some(pixels::Pixels::Pointer(buffer.as_mut_ptr()));
+            rgb.pixels = Some(Pixels::Pointer(buffer.as_mut_ptr()));
             rgb.row_bytes = width * 4 * pixel_size;
         } else {
             rgb.allocate()?;
@@ -315,7 +317,7 @@ mod tests {
         image.width = width;
         image.height = height;
         image.depth = yuv_depth;
-        image.allocate_planes(decoder::Category::Alpha)?;
+        image.allocate_planes(Category::Alpha)?;
 
         let mut rng = rand::thread_rng();
         let mut expected_values: Vec<u16> = Vec::new();
