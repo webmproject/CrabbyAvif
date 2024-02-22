@@ -93,8 +93,8 @@ impl rgb::Image {
     pub fn import_alpha_from(&mut self, image: &image::Image) -> AvifResult<()> {
         if !self.has_alpha()
             || !image.has_alpha()
-            || self.width != image.width(Plane::A) as u32
-            || self.height != image.height(Plane::A) as u32
+            || self.width != image.width as u32
+            || self.height != image.height as u32
         {
             return Err(AvifError::InvalidArgument);
         }
