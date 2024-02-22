@@ -1147,19 +1147,23 @@ impl Decoder {
 
                 if is_grid {
                     if tile_index == 0 {
-                        // When using android mediacodec, the decoded image may have a different
-                        // yuv format than the one reported in the headers. use the decoded image
-                        // format in that case.
                         match category {
-                            Category::Gainmap => {
-                                self.gainmap.image.yuv_format = tile.image.yuv_format;
-                                self.gainmap.image.depth = tile.image.depth;
-                                self.gainmap.image.allocate_planes(category)?;
-                            }
-                            _ => {
+                            Category::Color => {
+                                // Adopt the yuv_format and depth.
                                 self.image.yuv_format = tile.image.yuv_format;
                                 self.image.depth = tile.image.depth;
                                 self.image.allocate_planes(category)?;
+                            }
+                            Category::Alpha => {
+                                // Alpha is always just one plane and the depth has been validated
+                                // to be the same as the color planes' depth.
+                                self.image.allocate_planes(category)?;
+                            }
+                            Category::Gainmap => {
+                                // Adopt the yuv_format and depth.
+                                self.gainmap.image.yuv_format = tile.image.yuv_format;
+                                self.gainmap.image.depth = tile.image.depth;
+                                self.gainmap.image.allocate_planes(category)?;
                             }
                         }
                     }
