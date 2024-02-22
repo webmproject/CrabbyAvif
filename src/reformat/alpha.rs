@@ -52,7 +52,7 @@ impl rgb::Image {
         if !self.has_alpha() {
             return Ok(());
         }
-        if self.format == rgb::Format::Rgb565 {
+if self.format == rgb::Format::Rgb565 {
             return Err(AvifError::NotImplemented);
         }
         if self.alpha_premultiplied {
@@ -61,26 +61,20 @@ impl rgb::Image {
         }
         let alpha_offset = self.format.alpha_offset();
         let width = usize_from_u32(self.width)?;
-        match self.depth {
-            9..=16 => {
-                let max_channel = self.max_channel();
-                for y in 0..self.height {
-                    let row = self.row16_mut(y)?;
-                    for x in 0..width {
-                        row[(x * 4) + alpha_offset] = max_channel;
-                    }
+        if self.depth > 8 {
+            let max_channel = self.max_channel();
+            for y in 0..self.height {
+                let row = self.row16_mut(y)?;
+                for x in 0..width {
+                    row[(x * 4) + alpha_offset] = max_channel;
                 }
             }
-            8 => {
-                for y in 0..self.height {
-                    let row = self.row_mut(y)?;
-                    for x in 0..width {
-                        row[(x * 4) + alpha_offset] = 255;
-                    }
+        } else {
+            for y in 0..self.height {
+                                let row = self.row_mut(y)?;
+                for x in 0..width {
+                    row[(x * 4) + alpha_offset] = 255;
                 }
-            }
-            _ => {
-                unimplemented!("{}-bit alpha filling", self.depth);
             }
         }
         Ok(())
@@ -104,9 +98,8 @@ impl rgb::Image {
         }
         let width = usize_from_u32(self.width)?;
         let dst_alpha_offset = self.format.alpha_offset();
-        let max_channel = self.max_channel();
-        match (image.depth, self.depth) {
-            (9..=16, _) if self.depth == image.depth as u32 => {
+        if self.depth == image.depth as u32 {
+            if self.depth > 8 {
                 for y in 0..self.height {
                     let dst_row = self.row16_mut(y)?;
                     let src_row = image.row16(Plane::A, y)?;
@@ -114,17 +107,20 @@ impl rgb::Image {
                         dst_row[(x * 4) + dst_alpha_offset] = src_row[x];
                     }
                 }
+                return Ok(());
             }
-            (1..=8, _) if self.depth == image.depth as u32 => {
-                for y in 0..self.height {
-                    let dst_row = self.row_mut(y)?;
-                    let src_row = image.row(Plane::A, y)?;
-                    for x in 0..width {
-                        dst_row[(x * 4) + dst_alpha_offset] = src_row[x];
-                    }
+            for y in 0..self.height {
+                let dst_row = self.row_mut(y)?;
+                let src_row = image.row(Plane::A, y)?;
+                for x in 0..width {
+                    dst_row[(x * 4) + dst_alpha_offset] = src_row[x];
                 }
             }
-            (9..=16, 9..=16) => {
+            return Ok(());
+        }
+        let max_channel = self.max_channel();
+        if image.depth > 8 {
+            if self.depth > 8 {
                 // u16 to u16 depth rescaling.
                 for y in 0..self.height {
                     let dst_row = self.row16_mut(y)?;
@@ -137,43 +133,32 @@ impl rgb::Image {
                         );
                     }
                 }
+                return Ok(());
             }
-            (9..=16, 1..=8) => {
-                // u16 to u8 depth rescaling.
-                for y in 0..self.height {
-                    let dst_row = self.row_mut(y)?;
-                    let src_row = image.row16(Plane::A, y)?;
-                    for x in 0..width {
-                        dst_row[(x * 4) + dst_alpha_offset] = Self::rescale_alpha_value(
-                            src_row[x],
-                            image.max_channel_f(),
-                            max_channel,
-                        ) as u8;
-                    }
+            // u16 to u8 depth rescaling.
+            for y in 0..self.height {
+                let dst_row = self.row_mut(y)?;
+                let src_row = image.row16(Plane::A, y)?;
+                for x in 0..width {
+                    dst_row[(x * 4) + dst_alpha_offset] =
+                        Self::rescale_alpha_value(src_row[x], image.max_channel_f(), max_channel)
+                            as u8;
                 }
             }
-            (1..=8, 9..=16) => {
-                // u8 to u16 depth rescaling.
-                for y in 0..self.height {
-                    let dst_row = self.row16_mut(y)?;
-                    let src_row = image.row(Plane::A, y)?;
-                    for x in 0..width {
-                        dst_row[(x * 4) + dst_alpha_offset] = Self::rescale_alpha_value(
-                            src_row[x] as u16,
-                            image.max_channel_f(),
-                            max_channel,
-                        );
-                    }
-                }
-            }
-            _ => {
-                unimplemented!(
-                    "alpha conversion from {}-bit to {}-bit",
-                    image.depth,
-                    self.depth
+            return Ok(());
+        }
+        // u8 to u16 depth rescaling.
+        for y in 0..self.height {
+            let dst_row = self.row16_mut(y)?;
+            let src_row = image.row(Plane::A, y)?;
+            for x in 0..width {
+                dst_row[(x * 4) + dst_alpha_offset] = Self::rescale_alpha_value(
+                    src_row[x] as u16,
+                    image.max_channel_f(),
+                    max_channel,
                 );
             }
-        };
+        }
         Ok(())
     }
 }
@@ -183,29 +168,44 @@ impl image::Image {
         if self.planes2[3].is_none() {
             return Ok(());
         }
+        if !self.planes2[3].as_ref().unwrap().is_pointer() {
+            // TODO: implement this function for non-pointer inputs.
+            return Err(AvifError::NotImplemented);
+        }
+        let src = image::Image {
+            width: self.width,
+            height: self.height,
+            depth: self.depth,
+            yuv_format: self.yuv_format,
+            planes2: [
+                None,
+                None,
+                None,
+                Some(Pixels::Pointer(self.planes2[3].as_ref().unwrap().pointer())),
+            ],
+            row_bytes: [0, 0, 0, self.row_bytes[3]],
+            ..image::Image::default()
+        };
+        self.allocate_planes(Category::Alpha)?;
         let width = self.width as usize;
         let depth = self.depth;
-        match depth {
-            10 | 12 => {
-                for y in 0..self.height {
-                    let row = self.row16_mut(Plane::A, y)?;
-                    for x in 0..width {
-                        row[x] = limited_to_full_y(depth, row[x]);
-                    }
+        if depth > 8 {
+            for y in 0..self.height {
+                let src_row = src.row16(Plane::A, y)?;
+                let dst_row = self.row16_mut(Plane::A, y)?;
+                for x in 0..width {
+                    dst_row[x] = limited_to_full_y(depth, src_row[x]);
                 }
             }
-            8 => {
-                for y in 0..self.height {
-                    let row = self.row_mut(Plane::A, y)?;
-                    for x in 0..width {
-                        row[x] = limited_to_full_y(8, row[x] as u16) as u8;
-                    }
+        } else {
+            for y in 0..self.height {
+                let src_row = src.row(Plane::A, y)?;
+                let dst_row = self.row_mut(Plane::A, y)?;
+                for x in 0..width {
+                    dst_row[x] = limited_to_full_y(8, src_row[x] as u16) as u8;
                 }
             }
-            _ => {
-                unimplemented!("{}-bit alpha full range", self.depth);
-            }
-        };
+        }
         Ok(())
     }
 }
