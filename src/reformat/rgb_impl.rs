@@ -317,7 +317,7 @@ pub fn yuv_to_rgb_any(
                     let v_adj_row16;
                     let image_height_minus_1 = (image.height - 1) as usize;
                     if j == 0
-                        || (j != image_height_minus_1 && (j % 2) != 0)
+                        || (j == image_height_minus_1 && (j % 2) != 0)
                         || image.yuv_format == PixelFormat::Yuv422
                     {
                         u_adj_row = u_row;
@@ -449,4 +449,224 @@ pub fn yuv_to_rgb_any(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn yuv_to_rgb() {
+        fn create_420(
+            matrix_coefficients: MatrixCoefficients,
+            y: &[&[u8]],
+            u: &[&[u8]],
+            v: &[&[u8]],
+        ) -> image::Image {
+            let mut yuv = image::Image {
+                width: y[0].len() as u32,
+                height: y.len() as u32,
+                depth: 8,
+                yuv_format: PixelFormat::Yuv420,
+                matrix_coefficients,
+                ..Default::default()
+            };
+            assert!(yuv.allocate_planes(decoder::Category::Color).is_ok());
+            for plane in [Plane::Y, Plane::U, Plane::V] {
+                let samples = if plane == Plane::Y {
+                    &y
+                } else if plane == Plane::U {
+                    &u
+                } else {
+                    &v
+                };
+                assert_eq!(yuv.height(plane), samples.len());
+                for y in 0..yuv.height(plane) {
+                    assert_eq!(yuv.width(plane), samples[y].len());
+                    for x in 0..yuv.width(plane) {
+                        yuv.row_mut(plane, y as u32).unwrap()[x] = samples[y][x];
+                    }
+                }
+            }
+            yuv
+        }
+        fn assert_near(yuv: &image::Image, r: &[&[u8]], g: &[&[u8]], b: &[&[u8]]) {
+            let mut dst = rgb::Image::create_from_yuv(&yuv);
+            dst.format = rgb::Format::Rgb;
+            dst.chroma_upsampling = ChromaUpsampling::Bilinear;
+            assert!(dst.allocate().is_ok());
+            assert!(yuv_to_rgb_any(&yuv, &mut dst, AlphaMultiplyMode::NoOp).is_ok());
+            assert_eq!(dst.height, r.len() as u32);
+            assert_eq!(dst.height, g.len() as u32);
+            assert_eq!(dst.height, b.len() as u32);
+            for y in 0..dst.height {
+                assert_eq!(dst.width, r[y as usize].len() as u32);
+                assert_eq!(dst.width, g[y as usize].len() as u32);
+                assert_eq!(dst.width, b[y as usize].len() as u32);
+                for x in 0..dst.width {
+                    let i = (x * dst.pixel_size() + 0) as usize;
+                    let pixel = &dst.row(y).unwrap()[i..i + 3];
+                    assert_eq!(pixel[0], r[y as usize][x as usize]);
+                    assert_eq!(pixel[1], g[y as usize][x as usize]);
+                    assert_eq!(pixel[2], b[y as usize][x as usize]);
+                }
+            }
+        }
+
+        // Testing identity 4:2:0 -> RGB would be simpler to check upsampling
+        // but this is not allowed (not a real use case).
+        assert_near(
+            &create_420(
+                MatrixCoefficients::Bt601,
+                /*y=*/
+                &[
+                    &[0, 100, 200],  //
+                    &[10, 110, 210], //
+                    &[50, 150, 250],
+                ],
+                /*u=*/
+                &[
+                    &[0, 100], //
+                    &[10, 110],
+                ],
+                /*v=*/
+                &[
+                    &[57, 57], //
+                    &[57, 57],
+                ],
+            ),
+            /*r=*/
+            &[
+                &[0, 0, 101], //
+                &[0, 0, 113], //
+                &[0, 43, 159],
+            ],
+            /*g=*/
+            &[
+                &[89, 196, 255],  //
+                &[100, 207, 255], //
+                &[145, 251, 255],
+            ],
+            /*b=*/
+            &[
+                &[0, 0, 107], //
+                &[0, 0, 124], //
+                &[0, 0, 181],
+            ],
+        );
+
+        // Extreme values.
+        assert_near(
+            &create_420(
+                MatrixCoefficients::Bt601,
+                /*y=*/ &[&[0]],
+                /*u=*/ &[&[0]],
+                /*v=*/ &[&[0]],
+            ),
+            /*r=*/ &[&[0]],
+            /*g=*/ &[&[136]],
+            /*b=*/ &[&[0]],
+        );
+        assert_near(
+            &create_420(
+                MatrixCoefficients::Bt601,
+                /*y=*/ &[&[255]],
+                /*u=*/ &[&[255]],
+                /*v=*/ &[&[255]],
+            ),
+            /*r=*/ &[&[255]],
+            /*g=*/ &[&[125]],
+            /*b=*/ &[&[255]],
+        );
+
+        // Top-right square "bleeds" into other samples during upsampling.
+        assert_near(
+            &create_420(
+                MatrixCoefficients::Bt601,
+                /*y=*/
+                &[
+                    &[0, 0, 255, 255],
+                    &[0, 0, 255, 255],
+                    &[0, 0, 0, 0],
+                    &[0, 0, 0, 0],
+                ],
+                /*u=*/
+                &[
+                    &[0, 255], //
+                    &[0, 0],
+                ],
+                /*v=*/
+                &[
+                    &[0, 255], //
+                    &[0, 0],
+                ],
+            ),
+            /*r=*/
+            &[
+                &[0, 0, 255, 255],
+                &[0, 0, 255, 255],
+                &[0, 0, 0, 0],
+                &[0, 0, 0, 0],
+            ],
+            /*g=*/
+            &[
+                &[136, 59, 202, 125],
+                &[136, 78, 255, 202],
+                &[136, 116, 78, 59],
+                &[136, 136, 136, 136],
+            ],
+            /*b=*/
+            &[
+                &[0, 0, 255, 255],
+                &[0, 0, 255, 255],
+                &[0, 0, 0, 0],
+                &[0, 0, 0, 0],
+            ],
+        );
+
+        // Middle square does not "bleed" into other samples during upsampling.
+        assert_near(
+            &create_420(
+                MatrixCoefficients::Bt601,
+                /*y=*/
+                &[
+                    &[0, 0, 0, 0],
+                    &[0, 255, 255, 0],
+                    &[0, 255, 255, 0],
+                    &[0, 0, 0, 0],
+                ],
+                /*u=*/
+                &[
+                    &[0, 0], //
+                    &[0, 0],
+                ],
+                /*v=*/
+                &[
+                    &[0, 0], //
+                    &[0, 0],
+                ],
+            ),
+            /*r=*/
+            &[
+                &[0, 0, 0, 0],
+                &[0, 74, 74, 0],
+                &[0, 74, 74, 0],
+                &[0, 0, 0, 0],
+            ],
+            /*g=*/
+            &[
+                &[136, 136, 136, 136],
+                &[136, 255, 255, 136],
+                &[136, 255, 255, 136],
+                &[136, 136, 136, 136],
+            ],
+            /*b=*/
+            &[
+                &[0, 0, 0, 0],
+                &[0, 20, 20, 0],
+                &[0, 20, 20, 0],
+                &[0, 0, 0, 0],
+            ],
+        );
+    }
 }
