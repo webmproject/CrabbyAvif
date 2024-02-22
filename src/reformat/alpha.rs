@@ -244,7 +244,7 @@ mod tests {
             let buffer_size = (width * height * 4 * pixel_size) as usize;
             buffer.reserve_exact(buffer_size);
             buffer.resize(buffer_size, 0);
-            // Unsafe on purpose to mimic C API calls.
+            // Use a pointer to mimic C API calls.
             rgb.pixels = Some(pixels::Pixels::Pointer(buffer.as_mut_ptr()));
             rgb.row_bytes = width * 4 * pixel_size;
         } else {
