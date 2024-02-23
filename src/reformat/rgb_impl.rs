@@ -1,5 +1,3 @@
-#![allow(non_snake_case)] // TODO: remove
-
 use super::coeffs::*;
 use super::rgb;
 use super::rgb::*;
@@ -113,9 +111,7 @@ impl YuvColorSpaceInfo {
 }
 
 struct State {
-    #[allow(unused)]
     rgb: RgbColorSpaceInfo,
-    #[allow(unused)]
     yuv: YuvColorSpaceInfo,
 }
 
@@ -163,7 +159,7 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> 
 }
 
 fn unorm_lookup_tables(depth: u8, state: &State) -> AvifResult<(Vec<f32>, Vec<f32>)> {
-    let count = (1i32 << depth) as usize;
+    let count = 1usize << depth;
     let mut table_y: Vec<f32> = create_vec_exact(count)?;
     for cp in 0..count {
         table_y.push(((cp as f32) - state.yuv.bias_y) / state.yuv.range_y);
@@ -179,38 +175,38 @@ fn unorm_lookup_tables(depth: u8, state: &State) -> AvifResult<(Vec<f32>, Vec<f3
     Ok((table_y, table_uv))
 }
 
-fn compute_rgb(Y: f32, Cb: f32, Cr: f32, has_color: bool, mode: Mode) -> (f32, f32, f32) {
-    let R: f32;
-    let G: f32;
-    let B: f32;
+fn compute_rgb(y: f32, cb: f32, cr: f32, has_color: bool, mode: Mode) -> (f32, f32, f32) {
+    let r: f32;
+    let g: f32;
+    let b: f32;
     if has_color {
         match mode {
             Mode::Identity => {
-                G = Y;
-                B = Cb;
-                R = Cr;
+                g = y;
+                b = cb;
+                r = cr;
             }
             Mode::Ycgco => {
-                let t = Y - Cb;
-                G = Y + Cb;
-                B = t - Cr;
-                R = t + Cr;
+                let t = y - cb;
+                g = y + cb;
+                b = t - cr;
+                r = t + cr;
             }
             Mode::YuvCoefficients(kr, kg, kb) => {
-                R = Y + (2.0 * (1.0 - kr)) * Cr;
-                B = Y + (2.0 * (1.0 - kb)) * Cb;
-                G = Y - ((2.0 * ((kr * (1.0 - kr) * Cr) + (kb * (1.0 - kb) * Cb))) / kg);
+                r = y + (2.0 * (1.0 - kr)) * cr;
+                b = y + (2.0 * (1.0 - kb)) * cb;
+                g = y - ((2.0 * ((kr * (1.0 - kr) * cr) + (kb * (1.0 - kb) * cb))) / kg);
             }
         }
     } else {
-        R = Y;
-        G = Y;
-        B = Y;
+        r = y;
+        g = y;
+        b = y;
     }
     (
-        clamp_f32(R, 0.0, 1.0),
-        clamp_f32(G, 0.0, 1.0),
-        clamp_f32(B, 0.0, 1.0),
+        clamp_f32(r, 0.0, 1.0),
+        clamp_f32(g, 0.0, 1.0),
+        clamp_f32(b, 0.0, 1.0),
     )
 }
 
@@ -274,9 +270,9 @@ pub fn yuv_to_rgb_any(
         let a_row16 = image.row16(Plane::A, j as u32);
         let (mut rgb_row, mut rgb_row16) = rgb.rows_mut(j as u32)?;
         for i in 0..image.width as usize {
-            let Y = unorm_value(image.depth, &y_row, &y_row16, i, yuv_max_channel, &table_y);
-            let mut Cb = 0.5;
-            let mut Cr = 0.5;
+            let y = unorm_value(image.depth, &y_row, &y_row16, i, yuv_max_channel, &table_y);
+            let mut cb = 0.5;
+            let mut cr = 0.5;
             if has_color {
                 let uv_i = i >> image.yuv_format.chroma_shift_x();
                 if image.yuv_format == PixelFormat::Yuv444
@@ -285,7 +281,7 @@ pub fn yuv_to_rgb_any(
                         ChromaUpsampling::Fastest | ChromaUpsampling::Nearest
                     )
                 {
-                    Cb = unorm_value(
+                    cb = unorm_value(
                         image.depth,
                         &u_row,
                         &u_row16,
@@ -293,7 +289,7 @@ pub fn yuv_to_rgb_any(
                         yuv_max_channel,
                         &table_uv,
                     );
-                    Cr = unorm_value(
+                    cr = unorm_value(
                         image.depth,
                         &v_row,
                         &v_row16,
@@ -401,35 +397,35 @@ pub fn yuv_to_rgb_any(
                         yuv_max_channel,
                         &table_uv,
                     );
-                    Cb = (unorm_u[0][0] * (9.0 / 16.0))
+                    cb = (unorm_u[0][0] * (9.0 / 16.0))
                         + (unorm_u[1][0] * (3.0 / 16.0))
                         + (unorm_u[0][1] * (3.0 / 16.0))
                         + (unorm_u[1][1] * (1.0 / 16.0));
-                    Cr = (unorm_v[0][0] * (9.0 / 16.0))
+                    cr = (unorm_v[0][0] * (9.0 / 16.0))
                         + (unorm_v[1][0] * (3.0 / 16.0))
                         + (unorm_v[0][1] * (3.0 / 16.0))
                         + (unorm_v[1][1] * (1.0 / 16.0));
                 }
             }
-            let (mut Rc, mut Gc, mut Bc) = compute_rgb(Y, Cb, Cr, has_color, state.yuv.mode);
+            let (mut rc, mut gc, mut bc) = compute_rgb(y, cb, cr, has_color, state.yuv.mode);
             if alpha_multiply_mode != AlphaMultiplyMode::NoOp {
                 let unorm_a = clamped_pixel(image.depth, &a_row, &a_row16, i, yuv_max_channel);
-                let Ac = clamp_f32((unorm_a as f32) / (yuv_max_channel as f32), 0.0, 1.0);
-                if Ac == 0.0 {
-                    Rc = 0.0;
-                    Gc = 0.0;
-                    Bc = 0.0;
-                } else if Ac < 1.0 {
+                let ac = clamp_f32((unorm_a as f32) / (yuv_max_channel as f32), 0.0, 1.0);
+                if ac == 0.0 {
+                    rc = 0.0;
+                    gc = 0.0;
+                    bc = 0.0;
+                } else if ac < 1.0 {
                     match alpha_multiply_mode {
                         AlphaMultiplyMode::Multiply => {
-                            Rc *= Ac;
-                            Gc *= Ac;
-                            Bc *= Ac;
+                            rc *= ac;
+                            gc *= ac;
+                            bc *= ac;
                         }
                         AlphaMultiplyMode::UnMultiply => {
-                            Rc = f32::min(Rc / Ac, 1.0);
-                            Gc = f32::min(Gc / Ac, 1.0);
-                            Bc = f32::min(Bc / Ac, 1.0);
+                            rc = f32::min(rc / ac, 1.0);
+                            gc = f32::min(gc / ac, 1.0);
+                            bc = f32::min(bc / ac, 1.0);
                         }
                         _ => {} // Not reached.
                     }
@@ -437,14 +433,14 @@ pub fn yuv_to_rgb_any(
             }
             if rgb_depth == 8 {
                 let dst = rgb_row.as_mut().unwrap();
-                dst[(i * rgb_channel_count) + r_offset] = (0.5 + (Rc * rgb_max_channel_f)) as u8;
-                dst[(i * rgb_channel_count) + g_offset] = (0.5 + (Gc * rgb_max_channel_f)) as u8;
-                dst[(i * rgb_channel_count) + b_offset] = (0.5 + (Bc * rgb_max_channel_f)) as u8;
+                dst[(i * rgb_channel_count) + r_offset] = (0.5 + (rc * rgb_max_channel_f)) as u8;
+                dst[(i * rgb_channel_count) + g_offset] = (0.5 + (gc * rgb_max_channel_f)) as u8;
+                dst[(i * rgb_channel_count) + b_offset] = (0.5 + (bc * rgb_max_channel_f)) as u8;
             } else {
                 let dst16 = rgb_row16.as_mut().unwrap();
-                dst16[(i * rgb_channel_count) + r_offset] = (0.5 + (Rc * rgb_max_channel_f)) as u16;
-                dst16[(i * rgb_channel_count) + g_offset] = (0.5 + (Gc * rgb_max_channel_f)) as u16;
-                dst16[(i * rgb_channel_count) + b_offset] = (0.5 + (Bc * rgb_max_channel_f)) as u16;
+                dst16[(i * rgb_channel_count) + r_offset] = (0.5 + (rc * rgb_max_channel_f)) as u16;
+                dst16[(i * rgb_channel_count) + g_offset] = (0.5 + (gc * rgb_max_channel_f)) as u16;
+                dst16[(i * rgb_channel_count) + b_offset] = (0.5 + (bc * rgb_max_channel_f)) as u16;
             }
         }
     }
