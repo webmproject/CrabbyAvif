@@ -298,7 +298,12 @@ pub fn yuv_to_rgb_any(
                         &table_uv,
                     );
                 } else {
-                    // Bilinear filtering with weights.
+                    if image.chroma_sample_position != ChromaSamplePosition::CENTER {
+                        return Err(AvifError::NotImplemented);
+                    }
+
+                    // Bilinear filtering with weights. See
+                    // https://github.com/AOMediaCodec/libavif/blob/0580334466d57fedb889d5ed7ae9574d6f66e00c/src/reformat.c#L657-L685.
                     let image_width_minus_1 = (image.width - 1) as usize;
                     let uv_adj_col: i32 = if i == 0 || (i == image_width_minus_1 && (i % 2) != 0) {
                         0
