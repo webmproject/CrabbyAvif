@@ -117,24 +117,23 @@ struct State {
 }
 
 fn identity_yuv8_to_rgb8_full_range(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
+    if image.yuv_format != PixelFormat::Yuv444 || rgb.format == Format::Rgb565 {
+        return Err(AvifError::NotImplemented);
+    }
+
     let r_offset = rgb.format.r_offset();
     let g_offset = rgb.format.g_offset();
     let b_offset = rgb.format.b_offset();
-    let rgb565 = rgb.format == Format::Rgb565;
     let channel_count = rgb.channel_count() as usize;
     for i in 0..image.height {
         let y = image.row(Plane::Y, i)?;
         let u = image.row(Plane::U, i)?;
         let v = image.row(Plane::V, i)?;
         let rgb_pixels = rgb.row_mut(i)?;
-        if rgb565 {
-            unimplemented!("rgb 565 is not implemented");
-        } else {
-            for j in 0..image.width as usize {
-                rgb_pixels[(j * channel_count) + r_offset] = v[j];
-                rgb_pixels[(j * channel_count) + g_offset] = y[j];
-                rgb_pixels[(j * channel_count) + b_offset] = u[j];
-            }
+        for j in 0..image.width as usize {
+            rgb_pixels[(j * channel_count) + r_offset] = v[j];
+            rgb_pixels[(j * channel_count) + g_offset] = y[j];
+            rgb_pixels[(j * channel_count) + b_offset] = u[j];
         }
     }
     Ok(())
@@ -146,11 +145,7 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> 
         yuv: YuvColorSpaceInfo::create_from(image)?,
     };
     if state.yuv.mode == Mode::Identity {
-        if image.depth == 8
-            && rgb.depth == 8
-            && image.yuv_format == PixelFormat::Yuv444
-            && image.full_range
-        {
+        if image.depth == 8 && rgb.depth == 8 && image.full_range {
             return identity_yuv8_to_rgb8_full_range(image, rgb);
         }
         // TODO: Add more fast paths for identity.
