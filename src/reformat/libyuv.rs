@@ -259,9 +259,7 @@ fn find_conversion_function(
             ))
         }
 
-        (true, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv444)
-            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
-        {
+        (true, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv444) => {
             Some(ConversionFunction::YUVAToRGBMatrix(I444AlphaToARGBMatrix))
         }
         (true, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv422)
@@ -275,9 +273,7 @@ fn find_conversion_function(
             Some(ConversionFunction::YUVAToRGBMatrix(I420AlphaToARGBMatrix))
         }
 
-        (_, _, Format::Rgb | Format::Bgr, PixelFormat::Yuv444)
-            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
-        {
+        (_, _, Format::Rgb | Format::Bgr, PixelFormat::Yuv444) => {
             Some(ConversionFunction::YUVToRGBMatrix(I444ToRGB24Matrix))
         }
         (_, _, Format::Rgb | Format::Bgr, PixelFormat::Yuv420)
@@ -286,9 +282,7 @@ fn find_conversion_function(
             Some(ConversionFunction::YUVToRGBMatrix(I420ToRGB24Matrix))
         }
 
-        (_, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv444)
-            if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() =>
-        {
+        (_, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv444) => {
             Some(ConversionFunction::YUVToRGBMatrix(I444ToARGBMatrix))
         }
         (_, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv422)
