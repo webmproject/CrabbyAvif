@@ -18,15 +18,10 @@ impl rgb::Image {
         match libyuv::process_alpha(self, true) {
             Ok(_) => {
                 self.alpha_premultiplied = true;
-                return Ok(());
+                Ok(())
             }
-            Err(err) => {
-                if err != AvifError::NotImplemented {
-                    return Err(err);
-                }
-            }
+            Err(err) => Err(err),
         }
-        unimplemented!("native alpha multiply implementation");
     }
 
     pub fn unpremultiply_alpha(&mut self) -> AvifResult<()> {
@@ -39,15 +34,10 @@ impl rgb::Image {
         match libyuv::process_alpha(self, false) {
             Ok(_) => {
                 self.alpha_premultiplied = false;
-                return Ok(());
+                Ok(())
             }
-            Err(err) => {
-                if err != AvifError::NotImplemented {
-                    return Err(err);
-                }
-            }
+            Err(err) => Err(err),
         }
-        unimplemented!("native alpha unmultiply implementation");
     }
 
     pub fn set_opaque(&mut self) -> AvifResult<()> {
