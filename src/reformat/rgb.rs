@@ -192,7 +192,13 @@ impl Image {
     }
 
     pub fn depth_valid(&self) -> bool {
-        matches!(self.depth, 8 | 10 | 12 | 16)
+        match (self.format, self.is_float, self.depth) {
+            (Format::Rgb565, false, 8) => true,
+            (Format::Rgb565, _, _) => false,
+            (_, true, 16) => true, // IEEE 754 half-precision binary16
+            (_, false, 8 | 10 | 12 | 16) => true,
+            _ => false,
+        }
     }
 
     pub fn has_alpha(&self) -> bool {

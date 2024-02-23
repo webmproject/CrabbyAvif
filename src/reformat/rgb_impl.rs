@@ -23,10 +23,7 @@ struct RgbColorSpaceInfo {
 
 impl RgbColorSpaceInfo {
     fn create_from(rgb: &Image) -> AvifResult<Self> {
-        if !rgb.depth_valid()
-            || (rgb.is_float && rgb.depth != 16)
-            || (rgb.format == Format::Rgb565 && rgb.depth != 8)
-        {
+        if !rgb.depth_valid() {
             return Err(AvifError::ReformatFailed);
         }
         let offsets = rgb.format.offsets();
