@@ -50,7 +50,7 @@ pub struct Image {
     pub depth: u8,
 
     pub yuv_format: PixelFormat,
-    pub full_range: bool, // VideoFullRangeFlag as specified in ISO/IEC 23091-4/ITU-T H.273.
+    pub full_range: bool, // VideoFullRangeFlag as specified in ISO/IEC 23091-2/ITU-T H.273.
     pub chroma_sample_position: ChromaSamplePosition,
 
     pub alpha_present: bool,
