@@ -139,7 +139,7 @@ fn identity_yuv8_to_rgb8_full_range(image: &image::Image, rgb: &mut rgb::Image) 
     Ok(())
 }
 
-pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
+pub fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
     let state = State {
         rgb: RgbColorSpaceInfo::create_from(rgb)?,
         yuv: YuvColorSpaceInfo::create_from(image)?,

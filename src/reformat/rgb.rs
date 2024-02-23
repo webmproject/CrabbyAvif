@@ -287,18 +287,19 @@ impl Image {
             }
         }
         if !converted_with_libyuv {
-            if let Err(err) = rgb_impl::yuv_to_rgb(image, self) {
-                if err != AvifError::NotImplemented {
-                    return Err(err);
+            match rgb_impl::yuv_to_rgb_fast(image, self) {
+                Ok(_) => (),
+                Err(AvifError::NotImplemented) => {
+                    rgb_impl::yuv_to_rgb_any(image, self, alpha_multiply_mode)?;
+                    alpha_multiply_mode = AlphaMultiplyMode::NoOp;
                 }
-                rgb_impl::yuv_to_rgb_any(image, self, alpha_multiply_mode)?;
-                alpha_multiply_mode = AlphaMultiplyMode::NoOp;
+                Err(err) => return Err(err),
             }
         }
         match alpha_multiply_mode {
             AlphaMultiplyMode::Multiply => self.premultiply_alpha()?,
             AlphaMultiplyMode::UnMultiply => self.unpremultiply_alpha()?,
-            _ => {}
+            AlphaMultiplyMode::NoOp => {}
         }
         if self.is_float {
             self.convert_to_half_float()?;
