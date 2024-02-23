@@ -12,11 +12,14 @@ impl rgb::Image {
         if self.pixels().is_null() || self.row_bytes == 0 {
             return Err(AvifError::ReformatFailed);
         }
-        if !self.has_alpha() {
+        if !self.has_alpha() || self.alpha_premultiplied {
             return Err(AvifError::InvalidArgument);
         }
         match libyuv::process_alpha(self, true) {
-            Ok(_) => return Ok(()),
+            Ok(_) => {
+                self.alpha_premultiplied = true;
+                return Ok(());
+            }
             Err(err) => {
                 if err != AvifError::NotImplemented {
                     return Err(err);
@@ -30,11 +33,14 @@ impl rgb::Image {
         if self.pixels().is_null() || self.row_bytes == 0 {
             return Err(AvifError::ReformatFailed);
         }
-        if !self.has_alpha() {
+        if !self.has_alpha() || !self.alpha_premultiplied {
             return Err(AvifError::InvalidArgument);
         }
         match libyuv::process_alpha(self, false) {
-            Ok(_) => return Ok(()),
+            Ok(_) => {
+                self.alpha_premultiplied = false;
+                return Ok(());
+            }
             Err(err) => {
                 if err != AvifError::NotImplemented {
                     return Err(err);
@@ -48,15 +54,18 @@ impl rgb::Image {
         if !self.has_alpha() {
             return Ok(());
         }
+        if self.format == rgb::Format::Rgb565 {
+            return Err(AvifError::NotImplemented);
+        }
         if self.alpha_premultiplied {
             // unpremultiply_alpha() should be called first.
             return Err(AvifError::InvalidArgument);
         }
         let alpha_offset = self.format.alpha_offset();
+        let width = usize_from_u32(self.width)?;
         if self.depth > 8 {
-            let max_channel = ((1 << self.depth) - 1) as u16;
+            let max_channel = self.max_channel();
             for y in 0..self.height {
-                let width = usize_from_u32(self.width)?;
                 let row = self.row16_mut(y)?;
                 for x in 0..width {
                     row[(x * 4) + alpha_offset] = max_channel;
@@ -64,7 +73,6 @@ impl rgb::Image {
             }
         } else {
             for y in 0..self.height {
-                let width = usize_from_u32(self.width)?;
                 let row = self.row_mut(y)?;
                 for x in 0..width {
                     row[(x * 4) + alpha_offset] = 255;
@@ -82,8 +90,12 @@ impl rgb::Image {
         clamp_u16(alpha, 0, dst_max_channel)
     }
 
-    pub fn reformat_alpha(&mut self, image: &image::Image) -> AvifResult<()> {
-        if !self.has_alpha() {
+    pub fn import_alpha_from(&mut self, image: &image::Image) -> AvifResult<()> {
+        if !self.has_alpha()
+            || !image.has_alpha()
+            || self.width != image.width as u32
+            || self.height != image.height as u32
+        {
             return Err(AvifError::InvalidArgument);
         }
         let width = usize_from_u32(self.width)?;
@@ -234,6 +246,7 @@ mod tests {
             let buffer_size = (width * height * 4 * pixel_size) as usize;
             buffer.reserve_exact(buffer_size);
             buffer.resize(buffer_size, 0);
+            // Use a pointer to mimic C API calls.
             rgb.pixels = Some(Pixels::Pointer(buffer.as_mut_ptr()));
             rgb.row_bytes = width * 4 * pixel_size;
         } else {
@@ -262,9 +275,9 @@ mod tests {
                 let row = rgb.row(y)?;
                 assert_eq!(row.len(), (width * 4) as usize);
                 for x in 0..width as usize {
-                    for idx in 0usize..4 {
+                    for idx in 0..4usize {
                         let expected_value = if idx == alpha_offset { 255 } else { 0 };
-                        assert_eq!(row[(x * 4) + idx], expected_value);
+                        assert_eq!(row[x * 4 + idx], expected_value);
                     }
                 }
             }
@@ -274,9 +287,9 @@ mod tests {
                 let row = rgb.row16(y)?;
                 assert_eq!(row.len(), (width * 4) as usize);
                 for x in 0..width as usize {
-                    for idx in 0usize..4 {
+                    for idx in 0..4usize {
                         let expected_value = if idx == alpha_offset { max_channel } else { 0 };
-                        assert_eq!(row[(x * 4) + idx], expected_value);
+                        assert_eq!(row[x * 4 + idx], expected_value);
                     }
                 }
             }
@@ -345,7 +358,7 @@ mod tests {
             }
         }
 
-        rgb.reformat_alpha(&image)?;
+        rgb.import_alpha_from(&image)?;
 
         let alpha_offset = rgb.format.alpha_offset();
         let mut expected_values = expected_values.into_iter();
@@ -354,10 +367,10 @@ mod tests {
                 let rgb_row = rgb.row(y)?;
                 assert_eq!(rgb_row.len(), (width * 4) as usize);
                 for x in 0..width as usize {
-                    for idx in 0usize..4 {
+                    for idx in 0..4usize {
                         let expected_value =
                             if idx == alpha_offset { expected_values.next().unwrap() } else { 0 };
-                        assert_eq!(rgb_row[(x * 4) + idx], expected_value as u8);
+                        assert_eq!(rgb_row[x * 4 + idx], expected_value as u8);
                     }
                 }
             }
@@ -366,10 +379,10 @@ mod tests {
                 let rgb_row = rgb.row16(y)?;
                 assert_eq!(rgb_row.len(), (width * 4) as usize);
                 for x in 0..width as usize {
-                    for idx in 0usize..4 {
+                    for idx in 0..4usize {
                         let expected_value =
                             if idx == alpha_offset { expected_values.next().unwrap() } else { 0 };
-                        assert_eq!(rgb_row[(x * 4) + idx], expected_value);
+                        assert_eq!(rgb_row[x * 4 + idx], expected_value);
                     }
                 }
             }
