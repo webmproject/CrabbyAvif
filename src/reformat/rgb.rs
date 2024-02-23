@@ -202,30 +202,33 @@ impl Image {
     }
 
     pub fn has_alpha(&self) -> bool {
-        !matches!(self.format, Format::Rgb | Format::Bgr | Format::Rgb565)
+        match self.format {
+            Format::Rgba | Format::Bgra | Format::Argb | Format::Abgr => true,
+            Format::Rgb | Format::Bgr | Format::Rgb565 => false,
+        }
     }
 
     pub fn channel_size(&self) -> u32 {
-        if self.depth == 8 {
-            1
-        } else {
-            2
+        match self.depth {
+            8 => 1,
+            10 | 12 | 16 => 2,
+            _ => panic!(),
         }
     }
 
     pub fn channel_count(&self) -> u32 {
-        if self.has_alpha() {
-            4
-        } else {
-            3
+        match self.format {
+            Format::Rgba | Format::Bgra | Format::Argb | Format::Abgr => 4,
+            Format::Rgb | Format::Bgr | Format::Rgb565 => 3,
         }
     }
 
     pub fn pixel_size(&self) -> u32 {
-        if self.format == Format::Rgb565 {
-            return 2;
+        match self.format {
+            Format::Rgba | Format::Bgra | Format::Argb | Format::Abgr => self.channel_size() * 4,
+            Format::Rgb | Format::Bgr => self.channel_size() * 3,
+            Format::Rgb565 => 2,
         }
-        self.channel_count() * self.channel_size()
     }
 
     fn convert_to_half_float(&mut self) -> AvifResult<()> {
