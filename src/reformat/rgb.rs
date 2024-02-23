@@ -91,7 +91,6 @@ pub struct Image {
     pub format: Format,
     pub chroma_upsampling: ChromaUpsampling,
     pub chroma_downsampling: ChromaDownsampling,
-    pub ignore_alpha: bool,
     pub alpha_premultiplied: bool,
     pub is_float: bool,
     pub max_threads: i32,
@@ -124,7 +123,6 @@ impl Image {
             format: Format::Rgba,
             chroma_upsampling: ChromaUpsampling::Automatic,
             chroma_downsampling: ChromaDownsampling::Automatic,
-            ignore_alpha: false,
             alpha_premultiplied: false,
             is_float: false,
             max_threads: 1,
@@ -258,17 +256,12 @@ impl Image {
     }
 
     pub fn convert_from_yuv(&mut self, image: &image::Image) -> AvifResult<()> {
-        // TODO: use plane constant here and elsewhere.
         if !image.has_plane(Plane::Y) {
             return Err(AvifError::ReformatFailed);
         }
         let mut alpha_multiply_mode = AlphaMultiplyMode::NoOp;
-        if image.has_alpha() {
-            if !self.has_alpha() || self.ignore_alpha {
-                if !image.alpha_premultiplied {
-                    alpha_multiply_mode = AlphaMultiplyMode::Multiply;
-                }
-            } else if !image.alpha_premultiplied && self.alpha_premultiplied {
+        if image.has_alpha() && self.has_alpha() {
+            if !image.alpha_premultiplied && self.alpha_premultiplied {
                 alpha_multiply_mode = AlphaMultiplyMode::Multiply;
             } else if image.alpha_premultiplied && !self.alpha_premultiplied {
                 alpha_multiply_mode = AlphaMultiplyMode::UnMultiply;
@@ -276,11 +269,9 @@ impl Image {
         }
 
         let mut converted_with_libyuv: bool = false;
-        let reformat_alpha = self.has_alpha()
-            && (!self.ignore_alpha || alpha_multiply_mode != AlphaMultiplyMode::NoOp);
         let mut alpha_reformatted_with_libyuv = false;
         if alpha_multiply_mode == AlphaMultiplyMode::NoOp || self.has_alpha() {
-            match libyuv::yuv_to_rgb(image, self, reformat_alpha) {
+            match libyuv::yuv_to_rgb(image, self) {
                 Ok(alpha_reformatted) => {
                     alpha_reformatted_with_libyuv = alpha_reformatted;
                     converted_with_libyuv = true;
@@ -292,7 +283,7 @@ impl Image {
                 }
             }
         }
-        if reformat_alpha && !alpha_reformatted_with_libyuv {
+        if self.has_alpha() && !alpha_reformatted_with_libyuv {
             if image.has_alpha() {
                 self.import_alpha_from(image)?;
             } else {

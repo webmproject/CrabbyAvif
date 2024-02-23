@@ -322,16 +322,12 @@ fn find_conversion_function(
     }
 }
 
-pub fn yuv_to_rgb(
-    image: &image::Image,
-    rgb: &mut rgb::Image,
-    reformat_alpha: bool,
-) -> AvifResult<bool> {
+pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool> {
     if rgb.depth != 8 || (image.depth != 8 && image.depth != 10 && image.depth != 12) {
         return Err(AvifError::NotImplemented);
     }
     let (matrix_yuv, matrix_yvu) = find_constants(image).ok_or(AvifError::NotImplemented)?;
-    let alpha_preferred = reformat_alpha && image.has_alpha();
+    let alpha_preferred = rgb.has_alpha() && image.has_alpha();
     let conversion_function =
         find_conversion_function(image.yuv_format, image.depth, rgb, alpha_preferred)
             .ok_or(AvifError::NotImplemented)?;
