@@ -170,41 +170,53 @@ impl image::Image {
         if self.planes2[3].is_none() {
             return Ok(());
         }
-        if !self.planes2[3].as_ref().unwrap().is_pointer() {
-            // TODO: implement this function for non-pointer inputs.
-            return Err(AvifError::NotImplemented);
-        }
-        let src = image::Image {
-            width: self.width,
-            height: self.height,
-            depth: self.depth,
-            yuv_format: self.yuv_format,
-            planes2: [
-                None,
-                None,
-                None,
-                Some(Pixels::Pointer(self.planes2[3].as_ref().unwrap().pointer())),
-            ],
-            row_bytes: [0, 0, 0, self.row_bytes[3]],
-            ..image::Image::default()
-        };
-        self.allocate_planes(Category::Alpha)?;
         let width = self.width as usize;
         let depth = self.depth;
-        if depth > 8 {
+        if self.planes2[3].as_ref().unwrap().is_pointer() {
+            let src = image::Image {
+                width: self.width,
+                height: self.height,
+                depth: self.depth,
+                yuv_format: self.yuv_format,
+                planes2: [
+                    None,
+                    None,
+                    None,
+                    Some(Pixels::Pointer(self.planes2[3].as_ref().unwrap().pointer())),
+                ],
+                row_bytes: [0, 0, 0, self.row_bytes[3]],
+                ..image::Image::default()
+            };
+            self.allocate_planes(Category::Alpha)?;
+            if depth > 8 {
+                for y in 0..self.height {
+                    let src_row = src.row16(Plane::A, y)?;
+                    let dst_row = self.row16_mut(Plane::A, y)?;
+                    for x in 0..width {
+                        dst_row[x] = limited_to_full_y(depth, src_row[x]);
+                    }
+                }
+            } else {
+                for y in 0..self.height {
+                    let src_row = src.row(Plane::A, y)?;
+                    let dst_row = self.row_mut(Plane::A, y)?;
+                    for x in 0..width {
+                        dst_row[x] = limited_to_full_y(8, src_row[x] as u16) as u8;
+                    }
+                }
+            }
+        } else if depth > 8 {
             for y in 0..self.height {
-                let src_row = src.row16(Plane::A, y)?;
-                let dst_row = self.row16_mut(Plane::A, y)?;
+                let row = self.row16_mut(Plane::A, y)?;
                 for x in 0..width {
-                    dst_row[x] = limited_to_full_y(depth, src_row[x]);
+                    row[x] = limited_to_full_y(depth, row[x]);
                 }
             }
         } else {
             for y in 0..self.height {
-                let src_row = src.row(Plane::A, y)?;
-                let dst_row = self.row_mut(Plane::A, y)?;
+                let row = self.row_mut(Plane::A, y)?;
                 for x in 0..width {
-                    dst_row[x] = limited_to_full_y(8, src_row[x] as u16) as u8;
+                    row[x] = limited_to_full_y(8, row[x] as u16) as u8;
                 }
             }
         }
