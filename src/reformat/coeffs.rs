@@ -11,20 +11,15 @@ fn calculate_yuv_coefficients_from_cicp(
     color_primaries: ColorPrimaries,
     matrix_coefficients: MatrixCoefficients,
 ) -> Option<[f32; 3]> {
+    let expand_coeffs = |y, v| Some([y, 1.0 - y - v, v]);
     match matrix_coefficients {
         MatrixCoefficients::ChromaDerivedNcl => Some(color_primaries.y_coeffs()),
-        _ => {
-            let mut lookup = HashMap::with_hasher(NonRandomHasherState);
-            lookup.insert(MatrixCoefficients::Bt709, (0.2126f32, 0.0722));
-            lookup.insert(MatrixCoefficients::Fcc, (0.30, 0.11));
-            lookup.insert(MatrixCoefficients::Bt470bg, (0.299, 0.114));
-            lookup.insert(MatrixCoefficients::Bt601, (0.299, 0.114));
-            lookup.insert(MatrixCoefficients::Smpte240, (0.212, 0.087));
-            lookup.insert(MatrixCoefficients::Bt2020Ncl, (0.2627, 0.0593));
-            lookup
-                .get(&matrix_coefficients)
-                .map(|x| [x.0, 1.0 - x.0 - x.1, x.1])
-        }
+        MatrixCoefficients::Bt709 => expand_coeffs(0.2126f32, 0.0722),
+        MatrixCoefficients::Fcc => expand_coeffs(0.30, 0.11),
+        MatrixCoefficients::Bt470bg | MatrixCoefficients::Bt601 => expand_coeffs(0.299, 0.114),
+        MatrixCoefficients::Smpte240 => expand_coeffs(0.212, 0.087),
+        MatrixCoefficients::Bt2020Ncl => expand_coeffs(0.2627, 0.0593),
+        _ => None,
     }
 }
 
