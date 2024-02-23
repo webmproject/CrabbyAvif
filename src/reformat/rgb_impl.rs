@@ -55,7 +55,7 @@ enum Mode {
 struct YuvColorSpaceInfo {
     channel_bytes: u32,
     depth: u32,
-    full_range: bool,
+    full_range: bool, // VideoFullRangeFlag as specified in ISO/IEC 23091-2/ITU-T H.273.
     max_channel: u16,
     bias_y: f32,
     bias_uv: f32,
@@ -100,6 +100,7 @@ impl YuvColorSpaceInfo {
             depth: image.depth as u32,
             full_range: image.full_range,
             max_channel,
+            // See the formulas in ISO/IEC 23091-2.
             bias_y: if image.full_range { 0.0 } else { (16 << (image.depth - 8)) as f32 },
             bias_uv: (1 << (image.depth - 1)) as f32,
             range_y: if image.full_range { max_channel } else { 219 << (image.depth - 8) } as f32,
