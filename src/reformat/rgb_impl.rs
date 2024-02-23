@@ -472,7 +472,7 @@ mod tests {
                 ..Default::default()
             };
             assert!(yuv.allocate_planes(decoder::Category::Color).is_ok());
-            for plane in [Plane::Y, Plane::U, Plane::V] {
+            for plane in image::YUV_PLANES {
                 let samples = if plane == Plane::Y {
                     &y
                 } else if plane == Plane::U {
@@ -491,11 +491,11 @@ mod tests {
             yuv
         }
         fn assert_near(yuv: &image::Image, r: &[&[u8]], g: &[&[u8]], b: &[&[u8]]) {
-            let mut dst = rgb::Image::create_from_yuv(&yuv);
+            let mut dst = rgb::Image::create_from_yuv(yuv);
             dst.format = rgb::Format::Rgb;
             dst.chroma_upsampling = ChromaUpsampling::Bilinear;
             assert!(dst.allocate().is_ok());
-            assert!(yuv_to_rgb_any(&yuv, &mut dst, AlphaMultiplyMode::NoOp).is_ok());
+            assert!(yuv_to_rgb_any(yuv, &mut dst, AlphaMultiplyMode::NoOp).is_ok());
             assert_eq!(dst.height, r.len() as u32);
             assert_eq!(dst.height, g.len() as u32);
             assert_eq!(dst.height, b.len() as u32);
