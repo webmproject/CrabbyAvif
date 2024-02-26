@@ -211,37 +211,36 @@ fn compute_rgb(y: f32, cb: f32, cr: f32, has_color: bool, mode: Mode) -> (f32, f
 }
 
 enum Row<'a> {
-    Absent,
     Depth8(&'a [u8]),
     Depth16(&'a [u16]),
 }
 
 impl image::Image {
     // TODO: Move it to image.rs?
-    fn row_generic(&self, plane: Plane, row: u32) -> Row {
+    fn row_generic(&self, plane: Plane, row: u32) -> Option<Row> {
         if self.depth == 8 {
             match self.row(plane, row) {
-                Ok(row) => Row::Depth8(row),
-                _ => Row::Absent,
+                Ok(row) => Some(Row::Depth8(row)),
+                _ => None,
             }
         } else {
             match self.row16(plane, row) {
-                Ok(row) => Row::Depth16(row),
-                _ => Row::Absent,
+                Ok(row) => Some(Row::Depth16(row)),
+                _ => None,
             }
         }
     }
 }
 
-fn clamped_pixel(row: &Row, index: usize, max_channel: u16) -> u16 {
+fn clamped_pixel(row: &Option<Row>, index: usize, max_channel: u16) -> u16 {
     match row {
-        Row::Depth8(row) => row[index] as u16,
-        Row::Depth16(row) => min(max_channel, row[index]),
-        _ => panic!(),
+        Some(Row::Depth8(row)) => row[index] as u16,
+        Some(Row::Depth16(row)) => min(max_channel, row[index]),
+        None => panic!(),
     }
 }
 
-fn unorm_value(row: &Row, index: usize, max_channel: u16, table: &[f32]) -> f32 {
+fn unorm_value(row: &Option<Row>, index: usize, max_channel: u16, table: &[f32]) -> f32 {
     table[clamped_pixel(row, index, max_channel) as usize]
 }
 
@@ -302,8 +301,6 @@ pub fn yuv_to_rgb_any(
                     } else {
                         uv_i - 1
                     };
-                    let u_adj_row;
-                    let v_adj_row;
                     let uv_adj_j = if j == 0
                         || (j == image.height - 1 && (j % 2) != 0)
                         || image.yuv_format == PixelFormat::Yuv422
@@ -314,13 +311,8 @@ pub fn yuv_to_rgb_any(
                     } else {
                         uv_j - 1
                     };
-                    if image.depth == 8 {
-                        u_adj_row = Row::Depth8(image.row(Plane::U, uv_adj_j)?);
-                        v_adj_row = Row::Depth8(image.row(Plane::V, uv_adj_j)?);
-                    } else {
-                        u_adj_row = Row::Depth16(image.row16(Plane::U, uv_adj_j)?);
-                        v_adj_row = Row::Depth16(image.row16(Plane::V, uv_adj_j)?);
-                    }
+                    let u_adj_row = image.row_generic(Plane::U, uv_adj_j);
+                    let v_adj_row = image.row_generic(Plane::V, uv_adj_j);
                     let mut unorm_u: [[f32; 2]; 2] = [[0.0; 2]; 2];
                     let mut unorm_v: [[f32; 2]; 2] = [[0.0; 2]; 2];
                     unorm_u[0][0] = unorm_value(&u_row, uv_i, yuv_max_channel, &table_uv);
