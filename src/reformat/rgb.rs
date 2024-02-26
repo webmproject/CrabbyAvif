@@ -310,6 +310,101 @@ impl Image {
         }
         Ok(())
     }
+
+    pub fn view(&self) -> Image {
+        Image {
+            width: self.width,
+            height: self.height,
+            depth: self.depth,
+            format: self.format,
+            chroma_upsampling: self.chroma_upsampling,
+            chroma_downsampling: self.chroma_downsampling,
+            alpha_premultiplied: self.alpha_premultiplied,
+            is_float: self.is_float,
+            max_threads: self.max_threads,
+            pixels: match &self.pixels {
+                Some(Pixels::Pointer(ptr)) => Some(Pixels::Pointer(*ptr)),
+                Some(Pixels::Buffer(vec)) => Some(Pixels::Pointer(vec.as_ptr() as *mut u8)),
+                Some(Pixels::Buffer16(vec)) => {
+                    Some(Pixels::Pointer(vec.as_ptr().cast::<u8>() as *mut u8))
+                }
+                None => None,
+            },
+            row_bytes: self.row_bytes,
+        }
+    }
+
+    pub fn shuffle_channels_to(&self, format: Format) -> AvifResult<Image> {
+        if self.format == format {
+            return Ok(self.view());
+        }
+        if self.format == Format::Rgb565 || format == Format::Rgb565 {
+            return Err(AvifError::NotImplemented);
+        }
+
+        let mut dst = Image {
+            width: self.width,
+            height: self.height,
+            depth: self.depth,
+            format: format,
+            chroma_upsampling: self.chroma_upsampling,
+            chroma_downsampling: self.chroma_downsampling,
+            alpha_premultiplied: self.alpha_premultiplied,
+            is_float: self.is_float,
+            max_threads: self.max_threads,
+            pixels: None,
+            row_bytes: 0,
+        };
+        dst.allocate()?;
+
+        let src_channel_count = self.channel_count();
+        let dst_channel_count = dst.channel_count();
+        let src_offsets = self.format.offsets();
+        let dst_offsets = dst.format.offsets();
+        let src_has_alpha = self.has_alpha();
+        let dst_has_alpha = dst.has_alpha();
+        let dst_max_channel = dst.max_channel();
+        for y in 0..self.height {
+            if self.depth == 8 {
+                let src_row = self.row(y)?;
+                let dst_row = &mut dst.row_mut(y)?;
+                for x in 0..self.width {
+                    let src_pixel_i = (src_channel_count * x) as usize;
+                    let dst_pixel_i = (dst_channel_count * x) as usize;
+                    for c in 0..3 {
+                        dst_row[dst_pixel_i + dst_offsets[c]] =
+                            src_row[src_pixel_i + src_offsets[c]];
+                    }
+                    if dst_has_alpha {
+                        dst_row[dst_pixel_i + dst_offsets[3]] = if src_has_alpha {
+                            src_row[src_pixel_i + src_offsets[3]]
+                        } else {
+                            dst_max_channel as u8
+                        };
+                    }
+                }
+            } else {
+                let src_row = self.row16(y)?;
+                let dst_row = &mut dst.row16_mut(y)?;
+                for x in 0..self.width {
+                    let src_pixel_i = (src_channel_count * x) as usize;
+                    let dst_pixel_i = (dst_channel_count * x) as usize;
+                    for c in 0..3 {
+                        dst_row[dst_pixel_i + dst_offsets[c]] =
+                            src_row[src_pixel_i + src_offsets[c]];
+                    }
+                    if dst_has_alpha {
+                        dst_row[dst_pixel_i + dst_offsets[3]] = if src_has_alpha {
+                            src_row[src_pixel_i + src_offsets[3]]
+                        } else {
+                            dst_max_channel
+                        };
+                    }
+                }
+            }
+        }
+        Ok(dst)
+    }
 }
 
 #[cfg(test)]
@@ -461,5 +556,39 @@ mod tests {
             assert_eq!(&row16[..], rgb_params.expected_rgba[y]);
         }
         Ok(())
+    }
+
+    #[test]
+    fn channel_shuffling() {
+        let image = Image {
+            width: 1,
+            height: 1,
+            depth: 8,
+            format: Format::Rgba,
+            pixels: Some(Pixels::Buffer(vec![0u8, 1, 2, 3])),
+            row_bytes: 4,
+            ..Default::default()
+        };
+
+        let shuffled = image.shuffle_channels_to(Format::Rgba);
+        match &shuffled.unwrap().pixels {
+            Some(Pixels::Pointer(ptr)) => assert_eq!(
+                unsafe { std::slice::from_raw_parts(*ptr, 4) },
+                [0u8, 1, 2, 3]
+            ),
+            _ => panic!(),
+        }
+
+        let shuffled = image.shuffle_channels_to(Format::Abgr);
+        match &shuffled.unwrap().pixels {
+            Some(Pixels::Buffer(vec)) => assert_eq!(vec[..], [3u8, 2, 1, 0]),
+            _ => panic!(),
+        }
+
+        let shuffled = image.shuffle_channels_to(Format::Rgb);
+        match &shuffled.unwrap().pixels {
+            Some(Pixels::Buffer(vec)) => assert_eq!(vec[..], [0u8, 1, 2]),
+            _ => panic!(),
+        }
     }
 }
