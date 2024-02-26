@@ -68,8 +68,6 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         cargo build --features capi --release
-        mkdir c_build
-        cd c_build
-        cmake ../c_api_tests/
-        make
-        make test
+        cmake -S c_api_tests -B c_build
+        make -C c_build
+        make -C c_build test
