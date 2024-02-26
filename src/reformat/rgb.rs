@@ -66,6 +66,10 @@ impl ChromaUpsampling {
         // TODO: this function has to return different values based on whether libyuv is used.
         !matches!(self, Self::Bilinear | Self::BestQuality)
     }
+    pub fn bilinear_or_better_filter_allowed(&self) -> bool {
+        // TODO: this function has to return different values based on whether libyuv is used.
+        !matches!(self, Self::Nearest | Self::Fastest)
+    }
 }
 
 #[repr(C)]
