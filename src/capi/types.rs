@@ -402,6 +402,6 @@ pub unsafe extern "C" fn avifAlloc(size: usize) -> *mut c_void {
 #[no_mangle]
 pub unsafe extern "C" fn avifFree(p: *mut c_void) {
     if !p.is_null() {
-        let _ = unsafe { Box::from_raw(p) };
+        let _ = unsafe { Box::from_raw(p as *mut u8) };
     }
 }
