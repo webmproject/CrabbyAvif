@@ -75,30 +75,31 @@ impl From<*const avifImage> for image::Image {
     // Only copies fields necessary for reformatting.
     fn from(image: *const avifImage) -> image::Image {
         let image = unsafe { &(*image) };
-        let mut ret = image::Image::default();
-        ret.width = image.width;
-        ret.height = image.height;
-        ret.depth = image.depth as u8;
-        ret.yuv_format = image.yuvFormat.into();
-        ret.full_range = image.yuvRange == avifRange::Full;
-        ret.alpha_present = !image.alphaPlane.is_null();
-        ret.alpha_premultiplied = image.alphaPremultiplied == AVIF_TRUE;
-        ret.planes2 = [
-            Some(Pixels::Pointer(image.yuvPlanes[0])),
-            Some(Pixels::Pointer(image.yuvPlanes[1])),
-            Some(Pixels::Pointer(image.yuvPlanes[2])),
-            Some(Pixels::Pointer(image.alphaPlane)),
-        ];
-        ret.row_bytes = [
-            image.yuvRowBytes[0],
-            image.yuvRowBytes[1],
-            image.yuvRowBytes[2],
-            image.alphaRowBytes,
-        ];
-        ret.color_primaries = image.colorPrimaries;
-        ret.transfer_characteristics = image.transferCharacteristics;
-        ret.matrix_coefficients = image.matrixCoefficients;
-        ret
+        image::Image {
+            width: image.width,
+            height: image.height,
+            depth: image.depth as u8,
+            yuv_format: image.yuvFormat.into(),
+            full_range: image.yuvRange == avifRange::Full,
+            alpha_present: !image.alphaPlane.is_null(),
+            alpha_premultiplied: image.alphaPremultiplied == AVIF_TRUE,
+            planes2: [
+                Some(Pixels::Pointer(image.yuvPlanes[0])),
+                Some(Pixels::Pointer(image.yuvPlanes[1])),
+                Some(Pixels::Pointer(image.yuvPlanes[2])),
+                Some(Pixels::Pointer(image.alphaPlane)),
+            ],
+            row_bytes: [
+                image.yuvRowBytes[0],
+                image.yuvRowBytes[1],
+                image.yuvRowBytes[2],
+                image.alphaRowBytes,
+            ],
+            color_primaries: image.colorPrimaries,
+            transfer_characteristics: image.transferCharacteristics,
+            matrix_coefficients: image.matrixCoefficients,
+            ..Default::default()
+        }
     }
 }
 
