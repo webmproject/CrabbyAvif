@@ -83,8 +83,8 @@ impl rgb::Image {
     pub fn import_alpha_from(&mut self, image: &image::Image) -> AvifResult<()> {
         if !self.has_alpha()
             || !image.has_alpha()
-            || self.width != image.width as u32
-            || self.height != image.height as u32
+            || self.width != image.width
+            || self.height != image.height
         {
             return Err(AvifError::InvalidArgument);
         }
@@ -198,15 +198,15 @@ impl image::Image {
         } else if depth > 8 {
             for y in 0..self.height {
                 let row = self.row16_mut(Plane::A, y)?;
-                for x in 0..width {
-                    row[x] = limited_to_full_y(depth, row[x]);
+                for pixel in row.iter_mut().take(width) {
+                    *pixel = limited_to_full_y(depth, *pixel);
                 }
             }
         } else {
             for y in 0..self.height {
                 let row = self.row_mut(Plane::A, y)?;
-                for x in 0..width {
-                    row[x] = limited_to_full_y(8, row[x] as u16) as u8;
+                for pixel in row.iter_mut().take(width) {
+                    *pixel = limited_to_full_y(8, *pixel as u16) as u8;
                 }
             }
         }
