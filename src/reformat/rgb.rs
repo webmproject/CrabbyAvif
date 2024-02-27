@@ -311,29 +311,6 @@ impl Image {
         Ok(())
     }
 
-    pub fn view(&self) -> Image {
-        Image {
-            width: self.width,
-            height: self.height,
-            depth: self.depth,
-            format: self.format,
-            chroma_upsampling: self.chroma_upsampling,
-            chroma_downsampling: self.chroma_downsampling,
-            alpha_premultiplied: self.alpha_premultiplied,
-            is_float: self.is_float,
-            max_threads: self.max_threads,
-            pixels: match &self.pixels {
-                Some(Pixels::Pointer(ptr)) => Some(Pixels::Pointer(*ptr)),
-                Some(Pixels::Buffer(vec)) => Some(Pixels::Pointer(vec.as_ptr() as *mut u8)),
-                Some(Pixels::Buffer16(vec)) => {
-                    Some(Pixels::Pointer(vec.as_ptr().cast::<u8>() as *mut u8))
-                }
-                None => None,
-            },
-            row_bytes: self.row_bytes,
-        }
-    }
-
     pub fn shuffle_channels_to(self, format: Format) -> AvifResult<Image> {
         if self.format == format {
             return Ok(self);
