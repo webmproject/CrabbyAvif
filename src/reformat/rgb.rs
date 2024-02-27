@@ -570,25 +570,15 @@ mod tests {
             ..Default::default()
         };
 
-        let shuffled = image.shuffle_channels_to(Format::Rgba);
-        match &shuffled.unwrap().pixels {
-            Some(Pixels::Pointer(ptr)) => assert_eq!(
-                unsafe { std::slice::from_raw_parts(*ptr, 4) },
-                [0u8, 1, 2, 3]
-            ),
-            _ => panic!(),
-        }
-
-        let shuffled = image.shuffle_channels_to(Format::Abgr);
-        match &shuffled.unwrap().pixels {
-            Some(Pixels::Buffer(vec)) => assert_eq!(vec[..], [3u8, 2, 1, 0]),
-            _ => panic!(),
-        }
-
-        let shuffled = image.shuffle_channels_to(Format::Rgb);
-        match &shuffled.unwrap().pixels {
-            Some(Pixels::Buffer(vec)) => assert_eq!(vec[..], [0u8, 1, 2]),
-            _ => panic!(),
+        for (format, expected) in [
+            (Format::Rgba, vec![0u8, 1, 2, 3]),
+            (Format::Abgr, vec![3u8, 2, 1, 0]),
+            (Format::Rgb, vec![0u8, 1, 2]),
+        ] {
+            assert_eq!(
+                image.shuffle_channels_to(format).unwrap().row(0).unwrap(),
+                expected
+            );
         }
     }
 }
