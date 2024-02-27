@@ -324,7 +324,7 @@ impl Image {
             pixels: None,
             row_bytes: 0,
             ..self
-          };
+        };
         dst.allocate()?;
 
         let src_channel_count = self.channel_count();
