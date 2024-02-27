@@ -80,11 +80,7 @@ impl From<*mut avifRGBImage> for rgb::Image {
             (rgb::Format::Abgr, false) => rgb::Format::Abgr,
             (rgb::Format::Rgb565, _) => rgb::Format::Rgb565,
         };
-        if format == rgb.format {
-            dst
-        } else {
-            dst.shuffle_channels_to(format).unwrap()
-        }
+        dst.shuffle_channels_to(format).unwrap()
     }
 }
 

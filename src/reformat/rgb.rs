@@ -334,9 +334,9 @@ impl Image {
         }
     }
 
-    pub fn shuffle_channels_to(&self, format: Format) -> AvifResult<Image> {
+    pub fn shuffle_channels_to(self, format: Format) -> AvifResult<Image> {
         if self.format == format {
-            return Ok(self.view());
+            return Ok(self);
         }
         if self.format == Format::Rgb565 || format == Format::Rgb565 {
             return Err(AvifError::NotImplemented);
@@ -415,6 +415,7 @@ mod tests {
     use crate::image::ALL_PLANES;
     use crate::image::MAX_PLANE_COUNT;
 
+    use test_case::test_case;
     use test_case::test_matrix;
 
     const WIDTH: usize = 3;
@@ -558,8 +559,10 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn shuffle_channels_to() {
+    #[test_case(Format::Rgba, &[0, 1, 2, 3])]
+    #[test_case(Format::Abgr, &[3, 2, 1, 0])]
+    #[test_case(Format::Rgb, &[0, 1, 2])]
+    fn shuffle_channels_to(format: Format, expected: &[u8]) {
         let image = Image {
             width: 1,
             height: 1,
@@ -569,16 +572,9 @@ mod tests {
             row_bytes: 4,
             ..Default::default()
         };
-
-        for (format, expected) in [
-            (Format::Rgba, vec![0u8, 1, 2, 3]),
-            (Format::Abgr, vec![3u8, 2, 1, 0]),
-            (Format::Rgb, vec![0u8, 1, 2]),
-        ] {
-            assert_eq!(
-                image.shuffle_channels_to(format).unwrap().row(0).unwrap(),
-                expected
-            );
-        }
+        assert_eq!(
+            image.shuffle_channels_to(format).unwrap().row(0).unwrap(),
+            expected
+        );
     }
 }
