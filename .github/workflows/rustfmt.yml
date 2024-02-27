@@ -1,8 +1,8 @@
-name: CI Rustfmt
+name: Rustfmt
 on: pull_request
 
 jobs:
-  format:
+  rustfmt:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write

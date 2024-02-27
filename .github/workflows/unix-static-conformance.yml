@@ -1,4 +1,4 @@
-name: CI Unix Static Conformance
+name: Unix Static Conformance
 on:
   push:
     branches:
@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  build-static:
+  unix-static-conformance:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
