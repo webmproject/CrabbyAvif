@@ -41,7 +41,7 @@ impl From<rgb::Image> for avifRGBImage {
             format: rgb.format,
             chroma_upsampling: rgb.chroma_upsampling,
             chroma_downsampling: rgb.chroma_downsampling,
-            ignore_alpha: rgb.ignore_alpha,
+            ignore_alpha: false,
             alpha_premultiplied: rgb.alpha_premultiplied,
             is_float: rgb.is_float,
             max_threads: rgb.max_threads,
@@ -54,20 +54,33 @@ impl From<rgb::Image> for avifRGBImage {
 impl From<*mut avifRGBImage> for rgb::Image {
     fn from(rgb: *mut avifRGBImage) -> rgb::Image {
         let rgb = unsafe { &(*rgb) };
-        rgb::Image {
+        let dst = rgb::Image {
             width: rgb.width,
             height: rgb.height,
             depth: rgb.depth,
             format: rgb.format,
             chroma_upsampling: rgb.chroma_upsampling,
             chroma_downsampling: rgb.chroma_downsampling,
-            ignore_alpha: rgb.ignore_alpha,
             alpha_premultiplied: rgb.alpha_premultiplied,
             is_float: rgb.is_float,
             max_threads: rgb.max_threads,
             pixels: Some(Pixels::Pointer(rgb.pixels)),
             row_bytes: rgb.row_bytes,
-        }
+        };
+        let format = match (rgb.format, rgb.ignore_alpha) {
+            (rgb::Format::Rgb, _) => rgb::Format::Rgb,
+            (rgb::Format::Rgba, true) => rgb::Format::Rgb,
+            (rgb::Format::Rgba, false) => rgb::Format::Rgba,
+            (rgb::Format::Argb, true) => rgb::Format::Rgb,
+            (rgb::Format::Argb, false) => rgb::Format::Argb,
+            (rgb::Format::Bgr, _) => rgb::Format::Bgr,
+            (rgb::Format::Bgra, true) => rgb::Format::Bgr,
+            (rgb::Format::Bgra, false) => rgb::Format::Bgra,
+            (rgb::Format::Abgr, true) => rgb::Format::Bgr,
+            (rgb::Format::Abgr, false) => rgb::Format::Abgr,
+            (rgb::Format::Rgb565, _) => rgb::Format::Rgb565,
+        };
+        dst.shuffle_channels_to(format).unwrap()
     }
 }
 

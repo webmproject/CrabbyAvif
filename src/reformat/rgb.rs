@@ -91,7 +91,6 @@ pub struct Image {
     pub format: Format,
     pub chroma_upsampling: ChromaUpsampling,
     pub chroma_downsampling: ChromaDownsampling,
-    pub ignore_alpha: bool,
     pub alpha_premultiplied: bool,
     pub is_float: bool,
     pub max_threads: i32,
@@ -124,7 +123,6 @@ impl Image {
             format: Format::Rgba,
             chroma_upsampling: ChromaUpsampling::Automatic,
             chroma_downsampling: ChromaDownsampling::Automatic,
-            ignore_alpha: false,
             alpha_premultiplied: false,
             is_float: false,
             max_threads: 1,
@@ -258,17 +256,12 @@ impl Image {
     }
 
     pub fn convert_from_yuv(&mut self, image: &image::Image) -> AvifResult<()> {
-        // TODO: use plane constant here and elsewhere.
         if !image.has_plane(Plane::Y) {
             return Err(AvifError::ReformatFailed);
         }
         let mut alpha_multiply_mode = AlphaMultiplyMode::NoOp;
-        if image.has_alpha() {
-            if !self.has_alpha() || self.ignore_alpha {
-                if !image.alpha_premultiplied {
-                    alpha_multiply_mode = AlphaMultiplyMode::Multiply;
-                }
-            } else if !image.alpha_premultiplied && self.alpha_premultiplied {
+        if image.has_alpha() && self.has_alpha() {
+            if !image.alpha_premultiplied && self.alpha_premultiplied {
                 alpha_multiply_mode = AlphaMultiplyMode::Multiply;
             } else if image.alpha_premultiplied && !self.alpha_premultiplied {
                 alpha_multiply_mode = AlphaMultiplyMode::UnMultiply;
@@ -276,11 +269,9 @@ impl Image {
         }
 
         let mut converted_with_libyuv: bool = false;
-        let reformat_alpha = self.has_alpha()
-            && (!self.ignore_alpha || alpha_multiply_mode != AlphaMultiplyMode::NoOp);
         let mut alpha_reformatted_with_libyuv = false;
         if alpha_multiply_mode == AlphaMultiplyMode::NoOp || self.has_alpha() {
-            match libyuv::yuv_to_rgb(image, self, reformat_alpha) {
+            match libyuv::yuv_to_rgb(image, self) {
                 Ok(alpha_reformatted) => {
                     alpha_reformatted_with_libyuv = alpha_reformatted;
                     converted_with_libyuv = true;
@@ -292,7 +283,7 @@ impl Image {
                 }
             }
         }
-        if reformat_alpha && !alpha_reformatted_with_libyuv {
+        if self.has_alpha() && !alpha_reformatted_with_libyuv {
             if image.has_alpha() {
                 self.import_alpha_from(image)?;
             } else {
@@ -319,6 +310,71 @@ impl Image {
         }
         Ok(())
     }
+
+    pub fn shuffle_channels_to(self, format: Format) -> AvifResult<Image> {
+        if self.format == format {
+            return Ok(self);
+        }
+        if self.format == Format::Rgb565 || format == Format::Rgb565 {
+            return Err(AvifError::NotImplemented);
+        }
+
+        let mut dst = Image {
+            format,
+            pixels: None,
+            row_bytes: 0,
+            ..self
+        };
+        dst.allocate()?;
+
+        let src_channel_count = self.channel_count();
+        let dst_channel_count = dst.channel_count();
+        let src_offsets = self.format.offsets();
+        let dst_offsets = dst.format.offsets();
+        let src_has_alpha = self.has_alpha();
+        let dst_has_alpha = dst.has_alpha();
+        let dst_max_channel = dst.max_channel();
+        for y in 0..self.height {
+            if self.depth == 8 {
+                let src_row = self.row(y)?;
+                let dst_row = &mut dst.row_mut(y)?;
+                for x in 0..self.width {
+                    let src_pixel_i = (src_channel_count * x) as usize;
+                    let dst_pixel_i = (dst_channel_count * x) as usize;
+                    for c in 0..3 {
+                        dst_row[dst_pixel_i + dst_offsets[c]] =
+                            src_row[src_pixel_i + src_offsets[c]];
+                    }
+                    if dst_has_alpha {
+                        dst_row[dst_pixel_i + dst_offsets[3]] = if src_has_alpha {
+                            src_row[src_pixel_i + src_offsets[3]]
+                        } else {
+                            dst_max_channel as u8
+                        };
+                    }
+                }
+            } else {
+                let src_row = self.row16(y)?;
+                let dst_row = &mut dst.row16_mut(y)?;
+                for x in 0..self.width {
+                    let src_pixel_i = (src_channel_count * x) as usize;
+                    let dst_pixel_i = (dst_channel_count * x) as usize;
+                    for c in 0..3 {
+                        dst_row[dst_pixel_i + dst_offsets[c]] =
+                            src_row[src_pixel_i + src_offsets[c]];
+                    }
+                    if dst_has_alpha {
+                        dst_row[dst_pixel_i + dst_offsets[3]] = if src_has_alpha {
+                            src_row[src_pixel_i + src_offsets[3]]
+                        } else {
+                            dst_max_channel
+                        };
+                    }
+                }
+            }
+        }
+        Ok(dst)
+    }
 }
 
 #[cfg(test)]
@@ -329,6 +385,7 @@ mod tests {
     use crate::image::ALL_PLANES;
     use crate::image::MAX_PLANE_COUNT;
 
+    use test_case::test_case;
     use test_case::test_matrix;
 
     const WIDTH: usize = 3;
@@ -470,5 +527,24 @@ mod tests {
             assert_eq!(&row16[..], rgb_params.expected_rgba[y]);
         }
         Ok(())
+    }
+
+    #[test_case(Format::Rgba, &[0, 1, 2, 3])]
+    #[test_case(Format::Abgr, &[3, 2, 1, 0])]
+    #[test_case(Format::Rgb, &[0, 1, 2])]
+    fn shuffle_channels_to(format: Format, expected: &[u8]) {
+        let image = Image {
+            width: 1,
+            height: 1,
+            depth: 8,
+            format: Format::Rgba,
+            pixels: Some(Pixels::Buffer(vec![0u8, 1, 2, 3])),
+            row_bytes: 4,
+            ..Default::default()
+        };
+        assert_eq!(
+            image.shuffle_channels_to(format).unwrap().row(0).unwrap(),
+            expected
+        );
     }
 }

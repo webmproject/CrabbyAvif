@@ -16,11 +16,7 @@ pub mod libyuv {
     use crate::reformat::*;
     use crate::*;
 
-    pub fn yuv_to_rgb(
-        _image: &image::Image,
-        _rgb: &mut rgb::Image,
-        _reformat_alpha: bool,
-    ) -> AvifResult<bool> {
+    pub fn yuv_to_rgb(_image: &image::Image, _rgb: &mut rgb::Image) -> AvifResult<bool> {
         return Err(AvifError::NotImplemented);
     }
 
