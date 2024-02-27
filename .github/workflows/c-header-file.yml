@@ -1,4 +1,4 @@
-name: CI C Header File
+name: C Header File
 on:
   push:
     branches:
@@ -24,7 +24,7 @@ jobs:
       with:
         toolchain: stable
 
-    - name: Build and the C header file
+    - name: Build the library and generate the C header file
       run: cargo build --features capi --release --no-default-features
 
     - name: Ensure that there is no diff in the header file.

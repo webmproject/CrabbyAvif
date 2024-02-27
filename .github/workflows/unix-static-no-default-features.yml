@@ -1,4 +1,4 @@
-name: CI Unix Static Without Default Features
+name: Unix Static Without Default Features
 on:
   push:
     branches:
@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  build-static-no-default-features:
+  unix-static-no-default-features:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

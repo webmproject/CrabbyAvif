@@ -1,4 +1,4 @@
-name: CI Unix Static
+name: Unix Static
 on:
   push:
     branches:
@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  build-static:
+  unix-static:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
