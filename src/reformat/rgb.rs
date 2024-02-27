@@ -343,18 +343,11 @@ impl Image {
         }
 
         let mut dst = Image {
-            width: self.width,
-            height: self.height,
-            depth: self.depth,
-            format: format,
-            chroma_upsampling: self.chroma_upsampling,
-            chroma_downsampling: self.chroma_downsampling,
-            alpha_premultiplied: self.alpha_premultiplied,
-            is_float: self.is_float,
-            max_threads: self.max_threads,
+            format,
             pixels: None,
             row_bytes: 0,
-        };
+            ..self
+          };
         dst.allocate()?;
 
         let src_channel_count = self.channel_count();
