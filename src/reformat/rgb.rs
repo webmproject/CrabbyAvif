@@ -559,7 +559,7 @@ mod tests {
     }
 
     #[test]
-    fn channel_shuffling() {
+    fn shuffle_channels_to() {
         let image = Image {
             width: 1,
             height: 1,
