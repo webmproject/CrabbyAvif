@@ -3,8 +3,6 @@ use crate::*;
 use std::fs::File;
 use std::io::prelude::*;
 
-use byteorder::{LittleEndian, WriteBytesExt};
-
 #[derive(Default)]
 pub struct Y4MWriter {
     pub filename: Option<String>,
@@ -140,7 +138,7 @@ impl Y4MWriter {
                     let mut pixels: Vec<u8> = Vec::new();
                     // y4m is always little endian.
                     for &pixel16 in pixels16 {
-                        let _ = pixels.write_u16::<LittleEndian>(pixel16);
+                        pixels.extend_from_slice(&pixel16.to_le_bytes());
                     }
                     if self.file.as_ref().unwrap().write_all(&pixels[..]).is_err() {
                         return false;
