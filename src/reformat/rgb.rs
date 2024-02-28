@@ -170,7 +170,7 @@ impl Image {
         }
     }
 
-    pub fn rows_mut(&mut self, row: u32) -> AvifResult<(Option<&mut [u8]>, Option<&mut [u16]>)> {
+    pub fn rows_mut(&mut self, row: u32) -> AvifResult<U8OrU16SliceMut> {
         if self.depth == 8 {
             Ok((Some(self.row_mut(row)?), None))
         } else {

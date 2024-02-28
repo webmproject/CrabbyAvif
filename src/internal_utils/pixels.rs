@@ -10,6 +10,9 @@ pub enum Pixels {
     Buffer16(Vec<u16>),
 }
 
+pub type U8OrU16Slice<'a> = (Option<&'a [u8]>, Option<&'a [u16]>);
+pub type U8OrU16SliceMut<'a> = (Option<&'a mut [u8]>, Option<&'a mut [u16]>);
+
 impl Pixels {
     pub fn size(&self) -> usize {
         match self {
@@ -131,7 +134,7 @@ impl Pixels {
         }
     }
 
-    pub fn slices(&self, offset: u32, size: u32) -> AvifResult<(Option<&[u8]>, Option<&[u16]>)> {
+    pub fn slices(&self, offset: u32, size: u32) -> AvifResult<U8OrU16Slice> {
         match self {
             Pixels::Pointer(ptr) => {
                 let offset = isize_from_u32(offset)?;
@@ -149,11 +152,7 @@ impl Pixels {
         }
     }
 
-    pub fn slices_mut(
-        &mut self,
-        offset: u32,
-        size: u32,
-    ) -> AvifResult<(Option<&mut [u8]>, Option<&mut [u16]>)> {
+    pub fn slices_mut(&mut self, offset: u32, size: u32) -> AvifResult<U8OrU16SliceMut> {
         match self {
             Pixels::Pointer(ptr) => {
                 let offset = isize_from_u32(offset)?;
