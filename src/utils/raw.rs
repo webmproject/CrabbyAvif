@@ -5,8 +5,6 @@ use crate::reformat::rgb;
 use std::fs::File;
 use std::io::prelude::*;
 
-use byteorder::{BigEndian, WriteBytesExt};
-
 #[derive(Default)]
 pub struct RawWriter {
     pub filename: Option<String>,
@@ -59,7 +57,7 @@ impl RawWriter {
                     let row = rgb.row16(y).unwrap();
                     let mut row16: Vec<u8> = Vec::new();
                     for &pixel in row {
-                        let _ = row16.write_u16::<BigEndian>(pixel);
+                        row16.extend_from_slice(&pixel.to_be_bytes());
                     }
                     if self.file.as_ref().unwrap().write_all(&row16[..]).is_err() {
                         return false;

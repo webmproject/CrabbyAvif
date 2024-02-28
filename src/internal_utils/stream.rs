@@ -1,7 +1,6 @@
 use crate::internal_utils::*;
 use crate::AvifError;
 use crate::AvifResult;
-use byteorder::{BigEndian, ByteOrder};
 
 #[derive(Debug)]
 pub struct IBitStream<'a> {
@@ -125,19 +124,19 @@ impl IStream<'_> {
     }
 
     pub fn read_u16(&mut self) -> AvifResult<u16> {
-        Ok(BigEndian::read_u16(self.get_slice(2)?))
+        Ok(u16::from_be_bytes(self.get_slice(2)?.try_into().unwrap()))
     }
 
     pub fn read_u24(&mut self) -> AvifResult<u32> {
-        Ok(BigEndian::read_u24(self.get_slice(3)?))
+        Ok(self.read_uxx(3)? as u32)
     }
 
     pub fn read_u32(&mut self) -> AvifResult<u32> {
-        Ok(BigEndian::read_u32(self.get_slice(4)?))
+        Ok(u32::from_be_bytes(self.get_slice(4)?.try_into().unwrap()))
     }
 
     pub fn read_u64(&mut self) -> AvifResult<u64> {
-        Ok(BigEndian::read_u64(self.get_slice(8)?))
+        Ok(u64::from_be_bytes(self.get_slice(8)?.try_into().unwrap()))
     }
 
     pub fn read_i32(&mut self) -> AvifResult<i32> {
@@ -175,7 +174,10 @@ impl IStream<'_> {
         if n > 8 {
             return Err(AvifError::NotImplemented);
         }
-        Ok(BigEndian::read_uint(self.get_slice(n)?, n))
+        let mut out = [0; 8];
+        let start = out.len() - n;
+        out[start..].copy_from_slice(self.get_slice(n)?);
+        Ok(u64::from_be_bytes(out))
     }
 
     pub fn read_c_string(&mut self) -> AvifResult<String> {
@@ -231,5 +233,43 @@ impl IStream<'_> {
         }
         println!("uleb value did not terminate after 8 bytes");
         Err(AvifError::BmffParseFailed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_uxx() {
+        let mut stream = IStream::create(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(stream.read_uxx(0), Ok(0));
+        assert_eq!(stream.offset, 0);
+        assert_eq!(stream.read_uxx(1), Ok(1));
+        assert_eq!(stream.offset, 1);
+        stream.offset = 0;
+        assert_eq!(stream.read_uxx(2), Ok(258));
+        stream.offset = 0;
+        assert_eq!(stream.read_u16(), Ok(258));
+        stream.offset = 0;
+        assert_eq!(stream.read_uxx(3), Ok(66051));
+        stream.offset = 0;
+        assert_eq!(stream.read_u24(), Ok(66051));
+        stream.offset = 0;
+        assert_eq!(stream.read_uxx(4), Ok(16909060));
+        stream.offset = 0;
+        assert_eq!(stream.read_u32(), Ok(16909060));
+        stream.offset = 0;
+        assert_eq!(stream.read_uxx(5), Ok(4328719365));
+        stream.offset = 0;
+        assert_eq!(stream.read_uxx(6), Ok(1108152157446));
+        stream.offset = 0;
+        assert_eq!(stream.read_uxx(7), Ok(283686952306183));
+        stream.offset = 0;
+        assert_eq!(stream.read_uxx(8), Ok(72623859790382856));
+        stream.offset = 0;
+        assert_eq!(stream.read_u64(), Ok(72623859790382856));
+        stream.offset = 0;
+        assert_eq!(stream.read_uxx(9), Err(AvifError::NotImplemented));
     }
 }
