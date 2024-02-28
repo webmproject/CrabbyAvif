@@ -23,6 +23,10 @@ unsafe extern "C" fn avif_dav1d_free_callback(
 
 const DAV1D_EAGAIN: i32 = -libc::EAGAIN;
 
+// The type of the fields from from dav1d_sys::bindings::* are dependent on the compiler that
+// is used to generate the bindings, version of dav1d, etc. So allow clippy to ignore
+// unnecessary cast warnings.
+#[allow(clippy::unnecessary_cast)]
 impl Decoder for Dav1d {
     fn initialize(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
         if self.context.is_some() {
