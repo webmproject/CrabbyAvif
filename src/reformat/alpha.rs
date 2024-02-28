@@ -1,4 +1,6 @@
+#[cfg(feature = "libyuv")]
 use super::libyuv;
+
 use super::rgb;
 
 use crate::decoder::Category;
@@ -15,6 +17,7 @@ impl rgb::Image {
         if !self.has_alpha() || self.alpha_premultiplied {
             return Err(AvifError::InvalidArgument);
         }
+        #[cfg(feature = "libyuv")]
         match libyuv::process_alpha(self, true) {
             Ok(_) => {
                 self.alpha_premultiplied = true;
@@ -22,6 +25,8 @@ impl rgb::Image {
             }
             Err(err) => Err(err),
         }
+        #[cfg(not(feature = "libyuv"))]
+        Err(AvifError::NotImplemented)
     }
 
     pub fn unpremultiply_alpha(&mut self) -> AvifResult<()> {
@@ -31,6 +36,7 @@ impl rgb::Image {
         if !self.has_alpha() || !self.alpha_premultiplied {
             return Err(AvifError::InvalidArgument);
         }
+        #[cfg(feature = "libyuv")]
         match libyuv::process_alpha(self, false) {
             Ok(_) => {
                 self.alpha_premultiplied = false;
@@ -38,6 +44,8 @@ impl rgb::Image {
             }
             Err(err) => Err(err),
         }
+        #[cfg(not(feature = "libyuv"))]
+        Err(AvifError::NotImplemented)
     }
 
     pub fn set_opaque(&mut self) -> AvifResult<()> {
