@@ -1,5 +1,6 @@
 use crabby_avif::decoder::track::RepetitionCount;
 use crabby_avif::image::*;
+use crabby_avif::reformat::rgb;
 use crabby_avif::*;
 
 use std::cell::RefCell;
@@ -532,4 +533,19 @@ fn color_and_alpha_dimensions_do_not_match() {
     let res = decoder.next_image();
     assert!(res.is_err());
     assert_avif_error!(res, DecodeAlphaFailed);
+}
+
+#[test]
+fn rgb_conversion_alpha_premultiply() -> AvifResult<()> {
+    let mut decoder = get_decoder("alpha.avif");
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let res = decoder.next_image();
+    assert!(res.is_ok());
+    let image = decoder.image();
+    let mut rgb = rgb::Image::create_from_yuv(image);
+    rgb.alpha_premultiplied = true;
+    rgb.allocate()?;
+    assert!(rgb.convert_from_yuv(image).is_ok());
+    Ok(())
 }

@@ -14,17 +14,12 @@ impl rgb::Image {
         if self.pixels().is_null() || self.row_bytes == 0 {
             return Err(AvifError::ReformatFailed);
         }
-        if !self.has_alpha() || self.alpha_premultiplied {
+        if !self.has_alpha() {
             return Err(AvifError::InvalidArgument);
         }
         #[cfg(feature = "libyuv")]
-        match libyuv::process_alpha(self, true) {
-            Ok(_) => {
-                self.alpha_premultiplied = true;
-                Ok(())
-            }
-            Err(err) => Err(err),
-        }
+        return libyuv::process_alpha(self, true);
+
         #[cfg(not(feature = "libyuv"))]
         Err(AvifError::NotImplemented)
     }
@@ -33,17 +28,12 @@ impl rgb::Image {
         if self.pixels().is_null() || self.row_bytes == 0 {
             return Err(AvifError::ReformatFailed);
         }
-        if !self.has_alpha() || !self.alpha_premultiplied {
+        if !self.has_alpha() {
             return Err(AvifError::InvalidArgument);
         }
         #[cfg(feature = "libyuv")]
-        match libyuv::process_alpha(self, false) {
-            Ok(_) => {
-                self.alpha_premultiplied = false;
-                Ok(())
-            }
-            Err(err) => Err(err),
-        }
+        return libyuv::process_alpha(self, false);
+
         #[cfg(not(feature = "libyuv"))]
         Err(AvifError::NotImplemented)
     }
