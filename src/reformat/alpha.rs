@@ -45,7 +45,7 @@ impl rgb::Image {
         if self.format == rgb::Format::Rgb565 {
             return Err(AvifError::NotImplemented);
         }
-        if self.alpha_premultiplied {
+        if self.premultiply_alpha {
             // unpremultiply_alpha() should be called first.
             return Err(AvifError::InvalidArgument);
         }

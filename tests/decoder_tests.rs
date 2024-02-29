@@ -544,7 +544,7 @@ fn rgb_conversion_alpha_premultiply() -> AvifResult<()> {
     assert!(res.is_ok());
     let image = decoder.image();
     let mut rgb = rgb::Image::create_from_yuv(image);
-    rgb.alpha_premultiplied = true;
+    rgb.premultiply_alpha = true;
     rgb.allocate()?;
     assert!(rgb.convert_from_yuv(image).is_ok());
     Ok(())
