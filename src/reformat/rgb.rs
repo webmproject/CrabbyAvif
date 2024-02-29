@@ -91,7 +91,7 @@ pub struct Image {
     pub format: Format,
     pub chroma_upsampling: ChromaUpsampling,
     pub chroma_downsampling: ChromaDownsampling,
-    pub alpha_premultiplied: bool,
+    pub premultiply_alpha: bool,
     pub is_float: bool,
     pub max_threads: i32,
     pub pixels: Option<Pixels>,
@@ -123,7 +123,7 @@ impl Image {
             format: Format::Rgba,
             chroma_upsampling: ChromaUpsampling::Automatic,
             chroma_downsampling: ChromaDownsampling::Automatic,
-            alpha_premultiplied: false,
+            premultiply_alpha: false,
             is_float: false,
             max_threads: 1,
             pixels: None,
@@ -261,9 +261,9 @@ impl Image {
         }
         let mut alpha_multiply_mode = AlphaMultiplyMode::NoOp;
         if image.has_alpha() && self.has_alpha() {
-            if !image.alpha_premultiplied && self.alpha_premultiplied {
+            if !image.alpha_premultiplied && self.premultiply_alpha {
                 alpha_multiply_mode = AlphaMultiplyMode::Multiply;
-            } else if image.alpha_premultiplied && !self.alpha_premultiplied {
+            } else if image.alpha_premultiplied && !self.premultiply_alpha {
                 alpha_multiply_mode = AlphaMultiplyMode::UnMultiply;
             }
         }
@@ -426,7 +426,7 @@ mod tests {
             /*yuv_param_index:*/ usize,
             /*format:*/ Format,
             /*depth:*/ u32,
-            /*alpha_premultiplied:*/ bool,
+            /*premultiply_alpha:*/ bool,
             /*is_float:*/ bool,
         ),
         expected_rgba: [&'static [u16]; HEIGHT],
@@ -516,7 +516,7 @@ mod tests {
 
         rgb.format = rgb_params.params.1;
         rgb.depth = rgb_params.params.2;
-        rgb.alpha_premultiplied = rgb_params.params.3;
+        rgb.premultiply_alpha = rgb_params.params.3;
         rgb.is_float = rgb_params.params.4;
 
         rgb.allocate()?;
