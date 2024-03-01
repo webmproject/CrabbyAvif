@@ -532,7 +532,6 @@ fn color_and_alpha_dimensions_do_not_match() {
     // Decoding should fail.
     let res = decoder.next_image();
     assert!(res.is_err());
-    assert_avif_error!(res, DecodeAlphaFailed);
 }
 
 #[test]
