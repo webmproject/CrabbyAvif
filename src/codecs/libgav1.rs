@@ -15,6 +15,10 @@ pub struct Libgav1 {
 }
 
 #[allow(non_upper_case_globals)]
+// The type of the fields from from dav1d_sys::bindings::* are dependent on the compiler that
+// is used to generate the bindings, version of dav1d, etc. So allow clippy to ignore
+// unnecessary cast warnings.
+#[allow(clippy::unnecessary_cast)]
 impl Decoder for Libgav1 {
     fn initialize(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
         if self.decoder.is_some() {
@@ -60,7 +64,6 @@ impl Decoder for Libgav1 {
                 std::ptr::null_mut(),
             );
             if ret != Libgav1StatusCode_kLibgav1StatusOk {
-                println!("enqueue failed. err: {ret} len: {}", av1_payload.len());
                 return Err(AvifError::UnknownError);
             }
             self.image = None;
@@ -68,7 +71,6 @@ impl Decoder for Libgav1 {
             loop {
                 let ret = Libgav1DecoderDequeueFrame(self.decoder.unwrap(), &mut next_frame);
                 if ret != Libgav1StatusCode_kLibgav1StatusOk {
-                    println!("dequeue failed. err: {ret}");
                     return Err(AvifError::UnknownError);
                 }
                 if !next_frame.is_null()
@@ -83,24 +85,29 @@ impl Decoder for Libgav1 {
             // Got an image.
             if next_frame.is_null() {
                 if category == Category::Alpha {
-                    // TODO: handle alpha special case.
+                    // Special case for alpha, re-use last frame.
                 } else {
-                    println!("next frame is null. err: {ret}");
                     return Err(AvifError::UnknownError);
                 }
             } else {
                 self.image = Some(*next_frame);
-                // TODO: store color range.
             }
 
             let gav1_image = &self.image.unwrap();
             match category {
                 Category::Alpha => {
-                    // TODO: make sure alpha plane matches previous alpha plane.
+                    if image.width > 0
+                        && image.height > 0
+                        && (image.width != (gav1_image.displayed_width[0] as u32)
+                            || image.height != (gav1_image.displayed_height[0] as u32)
+                            || image.depth != (gav1_image.bitdepth as u8))
+                    {
+                        // Alpha plane does not match the previous alpha plane.
+                        return Err(AvifError::UnknownError);
+                    }
                     image.width = gav1_image.displayed_width[0] as u32;
                     image.height = gav1_image.displayed_height[0] as u32;
                     image.depth = gav1_image.bitdepth as u8;
-                    // TODO: call image freeplanes.
                     image.planes2[3] = Some(Pixels::Pointer(gav1_image.plane[0] as *mut u8));
                     image.row_bytes[3] = gav1_image.stride[0] as u32;
                     image.image_owns_planes[3] = false;
@@ -130,7 +137,6 @@ impl Decoder for Libgav1 {
                         (gav1_image.transfer_characteristics as u16).into();
                     image.matrix_coefficients = (gav1_image.matrix_coefficients as u16).into();
 
-                    // TODO: call free planes.
                     for plane in 0usize..image.yuv_format.plane_count() {
                         image.planes2[plane] =
                             Some(Pixels::Pointer(gav1_image.plane[plane] as *mut u8));
@@ -147,7 +153,6 @@ impl Decoder for Libgav1 {
 impl Drop for Libgav1 {
     fn drop(&mut self) {
         if self.decoder.is_some() {
-            println!("closing gav1");
             unsafe { Libgav1DecoderDestroy(self.decoder.unwrap()) };
         }
     }
