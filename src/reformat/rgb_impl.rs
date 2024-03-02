@@ -151,20 +151,20 @@ pub fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult
     Err(AvifError::NotImplemented)
 }
 
-fn unorm_lookup_tables(depth: u8, state: &State) -> AvifResult<(Vec<f32>, Vec<f32>)> {
+fn unorm_lookup_tables(depth: u8, state: &State) -> AvifResult<(Vec<f32>, Option<Vec<f32>>)> {
     let count = 1usize << depth;
     let mut table_y: Vec<f32> = create_vec_exact(count)?;
     for cp in 0..count {
         table_y.push(((cp as f32) - state.yuv.bias_y) / state.yuv.range_y);
     }
     if state.yuv.mode == Mode::Identity {
-        Ok((table_y, Vec::new()))
+        Ok((table_y, None))
     } else {
         let mut table_uv: Vec<f32> = create_vec_exact(count)?;
         for cp in 0..count {
             table_uv.push(((cp as f32) - state.yuv.bias_uv) / state.yuv.range_uv);
         }
-        Ok((table_y, table_uv))
+        Ok((table_y, Some(table_uv)))
     }
 }
 
@@ -247,7 +247,10 @@ pub fn yuv_to_rgb_any(
         yuv: YuvColorSpaceInfo::create_from(image)?,
     };
     let (table_y, table_uv) = unorm_lookup_tables(image.depth, &state)?;
-    let table_uv = if table_uv.is_empty() { &table_y } else { &table_uv };
+    let table_uv = match &table_uv {
+        Some(table_uv) => table_uv,
+        None => &table_y,
+    };
     let r_offset = rgb.format.r_offset();
     let g_offset = rgb.format.g_offset();
     let b_offset = rgb.format.b_offset();
