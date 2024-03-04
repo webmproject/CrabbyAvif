@@ -1212,7 +1212,7 @@ impl Decoder {
                             self.image.height = tile.image.height;
                             self.image.depth = tile.image.depth;
                             self.image.yuv_format = tile.image.yuv_format;
-                            self.image.steal_from(&tile.image, category);
+                            self.image.steal_from(&tile.image, category)?;
                             self.image.scale(tile.width, tile.height)?;
                         }
                         Category::Alpha => {
@@ -1220,7 +1220,7 @@ impl Decoder {
                                 println!("Color image item does not match alpha image item");
                                 return Err(AvifError::DecodeAlphaFailed);
                             }
-                            self.image.steal_from(&tile.image, category);
+                            self.image.steal_from(&tile.image, category)?;
                             if !tile.image.full_range {
                                 self.image.alpha_to_full_range()?;
                             }
@@ -1231,7 +1231,7 @@ impl Decoder {
                             self.gainmap.image.height = tile.image.height;
                             self.gainmap.image.depth = tile.image.depth;
                             self.gainmap.image.yuv_format = tile.image.yuv_format;
-                            self.gainmap.image.steal_from(&tile.image, category);
+                            self.gainmap.image.steal_from(&tile.image, category)?;
                             self.gainmap.image.scale(tile.width, tile.height)?;
                         }
                     }

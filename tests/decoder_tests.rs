@@ -49,7 +49,7 @@ fn alpha_no_ispe() {
     let res = decoder.next_image();
     assert!(res.is_ok());
     let image = decoder.image();
-    let alpha_plane = image.plane(Plane::A);
+    let alpha_plane = image.plane_data(Plane::A);
     assert!(alpha_plane.is_some());
     assert!(alpha_plane.unwrap().row_bytes > 0);
 }
@@ -108,7 +108,7 @@ fn color_grid_alpha_no_grid() {
     let res = decoder.next_image();
     assert!(res.is_ok());
     let image = decoder.image();
-    let alpha_plane = image.plane(Plane::A);
+    let alpha_plane = image.plane_data(Plane::A);
     assert!(alpha_plane.is_some());
     assert!(alpha_plane.unwrap().row_bytes > 0);
 }

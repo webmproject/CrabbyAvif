@@ -143,7 +143,11 @@ impl Decoder for Dav1d {
                 image.width = dav1d_picture.p.w as u32;
                 image.height = dav1d_picture.p.h as u32;
                 image.depth = dav1d_picture.p.bpc as u8;
-                image.planes2[3] = Some(Pixels::Pointer(dav1d_picture.data[0] as *mut u8));
+                image.planes2[3] = Some(if image.depth > 8 {
+                    Pixels::Pointer16(dav1d_picture.data[0] as *mut u16)
+                } else {
+                    Pixels::Pointer(dav1d_picture.data[0] as *mut u8)
+                });
                 image.row_bytes[3] = dav1d_picture.stride[0] as u32;
                 image.image_owns_planes[3] = false;
                 let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
@@ -170,8 +174,11 @@ impl Decoder for Dav1d {
                 image.matrix_coefficients = (seq_hdr.mtrx as u16).into();
 
                 for plane in 0usize..image.yuv_format.plane_count() {
-                    image.planes2[plane] =
-                        Some(Pixels::Pointer(dav1d_picture.data[plane] as *mut u8));
+                    image.planes2[plane] = Some(if image.depth > 8 {
+                        Pixels::Pointer16(dav1d_picture.data[plane] as *mut u16)
+                    } else {
+                        Pixels::Pointer(dav1d_picture.data[plane] as *mut u8)
+                    });
                     let stride_index = if plane == 0 { 0 } else { 1 };
                     image.row_bytes[plane] = dav1d_picture.stride[stride_index] as u32;
                     image.image_owns_planes[plane] = false;

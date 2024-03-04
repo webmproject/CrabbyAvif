@@ -184,20 +184,18 @@ impl From<&Image> for avifImage {
             if !image.has_plane(i.into()) {
                 continue;
             }
-            let plane = image.plane(i.into()).unwrap();
-            dst_image.yuvPlanes[i] = if image.depth == 8 {
-                plane.data.unwrap().as_ptr() as *mut u8
+            dst_image.yuvPlanes[i] = if image.depth > 8 {
+                image.planes2[i].as_ref().unwrap().ptr16() as *mut u8
             } else {
-                plane.data16.unwrap().as_ptr() as *mut u8
+                image.planes2[i].as_ref().unwrap().ptr() as *mut u8
             };
             dst_image.yuvRowBytes[i] = image.row_bytes[i];
         }
         if image.has_plane(Plane::A) {
-            let plane = image.plane(Plane::A).unwrap();
-            dst_image.alphaPlane = if image.depth == 8 {
-                plane.data.unwrap().as_ptr() as *mut u8
+            dst_image.alphaPlane = if image.depth > 8 {
+                image.planes2[3].as_ref().unwrap().ptr16() as *mut u8
             } else {
-                plane.data16.unwrap().as_ptr() as *mut u8
+                image.planes2[3].as_ref().unwrap().ptr() as *mut u8
             };
             dst_image.alphaRowBytes = image.row_bytes[3];
         }

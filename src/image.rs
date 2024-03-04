@@ -77,22 +77,9 @@ pub struct Image {
 
     pub image_sequence_track_present: bool,
     pub progressive_state: ProgressiveState,
-    // TODO: gainmap image ?
 }
 
-pub struct PlaneData<'a> {
-    pub data: Option<&'a [u8]>,
-    pub data16: Option<&'a [u16]>,
-    pub width: u32,
-    pub height: u32,
-    pub row_bytes: u32,
-    pub pixel_size: u32,
-}
-
-// TODO: unify this into the struct above with an enum for mut/const.
-pub struct PlaneMutData<'a> {
-    pub data: Option<&'a mut [u8]>,
-    pub data16: Option<&'a mut [u16]>,
+pub struct PlaneData2 {
     pub width: u32,
     pub height: u32,
     pub row_bytes: u32,
@@ -154,79 +141,55 @@ impl Image {
         }
     }
 
-    pub fn plane(&self, plane: Plane) -> Option<PlaneData> {
+    pub fn plane_data(&self, plane: Plane) -> Option<PlaneData2> {
         if !self.has_plane(plane) {
             return None;
         }
-        let plane_index = plane.to_usize();
-        let pixel_size = if self.depth == 8 { 1 } else { 2 };
-        let height = self.height(plane);
-        let row_bytes = self.row_bytes[plane_index] as usize;
-        let plane_size = height * row_bytes;
-        let planes2 = self.planes2[plane_index].as_ref().unwrap();
-        let (data, data16) = planes2.slices(0, plane_size as u32).unwrap();
-        Some(PlaneData {
-            data,
-            data16,
+        Some(PlaneData2 {
             width: self.width(plane) as u32,
-            height: height as u32,
-            row_bytes: row_bytes as u32,
-            pixel_size,
-        })
-    }
-
-    pub fn plane_mut(&mut self, plane: Plane) -> Option<PlaneMutData> {
-        if !self.has_plane(plane) {
-            return None;
-        }
-        let plane_index = plane.to_usize();
-        let pixel_size = if self.depth == 8 { 1 } else { 2 };
-        let height = self.height(plane);
-        let width = self.width(plane) as u32;
-        let row_bytes = self.row_bytes[plane_index] as usize;
-        let plane_size = height * row_bytes;
-        let planes2 = self.planes2[plane_index].as_mut().unwrap();
-        let (data, data16) = planes2.slices_mut(0, plane_size as u32).unwrap();
-        Some(PlaneMutData {
-            data,
-            data16,
-            width,
-            height: height as u32,
-            row_bytes: row_bytes as u32,
-            pixel_size,
+            height: self.height(plane) as u32,
+            row_bytes: self.row_bytes[plane.to_usize()],
+            pixel_size: if self.depth == 8 { 1 } else { 2 },
         })
     }
 
     pub fn row(&self, plane: Plane, row: u32) -> AvifResult<&[u8]> {
-        let plane = self.plane(plane).ok_or(AvifError::NoContent)?;
-        let row_bytes = usize_from_u32(plane.row_bytes)?;
-        let start = usize_from_u32(row * plane.row_bytes)?;
-        let end = start + row_bytes;
-        Ok(&plane.data.ok_or(AvifError::NoContent)?[start..end])
+        let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
+        let start = row * plane_data.row_bytes;
+        self.planes2[plane.to_usize()]
+            .as_ref()
+            .unwrap()
+            .slice(start, plane_data.row_bytes)
     }
 
     pub fn row_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u8]> {
-        let plane = self.plane_mut(plane).ok_or(AvifError::NoContent)?;
-        let row_bytes = usize_from_u32(plane.row_bytes)?;
-        let start = usize_from_u32(row * plane.row_bytes)?;
-        let end = start + row_bytes;
-        Ok(&mut plane.data.ok_or(AvifError::NoContent)?[start..end])
+        let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
+        let row_bytes = plane_data.row_bytes;
+        let start = row * row_bytes;
+        self.planes2[plane.to_usize()]
+            .as_mut()
+            .unwrap()
+            .slice_mut(start, row_bytes)
     }
 
     pub fn row16(&self, plane: Plane, row: u32) -> AvifResult<&[u16]> {
-        let plane = self.plane(plane).ok_or(AvifError::NoContent)?;
-        let row_bytes = usize_from_u32(plane.row_bytes)? / 2;
-        let start = usize_from_u32(row * plane.row_bytes / 2)?;
-        let end = start + row_bytes;
-        Ok(&plane.data16.ok_or(AvifError::NoContent)?[start..end])
+        let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
+        let row_bytes = plane_data.row_bytes / 2;
+        let start = row * row_bytes;
+        self.planes2[plane.to_usize()]
+            .as_ref()
+            .unwrap()
+            .slice16(start, row_bytes)
     }
 
     pub fn row16_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u16]> {
-        let plane = self.plane_mut(plane).ok_or(AvifError::NoContent)?;
-        let row_bytes = usize_from_u32(plane.row_bytes)? / 2;
-        let start = usize_from_u32(row * plane.row_bytes / 2)?;
-        let end = start + row_bytes;
-        Ok(&mut plane.data16.ok_or(AvifError::NoContent)?[start..end])
+        let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
+        let row_bytes = plane_data.row_bytes / 2;
+        let start = row * row_bytes;
+        self.planes2[plane.to_usize()]
+            .as_mut()
+            .unwrap()
+            .slice16_mut(start, row_bytes)
     }
 
     pub fn allocate_planes(&mut self, category: Category) -> AvifResult<()> {
@@ -260,34 +223,26 @@ impl Image {
         Ok(())
     }
 
-    pub fn steal_from(&mut self, src: &Image, category: Category) {
+    pub fn steal_from(&mut self, src: &Image, category: Category) -> AvifResult<()> {
         // This function is used only when both src and self contains only pointers.
         match category {
             Category::Alpha => {
                 if src.planes2[3].is_some() {
-                    self.planes2[3] =
-                        Some(Pixels::Pointer(src.planes2[3].as_ref().unwrap().pointer()));
+                    self.planes2[3] = src.planes2[3].as_ref().unwrap().clone_pointer();
+                    self.row_bytes[3] = src.row_bytes[3];
                 }
-                self.row_bytes[3] = src.row_bytes[3];
             }
             _ => {
-                if src.planes2[0].is_some() {
-                    self.planes2[0] =
-                        Some(Pixels::Pointer(src.planes2[0].as_ref().unwrap().pointer()));
+                for plane in 0..3usize {
+                    if src.planes2[plane].is_none() {
+                        continue;
+                    }
+                    self.planes2[plane] = src.planes2[plane].as_ref().unwrap().clone_pointer();
+                    self.row_bytes[plane] = src.row_bytes[plane];
                 }
-                if src.planes2[1].is_some() {
-                    self.planes2[1] =
-                        Some(Pixels::Pointer(src.planes2[1].as_ref().unwrap().pointer()));
-                }
-                if src.planes2[2].is_some() {
-                    self.planes2[2] =
-                        Some(Pixels::Pointer(src.planes2[2].as_ref().unwrap().pointer()));
-                }
-                self.row_bytes[0] = src.row_bytes[0];
-                self.row_bytes[1] = src.row_bytes[1];
-                self.row_bytes[2] = src.row_bytes[2];
             }
         }
+        Ok(())
     }
 
     pub fn copy_from_tile(
@@ -304,7 +259,7 @@ impl Image {
         //println!("copying tile {tile_index} {row_index} {column_index}");
         for plane in category.planes() {
             let plane = *plane;
-            let src_plane = tile.plane(plane);
+            let src_plane = tile.plane_data(plane);
             if src_plane.is_none() {
                 continue;
             }

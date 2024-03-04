@@ -5,7 +5,6 @@ use super::rgb;
 
 use crate::decoder::Category;
 use crate::image::Plane;
-use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
 use crate::*;
 
@@ -170,7 +169,7 @@ impl image::Image {
                     None,
                     None,
                     None,
-                    Some(Pixels::Pointer(self.planes2[3].as_ref().unwrap().pointer())),
+                    self.planes2[3].as_ref().unwrap().clone_pointer(),
                 ],
                 row_bytes: [0, 0, 0, self.row_bytes[3]],
                 ..image::Image::default()
@@ -216,6 +215,8 @@ impl image::Image {
 mod tests {
     use super::*;
 
+    use crate::internal_utils::pixels::*;
+
     use rand::Rng;
     use test_case::test_matrix;
 
@@ -247,7 +248,11 @@ mod tests {
             buffer.reserve_exact(buffer_size);
             buffer.resize(buffer_size, 0);
             // Use a pointer to mimic C API calls.
-            rgb.pixels = Some(Pixels::Pointer(buffer.as_mut_ptr()));
+            rgb.pixels = Some(if rgb.depth > 8 {
+                Pixels::Pointer16(buffer.as_mut_ptr() as *mut u16)
+            } else {
+                Pixels::Pointer(buffer.as_mut_ptr())
+            });
             rgb.row_bytes = width * 4 * pixel_size;
         } else {
             rgb.allocate()?;
