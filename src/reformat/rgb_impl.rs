@@ -203,6 +203,7 @@ fn compute_rgb(y: f32, cb: f32, cr: f32, has_color: bool, mode: Mode) -> (f32, f
     )
 }
 
+#[derive(Copy, Clone)]
 enum Row<'a> {
     Depth8(&'a [u8]),
     Depth16(&'a [u16]),
@@ -225,15 +226,14 @@ impl image::Image {
     }
 }
 
-fn clamped_pixel(row: &Option<Row>, index: usize, max_channel: u16) -> u16 {
+fn clamped_pixel(row: Row, index: usize, max_channel: u16) -> u16 {
     match row {
-        Some(Row::Depth8(row)) => row[index] as u16,
-        Some(Row::Depth16(row)) => min(max_channel, row[index]),
-        None => panic!(),
+        Row::Depth8(row) => row[index] as u16,
+        Row::Depth16(row) => min(max_channel, row[index]),
     }
 }
 
-fn unorm_value(row: &Option<Row>, index: usize, max_channel: u16, table: &[f32]) -> f32 {
+fn unorm_value(row: Row, index: usize, max_channel: u16, table: &[f32]) -> f32 {
     table[clamped_pixel(row, index, max_channel) as usize]
 }
 
@@ -264,13 +264,21 @@ pub fn yuv_to_rgb_any(
     let rgb_max_channel_f = state.rgb.max_channel_f;
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
-        let y_row = image.row_generic(Plane::Y, j);
-        let u_row = image.row_generic(Plane::U, uv_j);
-        let v_row = image.row_generic(Plane::V, uv_j);
-        let a_row = image.row_generic(Plane::A, j);
+        let y_row = image
+            .row_generic(Plane::Y, j)
+            .ok_or(AvifError::InvalidArgument);
+        let u_row = image
+            .row_generic(Plane::U, uv_j)
+            .ok_or(AvifError::InvalidArgument);
+        let v_row = image
+            .row_generic(Plane::V, uv_j)
+            .ok_or(AvifError::InvalidArgument);
+        let a_row = image
+            .row_generic(Plane::A, j)
+            .ok_or(AvifError::InvalidArgument);
         let (mut rgb_row, mut rgb_row16) = rgb.rows_mut(j)?;
         for i in 0..image.width as usize {
-            let y = unorm_value(&y_row, i, yuv_max_channel, &table_y);
+            let y = unorm_value(y_row?, i, yuv_max_channel, &table_y);
             let mut cb = 0.5;
             let mut cr = 0.5;
             if has_color {
@@ -281,8 +289,8 @@ pub fn yuv_to_rgb_any(
                         ChromaUpsampling::Fastest | ChromaUpsampling::Nearest
                     )
                 {
-                    cb = unorm_value(&u_row, uv_i, yuv_max_channel, table_uv);
-                    cr = unorm_value(&v_row, uv_i, yuv_max_channel, table_uv);
+                    cb = unorm_value(u_row?, uv_i, yuv_max_channel, table_uv);
+                    cr = unorm_value(v_row?, uv_i, yuv_max_channel, table_uv);
                 } else {
                     if image.chroma_sample_position != ChromaSamplePosition::CENTER {
                         return Err(AvifError::NotImplemented);
@@ -308,18 +316,22 @@ pub fn yuv_to_rgb_any(
                     } else {
                         uv_j - 1
                     };
-                    let u_adj_row = image.row_generic(Plane::U, uv_adj_j);
-                    let v_adj_row = image.row_generic(Plane::V, uv_adj_j);
+                    let u_adj_row = image
+                        .row_generic(Plane::U, uv_adj_j)
+                        .ok_or(AvifError::InvalidArgument)?;
+                    let v_adj_row = image
+                        .row_generic(Plane::V, uv_adj_j)
+                        .ok_or(AvifError::InvalidArgument)?;
                     let mut unorm_u: [[f32; 2]; 2] = [[0.0; 2]; 2];
                     let mut unorm_v: [[f32; 2]; 2] = [[0.0; 2]; 2];
-                    unorm_u[0][0] = unorm_value(&u_row, uv_i, yuv_max_channel, table_uv);
-                    unorm_v[0][0] = unorm_value(&v_row, uv_i, yuv_max_channel, table_uv);
-                    unorm_u[1][0] = unorm_value(&u_row, uv_adj_i, yuv_max_channel, table_uv);
-                    unorm_v[1][0] = unorm_value(&v_row, uv_adj_i, yuv_max_channel, table_uv);
-                    unorm_u[0][1] = unorm_value(&u_adj_row, uv_i, yuv_max_channel, table_uv);
-                    unorm_v[0][1] = unorm_value(&v_adj_row, uv_i, yuv_max_channel, table_uv);
-                    unorm_u[1][1] = unorm_value(&u_adj_row, uv_adj_i, yuv_max_channel, table_uv);
-                    unorm_v[1][1] = unorm_value(&v_adj_row, uv_adj_i, yuv_max_channel, table_uv);
+                    unorm_u[0][0] = unorm_value(u_row?, uv_i, yuv_max_channel, table_uv);
+                    unorm_v[0][0] = unorm_value(v_row?, uv_i, yuv_max_channel, table_uv);
+                    unorm_u[1][0] = unorm_value(u_row?, uv_adj_i, yuv_max_channel, table_uv);
+                    unorm_v[1][0] = unorm_value(v_row?, uv_adj_i, yuv_max_channel, table_uv);
+                    unorm_u[0][1] = unorm_value(u_adj_row, uv_i, yuv_max_channel, table_uv);
+                    unorm_v[0][1] = unorm_value(v_adj_row, uv_i, yuv_max_channel, table_uv);
+                    unorm_u[1][1] = unorm_value(u_adj_row, uv_adj_i, yuv_max_channel, table_uv);
+                    unorm_v[1][1] = unorm_value(v_adj_row, uv_adj_i, yuv_max_channel, table_uv);
                     cb = (unorm_u[0][0] * (9.0 / 16.0))
                         + (unorm_u[1][0] * (3.0 / 16.0))
                         + (unorm_u[0][1] * (3.0 / 16.0))
@@ -332,7 +344,7 @@ pub fn yuv_to_rgb_any(
             }
             let (mut rc, mut gc, mut bc) = compute_rgb(y, cb, cr, has_color, state.yuv.mode);
             if alpha_multiply_mode != AlphaMultiplyMode::NoOp {
-                let unorm_a = clamped_pixel(&a_row, i, yuv_max_channel);
+                let unorm_a = clamped_pixel(a_row?, i, yuv_max_channel);
                 let ac = clamp_f32((unorm_a as f32) / (yuv_max_channel as f32), 0.0, 1.0);
                 if ac == 0.0 {
                     rc = 0.0;
