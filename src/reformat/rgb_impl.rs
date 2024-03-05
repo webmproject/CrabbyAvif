@@ -151,20 +151,42 @@ pub fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult
     Err(AvifError::NotImplemented)
 }
 
-fn unorm_lookup_tables(depth: u8, state: &State) -> AvifResult<(Vec<f32>, Option<Vec<f32>>)> {
-    let count = 1usize << depth;
-    let mut table_y: Vec<f32> = create_vec_exact(count)?;
-    for cp in 0..count {
-        table_y.push(((cp as f32) - state.yuv.bias_y) / state.yuv.range_y);
-    }
-    if state.yuv.mode == Mode::Identity {
-        Ok((table_y, None))
-    } else {
-        let mut table_uv: Vec<f32> = create_vec_exact(count)?;
+struct UnormLookupTables {
+    table_y: Vec<f32>,
+    table_uv: Option<Vec<f32>>,
+}
+
+impl UnormLookupTables {
+    fn create(depth: u8, state: &State) -> AvifResult<UnormLookupTables> {
+        let count = 1usize << depth;
+        let mut table_y: Vec<f32> = create_vec_exact(count)?;
         for cp in 0..count {
-            table_uv.push(((cp as f32) - state.yuv.bias_uv) / state.yuv.range_uv);
+            table_y.push(((cp as f32) - state.yuv.bias_y) / state.yuv.range_y);
         }
-        Ok((table_y, Some(table_uv)))
+        if state.yuv.mode == Mode::Identity {
+            Ok(UnormLookupTables {
+                table_y,
+                table_uv: None,
+            })
+        } else {
+            let mut table_uv: Vec<f32> = create_vec_exact(count)?;
+            for cp in 0..count {
+                table_uv.push(((cp as f32) - state.yuv.bias_uv) / state.yuv.range_uv);
+            }
+            Ok(UnormLookupTables {
+                table_y,
+                table_uv: Some(table_uv),
+            })
+        }
+    }
+    fn get(&self) -> (&[f32], &[f32]) {
+        (
+            &self.table_y,
+            match &self.table_uv {
+                Some(table_uv) => table_uv,
+                None => &self.table_y,
+            },
+        )
     }
 }
 
@@ -246,11 +268,8 @@ pub fn yuv_to_rgb_any(
         rgb: RgbColorSpaceInfo::create_from(rgb)?,
         yuv: YuvColorSpaceInfo::create_from(image)?,
     };
-    let (table_y, table_uv) = unorm_lookup_tables(image.depth, &state)?;
-    let table_uv = match &table_uv {
-        Some(table_uv) => table_uv,
-        None => &table_y,
-    };
+    let unorm_lookup_tables = UnormLookupTables::create(image.depth, &state)?;
+    let (table_y, table_uv) = unorm_lookup_tables.get();
     let r_offset = rgb.format.r_offset();
     let g_offset = rgb.format.g_offset();
     let b_offset = rgb.format.b_offset();
@@ -270,7 +289,7 @@ pub fn yuv_to_rgb_any(
         let a_row = image.row_generic(Plane::A, j);
         let (mut rgb_row, mut rgb_row16) = rgb.rows_mut(j)?;
         for i in 0..image.width as usize {
-            let y = unorm_value(&y_row, i, yuv_max_channel, &table_y);
+            let y = unorm_value(&y_row, i, yuv_max_channel, table_y);
             let mut cb = 0.5;
             let mut cr = 0.5;
             if has_color {
