@@ -28,7 +28,7 @@ jobs:
       with:
         path: |
           sys
-          third_party
+          external
         key: ${{ runner.os }}-${{ hashFiles('sys/dav1d-sys/Cargo.toml', 'sys/dav1d-sys/dav1d.cmd', 'sys/dav1d-sys/build.rs', 'sys/libyuv-sys/Cargo.toml', 'sys/libyuv-sys/libyuv.cmd', 'sys/libyuv-sys/build.rs') }}
 
     - uses: jwlawson/actions-setup-cmake@d06b37b47cfd043ec794ffa3e40e0b6b5858a7ec # v1.14.2
@@ -51,7 +51,7 @@ jobs:
 
     - name: Clone av1-avif (specification repository for testFiles)
       if: steps.cache-ext-with-libavif.outputs.cache-hit != 'true'
-      working-directory: ./third_party
+      working-directory: ./external
       run: |
         git clone https://github.com/AOMediaCodec/av1-avif.git
         cd av1-avif
@@ -59,7 +59,7 @@ jobs:
 
     - name: Build libavif (avifdec for conformance comparison)
       if: steps.cache-ext-with-libavif.outputs.cache-hit != 'true'
-      working-directory: ./third_party
+      working-directory: ./external
       run: |
         git clone https://github.com/AOMediaCodec/libavif.git
         cd libavif

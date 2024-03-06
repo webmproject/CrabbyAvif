@@ -10,9 +10,9 @@ use std::process::Command;
 use tempfile::NamedTempFile;
 
 // See README.md for dependency instructions.
-const TEST_DATA_PATH: &str = "third_party/av1-avif/testFiles";
+const TEST_DATA_PATH: &str = "external/av1-avif/testFiles";
 //const AVIFDEC_PATH: &str = "/opt/homebrew/bin/avifdec";
-const AVIFDEC_PATH: &str = "third_party/libavif/build/avifdec";
+const AVIFDEC_PATH: &str = "external/libavif/build/avifdec";
 
 #[derive(Copy, Clone)]
 struct ExpectedImageInfo<'a> {

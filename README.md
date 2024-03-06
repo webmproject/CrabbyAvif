@@ -30,9 +30,9 @@ cargo test -- --skip test_conformance
 ### Conformance Tests
 
 ```sh
-git clone https://github.com/AOMediaCodec/av1-avif.git third_party/av1-avif
-git clone https://github.com/AOMediaCodec/libavif.git third_party/libavif
-cd third_party/libavif/ext
+git clone https://github.com/AOMediaCodec/av1-avif.git external/av1-avif
+git clone https://github.com/AOMediaCodec/libavif.git external/libavif
+cd external/libavif/ext
 ./dav1d.cmd
 cd ..
 cmake -S . -B build -DAVIF_CODEC_DAV1D=LOCAL -DAVIF_LIBYUV=OFF -DAVIF_BUILD_APPS=ON
@@ -45,7 +45,7 @@ cargo test -- test_conformance
 
 ```sh
 # Build google test
-cd third_party
+cd external
 ./googletest.cmd
 cd ..
 # Build the library with C API enabled
