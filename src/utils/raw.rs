@@ -67,19 +67,19 @@ impl RawWriter {
             return true;
         }
         for plane in ALL_PLANES {
-            let avif_plane = image.plane(plane);
-            if avif_plane.is_none() {
+            let plane_data = image.plane_data(plane);
+            if plane_data.is_none() {
                 continue;
             }
-            let avif_plane = avif_plane.unwrap();
-            let byte_count: usize = (avif_plane.width * avif_plane.pixel_size)
-                .try_into()
-                .unwrap();
-            for y in 0..avif_plane.height {
-                let stride_offset: usize = (y * avif_plane.row_bytes).try_into().unwrap();
-                //println!("{y}: {stride_offset} plane_height: {}", avif_plane.height);
-                let pixels = &avif_plane.data.unwrap()[stride_offset..stride_offset + byte_count];
-                if self.file.as_ref().unwrap().write_all(pixels).is_err() {
+            let plane_data = plane_data.unwrap();
+            for y in 0..plane_data.height {
+                // TODO: Handle row16.
+                let row = if let Ok(row) = image.row(plane, y) {
+                    row
+                } else {
+                    return false;
+                };
+                if self.file.as_ref().unwrap().write_all(row).is_err() {
                     return false;
                 }
             }

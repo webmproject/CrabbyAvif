@@ -340,20 +340,11 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool
     } else {
         FilterMode_kFilterBilinear
     };
-    let mut pd: [Option<PlaneData>; 4] = [
-        image.plane(Plane::Y),
-        image.plane(Plane::U),
-        image.plane(Plane::V),
-        image.plane(Plane::A),
-    ];
-    let mut plane_u8: [*const u8; 4] = pd
+    let mut plane_u8: [*const u8; 4] = ALL_PLANES
         .iter()
         .map(|x| {
-            if x.is_some() {
-                match x.as_ref().unwrap().data {
-                    Some(data) => data.as_ptr(),
-                    None => std::ptr::null(),
-                }
+            if image.has_plane(*x) {
+                image.planes2[x.to_usize()].as_ref().unwrap().ptr()
             } else {
                 std::ptr::null()
             }
@@ -361,14 +352,11 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool
         .collect::<Vec<*const u8>>()
         .try_into()
         .unwrap();
-    let plane_u16: [*const u16; 4] = pd
+    let plane_u16: [*const u16; 4] = ALL_PLANES
         .iter()
         .map(|x| {
-            if x.is_some() {
-                match x.as_ref().unwrap().data16 {
-                    Some(data16) => data16.as_ptr(),
-                    None => std::ptr::null(),
-                }
+            if image.has_plane(*x) {
+                image.planes2[x.to_usize()].as_ref().unwrap().ptr16()
             } else {
                 std::ptr::null()
             }
@@ -376,11 +364,11 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool
         .collect::<Vec<*const u16>>()
         .try_into()
         .unwrap();
-    let mut plane_row_bytes: [i32; 4] = pd
+    let mut plane_row_bytes: [i32; 4] = ALL_PLANES
         .iter()
         .map(|x| {
-            if x.is_some() {
-                i32_from_u32(x.as_ref().unwrap().row_bytes).unwrap_or_default()
+            if image.has_plane(*x) {
+                i32_from_u32(image.plane_data(*x).unwrap().row_bytes).unwrap_or_default()
             } else {
                 0
             }
@@ -471,17 +459,11 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool
         let mut image8 = image::Image::default();
         if image.depth > 8 {
             downshift_to_8bit(image, &mut image8, conversion_function.is_yuva())?;
-            pd = [
-                image8.plane(Plane::Y),
-                image8.plane(Plane::U),
-                image8.plane(Plane::V),
-                image8.plane(Plane::A),
-            ];
-            plane_u8 = pd
+            plane_u8 = ALL_PLANES
                 .iter()
                 .map(|x| {
-                    if x.is_some() {
-                        x.as_ref().unwrap().data.unwrap().as_ptr()
+                    if image8.has_plane(*x) {
+                        image8.planes2[x.to_usize()].as_ref().unwrap().ptr()
                     } else {
                         std::ptr::null()
                     }
@@ -489,11 +471,11 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool
                 .collect::<Vec<*const u8>>()
                 .try_into()
                 .unwrap();
-            plane_row_bytes = pd
+            plane_row_bytes = ALL_PLANES
                 .iter()
                 .map(|x| {
-                    if x.is_some() {
-                        i32_from_u32(x.as_ref().unwrap().row_bytes).unwrap_or_default()
+                    if image8.has_plane(*x) {
+                        i32_from_u32(image8.plane_data(*x).unwrap().row_bytes).unwrap_or_default()
                     } else {
                         0
                     }
@@ -600,7 +582,7 @@ fn downshift_to_8bit(
         if plane == Plane::A && !alpha {
             continue;
         }
-        let pd = image.plane(plane);
+        let pd = image.plane_data(plane);
         if pd.is_none() {
             continue;
         }
@@ -608,12 +590,14 @@ fn downshift_to_8bit(
         if pd.width == 0 {
             continue;
         }
-        let pd8 = image8.plane_mut(plane).unwrap();
+        let source_ptr = image.planes2[plane.to_usize()].as_ref().unwrap().ptr16();
+        let pd8 = image8.plane_data(plane).unwrap();
+        let dst_ptr = image8.planes2[plane.to_usize()].as_mut().unwrap().ptr_mut();
         unsafe {
             Convert16To8Plane(
-                pd.data16.unwrap().as_ptr(),
+                source_ptr,
                 i32_from_u32(pd.row_bytes / 2)?,
-                pd8.data.unwrap().as_mut_ptr(),
+                dst_ptr,
                 i32_from_u32(pd8.row_bytes)?,
                 scale,
                 i32_from_u32(pd.width)?,

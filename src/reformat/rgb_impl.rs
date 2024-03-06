@@ -276,7 +276,6 @@ pub fn yuv_to_rgb_any(
         let a_row = image
             .row_generic(Plane::A, j)
             .ok_or(AvifError::InvalidArgument);
-        let (mut rgb_row, mut rgb_row16) = rgb.rows_mut(j)?;
         for i in 0..image.width as usize {
             let y = unorm_value(y_row?, i, yuv_max_channel, &table_y);
             let mut cb = 0.5;
@@ -367,12 +366,12 @@ pub fn yuv_to_rgb_any(
                 }
             }
             if rgb_depth == 8 {
-                let dst = rgb_row.as_mut().unwrap();
+                let dst = rgb.row_mut(j)?;
                 dst[(i * rgb_channel_count) + r_offset] = (0.5 + (rc * rgb_max_channel_f)) as u8;
                 dst[(i * rgb_channel_count) + g_offset] = (0.5 + (gc * rgb_max_channel_f)) as u8;
                 dst[(i * rgb_channel_count) + b_offset] = (0.5 + (bc * rgb_max_channel_f)) as u8;
             } else {
-                let dst16 = rgb_row16.as_mut().unwrap();
+                let dst16 = rgb.row16_mut(j)?;
                 dst16[(i * rgb_channel_count) + r_offset] = (0.5 + (rc * rgb_max_channel_f)) as u16;
                 dst16[(i * rgb_channel_count) + g_offset] = (0.5 + (gc * rgb_max_channel_f)) as u16;
                 dst16[(i * rgb_channel_count) + b_offset] = (0.5 + (bc * rgb_max_channel_f)) as u16;

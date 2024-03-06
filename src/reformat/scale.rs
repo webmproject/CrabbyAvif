@@ -1,6 +1,5 @@
 use crate::decoder::Category;
 use crate::image::*;
-use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
 use crate::*;
 
@@ -29,22 +28,22 @@ impl Image {
             yuv_format: self.yuv_format,
             planes2: [
                 if self.planes2[0].is_some() {
-                    Some(Pixels::Pointer(self.planes2[0].as_ref().unwrap().pointer()))
+                    self.planes2[0].as_ref().unwrap().clone_pointer()
                 } else {
                     None
                 },
                 if self.planes2[1].is_some() {
-                    Some(Pixels::Pointer(self.planes2[1].as_ref().unwrap().pointer()))
+                    self.planes2[1].as_ref().unwrap().clone_pointer()
                 } else {
                     None
                 },
                 if self.planes2[2].is_some() {
-                    Some(Pixels::Pointer(self.planes2[2].as_ref().unwrap().pointer()))
+                    self.planes2[2].as_ref().unwrap().clone_pointer()
                 } else {
                     None
                 },
                 if self.planes2[3].is_some() {
-                    Some(Pixels::Pointer(self.planes2[3].as_ref().unwrap().pointer()))
+                    self.planes2[3].as_ref().unwrap().clone_pointer()
                 } else {
                     None
                 },
@@ -70,31 +69,35 @@ impl Image {
             if !src.has_plane(plane) {
                 continue;
             }
-            let src_pd = src.plane(plane).unwrap();
-            let pd = self.plane_mut(plane).unwrap();
+            let src_pd = src.plane_data(plane).unwrap();
+            let pd = self.plane_data(plane).unwrap();
             // libyuv versions >= 1880 reports a return value here. Older versions do not. Ignore
             // the return value for now.
             #[allow(clippy::let_unit_value)]
             let _ret = unsafe {
                 if src.depth > 8 {
+                    let source_ptr = src.planes2[plane.to_usize()].as_ref().unwrap().ptr16();
+                    let dst_ptr = self.planes2[plane.to_usize()].as_mut().unwrap().ptr16_mut();
                     ScalePlane_12(
-                        src_pd.data16.unwrap().as_ptr(),
+                        source_ptr,
                         i32_from_u32(src_pd.row_bytes / 2)?,
                         i32_from_u32(src_pd.width)?,
                         i32_from_u32(src_pd.height)?,
-                        pd.data16.unwrap().as_mut_ptr(),
+                        dst_ptr,
                         i32_from_u32(pd.row_bytes / 2)?,
                         i32_from_u32(pd.width)?,
                         i32_from_u32(pd.height)?,
                         FilterMode_kFilterBox,
                     )
                 } else {
+                    let source_ptr = src.planes2[plane.to_usize()].as_ref().unwrap().ptr();
+                    let dst_ptr = self.planes2[plane.to_usize()].as_mut().unwrap().ptr_mut();
                     ScalePlane(
-                        src_pd.data.unwrap().as_ptr(),
+                        source_ptr,
                         i32_from_u32(src_pd.row_bytes)?,
                         i32_from_u32(src_pd.width)?,
                         i32_from_u32(src_pd.height)?,
-                        pd.data.unwrap().as_mut_ptr(),
+                        dst_ptr,
                         i32_from_u32(pd.row_bytes)?,
                         i32_from_u32(pd.width)?,
                         i32_from_u32(pd.height)?,

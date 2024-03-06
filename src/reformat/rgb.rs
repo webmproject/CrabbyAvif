@@ -137,45 +137,38 @@ impl Image {
         }
         match self.pixels.as_mut().unwrap() {
             Pixels::Pointer(ptr) => *ptr,
+            Pixels::Pointer16(ptr) => *ptr as *mut u8,
             Pixels::Buffer(buffer) => buffer.as_mut_ptr(),
             Pixels::Buffer16(buffer) => buffer.as_mut_ptr() as *mut u8,
         }
     }
 
     pub fn row(&self, row: u32) -> AvifResult<&[u8]> {
-        match &self.pixels {
-            Some(pixels) => pixels.slice(row * self.row_bytes, self.row_bytes),
-            None => Err(AvifError::NoContent),
-        }
+        self.pixels
+            .as_ref()
+            .ok_or(AvifError::NoContent)?
+            .slice(row * self.row_bytes, self.row_bytes)
     }
 
     pub fn row_mut(&mut self, row: u32) -> AvifResult<&mut [u8]> {
-        match &mut self.pixels {
-            Some(pixels) => pixels.slice_mut(row * self.row_bytes, self.row_bytes),
-            None => Err(AvifError::NoContent),
-        }
+        self.pixels
+            .as_mut()
+            .ok_or(AvifError::NoContent)?
+            .slice_mut(row * self.row_bytes, self.row_bytes)
     }
 
     pub fn row16(&self, row: u32) -> AvifResult<&[u16]> {
-        match &self.pixels {
-            Some(pixels) => pixels.slice16(row * self.row_bytes / 2, self.row_bytes / 2),
-            None => Err(AvifError::NoContent),
-        }
+        self.pixels
+            .as_ref()
+            .ok_or(AvifError::NoContent)?
+            .slice16(row * self.row_bytes / 2, self.row_bytes / 2)
     }
 
     pub fn row16_mut(&mut self, row: u32) -> AvifResult<&mut [u16]> {
-        match &mut self.pixels {
-            Some(pixels) => pixels.slice16_mut(row * self.row_bytes / 2, self.row_bytes / 2),
-            None => Err(AvifError::NoContent),
-        }
-    }
-
-    pub fn rows_mut(&mut self, row: u32) -> AvifResult<U8OrU16SliceMut> {
-        if self.depth == 8 {
-            Ok((Some(self.row_mut(row)?), None))
-        } else {
-            Ok((None, Some(self.row16_mut(row)?)))
-        }
+        self.pixels
+            .as_mut()
+            .ok_or(AvifError::NoContent)?
+            .slice16_mut(row * self.row_bytes / 2, self.row_bytes / 2)
     }
 
     pub fn allocate(&mut self) -> AvifResult<()> {
