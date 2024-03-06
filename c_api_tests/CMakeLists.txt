@@ -9,9 +9,9 @@ set(CMAKE_CXX_COMPILER "clang++")
 
 cmake_path(GET CMAKE_CURRENT_SOURCE_DIR PARENT_PATH CARGO_ROOT_DIR)
 
-set(GTEST_INCLUDE_DIR "${CARGO_ROOT_DIR}/third_party/googletest/googletest/include")
-set(GTEST_LIBRARIES "${CARGO_ROOT_DIR}/third_party/googletest/build/lib/libgtest.a")
-set(GTEST_MAIN_LIBRARIES "${CARGO_ROOT_DIR}/third_party/googletest/build/lib/libgtest_main.a")
+set(GTEST_INCLUDE_DIR "${CARGO_ROOT_DIR}/external/googletest/googletest/include")
+set(GTEST_LIBRARIES "${CARGO_ROOT_DIR}/external/googletest/build/lib/libgtest.a")
+set(GTEST_MAIN_LIBRARIES "${CARGO_ROOT_DIR}/external/googletest/build/lib/libgtest_main.a")
 
 set(CRABBY_AVIF_INCLUDE_DIR "${CARGO_ROOT_DIR}/include")
 set(CRABBY_AVIF_LIBRARIES "${CARGO_ROOT_DIR}/target/release/libcrabby_avif.so")
