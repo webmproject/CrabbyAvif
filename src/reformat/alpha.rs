@@ -69,7 +69,6 @@ impl rgb::Image {
         Ok(())
     }
 
-    // TODO: Add test for this function.
     fn rescale_alpha_value(value: u16, src_max_channel_f: f32, dst_max_channel: u16) -> u16 {
         let alpha_f = (value as f32) / src_max_channel_f;
         let dst_max_channel_f = dst_max_channel as f32;
@@ -300,6 +299,40 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    #[test]
+    fn rescale_alpha_value() {
+        // 8bit to 10bit.
+        assert_eq!(rgb::Image::rescale_alpha_value(0, 255.0, 1023), 0);
+        assert_eq!(rgb::Image::rescale_alpha_value(100, 255.0, 1023), 401);
+        assert_eq!(rgb::Image::rescale_alpha_value(128, 255.0, 1023), 514);
+        assert_eq!(rgb::Image::rescale_alpha_value(255, 255.0, 1023), 1023);
+        // 10bit to 8bit.
+        assert_eq!(rgb::Image::rescale_alpha_value(0, 1023.0, 255), 0);
+        assert_eq!(rgb::Image::rescale_alpha_value(401, 1023.0, 255), 100);
+        assert_eq!(rgb::Image::rescale_alpha_value(514, 1023.0, 255), 128);
+        assert_eq!(rgb::Image::rescale_alpha_value(1023, 1023.0, 255), 255);
+        // 8bit to 12bit.
+        assert_eq!(rgb::Image::rescale_alpha_value(0, 255.0, 4095), 0);
+        assert_eq!(rgb::Image::rescale_alpha_value(100, 255.0, 4095), 1606);
+        assert_eq!(rgb::Image::rescale_alpha_value(128, 255.0, 4095), 2056);
+        assert_eq!(rgb::Image::rescale_alpha_value(255, 255.0, 4095), 4095);
+        // 12bit to 8bit.
+        assert_eq!(rgb::Image::rescale_alpha_value(0, 4095.0, 255), 0);
+        assert_eq!(rgb::Image::rescale_alpha_value(1606, 4095.0, 255), 100);
+        assert_eq!(rgb::Image::rescale_alpha_value(2056, 4095.0, 255), 128);
+        assert_eq!(rgb::Image::rescale_alpha_value(4095, 4095.0, 255), 255);
+        // 10bit to 12bit.
+        assert_eq!(rgb::Image::rescale_alpha_value(0, 1023.0, 4095), 0);
+        assert_eq!(rgb::Image::rescale_alpha_value(401, 1023.0, 4095), 1605);
+        assert_eq!(rgb::Image::rescale_alpha_value(514, 1023.0, 4095), 2058);
+        assert_eq!(rgb::Image::rescale_alpha_value(1023, 1023.0, 4095), 4095);
+        // 12bit to 10bit.
+        assert_eq!(rgb::Image::rescale_alpha_value(0, 4095.0, 1023), 0);
+        assert_eq!(rgb::Image::rescale_alpha_value(1606, 4095.0, 1023), 401);
+        assert_eq!(rgb::Image::rescale_alpha_value(2056, 4095.0, 1023), 514);
+        assert_eq!(rgb::Image::rescale_alpha_value(4095, 4095.0, 1023), 1023);
     }
 
     #[test_matrix(20, 10, [8, 10, 12, 16], 0..4, [8, 10, 12], [true, false])]
