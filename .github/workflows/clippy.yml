@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  unix-static:
+  clippy:
     runs-on: ubuntu-latest
 
     steps:
