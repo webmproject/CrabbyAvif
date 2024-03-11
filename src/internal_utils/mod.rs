@@ -249,6 +249,6 @@ pub fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
 pub fn assert_f32_array(a: &[f32], b: &[f32]) {
     assert_eq!(a.len(), b.len());
     for i in 0..a.len() {
-        float_cmp::approx_eq!(f32, a[i], b[i]);
+        assert!((a[i] - b[i]).abs() <= std::f32::EPSILON);
     }
 }
