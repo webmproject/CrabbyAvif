@@ -13,10 +13,10 @@ impl Image {
         if width == 0 || height == 0 {
             return Err(AvifError::InvalidArgument);
         }
-        if (self.planes2[0].is_some() && !self.planes2[0].as_ref().unwrap().is_pointer())
-            || (self.planes2[1].is_some() && !self.planes2[1].as_ref().unwrap().is_pointer())
-            || (self.planes2[2].is_some() && !self.planes2[2].as_ref().unwrap().is_pointer())
-            || (self.planes2[3].is_some() && !self.planes2[3].as_ref().unwrap().is_pointer())
+        if (self.planes[0].is_some() && !self.planes[0].as_ref().unwrap().is_pointer())
+            || (self.planes[1].is_some() && !self.planes[1].as_ref().unwrap().is_pointer())
+            || (self.planes[2].is_some() && !self.planes[2].as_ref().unwrap().is_pointer())
+            || (self.planes[3].is_some() && !self.planes[3].as_ref().unwrap().is_pointer())
         {
             // TODO: implement this function for non-pointer inputs.
             return Err(AvifError::NotImplemented);
@@ -26,24 +26,24 @@ impl Image {
             height: self.height,
             depth: self.depth,
             yuv_format: self.yuv_format,
-            planes2: [
-                if self.planes2[0].is_some() {
-                    self.planes2[0].as_ref().unwrap().clone_pointer()
+            planes: [
+                if self.planes[0].is_some() {
+                    self.planes[0].as_ref().unwrap().clone_pointer()
                 } else {
                     None
                 },
-                if self.planes2[1].is_some() {
-                    self.planes2[1].as_ref().unwrap().clone_pointer()
+                if self.planes[1].is_some() {
+                    self.planes[1].as_ref().unwrap().clone_pointer()
                 } else {
                     None
                 },
-                if self.planes2[2].is_some() {
-                    self.planes2[2].as_ref().unwrap().clone_pointer()
+                if self.planes[2].is_some() {
+                    self.planes[2].as_ref().unwrap().clone_pointer()
                 } else {
                     None
                 },
-                if self.planes2[3].is_some() {
-                    self.planes2[3].as_ref().unwrap().clone_pointer()
+                if self.planes[3].is_some() {
+                    self.planes[3].as_ref().unwrap().clone_pointer()
                 } else {
                     None
                 },
@@ -76,8 +76,8 @@ impl Image {
             #[allow(clippy::let_unit_value)]
             let _ret = unsafe {
                 if src.depth > 8 {
-                    let source_ptr = src.planes2[plane.to_usize()].as_ref().unwrap().ptr16();
-                    let dst_ptr = self.planes2[plane.to_usize()].as_mut().unwrap().ptr16_mut();
+                    let source_ptr = src.planes[plane.to_usize()].as_ref().unwrap().ptr16();
+                    let dst_ptr = self.planes[plane.to_usize()].as_mut().unwrap().ptr16_mut();
                     ScalePlane_12(
                         source_ptr,
                         i32_from_u32(src_pd.row_bytes / 2)?,
@@ -90,8 +90,8 @@ impl Image {
                         FilterMode_kFilterBox,
                     )
                 } else {
-                    let source_ptr = src.planes2[plane.to_usize()].as_ref().unwrap().ptr();
-                    let dst_ptr = self.planes2[plane.to_usize()].as_mut().unwrap().ptr_mut();
+                    let source_ptr = src.planes[plane.to_usize()].as_ref().unwrap().ptr();
+                    let dst_ptr = self.planes[plane.to_usize()].as_mut().unwrap().ptr_mut();
                     ScalePlane(
                         source_ptr,
                         i32_from_u32(src_pd.row_bytes)?,

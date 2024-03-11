@@ -96,7 +96,7 @@ impl From<*const avifImage> for image::Image {
             full_range: image.yuvRange == avifRange::Full,
             alpha_present: !image.alphaPlane.is_null(),
             alpha_premultiplied: image.alphaPremultiplied == AVIF_TRUE,
-            planes2: [
+            planes: [
                 Some(Pixels::Pointer(image.yuvPlanes[0])),
                 Some(Pixels::Pointer(image.yuvPlanes[1])),
                 Some(Pixels::Pointer(image.yuvPlanes[2])),

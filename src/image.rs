@@ -59,7 +59,7 @@ pub struct Image {
     pub row_bytes: [u32; MAX_PLANE_COUNT],
     pub image_owns_planes: [bool; MAX_PLANE_COUNT],
 
-    pub planes2: [Option<Pixels>; MAX_PLANE_COUNT],
+    pub planes: [Option<Pixels>; MAX_PLANE_COUNT],
 
     pub color_primaries: ColorPrimaries,
     pub transfer_characteristics: TransferCharacteristics,
@@ -101,10 +101,10 @@ impl Image {
 
     pub fn has_plane(&self, plane: Plane) -> bool {
         let plane_index = plane.to_usize();
-        if self.planes2[plane_index].is_none() || self.row_bytes[plane_index] == 0 {
+        if self.planes[plane_index].is_none() || self.row_bytes[plane_index] == 0 {
             return false;
         }
-        self.planes2[plane_index].as_ref().unwrap().has_data()
+        self.planes[plane_index].as_ref().unwrap().has_data()
     }
 
     pub fn has_alpha(&self) -> bool {
@@ -156,7 +156,7 @@ impl Image {
     pub fn row(&self, plane: Plane, row: u32) -> AvifResult<&[u8]> {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let start = row * plane_data.row_bytes;
-        self.planes2[plane.to_usize()]
+        self.planes[plane.to_usize()]
             .as_ref()
             .unwrap()
             .slice(start, plane_data.row_bytes)
@@ -166,7 +166,7 @@ impl Image {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let row_bytes = plane_data.row_bytes;
         let start = row * row_bytes;
-        self.planes2[plane.to_usize()]
+        self.planes[plane.to_usize()]
             .as_mut()
             .unwrap()
             .slice_mut(start, row_bytes)
@@ -176,7 +176,7 @@ impl Image {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let row_bytes = plane_data.row_bytes / 2;
         let start = row * row_bytes;
-        self.planes2[plane.to_usize()]
+        self.planes[plane.to_usize()]
             .as_ref()
             .unwrap()
             .slice16(start, row_bytes)
@@ -186,7 +186,7 @@ impl Image {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let row_bytes = plane_data.row_bytes / 2;
         let start = row * row_bytes;
-        self.planes2[plane.to_usize()]
+        self.planes[plane.to_usize()]
             .as_mut()
             .unwrap()
             .slice16_mut(start, row_bytes)
@@ -201,21 +201,21 @@ impl Image {
             let plane_size = width * self.height(plane);
             let default_value =
                 if plane == Plane::A { ((1i32 << self.depth) - 1) as u16 } else { 0 };
-            if self.planes2[plane_index].is_some()
-                && self.planes2[plane_index].as_ref().unwrap().size() == plane_size
-                && (self.planes2[plane_index].as_ref().unwrap().pixel_bit_size() == 0
-                    || self.planes2[plane_index].as_ref().unwrap().pixel_bit_size()
+            if self.planes[plane_index].is_some()
+                && self.planes[plane_index].as_ref().unwrap().size() == plane_size
+                && (self.planes[plane_index].as_ref().unwrap().pixel_bit_size() == 0
+                    || self.planes[plane_index].as_ref().unwrap().pixel_bit_size()
                         == pixel_size * 8)
             {
                 // TODO: need to memset to 0 maybe?
                 continue;
             }
-            self.planes2[plane_index] = Some(if self.depth == 8 {
+            self.planes[plane_index] = Some(if self.depth == 8 {
                 Pixels::Buffer(Vec::new())
             } else {
                 Pixels::Buffer16(Vec::new())
             });
-            let pixels = self.planes2[plane_index].as_mut().unwrap();
+            let pixels = self.planes[plane_index].as_mut().unwrap();
             pixels.resize(plane_size, default_value)?;
             self.row_bytes[plane_index] = u32_from_usize(width * pixel_size)?;
             self.image_owns_planes[plane_index] = true;
@@ -227,17 +227,17 @@ impl Image {
         // This function is used only when both src and self contains only pointers.
         match category {
             Category::Alpha => {
-                if src.planes2[3].is_some() {
-                    self.planes2[3] = src.planes2[3].as_ref().unwrap().clone_pointer();
+                if src.planes[3].is_some() {
+                    self.planes[3] = src.planes[3].as_ref().unwrap().clone_pointer();
                     self.row_bytes[3] = src.row_bytes[3];
                 }
             }
             _ => {
                 for plane in 0..3usize {
-                    if src.planes2[plane].is_none() {
+                    if src.planes[plane].is_none() {
                         continue;
                     }
-                    self.planes2[plane] = src.planes2[plane].as_ref().unwrap().clone_pointer();
+                    self.planes[plane] = src.planes[plane].as_ref().unwrap().clone_pointer();
                     self.row_bytes[plane] = src.row_bytes[plane];
                 }
             }

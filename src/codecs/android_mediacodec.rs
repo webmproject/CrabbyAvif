@@ -206,7 +206,7 @@ impl Decoder for MediaCodec {
                 image.height = height as u32;
                 image.depth = 8; // TODO: 10?
                 image.full_range = color_range == 1;
-                image.planes2[3] = Some(Pixels::Pointer(buffer));
+                image.planes[3] = Some(Pixels::Pointer(buffer));
                 image.row_bytes[3] = stride as u32;
             }
             _ => {
@@ -233,16 +233,16 @@ impl Decoder for MediaCodec {
                 image.transfer_characteristics = TransferCharacteristics::Unspecified;
                 image.matrix_coefficients = MatrixCoefficients::Unspecified;
 
-                image.planes2[0] = Some(Pixels::Pointer(buffer));
+                image.planes[0] = Some(Pixels::Pointer(buffer));
                 // TODO: u and v order must be inverted for color format 19.
                 let u_plane_offset = isize_from_i32(stride * height)?;
                 let u_index = if reverse_uv { 2 } else { 1 };
-                image.planes2[u_index] =
+                image.planes[u_index] =
                     Some(Pixels::Pointer(unsafe { buffer.offset(u_plane_offset) }));
                 let u_plane_size = isize_from_i32(((width + 1) / 2) * ((height + 1) / 2))?;
                 let v_plane_offset = u_plane_offset + u_plane_size;
                 let v_index = if reverse_uv { 1 } else { 2 };
-                image.planes2[v_index] =
+                image.planes[v_index] =
                     Some(Pixels::Pointer(unsafe { buffer.offset(v_plane_offset) }));
 
                 image.row_bytes[0] = stride as u32;

@@ -153,22 +153,22 @@ impl rgb::Image {
 
 impl image::Image {
     pub fn alpha_to_full_range(&mut self) -> AvifResult<()> {
-        if self.planes2[3].is_none() {
+        if self.planes[3].is_none() {
             return Ok(());
         }
         let width = self.width as usize;
         let depth = self.depth;
-        if self.planes2[3].as_ref().unwrap().is_pointer() {
+        if self.planes[3].as_ref().unwrap().is_pointer() {
             let src = image::Image {
                 width: self.width,
                 height: self.height,
                 depth: self.depth,
                 yuv_format: self.yuv_format,
-                planes2: [
+                planes: [
                     None,
                     None,
                     None,
-                    self.planes2[3].as_ref().unwrap().clone_pointer(),
+                    self.planes[3].as_ref().unwrap().clone_pointer(),
                 ],
                 row_bytes: [0, 0, 0, self.row_bytes[3]],
                 ..image::Image::default()
