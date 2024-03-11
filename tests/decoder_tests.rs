@@ -7,7 +7,15 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 fn get_test_file(filename: &str) -> String {
-    String::from(format!("tests/data/{filename}"))
+    let base_path = if cfg!(google3) {
+        format!(
+            "{}/google3/third_party/crabbyavif/",
+            std::env::var("TEST_SRCDIR").expect("TEST_SRCDIR is not defined")
+        )
+    } else {
+        "".to_string()
+    };
+    String::from(format!("{base_path}tests/data/{filename}"))
 }
 
 fn get_decoder(filename: &str) -> decoder::Decoder {
