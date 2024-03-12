@@ -24,7 +24,10 @@ pub mod libyuv {
     }
 
     impl image::Image {
-        pub fn scale(&mut self, _width: u32, _height: u32) -> AvifResult<()> {
+        pub fn scale(&mut self, width: u32, height: u32) -> AvifResult<()> {
+            if self.width == width && self.height == height {
+                return Ok(());
+            }
             Err(AvifError::NotImplemented)
         }
     }
