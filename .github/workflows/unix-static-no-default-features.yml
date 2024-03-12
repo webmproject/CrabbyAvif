@@ -28,5 +28,5 @@ jobs:
       with:
         toolchain: stable
 
-    - name: Build the library without default features
-      run: cargo build --no-default-features
+    - name: Build the library and run the tests without default features
+      run: cargo test --no-default-features -- --skip test_conformance
