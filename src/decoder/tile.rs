@@ -233,7 +233,7 @@ impl Tile {
             operating_point: 0, // No way to set operating point via tracks
             ..Tile::default()
         };
-        let sample_table = &track.sample_table.as_ref().unwrap();
+        let sample_table = &track.sample_table.unwrap_ref();
 
         if image_count_limit != 0 {
             for (chunk_index, _chunk_offset) in sample_table.chunk_offsets.iter().enumerate() {

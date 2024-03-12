@@ -275,3 +275,22 @@ pub enum AvifError {
 }
 
 pub type AvifResult<T> = Result<T, AvifError>;
+
+trait OptionExtension {
+    type Value;
+
+    fn unwrap_ref(&self) -> &Self::Value;
+    fn unwrap_mut(&mut self) -> &mut Self::Value;
+}
+
+impl<T> OptionExtension for Option<T> {
+    type Value = T;
+
+    fn unwrap_ref(&self) -> &T {
+        self.as_ref().unwrap()
+    }
+
+    fn unwrap_mut(&mut self) -> &mut T {
+        self.as_mut().unwrap()
+    }
+}

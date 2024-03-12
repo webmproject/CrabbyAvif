@@ -344,7 +344,7 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool
         .iter()
         .map(|x| {
             if image.has_plane(*x) {
-                image.planes[x.to_usize()].as_ref().unwrap().ptr()
+                image.planes[x.to_usize()].unwrap_ref().ptr()
             } else {
                 std::ptr::null()
             }
@@ -356,7 +356,7 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool
         .iter()
         .map(|x| {
             if image.has_plane(*x) {
-                image.planes[x.to_usize()].as_ref().unwrap().ptr16()
+                image.planes[x.to_usize()].unwrap_ref().ptr16()
             } else {
                 std::ptr::null()
             }
@@ -463,7 +463,7 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool
                 .iter()
                 .map(|x| {
                     if image8.has_plane(*x) {
-                        image8.planes[x.to_usize()].as_ref().unwrap().ptr()
+                        image8.planes[x.to_usize()].unwrap_ref().ptr()
                     } else {
                         std::ptr::null()
                     }
@@ -590,9 +590,9 @@ fn downshift_to_8bit(
         if pd.width == 0 {
             continue;
         }
-        let source_ptr = image.planes[plane.to_usize()].as_ref().unwrap().ptr16();
+        let source_ptr = image.planes[plane.to_usize()].unwrap_ref().ptr16();
         let pd8 = image8.plane_data(plane).unwrap();
-        let dst_ptr = image8.planes[plane.to_usize()].as_mut().unwrap().ptr_mut();
+        let dst_ptr = image8.planes[plane.to_usize()].unwrap_mut().ptr_mut();
         unsafe {
             Convert16To8Plane(
                 source_ptr,

@@ -135,7 +135,7 @@ impl Image {
         if self.pixels.is_none() {
             return std::ptr::null_mut();
         }
-        match self.pixels.as_mut().unwrap() {
+        match self.pixels.unwrap_mut() {
             Pixels::Pointer(ptr) => *ptr,
             Pixels::Pointer16(ptr) => *ptr as *mut u8,
             Pixels::Buffer(buffer) => buffer.as_mut_ptr(),

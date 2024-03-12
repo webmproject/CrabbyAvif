@@ -456,7 +456,7 @@ impl Decoder {
         }
         if !self.settings.ignore_exif {
             if let Some(exif) = self.items.iter().find(|x| x.1.is_exif(color_item_index)) {
-                let mut stream = exif.1.stream(self.io.as_mut().unwrap())?;
+                let mut stream = exif.1.stream(self.io.unwrap_mut())?;
                 exif::parse(&mut stream)?;
                 self.image
                     .exif
@@ -465,7 +465,7 @@ impl Decoder {
         }
         if !self.settings.ignore_xmp {
             if let Some(xmp) = self.items.iter().find(|x| x.1.is_xmp(color_item_index)) {
-                let mut stream = xmp.1.stream(self.io.as_mut().unwrap())?;
+                let mut stream = xmp.1.stream(self.io.unwrap_mut())?;
                 self.image
                     .xmp
                     .extend_from_slice(stream.get_slice(stream.bytes_left())?);
@@ -536,7 +536,7 @@ impl Decoder {
         // TODO: This will read the entire first sample if there are multiple extents. Might want
         // to fix that.
         self.prepare_sample(0, 0, 0)?;
-        let io = &mut self.io.as_mut().unwrap();
+        let io = &mut self.io.unwrap_mut();
         let sample = &self.tiles[0][0].input.samples[0];
         let item_data_buffer = if sample.item_id == 0 {
             &None
@@ -653,7 +653,7 @@ impl Decoder {
         }
         if self.parse_state == ParseState::None {
             self.reset();
-            let avif_boxes = mp4box::parse(self.io.as_mut().unwrap())?;
+            let avif_boxes = mp4box::parse(self.io.unwrap_mut())?;
             self.tracks = avif_boxes.tracks;
             if !self.tracks.is_empty() {
                 self.image.image_sequence_track_present = true;
@@ -813,7 +813,7 @@ impl Decoder {
                                 .items
                                 .get(&tonemap_id)
                                 .ok_or(AvifError::InvalidToneMappedImage)?;
-                            let mut stream = tonemap_item.stream(self.io.as_mut().unwrap())?;
+                            let mut stream = tonemap_item.stream(self.io.unwrap_mut())?;
                             self.gainmap.metadata = mp4box::parse_tmap(&mut stream)?;
                         }
                         //println!("gainmap: {:#?}", self.gainmap);
@@ -973,7 +973,7 @@ impl Decoder {
             return Ok(());
         }
         self.items.get(&item_id).unwrap().read_and_parse(
-            self.io.as_mut().unwrap(),
+            self.io.unwrap_mut(),
             &mut self.tile_info[category.usize()].grid,
             self.settings.image_size_limit,
             self.settings.image_dimension_limit,
@@ -1103,7 +1103,7 @@ impl Decoder {
         // Item has multiple extents, merge them into a contiguous buffer.
         let mut data: Vec<u8> = Vec::with_capacity(item.size);
         for extent in &item.extents {
-            let io = self.io.as_mut().unwrap();
+            let io = self.io.unwrap_mut();
             // TODO: check if enough bytes were actually read.
             data.extend_from_slice(io.read(extent.offset, extent.size)?);
         }
@@ -1133,7 +1133,7 @@ impl Decoder {
                     self.tiles[category.usize()].split_at_mut(tile_index);
                 let tile = &mut tiles_slice2[0];
                 let sample = &tile.input.samples[image_index];
-                let io = &mut self.io.as_mut().unwrap();
+                let io = &mut self.io.unwrap_mut();
 
                 let codec = &mut self.codecs[tile.codec_index];
                 let item_data_buffer = if sample.item_id == 0 {

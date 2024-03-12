@@ -158,7 +158,7 @@ impl image::Image {
         }
         let width = self.width as usize;
         let depth = self.depth;
-        if self.planes[3].as_ref().unwrap().is_pointer() {
+        if self.planes[3].unwrap_ref().is_pointer() {
             let src = image::Image {
                 width: self.width,
                 height: self.height,
@@ -168,7 +168,7 @@ impl image::Image {
                     None,
                     None,
                     None,
-                    self.planes[3].as_ref().unwrap().clone_pointer(),
+                    self.planes[3].unwrap_ref().clone_pointer(),
                 ],
                 row_bytes: [0, 0, 0, self.row_bytes[3]],
                 ..image::Image::default()

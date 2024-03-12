@@ -128,7 +128,7 @@ impl Decoder for Dav1d {
             }
         }
 
-        let dav1d_picture = self.picture.as_ref().unwrap();
+        let dav1d_picture = self.picture.unwrap_ref();
         match category {
             Category::Alpha => {
                 if image.width > 0
@@ -192,7 +192,7 @@ impl Decoder for Dav1d {
 impl Drop for Dav1d {
     fn drop(&mut self) {
         if self.picture.is_some() {
-            unsafe { dav1d_picture_unref(self.picture.as_mut().unwrap() as *mut _) };
+            unsafe { dav1d_picture_unref(self.picture.unwrap_mut() as *mut _) };
         }
         if self.context.is_some() {
             unsafe { dav1d_close(&mut self.context.unwrap()) };

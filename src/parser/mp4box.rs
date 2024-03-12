@@ -1240,7 +1240,7 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
                 match header.box_type.as_str() {
                     "ftyp" => {
                         ftyp = Some(parse_ftyp(&mut box_stream)?);
-                        if !ftyp.as_ref().unwrap().is_avif() {
+                        if !ftyp.unwrap_ref().is_avif() {
                             return Err(AvifError::InvalidFtyp);
                         }
                     }
@@ -1252,7 +1252,7 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
                     _ => {} // Not reached.
                 }
                 if ftyp.is_some() {
-                    let ftyp = ftyp.as_ref().unwrap();
+                    let ftyp = ftyp.unwrap_ref();
                     if (!ftyp.needs_meta() || meta.is_some())
                         && (!ftyp.needs_moov() || tracks.is_some())
                     {

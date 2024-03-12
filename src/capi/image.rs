@@ -185,17 +185,17 @@ impl From<&Image> for avifImage {
                 continue;
             }
             dst_image.yuvPlanes[i] = if image.depth > 8 {
-                image.planes[i].as_ref().unwrap().ptr16() as *mut u8
+                image.planes[i].unwrap_ref().ptr16() as *mut u8
             } else {
-                image.planes[i].as_ref().unwrap().ptr() as *mut u8
+                image.planes[i].unwrap_ref().ptr() as *mut u8
             };
             dst_image.yuvRowBytes[i] = image.row_bytes[i];
         }
         if image.has_plane(Plane::A) {
             dst_image.alphaPlane = if image.depth > 8 {
-                image.planes[3].as_ref().unwrap().ptr16() as *mut u8
+                image.planes[3].unwrap_ref().ptr16() as *mut u8
             } else {
-                image.planes[3].as_ref().unwrap().ptr() as *mut u8
+                image.planes[3].unwrap_ref().ptr() as *mut u8
             };
             dst_image.alphaRowBytes = image.row_bytes[3];
         }

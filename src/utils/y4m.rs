@@ -76,19 +76,13 @@ impl Y4MWriter {
         println!("{header}");
         if self.file.is_none() {
             assert!(self.filename.is_some());
-            let file = File::create(self.filename.as_ref().unwrap());
+            let file = File::create(self.filename.unwrap_ref());
             if file.is_err() {
                 return false;
             }
             self.file = Some(file.unwrap());
         }
-        if self
-            .file
-            .as_ref()
-            .unwrap()
-            .write_all(header.as_bytes())
-            .is_err()
-        {
+        if self.file.unwrap_ref().write_all(header.as_bytes()).is_err() {
             return false;
         }
         self.header_written = true;
@@ -102,8 +96,7 @@ impl Y4MWriter {
         let frame_marker = "FRAME\n";
         if self
             .file
-            .as_ref()
-            .unwrap()
+            .unwrap_ref()
             .write_all(frame_marker.as_bytes())
             .is_err()
         {
@@ -123,7 +116,7 @@ impl Y4MWriter {
                         return false;
                     };
                     let pixels = &row[..image.width(plane)];
-                    if self.file.as_ref().unwrap().write_all(pixels).is_err() {
+                    if self.file.unwrap_ref().write_all(pixels).is_err() {
                         return false;
                     }
                 }
@@ -140,7 +133,7 @@ impl Y4MWriter {
                     for &pixel16 in pixels16 {
                         pixels.extend_from_slice(&pixel16.to_le_bytes());
                     }
-                    if self.file.as_ref().unwrap().write_all(&pixels[..]).is_err() {
+                    if self.file.unwrap_ref().write_all(&pixels[..]).is_err() {
                         return false;
                     }
                 }

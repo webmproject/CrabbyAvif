@@ -172,7 +172,7 @@ mod tests {
         if param.rect.is_some() {
             assert!(rect.is_ok());
             let rect = rect.unwrap();
-            let expected_rect = param.rect.as_ref().unwrap();
+            let expected_rect = param.rect.unwrap_ref();
             assert_eq!(rect.x, expected_rect.x);
             assert_eq!(rect.y, expected_rect.y);
             assert_eq!(rect.width, expected_rect.width);

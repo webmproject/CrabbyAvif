@@ -39,8 +39,7 @@ impl decoder::IO for DecoderFileIO {
             self.buffer.resize(size_to_read, 0);
             if self
                 .file
-                .as_ref()
-                .unwrap()
+                .unwrap_ref()
                 .read_exact_at(self.buffer.as_mut_slice(), offset)
                 .is_err()
             {
@@ -53,7 +52,7 @@ impl decoder::IO for DecoderFileIO {
     }
 
     fn size_hint(&self) -> u64 {
-        let metadata = self.file.as_ref().unwrap().metadata();
+        let metadata = self.file.unwrap_ref().metadata();
         if metadata.is_err() {
             return 0;
         }

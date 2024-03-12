@@ -36,7 +36,7 @@ impl Track {
         if self.sample_table.is_none() || self.id == 0 {
             return false;
         }
-        let sample_table = self.sample_table.as_ref().unwrap();
+        let sample_table = self.sample_table.unwrap_ref();
         if sample_table.chunk_offsets.is_empty() || !sample_table.has_av1_sample() {
             return false;
         }

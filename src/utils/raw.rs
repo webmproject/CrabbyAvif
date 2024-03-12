@@ -1,6 +1,7 @@
 use crate::image::Image;
 use crate::image::ALL_PLANES;
 use crate::reformat::rgb;
+use crate::OptionExtension;
 
 use std::fs::File;
 use std::io::prelude::*;
@@ -23,7 +24,7 @@ impl RawWriter {
     fn write_header(&mut self) -> bool {
         if self.file.is_none() {
             assert!(self.filename.is_some());
-            let file = File::create(self.filename.as_ref().unwrap());
+            let file = File::create(self.filename.unwrap_ref());
             if file.is_err() {
                 return false;
             }
@@ -50,7 +51,7 @@ impl RawWriter {
             for y in 0..rgb.height {
                 if rgb.depth == 8 {
                     let row = rgb.row(y).unwrap();
-                    if self.file.as_ref().unwrap().write_all(row).is_err() {
+                    if self.file.unwrap_ref().write_all(row).is_err() {
                         return false;
                     }
                 } else {
@@ -59,7 +60,7 @@ impl RawWriter {
                     for &pixel in row {
                         row16.extend_from_slice(&pixel.to_be_bytes());
                     }
-                    if self.file.as_ref().unwrap().write_all(&row16[..]).is_err() {
+                    if self.file.unwrap_ref().write_all(&row16[..]).is_err() {
                         return false;
                     }
                 }
@@ -79,7 +80,7 @@ impl RawWriter {
                 } else {
                     return false;
                 };
-                if self.file.as_ref().unwrap().write_all(row).is_err() {
+                if self.file.unwrap_ref().write_all(row).is_err() {
                     return false;
                 }
             }
