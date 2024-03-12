@@ -37,7 +37,7 @@ impl From<rgb::Image> for avifRGBImage {
         avifRGBImage {
             width: rgb.width,
             height: rgb.height,
-            depth: rgb.depth,
+            depth: rgb.depth as u32,
             format: rgb.format,
             chroma_upsampling: rgb.chroma_upsampling,
             chroma_downsampling: rgb.chroma_downsampling,
@@ -57,7 +57,7 @@ impl From<*mut avifRGBImage> for rgb::Image {
         let dst = rgb::Image {
             width: rgb.width,
             height: rgb.height,
-            depth: rgb.depth,
+            depth: rgb.depth as u8,
             format: rgb.format,
             chroma_upsampling: rgb.chroma_upsampling,
             chroma_downsampling: rgb.chroma_downsampling,

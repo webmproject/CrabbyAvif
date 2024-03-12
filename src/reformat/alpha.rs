@@ -86,7 +86,7 @@ impl rgb::Image {
         }
         let width = usize_from_u32(self.width)?;
         let dst_alpha_offset = self.format.alpha_offset();
-        if self.depth == image.depth as u32 {
+        if self.depth == image.depth {
             if self.depth > 8 {
                 for y in 0..self.height {
                     let dst_row = self.row16_mut(y)?;
@@ -229,7 +229,7 @@ mod tests {
     fn rgb_image(
         width: u32,
         height: u32,
-        depth: u32,
+        depth: u8,
         format: rgb::Format,
         use_pointer: bool,
         buffer: &mut Vec<u8>,
@@ -263,7 +263,7 @@ mod tests {
     fn fill_alpha(
         width: u32,
         height: u32,
-        depth: u32,
+        depth: u8,
         format_index: usize,
         use_pointer: bool,
     ) -> AvifResult<()> {
@@ -339,7 +339,7 @@ mod tests {
     fn reformat_alpha(
         width: u32,
         height: u32,
-        rgb_depth: u32,
+        rgb_depth: u8,
         format_index: usize,
         yuv_depth: u8,
         use_pointer: bool,
@@ -382,7 +382,7 @@ mod tests {
                 let row = image.row16_mut(Plane::A, y)?;
                 for x in 0..width as usize {
                     let value = rng.gen_range(0..(1i32 << yuv_depth)) as u16;
-                    if rgb.depth == yuv_depth as u32 {
+                    if rgb.depth == yuv_depth {
                         expected_values.push(value);
                     } else {
                         expected_values.push(rgb::Image::rescale_alpha_value(

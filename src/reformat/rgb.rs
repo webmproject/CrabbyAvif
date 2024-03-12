@@ -87,7 +87,7 @@ pub enum ChromaDownsampling {
 pub struct Image {
     pub width: u32,
     pub height: u32,
-    pub depth: u32,
+    pub depth: u8,
     pub format: Format,
     pub chroma_upsampling: ChromaUpsampling,
     pub chroma_downsampling: ChromaDownsampling,
@@ -119,7 +119,7 @@ impl Image {
         Self {
             width: image.width,
             height: image.height,
-            depth: image.depth as u32,
+            depth: image.depth,
             format: Format::Rgba,
             chroma_upsampling: ChromaUpsampling::Automatic,
             chroma_downsampling: ChromaDownsampling::Automatic,
@@ -418,7 +418,7 @@ mod tests {
         params: (
             /*yuv_param_index:*/ usize,
             /*format:*/ Format,
-            /*depth:*/ u32,
+            /*depth:*/ u8,
             /*premultiply_alpha:*/ bool,
             /*is_float:*/ bool,
         ),
@@ -505,7 +505,7 @@ mod tests {
         let mut rgb = Image::create_from_yuv(&image);
         assert_eq!(rgb.width, image.width);
         assert_eq!(rgb.height, image.height);
-        assert_eq!(rgb.depth, image.depth as u32);
+        assert_eq!(rgb.depth, image.depth);
 
         rgb.format = rgb_params.params.1;
         rgb.depth = rgb_params.params.2;
