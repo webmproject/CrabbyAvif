@@ -1,9 +1,27 @@
 use crate::*;
 
+fn expand_coeffs(y: f32, v: f32) -> [f32; 3] {
+    [y, 1.0 - y - v, v]
+}
+
 impl ColorPrimaries {
     pub fn y_coeffs(&self) -> [f32; 3] {
-        // TODO: implement.
-        [0.0, 0.0, 0.0]
+        // These values come from computations in Section 8 of
+        // https://www.itu.int/rec/T-REC-H.273-201612-S
+        match self {
+            ColorPrimaries::Unknown | ColorPrimaries::Srgb | ColorPrimaries::Unspecified => {
+                expand_coeffs(0.2126, 0.0722)
+            }
+            ColorPrimaries::Bt470m => expand_coeffs(0.299, 0.1146),
+            ColorPrimaries::Bt470bg => expand_coeffs(0.222, 0.0713),
+            ColorPrimaries::Bt601 | ColorPrimaries::Smpte240 => expand_coeffs(0.212, 0.087),
+            ColorPrimaries::GenericFilm => expand_coeffs(0.2536, 0.06808),
+            ColorPrimaries::Bt2020 => expand_coeffs(0.2627, 0.0593),
+            ColorPrimaries::Xyz => expand_coeffs(0.0, 0.0),
+            ColorPrimaries::Smpte431 => expand_coeffs(0.2095, 0.0689),
+            ColorPrimaries::Smpte432 => expand_coeffs(0.229, 0.0793),
+            ColorPrimaries::Ebu3213 => expand_coeffs(0.2318, 0.096),
+        }
     }
 }
 
@@ -11,14 +29,15 @@ fn calculate_yuv_coefficients_from_cicp(
     color_primaries: ColorPrimaries,
     matrix_coefficients: MatrixCoefficients,
 ) -> Option<[f32; 3]> {
-    let expand_coeffs = |y, v| Some([y, 1.0 - y - v, v]);
     match matrix_coefficients {
         MatrixCoefficients::ChromaDerivedNcl => Some(color_primaries.y_coeffs()),
-        MatrixCoefficients::Bt709 => expand_coeffs(0.2126f32, 0.0722),
-        MatrixCoefficients::Fcc => expand_coeffs(0.30, 0.11),
-        MatrixCoefficients::Bt470bg | MatrixCoefficients::Bt601 => expand_coeffs(0.299, 0.114),
-        MatrixCoefficients::Smpte240 => expand_coeffs(0.212, 0.087),
-        MatrixCoefficients::Bt2020Ncl => expand_coeffs(0.2627, 0.0593),
+        MatrixCoefficients::Bt709 => Some(expand_coeffs(0.2126, 0.0722)),
+        MatrixCoefficients::Fcc => Some(expand_coeffs(0.30, 0.11)),
+        MatrixCoefficients::Bt470bg | MatrixCoefficients::Bt601 => {
+            Some(expand_coeffs(0.299, 0.114))
+        }
+        MatrixCoefficients::Smpte240 => Some(expand_coeffs(0.212, 0.087)),
+        MatrixCoefficients::Bt2020Ncl => Some(expand_coeffs(0.2627, 0.0593)),
         _ => None,
     }
 }
