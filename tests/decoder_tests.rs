@@ -34,6 +34,16 @@ macro_rules! assert_avif_error {
     };
 }
 
+const HAS_DECODER: bool = if cfg!(any(
+    feature = "dav1d",
+    feature = "libgav1",
+    feature = "android_mediacodec"
+)) {
+    true
+} else {
+    false
+};
+
 // From avifalphanoispetest.cc
 #[test]
 fn alpha_no_ispe() {
@@ -54,6 +64,9 @@ fn alpha_no_ispe() {
     let image = decoder.image();
     assert!(image.alpha_present);
     assert!(!image.image_sequence_track_present);
+    if !HAS_DECODER {
+        return;
+    }
     let res = decoder.next_image();
     assert!(res.is_ok());
     let image = decoder.image();
@@ -76,6 +89,9 @@ fn animated_image() {
         decoder.repetition_count,
         RepetitionCount::Finite(0)
     ));
+    if !HAS_DECODER {
+        return;
+    }
     for _ in 0..5 {
         assert!(decoder.next_image().is_ok());
     }
@@ -96,6 +112,9 @@ fn animated_image_with_source_set_to_primary_item() {
     // preferred source.
     assert_eq!(decoder.image_count, 1);
     assert!(matches!(decoder.repetition_count, RepetitionCount::Unknown));
+    if !HAS_DECODER {
+        return;
+    }
     // Get the first (and only) image.
     assert!(decoder.next_image().is_ok());
     // Subsequent calls should not return anything since there is only one
@@ -113,6 +132,9 @@ fn color_grid_alpha_no_grid() {
     let image = decoder.image();
     assert!(image.alpha_present);
     assert!(!image.image_sequence_track_present);
+    if !HAS_DECODER {
+        return;
+    }
     let res = decoder.next_image();
     assert!(res.is_ok());
     let image = decoder.image();
@@ -153,6 +175,9 @@ fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     assert_eq!(image.width, width);
     assert_eq!(image.height, height);
     assert_eq!(decoder.image_count, layer_count);
+    if !HAS_DECODER {
+        return;
+    }
     for _i in 0..decoder.image_count {
         let res = decoder.next_image();
         assert!(res.is_ok());
@@ -222,6 +247,9 @@ fn color_grid_gainmap_different_grid() {
     assert_eq!(decoder.gainmap.image.depth, 8);
     assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.0, 6);
     assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.1, 2);
+    if !HAS_DECODER {
+        return;
+    }
     let res = decoder.next_image();
     assert!(res.is_ok());
 }
@@ -246,6 +274,9 @@ fn color_grid_alpha_grid_gainmap_nogrid() {
     assert_eq!(decoder.gainmap.image.depth, 8);
     assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.0, 6);
     assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.1, 2);
+    if !HAS_DECODER {
+        return;
+    }
     let res = decoder.next_image();
     assert!(res.is_ok());
 }
@@ -270,6 +301,9 @@ fn color_nogrid_alpha_nogrid_gainmap_grid() {
     assert_eq!(decoder.gainmap.image.depth, 8);
     assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.0, 6);
     assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.1, 2);
+    if !HAS_DECODER {
+        return;
+    }
     let res = decoder.next_image();
     assert!(res.is_ok());
 }
@@ -311,6 +345,9 @@ fn raw_io() {
         .expect("Failed to set IO");
     assert!(decoder.parse().is_ok());
     assert_eq!(decoder.image_count, 5);
+    if !HAS_DECODER {
+        return;
+    }
     for _ in 0..5 {
         assert!(decoder.next_image().is_ok());
     }
@@ -324,10 +361,6 @@ struct CustomIO {
 impl decoder::IO for CustomIO {
     fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]> {
         let available_size = self.available_size_rc.borrow();
-        println!(
-            "### read: offset {offset} size {size} available size: {}",
-            *available_size
-        );
         let start = usize::try_from(offset).unwrap();
         let end = start + size;
         if start > self.data.len() || end > self.data.len() {
@@ -366,6 +399,9 @@ fn custom_io() {
     decoder.set_io(io);
     assert!(decoder.parse().is_ok());
     assert_eq!(decoder.image_count, 5);
+    if !HAS_DECODER {
+        return;
+    }
     for _ in 0..5 {
         assert!(decoder.next_image().is_ok());
     }
@@ -460,7 +496,6 @@ fn incremental_decode() {
     });
     decoder.set_io(io);
     let step: usize = std::cmp::max(1, len / 10000) as usize;
-    println!("### step: {step}");
 
     // Parsing is not incremental.
     let mut parse_result = decoder.parse();
@@ -472,12 +507,13 @@ fn incremental_decode() {
                 assert!(false);
             }
             *available_size = std::cmp::min(*available_size + step, len);
-            println!("### available size after increment: {}", *available_size);
         }
         parse_result = decoder.parse();
     }
     assert!(parse_result.is_ok());
-    println!("parse succeeded");
+    if !HAS_DECODER {
+        return;
+    }
 
     // Decoding is incremental.
     let mut previous_decoded_row_count = 0;
@@ -499,11 +535,8 @@ fn incremental_decode() {
                 len,
                 &grid_cell_offsets,
             );
-            println!("expected_min_decoded_row_count: {expected_min_decoded_row_count}");
             assert!(decoded_row_count >= expected_min_decoded_row_count);
             previous_decoded_row_count = decoded_row_count;
-            println!("decoded_row_count: {decoded_row_count}");
-            println!("### available size after increment: {}", *available_size);
             *available_size = std::cmp::min(*available_size + step, len);
         }
         decode_result = decoder.next_image();
@@ -520,6 +553,9 @@ fn nth_image() {
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.image_count, 5);
+    if !HAS_DECODER {
+        return;
+    }
     assert!(decoder.nth_image(3).is_ok());
     assert!(decoder.next_image().is_ok());
     assert!(decoder.next_image().is_err());
@@ -537,6 +573,9 @@ fn color_and_alpha_dimensions_do_not_match() {
     let image = decoder.image();
     assert_eq!(image.width, 10);
     assert_eq!(image.height, 10);
+    if !HAS_DECODER {
+        return;
+    }
     // Decoding should fail.
     let res = decoder.next_image();
     assert!(res.is_err());
@@ -547,6 +586,9 @@ fn rgb_conversion_alpha_premultiply() -> AvifResult<()> {
     let mut decoder = get_decoder("alpha.avif");
     let res = decoder.parse();
     assert!(res.is_ok());
+    if !HAS_DECODER {
+        return Ok(());
+    }
     let res = decoder.next_image();
     assert!(res.is_ok());
     let image = decoder.image();
