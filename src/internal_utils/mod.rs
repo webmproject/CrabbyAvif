@@ -245,6 +245,10 @@ pub fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
     Ok(v)
 }
 
+pub fn reinterpret_f32_as_u32(f: f32) -> u32 {
+    u32::from_be_bytes(f.to_be_bytes())
+}
+
 #[cfg(test)]
 pub fn assert_f32_array(a: &[f32], b: &[f32]) {
     assert_eq!(a.len(), b.len());

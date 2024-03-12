@@ -242,7 +242,7 @@ impl Image {
         for y in 0..self.height {
             let row = self.row16_mut(y)?;
             for pixel in row {
-                *pixel = ((((*pixel as f32) * multiplier) as u32) >> 13) as u16;
+                *pixel = (reinterpret_f32_as_u32((*pixel as f32) * multiplier) >> 13) as u16;
             }
         }
         Ok(())
