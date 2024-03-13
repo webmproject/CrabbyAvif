@@ -86,6 +86,12 @@ pub struct PlaneData {
     pub pixel_size: u32,
 }
 
+#[derive(Copy, Clone)]
+pub enum PlaneRow<'a> {
+    Depth8(&'a [u8]),
+    Depth16(&'a [u16]),
+}
+
 impl Image {
     pub fn depth_valid(&self) -> bool {
         matches!(self.depth, 8 | 10 | 12 | 16)
@@ -186,6 +192,14 @@ impl Image {
         self.planes[plane.to_usize()]
             .unwrap_mut()
             .slice16_mut(start, row_bytes)
+    }
+
+    pub fn row_generic(&self, plane: Plane, row: u32) -> AvifResult<PlaneRow> {
+        Ok(if self.depth == 8 {
+            PlaneRow::Depth8(self.row(plane, row)?)
+        } else {
+            PlaneRow::Depth16(self.row16(plane, row)?)
+        })
     }
 
     pub fn allocate_planes(&mut self, category: Category) -> AvifResult<()> {
