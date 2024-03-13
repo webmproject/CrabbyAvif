@@ -79,7 +79,7 @@ pub struct Image {
     pub progressive_state: ProgressiveState,
 }
 
-pub struct PlaneData2 {
+pub struct PlaneData {
     pub width: u32,
     pub height: u32,
     pub row_bytes: u32,
@@ -141,11 +141,11 @@ impl Image {
         }
     }
 
-    pub fn plane_data(&self, plane: Plane) -> Option<PlaneData2> {
+    pub fn plane_data(&self, plane: Plane) -> Option<PlaneData> {
         if !self.has_plane(plane) {
             return None;
         }
-        Some(PlaneData2 {
+        Some(PlaneData {
             width: self.width(plane) as u32,
             height: self.height(plane) as u32,
             row_bytes: self.row_bytes[plane.to_usize()],
