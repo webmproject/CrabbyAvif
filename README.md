@@ -41,6 +41,14 @@ cd ../..
 cargo test -- test_conformance
 ```
 
+If you already have the `av1-avif` repository checked out and the `avifdec`
+binary available, you can point to those by setting the following environment
+variables:
+
+``sh
+CRABBYAVIF_CONFORMANCE_TEST_DATA_DIR=<path> CRABBYAVIF_CONFORMANCE_TEST_AVIFDEC=<avifdec_binary> cargo test -- test_conformance
+``
+
 ### C API Tests
 
 ```sh

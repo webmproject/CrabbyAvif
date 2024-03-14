@@ -2,6 +2,7 @@ use crabby_avif::image::*;
 use crabby_avif::utils::y4m;
 use crabby_avif::*;
 
+use std::env;
 use std::fs::remove_file;
 use std::fs::File;
 use std::io::BufReader;
@@ -9,10 +10,43 @@ use std::io::Read;
 use std::process::Command;
 use tempfile::NamedTempFile;
 
-// See README.md for dependency instructions.
-const TEST_DATA_PATH: &str = "external/av1-avif/testFiles";
-//const AVIFDEC_PATH: &str = "/opt/homebrew/bin/avifdec";
-const AVIFDEC_PATH: &str = "external/libavif/build/avifdec";
+// See README.md for instructions on how to set up the dependencies for
+// running the conformance tests.
+
+fn get_test_file(filename: &str) -> String {
+    let base_path = if cfg!(google3) {
+        format!(
+            "{}/google3/third_party/crabbyavif/google3/test_data/av1-avif",
+            env::var("TEST_SRCDIR").expect("TEST_SRCDIR is not defined")
+        )
+    } else {
+        match env::var("CRABBYAVIF_CONFORMANCE_TEST_DATA_DIR") {
+            Ok(dir) => format!("{dir}/testFiles"),
+            Err(_) => format!(
+                "{}/external/av1-avif/testFiles",
+                env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not defined")
+            ),
+        }
+    };
+    format!("{base_path}/{filename}")
+}
+
+fn get_avifdec() -> String {
+    if cfg!(google3) {
+        format!(
+            "{}/google3/third_party/libavif/avifdec",
+            env::var("TEST_SRCDIR").expect("TEST_SRCDIR is not defined")
+        )
+    } else {
+        match env::var("CRABBYAVIF_CONFORMANCE_TEST_AVIFDEC") {
+            Ok(avifdec) => avifdec,
+            Err(_) => format!(
+                "{}/external/libavif/build/avifdec",
+                env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not defined")
+            ),
+        }
+    }
+}
 
 #[derive(Copy, Clone)]
 struct ExpectedImageInfo<'a> {
@@ -54,7 +88,6 @@ fn get_tempfile() -> String {
     let path = file.into_temp_path();
     let filename = String::from(path.to_str().unwrap());
     let _ = path.close();
-    println!("### filename: {:#?}", filename);
     filename
 }
 
@@ -68,7 +101,7 @@ fn write_y4m(image: &Image) -> String {
 fn run_avifdec(filename: &String) -> String {
     let mut outfile = get_tempfile();
     outfile.push_str(".y4m");
-    let avifdec = Command::new(AVIFDEC_PATH)
+    let avifdec = Command::new(get_avifdec())
         .arg("--no-strict")
         .arg("--jobs")
         .arg("8")
@@ -76,7 +109,6 @@ fn run_avifdec(filename: &String) -> String {
         .arg(&outfile)
         .output()
         .unwrap();
-    println!("avifdec: {:#?}", avifdec);
     assert!(avifdec.status.success());
     outfile
 }
@@ -100,7 +132,7 @@ fn compare_files(file1: &String, file2: &String) -> bool {
 #[test_case::test_matrix(0usize..172)]
 fn test_conformance(index: usize) {
     let expected_info = &EXPECTED_INFOS[index];
-    let filename = String::from(format!("{TEST_DATA_PATH}/{}", expected_info.filename));
+    let filename = get_test_file(expected_info.filename);
     let mut decoder = decoder::Decoder::default();
     decoder.settings.strictness = decoder::Strictness::None;
     let _ = decoder.set_io_file(&filename).expect("Failed to set IO");
@@ -126,7 +158,6 @@ fn test_conformance(index: usize) {
     assert!(compare_files(&y4m_file, &gold_y4m_file));
     let _ = remove_file(y4m_file);
     let _ = remove_file(gold_y4m_file);
-    println!("filename: {filename}");
 }
 
 // If more files are added to this array, update the call to generate_tests macro below.
