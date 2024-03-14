@@ -15,3 +15,4 @@
 /sys/libyuv-sys/src/libyuv.rs
 /sys/ndk-sys/src/bindings.rs
 /target
+/third_party
