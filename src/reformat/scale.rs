@@ -70,7 +70,7 @@ impl Image {
                 continue;
             }
             let src_pd = src.plane_data(plane).unwrap();
-            let pd = self.plane_data(plane).unwrap();
+            let dst_pd = self.plane_data(plane).unwrap();
             // libyuv versions >= 1880 reports a return value here. Older versions do not. Ignore
             // the return value for now.
             #[allow(clippy::let_unit_value)]
@@ -84,9 +84,9 @@ impl Image {
                         i32_from_u32(src_pd.width)?,
                         i32_from_u32(src_pd.height)?,
                         dst_ptr,
-                        i32_from_u32(pd.row_bytes / 2)?,
-                        i32_from_u32(pd.width)?,
-                        i32_from_u32(pd.height)?,
+                        i32_from_u32(dst_pd.row_bytes / 2)?,
+                        i32_from_u32(dst_pd.width)?,
+                        i32_from_u32(dst_pd.height)?,
                         FilterMode_kFilterBox,
                     )
                 } else {
@@ -98,9 +98,9 @@ impl Image {
                         i32_from_u32(src_pd.width)?,
                         i32_from_u32(src_pd.height)?,
                         dst_ptr,
-                        i32_from_u32(pd.row_bytes)?,
-                        i32_from_u32(pd.width)?,
-                        i32_from_u32(pd.height)?,
+                        i32_from_u32(dst_pd.row_bytes)?,
+                        i32_from_u32(dst_pd.width)?,
+                        i32_from_u32(dst_pd.height)?,
                         FilterMode_kFilterBox,
                     )
                 }
