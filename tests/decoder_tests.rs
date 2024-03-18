@@ -359,14 +359,14 @@ struct CustomIO {
 }
 
 impl decoder::IO for CustomIO {
-    fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]> {
+    fn read(&mut self, offset: u64, max_read_size: usize) -> AvifResult<&[u8]> {
         let available_size = self.available_size_rc.borrow();
         let start = usize::try_from(offset).unwrap();
-        let end = start + size;
+        let end = start + max_read_size;
         if start > self.data.len() || end > self.data.len() {
             return Err(AvifError::IoError);
         }
-        let mut ssize = size;
+        let mut ssize = max_read_size;
         if ssize > self.data.len() - start {
             ssize = self.data.len() - start;
         }

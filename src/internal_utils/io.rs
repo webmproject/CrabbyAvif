@@ -23,13 +23,14 @@ impl DecoderFileIO {
 }
 
 impl decoder::IO for DecoderFileIO {
-    fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]> {
+    fn read(&mut self, offset: u64, max_read_size: usize) -> AvifResult<&[u8]> {
         let file_size = self.size_hint();
         if offset > file_size {
             return Err(AvifError::IoError);
         }
         let available_size: usize = (file_size - offset) as usize;
-        let size_to_read: usize = if size > available_size { available_size } else { size };
+        let size_to_read: usize =
+            if max_read_size > available_size { available_size } else { max_read_size };
         if size_to_read > 0 {
             if self.buffer.capacity() < size_to_read
                 && self.buffer.try_reserve_exact(size_to_read).is_err()
@@ -77,13 +78,14 @@ impl DecoderRawIO<'_> {
 }
 
 impl decoder::IO for DecoderRawIO<'_> {
-    fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]> {
+    fn read(&mut self, offset: u64, max_read_size: usize) -> AvifResult<&[u8]> {
         let data_len = self.data.len() as u64;
         if offset > data_len {
             return Err(AvifError::IoError);
         }
         let available_size: usize = (data_len - offset) as usize;
-        let size_to_read: usize = if size > available_size { available_size } else { size };
+        let size_to_read: usize =
+            if max_read_size > available_size { available_size } else { max_read_size };
         let slice_start = usize_from_u64(offset)?;
         let slice_end = slice_start + size_to_read;
         Ok(&self.data[slice_start..slice_end])
