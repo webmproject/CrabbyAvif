@@ -71,7 +71,7 @@ impl IStream<'_> {
     }
 
     fn check(&self, size: usize) -> AvifResult<()> {
-        if self.bytes_left() < size {
+        if self.bytes_left()? < size {
             return Err(AvifError::BmffParseFailed);
         }
         Ok(())
@@ -97,12 +97,15 @@ impl IStream<'_> {
         })
     }
 
-    pub fn bytes_left(&self) -> usize {
-        self.data.len() - self.offset
+    pub fn bytes_left(&self) -> AvifResult<usize> {
+        if self.data.len() < self.offset {
+            return Err(AvifError::UnknownError);
+        }
+        Ok(self.data.len() - self.offset)
     }
 
-    pub fn has_bytes_left(&self) -> bool {
-        self.bytes_left() > 0
+    pub fn has_bytes_left(&self) -> AvifResult<bool> {
+        Ok(self.bytes_left()? > 0)
     }
 
     pub fn get_slice(&mut self, size: usize) -> AvifResult<&[u8]> {

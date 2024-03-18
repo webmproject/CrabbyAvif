@@ -245,7 +245,7 @@ impl Av1SequenceHeader {
         let size = if obu_has_size_field {
             stream.read_uleb128()?
         } else {
-            u32_from_usize(stream.bytes_left())?
+            u32_from_usize(stream.bytes_left()?)?
         };
 
         Ok(ObuHeader { obu_type, size })
@@ -254,7 +254,7 @@ impl Av1SequenceHeader {
     pub fn parse_from_obus(data: &[u8]) -> AvifResult<Self> {
         let mut stream = IStream::create(data);
 
-        while stream.has_bytes_left() {
+        while stream.has_bytes_left()? {
             let obu = Self::parse_obu_header(&mut stream)?;
             if obu.obu_type != 1 {
                 // Not a sequence header. Skip this obu.
