@@ -108,11 +108,10 @@ impl Decoder for Libgav1 {
                     image.width = gav1_image.displayed_width[0] as u32;
                     image.height = gav1_image.displayed_height[0] as u32;
                     image.depth = gav1_image.bitdepth as u8;
-                    image.planes[3] = Some(if image.depth > 8 {
-                        Pixels::Pointer16(gav1_image.plane[0] as *mut u16)
-                    } else {
-                        Pixels::Pointer(gav1_image.plane[0] as *mut u8)
-                    });
+                    image.planes[3] = Some(Pixels::from_raw_pointer(
+                        gav1_image.plane[0],
+                        image.depth as u32,
+                    ));
                     image.row_bytes[3] = gav1_image.stride[0] as u32;
                     image.image_owns_planes[3] = false;
                     image.full_range =
@@ -142,11 +141,10 @@ impl Decoder for Libgav1 {
                     image.matrix_coefficients = (gav1_image.matrix_coefficients as u16).into();
 
                     for plane in 0usize..image.yuv_format.plane_count() {
-                        image.planes[plane] = Some(if image.depth > 8 {
-                            Pixels::Pointer16(gav1_image.plane[plane] as *mut u16)
-                        } else {
-                            Pixels::Pointer(gav1_image.plane[plane] as *mut u8)
-                        });
+                        image.planes[plane] = Some(Pixels::from_raw_pointer(
+                            gav1_image.plane[plane],
+                            image.depth as u32,
+                        ));
                         image.row_bytes[plane] = gav1_image.stride[plane] as u32;
                         image.image_owns_planes[plane] = false;
                     }
