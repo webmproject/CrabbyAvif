@@ -1232,10 +1232,7 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
         // Read the rest of the box if necessary.
         match header.box_type.as_str() {
             "ftyp" | "meta" | "moov" => {
-                let box_data = io.read(parse_offset, header.size)?;
-                if box_data.len() != header.size {
-                    return Err(AvifError::TruncatedData);
-                }
+                let box_data = io.read_exact(parse_offset, header.size)?;
                 let mut box_stream = IStream::create(box_data);
                 match header.box_type.as_str() {
                     "ftyp" => {

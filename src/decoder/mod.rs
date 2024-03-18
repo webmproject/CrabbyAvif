@@ -30,9 +30,21 @@ use std::cmp::max;
 use std::cmp::min;
 
 pub trait IO {
-    fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]>;
+    fn read(&mut self, offset: u64, max_read_size: usize) -> AvifResult<&[u8]>;
     fn size_hint(&self) -> u64;
     fn persistent(&self) -> bool;
+}
+
+impl dyn IO {
+    pub fn read_exact(&mut self, offset: u64, read_size: usize) -> AvifResult<&[u8]> {
+        let result = self.read(offset, read_size)?;
+        if result.len() < read_size {
+            Err(AvifError::TruncatedData)
+        } else {
+            assert!(result.len() == read_size);
+            Ok(result)
+        }
+    }
 }
 
 pub type GenericIO = Box<dyn IO>;
@@ -1104,8 +1116,7 @@ impl Decoder {
         let mut data: Vec<u8> = Vec::with_capacity(item.size);
         for extent in &item.extents {
             let io = self.io.unwrap_mut();
-            // TODO: check if enough bytes were actually read.
-            data.extend_from_slice(io.read(extent.offset, extent.size)?);
+            data.extend_from_slice(io.read_exact(extent.offset, extent.size)?);
         }
         item.data_buffer = Some(data);
         Ok(())

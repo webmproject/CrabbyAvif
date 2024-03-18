@@ -43,7 +43,7 @@ impl Item {
     pub fn stream<'a>(&'a self, io: &'a mut GenericIO) -> AvifResult<IStream> {
         // TODO: handle multiple extents.
         let io_data = match self.idat.is_empty() {
-            true => io.read(self.data_offset(), self.size)?,
+            true => io.read_exact(self.data_offset(), self.size)?,
             false => {
                 // TODO: assumes idat offset is 0.
                 self.idat.as_slice()
