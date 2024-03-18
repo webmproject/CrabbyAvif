@@ -109,3 +109,82 @@ impl Image {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::internal_utils::pixels::Pixels;
+    use test_case::test_matrix;
+
+    #[test_matrix([PixelFormat::Yuv444, PixelFormat::Yuv422, PixelFormat::Yuv420, PixelFormat::Monochrome], [false, true])]
+    fn scale_pointer(yuv_format: PixelFormat, use_alpha: bool) {
+        let mut yuv = image::Image {
+            width: 2,
+            height: 2,
+            depth: 8,
+            yuv_format,
+            ..Default::default()
+        };
+
+        let planes: &[Plane] = match (yuv_format, use_alpha) {
+            (PixelFormat::Monochrome, false) => &[Plane::Y],
+            (PixelFormat::Monochrome, true) => &[Plane::Y, Plane::A],
+            (_, false) => &YUV_PLANES,
+            (_, true) => &ALL_PLANES,
+        };
+        let mut values = [
+            10, 20, //
+            30, 40,
+        ];
+        for plane in planes {
+            yuv.planes[plane.to_usize()] = Some(Pixels::Pointer(values.as_mut_ptr()));
+            yuv.row_bytes[plane.to_usize()] = 2;
+            yuv.image_owns_planes[plane.to_usize()] = true;
+        }
+
+        assert!(yuv.scale(4, 4).is_ok());
+        for plane in planes {
+            let expected_samples: &[u8] = match (yuv_format, plane) {
+                (PixelFormat::Yuv422, Plane::U | Plane::V) => &[
+                    10, 10, //
+                    10, 10, //
+                    30, 30, //
+                    30, 30,
+                ],
+                (PixelFormat::Yuv420, Plane::U | Plane::V) => &[
+                    10, 10, //
+                    10, 10,
+                ],
+                (_, _) => &[
+                    10, 13, 18, 20, //
+                    15, 18, 23, 25, //
+                    25, 28, 33, 35, //
+                    30, 33, 38, 40,
+                ],
+            };
+            match &yuv.planes[plane.to_usize()] {
+                Some(Pixels::Buffer(samples)) => {
+                    assert_eq!(*samples, expected_samples)
+                }
+                _ => panic!(),
+            }
+        }
+    }
+
+    #[test]
+    fn scale_buffer() {
+        let mut yuv = image::Image {
+            width: 2,
+            height: 2,
+            depth: 8,
+            yuv_format: PixelFormat::Monochrome,
+            ..Default::default()
+        };
+
+        yuv.planes[0] = Some(Pixels::Buffer(vec![
+            1, 2, //
+            3, 4,
+        ]));
+        assert_eq!(yuv.scale(4, 4), Err(AvifError::NotImplemented));
+    }
+}
