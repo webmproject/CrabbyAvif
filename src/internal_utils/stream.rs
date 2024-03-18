@@ -17,11 +17,6 @@ impl IBitStream<'_> {
         let byte = self.data[byte_offset];
         let shift = 7 - (self.bit_offset % 8);
         self.bit_offset += 1;
-        // println!(
-        //     "read bit at offset {} is {}",
-        //     self.bit_offset - 1,
-        //     (byte >> shift) & 0x01
-        // );
         Ok((byte >> shift) & 0x01)
     }
 
@@ -32,13 +27,11 @@ impl IBitStream<'_> {
             value <<= 1;
             value |= self.read_bit()? as u32;
         }
-        // println!("read byte({n}): {value}");
         Ok(value)
     }
 
     pub fn read_bool(&mut self) -> AvifResult<bool> {
         let bit = self.read_bit()?;
-        // println!("read bool: {}", bit == 1);
         Ok(bit == 1)
     }
 
@@ -47,14 +40,14 @@ impl IBitStream<'_> {
     }
 
     pub fn skip_uvlc(&mut self) -> AvifResult<()> {
-        let mut bit_count = 0;
+        // See the section 4.10.3. uvlc() of the AV1 specification.
+        let mut leading_zeros = 0u128; // leadingZeros
         while !self.read_bool()? {
-            bit_count += 1;
-            if bit_count == 32 {
-                return Err(AvifError::BmffParseFailed);
-            }
+            leading_zeros += 1;
         }
-        self.skip(bit_count);
+        if leading_zeros < 32 {
+            self.skip(leading_zeros as usize); // f(leadingZeros) value;
+        }
         Ok(())
     }
 }
