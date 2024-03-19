@@ -1,7 +1,4 @@
-use crate::decoder;
 use crate::internal_utils::*;
-use crate::AvifError;
-use crate::AvifResult;
 
 use std::fs::File;
 use std::os::unix::fs::FileExt; // TODO: what happens when this is compiled for windows?

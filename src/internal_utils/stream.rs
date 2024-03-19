@@ -1,6 +1,4 @@
 use crate::internal_utils::*;
-use crate::AvifError;
-use crate::AvifResult;
 
 #[derive(Debug)]
 pub struct IBitStream<'a> {

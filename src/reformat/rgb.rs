@@ -1,7 +1,6 @@
 use super::libyuv;
 use super::rgb_impl;
 
-use crate::image;
 use crate::image::Plane;
 use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;

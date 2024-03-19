@@ -2,7 +2,6 @@ use super::coeffs::*;
 use super::rgb;
 use super::rgb::*;
 
-use crate::image;
 use crate::image::Plane;
 use crate::image::PlaneRow;
 use crate::internal_utils::*;
