@@ -9,6 +9,8 @@
 
 #include "avif/avif.h"
 
+#include "aviftest_helpers.h"
+
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -148,13 +150,13 @@ static void avifIOTestReaderDestroy(struct avifIO * io)
 static avifIO * avifIOCreateTestReader(const uint8_t * data, size_t size)
 {
     printf("### creating reader of size: %zu\n", size);
-    avifIO * io = malloc(sizeof(avifIO));
+    avifIO * io = reinterpret_cast<avifIO *>(malloc(sizeof(avifIO)));
     memset(io, 0, sizeof(avifIO));
     io->destroy = &avifIOTestReaderDestroy;
     io->read = &avifIOTestReaderRead;
     io->sizeHint = size;
     io->persistent = AVIF_TRUE;
-    avifIOMeta * meta = malloc(sizeof(avifIOMeta));
+    avifIOMeta * meta = reinterpret_cast<avifIOMeta *>(malloc(sizeof(avifIOMeta)));
     meta->rodata.data = data;
     meta->rodata.size = size;
     meta->availableBytes = 0;
