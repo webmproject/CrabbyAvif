@@ -51,7 +51,10 @@ impl From<&Vec<u8>> for avifRWData {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifRWDataRealloc(raw: *mut avifRWData, newSize: usize) -> avifResult {
+pub unsafe extern "C" fn crabby_avifRWDataRealloc(
+    raw: *mut avifRWData,
+    newSize: usize,
+) -> avifResult {
     unsafe {
         if (*raw).size == newSize {
             return avifResult::Ok;
@@ -76,27 +79,27 @@ pub unsafe extern "C" fn avifRWDataRealloc(raw: *mut avifRWData, newSize: usize)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifRWDataSet(
+pub unsafe extern "C" fn crabby_avifRWDataSet(
     raw: *mut avifRWData,
     data: *const u8,
     size: usize,
 ) -> avifResult {
     unsafe {
         if size != 0 {
-            let res = avifRWDataRealloc(raw, size);
+            let res = crabby_avifRWDataRealloc(raw, size);
             if res != avifResult::Ok {
                 return res;
             }
             std::ptr::copy_nonoverlapping(data, (*raw).data, size);
         } else {
-            avifRWDataFree(raw);
+            crabby_avifRWDataFree(raw);
         }
         avifResult::Ok
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifRWDataFree(raw: *mut avifRWData) {
+pub unsafe extern "C" fn crabby_avifRWDataFree(raw: *mut avifRWData) {
     unsafe {
         let _ = Box::from_raw(std::slice::from_raw_parts_mut((*raw).data, (*raw).size));
     }
@@ -218,7 +221,10 @@ unsafe extern "C" fn cioWrite(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifIOCreateMemoryReader(data: *const u8, size: usize) -> *mut avifIO {
+pub unsafe extern "C" fn crabby_avifIOCreateMemoryReader(
+    data: *const u8,
+    size: usize,
+) -> *mut avifIO {
     let cio = Box::new(avifCIOWrapper {
         io: Box::new(DecoderRawIO::create(data, size)),
         buf: Vec::new(),
@@ -235,7 +241,7 @@ pub unsafe extern "C" fn avifIOCreateMemoryReader(data: *const u8, size: usize) 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifIOCreateFileReader(filename: *const c_char) -> *mut avifIO {
+pub unsafe extern "C" fn crabby_avifIOCreateFileReader(filename: *const c_char) -> *mut avifIO {
     let filename = unsafe { String::from(CStr::from_ptr(filename).to_str().unwrap_or("")) };
     let file_io = match DecoderFileIO::create(&filename) {
         Ok(x) => x,
@@ -257,7 +263,7 @@ pub unsafe extern "C" fn avifIOCreateFileReader(filename: *const c_char) -> *mut
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifIODestroy(io: *mut avifIO) {
+pub unsafe extern "C" fn crabby_avifIODestroy(io: *mut avifIO) {
     unsafe {
         let _ = Box::from_raw((*io).data as *mut avifCIOWrapper);
         let _ = Box::from_raw(io);

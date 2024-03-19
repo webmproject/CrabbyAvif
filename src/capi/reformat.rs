@@ -117,14 +117,17 @@ impl From<*const avifImage> for image::Image {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifRGBImageSetDefaults(rgb: *mut avifRGBImage, image: *const avifImage) {
+pub unsafe extern "C" fn crabby_avifRGBImageSetDefaults(
+    rgb: *mut avifRGBImage,
+    image: *const avifImage,
+) {
     let rgb = unsafe { &mut (*rgb) };
     let image: image::Image = image.into();
     *rgb = rgb::Image::create_from_yuv(&image).into();
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImageYUVToRGB(
+pub unsafe extern "C" fn crabby_avifImageYUVToRGB(
     image: *const avifImage,
     rgb: *mut avifRGBImage,
 ) -> avifResult {

@@ -506,87 +506,88 @@ typedef uint32_t avifCodecFlags;
 extern "C" {
 #endif // __cplusplus
 
-struct avifDecoder *avifDecoderCreate(void);
+struct avifDecoder *crabby_avifDecoderCreate(void);
 
-void avifDecoderSetIO(struct avifDecoder *decoder, struct avifIO *io);
+void crabby_avifDecoderSetIO(struct avifDecoder *decoder, struct avifIO *io);
 
-enum avifResult avifDecoderSetIOFile(struct avifDecoder *decoder, const char *filename);
+enum avifResult crabby_avifDecoderSetIOFile(struct avifDecoder *decoder, const char *filename);
 
-enum avifResult avifDecoderSetIOMemory(struct avifDecoder *decoder,
-                                       const uint8_t *data,
-                                       size_t size);
+enum avifResult crabby_avifDecoderSetIOMemory(struct avifDecoder *decoder,
+                                              const uint8_t *data,
+                                              size_t size);
 
-enum avifResult avifDecoderSetSource(struct avifDecoder *decoder, enum avifDecoderSource source);
+enum avifResult crabby_avifDecoderSetSource(struct avifDecoder *decoder,
+                                            enum avifDecoderSource source);
 
-enum avifResult avifDecoderParse(struct avifDecoder *decoder);
+enum avifResult crabby_avifDecoderParse(struct avifDecoder *decoder);
 
-enum avifResult avifDecoderNextImage(struct avifDecoder *decoder);
+enum avifResult crabby_avifDecoderNextImage(struct avifDecoder *decoder);
 
-enum avifResult avifDecoderNthImage(struct avifDecoder *decoder, uint32_t frameIndex);
+enum avifResult crabby_avifDecoderNthImage(struct avifDecoder *decoder, uint32_t frameIndex);
 
-enum avifResult avifDecoderNthImageTiming(const struct avifDecoder *decoder,
-                                          uint32_t frameIndex,
-                                          struct avifImageTiming *outTiming);
+enum avifResult crabby_avifDecoderNthImageTiming(const struct avifDecoder *decoder,
+                                                 uint32_t frameIndex,
+                                                 struct avifImageTiming *outTiming);
 
-void avifDecoderDestroy(struct avifDecoder *decoder);
+void crabby_avifDecoderDestroy(struct avifDecoder *decoder);
 
-enum avifResult avifDecoderRead(struct avifDecoder *decoder, struct avifImage *image);
+enum avifResult crabby_avifDecoderRead(struct avifDecoder *decoder, struct avifImage *image);
 
-enum avifResult avifDecoderReadMemory(struct avifDecoder *decoder,
-                                      struct avifImage *image,
-                                      const uint8_t *data,
-                                      size_t size);
+enum avifResult crabby_avifDecoderReadMemory(struct avifDecoder *decoder,
+                                             struct avifImage *image,
+                                             const uint8_t *data,
+                                             size_t size);
 
-enum avifResult avifDecoderReadFile(struct avifDecoder *decoder,
-                                    struct avifImage *image,
-                                    const char *filename);
+enum avifResult crabby_avifDecoderReadFile(struct avifDecoder *decoder,
+                                           struct avifImage *image,
+                                           const char *filename);
 
-avifBool avifDecoderIsKeyframe(const struct avifDecoder *decoder, uint32_t frameIndex);
+avifBool crabby_avifDecoderIsKeyframe(const struct avifDecoder *decoder, uint32_t frameIndex);
 
-uint32_t avifDecoderNearestKeyframe(const struct avifDecoder *decoder, uint32_t frameIndex);
+uint32_t crabby_avifDecoderNearestKeyframe(const struct avifDecoder *decoder, uint32_t frameIndex);
 
-uint32_t avifDecoderDecodedRowCount(const struct avifDecoder *decoder);
+uint32_t crabby_avifDecoderDecodedRowCount(const struct avifDecoder *decoder);
 
-enum avifResult avifDecoderNthImageMaxExtent(const struct avifDecoder *decoder,
-                                             uint32_t frameIndex,
-                                             avifExtent *outExtent);
+enum avifResult crabby_avifDecoderNthImageMaxExtent(const struct avifDecoder *decoder,
+                                                    uint32_t frameIndex,
+                                                    avifExtent *outExtent);
 
-avifBool avifPeekCompatibleFileType(const struct avifROData *input);
+avifBool crabby_avifPeekCompatibleFileType(const struct avifROData *input);
 
-struct avifImage *avifImageCreateEmpty(void);
+struct avifImage *crabby_avifImageCreateEmpty(void);
 
-struct avifImage *avifImageCreate(uint32_t width,
-                                  uint32_t height,
-                                  uint32_t depth,
-                                  enum avifPixelFormat yuvFormat);
+struct avifImage *crabby_avifImageCreate(uint32_t width,
+                                         uint32_t height,
+                                         uint32_t depth,
+                                         enum avifPixelFormat yuvFormat);
 
-enum avifResult avifImageAllocatePlanes(struct avifImage *image, avifPlanesFlags planes);
+enum avifResult crabby_avifImageAllocatePlanes(struct avifImage *image, avifPlanesFlags planes);
 
-void avifImageFreePlanes(struct avifImage *image, avifPlanesFlags planes);
+void crabby_avifImageFreePlanes(struct avifImage *image, avifPlanesFlags planes);
 
-void avifImageDestroy(struct avifImage *image);
+void crabby_avifImageDestroy(struct avifImage *image);
 
-avifBool avifImageUsesU16(const struct avifImage *image);
+avifBool crabby_avifImageUsesU16(const struct avifImage *image);
 
-avifBool avifImageIsOpaque(const struct avifImage *image);
+avifBool crabby_avifImageIsOpaque(const struct avifImage *image);
 
-uint8_t *avifImagePlane(const struct avifImage *image, int channel);
+uint8_t *crabby_avifImagePlane(const struct avifImage *image, int channel);
 
-uint32_t avifImagePlaneRowBytes(const struct avifImage *image, int channel);
+uint32_t crabby_avifImagePlaneRowBytes(const struct avifImage *image, int channel);
 
-uint32_t avifImagePlaneWidth(const struct avifImage *image, int channel);
+uint32_t crabby_avifImagePlaneWidth(const struct avifImage *image, int channel);
 
-uint32_t avifImagePlaneHeight(const struct avifImage *image, int channel);
+uint32_t crabby_avifImagePlaneHeight(const struct avifImage *image, int channel);
 
-enum avifResult avifImageSetViewRect(struct avifImage *dstImage,
-                                     const struct avifImage *srcImage,
-                                     const avifCropRect *rect);
+enum avifResult crabby_avifImageSetViewRect(struct avifImage *dstImage,
+                                            const struct avifImage *srcImage,
+                                            const avifCropRect *rect);
 
-enum avifResult avifRWDataRealloc(struct avifRWData *raw, size_t newSize);
+enum avifResult crabby_avifRWDataRealloc(struct avifRWData *raw, size_t newSize);
 
-enum avifResult avifRWDataSet(struct avifRWData *raw, const uint8_t *data, size_t size);
+enum avifResult crabby_avifRWDataSet(struct avifRWData *raw, const uint8_t *data, size_t size);
 
-void avifRWDataFree(struct avifRWData *raw);
+void crabby_avifRWDataFree(struct avifRWData *raw);
 
 void cioDestroy(struct avifIO *_io);
 
@@ -602,32 +603,32 @@ enum avifResult cioWrite(struct avifIO *_io,
                          const uint8_t *_data,
                          size_t _size);
 
-struct avifIO *avifIOCreateMemoryReader(const uint8_t *data, size_t size);
+struct avifIO *crabby_avifIOCreateMemoryReader(const uint8_t *data, size_t size);
 
-struct avifIO *avifIOCreateFileReader(const char *filename);
+struct avifIO *crabby_avifIOCreateFileReader(const char *filename);
 
-void avifIODestroy(struct avifIO *io);
+void crabby_avifIODestroy(struct avifIO *io);
 
-void avifRGBImageSetDefaults(struct avifRGBImage *rgb, const struct avifImage *image);
+void crabby_avifRGBImageSetDefaults(struct avifRGBImage *rgb, const struct avifImage *image);
 
-enum avifResult avifImageYUVToRGB(const struct avifImage *image, struct avifRGBImage *rgb);
+enum avifResult crabby_avifImageYUVToRGB(const struct avifImage *image, struct avifRGBImage *rgb);
 
-const char *avifResultToString(enum avifResult _res);
+const char *crabby_avifResultToString(enum avifResult _res);
 
-avifBool avifCropRectConvertCleanApertureBox(avifCropRect *cropRect,
-                                             const struct avifCleanApertureBox *clap,
-                                             uint32_t imageW,
-                                             uint32_t imageH,
-                                             enum avifPixelFormat yuvFormat,
-                                             struct avifDiagnostics *_diag);
+avifBool crabby_avifCropRectConvertCleanApertureBox(avifCropRect *cropRect,
+                                                    const struct avifCleanApertureBox *clap,
+                                                    uint32_t imageW,
+                                                    uint32_t imageH,
+                                                    enum avifPixelFormat yuvFormat,
+                                                    struct avifDiagnostics *_diag);
 
-void avifGetPixelFormatInfo(enum avifPixelFormat format, struct avifPixelFormatInfo *info);
+void crabby_avifGetPixelFormatInfo(enum avifPixelFormat format, struct avifPixelFormatInfo *info);
 
-void avifDiagnosticsClearError(struct avifDiagnostics *diag);
+void crabby_avifDiagnosticsClearError(struct avifDiagnostics *diag);
 
-void *avifAlloc(size_t size);
+void *crabby_avifAlloc(size_t size);
 
-void avifFree(void *p);
+void crabby_avifFree(void *p);
 
 #ifdef __cplusplus
 } // extern "C"

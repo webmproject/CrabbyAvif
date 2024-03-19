@@ -8,6 +8,7 @@
 #endif
 
 #include "avif/avif.h"
+#include "avif/libavif_compat.h"
 
 #include "aviftest_helpers.h"
 

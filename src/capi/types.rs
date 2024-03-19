@@ -253,7 +253,7 @@ pub fn to_avifResult<T>(res: &AvifResult<T>) -> avifResult {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifResultToString(_res: avifResult) -> *const c_char {
+pub unsafe extern "C" fn crabby_avifResultToString(_res: avifResult) -> *const c_char {
     // TODO: implement this function.
     std::ptr::null()
 }
@@ -261,7 +261,7 @@ pub unsafe extern "C" fn avifResultToString(_res: avifResult) -> *const c_char {
 pub type avifCropRect = CropRect;
 
 #[no_mangle]
-pub unsafe extern "C" fn avifCropRectConvertCleanApertureBox(
+pub unsafe extern "C" fn crabby_avifCropRectConvertCleanApertureBox(
     cropRect: *mut avifCropRect,
     clap: *const avifCleanApertureBox,
     imageW: u32,
@@ -317,7 +317,7 @@ pub struct avifPixelFormatInfo {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifGetPixelFormatInfo(
+pub unsafe extern "C" fn crabby_avifGetPixelFormatInfo(
     format: avifPixelFormat,
     info: *mut avifPixelFormatInfo,
 ) {
@@ -351,7 +351,7 @@ pub unsafe extern "C" fn avifGetPixelFormatInfo(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDiagnosticsClearError(diag: *mut avifDiagnostics) {
+pub unsafe extern "C" fn crabby_avifDiagnosticsClearError(diag: *mut avifDiagnostics) {
     if diag.is_null() {
         return;
     }
@@ -389,7 +389,7 @@ pub const AVIF_COLOR_PRIMARIES_DCI_P3: u32 = 12;
 pub const AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084: u32 = 16;
 
 #[no_mangle]
-pub unsafe extern "C" fn avifAlloc(size: usize) -> *mut c_void {
+pub unsafe extern "C" fn crabby_avifAlloc(size: usize) -> *mut c_void {
     let mut data: Vec<u8> = Vec::new();
     data.reserve_exact(size);
     data.resize(size, 0);
@@ -400,7 +400,7 @@ pub unsafe extern "C" fn avifAlloc(size: usize) -> *mut c_void {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifFree(p: *mut c_void) {
+pub unsafe extern "C" fn crabby_avifFree(p: *mut c_void) {
     if !p.is_null() {
         let _ = unsafe { Box::from_raw(p as *mut u8) };
     }

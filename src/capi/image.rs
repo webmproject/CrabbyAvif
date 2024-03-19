@@ -204,12 +204,12 @@ impl From<&Image> for avifImage {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImageCreateEmpty() -> *mut avifImage {
+pub unsafe extern "C" fn crabby_avifImageCreateEmpty() -> *mut avifImage {
     Box::into_raw(Box::<avifImage>::default())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImageCreate(
+pub unsafe extern "C" fn crabby_avifImageCreate(
     width: u32,
     height: u32,
     depth: u32,
@@ -242,7 +242,7 @@ fn avif_image_allocate_planes_helper(
         println!("is null? {}", image.yuvPlanes[0].is_null());
         if image.yuvPlanes[0].is_null() {
             image.yuvRowBytes[0] = u32_from_usize(y_row_bytes)?;
-            image.yuvPlanes[0] = unsafe { avifAlloc(y_size) as *mut u8 };
+            image.yuvPlanes[0] = unsafe { crabby_avifAlloc(y_size) as *mut u8 };
             println!("allocated {y_size} for y plane");
         }
         if !image.yuvFormat.is_monochrome() {
@@ -257,7 +257,7 @@ fn avif_image_allocate_planes_helper(
                     continue;
                 }
                 image.yuvRowBytes[plane] = u32_from_usize(uv_row_bytes)?;
-                image.yuvPlanes[plane] = unsafe { avifAlloc(uv_size) as *mut u8 };
+                image.yuvPlanes[plane] = unsafe { crabby_avifAlloc(uv_size) as *mut u8 };
                 println!("allocated {uv_size} for uv plane");
             }
         }
@@ -265,13 +265,13 @@ fn avif_image_allocate_planes_helper(
     if (planes & 2) != 0 {
         image.imageOwnsAlphaPlane = AVIF_TRUE;
         image.alphaRowBytes = u32_from_usize(y_row_bytes)?;
-        image.alphaPlane = unsafe { avifAlloc(y_size) as *mut u8 };
+        image.alphaPlane = unsafe { crabby_avifAlloc(y_size) as *mut u8 };
     }
     Ok(())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImageAllocatePlanes(
+pub unsafe extern "C" fn crabby_avifImageAllocatePlanes(
     image: *mut avifImage,
     planes: avifPlanesFlags,
 ) -> avifResult {
@@ -280,13 +280,16 @@ pub unsafe extern "C" fn avifImageAllocatePlanes(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImageFreePlanes(image: *mut avifImage, planes: avifPlanesFlags) {
+pub unsafe extern "C" fn crabby_avifImageFreePlanes(
+    image: *mut avifImage,
+    planes: avifPlanesFlags,
+) {
     let image = unsafe { &mut (*image) };
     if (planes & 1) != 0 {
         for plane in 0usize..3 {
             if image.imageOwnsYUVPlanes == AVIF_TRUE {
                 unsafe {
-                    avifFree(image.yuvPlanes[plane] as *mut c_void);
+                    crabby_avifFree(image.yuvPlanes[plane] as *mut c_void);
                 }
             }
             image.yuvPlanes[plane] = std::ptr::null_mut();
@@ -297,7 +300,7 @@ pub unsafe extern "C" fn avifImageFreePlanes(image: *mut avifImage, planes: avif
     if (planes & 2) != 0 {
         if image.imageOwnsAlphaPlane == AVIF_TRUE {
             unsafe {
-                avifFree(image.alphaPlane as *mut c_void);
+                crabby_avifFree(image.alphaPlane as *mut c_void);
             }
         }
         image.alphaPlane = std::ptr::null_mut();
@@ -307,19 +310,19 @@ pub unsafe extern "C" fn avifImageFreePlanes(image: *mut avifImage, planes: avif
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImageDestroy(image: *mut avifImage) {
+pub unsafe extern "C" fn crabby_avifImageDestroy(image: *mut avifImage) {
     unsafe {
         let _ = Box::from_raw(image);
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImageUsesU16(image: *const avifImage) -> avifBool {
+pub unsafe extern "C" fn crabby_avifImageUsesU16(image: *const avifImage) -> avifBool {
     unsafe { to_avifBool(!image.is_null() && (*image).depth > 8) }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImageIsOpaque(image: *const avifImage) -> avifBool {
+pub unsafe extern "C" fn crabby_avifImageIsOpaque(image: *const avifImage) -> avifBool {
     unsafe {
         // TODO: Check for pixel level opacity as well.
         to_avifBool(!image.is_null() && !(*image).alphaPlane.is_null())
@@ -327,7 +330,7 @@ pub unsafe extern "C" fn avifImageIsOpaque(image: *const avifImage) -> avifBool 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImagePlane(image: *const avifImage, channel: c_int) -> *mut u8 {
+pub unsafe extern "C" fn crabby_avifImagePlane(image: *const avifImage, channel: c_int) -> *mut u8 {
     if image.is_null() {
         return std::ptr::null_mut();
     }
@@ -341,7 +344,10 @@ pub unsafe extern "C" fn avifImagePlane(image: *const avifImage, channel: c_int)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImagePlaneRowBytes(image: *const avifImage, channel: c_int) -> u32 {
+pub unsafe extern "C" fn crabby_avifImagePlaneRowBytes(
+    image: *const avifImage,
+    channel: c_int,
+) -> u32 {
     if image.is_null() {
         return 0;
     }
@@ -355,7 +361,10 @@ pub unsafe extern "C" fn avifImagePlaneRowBytes(image: *const avifImage, channel
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImagePlaneWidth(image: *const avifImage, channel: c_int) -> u32 {
+pub unsafe extern "C" fn crabby_avifImagePlaneWidth(
+    image: *const avifImage,
+    channel: c_int,
+) -> u32 {
     if image.is_null() {
         return 0;
     }
@@ -383,7 +392,10 @@ pub unsafe extern "C" fn avifImagePlaneWidth(image: *const avifImage, channel: c
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImagePlaneHeight(image: *const avifImage, channel: c_int) -> u32 {
+pub unsafe extern "C" fn crabby_avifImagePlaneHeight(
+    image: *const avifImage,
+    channel: c_int,
+) -> u32 {
     if image.is_null() {
         return 0;
     }
@@ -411,7 +423,7 @@ pub unsafe extern "C" fn avifImagePlaneHeight(image: *const avifImage, channel: 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifImageSetViewRect(
+pub unsafe extern "C" fn crabby_avifImageSetViewRect(
     dstImage: *mut avifImage,
     srcImage: *const avifImage,
     rect: *const avifCropRect,

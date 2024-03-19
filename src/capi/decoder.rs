@@ -94,12 +94,12 @@ impl Default for avifDecoder {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderCreate() -> *mut avifDecoder {
+pub unsafe extern "C" fn crabby_avifDecoderCreate() -> *mut avifDecoder {
     Box::into_raw(Box::<avifDecoder>::default())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderSetIO(decoder: *mut avifDecoder, io: *mut avifIO) {
+pub unsafe extern "C" fn crabby_avifDecoderSetIO(decoder: *mut avifDecoder, io: *mut avifIO) {
     unsafe {
         let rust_decoder = &mut (*decoder).rust_decoder;
         rust_decoder.set_io(Box::new(avifIOWrapper::create(*io)));
@@ -107,7 +107,7 @@ pub unsafe extern "C" fn avifDecoderSetIO(decoder: *mut avifDecoder, io: *mut av
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderSetIOFile(
+pub unsafe extern "C" fn crabby_avifDecoderSetIOFile(
     decoder: *mut avifDecoder,
     filename: *const c_char,
 ) -> avifResult {
@@ -119,7 +119,7 @@ pub unsafe extern "C" fn avifDecoderSetIOFile(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderSetIOMemory(
+pub unsafe extern "C" fn crabby_avifDecoderSetIOMemory(
     decoder: *mut avifDecoder,
     data: *const u8,
     size: usize,
@@ -129,7 +129,7 @@ pub unsafe extern "C" fn avifDecoderSetIOMemory(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderSetSource(
+pub unsafe extern "C" fn crabby_avifDecoderSetSource(
     decoder: *mut avifDecoder,
     source: Source,
 ) -> avifResult {
@@ -212,7 +212,7 @@ fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResult {
+pub unsafe extern "C" fn crabby_avifDecoderParse(decoder: *mut avifDecoder) -> avifResult {
     unsafe {
         let rust_decoder = &mut (*decoder).rust_decoder;
         rust_decoder.settings = (&(*decoder)).into();
@@ -227,7 +227,7 @@ pub unsafe extern "C" fn avifDecoderParse(decoder: *mut avifDecoder) -> avifResu
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avifResult {
+pub unsafe extern "C" fn crabby_avifDecoderNextImage(decoder: *mut avifDecoder) -> avifResult {
     unsafe {
         let rust_decoder = &mut (*decoder).rust_decoder;
         rust_decoder.settings = (&(*decoder)).into();
@@ -257,7 +257,7 @@ pub unsafe extern "C" fn avifDecoderNextImage(decoder: *mut avifDecoder) -> avif
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderNthImage(
+pub unsafe extern "C" fn crabby_avifDecoderNthImage(
     decoder: *mut avifDecoder,
     frameIndex: u32,
 ) -> avifResult {
@@ -293,7 +293,7 @@ pub unsafe extern "C" fn avifDecoderNthImage(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderNthImageTiming(
+pub unsafe extern "C" fn crabby_avifDecoderNthImageTiming(
     decoder: *const avifDecoder,
     frameIndex: u32,
     outTiming: *mut ImageTiming,
@@ -309,14 +309,14 @@ pub unsafe extern "C" fn avifDecoderNthImageTiming(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderDestroy(decoder: *mut avifDecoder) {
+pub unsafe extern "C" fn crabby_avifDecoderDestroy(decoder: *mut avifDecoder) {
     unsafe {
         let _ = Box::from_raw(decoder);
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderRead(
+pub unsafe extern "C" fn crabby_avifDecoderRead(
     decoder: *mut avifDecoder,
     image: *mut avifImage,
 ) -> avifResult {
@@ -339,38 +339,38 @@ pub unsafe extern "C" fn avifDecoderRead(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderReadMemory(
+pub unsafe extern "C" fn crabby_avifDecoderReadMemory(
     decoder: *mut avifDecoder,
     image: *mut avifImage,
     data: *const u8,
     size: usize,
 ) -> avifResult {
     unsafe {
-        let res = avifDecoderSetIOMemory(decoder, data, size);
+        let res = crabby_avifDecoderSetIOMemory(decoder, data, size);
         if res != avifResult::Ok {
             return res;
         }
-        avifDecoderRead(decoder, image)
+        crabby_avifDecoderRead(decoder, image)
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderReadFile(
+pub unsafe extern "C" fn crabby_avifDecoderReadFile(
     decoder: *mut avifDecoder,
     image: *mut avifImage,
     filename: *const c_char,
 ) -> avifResult {
     unsafe {
-        let res = avifDecoderSetIOFile(decoder, filename);
+        let res = crabby_avifDecoderSetIOFile(decoder, filename);
         if res != avifResult::Ok {
             return res;
         }
-        avifDecoderRead(decoder, image)
+        crabby_avifDecoderRead(decoder, image)
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderIsKeyframe(
+pub unsafe extern "C" fn crabby_avifDecoderIsKeyframe(
     decoder: *const avifDecoder,
     frameIndex: u32,
 ) -> avifBool {
@@ -379,7 +379,7 @@ pub unsafe extern "C" fn avifDecoderIsKeyframe(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderNearestKeyframe(
+pub unsafe extern "C" fn crabby_avifDecoderNearestKeyframe(
     decoder: *const avifDecoder,
     frameIndex: u32,
 ) -> u32 {
@@ -388,7 +388,7 @@ pub unsafe extern "C" fn avifDecoderNearestKeyframe(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderDecodedRowCount(decoder: *const avifDecoder) -> u32 {
+pub unsafe extern "C" fn crabby_avifDecoderDecodedRowCount(decoder: *const avifDecoder) -> u32 {
     let rust_decoder = unsafe { &(*decoder).rust_decoder };
     rust_decoder.decoded_row_count()
 }
@@ -396,7 +396,7 @@ pub unsafe extern "C" fn avifDecoderDecodedRowCount(decoder: *const avifDecoder)
 pub type avifExtent = Extent;
 
 #[no_mangle]
-pub unsafe extern "C" fn avifDecoderNthImageMaxExtent(
+pub unsafe extern "C" fn crabby_avifDecoderNthImageMaxExtent(
     decoder: *const avifDecoder,
     frameIndex: u32,
     outExtent: *mut avifExtent,
@@ -413,7 +413,7 @@ pub unsafe extern "C" fn avifDecoderNthImageMaxExtent(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn avifPeekCompatibleFileType(input: *const avifROData) -> avifBool {
+pub unsafe extern "C" fn crabby_avifPeekCompatibleFileType(input: *const avifROData) -> avifBool {
     let data = unsafe { std::slice::from_raw_parts((*input).data, (*input).size) };
     to_avifBool(Decoder::peek_compatible_file_type(data))
 }

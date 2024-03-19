@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "avif/avif.h"
+#include "avif/libavif_compat.h"
 #include "gtest/gtest.h"
 
 // Used instead of CHECK if needing to return a specific error on failure,
