@@ -472,7 +472,7 @@ impl Decoder {
                 exif::parse(&mut stream)?;
                 self.image
                     .exif
-                    .extend_from_slice(stream.get_slice(stream.bytes_left())?);
+                    .extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
             }
         }
         if !self.settings.ignore_xmp {
@@ -480,7 +480,7 @@ impl Decoder {
                 let mut stream = xmp.1.stream(self.io.unwrap_mut())?;
                 self.image
                     .xmp
-                    .extend_from_slice(stream.get_slice(stream.bytes_left())?);
+                    .extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
             }
         }
         Ok(())

@@ -232,11 +232,11 @@ fn parse_header(stream: &mut IStream) -> AvifResult<BoxHeader> {
 fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
     let major_brand = stream.read_string(4)?;
     let minor_version = stream.read_u32()?;
-    if stream.bytes_left() % 4 != 0 {
+    if stream.bytes_left()? % 4 != 0 {
         return Err(AvifError::BmffParseFailed);
     }
-    let mut compatible_brands: Vec<String> = create_vec_exact(stream.bytes_left() / 4)?;
-    while stream.has_bytes_left() {
+    let mut compatible_brands: Vec<String> = create_vec_exact(stream.bytes_left()? / 4)?;
+    while stream.has_bytes_left()? {
         compatible_brands.push(stream.read_string(4)?);
     }
     Ok(FileTypeBox {
@@ -431,7 +431,7 @@ fn parse_colr(stream: &mut IStream) -> AvifResult<Option<ItemProperty>> {
     let color_type = stream.read_string(4)?;
     if color_type == "rICC" || color_type == "prof" {
         return Ok(Some(ItemProperty::ColorInformation(ColorInformation::Icc(
-            stream.get_slice(stream.bytes_left())?.to_vec(),
+            stream.get_slice(stream.bytes_left()?)?.to_vec(),
         ))));
     }
     if color_type == "nclx" {
@@ -572,7 +572,7 @@ fn parse_clli(stream: &mut IStream) -> AvifResult<ItemProperty> {
 #[allow(non_snake_case)]
 fn parse_ipco(stream: &mut IStream) -> AvifResult<Vec<ItemProperty>> {
     let mut properties: Vec<ItemProperty> = Vec::new();
-    while stream.has_bytes_left() {
+    while stream.has_bytes_left()? {
         let header = parse_header(stream)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
@@ -665,7 +665,7 @@ fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
         iprp.properties = parse_ipco(&mut sub_stream)?;
     }
     // Parse ipma boxes.
-    while stream.has_bytes_left() {
+    while stream.has_bytes_left()? {
         let header = parse_header(stream)?;
         if header.box_type != "ipma" {
             println!("Found non ipma box in iprp");
@@ -749,7 +749,7 @@ fn parse_iref(stream: &mut IStream) -> AvifResult<Vec<ItemReference>> {
     let mut iref: Vec<ItemReference> = Vec::new();
     // versions > 1 are not supported. ignore them.
     if version <= 1 {
-        while stream.has_bytes_left() {
+        while stream.has_bytes_left()? {
             let header = parse_header(stream)?;
             let from_item_id: u32 = if version == 0 {
                 // unsigned int(16) from_item_ID;
@@ -789,12 +789,12 @@ fn parse_iref(stream: &mut IStream) -> AvifResult<Vec<ItemReference>> {
 }
 
 fn parse_idat(stream: &mut IStream) -> AvifResult<Vec<u8>> {
-    if !stream.has_bytes_left() {
+    if !stream.has_bytes_left()? {
         println!("Invalid idat size");
         return Err(AvifError::BmffParseFailed);
     }
-    let mut idat: Vec<u8> = Vec::with_capacity(stream.bytes_left());
-    idat.extend_from_slice(stream.get_slice(stream.bytes_left())?);
+    let mut idat: Vec<u8> = Vec::with_capacity(stream.bytes_left()?);
+    idat.extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
     Ok(idat)
 }
 
@@ -815,7 +815,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
 
     let mut boxes_seen: HashSet<String> = HashSet::with_hasher(NonRandomHasherState);
     boxes_seen.insert(String::from("hdlr"));
-    while stream.has_bytes_left() {
+    while stream.has_bytes_left()? {
         let header = parse_header(stream)?;
         match header.box_type.as_str() {
             "hdlr" | "iloc" | "pitm" | "iprp" | "iinf" | "iref" | "idat" => {
@@ -1063,7 +1063,7 @@ fn parse_stbl(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         return Err(AvifError::BmffParseFailed);
     }
     let mut sample_table = SampleTable::default();
-    while stream.has_bytes_left() {
+    while stream.has_bytes_left()? {
         let header = parse_header(stream)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
@@ -1082,7 +1082,7 @@ fn parse_stbl(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 }
 
 fn parse_minf(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
-    while stream.has_bytes_left() {
+    while stream.has_bytes_left()? {
         let header = parse_header(stream)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
         if header.box_type == "stbl" {
@@ -1093,7 +1093,7 @@ fn parse_minf(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 }
 
 fn parse_mdia(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
-    while stream.has_bytes_left() {
+    while stream.has_bytes_left()? {
         let header = parse_header(stream)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
@@ -1106,7 +1106,7 @@ fn parse_mdia(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 }
 
 fn parse_tref(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
-    while stream.has_bytes_left() {
+    while stream.has_bytes_left()? {
         let header = parse_header(stream)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
@@ -1168,7 +1168,7 @@ fn parse_edts(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         println!("multiple edts boxes found for track.");
         return Err(AvifError::BmffParseFailed);
     }
-    while stream.has_bytes_left() {
+    while stream.has_bytes_left()? {
         let header = parse_header(stream)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
         if header.box_type == "elst" {
@@ -1184,7 +1184,7 @@ fn parse_edts(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 
 fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
     let mut track = Track::default();
-    while stream.has_bytes_left() {
+    while stream.has_bytes_left()? {
         let header = parse_header(stream)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
@@ -1201,7 +1201,7 @@ fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
 
 fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
     let mut tracks: Vec<Track> = Vec::new();
-    while stream.has_bytes_left() {
+    while stream.has_bytes_left()? {
         let header = parse_header(stream)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
         if header.box_type == "trak" {
@@ -1344,7 +1344,7 @@ pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
         metadata.base_offset[i] = metadata.base_offset[0];
         metadata.alternate_offset[i] = metadata.alternate_offset[0];
     }
-    if stream.has_bytes_left() {
+    if stream.has_bytes_left()? {
         println!("invalid trailing bytes in tmap box");
         return Err(AvifError::InvalidToneMappedImage);
     }
