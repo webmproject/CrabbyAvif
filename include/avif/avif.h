@@ -7,17 +7,17 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define AVIF_DEFAULT_IMAGE_SIZE_LIMIT (16384 * 16384)
+#define CRABBY_AVIF_DEFAULT_IMAGE_SIZE_LIMIT (16384 * 16384)
 
-#define AVIF_DEFAULT_IMAGE_DIMENSION_LIMIT 32768
+#define CRABBY_AVIF_DEFAULT_IMAGE_DIMENSION_LIMIT 32768
 
-#define AVIF_DEFAULT_IMAGE_COUNT_LIMIT ((12 * 3600) * 60)
+#define CRABBY_AVIF_DEFAULT_IMAGE_COUNT_LIMIT ((12 * 3600) * 60)
 
-#define AVIF_MAX_AV1_LAYER_COUNT 4
+#define CRABBY_AVIF_MAX_AV1_LAYER_COUNT 4
 
-#define AVIF_TRUE 1
+#define CRABBY_AVIF_TRUE 1
 
-#define AVIF_FALSE 0
+#define CRABBY_AVIF_FALSE 0
 
 #define AVIF_STRICT_DISABLED 0
 
@@ -29,13 +29,13 @@
 
 #define AVIF_STRICT_ENABLED ((AVIF_STRICT_PIXI_REQUIRED | AVIF_STRICT_CLAP_VALID) | AVIF_STRICT_ALPHA_ISPE_REQUIRED)
 
-#define AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE 256
+#define CRABBY_AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE 256
 
-#define AVIF_PLANE_COUNT_YUV 3
+#define CRABBY_AVIF_PLANE_COUNT_YUV 3
 
-#define AVIF_REPETITION_COUNT_INFINITE -1
+#define CRABBY_AVIF_REPETITION_COUNT_INFINITE -1
 
-#define AVIF_REPETITION_COUNT_UNKNOWN -2
+#define CRABBY_AVIF_REPETITION_COUNT_UNKNOWN -2
 
 #define AVIF_TRANSFORM_NONE 0
 
@@ -345,8 +345,8 @@ typedef struct avifImage {
     enum avifPixelFormat yuvFormat;
     enum avifRange yuvRange;
     enum avifChromaSamplePosition yuvChromaSamplePosition;
-    uint8_t *yuvPlanes[AVIF_PLANE_COUNT_YUV];
-    uint32_t yuvRowBytes[AVIF_PLANE_COUNT_YUV];
+    uint8_t *yuvPlanes[CRABBY_AVIF_PLANE_COUNT_YUV];
+    uint32_t yuvRowBytes[CRABBY_AVIF_PLANE_COUNT_YUV];
     avifBool imageOwnsYUVPlanes;
     uint8_t *alphaPlane;
     uint32_t alphaRowBytes;
@@ -381,7 +381,7 @@ typedef struct avifIOStats {
 } avifIOStats;
 
 typedef struct avifDiagnostics {
-    char error[AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE];
+    char error[CRABBY_AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE];
 } avifDiagnostics;
 
 typedef struct avifDecoderData {
