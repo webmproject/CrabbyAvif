@@ -1,89 +1,96 @@
 #ifndef AVIF_H
 #define AVIF_H
 
-#include <stdarg.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <stdlib.h>
+#include <cstdarg>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <ostream>
+#include <new>
 
-#define CRABBY_AVIF_DEFAULT_IMAGE_SIZE_LIMIT (16384 * 16384)
+template <typename T>
+using Box = T*;
+namespace crabbyavif {
+struct avifImage;
+struct avifIO;
+}
 
-#define CRABBY_AVIF_DEFAULT_IMAGE_DIMENSION_LIMIT 32768
 
-#define CRABBY_AVIF_DEFAULT_IMAGE_COUNT_LIMIT ((12 * 3600) * 60)
+namespace crabbyavif {
 
-#define CRABBY_AVIF_MAX_AV1_LAYER_COUNT 4
+constexpr static const uint32_t CRABBY_AVIF_DEFAULT_IMAGE_SIZE_LIMIT = (16384 * 16384);
 
-#define CRABBY_AVIF_TRUE 1
+constexpr static const uint32_t CRABBY_AVIF_DEFAULT_IMAGE_DIMENSION_LIMIT = 32768;
 
-#define CRABBY_AVIF_FALSE 0
+constexpr static const uint32_t CRABBY_AVIF_DEFAULT_IMAGE_COUNT_LIMIT = ((12 * 3600) * 60);
 
-#define AVIF_STRICT_DISABLED 0
+constexpr static const size_t CRABBY_AVIF_MAX_AV1_LAYER_COUNT = 4;
 
-#define AVIF_STRICT_PIXI_REQUIRED (1 << 0)
+constexpr static const int CRABBY_AVIF_TRUE = 1;
 
-#define AVIF_STRICT_CLAP_VALID (1 << 1)
+constexpr static const int CRABBY_AVIF_FALSE = 0;
 
-#define AVIF_STRICT_ALPHA_ISPE_REQUIRED (1 << 2)
+constexpr static const uint32_t AVIF_STRICT_DISABLED = 0;
 
-#define AVIF_STRICT_ENABLED ((AVIF_STRICT_PIXI_REQUIRED | AVIF_STRICT_CLAP_VALID) | AVIF_STRICT_ALPHA_ISPE_REQUIRED)
+constexpr static const uint32_t AVIF_STRICT_PIXI_REQUIRED = (1 << 0);
 
-#define CRABBY_AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE 256
+constexpr static const uint32_t AVIF_STRICT_CLAP_VALID = (1 << 1);
 
-#define CRABBY_AVIF_PLANE_COUNT_YUV 3
+constexpr static const uint32_t AVIF_STRICT_ALPHA_ISPE_REQUIRED = (1 << 2);
 
-#define CRABBY_AVIF_REPETITION_COUNT_INFINITE -1
+constexpr static const uint32_t AVIF_STRICT_ENABLED = ((AVIF_STRICT_PIXI_REQUIRED | AVIF_STRICT_CLAP_VALID) | AVIF_STRICT_ALPHA_ISPE_REQUIRED);
 
-#define CRABBY_AVIF_REPETITION_COUNT_UNKNOWN -2
+constexpr static const size_t CRABBY_AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE = 256;
 
-#define AVIF_TRANSFORM_NONE 0
+constexpr static const size_t CRABBY_AVIF_PLANE_COUNT_YUV = 3;
 
-#define AVIF_TRANSFORM_PASP (1 << 0)
+constexpr static const int32_t CRABBY_AVIF_REPETITION_COUNT_INFINITE = -1;
 
-#define AVIF_TRANSFORM_CLAP (1 << 1)
+constexpr static const int32_t CRABBY_AVIF_REPETITION_COUNT_UNKNOWN = -2;
 
-#define AVIF_TRANSFORM_IROT (1 << 2)
+constexpr static const uint32_t AVIF_TRANSFORM_NONE = 0;
 
-#define AVIF_TRANSFORM_IMIR (1 << 3)
+constexpr static const uint32_t AVIF_TRANSFORM_PASP = (1 << 0);
 
-#define AVIF_COLOR_PRIMARIES_BT709 1
+constexpr static const uint32_t AVIF_TRANSFORM_CLAP = (1 << 1);
 
-#define AVIF_COLOR_PRIMARIES_IEC61966_2_4 1
+constexpr static const uint32_t AVIF_TRANSFORM_IROT = (1 << 2);
 
-#define AVIF_COLOR_PRIMARIES_BT2100 9
+constexpr static const uint32_t AVIF_TRANSFORM_IMIR = (1 << 3);
 
-#define AVIF_COLOR_PRIMARIES_DCI_P3 12
+constexpr static const uint32_t AVIF_COLOR_PRIMARIES_BT709 = 1;
 
-#define AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084 16
+constexpr static const uint32_t AVIF_COLOR_PRIMARIES_IEC61966_2_4 = 1;
 
-typedef enum avifChromaDownsampling {
+constexpr static const uint32_t AVIF_COLOR_PRIMARIES_BT2100 = 9;
+
+constexpr static const uint32_t AVIF_COLOR_PRIMARIES_DCI_P3 = 12;
+
+constexpr static const uint32_t AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084 = 16;
+
+enum avifChromaDownsampling {
     AVIF_CHROMA_DOWNSAMPLING_AUTOMATIC,
     AVIF_CHROMA_DOWNSAMPLING_FASTEST,
     AVIF_CHROMA_DOWNSAMPLING_BEST_QUALITY,
     AVIF_CHROMA_DOWNSAMPLING_AVERAGE,
     AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV,
-} avifChromaDownsampling;
+};
 
-typedef enum avifChromaSamplePosition {
+enum avifChromaSamplePosition {
     AVIF_CHROMA_SAMPLE_POSITION_UNKNOWN = 0,
     AVIF_CHROMA_SAMPLE_POSITION_VERTICAL = 1,
     AVIF_CHROMA_SAMPLE_POSITION_COLOCATED = 2,
-} avifChromaSamplePosition;
+};
 
-typedef enum avifChromaUpsampling {
+enum avifChromaUpsampling {
     AVIF_CHROMA_UPSAMPLING_AUTOMATIC,
     AVIF_CHROMA_UPSAMPLING_FASTEST,
     AVIF_CHROMA_UPSAMPLING_BEST_QUALITY,
     AVIF_CHROMA_UPSAMPLING_NEAREST,
     AVIF_CHROMA_UPSAMPLING_BILINEAR,
-} avifChromaUpsampling;
+};
 
-enum avifColorPrimaries
-#ifdef __cplusplus
-  : uint16_t
-#endif // __cplusplus
- {
+enum avifColorPrimaries : uint16_t {
     AVIF_COLOR_PRIMARIES_UNKNOWN = 0,
     AVIF_COLOR_PRIMARIES_SRGB = 1,
     AVIF_COLOR_PRIMARIES_UNSPECIFIED = 2,
@@ -98,11 +105,8 @@ enum avifColorPrimaries
     AVIF_COLOR_PRIMARIES_SMPTE432 = 12,
     AVIF_COLOR_PRIMARIES_EBU3213 = 22,
 };
-#ifndef __cplusplus
-typedef uint16_t avifColorPrimaries;
-#endif // __cplusplus
 
-typedef enum avifRGBFormat {
+enum avifRGBFormat {
     AVIF_RGB_FORMAT_RGB,
     AVIF_RGB_FORMAT_RGBA,
     AVIF_RGB_FORMAT_ARGB,
@@ -110,13 +114,9 @@ typedef enum avifRGBFormat {
     AVIF_RGB_FORMAT_BGRA,
     AVIF_RGB_FORMAT_ABGR,
     AVIF_RGB_FORMAT_RGB565,
-} avifRGBFormat;
+};
 
-enum avifMatrixCoefficients
-#ifdef __cplusplus
-  : uint16_t
-#endif // __cplusplus
- {
+enum avifMatrixCoefficients : uint16_t {
     AVIF_MATRIX_COEFFICIENTS_IDENTITY = 0,
     AVIF_MATRIX_COEFFICIENTS_BT709 = 1,
     AVIF_MATRIX_COEFFICIENTS_UNSPECIFIED = 2,
@@ -134,27 +134,20 @@ enum avifMatrixCoefficients
     AVIF_MATRIX_COEFFICIENTS_YCGCO_RE = 15,
     AVIF_MATRIX_COEFFICIENTS_YCGCO_RO = 16,
 };
-#ifndef __cplusplus
-typedef uint16_t avifMatrixCoefficients;
-#endif // __cplusplus
 
-typedef enum avifProgressiveState {
+enum avifProgressiveState {
     AVIF_PROGRESSIVE_STATE_UNAVAILABLE = 0,
     AVIF_PROGRESSIVE_STATE_AVAILABLE = 1,
     AVIF_PROGRESSIVE_STATE_ACTIVE = 2,
-} avifProgressiveState;
+};
 
-typedef enum avifDecoderSource {
+enum avifDecoderSource {
     AVIF_DECODER_SOURCE_AUTO = 0,
     AVIF_DECODER_SOURCE_PRIMARY_ITEM = 1,
     AVIF_DECODER_SOURCE_TRACKS = 2,
-} avifDecoderSource;
+};
 
-enum avifTransferCharacteristics
-#ifdef __cplusplus
-  : uint16_t
-#endif // __cplusplus
- {
+enum avifTransferCharacteristics : uint16_t {
     AVIF_TRANSFER_CHARACTERISTICS_UNKNOWN = 0,
     AVIF_TRANSFER_CHARACTERISTICS_BT709 = 1,
     AVIF_TRANSFER_CHARACTERISTICS_UNSPECIFIED = 2,
@@ -174,18 +167,15 @@ enum avifTransferCharacteristics
     AVIF_TRANSFER_CHARACTERISTICS_SMPTE428 = 17,
     AVIF_TRANSFER_CHARACTERISTICS_HLG = 18,
 };
-#ifndef __cplusplus
-typedef uint16_t avifTransferCharacteristics;
-#endif // __cplusplus
 
-typedef enum avifChannelIndex {
+enum avifChannelIndex {
     AVIF_CHAN_Y = 0,
     AVIF_CHAN_U = 1,
     AVIF_CHAN_V = 2,
     AVIF_CHAN_A = 3,
-} avifChannelIndex;
+};
 
-typedef enum avifCodecChoice {
+enum avifCodecChoice {
     AVIF_CODEC_CHOICE_AUTO = 0,
     AVIF_CODEC_CHOICE_AOM = 1,
     AVIF_CODEC_CHOICE_DAV1D = 2,
@@ -193,39 +183,39 @@ typedef enum avifCodecChoice {
     AVIF_CODEC_CHOICE_RAV1E = 4,
     AVIF_CODEC_CHOICE_SVT = 5,
     AVIF_CODEC_CHOICE_AVM = 6,
-} avifCodecChoice;
+};
 
-typedef enum avifCodecFlag {
+enum avifCodecFlag {
     AVIF_CODEC_FLAG_CAN_DECODE = (1 << 0),
     AVIF_CODEC_FLAG_CAN_ENCODE = (1 << 1),
-} avifCodecFlag;
+};
 
-typedef enum avifHeaderFormat {
+enum avifHeaderFormat {
     AVIF_HEADER_FULL,
     AVIF_HEADER_REDUCED,
-} avifHeaderFormat;
+};
 
-typedef enum avifPixelFormat {
+enum avifPixelFormat {
     AVIF_PIXEL_FORMAT_NONE,
     AVIF_PIXEL_FORMAT_YUV444,
     AVIF_PIXEL_FORMAT_YUV422,
     AVIF_PIXEL_FORMAT_YUV420,
     AVIF_PIXEL_FORMAT_YUV400,
     AVIF_PIXEL_FORMAT_COUNT,
-} avifPixelFormat;
+};
 
-typedef enum avifPlanesFlag {
+enum avifPlanesFlag {
     AVIF_PLANES_YUV = (1 << 0),
     AVIF_PLANES_A = (1 << 1),
     AVIF_PLANES_ALL = 255,
-} avifPlanesFlag;
+};
 
-typedef enum avifRange {
+enum avifRange {
     AVIF_RANGE_LIMITED = 0,
     AVIF_RANGE_FULL = 1,
-} avifRange;
+};
 
-typedef enum avifResult {
+enum avifResult {
     AVIF_RESULT_OK = 0,
     AVIF_RESULT_UNKNOWN_ERROR = 1,
     AVIF_RESULT_INVALID_FTYP = 2,
@@ -258,36 +248,36 @@ typedef enum avifResult {
     AVIF_RESULT_ENCODE_GAIN_MAP_FAILED = 29,
     AVIF_RESULT_DECODE_GAIN_MAP_FAILED = 30,
     AVIF_RESULT_INVALID_TONE_MAPPED_IMAGE = 31,
-} avifResult;
+};
 
-typedef struct Decoder Decoder;
+struct Decoder;
 
-typedef int avifBool;
+using avifBool = int;
 
-typedef uint32_t avifStrictFlags;
+using avifStrictFlags = uint32_t;
 
-typedef struct avifRWData {
+struct avifRWData {
     uint8_t *data;
     size_t size;
-} avifRWData;
+};
 
-typedef struct ContentLightLevelInformation {
+struct ContentLightLevelInformation {
     uint16_t maxCLL;
     uint16_t maxPALL;
-} ContentLightLevelInformation;
+};
 
-typedef struct ContentLightLevelInformation avifContentLightLevelInformationBox;
+using avifContentLightLevelInformationBox = ContentLightLevelInformation;
 
-typedef uint32_t avifTransformFlags;
+using avifTransformFlags = uint32_t;
 
-typedef struct PixelAspectRatio {
+struct PixelAspectRatio {
     uint32_t hSpacing;
     uint32_t vSpacing;
-} PixelAspectRatio;
+};
 
-typedef struct PixelAspectRatio avifPixelAspectRatioBox;
+using avifPixelAspectRatioBox = PixelAspectRatio;
 
-typedef struct avifCleanApertureBox {
+struct avifCleanApertureBox {
     uint32_t widthN;
     uint32_t widthD;
     uint32_t heightN;
@@ -296,17 +286,17 @@ typedef struct avifCleanApertureBox {
     uint32_t horizOffD;
     uint32_t vertOffN;
     uint32_t vertOffD;
-} avifCleanApertureBox;
+};
 
-typedef struct avifImageRotation {
+struct avifImageRotation {
     uint8_t angle;
-} avifImageRotation;
+};
 
-typedef struct avifImageMirror {
+struct avifImageMirror {
     uint8_t axis;
-} avifImageMirror;
+};
 
-typedef struct avifGainMapMetadata {
+struct avifGainMapMetadata {
     int32_t gainMapMinN[3];
     uint32_t gainMapMinD[3];
     int32_t gainMapMaxN[3];
@@ -323,28 +313,28 @@ typedef struct avifGainMapMetadata {
     uint32_t alternateHdrHeadroomD;
     avifBool backwardDirection;
     avifBool useBaseColorSpace;
-} avifGainMapMetadata;
+};
 
-typedef struct avifGainMap {
-    struct avifImage *image;
-    struct avifGainMapMetadata metadata;
-    struct avifRWData altICC;
+struct avifGainMap {
+    avifImage *image;
+    avifGainMapMetadata metadata;
+    avifRWData altICC;
     avifColorPrimaries altColorPrimaries;
     avifTransferCharacteristics altTransferCharacteristics;
     avifMatrixCoefficients altMatrixCoefficients;
-    enum avifRange altYUVRange;
+    avifRange altYUVRange;
     uint32_t altDepth;
     uint32_t altPlaneCount;
     avifContentLightLevelInformationBox altCLLI;
-} avifGainMap;
+};
 
-typedef struct avifImage {
+struct avifImage {
     uint32_t width;
     uint32_t height;
     uint32_t depth;
-    enum avifPixelFormat yuvFormat;
-    enum avifRange yuvRange;
-    enum avifChromaSamplePosition yuvChromaSamplePosition;
+    avifPixelFormat yuvFormat;
+    avifRange yuvRange;
+    avifChromaSamplePosition yuvChromaSamplePosition;
     uint8_t *yuvPlanes[CRABBY_AVIF_PLANE_COUNT_YUV];
     uint32_t yuvRowBytes[CRABBY_AVIF_PLANE_COUNT_YUV];
     avifBool imageOwnsYUVPlanes;
@@ -352,46 +342,46 @@ typedef struct avifImage {
     uint32_t alphaRowBytes;
     avifBool imageOwnsAlphaPlane;
     avifBool alphaPremultiplied;
-    struct avifRWData icc;
+    avifRWData icc;
     avifColorPrimaries colorPrimaries;
     avifTransferCharacteristics transferCharacteristics;
     avifMatrixCoefficients matrixCoefficients;
     avifContentLightLevelInformationBox clli;
     avifTransformFlags transformFlags;
     avifPixelAspectRatioBox pasp;
-    struct avifCleanApertureBox clap;
-    struct avifImageRotation irot;
-    struct avifImageMirror imir;
-    struct avifRWData exif;
-    struct avifRWData xmp;
-    struct avifGainMap *gainMap;
-} avifImage;
+    avifCleanApertureBox clap;
+    avifImageRotation irot;
+    avifImageMirror imir;
+    avifRWData exif;
+    avifRWData xmp;
+    avifGainMap *gainMap;
+};
 
-typedef struct avifImageTiming {
+struct avifImageTiming {
     uint64_t timescale;
     double pts;
     uint64_t ptsInTimescales;
     double duration;
     uint64_t durationInTimescales;
-} avifImageTiming;
+};
 
-typedef struct avifIOStats {
+struct avifIOStats {
     size_t colorOBUSize;
     size_t alphaOBUSize;
-} avifIOStats;
+};
 
-typedef struct avifDiagnostics {
+struct avifDiagnostics {
     char error[CRABBY_AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE];
-} avifDiagnostics;
+};
 
-typedef struct avifDecoderData {
+struct avifDecoderData {
 
-} avifDecoderData;
+};
 
-typedef struct avifDecoder {
-    enum avifCodecChoice codecChoice;
+struct avifDecoder {
+    avifCodecChoice codecChoice;
     int32_t maxThreads;
-    enum avifDecoderSource requestedSource;
+    avifDecoderSource requestedSource;
     avifBool allowProgressive;
     avifBool allowIncremental;
     avifBool ignoreExif;
@@ -400,99 +390,97 @@ typedef struct avifDecoder {
     uint32_t imageDimensionLimit;
     uint32_t imageCountLimit;
     avifStrictFlags strictFlags;
-    struct avifImage *image;
+    avifImage *image;
     int32_t imageIndex;
     int32_t imageCount;
-    enum avifProgressiveState progressiveState;
-    struct avifImageTiming imageTiming;
+    avifProgressiveState progressiveState;
+    avifImageTiming imageTiming;
     uint64_t timescale;
     double duration;
     uint64_t durationInTimescales;
     int32_t repetitionCount;
     avifBool alphaPresent;
-    struct avifIOStats ioStats;
-    struct avifDiagnostics diag;
-    struct avifDecoderData *data;
+    avifIOStats ioStats;
+    avifDiagnostics diag;
+    avifDecoderData *data;
     avifBool gainMapPresent;
     avifBool enableDecodingGainMap;
     avifBool enableParsingGainMapMetadata;
     avifBool imageSequenceTrackPresent;
-    struct Decoder *rust_decoder;
-    struct avifImage image_object;
-    struct avifGainMap gainmap_object;
-    struct avifImage gainmap_image_object;
-} avifDecoder;
+    Box<Decoder> rust_decoder;
+    avifImage image_object;
+    avifGainMap gainmap_object;
+    avifImage gainmap_image_object;
+};
 
-typedef void (*avifIODestroyFunc)(struct avifIO *io);
+using avifIODestroyFunc = void(*)(avifIO *io);
 
-typedef struct avifROData {
+struct avifROData {
     const uint8_t *data;
     size_t size;
-} avifROData;
+};
 
-typedef enum avifResult (*avifIOReadFunc)(struct avifIO *io,
-                                          uint32_t readFlags,
-                                          uint64_t offset,
-                                          size_t size,
-                                          struct avifROData *out);
+using avifIOReadFunc = avifResult(*)(avifIO *io,
+                                     uint32_t readFlags,
+                                     uint64_t offset,
+                                     size_t size,
+                                     avifROData *out);
 
-typedef enum avifResult (*avifIOWriteFunc)(struct avifIO *io,
-                                           uint32_t writeFlags,
-                                           uint64_t offset,
-                                           const uint8_t *data,
-                                           size_t size);
+using avifIOWriteFunc = avifResult(*)(avifIO *io,
+                                      uint32_t writeFlags,
+                                      uint64_t offset,
+                                      const uint8_t *data,
+                                      size_t size);
 
-typedef struct avifIO {
+struct avifIO {
     avifIODestroyFunc destroy;
     avifIOReadFunc read;
     avifIOWriteFunc write;
     uint64_t sizeHint;
     avifBool persistent;
     void *data;
-} avifIO;
+};
 
-typedef struct Extent {
+struct Extent {
     uint64_t offset;
     size_t size;
-} Extent;
+};
 
-typedef struct Extent avifExtent;
+using avifExtent = Extent;
 
-typedef uint32_t avifPlanesFlags;
+using avifPlanesFlags = uint32_t;
 
-typedef struct CropRect {
+struct CropRect {
     uint32_t x;
     uint32_t y;
     uint32_t width;
     uint32_t height;
-} CropRect;
+};
 
-typedef struct CropRect avifCropRect;
+using avifCropRect = CropRect;
 
-typedef struct avifRGBImage {
+struct avifRGBImage {
     uint32_t width;
     uint32_t height;
     uint32_t depth;
-    enum avifRGBFormat format;
-    enum avifChromaUpsampling chromaUpsampling;
-    enum avifChromaDownsampling chromaDownsampling;
+    avifRGBFormat format;
+    avifChromaUpsampling chromaUpsampling;
+    avifChromaDownsampling chromaDownsampling;
     bool ignoreAlpha;
     bool alphaPremultiplied;
     bool isFloat;
     int32_t maxThreads;
     uint8_t *pixels;
     uint32_t rowBytes;
-} avifRGBImage;
+};
 
-typedef struct avifPixelFormatInfo {
+struct avifPixelFormatInfo {
     avifBool monochrome;
     int chromaShiftX;
     int chromaShiftY;
-} avifPixelFormatInfo;
+};
 
-typedef uint32_t avifCodecFlags;
-
-
+using avifCodecFlags = uint32_t;
 
 
 
@@ -502,136 +490,127 @@ typedef uint32_t avifCodecFlags;
 
 
 
-#ifdef __cplusplus
+
+
 extern "C" {
-#endif // __cplusplus
 
-struct avifDecoder *crabby_avifDecoderCreate(void);
+avifDecoder *crabby_avifDecoderCreate();
 
-void crabby_avifDecoderSetIO(struct avifDecoder *decoder, struct avifIO *io);
+void crabby_avifDecoderSetIO(avifDecoder *decoder, avifIO *io);
 
-enum avifResult crabby_avifDecoderSetIOFile(struct avifDecoder *decoder, const char *filename);
+avifResult crabby_avifDecoderSetIOFile(avifDecoder *decoder, const char *filename);
 
-enum avifResult crabby_avifDecoderSetIOMemory(struct avifDecoder *decoder,
-                                              const uint8_t *data,
-                                              size_t size);
+avifResult crabby_avifDecoderSetIOMemory(avifDecoder *decoder, const uint8_t *data, size_t size);
 
-enum avifResult crabby_avifDecoderSetSource(struct avifDecoder *decoder,
-                                            enum avifDecoderSource source);
+avifResult crabby_avifDecoderSetSource(avifDecoder *decoder, avifDecoderSource source);
 
-enum avifResult crabby_avifDecoderParse(struct avifDecoder *decoder);
+avifResult crabby_avifDecoderParse(avifDecoder *decoder);
 
-enum avifResult crabby_avifDecoderNextImage(struct avifDecoder *decoder);
+avifResult crabby_avifDecoderNextImage(avifDecoder *decoder);
 
-enum avifResult crabby_avifDecoderNthImage(struct avifDecoder *decoder, uint32_t frameIndex);
+avifResult crabby_avifDecoderNthImage(avifDecoder *decoder, uint32_t frameIndex);
 
-enum avifResult crabby_avifDecoderNthImageTiming(const struct avifDecoder *decoder,
-                                                 uint32_t frameIndex,
-                                                 struct avifImageTiming *outTiming);
+avifResult crabby_avifDecoderNthImageTiming(const avifDecoder *decoder,
+                                            uint32_t frameIndex,
+                                            avifImageTiming *outTiming);
 
-void crabby_avifDecoderDestroy(struct avifDecoder *decoder);
+void crabby_avifDecoderDestroy(avifDecoder *decoder);
 
-enum avifResult crabby_avifDecoderRead(struct avifDecoder *decoder, struct avifImage *image);
+avifResult crabby_avifDecoderRead(avifDecoder *decoder, avifImage *image);
 
-enum avifResult crabby_avifDecoderReadMemory(struct avifDecoder *decoder,
-                                             struct avifImage *image,
-                                             const uint8_t *data,
-                                             size_t size);
+avifResult crabby_avifDecoderReadMemory(avifDecoder *decoder,
+                                        avifImage *image,
+                                        const uint8_t *data,
+                                        size_t size);
 
-enum avifResult crabby_avifDecoderReadFile(struct avifDecoder *decoder,
-                                           struct avifImage *image,
-                                           const char *filename);
+avifResult crabby_avifDecoderReadFile(avifDecoder *decoder, avifImage *image, const char *filename);
 
-avifBool crabby_avifDecoderIsKeyframe(const struct avifDecoder *decoder, uint32_t frameIndex);
+avifBool crabby_avifDecoderIsKeyframe(const avifDecoder *decoder, uint32_t frameIndex);
 
-uint32_t crabby_avifDecoderNearestKeyframe(const struct avifDecoder *decoder, uint32_t frameIndex);
+uint32_t crabby_avifDecoderNearestKeyframe(const avifDecoder *decoder, uint32_t frameIndex);
 
-uint32_t crabby_avifDecoderDecodedRowCount(const struct avifDecoder *decoder);
+uint32_t crabby_avifDecoderDecodedRowCount(const avifDecoder *decoder);
 
-enum avifResult crabby_avifDecoderNthImageMaxExtent(const struct avifDecoder *decoder,
-                                                    uint32_t frameIndex,
-                                                    avifExtent *outExtent);
+avifResult crabby_avifDecoderNthImageMaxExtent(const avifDecoder *decoder,
+                                               uint32_t frameIndex,
+                                               avifExtent *outExtent);
 
-avifBool crabby_avifPeekCompatibleFileType(const struct avifROData *input);
+avifBool crabby_avifPeekCompatibleFileType(const avifROData *input);
 
-struct avifImage *crabby_avifImageCreateEmpty(void);
+avifImage *crabby_avifImageCreateEmpty();
 
-struct avifImage *crabby_avifImageCreate(uint32_t width,
-                                         uint32_t height,
-                                         uint32_t depth,
-                                         enum avifPixelFormat yuvFormat);
+avifImage *crabby_avifImageCreate(uint32_t width,
+                                  uint32_t height,
+                                  uint32_t depth,
+                                  avifPixelFormat yuvFormat);
 
-enum avifResult crabby_avifImageAllocatePlanes(struct avifImage *image, avifPlanesFlags planes);
+avifResult crabby_avifImageAllocatePlanes(avifImage *image, avifPlanesFlags planes);
 
-void crabby_avifImageFreePlanes(struct avifImage *image, avifPlanesFlags planes);
+void crabby_avifImageFreePlanes(avifImage *image, avifPlanesFlags planes);
 
-void crabby_avifImageDestroy(struct avifImage *image);
+void crabby_avifImageDestroy(avifImage *image);
 
-avifBool crabby_avifImageUsesU16(const struct avifImage *image);
+avifBool crabby_avifImageUsesU16(const avifImage *image);
 
-avifBool crabby_avifImageIsOpaque(const struct avifImage *image);
+avifBool crabby_avifImageIsOpaque(const avifImage *image);
 
-uint8_t *crabby_avifImagePlane(const struct avifImage *image, int channel);
+uint8_t *crabby_avifImagePlane(const avifImage *image, int channel);
 
-uint32_t crabby_avifImagePlaneRowBytes(const struct avifImage *image, int channel);
+uint32_t crabby_avifImagePlaneRowBytes(const avifImage *image, int channel);
 
-uint32_t crabby_avifImagePlaneWidth(const struct avifImage *image, int channel);
+uint32_t crabby_avifImagePlaneWidth(const avifImage *image, int channel);
 
-uint32_t crabby_avifImagePlaneHeight(const struct avifImage *image, int channel);
+uint32_t crabby_avifImagePlaneHeight(const avifImage *image, int channel);
 
-enum avifResult crabby_avifImageSetViewRect(struct avifImage *dstImage,
-                                            const struct avifImage *srcImage,
-                                            const avifCropRect *rect);
+avifResult crabby_avifImageSetViewRect(avifImage *dstImage,
+                                       const avifImage *srcImage,
+                                       const avifCropRect *rect);
 
-enum avifResult crabby_avifRWDataRealloc(struct avifRWData *raw, size_t newSize);
+avifResult crabby_avifRWDataRealloc(avifRWData *raw, size_t newSize);
 
-enum avifResult crabby_avifRWDataSet(struct avifRWData *raw, const uint8_t *data, size_t size);
+avifResult crabby_avifRWDataSet(avifRWData *raw, const uint8_t *data, size_t size);
 
-void crabby_avifRWDataFree(struct avifRWData *raw);
+void crabby_avifRWDataFree(avifRWData *raw);
 
-void cioDestroy(struct avifIO *_io);
+void cioDestroy(avifIO *_io);
 
-enum avifResult cioRead(struct avifIO *io,
-                        uint32_t _readFlags,
-                        uint64_t offset,
-                        size_t size,
-                        struct avifROData *out);
+avifResult cioRead(avifIO *io, uint32_t _readFlags, uint64_t offset, size_t size, avifROData *out);
 
-enum avifResult cioWrite(struct avifIO *_io,
-                         uint32_t _writeFlags,
-                         uint64_t _offset,
-                         const uint8_t *_data,
-                         size_t _size);
+avifResult cioWrite(avifIO *_io,
+                    uint32_t _writeFlags,
+                    uint64_t _offset,
+                    const uint8_t *_data,
+                    size_t _size);
 
-struct avifIO *crabby_avifIOCreateMemoryReader(const uint8_t *data, size_t size);
+avifIO *crabby_avifIOCreateMemoryReader(const uint8_t *data, size_t size);
 
-struct avifIO *crabby_avifIOCreateFileReader(const char *filename);
+avifIO *crabby_avifIOCreateFileReader(const char *filename);
 
-void crabby_avifIODestroy(struct avifIO *io);
+void crabby_avifIODestroy(avifIO *io);
 
-void crabby_avifRGBImageSetDefaults(struct avifRGBImage *rgb, const struct avifImage *image);
+void crabby_avifRGBImageSetDefaults(avifRGBImage *rgb, const avifImage *image);
 
-enum avifResult crabby_avifImageYUVToRGB(const struct avifImage *image, struct avifRGBImage *rgb);
+avifResult crabby_avifImageYUVToRGB(const avifImage *image, avifRGBImage *rgb);
 
-const char *crabby_avifResultToString(enum avifResult _res);
+const char *crabby_avifResultToString(avifResult _res);
 
 avifBool crabby_avifCropRectConvertCleanApertureBox(avifCropRect *cropRect,
-                                                    const struct avifCleanApertureBox *clap,
+                                                    const avifCleanApertureBox *clap,
                                                     uint32_t imageW,
                                                     uint32_t imageH,
-                                                    enum avifPixelFormat yuvFormat,
-                                                    struct avifDiagnostics *_diag);
+                                                    avifPixelFormat yuvFormat,
+                                                    avifDiagnostics *_diag);
 
-void crabby_avifGetPixelFormatInfo(enum avifPixelFormat format, struct avifPixelFormatInfo *info);
+void crabby_avifGetPixelFormatInfo(avifPixelFormat format, avifPixelFormatInfo *info);
 
-void crabby_avifDiagnosticsClearError(struct avifDiagnostics *diag);
+void crabby_avifDiagnosticsClearError(avifDiagnostics *diag);
 
 void *crabby_avifAlloc(size_t size);
 
 void crabby_avifFree(void *p);
 
-#ifdef __cplusplus
 } // extern "C"
-#endif // __cplusplus
 
-#endif /* AVIF_H */
+} // namespace crabbyavif
+
+#endif // AVIF_H

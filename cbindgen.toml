@@ -1,9 +1,24 @@
-language = "C"
+language = "C++"
 include_guard = "AVIF_H"
 tab_width = 4
-style = "both"
-cpp_compat = true
 usize_is_size_t = true
+namespace = "crabbyavif"
+# Some workarounds for cbindgen's potential limitations/bugs:
+# 1) In C++ mode, cbindgen balks on use of "Box" objects without this. This
+#    workaround of aliasing Box to T* comes from
+#    https://github.com/mozilla/cbindgen/blob/f1d5801d3b299fa2e87d176f03b605532f931cb6/tests/rust/box.toml.
+# 2) In C++ mode, cbindgen does not use the struct prefix for structs.  We need
+#    this so that we can have circular struct dependencies that use a pointer.
+#    So forward declare those structs which have a circular dependency.
+after_includes = """
+
+template <typename T>
+using Box = T*;
+namespace crabbyavif {
+struct avifImage;
+struct avifIO;
+}
+"""
 
 [export.rename]
 "ChromaDownsampling" = "avifChromaDownsampling"
@@ -29,6 +44,7 @@ usize_is_size_t = true
 
 [enum]
 rename_variants = "QualifiedScreamingSnakeCase"
+enum_class = false
 
 [export]
 include = [
@@ -39,4 +55,7 @@ include = [
   "avifPlanesFlag",
   "avifPlanesFlags",
   "avifStrictFlag",
+]
+exclude = [
+  "Box"
 ]

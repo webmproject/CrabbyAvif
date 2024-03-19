@@ -8,6 +8,8 @@
 #include "avif/libavif_compat.h"
 #include "gtest/gtest.h"
 
+using namespace crabbyavif;
+
 // Used instead of CHECK if needing to return a specific error on failure,
 // instead of AVIF_FALSE
 #define AVIF_CHECKERR(A, ERR) \
