@@ -45,9 +45,9 @@ impl Av1SequenceHeader {
             // timing_info_present_flag
             if bits.read_bool()? {
                 // num_units_in_display_tick
-                bits.skip(32);
+                bits.skip(32)?;
                 // time_scale
-                bits.skip(32);
+                bits.skip(32)?;
                 // equal_picture_interval
                 if bits.read_bool()? {
                     // num_ticks_per_picture
@@ -58,16 +58,16 @@ impl Av1SequenceHeader {
                 if decoder_model_info_present {
                     buffer_delay_length = bits.read(5)? + 1;
                     // num_units_in_decoding_tick
-                    bits.skip(32);
+                    bits.skip(32)?;
                     // buffer_removal_time_length_minus_1, frame_presentation_time_length_minus_1
-                    bits.skip(10);
+                    bits.skip(10)?;
                 }
             }
             let initial_display_delay_present = bits.read_bool()?;
             let operaing_points_count = bits.read(5)? + 1;
             for i in 0..operaing_points_count {
                 // operating_point_idc
-                bits.skip(12);
+                bits.skip(12)?;
                 let seq_level_idx = bits.read(5)?;
                 if i == 0 {
                     self.config.seq_level_idx0 = seq_level_idx as u8;
@@ -82,18 +82,18 @@ impl Av1SequenceHeader {
                     // decoder_model_present_for_this_op
                     if bits.read_bool()? {
                         // decoder_buffer_delay
-                        bits.skip(buffer_delay_length as usize);
+                        bits.skip(buffer_delay_length as usize)?;
                         // encoder_buffer_delay
-                        bits.skip(buffer_delay_length as usize);
+                        bits.skip(buffer_delay_length as usize)?;
                         // low_delay_mode_flag
-                        bits.skip(1);
+                        bits.skip(1)?;
                     }
                 }
                 if initial_display_delay_present {
                     // initial_display_delay_present_for_this_op
                     if bits.read_bool()? {
                         // initial_display_delay_minus_1
-                        bits.skip(4);
+                        bits.skip(4)?;
                     }
                 }
             }
@@ -112,36 +112,36 @@ impl Av1SequenceHeader {
         }
         if frame_id_numbers_present {
             // delta_frame_id_length_minus_2, additional_frame_id_length_minus_1
-            bits.skip(7);
+            bits.skip(7)?;
         }
         Ok(())
     }
 
     fn parse_enabled_features(&mut self, bits: &mut IBitStream) -> AvifResult<()> {
         // use_128x128_superblock, enable_filter_intra, enable_intra_edge_filter
-        bits.skip(3);
+        bits.skip(3)?;
         if self.reduced_still_picture_header {
             return Ok(());
         }
         // enable_interintra_compound, enable_masked_compound
         // enable_warped_motion, enable_dual_filter
-        bits.skip(4);
+        bits.skip(4)?;
         let enable_order_hint = bits.read_bool()?;
         if enable_order_hint {
             // enable_jnt_comp, enable_ref_frame_mvs
-            bits.skip(2);
+            bits.skip(2)?;
         }
         let seq_force_screen_content_tools = if bits.read_bool()? { 2 } else { bits.read(1)? };
         if seq_force_screen_content_tools > 0 {
             // seq_choose_integer_mv
             if !bits.read_bool()? {
                 // seq_force_integer_mv
-                bits.skip(1);
+                bits.skip(1)?;
             }
         }
         if enable_order_hint {
             // order_hint_bits_minus_1
-            bits.skip(3);
+            bits.skip(3)?;
         }
         Ok(())
     }
@@ -220,14 +220,14 @@ impl Av1SequenceHeader {
             }
         }
         // separate_uv_delta_q
-        bits.skip(1);
+        bits.skip(1)?;
         Ok(())
     }
 
     fn parse_obu_header(stream: &mut IStream) -> AvifResult<ObuHeader> {
         let mut bits = stream.sub_bit_stream(1)?;
         // obu_forbidden_bit
-        bits.skip(1);
+        bits.skip(1)?;
         // obu_type
         let obu_type = bits.read(4)? as u8;
         // obu_extension_flag
@@ -235,7 +235,7 @@ impl Av1SequenceHeader {
         // obu_has_size_field
         let obu_has_size_field = bits.read_bool()?;
         // obu_reserved_1bit
-        bits.skip(1);
+        bits.skip(1)?;
 
         if obu_extension_flag {
             // temporal_id, spatial_id, extension_header_reserved_3bits
@@ -267,10 +267,10 @@ impl Av1SequenceHeader {
             sequence_header.parse_frame_max_dimensions(&mut bits)?;
             sequence_header.parse_enabled_features(&mut bits)?;
             // enable_superres, enable_cdef, enable_restoration
-            bits.skip(3);
+            bits.skip(3)?;
             sequence_header.parse_color_config(&mut bits)?;
             // film_grain_params_present
-            bits.skip(1);
+            bits.skip(1)?;
             return Ok(sequence_header);
         }
         // Failed to parse a sequence header.
