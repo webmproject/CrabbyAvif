@@ -1,19 +1,9 @@
-#![allow(dead_code, unused)] // TODO: remove
-
-use super::gainmap::*;
 use super::image::*;
-use super::io::*;
 use super::types::*;
 
 use crate::image;
 use crate::internal_utils::pixels::*;
-use crate::internal_utils::*;
-use crate::parser::mp4box::*;
 use crate::reformat::rgb;
-use crate::utils::clap::*;
-use crate::*;
-
-use std::os::raw::c_int;
 
 /// cbindgen:rename-all=CamelCase
 #[repr(C)]

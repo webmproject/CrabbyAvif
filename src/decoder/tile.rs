@@ -93,9 +93,7 @@ impl TileInfo {
 
 #[derive(Default)]
 pub struct Tile {
-    #[allow(unused)]
     pub width: u32,
-    #[allow(unused)]
     pub height: u32,
     pub operating_point: u8,
     pub image: Image,

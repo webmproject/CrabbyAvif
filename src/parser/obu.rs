@@ -10,13 +10,13 @@ struct ObuHeader {
 }
 
 #[derive(Debug, Default)]
-#[allow(unused)]
 pub struct Av1SequenceHeader {
     reduced_still_picture_header: bool,
     max_width: u32,
     max_height: u32,
     bit_depth: u8,
     yuv_format: PixelFormat,
+    #[allow(unused)]
     chroma_sample_position: ChromaSamplePosition,
     pub color_primaries: ColorPrimaries,
     pub transfer_characteristics: TransferCharacteristics,

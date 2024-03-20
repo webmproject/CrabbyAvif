@@ -57,11 +57,8 @@ struct ExpectedImageInfo<'a> {
     yuv_format: PixelFormat,
     alpha_present: bool,
     full_range: bool,
-    #[allow(unused)]
     color_primaries: u16,
-    #[allow(unused)]
     transfer_characteristics: u16,
-    #[allow(unused)]
     matrix_coefficients: u16,
 }
 

@@ -113,7 +113,6 @@ impl Track {
 }
 
 #[derive(Debug)]
-#[allow(unused)]
 pub struct TimeToSample {
     pub sample_count: u32,
     pub sample_delta: u32,
@@ -123,7 +122,6 @@ pub struct TimeToSample {
 pub struct SampleToChunk {
     pub first_chunk: u32,
     pub samples_per_chunk: u32,
-    #[allow(unused)]
     pub sample_description_index: u32,
 }
 
