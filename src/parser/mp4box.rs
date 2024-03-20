@@ -17,8 +17,6 @@ struct BoxHeader {
 #[derive(Debug)]
 pub struct FileTypeBox {
     pub major_brand: String,
-    #[allow(unused)]
-    minor_version: u32,
     compatible_brands: Vec<String>,
 }
 
@@ -118,7 +116,6 @@ pub struct Nclx {
 }
 
 #[derive(Debug, Clone)]
-#[allow(unused)]
 pub enum ColorInformation {
     Icc(Vec<u8>),
     Nclx(Nclx),
@@ -159,10 +156,7 @@ pub enum ItemProperty {
 }
 
 #[derive(Debug, Default)]
-#[allow(unused)]
 pub struct ItemPropertyAssociation {
-    version: u8,
-    flags: u32,
     pub item_id: u32,
     pub associations: Vec<(u16, bool)>,
 }
@@ -231,7 +225,8 @@ fn parse_header(stream: &mut IStream) -> AvifResult<BoxHeader> {
 
 fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
     let major_brand = stream.read_string(4)?;
-    let minor_version = stream.read_u32()?;
+    // unsigned int(4) minor_version;
+    stream.skip_u32()?;
     if stream.bytes_left()? % 4 != 0 {
         return Err(AvifError::BmffParseFailed);
     }
@@ -241,7 +236,6 @@ fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
     }
     Ok(FileTypeBox {
         major_brand,
-        minor_version,
         compatible_brands,
     })
 }
@@ -605,11 +599,7 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
     let entry_count = stream.read_u32()?;
     let mut ipma: Vec<ItemPropertyAssociation> = create_vec_exact(usize_from_u32(entry_count)?)?;
     for _i in 0..entry_count {
-        let mut entry = ItemPropertyAssociation {
-            version,
-            flags,
-            ..ItemPropertyAssociation::default()
-        };
+        let mut entry = ItemPropertyAssociation::default();
         // ISO/IEC 23008-12, First edition, 2017-12, Section 9.3.1:
         //   Each ItemPropertyAssociation box shall be ordered by increasing item_ID, and there
         //   shall be at most one association box for each item_ID, in any
