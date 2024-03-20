@@ -9,38 +9,6 @@ use crate::*;
 
 use std::cmp::min;
 
-#[allow(unused)]
-struct RgbColorSpaceInfo {
-    channel_bytes: u32,
-    pixel_bytes: u32,
-    offset_bytes_r: usize,
-    offset_bytes_g: usize,
-    offset_bytes_b: usize,
-    offset_bytes_a: usize,
-    max_channel: i32,
-    max_channel_f: f32,
-}
-
-impl RgbColorSpaceInfo {
-    fn create_from(rgb: &Image) -> AvifResult<Self> {
-        if !rgb.depth_valid() {
-            return Err(AvifError::ReformatFailed);
-        }
-        let offsets = rgb.format.offsets();
-        let max_channel = i32_from_u32((1 << rgb.depth) - 1)?;
-        Ok(Self {
-            channel_bytes: rgb.channel_size(),
-            pixel_bytes: rgb.pixel_size(),
-            offset_bytes_r: (rgb.channel_size() as usize * offsets[0]),
-            offset_bytes_g: (rgb.channel_size() as usize * offsets[1]),
-            offset_bytes_b: (rgb.channel_size() as usize * offsets[2]),
-            offset_bytes_a: (rgb.channel_size() as usize * offsets[3]),
-            max_channel,
-            max_channel_f: max_channel as f32,
-        })
-    }
-}
-
 #[derive(PartialEq, Copy, Clone)]
 enum Mode {
     YuvCoefficients(f32, f32, f32),
@@ -48,21 +16,7 @@ enum Mode {
     Ycgco,
 }
 
-#[allow(unused)]
-struct YuvColorSpaceInfo {
-    channel_bytes: u32,
-    depth: u32,
-    full_range: bool, // VideoFullRangeFlag as specified in ISO/IEC 23091-2/ITU-T H.273.
-    max_channel: u16,
-    bias_y: f32,
-    bias_uv: f32,
-    range_y: f32,
-    range_uv: f32,
-    format: PixelFormat,
-    mode: Mode,
-}
-
-impl YuvColorSpaceInfo {
+impl Mode {
     fn create_from(image: &image::Image) -> AvifResult<Self> {
         if !image.depth_valid() {
             return Err(AvifError::ReformatFailed);
@@ -82,7 +36,7 @@ impl YuvColorSpaceInfo {
         {
             return Err(AvifError::ReformatFailed);
         }
-        let mode = match image.matrix_coefficients {
+        Ok(match image.matrix_coefficients {
             MatrixCoefficients::Identity => Mode::Identity,
             MatrixCoefficients::Ycgco => Mode::Ycgco,
             _ => {
@@ -90,27 +44,8 @@ impl YuvColorSpaceInfo {
                     calculate_yuv_coefficients(image.color_primaries, image.matrix_coefficients);
                 Mode::YuvCoefficients(coeffs[0], coeffs[1], coeffs[2])
             }
-        };
-        let max_channel = (1 << image.depth) - 1;
-        Ok(Self {
-            channel_bytes: if image.depth == 8 { 1 } else { 2 },
-            depth: image.depth as u32,
-            full_range: image.full_range,
-            max_channel,
-            // See the formulas in ISO/IEC 23091-2.
-            bias_y: if image.full_range { 0.0 } else { (16 << (image.depth - 8)) as f32 },
-            bias_uv: (1 << (image.depth - 1)) as f32,
-            range_y: if image.full_range { max_channel } else { 219 << (image.depth - 8) } as f32,
-            range_uv: if image.full_range { max_channel } else { 224 << (image.depth - 8) } as f32,
-            format: image.yuv_format,
-            mode,
         })
     }
-}
-
-struct State {
-    rgb: RgbColorSpaceInfo,
-    yuv: YuvColorSpaceInfo,
 }
 
 fn identity_yuv8_to_rgb8_full_range(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
@@ -137,11 +72,8 @@ fn identity_yuv8_to_rgb8_full_range(image: &image::Image, rgb: &mut rgb::Image) 
 }
 
 pub fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
-    let state = State {
-        rgb: RgbColorSpaceInfo::create_from(rgb)?,
-        yuv: YuvColorSpaceInfo::create_from(image)?,
-    };
-    if state.yuv.mode == Mode::Identity {
+    let mode = Mode::create_from(image)?;
+    if mode == Mode::Identity {
         if image.depth == 8 && rgb.depth == 8 && image.full_range {
             return identity_yuv8_to_rgb8_full_range(image, rgb);
         }
@@ -151,18 +83,38 @@ pub fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult
     Err(AvifError::NotImplemented)
 }
 
-fn unorm_lookup_tables(depth: u8, state: &State) -> AvifResult<(Vec<f32>, Option<Vec<f32>>)> {
-    let count = 1usize << depth;
+fn unorm_lookup_tables(
+    image: &image::Image,
+    mode: Mode,
+) -> AvifResult<(Vec<f32>, Option<Vec<f32>>)> {
+    let count = 1usize << image.depth;
     let mut table_y: Vec<f32> = create_vec_exact(count)?;
-    for cp in 0..count {
-        table_y.push(((cp as f32) - state.yuv.bias_y) / state.yuv.range_y);
+    let bias_y;
+    let range_y;
+    // Formula specified in ISO/IEC 23091-2.
+    if image.full_range {
+        bias_y = 0.0;
+        range_y = image.max_channel_f();
+    } else {
+        bias_y = (16 << (image.depth - 8)) as f32;
+        range_y = (219 << (image.depth - 8)) as f32;
     }
-    if state.yuv.mode == Mode::Identity {
+    for cp in 0..count {
+        table_y.push(((cp as f32) - bias_y) / range_y);
+    }
+    if mode == Mode::Identity {
         Ok((table_y, None))
     } else {
+        // Formula specified in ISO/IEC 23091-2.
+        let bias_uv = (1 << (image.depth - 1)) as f32;
+        let range_uv = if image.full_range {
+            image.max_channel_f()
+        } else {
+            (224 << (image.depth - 8)) as f32
+        };
         let mut table_uv: Vec<f32> = create_vec_exact(count)?;
         for cp in 0..count {
-            table_uv.push(((cp as f32) - state.yuv.bias_uv) / state.yuv.range_uv);
+            table_uv.push(((cp as f32) - bias_uv) / range_uv);
         }
         Ok((table_y, Some(table_uv)))
     }
@@ -219,11 +171,8 @@ pub fn yuv_to_rgb_any(
     rgb: &mut rgb::Image,
     alpha_multiply_mode: AlphaMultiplyMode,
 ) -> AvifResult<()> {
-    let state = State {
-        rgb: RgbColorSpaceInfo::create_from(rgb)?,
-        yuv: YuvColorSpaceInfo::create_from(image)?,
-    };
-    let (table_y, table_uv) = unorm_lookup_tables(image.depth, &state)?;
+    let mode = Mode::create_from(image)?;
+    let (table_y, table_uv) = unorm_lookup_tables(image, mode)?;
     let table_uv = match &table_uv {
         Some(table_uv) => table_uv,
         None => &table_y,
@@ -237,8 +186,8 @@ pub fn yuv_to_rgb_any(
     let has_color = image.has_plane(Plane::U)
         && image.has_plane(Plane::V)
         && image.yuv_format != PixelFormat::Monochrome;
-    let yuv_max_channel = state.yuv.max_channel;
-    let rgb_max_channel_f = state.rgb.max_channel_f;
+    let yuv_max_channel = image.max_channel();
+    let rgb_max_channel_f = rgb.max_channel_f();
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
         let y_row = image.row_generic(Plane::Y, j);
@@ -306,7 +255,7 @@ pub fn yuv_to_rgb_any(
                         + (unorm_v[1][1] * (1.0 / 16.0));
                 }
             }
-            let (mut rc, mut gc, mut bc) = compute_rgb(y, cb, cr, has_color, state.yuv.mode);
+            let (mut rc, mut gc, mut bc) = compute_rgb(y, cb, cr, has_color, mode);
             if alpha_multiply_mode != AlphaMultiplyMode::NoOp {
                 let unorm_a = clamped_pixel(a_row?, i, yuv_max_channel);
                 let ac = clamp_f32((unorm_a as f32) / (yuv_max_channel as f32), 0.0, 1.0);
