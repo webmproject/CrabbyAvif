@@ -7,11 +7,11 @@ use crate::*;
 pub struct GainMapMetadata {
     pub min: [Fraction; 3],
     pub max: [Fraction; 3],
-    pub gamma: [UFraction; 3],
+    pub gamma: [Fraction; 3], // unsigned
     pub base_offset: [Fraction; 3],
     pub alternate_offset: [Fraction; 3],
-    pub base_hdr_headroom: UFraction,
-    pub alternate_hdr_headroom: UFraction,
+    pub base_hdr_headroom: Fraction,      // unsigned
+    pub alternate_hdr_headroom: Fraction, // unsigned
     pub backward_direction: bool,
     pub use_base_color_space: bool,
 }

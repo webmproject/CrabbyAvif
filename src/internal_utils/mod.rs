@@ -7,88 +7,104 @@ use crate::utils::clap::*;
 use crate::*;
 
 #[derive(Copy, Clone, Default, Debug)]
-pub struct Fraction(pub i32, pub u32);
-#[derive(Copy, Clone, Default, Debug)]
-pub struct UFraction(pub u32, pub u32);
-#[derive(Copy, Clone, Default, Debug)]
-pub struct IFraction(pub i32, pub i32);
-
-impl TryFrom<UFraction> for IFraction {
-    type Error = AvifError;
-
-    fn try_from(uf: UFraction) -> AvifResult<IFraction> {
-        Ok(IFraction(uf.0 as i32, i32_from_u32(uf.1)?))
-    }
+pub struct Fraction {
+    pub n: u32, // numerator
+    pub d: u32, // denominator
+    pub is_negative: bool,
 }
 
-impl IFraction {
-    fn gcd(a: i32, b: i32) -> i32 {
-        let mut a = if a < 0 { -a as i64 } else { a as i64 };
-        let mut b = if b < 0 { -b as i64 } else { b as i64 };
+impl Fraction {
+    pub const fn new(n: u32, d: u32) -> Fraction {
+        let is_negative = false;
+        Fraction { n, d, is_negative }
+    }
+    pub const fn new_i32(n: i32, d: u32) -> Fraction {
+        let is_negative = n < 0;
+        let n: u32 = n.unsigned_abs();
+        Fraction { n, d, is_negative }
+    }
+
+    fn gcd(mut a: u32, mut b: u32) -> u32 {
         while b != 0 {
             let r = a % b;
             a = b;
             b = r;
         }
-        a as i32
+        a
     }
 
-    pub fn simplified(n: i32, d: i32) -> Self {
-        let mut fraction = IFraction(n, d);
-        fraction.simplify();
-        fraction
-    }
-
-    pub fn simplify(&mut self) {
-        let gcd = Self::gcd(self.0, self.1);
-        if gcd > 1 {
-            self.0 /= gcd;
-            self.1 /= gcd;
+    pub fn negate(self) -> Fraction {
+        Fraction {
+            n: self.n,
+            d: self.d,
+            is_negative: !self.is_negative,
         }
     }
 
-    pub fn get_i32(&self) -> i32 {
-        assert!(self.1 != 0);
-        self.0 / self.1
+    pub fn simplify(self) -> AvifResult<Fraction> {
+        let gcd = Self::gcd(self.n, self.d);
+        Ok(Fraction {
+            n: self.n.checked_div(gcd).ok_or(AvifError::UnknownError)?,
+            d: self.d.checked_div(gcd).ok_or(AvifError::UnknownError)?,
+            is_negative: self.is_negative,
+        })
     }
 
-    pub fn get_u32(&self) -> AvifResult<u32> {
-        u32_from_i32(self.get_i32())
-    }
-
-    pub fn is_integer(&self) -> bool {
-        self.0 % self.1 == 0
-    }
-
-    fn common_denominator(&mut self, val: &mut IFraction) -> AvifResult<()> {
-        self.simplify();
-        if self.1 == val.1 {
-            return Ok(());
+    pub fn get_u32(self) -> AvifResult<u32> {
+        if self.is_negative || !self.is_integer() {
+            return Err(AvifError::UnknownError);
         }
-        let self_d = self.1;
-        self.0 = self.0.checked_mul(val.1).ok_or(AvifError::UnknownError)?;
-        self.1 = self.1.checked_mul(val.1).ok_or(AvifError::UnknownError)?;
-        val.0 = val.0.checked_mul(self_d).ok_or(AvifError::UnknownError)?;
-        val.1 = val.1.checked_mul(self_d).ok_or(AvifError::UnknownError)?;
-        Ok(())
+        self.n.checked_div(self.d).ok_or(AvifError::UnknownError)
     }
 
-    pub fn add(&mut self, val: &IFraction) -> AvifResult<()> {
-        let mut val = *val;
-        val.simplify();
-        self.common_denominator(&mut val)?;
-        self.0 = self.0.checked_add(val.0).ok_or(AvifError::UnknownError)?;
-        self.simplify();
-        Ok(())
+    pub fn is_integer(self) -> bool {
+        self.n % self.d == 0
     }
 
-    pub fn sub(&mut self, val: &IFraction) -> AvifResult<()> {
-        let mut val = *val;
-        val.simplify();
-        self.common_denominator(&mut val)?;
-        self.0 = self.0.checked_sub(val.0).ok_or(AvifError::UnknownError)?;
-        self.simplify();
-        Ok(())
+    fn common_denominator(a: Fraction, b: Fraction) -> AvifResult<(Fraction, Fraction)> {
+        if a.d == b.d {
+            return Ok((a, b));
+        }
+        let common_d = a.d.checked_mul(b.d).ok_or(AvifError::UnknownError)?;
+        Ok((
+            Fraction {
+                n: a.n.checked_mul(b.d).ok_or(AvifError::UnknownError)?,
+                d: common_d,
+                is_negative: a.is_negative,
+            },
+            Fraction {
+                n: b.n.checked_mul(a.d).ok_or(AvifError::UnknownError)?,
+                d: common_d,
+                is_negative: b.is_negative,
+            },
+        ))
+    }
+
+    pub fn add(self, val: Fraction) -> AvifResult<Fraction> {
+        let (a, b) = Self::common_denominator(self.simplify()?, val.simplify()?)?;
+        if a.is_negative == b.is_negative {
+            Ok(Fraction {
+                n: a.n.checked_add(b.n).ok_or(AvifError::UnknownError)?,
+                d: a.d,
+                is_negative: a.is_negative,
+            })
+        } else if a.n >= b.n {
+            Ok(Fraction {
+                n: a.n - b.n,
+                d: a.d,
+                is_negative: a.is_negative,
+            })
+        } else {
+            Ok(Fraction {
+                n: b.n - a.n,
+                d: a.d,
+                is_negative: !a.is_negative,
+            })
+        }
+    }
+
+    pub fn sub(self, val: Fraction) -> AvifResult<Fraction> {
+        self.add(val.negate())
     }
 }
 
@@ -108,7 +124,6 @@ conversion_function!(usize_from_isize, usize, isize);
 conversion_function!(u64_from_usize, u64, usize);
 conversion_function!(u32_from_usize, u32, usize);
 conversion_function!(u32_from_u64, u32, u64);
-conversion_function!(u32_from_i32, u32, i32);
 conversion_function!(i32_from_u32, i32, u32);
 #[cfg(feature = "android_mediacodec")]
 conversion_function!(isize_from_i32, isize, i32);

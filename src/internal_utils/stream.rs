@@ -153,11 +153,11 @@ impl IStream<'_> {
     }
 
     pub fn read_fraction(&mut self) -> AvifResult<Fraction> {
-        Ok(Fraction(self.read_i32()?, self.read_u32()?))
+        Ok(Fraction::new_i32(self.read_i32()?, self.read_u32()?))
     }
 
-    pub fn read_ufraction(&mut self) -> AvifResult<UFraction> {
-        Ok(UFraction(self.read_u32()?, self.read_u32()?))
+    pub fn read_ufraction(&mut self) -> AvifResult<Fraction> {
+        Ok(Fraction::new(self.read_u32()?, self.read_u32()?))
     }
 
     // Reads size characters of a non-null-terminated string.

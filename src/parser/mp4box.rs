@@ -1299,14 +1299,15 @@ pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
     println!("use_common_denominator: {use_common_denominator}");
     if use_common_denominator {
         let common_denominator = stream.read_u32()?;
-        metadata.base_hdr_headroom = UFraction(stream.read_u32()?, common_denominator);
-        metadata.alternate_hdr_headroom = UFraction(stream.read_u32()?, common_denominator);
+        metadata.base_hdr_headroom = Fraction::new(stream.read_u32()?, common_denominator);
+        metadata.alternate_hdr_headroom = Fraction::new(stream.read_u32()?, common_denominator);
         for i in 0..channel_count {
-            metadata.min[i] = Fraction(stream.read_i32()?, common_denominator);
-            metadata.max[i] = Fraction(stream.read_i32()?, common_denominator);
-            metadata.gamma[i] = UFraction(stream.read_u32()?, common_denominator);
-            metadata.base_offset[i] = Fraction(stream.read_i32()?, common_denominator);
-            metadata.alternate_offset[i] = Fraction(stream.read_i32()?, common_denominator);
+            metadata.min[i] = Fraction::new_i32(stream.read_i32()?, common_denominator);
+            metadata.max[i] = Fraction::new_i32(stream.read_i32()?, common_denominator);
+            metadata.gamma[i] = Fraction::new(stream.read_u32()?, common_denominator);
+            metadata.base_offset[i] = Fraction::new_i32(stream.read_i32()?, common_denominator);
+            metadata.alternate_offset[i] =
+                Fraction::new_i32(stream.read_i32()?, common_denominator);
         }
     } else {
         metadata.base_hdr_headroom = stream.read_ufraction()?;

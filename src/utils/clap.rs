@@ -3,10 +3,10 @@ use crate::*;
 
 #[derive(Debug, Clone, Copy)]
 pub struct CleanAperture {
-    pub width: UFraction,
-    pub height: UFraction,
-    pub horiz_off: UFraction,
-    pub vert_off: UFraction,
+    pub width: Fraction,
+    pub height: Fraction,
+    pub horiz_off: Fraction,
+    pub vert_off: Fraction,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -42,38 +42,35 @@ impl CropRect {
         image_height: u32,
         pixel_format: PixelFormat,
     ) -> AvifResult<Self> {
-        let width: IFraction = clap.width.try_into()?;
-        let height: IFraction = clap.height.try_into()?;
-        let horiz_off: IFraction = clap.horiz_off.try_into()?;
-        let vert_off: IFraction = clap.vert_off.try_into()?;
-        if width.1 <= 0
-            || height.1 <= 0
-            || horiz_off.1 <= 0
-            || vert_off.1 <= 0
-            || width.0 < 0
-            || height.0 < 0
-            || !width.is_integer()
-            || !height.is_integer()
+        if clap.width.d == 0
+            || clap.height.d == 0
+            || clap.horiz_off.d == 0
+            || clap.vert_off.d == 0
+            || clap.width.is_negative
+            || clap.height.is_negative
+            || !clap.width.is_integer()
+            || !clap.height.is_integer()
         {
             println!("invalid clap");
             return Err(AvifError::UnknownError);
         }
-        let clap_width = width.get_i32();
-        let clap_height = height.get_i32();
-        let mut crop_x = IFraction::simplified(i32_from_u32(image_width)?, 2);
-        crop_x.add(&horiz_off)?;
-        crop_x.sub(&IFraction::simplified(clap_width, 2))?;
-        let mut crop_y = IFraction::simplified(i32_from_u32(image_height)?, 2);
-        crop_y.add(&vert_off)?;
-        crop_y.sub(&IFraction::simplified(clap_height, 2))?;
-        if !crop_x.is_integer() || !crop_y.is_integer() || crop_x.0 < 0 || crop_y.0 < 0 {
+        let clap_width = clap.width.get_u32()?;
+        let clap_height = clap.height.get_u32()?;
+        let crop_x = Fraction::new(image_width, 2)
+            .add(clap.horiz_off)?
+            .sub(Fraction::new(clap_width, 2))?;
+        let crop_y = Fraction::new(image_height, 2)
+            .add(clap.vert_off)?
+            .sub(Fraction::new(clap_height, 2))?;
+        if !crop_x.is_integer() || !crop_y.is_integer() || crop_x.is_negative || crop_y.is_negative
+        {
             return Err(AvifError::UnknownError);
         }
         let rect = CropRect {
             x: crop_x.get_u32()?,
             y: crop_y.get_u32()?,
-            width: u32_from_i32(clap_width)?,
-            height: u32_from_i32(clap_height)?,
+            width: clap_width,
+            height: clap_height,
         };
         if rect.is_valid(image_width, image_height, pixel_format) {
             Ok(rect)
@@ -103,10 +100,10 @@ mod tests {
                 image_height: $b,
                 pixel_format: PixelFormat::$c,
                 clap: CleanAperture {
-                    width: UFraction($d, $e),
-                    height: UFraction($f, $g),
-                    horiz_off: UFraction($h, $i),
-                    vert_off: UFraction($j, $k),
+                    width: Fraction::new_i32($d, $e),
+                    height: Fraction::new_i32($f, $g),
+                    horiz_off: Fraction::new_i32($h, $i),
+                    vert_off: Fraction::new_i32($j, $k),
                 },
                 rect: Some(CropRect {
                     x: $l,
@@ -126,10 +123,10 @@ mod tests {
                 image_height: $b,
                 pixel_format: PixelFormat::$c,
                 clap: CleanAperture {
-                    width: UFraction($d, $e),
-                    height: UFraction($f, $g),
-                    horiz_off: UFraction($h, $i),
-                    vert_off: UFraction($j, $k),
+                    width: Fraction::new_i32($d, $e),
+                    height: Fraction::new_i32($f, $g),
+                    horiz_off: Fraction::new_i32($h, $i),
+                    vert_off: Fraction::new_i32($j, $k),
                 },
                 rect: None,
             }
@@ -139,25 +136,25 @@ mod tests {
     #[rustfmt::skip]
     const TEST_PARAMS: [TestParam; 20] = [
         valid!(120, 160, Yuv420, 96, 1, 132, 1, 0, 1, 0, 1, 12, 14, 96, 132),
-        valid!(120, 160, Yuv420, 60, 1, 80, 1, -30i32 as u32, 1, -40i32 as u32, 1, 0, 0, 60, 80),
-        valid!(100, 100, Yuv420, 99, 1, 99, 1, -1i32 as u32, 2, -1i32 as u32, 2, 0, 0, 99, 99),
+        valid!(120, 160, Yuv420, 60, 1, 80, 1, -30, 1, -40, 1, 0, 0, 60, 80),
+        valid!(100, 100, Yuv420, 99, 1, 99, 1, -1, 2, -1, 2, 0, 0, 99, 99),
         invalid!(120, 160, Yuv420, 96, 0, 132, 1, 0, 1, 0, 1),
-        invalid!(120, 160, Yuv420, 96, -1i32 as u32, 132, 1, 0, 1, 0, 1),
+        invalid!(120, 160, Yuv420, -96, 1, 132, 1, 0, 1, 0, 1),
         invalid!(120, 160, Yuv420, 96, 1, 132, 0, 0, 1, 0, 1),
-        invalid!(120, 160, Yuv420, 96, 1, 132, -1i32 as u32, 0, 1, 0, 1),
+        invalid!(120, 160, Yuv420, 96, 1, -132, 1, 0, 1, 0, 1),
         invalid!(120, 160, Yuv420, 96, 1, 132, 1, 0, 0, 0, 1),
-        invalid!(120, 160, Yuv420, 96, 1, 132, 1, 0, -1i32 as u32, 0, 1),
+        invalid!(120, 160, Yuv420, 96, 1, 132, 1, -1, 1, 0, 1),
         invalid!(120, 160, Yuv420, 96, 1, 132, 1, 0, 1, 0, 0),
-        invalid!(120, 160, Yuv420, 96, 1, 132, 1, 0, 1, 0, -1i32 as u32),
-        invalid!(120, 160, Yuv420, -96i32 as u32, 1, 132, 1, 0, 1, 0, 1),
+        invalid!(120, 160, Yuv420, 96, 1, 132, 1, 0, 1, -1, 1),
+        invalid!(120, 160, Yuv420, -96, 1, 132, 1, 0, 1, 0, 1),
         invalid!(120, 160, Yuv420, 0, 1, 132, 1, 0, 1, 0, 1),
-        invalid!(120, 160, Yuv420, 96, 1, -132i32 as u32, 1, 0, 1, 0, 1),
+        invalid!(120, 160, Yuv420, 96, 1, -132, 1, 0, 1, 0, 1),
         invalid!(120, 160, Yuv420, 96, 1, 0, 1, 0, 1, 0, 1),
         invalid!(120, 160, Yuv420, 96, 5, 132, 1, 0, 1, 0, 1),
         invalid!(120, 160, Yuv420, 96, 1, 132, 5, 0, 1, 0, 1),
-        invalid!(722, 1024, Yuv420, 385, 1, 330, 1, 103, 1, -308i32 as u32, 1),
-        invalid!(1024, 722, Yuv420, 330, 1, 385, 1, -308i32 as u32, 1, 103, 1),
-        invalid!(99, 99, Yuv420, 99, 1, 99, 1, -1i32 as u32, 2, -1i32 as u32, 2),
+        invalid!(722, 1024, Yuv420, 385, 1, 330, 1, 103, 1, -308, 1),
+        invalid!(1024, 722, Yuv420, 330, 1, 385, 1, -308, 1, 103, 1),
+        invalid!(99, 99, Yuv420, 99, 1, 99, 1, -1, 2, -1, 2),
     ];
 
     #[test_case::test_matrix(0usize..20)]

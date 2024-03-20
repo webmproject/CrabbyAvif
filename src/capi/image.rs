@@ -27,18 +27,46 @@ pub struct avifCleanApertureBox {
     pub vert_off_d: u32,
 }
 
+// The u32 members above are actually i32 values, see
+// https://github.com/AOMediaCodec/libavif/pull/1749#discussion_r1391583768
+impl Fraction {
+    pub const fn new_i32_in_u32(n: u32, d: u32) -> Fraction {
+        let n = n as i32;
+        let d = d as i32;
+        if d < 0 {
+            Fraction::new(0, 0) // Consider negative denominator as invalid.
+        } else {
+            Fraction {
+                n: n.unsigned_abs(),
+                d: d as u32,
+                is_negative: n < 0,
+            }
+        }
+    }
+    pub fn n_i32(self) -> i32 {
+        if self.is_negative {
+            i32::try_from(-(self.n as i64)).unwrap()
+        } else {
+            i32::try_from(self.n).unwrap()
+        }
+    }
+    pub fn d_i32(self) -> i32 {
+        i32::try_from(self.d).unwrap()
+    }
+}
+
 impl From<&Option<CleanAperture>> for avifCleanApertureBox {
     fn from(clap_op: &Option<CleanAperture>) -> Self {
         match clap_op {
             Some(clap) => Self {
-                width_n: clap.width.0,
-                width_d: clap.width.1,
-                height_n: clap.height.0,
-                height_d: clap.height.1,
-                horiz_off_n: clap.horiz_off.0,
-                horiz_off_d: clap.horiz_off.1,
-                vert_off_n: clap.vert_off.0,
-                vert_off_d: clap.vert_off.1,
+                width_n: clap.width.n_i32() as u32,
+                width_d: clap.width.d_i32() as u32,
+                height_n: clap.height.n_i32() as u32,
+                height_d: clap.height.d_i32() as u32,
+                horiz_off_n: clap.horiz_off.n_i32() as u32,
+                horiz_off_d: clap.horiz_off.d_i32() as u32,
+                vert_off_n: clap.vert_off.n_i32() as u32,
+                vert_off_d: clap.vert_off.d_i32() as u32,
             },
             None => Self::default(),
         }
@@ -48,10 +76,10 @@ impl From<&Option<CleanAperture>> for avifCleanApertureBox {
 impl From<&avifCleanApertureBox> for CleanAperture {
     fn from(clap: &avifCleanApertureBox) -> Self {
         Self {
-            width: UFraction(clap.width_n, clap.width_d),
-            height: UFraction(clap.height_n, clap.height_d),
-            horiz_off: UFraction(clap.horiz_off_n, clap.horiz_off_d),
-            vert_off: UFraction(clap.vert_off_n, clap.vert_off_d),
+            width: Fraction::new_i32_in_u32(clap.width_n, clap.width_d),
+            height: Fraction::new_i32_in_u32(clap.height_n, clap.height_d),
+            horiz_off: Fraction::new_i32_in_u32(clap.horiz_off_n, clap.horiz_off_d),
+            vert_off: Fraction::new_i32_in_u32(clap.vert_off_n, clap.vert_off_d),
         }
     }
 }

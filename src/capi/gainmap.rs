@@ -3,6 +3,7 @@ use super::io::*;
 use super::types::*;
 
 use crate::decoder::gainmap::*;
+use crate::internal_utils::*;
 use crate::parser::mp4box::*;
 use crate::*;
 
@@ -29,31 +30,45 @@ pub struct avifGainMapMetadata {
     pub useBaseColorSpace: avifBool,
 }
 
+impl Fraction {
+    pub fn n_u32(self) -> u32 {
+        if self.is_negative {
+            panic!()
+        } else {
+            self.n
+        }
+    }
+}
+
 impl From<&GainMapMetadata> for avifGainMapMetadata {
     fn from(m: &GainMapMetadata) -> Self {
         avifGainMapMetadata {
-            gainMapMinN: [m.min[0].0, m.min[1].0, m.min[2].0],
-            gainMapMinD: [m.min[0].1, m.min[1].1, m.min[2].1],
-            gainMapMaxN: [m.max[0].0, m.max[1].0, m.max[2].0],
-            gainMapMaxD: [m.max[0].1, m.max[1].1, m.max[2].1],
-            gainMapGammaN: [m.gamma[0].0, m.gamma[1].0, m.gamma[2].0],
-            gainMapGammaD: [m.gamma[0].1, m.gamma[1].1, m.gamma[2].1],
-            baseOffsetN: [m.base_offset[0].0, m.base_offset[1].0, m.base_offset[2].0],
-            baseOffsetD: [m.base_offset[0].1, m.base_offset[1].1, m.base_offset[2].1],
+            gainMapMinN: [m.min[0].n_i32(), m.min[1].n_i32(), m.min[2].n_i32()],
+            gainMapMinD: [m.min[0].d, m.min[1].d, m.min[2].d],
+            gainMapMaxN: [m.max[0].n_i32(), m.max[1].n_i32(), m.max[2].n_i32()],
+            gainMapMaxD: [m.max[0].d, m.max[1].d, m.max[2].d],
+            gainMapGammaN: [m.gamma[0].n_u32(), m.gamma[1].n_u32(), m.gamma[2].n_u32()],
+            gainMapGammaD: [m.gamma[0].d, m.gamma[1].d, m.gamma[2].d],
+            baseOffsetN: [
+                m.base_offset[0].n_i32(),
+                m.base_offset[1].n_i32(),
+                m.base_offset[2].n_i32(),
+            ],
+            baseOffsetD: [m.base_offset[0].d, m.base_offset[1].d, m.base_offset[2].d],
             alternateOffsetN: [
-                m.alternate_offset[0].0,
-                m.alternate_offset[1].0,
-                m.alternate_offset[2].0,
+                m.alternate_offset[0].n_i32(),
+                m.alternate_offset[1].n_i32(),
+                m.alternate_offset[2].n_i32(),
             ],
             alternateOffsetD: [
-                m.alternate_offset[0].1,
-                m.alternate_offset[1].1,
-                m.alternate_offset[2].1,
+                m.alternate_offset[0].d,
+                m.alternate_offset[1].d,
+                m.alternate_offset[2].d,
             ],
-            baseHdrHeadroomN: m.base_hdr_headroom.0,
-            baseHdrHeadroomD: m.base_hdr_headroom.1,
-            alternateHdrHeadroomN: m.alternate_hdr_headroom.0,
-            alternateHdrHeadroomD: m.alternate_hdr_headroom.1,
+            baseHdrHeadroomN: m.base_hdr_headroom.n_u32(),
+            baseHdrHeadroomD: m.base_hdr_headroom.d,
+            alternateHdrHeadroomN: m.alternate_hdr_headroom.n_u32(),
+            alternateHdrHeadroomD: m.alternate_hdr_headroom.d,
             backwardDirection: m.backward_direction as avifBool,
             useBaseColorSpace: m.use_base_color_space as avifBool,
         }
