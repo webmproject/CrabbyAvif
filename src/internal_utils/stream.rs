@@ -33,8 +33,12 @@ impl IBitStream<'_> {
         Ok(bit == 1)
     }
 
-    pub fn skip(&mut self, n: usize) {
+    pub fn skip(&mut self, n: usize) -> AvifResult<()> {
+        if self.bit_offset + n > self.data.len() * 8 {
+            return Err(AvifError::BmffParseFailed);
+        }
         self.bit_offset += n;
+        Ok(())
     }
 
     pub fn skip_uvlc(&mut self) -> AvifResult<()> {
@@ -44,7 +48,7 @@ impl IBitStream<'_> {
             leading_zeros += 1;
         }
         if leading_zeros < 32 {
-            self.skip(leading_zeros as usize); // f(leadingZeros) value;
+            self.skip(leading_zeros as usize)?; // f(leadingZeros) value;
         }
         Ok(())
     }
@@ -156,10 +160,12 @@ impl IStream<'_> {
         Ok(UFraction(self.read_u32()?, self.read_u32()?))
     }
 
+    // Reads size characters of a non-null-terminated string.
     pub fn read_string(&mut self, size: usize) -> AvifResult<String> {
         String::from_utf8(self.get_vec(size)?).or(Err(AvifError::BmffParseFailed))
     }
 
+    // Reads an xx-byte unsigner integer.
     pub fn read_uxx(&mut self, xx: u8) -> AvifResult<u64> {
         let n: usize = xx.into();
         if n == 0 {
@@ -174,11 +180,12 @@ impl IStream<'_> {
         Ok(u64::from_be_bytes(out))
     }
 
+    // Reads a null-terminated string.
     pub fn read_c_string(&mut self) -> AvifResult<String> {
         self.check(1)?;
         let null_position = self.data[self.offset..]
             .iter()
-            .position(|&x| x == 0)
+            .position(|&x| x == b'\0')
             .ok_or(AvifError::BmffParseFailed)?;
         let range = self.offset..self.offset + null_position;
         self.offset += null_position + 1;
@@ -217,14 +224,24 @@ impl IStream<'_> {
     }
 
     pub fn read_uleb128(&mut self) -> AvifResult<u32> {
-        let mut val: u64 = 0;
+        // See the section 4.10.5. of the AV1 specification.
+        let mut value: u64 = 0;
         for i in 0..8 {
-            let byte = self.read_u8()?;
-            val |= ((byte & 0x7F) << (i * 7)) as u64;
-            if (byte & 0x80) == 0 {
-                return u32_from_u64(val);
+            // leb128_byte contains 8 bits read from the bitstream.
+            let leb128_byte = self.read_u8()?;
+            // The bottom 7 bits are used to compute the variable value.
+            value |= ((leb128_byte & 0x7F) << (i * 7)) as u64;
+            // The most significant bit is used to indicate that there are more
+            // bytes to be read.
+            if (leb128_byte & 0x80) == 0 {
+                // It is a requirement of bitstream conformance that the value
+                // returned from the leb128 parsing process is less than or
+                // equal to (1 << 32)-1.
+                return u32_from_u64(value);
             }
         }
+        // It is a requirement of bitstream conformance that the most
+        // significant bit of leb128_byte is equal to 0 if i is equal to 7.
         println!("uleb value did not terminate after 8 bytes");
         Err(AvifError::BmffParseFailed)
     }
@@ -265,5 +282,18 @@ mod tests {
         assert_eq!(stream.read_u64(), Ok(72623859790382856));
         stream.offset = 0;
         assert_eq!(stream.read_uxx(9), Err(AvifError::NotImplemented));
+    }
+
+    #[test]
+    fn read_string() {
+        let bytes = "abcd\0e".as_bytes();
+        assert_eq!(IStream::create(bytes).read_string(4), Ok("abcd".into()));
+        assert_eq!(IStream::create(bytes).read_string(5), Ok("abcd\0".into()));
+        assert_eq!(IStream::create(bytes).read_string(6), Ok("abcd\0e".into()));
+        assert_eq!(
+            IStream::create(bytes).read_string(8),
+            Err(AvifError::BmffParseFailed)
+        );
+        assert_eq!(IStream::create(bytes).read_c_string(), Ok("abcd".into()));
     }
 }
