@@ -1274,8 +1274,8 @@ pub fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
     if header.box_type != "ftyp" {
         return Ok(false);
     }
-    let ftyp = parse_ftyp(&mut stream)?;
-    //println!("ftyp: {:#?}", ftyp);
+    let mut header_stream = stream.sub_stream(header.size)?;
+    let ftyp = parse_ftyp(&mut header_stream)?;
     Ok(ftyp.is_avif())
 }
 
@@ -1339,4 +1339,33 @@ pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
         return Err(AvifError::InvalidToneMappedImage);
     }
     Ok(metadata)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::parser::mp4box;
+    use crate::AvifResult;
+
+    #[test]
+    fn peek_compatible_file_type() -> AvifResult<()> {
+        let buf = [
+            0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, //
+            0x61, 0x76, 0x69, 0x66, 0x00, 0x00, 0x00, 0x00, //
+            0x61, 0x76, 0x69, 0x66, 0x6d, 0x69, 0x66, 0x31, //
+            0x6d, 0x69, 0x61, 0x66, 0x4d, 0x41, 0x31, 0x41, //
+            0x00, 0x00, 0x00, 0xf2, 0x6d, 0x65, 0x74, 0x61, //
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x28, //
+        ];
+        let min_required_bytes = 32;
+        for i in 0..buf.len() {
+            let res = mp4box::peek_compatible_file_type(&buf[..i]);
+            if i < min_required_bytes {
+                // Not enough bytes.
+                assert!(res.is_err());
+            } else {
+                assert!(res?);
+            }
+        }
+        Ok(())
+    }
 }
