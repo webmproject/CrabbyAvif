@@ -212,7 +212,6 @@ find_property_function!(find_irot_angle, ImageRotation, u8);
 find_property_function!(find_imir_axis, ImageMirror, u8);
 
 pub fn check_limits(width: u32, height: u32, size_limit: u32, dimension_limit: u32) -> bool {
-    //println!("w: {width} h: {height} s: {size_limit} d: {dimension_limit}");
     if height == 0 {
         return false;
     }
@@ -249,10 +248,6 @@ pub fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
         return Err(AvifError::OutOfMemory);
     }
     Ok(v)
-}
-
-pub fn reinterpret_f32_as_u32(f: f32) -> u32 {
-    u32::from_be_bytes(f.to_be_bytes())
 }
 
 #[cfg(test)]
