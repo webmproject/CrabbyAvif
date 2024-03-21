@@ -237,6 +237,7 @@ impl Image {
         }
         // This constant comes from libyuv. For details, see here:
         // https://chromium.googlesource.com/libyuv/libyuv/+/2f87e9a7/source/row_common.cc#3537
+        let reinterpret_f32_as_u32 = |f: f32| u32::from_le_bytes(f.to_le_bytes());
         let multiplier = 1.925_93e-34 * scale;
         for y in 0..self.height {
             let row = self.row16_mut(y)?;
