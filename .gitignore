@@ -1,4 +1,5 @@
 /.DS_Store
+/.vscode
 /Cargo.lock
 /c_api_tests/build
 /c_build
