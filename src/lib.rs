@@ -83,7 +83,7 @@ impl From<u32> for ChromaSamplePosition {
             0 => Self::Unknown,
             1 => Self::Vertical,
             2 => Self::Colocated,
-            _ => Self::default(),
+            _ => Self::Unknown,
         }
     }
 }
@@ -123,7 +123,7 @@ impl From<u16> for ColorPrimaries {
             11 => Self::Smpte431,
             12 => Self::Smpte432,
             22 => Self::Ebu3213,
-            _ => Self::default(),
+            _ => Self::Unknown,
         }
     }
 }
@@ -181,7 +181,7 @@ impl From<u16> for TransferCharacteristics {
             16 => Self::Pq,
             17 => Self::Smpte428,
             18 => Self::Hlg,
-            _ => Self::default(),
+            _ => Self::Unknown,
         }
     }
 }
