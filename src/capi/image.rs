@@ -17,6 +17,8 @@ pub type avifPixelAspectRatioBox = PixelAspectRatio;
 #[derive(Debug, Default, Copy, Clone)]
 #[repr(C)]
 pub struct avifCleanApertureBox {
+    // The u32 members below are actually i32 values, see
+    // https://github.com/AOMediaCodec/libavif/pull/1749#discussion_r1391583768.
     pub width_n: u32,
     pub width_d: u32,
     pub height_n: u32,

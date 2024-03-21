@@ -6,10 +6,16 @@ use crate::parser::mp4box::*;
 use crate::utils::clap::*;
 use crate::*;
 
+// Some HEIF fractional fields can be negative, hence Fraction and UFraction.
+// The denominator is always unsigned.
 #[derive(Copy, Clone, Default, Debug)]
 pub struct Fraction(pub i32, pub u32);
 #[derive(Copy, Clone, Default, Debug)]
 pub struct UFraction(pub u32, pub u32);
+// 'clap' fractions do not follow this pattern: both numerators and denominators
+// are used as i32, but they are signalled as u32 according to the specification
+// as of 2024. This may be fixed in later versions of the specification, see
+// https://github.com/AOMediaCodec/libavif/pull/1749#discussion_r1391612932.
 #[derive(Copy, Clone, Default, Debug)]
 pub struct IFraction(pub i32, pub i32);
 
