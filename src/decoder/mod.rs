@@ -346,7 +346,7 @@ impl Decoder {
         assert!(color_item.grid_item_ids.len() == alpha_item_indices.len());
         let first_item = self.items.get(&alpha_item_indices[0]).unwrap();
         let properties = match first_item.av1C() {
-            Some(av1C) => vec![ItemProperty::CodecConfiguration(av1C.clone())],
+            Some(av1C) => vec![ItemProperty::CodecConfiguration(*av1C)],
             None => return (0, None),
         };
         (
@@ -406,8 +406,8 @@ impl Decoder {
             .items
             .get(&gainmap_id)
             .ok_or(AvifError::InvalidToneMappedImage)?;
-        if let Ok(nclx) = find_nclx(&gainmap_item.properties) {
-            println!("found nclx: {:#?}", nclx);
+        // Ignore CICP if multiple nclx properties were found.
+        if let Ok(Some(nclx)) = find_nclx(&gainmap_item.properties) {
             self.gainmap.image.color_primaries = nclx.color_primaries;
             self.gainmap.image.transfer_characteristics = nclx.transfer_characteristics;
             self.gainmap.image.matrix_coefficients = nclx.matrix_coefficients;
@@ -423,30 +423,14 @@ impl Decoder {
             .items
             .get(&tonemap_id)
             .ok_or(AvifError::InvalidToneMappedImage)?;
-        match find_nclx(&tonemap_item.properties) {
-            Ok(nclx) => {
-                self.gainmap.alt_color_primaries = nclx.color_primaries;
-                self.gainmap.alt_transfer_characteristics = nclx.transfer_characteristics;
-                self.gainmap.alt_matrix_coefficients = nclx.matrix_coefficients;
-                self.gainmap.alt_full_range = nclx.full_range;
-            }
-            Err(multiple_nclx_found) => {
-                if multiple_nclx_found {
-                    println!("multiple nclx were found for tonemap");
-                    return Err(AvifError::BmffParseFailed);
-                }
-            }
+        if let Some(nclx) = find_nclx(&gainmap_item.properties)? {
+            self.gainmap.image.color_primaries = nclx.color_primaries;
+            self.gainmap.image.transfer_characteristics = nclx.transfer_characteristics;
+            self.gainmap.image.matrix_coefficients = nclx.matrix_coefficients;
+            self.gainmap.image.full_range = nclx.full_range;
         }
-        match find_icc(&tonemap_item.properties) {
-            Ok(icc) => {
-                self.gainmap.alt_icc = icc;
-            }
-            Err(multiple_icc_found) => {
-                if multiple_icc_found {
-                    println!("multiple icc were found for tonemap");
-                    return Err(AvifError::BmffParseFailed);
-                }
-            }
+        if let Some(icc) = find_icc(&tonemap_item.properties)? {
+            self.gainmap.alt_icc = icc.clone();
         }
         if let Some(clli) = tonemap_item.clli() {
             self.gainmap.alt_clli = *clli;
@@ -613,7 +597,7 @@ impl Decoder {
             }
             if is_first {
                 // Adopt the configuration property of the first tile.
-                first_av1C = dimg_item.av1C().ok_or(AvifError::BmffParseFailed)?.clone();
+                first_av1C = *dimg_item.av1C().ok_or(AvifError::BmffParseFailed)?;
                 is_first = false;
             }
             grid_item_ids.push(item_info.item_id);
@@ -928,40 +912,34 @@ impl Decoder {
             // (HEIF 6.5.5.1, from Amendment 3) Accept one of each type, and bail out if more than one
             // of a given type is provided.
             let mut cicp_set = false;
-            match find_nclx(color_properties) {
-                Ok(nclx) => {
-                    self.image.color_primaries = nclx.color_primaries;
-                    self.image.transfer_characteristics = nclx.transfer_characteristics;
-                    self.image.matrix_coefficients = nclx.matrix_coefficients;
-                    self.image.full_range = nclx.full_range;
-                    cicp_set = true;
-                }
-                Err(multiple_nclx_found) => {
-                    if multiple_nclx_found {
-                        println!("multiple nclx were found");
-                        return Err(AvifError::BmffParseFailed);
-                    }
-                }
+
+            if let Some(nclx) = find_nclx(color_properties)? {
+                self.image.color_primaries = nclx.color_primaries;
+                self.image.transfer_characteristics = nclx.transfer_characteristics;
+                self.image.matrix_coefficients = nclx.matrix_coefficients;
+                self.image.full_range = nclx.full_range;
+                cicp_set = true;
             }
-            match find_icc(color_properties) {
-                Ok(icc) => {
-                    self.image.icc = icc;
-                }
-                Err(multiple_icc_found) => {
-                    if multiple_icc_found {
-                        println!("multiple icc were found");
-                        return Err(AvifError::BmffParseFailed);
-                    }
-                }
+            if let Some(icc) = find_icc(color_properties)? {
+                self.image.icc = icc.clone();
             }
 
-            self.image.clli = find_clli(color_properties);
-            self.image.pasp = find_pasp(color_properties);
-            self.image.clap = find_clap(color_properties);
-            self.image.irot_angle = find_irot_angle(color_properties);
-            self.image.imir_axis = find_imir_axis(color_properties);
+            macro_rules! find_property {
+                ($properties:expr, $property_name:ident) => {
+                    $properties.iter().find_map(|p| match p {
+                        ItemProperty::$property_name(value) => Some(*value),
+                        _ => None,
+                    })
+                };
+            }
+            self.image.clli = find_property!(color_properties, ContentLightLevelInformation);
+            self.image.pasp = find_property!(color_properties, PixelAspectRatio);
+            self.image.clap = find_property!(color_properties, CleanAperture);
+            self.image.irot_angle = find_property!(color_properties, ImageRotation);
+            self.image.imir_axis = find_property!(color_properties, ImageMirror);
 
-            let av1C = find_av1C(color_properties).ok_or(AvifError::BmffParseFailed)?;
+            let av1C = find_property!(color_properties, CodecConfiguration)
+                .ok_or(AvifError::BmffParseFailed)?;
             self.image.depth = av1C.depth();
             self.image.yuv_format = av1C.pixel_format();
             self.image.chroma_sample_position = av1C.chroma_sample_position;

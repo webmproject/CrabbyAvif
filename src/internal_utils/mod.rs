@@ -3,7 +3,6 @@ pub mod pixels;
 pub mod stream;
 
 use crate::parser::mp4box::*;
-use crate::utils::clap::*;
 use crate::*;
 
 #[derive(Copy, Clone, Default, Debug)]
@@ -134,76 +133,35 @@ clamp_function!(clamp_u16, u16);
 clamp_function!(clamp_f32, f32);
 clamp_function!(clamp_i32, i32);
 
-pub fn find_nclx(properties: &[ItemProperty]) -> Result<&Nclx, bool> {
-    let nclx_properties: Vec<_> = properties
-        .iter()
-        .filter(|x| match x {
-            ItemProperty::ColorInformation(colr) => matches!(colr, ColorInformation::Nclx(_)),
-            _ => false,
-        })
-        .collect();
-    match nclx_properties.len() {
-        0 => Err(false),
-        1 => match nclx_properties[0] {
-            ItemProperty::ColorInformation(ColorInformation::Nclx(nclx)) => Ok(nclx),
-            _ => Err(false), // not reached.
-        },
-        _ => Err(true), // multiple nclx were found.
-    }
-}
-
-pub fn find_icc(properties: &[ItemProperty]) -> Result<Vec<u8>, bool> {
-    let icc_properties: Vec<_> = properties
-        .iter()
-        .filter(|x| match x {
-            ItemProperty::ColorInformation(colr) => matches!(colr, ColorInformation::Icc(_)),
-            _ => false,
-        })
-        .collect();
-    match icc_properties.len() {
-        0 => Err(false),
-        1 => match icc_properties[0] {
-            ItemProperty::ColorInformation(ColorInformation::Icc(icc)) => Ok(icc.to_vec()),
-            _ => Err(false), // not reached.
-        },
-        _ => Err(true), // multiple icc were found.
-    }
-}
-
-#[allow(non_snake_case)]
-pub fn find_av1C(properties: &[ItemProperty]) -> Option<&CodecConfiguration> {
-    match properties
-        .iter()
-        .find(|x| matches!(x, ItemProperty::CodecConfiguration(_)))
-    {
-        Some(ItemProperty::CodecConfiguration(av1C)) => Some(av1C),
-        _ => None,
-    }
-}
-
-macro_rules! find_property_function {
-    ($func:ident, $prop: ident, $ret:ty) => {
-        pub fn $func(properties: &[ItemProperty]) -> Option<$ret> {
-            match properties
-                .iter()
-                .find(|x| matches!(x, ItemProperty::$prop(_)))
-            {
-                Some(ItemProperty::$prop(x)) => Some(*x),
-                _ => None,
+// Returns the colr nclx property. Returns an error if there are multiple ones.
+pub fn find_nclx(properties: &[ItemProperty]) -> AvifResult<Option<&Nclx>> {
+    let mut single_nclx: Option<&Nclx> = None;
+    for property in properties {
+        if let ItemProperty::ColorInformation(ColorInformation::Nclx(nclx)) = property {
+            if single_nclx.is_some() {
+                println!("multiple nclx were found");
+                return Err(AvifError::BmffParseFailed);
             }
+            single_nclx = Some(nclx);
         }
-    };
+    }
+    Ok(single_nclx)
 }
 
-find_property_function!(
-    find_clli,
-    ContentLightLevelInformation,
-    ContentLightLevelInformation
-);
-find_property_function!(find_pasp, PixelAspectRatio, PixelAspectRatio);
-find_property_function!(find_clap, CleanAperture, CleanAperture);
-find_property_function!(find_irot_angle, ImageRotation, u8);
-find_property_function!(find_imir_axis, ImageMirror, u8);
+// Returns the colr icc property. Returns an error if there are multiple ones.
+pub fn find_icc(properties: &[ItemProperty]) -> AvifResult<Option<&Vec<u8>>> {
+    let mut single_icc: Option<&Vec<u8>> = None;
+    for property in properties {
+        if let ItemProperty::ColorInformation(ColorInformation::Icc(icc)) = property {
+            if single_icc.is_some() {
+                println!("multiple icc were found");
+                return Err(AvifError::BmffParseFailed);
+            }
+            single_icc = Some(icc);
+        }
+    }
+    Ok(single_icc)
+}
 
 pub fn check_limits(width: u32, height: u32, size_limit: u32, dimension_limit: u32) -> bool {
     //println!("w: {width} h: {height} s: {size_limit} d: {dimension_limit}");

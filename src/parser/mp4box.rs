@@ -70,7 +70,7 @@ pub struct PixelInformation {
     pub plane_depths: [u8; MAX_PLANE_COUNT],
 }
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct CodecConfiguration {
     pub seq_profile: u8,
     pub seq_level_idx0: u8,
