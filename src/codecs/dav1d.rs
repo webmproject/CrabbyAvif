@@ -21,11 +21,12 @@ unsafe extern "C" fn avif_dav1d_free_callback(
     // Do nothing. The buffers are owned by the decoder.
 }
 
-const DAV1D_EAGAIN: i32 = -libc::EAGAIN;
+// See https://code.videolan.org/videolan/dav1d/-/blob/9849ede1304da1443cfb4a86f197765081034205/include/dav1d/common.h#L55-59
+const DAV1D_EAGAIN: i32 = if libc::EPERM > 0 { -libc::EAGAIN } else { libc::EAGAIN };
 
-// The type of the fields from from dav1d_sys::bindings::* are dependent on the compiler that
-// is used to generate the bindings, version of dav1d, etc. So allow clippy to ignore
-// unnecessary cast warnings.
+// The type of the fields from dav1d_sys::bindings::* are dependent on the
+// compiler that is used to generate the bindings, version of dav1d, etc.
+// So allow clippy to ignore unnecessary cast warnings.
 #[allow(clippy::unnecessary_cast)]
 impl Decoder for Dav1d {
     fn initialize(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
@@ -41,14 +42,13 @@ impl Decoder for Dav1d {
         settings.operating_point = operating_point as i32;
         settings.all_layers = if all_layers { 1 } else { 0 };
 
-        unsafe {
-            let mut dec = MaybeUninit::uninit();
-            let ret = dav1d_open(dec.as_mut_ptr(), (&settings) as *const _);
-            if ret != 0 {
-                return Err(AvifError::UnknownError);
-            }
-            self.context = Some(dec.assume_init());
+        let mut dec = MaybeUninit::uninit();
+        let ret = unsafe { dav1d_open(dec.as_mut_ptr(), (&settings) as *const _) };
+        if ret != 0 {
+            return Err(AvifError::UnknownError);
         }
+        self.context = Some(unsafe { dec.assume_init() });
+
         Ok(())
     }
 
@@ -62,14 +62,12 @@ impl Decoder for Dav1d {
         if self.context.is_none() {
             self.initialize(0, true)?;
         }
-        let got_picture;
-        let av1_payload_len = av1_payload.len();
         unsafe {
             let mut data: Dav1dData = std::mem::zeroed();
             let res = dav1d_data_wrap(
                 (&mut data) as *mut _,
                 av1_payload.as_ptr(),
-                av1_payload_len,
+                av1_payload.len(),
                 Some(avif_dav1d_free_callback),
                 /*cookie=*/ std::ptr::null_mut(),
             );
@@ -77,6 +75,7 @@ impl Decoder for Dav1d {
                 return Err(AvifError::UnknownError);
             }
             let mut next_frame: Dav1dPicture = std::mem::zeroed();
+            let got_picture;
             loop {
                 if !data.data.is_null() {
                     let res = dav1d_send_data(self.context.unwrap(), (&mut data) as *mut _);
@@ -162,7 +161,7 @@ impl Decoder for Dav1d {
                     1 => PixelFormat::Yuv420,
                     2 => PixelFormat::Yuv422,
                     3 => PixelFormat::Yuv444,
-                    _ => PixelFormat::Yuv420, // not reached.
+                    _ => return Err(AvifError::UnknownError), // not reached.
                 };
                 let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
                 image.full_range = seq_hdr.color_range != 0;
