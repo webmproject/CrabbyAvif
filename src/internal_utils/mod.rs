@@ -251,7 +251,7 @@ pub fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
 }
 
 #[cfg(test)]
-pub fn assert_f32_array(a: &[f32], b: &[f32]) {
+pub fn assert_eq_f32_array(a: &[f32], b: &[f32]) {
     assert_eq!(a.len(), b.len());
     for i in 0..a.len() {
         assert!((a[i] - b[i]).abs() <= std::f32::EPSILON);

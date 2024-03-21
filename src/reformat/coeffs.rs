@@ -55,19 +55,19 @@ pub fn calculate_yuv_coefficients(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::internal_utils::assert_f32_array;
+    use crate::internal_utils::assert_eq_f32_array;
 
     #[test]
     fn yuv_coefficients() {
-        assert_f32_array(
+        assert_eq_f32_array(
             &calculate_yuv_coefficients(ColorPrimaries::Unknown, MatrixCoefficients::Bt601),
             &[0.299f32, 0.587f32, 0.114f32], // Kr,Kg,Kb as https://en.wikipedia.org/wiki/YCbCr#ITU-R_BT.601_conversion
         );
-        assert_f32_array(
+        assert_eq_f32_array(
             &calculate_yuv_coefficients(ColorPrimaries::Unknown, MatrixCoefficients::Unspecified),
             &[0.299f32, 0.587f32, 0.114f32], // Falls back to Bt601.
         );
-        assert_f32_array(
+        assert_eq_f32_array(
             &calculate_yuv_coefficients(ColorPrimaries::Unknown, MatrixCoefficients::Smpte240),
             &[0.212f32, 1f32 - 0.212 - 0.087, 0.087f32], // Kr,Kg,Kb as https://en.wikipedia.org/wiki/YCbCr#SMPTE_240M_conversion
         );
