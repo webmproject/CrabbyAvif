@@ -21,7 +21,7 @@ impl RawWriter {
         }
     }
 
-    fn write_header(&mut self) -> bool {
+    fn open_file(&mut self) -> bool {
         if self.file.is_none() {
             assert!(self.filename.is_some());
             let file = File::create(self.filename.unwrap_ref());
@@ -34,7 +34,7 @@ impl RawWriter {
     }
 
     pub fn write_frame(&mut self, image: &Image) -> bool {
-        if !self.write_header() {
+        if !self.open_file() {
             return false;
         }
         if self.rgb {
