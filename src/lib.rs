@@ -28,6 +28,7 @@ impl std::hash::BuildHasher for NonRandomHasherState {
 pub type HashMap<K, V> = std::collections::HashMap<K, V, NonRandomHasherState>;
 pub type HashSet<K> = std::collections::HashSet<K, NonRandomHasherState>;
 
+// See https://aomediacodec.github.io/av1-spec/#color-config-semantics.
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum PixelFormat {
     Yuv444,
@@ -88,6 +89,7 @@ impl From<u32> for ChromaSamplePosition {
     }
 }
 
+// See https://aomediacodec.github.io/av1-spec/#color-config-semantics.
 #[repr(u16)]
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum ColorPrimaries {
@@ -136,6 +138,7 @@ impl ColorPrimaries {
     pub const Dci_p3: Self = Self::Smpte432;
 }
 
+// See https://aomediacodec.github.io/av1-spec/#color-config-semantics.
 #[repr(u16)]
 #[derive(Debug, Default, PartialEq, Copy, Clone)]
 pub enum TransferCharacteristics {
@@ -191,6 +194,7 @@ impl TransferCharacteristics {
     pub const Smpte2084: Self = Self::Pq;
 }
 
+// See https://aomediacodec.github.io/av1-spec/#color-config-semantics.
 #[repr(u16)]
 #[derive(Debug, Default, PartialEq, Eq, Copy, Clone, Hash)]
 pub enum MatrixCoefficients {
