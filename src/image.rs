@@ -121,28 +121,24 @@ impl Image {
         self.width == other.width && self.height == other.height && self.depth == other.depth
     }
 
-    pub fn subsampled_width(&self, width: u32, plane: Plane) -> usize {
+    pub fn width(&self, plane: Plane) -> usize {
         match plane {
-            Plane::Y | Plane::A => width as usize,
-            _ => match self.yuv_format {
-                PixelFormat::Yuv444 | PixelFormat::Monochrome => width as usize,
-                PixelFormat::Yuv420 | PixelFormat::Yuv422 => (width as usize + 1) / 2,
+            Plane::Y | Plane::A => self.width as usize,
+            Plane::U | Plane::V => match self.yuv_format {
+                PixelFormat::Yuv444 => self.width as usize,
+                PixelFormat::Yuv420 | PixelFormat::Yuv422 => (self.width as usize + 1) / 2,
+                PixelFormat::Monochrome => 0,
             },
         }
-    }
-
-    pub fn width(&self, plane: Plane) -> usize {
-        self.subsampled_width(self.width, plane)
     }
 
     pub fn height(&self, plane: Plane) -> usize {
         match plane {
             Plane::Y | Plane::A => self.height as usize,
-            _ => match self.yuv_format {
-                PixelFormat::Yuv444 | PixelFormat::Monochrome | PixelFormat::Yuv422 => {
-                    self.height as usize
-                }
+            Plane::U | Plane::V => match self.yuv_format {
+                PixelFormat::Yuv444 | PixelFormat::Yuv422 => self.height as usize,
                 PixelFormat::Yuv420 => (self.height as usize + 1) / 2,
+                PixelFormat::Monochrome => 0,
             },
         }
     }
