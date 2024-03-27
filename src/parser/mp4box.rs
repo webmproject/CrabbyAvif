@@ -17,11 +17,16 @@ struct BoxHeader {
 #[derive(Debug)]
 pub struct FileTypeBox {
     pub major_brand: String,
+    // minor_version "is informative only" (section 4.3.1 of ISO/IEC 14496-12)
     compatible_brands: Vec<String>,
 }
 
 impl FileTypeBox {
     fn has_brand(&self, brand: &str) -> bool {
+        // As of 2024, section 4.3.1 of ISO/IEC 14496-12 does not explictly say that the file is
+        // compliant with the specification defining the major brand, but "the major_brand should be
+        // repeated in the compatible_brands". Later versions of the specification may explicitly
+        // consider the major brand as one of the compatible brands, even if not repeated.
         if self.major_brand.as_str() == brand {
             return true;
         }
@@ -30,6 +35,8 @@ impl FileTypeBox {
 
     pub fn is_avif(&self) -> bool {
         self.has_brand("avif") || self.has_brand("avis")
+        // "avio" also exists but does not identify the file as AVIF on its own. See
+        // https://aomediacodec.github.io/av1-avif/v1.1.0.html#image-and-image-collection-brand
     }
 
     pub fn needs_meta(&self) -> bool {
@@ -155,10 +162,14 @@ pub enum ItemProperty {
     Unknown(String),
 }
 
+// Section 8.11.14 of ISO/IEC 14496-12.
 #[derive(Debug, Default)]
 pub struct ItemPropertyAssociation {
     pub item_id: u32,
-    pub associations: Vec<(u16, bool)>,
+    pub associations: Vec<(
+        u16,  // 1-based property_index
+        bool, // essential
+    )>,
 }
 
 #[derive(Debug, Default)]
@@ -178,19 +189,19 @@ pub struct ItemPropertyBox {
 
 #[derive(Debug)]
 pub struct ItemReference {
-    // Read this reference as "{from_item_id} is a {reference_type} for{to_item_id}" (except for
-    // dimg where it is in the opposite direction).
+    // Read this reference as "{from_item_id} is a {reference_type} for {to_item_id}"
+    // (except for dimg where it is in the opposite direction).
     pub from_item_id: u32,
     pub to_item_id: u32,
     pub reference_type: String,
-    pub index: u32, // Index of the reference within the iref type.
+    pub index: u32, // 0-based index of the reference within the iref type.
 }
 
 #[derive(Debug, Default)]
 pub struct MetaBox {
     pub iinf: Vec<ItemInfo>,
     pub iloc: ItemLocationBox,
-    pub primary_item_id: u32,
+    pub primary_item_id: u32, // pitm
     pub iprp: ItemPropertyBox,
     pub iref: Vec<ItemReference>,
     pub idat: Vec<u8>,
@@ -207,7 +218,6 @@ fn parse_header(stream: &mut IStream) -> AvifResult<BoxHeader> {
     let start_offset = stream.offset;
     let mut size = stream.read_u32()? as u64;
     let box_type = stream.read_string(4)?;
-    //println!("box_type: {}", box_type);
     if size == 1 {
         size = stream.read_u64()?;
     }
@@ -224,6 +234,7 @@ fn parse_header(stream: &mut IStream) -> AvifResult<BoxHeader> {
 }
 
 fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
+    // Section 4.3.2 of ISO/IEC 14496-12.
     let major_brand = stream.read_string(4)?;
     // unsigned int(4) minor_version;
     stream.skip_u32()?;
@@ -241,6 +252,7 @@ fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
 }
 
 fn parse_hdlr(stream: &mut IStream) -> AvifResult<()> {
+    // Section 8.4.3.2 of ISO/IEC 14496-12.
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
     // unsigned int(32) pre_defined = 0;
     let predefined = stream.read_u32()?;
@@ -251,18 +263,26 @@ fn parse_hdlr(stream: &mut IStream) -> AvifResult<()> {
     // unsigned int(32) handler_type;
     let handler_type = stream.read_string(4)?;
     if handler_type != "pict" {
+        // Section 6.2 of ISO/IEC 23008-12:
+        //   The handler type for the MetaBox shall be 'pict'.
+        // https://aomediacodec.github.io/av1-avif/v1.1.0.html#image-sequences does not apply
+        // because this function is only called for the MetaBox but it would work too:
+        //   The track handler for an AV1 Image Sequence shall be pict.
         println!("handler type is not pict");
         return Err(AvifError::BmffParseFailed);
     }
     // const unsigned int(32)[3] reserved = 0;
     stream.skip(4 * 3)?;
     // string name;
-    // Verify that a valid string is here, but don't bother to store it.
+    // Verify that a valid string is here, but don't bother to store it:
+    //   name gives a human-readable name for the track type (for debugging and inspection
+    //   purposes).
     stream.read_c_string()?;
     Ok(())
 }
 
 fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
+    // Section 8.11.3.1 of ISO/IEC 14496-12.
     let (version, _flags) = stream.read_version_and_flags()?;
     if version > 2 {
         println!("Invalid version in iloc.");
@@ -336,14 +356,21 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
     Ok(iloc)
 }
 
+// Returns the primary item ID.
 fn parse_pitm(stream: &mut IStream) -> AvifResult<u32> {
+    // Section 8.11.4.2 of ISO/IEC 14496-12.
     let (version, _flags) = stream.read_version_and_flags()?;
-    let primary_item_id =
-        if version == 0 { stream.read_u16()? as u32 } else { stream.read_u32()? };
-    Ok(primary_item_id)
+    if version == 0 {
+        // unsigned int(16) item_ID;
+        Ok(stream.read_u16()? as u32)
+    } else {
+        // unsigned int(32) item_ID;
+        Ok(stream.read_u32()?)
+    }
 }
 
 fn parse_ispe(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    // Section 6.5.3.2 of ISO/IEC 23008-12.
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
     let ispe = ImageSpatialExtents {
         // unsigned int(32) image_width;
@@ -355,6 +382,7 @@ fn parse_ispe(stream: &mut IStream) -> AvifResult<ItemProperty> {
 }
 
 fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    // Section 6.5.6.2 of ISO/IEC 23008-12.
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
     let mut pixi = PixelInformation {
         // unsigned int (8) num_channels;
@@ -374,14 +402,15 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
 
 #[allow(non_snake_case)]
 fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
-    // unsigned int (1) marker = 1;
-    // unsigned int (7) version = 1;
+    // See https://aomediacodec.github.io/av1-isobmff/v1.2.0.html#av1codecconfigurationbox-syntax.
     let mut bits = stream.sub_bit_stream(3)?;
+    // unsigned int (1) marker = 1;
     let marker = bits.read(1)?;
     if marker != 1 {
         println!("Invalid marker in av1C");
         return Err(AvifError::BmffParseFailed);
     }
+    // unsigned int (7) version = 1;
     let version = bits.read(7)?;
     if version != 1 {
         println!("Invalid version in av1C");
@@ -408,19 +437,37 @@ fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
         chroma_sample_position: bits.read(2)?.into(),
     };
 
+    // Everything else is skipped.
+
     // unsigned int(3) reserved = 0;
     // unsigned int(1) initial_presentation_delay_present;
     // if(initial_presentation_delay_present) {
-    // unsigned int(4) initial_presentation_delay_minus_one;
+    //    unsigned int(4) initial_presentation_delay_minus_one;
     // } else {
-    // unsigned int(4) reserved = 0;
+    //    unsigned int(4) reserved = 0;
     // }
+
+    // https://aomediacodec.github.io/av1-avif/v1.1.0.html#av1-configuration-item-property:
+    //   - Sequence Header OBUs should not be present in the AV1CodecConfigurationBox.
+    // This is ignored.
+    //   - If a Sequence Header OBU is present in the AV1CodecConfigurationBox, it shall match the
+    //     Sequence Header OBU in the AV1 Image Item Data.
+    // This is not enforced.
+    //   - The values of the fields in the AV1CodecConfigurationBox shall match those of the
+    //     Sequence Header OBU in the AV1 Image Item Data.
+    // This is not enforced (?).
+    //   - Metadata OBUs, if present, shall match the values given in other item properties, such as
+    //     the PixelInformationProperty or ColourInformationBox.
+    // This is not enforced.
+
     // unsigned int(8) configOBUs[];
-    // We skip all these.
+
     Ok(ItemProperty::CodecConfiguration(av1C))
 }
 
 fn parse_colr(stream: &mut IStream) -> AvifResult<Option<ItemProperty>> {
+    // Section 12.1.5.2 of ISO/IEC 14496-12.
+
     // unsigned int(32) colour_type;
     let color_type = stream.read_string(4)?;
     if color_type == "rICC" || color_type == "prof" {
@@ -443,7 +490,7 @@ fn parse_colr(stream: &mut IStream) -> AvifResult<Option<ItemProperty>> {
         let mut bits = stream.sub_bit_stream(1)?;
         nclx.full_range = bits.read_bool()?;
         if bits.read(7)? != 0 {
-            println!("colr box contains invalid reserve bits");
+            println!("colr box contains invalid reserved bits");
             return Err(AvifError::BmffParseFailed);
         }
         return Ok(Some(ItemProperty::ColorInformation(
@@ -454,6 +501,7 @@ fn parse_colr(stream: &mut IStream) -> AvifResult<Option<ItemProperty>> {
 }
 
 fn parse_pasp(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    // Section 12.1.4.2 of ISO/IEC 14496-12.
     let pasp = PixelAspectRatio {
         // unsigned int(32) hSpacing;
         h_spacing: stream.read_u32()?,
@@ -465,13 +513,17 @@ fn parse_pasp(stream: &mut IStream) -> AvifResult<ItemProperty> {
 
 #[allow(non_snake_case)]
 fn parse_auxC(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    // Section 6.5.8.2 of ISO/IEC 23008-12.
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
     // string aux_type;
     let auxiliary_type = stream.read_c_string()?;
+    // template unsigned int(8) aux_subtype[];
+    // until the end of the box, the semantics depend on the aux_type value
     Ok(ItemProperty::AuxiliaryType(auxiliary_type))
 }
 
 fn parse_clap(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    // Section 12.1.4.2 of ISO/IEC 14496-12.
     let clap = CleanAperture {
         // unsigned int(32) cleanApertureWidthN;
         // unsigned int(32) cleanApertureWidthD;
@@ -490,10 +542,11 @@ fn parse_clap(stream: &mut IStream) -> AvifResult<ItemProperty> {
 }
 
 fn parse_irot(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    // Section 6.5.10.2 of ISO/IEC 23008-12.
     let mut bits = stream.sub_bit_stream(1)?;
     // unsigned int (6) reserved = 0;
     if bits.read(6)? != 0 {
-        println!("invalid reserve bits in irot");
+        println!("invalid reserved bits in irot");
         return Err(AvifError::BmffParseFailed);
     }
     // unsigned int (2) angle;
@@ -502,10 +555,11 @@ fn parse_irot(stream: &mut IStream) -> AvifResult<ItemProperty> {
 }
 
 fn parse_imir(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    // Section 6.5.12.1 of ISO/IEC 23008-12.
     let mut bits = stream.sub_bit_stream(1)?;
     // unsigned int(7) reserved = 0;
     if bits.read(7)? != 0 {
-        println!("invalid reserve bits in imir");
+        println!("invalid reserved bits in imir");
         return Err(AvifError::BmffParseFailed);
     }
     let axis = bits.read(1)? as u8;
@@ -513,10 +567,12 @@ fn parse_imir(stream: &mut IStream) -> AvifResult<ItemProperty> {
 }
 
 fn parse_a1op(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    // https://aomediacodec.github.io/av1-avif/v1.1.0.html#operating-point-selector-property-syntax
+
     // unsigned int(8) op_index;
     let op_index = stream.read_u8()?;
     if op_index > 31 {
-        // 31 is AV1's maximum operating point value.
+        // 31 is AV1's maximum operating point value (operating_points_cnt_minus_1).
         println!("Invalid op_index in a1op");
         return Err(AvifError::BmffParseFailed);
     }
@@ -524,8 +580,14 @@ fn parse_a1op(stream: &mut IStream) -> AvifResult<ItemProperty> {
 }
 
 fn parse_lsel(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    // Section 6.5.11.1 of ISO/IEC 23008-12.
+
     // unsigned int(16) layer_id;
     let layer_id = stream.read_u16()?;
+
+    // https://aomediacodec.github.io/av1-avif/v1.1.0.html#layer-selector-property:
+    //   The layer_id indicates the value of the spatial_id to render. The value shall be between 0
+    //   and 3, or the special value 0xFFFF.
     if layer_id != 0xFFFF && layer_id >= 4 {
         println!("Invalid layer_id in lsel");
         return Err(AvifError::BmffParseFailed);
@@ -534,10 +596,11 @@ fn parse_lsel(stream: &mut IStream) -> AvifResult<ItemProperty> {
 }
 
 fn parse_a1lx(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    // https://aomediacodec.github.io/av1-avif/v1.1.0.html#layered-image-indexing-property-syntax
     let mut bits = stream.sub_bit_stream(1)?;
     // unsigned int(7) reserved = 0;
     if bits.read(7)? != 0 {
-        println!("Invalid reserve bits in a1lx");
+        println!("Invalid reserved bits in a1lx");
         return Err(AvifError::BmffParseFailed);
     }
     // unsigned int(1) large_size;
@@ -554,6 +617,7 @@ fn parse_a1lx(stream: &mut IStream) -> AvifResult<ItemProperty> {
 }
 
 fn parse_clli(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    // Section 12.1.6.2 of ISO/IEC 14496-12.
     let clli = ContentLightLevelInformation {
         // unsigned int(16) max_content_light_level
         max_cll: stream.read_u16()?,
@@ -565,6 +629,7 @@ fn parse_clli(stream: &mut IStream) -> AvifResult<ItemProperty> {
 
 #[allow(non_snake_case)]
 fn parse_ipco(stream: &mut IStream) -> AvifResult<Vec<ItemProperty>> {
+    // Section 8.11.14.2 of ISO/IEC 14496-12.
     let mut properties: Vec<ItemProperty> = Vec::new();
     while stream.has_bytes_left()? {
         let header = parse_header(stream)?;
@@ -594,6 +659,7 @@ fn parse_ipco(stream: &mut IStream) -> AvifResult<Vec<ItemProperty>> {
 }
 
 fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> {
+    // Section 8.11.14.2 of ISO/IEC 14496-12.
     let (version, flags) = stream.read_version_and_flags()?;
     // unsigned int(32) entry_count;
     let entry_count = stream.read_u32()?;
@@ -643,6 +709,7 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
 }
 
 fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
+    // Section 8.11.14.2 of ISO/IEC 14496-12.
     let header = parse_header(stream)?;
     if header.box_type != "ipco" {
         println!("First box in iprp is not ipco");
@@ -668,6 +735,7 @@ fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
 }
 
 fn parse_infe(stream: &mut IStream) -> AvifResult<ItemInfo> {
+    // Section 8.11.6.2 of ISO/IEC 14496-12.
     let (version, _flags) = stream.read_version_and_flags()?;
     if version != 2 && version != 3 {
         println!("infe box version 2 or 3 expected.");
@@ -679,7 +747,7 @@ fn parse_infe(stream: &mut IStream) -> AvifResult<ItemInfo> {
     // as follows:
     //   (flags & 1) equal to 1 indicates that the item is not intended to be a part of the
     //   presentation. For example, when (flags & 1) is equal to 1 for an image item, the
-    //   image item should not be displayed.(flags & 1) equal to 0 indicates that the item
+    //   image item should not be displayed. (flags & 1) equal to 0 indicates that the item
     //   is intended to be a part of the presentation.
     //
     // See also Section 6.4.2.
@@ -688,7 +756,7 @@ fn parse_infe(stream: &mut IStream) -> AvifResult<ItemInfo> {
         // unsigned int(16) item_ID;
         entry.item_id = stream.read_u16()? as u32;
     } else {
-        // unsigned int(16) item_ID;
+        // unsigned int(32) item_ID;
         entry.item_id = stream.read_u32()?;
     }
     if entry.item_id == 0 {
@@ -713,6 +781,7 @@ fn parse_infe(stream: &mut IStream) -> AvifResult<ItemInfo> {
 }
 
 fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
+    // Section 8.11.6.2 of ISO/IEC 14496-12.
     let (version, _flags) = stream.read_version_and_flags()?;
     let entry_count: u32 = if version == 0 {
         // unsigned int(16) entry_count;
@@ -735,50 +804,53 @@ fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
 }
 
 fn parse_iref(stream: &mut IStream) -> AvifResult<Vec<ItemReference>> {
+    // Section 8.11.12.2 of ISO/IEC 14496-12.
     let (version, _flags) = stream.read_version_and_flags()?;
     let mut iref: Vec<ItemReference> = Vec::new();
     // versions > 1 are not supported. ignore them.
-    if version <= 1 {
-        while stream.has_bytes_left()? {
-            let header = parse_header(stream)?;
-            let from_item_id: u32 = if version == 0 {
-                // unsigned int(16) from_item_ID;
+    if version > 1 {
+        return Ok(iref);
+    }
+    while stream.has_bytes_left()? {
+        let header = parse_header(stream)?;
+        let from_item_id: u32 = if version == 0 {
+            // unsigned int(16) from_item_ID;
+            stream.read_u16()? as u32
+        } else {
+            // unsigned int(32) from_item_ID;
+            stream.read_u32()?
+        };
+        if from_item_id == 0 {
+            println!("invalid from_item_id in iref");
+            return Err(AvifError::BmffParseFailed);
+        }
+        // unsigned int(16) reference_count;
+        let reference_count = stream.read_u16()?;
+        for index in 0..reference_count {
+            let to_item_id: u32 = if version == 0 {
+                // unsigned int(16) to_item_ID;
                 stream.read_u16()? as u32
             } else {
-                // unsigned int(32) from_item_ID;
+                // unsigned int(32) to_item_ID;
                 stream.read_u32()?
             };
-            if from_item_id == 0 {
-                println!("invalid from_item_id in iref");
+            if to_item_id == 0 {
+                println!("invalid to_item_id in iref");
                 return Err(AvifError::BmffParseFailed);
             }
-            // unsigned int(16) reference_count;
-            let reference_count = stream.read_u16()?;
-            for index in 0..reference_count {
-                let to_item_id: u32 = if version == 0 {
-                    // unsigned int(16) to_item_ID;
-                    stream.read_u16()? as u32
-                } else {
-                    // unsigned int(32) to_item_ID;
-                    stream.read_u32()?
-                };
-                if to_item_id == 0 {
-                    println!("invalid to_item_id in iref");
-                    return Err(AvifError::BmffParseFailed);
-                }
-                iref.push(ItemReference {
-                    from_item_id,
-                    to_item_id,
-                    reference_type: header.box_type.clone(),
-                    index: index as u32,
-                });
-            }
+            iref.push(ItemReference {
+                from_item_id,
+                to_item_id,
+                reference_type: header.box_type.clone(),
+                index: index as u32,
+            });
         }
     }
     Ok(iref)
 }
 
 fn parse_idat(stream: &mut IStream) -> AvifResult<Vec<u8>> {
+    // Section 8.11.11.2 of ISO/IEC 14496-12.
     if !stream.has_bytes_left()? {
         println!("Invalid idat size");
         return Err(AvifError::BmffParseFailed);
@@ -789,6 +861,7 @@ fn parse_idat(stream: &mut IStream) -> AvifResult<Vec<u8>> {
 }
 
 fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
+    // Section 8.11.1.2 of ISO/IEC 14496-12.
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
     let mut meta = MetaBox::default();
 
@@ -799,8 +872,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
             println!("first box in meta is not hdlr");
             return Err(AvifError::BmffParseFailed);
         }
-        let mut sub_stream = stream.sub_stream(header.size)?;
-        parse_hdlr(&mut sub_stream)?;
+        parse_hdlr(&mut stream.sub_stream(header.size)?)?;
     }
 
     let mut boxes_seen: HashSet<String> = HashSet::with_hasher(NonRandomHasherState);
