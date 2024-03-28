@@ -436,11 +436,7 @@ impl Decoder {
             self.gainmap.alt_clli = *clli;
         }
         if let Some(pixi) = tonemap_item.pixi() {
-            if pixi.plane_count == 0 {
-                println!("invalid plane count in tonemap");
-                return Err(AvifError::BmffParseFailed);
-            }
-            self.gainmap.alt_plane_count = pixi.plane_count;
+            self.gainmap.alt_plane_count = pixi.plane_depths.len() as u8;
             self.gainmap.alt_plane_depth = pixi.plane_depths[0];
         }
         Ok(())

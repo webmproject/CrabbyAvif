@@ -173,8 +173,8 @@ impl Item {
         }
         match self.pixi() {
             Some(pixi) => {
-                for i in 0..pixi.plane_count as usize {
-                    if pixi.plane_depths[i] != av1C.depth() {
+                for depth in &pixi.plane_depths {
+                    if *depth != av1C.depth() {
                         println!("pixi depth does not match av1C depth");
                         return Err(AvifError::BmffParseFailed);
                     }

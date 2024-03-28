@@ -73,8 +73,7 @@ pub struct ImageSpatialExtents {
 
 #[derive(Debug, Default, Clone)]
 pub struct PixelInformation {
-    pub plane_count: u8,
-    pub plane_depths: [u8; MAX_PLANE_COUNT],
+    pub plane_depths: Vec<u8>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -389,18 +388,22 @@ fn parse_ispe(stream: &mut IStream) -> AvifResult<ItemProperty> {
 fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // Section 6.5.6.2 of ISO/IEC 23008-12.
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
-    let mut pixi = PixelInformation {
-        // unsigned int (8) num_channels;
-        plane_count: stream.read_u8()?,
-        ..PixelInformation::default()
-    };
-    if usize::from(pixi.plane_count) > MAX_PLANE_COUNT {
-        println!("Invalid plane count in pixi box");
+    // unsigned int (8) num_channels;
+    let num_channels = stream.read_u8()? as usize;
+    if num_channels == 0 || num_channels > MAX_PLANE_COUNT {
+        println!("Invalid plane count {num_channels} in pixi box");
         return Err(AvifError::BmffParseFailed);
     }
-    for i in 0..pixi.plane_count {
+    let mut pixi = PixelInformation {
+        plane_depths: create_vec_exact(num_channels)?,
+    };
+    for _ in 0..num_channels {
         // unsigned int (8) bits_per_channel;
-        pixi.plane_depths[i as usize] = stream.read_u8()?;
+        pixi.plane_depths.push(stream.read_u8()?);
+        if pixi.plane_depths.last().unwrap() != pixi.plane_depths.first().unwrap() {
+            println!("unsupported mismatched plane depths in pixi box");
+            return Err(AvifError::UnsupportedDepth);
+        }
     }
     Ok(ItemProperty::PixelInformation(pixi))
 }
