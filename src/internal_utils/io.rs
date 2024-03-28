@@ -96,3 +96,30 @@ impl decoder::IO for DecoderRawIO<'_> {
         true
     }
 }
+
+pub struct DecoderMemoryIO {
+    pub data: Vec<u8>,
+}
+
+impl decoder::IO for DecoderMemoryIO {
+    fn read(&mut self, offset: u64, max_read_size: usize) -> AvifResult<&[u8]> {
+        let data_len = self.data.len() as u64;
+        if offset > data_len {
+            return Err(AvifError::IoError);
+        }
+        let available_size: usize = (data_len - offset) as usize;
+        let size_to_read: usize =
+            if max_read_size > available_size { available_size } else { max_read_size };
+        let slice_start = usize_from_u64(offset)?;
+        let slice_end = slice_start + size_to_read;
+        Ok(&self.data[slice_start..slice_end])
+    }
+
+    fn size_hint(&self) -> u64 {
+        self.data.len() as u64
+    }
+
+    fn persistent(&self) -> bool {
+        true
+    }
+}
