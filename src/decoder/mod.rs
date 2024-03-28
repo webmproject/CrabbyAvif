@@ -303,6 +303,11 @@ impl Decoder {
         Ok(())
     }
 
+    pub fn set_io_vec(&mut self, data: Vec<u8>) {
+        self.io = Some(Box::new(DecoderMemoryIO { data }));
+        self.parse_state = ParseState::None;
+    }
+
     // This has an unsafe block and is intended for use only from the C API.
     pub fn set_io_raw(&mut self, data: *const u8, size: usize) -> AvifResult<()> {
         self.io = Some(Box::new(DecoderRawIO::create(data, size)));
