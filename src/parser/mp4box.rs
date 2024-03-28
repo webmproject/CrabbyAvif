@@ -691,17 +691,16 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
         // unsigned int(8) association_count;
         let association_count = stream.read_u8()?;
         for _j in 0..association_count {
+            let mut bits = stream.sub_bit_stream(if flags & 0x1 == 1 { 2 } else { 1 })?;
             // bit(1) essential;
-            let mut bits = stream.sub_bit_stream(1)?;
             let essential = bits.read_bool()?;
-            // unsigned int(7 or 15) property_index;
-            let mut property_index: u16 = bits.read(7)? as u16;
-            if (flags & 0x1) == 1 {
-                let property_index_lsb: u16 = stream.read_u8()? as u16;
-                property_index <<= 8;
-                property_index |= property_index_lsb;
+            if flags & 0x1 == 1 {
+                // unsigned int(15) property_index;
+                entry.associations.push((bits.read(15)? as u16, essential));
+            } else {
+                //unsigned int(7) property_index;
+                entry.associations.push((bits.read(7)? as u16, essential));
             }
-            entry.associations.push((property_index, essential));
         }
         ipma.push(entry);
     }
