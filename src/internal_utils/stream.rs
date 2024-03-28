@@ -52,6 +52,12 @@ impl IBitStream<'_> {
         }
         Ok(())
     }
+
+    pub fn remaining_bits(&self) -> AvifResult<usize> {
+        (self.data.len() * 8)
+            .checked_sub(self.bit_offset)
+            .ok_or(AvifError::BmffParseFailed)
+    }
 }
 
 #[derive(Debug)]
