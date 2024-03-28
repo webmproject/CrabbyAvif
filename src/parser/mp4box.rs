@@ -272,7 +272,10 @@ fn parse_hdlr(stream: &mut IStream) -> AvifResult<()> {
         return Err(AvifError::BmffParseFailed);
     }
     // const unsigned int(32)[3] reserved = 0;
-    stream.skip(4 * 3)?;
+    if stream.read_u32()? != 0 || stream.read_u32()? != 0 || stream.read_u32()? != 0 {
+        println!("Invalid reserved bits in hdlr");
+        return Err(AvifError::BmffParseFailed);
+    }
     // string name;
     // Verify that a valid string is here, but don't bother to store it:
     //   name gives a human-readable name for the track type (for debugging and inspection
@@ -324,11 +327,13 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
             return Err(AvifError::BmffParseFailed);
         }
         if version == 1 || version == 2 {
+            let mut bits = stream.sub_bit_stream(2)?;
             // unsigned int(12) reserved = 0;
+            if bits.read(12)? != 0 {
+                println!("Invalid reserved bits in iloc");
+                return Err(AvifError::BmffParseFailed);
+            }
             // unsigned int(4) construction_method;
-            stream.skip(1)?;
-            let mut bits = stream.sub_bit_stream(1)?;
-            bits.read(4)?;
             entry.construction_method = bits.read(4)? as u8;
             // 0: file, 1: idat.
             if entry.construction_method != 0 && entry.construction_method != 1 {
@@ -403,7 +408,7 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
 #[allow(non_snake_case)]
 fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // See https://aomediacodec.github.io/av1-isobmff/v1.2.0.html#av1codecconfigurationbox-syntax.
-    let mut bits = stream.sub_bit_stream(3)?;
+    let mut bits = stream.sub_bit_stream(4)?;
     // unsigned int (1) marker = 1;
     let marker = bits.read(1)?;
     if marker != 1 {
@@ -437,15 +442,23 @@ fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
         chroma_sample_position: bits.read(2)?.into(),
     };
 
-    // Everything else is skipped.
-
     // unsigned int(3) reserved = 0;
+    if bits.read(3)? != 0 {
+        println!("Invalid reserved bits in av1C");
+        return Err(AvifError::BmffParseFailed);
+    }
     // unsigned int(1) initial_presentation_delay_present;
-    // if(initial_presentation_delay_present) {
-    //    unsigned int(4) initial_presentation_delay_minus_one;
-    // } else {
-    //    unsigned int(4) reserved = 0;
-    // }
+    if bits.read(1)? == 1 {
+        // unsigned int(4) initial_presentation_delay_minus_one;
+        bits.read(4)?;
+    } else {
+        // unsigned int(4) reserved = 0;
+        if bits.read(4)? != 0 {
+            println!("Invalid reserved bits in av1C");
+            return Err(AvifError::BmffParseFailed);
+        }
+    }
+    assert_eq!(bits.remaining_bits()?, 0);
 
     // https://aomediacodec.github.io/av1-avif/v1.1.0.html#av1-configuration-item-property:
     //   - Sequence Header OBUs should not be present in the AV1CodecConfigurationBox.
@@ -495,10 +508,10 @@ fn parse_colr(stream: &mut IStream) -> AvifResult<Option<ItemProperty>> {
             matrix_coefficients: stream.read_u16()?.into(),
             ..Nclx::default()
         };
-        // unsigned int(1) full_range_flag;
-        // unsigned int(7) reserved = 0;
         let mut bits = stream.sub_bit_stream(1)?;
+        // unsigned int(1) full_range_flag;
         nclx.full_range = bits.read_bool()?;
+        // unsigned int(7) reserved = 0;
         if bits.read(7)? != 0 {
             println!("colr box contains invalid reserved bits");
             return Err(AvifError::BmffParseFailed);
@@ -572,6 +585,7 @@ fn parse_imir(stream: &mut IStream) -> AvifResult<ItemProperty> {
         println!("invalid reserved bits in imir");
         return Err(AvifError::BmffParseFailed);
     }
+    // unsigned int(1) axis;
     let axis = bits.read(1)? as u8;
     Ok(ItemProperty::ImageMirror(axis))
 }
@@ -922,7 +936,10 @@ fn parse_tkhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         // unsigned int(32) track_ID;
         track.id = stream.read_u32()?;
         // const unsigned int(32) reserved = 0;
-        stream.skip_u32()?;
+        if stream.read_u32()? != 0 {
+            println!("Invalid reserved bits in tkhd");
+            return Err(AvifError::BmffParseFailed);
+        }
         // unsigned int(64) duration;
         track.track_duration = stream.read_u64()?;
     } else if version == 0 {
@@ -933,7 +950,10 @@ fn parse_tkhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         // unsigned int(32) track_ID;
         track.id = stream.read_u32()?;
         // const unsigned int(32) reserved = 0;
-        stream.skip_u32()?;
+        if stream.read_u32()? != 0 {
+            println!("Invalid reserved bits in tkhd");
+            return Err(AvifError::BmffParseFailed);
+        }
         // unsigned int(32) duration;
         track.track_duration = stream.read_u32()? as u64;
     } else {
@@ -941,14 +961,24 @@ fn parse_tkhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         return Err(AvifError::BmffParseFailed);
     }
 
-    // Skip the following 52 bytes.
     // const unsigned int(32)[2] reserved = 0;
+    if stream.read_u32()? != 0 || stream.read_u32()? != 0 {
+        println!("Invalid reserved bits in tkhd");
+        return Err(AvifError::BmffParseFailed);
+    }
     // template int(16) layer = 0;
+    stream.skip(2)?;
     // template int(16) alternate_group = 0;
+    stream.skip(2)?;
     // template int(16) volume = {if track_is_audio 0x0100 else 0};
+    stream.skip(2)?;
     // const unsigned int(16) reserved = 0;
+    if stream.read_u16()? != 0 {
+        println!("Invalid reserved bits in tkhd");
+        return Err(AvifError::BmffParseFailed);
+    }
     // template int(32)[9] matrix= { 0x00010000,0,0,0,0x00010000,0,0,0,0x40000000 }; // unity matrix
-    stream.skip(52)?;
+    stream.skip(4 * 9)?;
 
     // unsigned int(32) width;
     track.width = stream.read_u32()? >> 16;
