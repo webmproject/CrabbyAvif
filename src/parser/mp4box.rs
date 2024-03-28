@@ -471,6 +471,16 @@ fn parse_colr(stream: &mut IStream) -> AvifResult<Option<ItemProperty>> {
     // unsigned int(32) colour_type;
     let color_type = stream.read_string(4)?;
     if color_type == "rICC" || color_type == "prof" {
+        if stream.bytes_left()? == 0 {
+            // Section 12.1.5.3 of ISO/IEC 14496-12:
+            //   ICC_profile: an ICC profile as defined in ISO 15076-1 or ICC.1 is supplied.
+            // Section 7.2.1 of ICC.1:2010:
+            //   The profile header is 128 bytes in length and contains 18 fields.
+            // So an empty ICC profile is invalid.
+            println!("colr box contains 0 bytes of {color_type}");
+            return Err(AvifError::BmffParseFailed);
+        }
+        // ICC_profile; // restricted ("rICC") or unrestricted ("prof") ICC profile
         return Ok(Some(ItemProperty::ColorInformation(ColorInformation::Icc(
             stream.get_slice(stream.bytes_left()?)?.to_vec(),
         ))));
