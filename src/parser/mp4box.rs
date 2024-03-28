@@ -906,13 +906,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
             "iprp" => meta.iprp = parse_iprp(&mut sub_stream)?,
             "iinf" => meta.iinf = parse_iinf(&mut sub_stream)?,
             "iref" => meta.iref = parse_iref(&mut sub_stream)?,
-            "idat" => {
-                if !meta.idat.is_empty() {
-                    println!("meta contains multiple idat boxes");
-                    return Err(AvifError::BmffParseFailed);
-                }
-                meta.idat = parse_idat(&mut sub_stream)?;
-            }
+            "idat" => meta.idat = parse_idat(&mut sub_stream)?,
             _ => {}
         }
     }
