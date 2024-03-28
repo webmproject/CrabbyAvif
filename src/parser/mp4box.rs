@@ -62,6 +62,7 @@ pub struct ItemLocationBox {
     offset_size: u8,
     length_size: u8,
     base_offset_size: u8,
+    index_size: u8,
     pub items: Vec<ItemLocationEntry>,
 }
 
@@ -284,7 +285,7 @@ fn parse_hdlr(stream: &mut IStream) -> AvifResult<()> {
 }
 
 fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
-    // Section 8.11.3.1 of ISO/IEC 14496-12.
+    // Section 8.11.3.2 of ISO/IEC 14496-12.
     let (version, _flags) = stream.read_version_and_flags()?;
     if version > 2 {
         println!("Invalid version in iloc.");
@@ -298,11 +299,29 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
     iloc.length_size = bits.read(4)? as u8;
     // unsigned int(4) base_offset_size;
     iloc.base_offset_size = bits.read(4)? as u8;
-    if (version == 1 || version == 2) && iloc.base_offset_size != 0 {
-        println!("Invalid base_offset_size in iloc.");
-        return Err(AvifError::BmffParseFailed);
+    iloc.index_size = if version == 1 || version == 2 {
+        // unsigned int(4) index_size;
+        bits.read(4)? as u8
+    } else {
+        // unsigned int(4) reserved;
+        bits.skip(4)?;
+        0
+    };
+    assert_eq!(bits.remaining_bits()?, 0);
+
+    // Section 8.11.3.3 of ISO/IEC 14496-12.
+    for size in [
+        iloc.offset_size,
+        iloc.length_size,
+        iloc.base_offset_size,
+        iloc.index_size,
+    ] {
+        if ![0u8, 4, 8].contains(&size) {
+            println!("Invalid size {size} in iloc.");
+            return Err(AvifError::BmffParseFailed);
+        }
     }
-    // unsigned int(4) reserved; The last 4 bits left in the bits.
+
     let item_count: u32 = if version < 2 {
         // unsigned int(16) item_count;
         stream.read_u16()? as u32
@@ -334,7 +353,7 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
             }
             // unsigned int(4) construction_method;
             entry.construction_method = bits.read(4)? as u8;
-            // 0: file, 1: idat.
+            // 0: file offset, 1: idat offset, 2: item offset.
             if entry.construction_method != 0 && entry.construction_method != 1 {
                 println!("unknown construction_method");
                 return Err(AvifError::BmffParseFailed);
@@ -347,6 +366,8 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
         // unsigned int(16) extent_count;
         entry.extent_count = stream.read_u16()?;
         for _j in 0..entry.extent_count {
+            // unsigned int(index_size*8) item_reference_index;
+            stream.skip(iloc.index_size as usize)?; // Only used for construction_method 2.
             let extent = Extent {
                 // unsigned int(offset_size*8) extent_offset;
                 offset: stream.read_uxx(iloc.offset_size)?,
