@@ -34,8 +34,8 @@ pub enum PixelFormat {
     Yuv444,
     Yuv422,
     #[default]
-    Yuv420,
-    Monochrome,
+    Yuv420, // Also used for alpha items when 4:0:0 is not supported by the codec.
+    Monochrome, // 4:0:0
 }
 
 impl PixelFormat {
