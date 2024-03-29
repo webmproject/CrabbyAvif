@@ -598,3 +598,75 @@ fn rgb_conversion_alpha_premultiply() -> AvifResult<()> {
     assert!(rgb.convert_from_yuv(image).is_ok());
     Ok(())
 }
+
+#[test]
+fn white_1x1() -> AvifResult<()> {
+    let mut decoder = get_decoder("white_1x1.avif");
+    assert_eq!(decoder.parse(), Ok(()));
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    assert_eq!(decoder.next_image(), Ok(()));
+
+    let mut rgb = rgb::Image::create_from_yuv(decoder.image());
+    rgb.allocate()?;
+    assert!(rgb.convert_from_yuv(decoder.image()).is_ok());
+    assert_eq!(rgb.width * rgb.height, 1);
+    let format = rgb.format;
+    for i in [format.r_offset(), format.g_offset(), format.b_offset()] {
+        assert_eq!(rgb.row(0)?[i], 253); // Compressed with loss, not pure white.
+    }
+    if rgb.has_alpha() {
+        assert_eq!(rgb.row(0)?[rgb.format.alpha_offset()], 255);
+    }
+    Ok(())
+}
+
+#[test]
+fn white_1x1_mdat_size0() -> AvifResult<()> {
+    // Edit the file to simulate an 'mdat' box with size 0 (meaning it ends at EOF).
+    let mut file_bytes = std::fs::read(get_test_file("white_1x1.avif")).unwrap();
+    let mdat = [b'm', b'd', b'a', b't'];
+    let mdat_size_pos = file_bytes.windows(4).position(|w| w == mdat).unwrap() - 4;
+    file_bytes[mdat_size_pos + 3] = b'\0';
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(file_bytes);
+    assert_eq!(decoder.parse(), Ok(()));
+    Ok(())
+}
+
+#[test]
+fn white_1x1_meta_size0() -> AvifResult<()> {
+    // Edit the file to simulate a 'meta' box with size 0 (invalid).
+    let mut file_bytes = std::fs::read(get_test_file("white_1x1.avif")).unwrap();
+    let meta = [b'm', b'e', b't', b'a'];
+    let meta_size_pos = file_bytes.windows(4).position(|w| w == meta).unwrap() - 4;
+    file_bytes[meta_size_pos + 3] = b'\0';
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(file_bytes);
+
+    // This should fail because the meta box contains the mdat box.
+    // However, the section 8.11.3.1 of ISO/IEC 14496-12 does not explicitly require the coded image
+    // item extents to be read from the MediaDataBox if the construction_method is 0.
+    // Maybe another section or specification enforces that.
+    assert_eq!(decoder.parse(), Ok(()));
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    assert_eq!(decoder.next_image(), Ok(()));
+    Ok(())
+}
+
+#[test]
+fn white_1x1_ftyp_size0() -> AvifResult<()> {
+    // Edit the file to simulate a 'ftyp' box with size 0 (invalid).
+    let mut file_bytes = std::fs::read(get_test_file("white_1x1.avif")).unwrap();
+    file_bytes[3] = b'\0';
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(file_bytes);
+    assert_eq!(decoder.parse(), Err(AvifError::BmffParseFailed));
+    Ok(())
+}
