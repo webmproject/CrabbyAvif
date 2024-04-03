@@ -78,7 +78,7 @@ impl From<&AvifError> for avifResult {
             AvifError::IncompatibleImage => avifResult::IncompatibleImage,
             AvifError::EncodeGainMapFailed => avifResult::EncodeGainMapFailed,
             AvifError::DecodeGainMapFailed => avifResult::DecodeGainMapFailed,
-            AvifError::InvalidToneMappedImage => avifResult::InvalidToneMappedImage,
+            AvifError::InvalidToneMappedImage(_) => avifResult::InvalidToneMappedImage,
         }
     }
 }
@@ -117,7 +117,7 @@ impl From<avifResult> for AvifError {
             avifResult::IncompatibleImage => AvifError::IncompatibleImage,
             avifResult::EncodeGainMapFailed => AvifError::EncodeGainMapFailed,
             avifResult::DecodeGainMapFailed => AvifError::DecodeGainMapFailed,
-            avifResult::InvalidToneMappedImage => AvifError::InvalidToneMappedImage,
+            avifResult::InvalidToneMappedImage => AvifError::InvalidToneMappedImage("".into()),
         }
     }
 }

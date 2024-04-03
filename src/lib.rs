@@ -275,7 +275,7 @@ pub enum AvifError {
     IncompatibleImage,
     EncodeGainMapFailed,
     DecodeGainMapFailed,
-    InvalidToneMappedImage,
+    InvalidToneMappedImage(String),
 }
 
 pub type AvifResult<T> = Result<T, AvifError>;

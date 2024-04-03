@@ -378,8 +378,9 @@ impl Decoder {
                 .filter(|x| x.dimg_for_id == item.id)
                 .collect();
             if dimg_items.len() != 2 {
-                println!("Expected tmap to have 2 dimg items");
-                return Err(AvifError::InvalidToneMappedImage);
+                return Err(AvifError::InvalidToneMappedImage(
+                    "Expected tmap to have 2 dimg items".into(),
+                ));
             }
             let item0 = if dimg_items[0].dimg_index == 0 { dimg_items[0] } else { dimg_items[1] };
             if item0.id != color_item_id {
@@ -399,9 +400,9 @@ impl Decoder {
         let gainmap_item = self
             .items
             .get(&gainmap_id)
-            .ok_or(AvifError::InvalidToneMappedImage)?;
+            .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
         if gainmap_item.should_skip() {
-            return Err(AvifError::InvalidToneMappedImage);
+            return Err(AvifError::InvalidToneMappedImage("".into()));
         }
         Ok((tonemap_id, gainmap_id))
     }
@@ -410,7 +411,7 @@ impl Decoder {
         let gainmap_item = self
             .items
             .get(&gainmap_id)
-            .ok_or(AvifError::InvalidToneMappedImage)?;
+            .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
         // Ignore CICP if multiple nclx properties were found.
         if let Ok(Some(nclx)) = find_nclx(&gainmap_item.properties) {
             self.gainmap.image.color_primaries = nclx.color_primaries;
@@ -427,7 +428,7 @@ impl Decoder {
         let tonemap_item = self
             .items
             .get(&tonemap_id)
-            .ok_or(AvifError::InvalidToneMappedImage)?;
+            .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
         if let Some(nclx) = find_nclx(&gainmap_item.properties)? {
             self.gainmap.image.color_primaries = nclx.color_primaries;
             self.gainmap.image.transfer_characteristics = nclx.transfer_characteristics;
@@ -815,7 +816,7 @@ impl Decoder {
                             let tonemap_item = self
                                 .items
                                 .get(&tonemap_id)
-                                .ok_or(AvifError::InvalidToneMappedImage)?;
+                                .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
                             let mut stream = tonemap_item.stream(self.io.unwrap_mut())?;
                             self.gainmap.metadata = mp4box::parse_tmap(&mut stream)?;
                         }

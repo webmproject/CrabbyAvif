@@ -1498,8 +1498,9 @@ pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
     // unsigned int(8) version = 0;
     let version = stream.read_u8()?;
     if version != 0 {
-        println!("unsupported version in tmap box");
-        return Err(AvifError::InvalidToneMappedImage);
+        return Err(AvifError::InvalidToneMappedImage(
+            "unsupported version in tmap box".into(),
+        ));
     }
     // unsigned int(8) flags;
     let flags = stream.read_u8()?;
@@ -1550,8 +1551,9 @@ pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
         metadata.alternate_offset[i] = metadata.alternate_offset[0];
     }
     if stream.has_bytes_left()? {
-        println!("invalid trailing bytes in tmap box");
-        return Err(AvifError::InvalidToneMappedImage);
+        return Err(AvifError::InvalidToneMappedImage(
+            "invalid trailing bytes in tmap box".into(),
+        ));
     }
     Ok(metadata)
 }
