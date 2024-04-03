@@ -141,7 +141,7 @@ impl Item {
                         ));
                     }
                 }
-                _ => return Err(AvifError::UnknownError), // not reached.
+                _ => return Err(AvifError::UnknownError("".into())), // not reached.
             },
             None => {
                 // No ispe was found.

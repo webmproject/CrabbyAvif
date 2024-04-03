@@ -245,7 +245,7 @@ impl From<u16> for MatrixCoefficients {
 pub enum AvifError {
     #[default]
     Ok,
-    UnknownError,
+    UnknownError(String),
     InvalidFtyp,
     NoContent,
     NoYuvFormatSelected,

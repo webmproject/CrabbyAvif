@@ -100,7 +100,7 @@ impl IStream<'_> {
 
     pub fn bytes_left(&self) -> AvifResult<usize> {
         if self.data.len() < self.offset {
-            return Err(AvifError::UnknownError);
+            return Err(AvifError::UnknownError("".into()));
         }
         Ok(self.data.len() - self.offset)
     }

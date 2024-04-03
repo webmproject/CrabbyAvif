@@ -55,8 +55,7 @@ impl CropRect {
             || !width.is_integer()
             || !height.is_integer()
         {
-            println!("invalid clap");
-            return Err(AvifError::UnknownError);
+            return Err(AvifError::UnknownError("invalid clap".into()));
         }
         let clap_width = width.get_i32();
         let clap_height = height.get_i32();
@@ -67,7 +66,7 @@ impl CropRect {
         crop_y.add(&vert_off)?;
         crop_y.sub(&IFraction::simplified(clap_height, 2))?;
         if !crop_x.is_integer() || !crop_y.is_integer() || crop_x.0 < 0 || crop_y.0 < 0 {
-            return Err(AvifError::UnknownError);
+            return Err(AvifError::UnknownError("".into()));
         }
         let rect = CropRect {
             x: crop_x.get_u32()?,
@@ -78,7 +77,7 @@ impl CropRect {
         if rect.is_valid(image_width, image_height, pixel_format) {
             Ok(rect)
         } else {
-            Err(AvifError::UnknownError)
+            Err(AvifError::UnknownError("".into()))
         }
     }
 }

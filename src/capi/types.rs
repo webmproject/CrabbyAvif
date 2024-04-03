@@ -48,7 +48,7 @@ impl From<&AvifError> for avifResult {
     fn from(err: &AvifError) -> Self {
         match err {
             AvifError::Ok => avifResult::Ok,
-            AvifError::UnknownError => avifResult::UnknownError,
+            AvifError::UnknownError(_) => avifResult::UnknownError,
             AvifError::InvalidFtyp => avifResult::InvalidFtyp,
             AvifError::NoContent => avifResult::NoContent,
             AvifError::NoYuvFormatSelected => avifResult::NoYuvFormatSelected,
@@ -87,7 +87,7 @@ impl From<avifResult> for AvifError {
     fn from(res: avifResult) -> Self {
         match res {
             avifResult::Ok => AvifError::Ok,
-            avifResult::UnknownError => AvifError::UnknownError,
+            avifResult::UnknownError => AvifError::UnknownError("".into()),
             avifResult::InvalidFtyp => AvifError::InvalidFtyp,
             avifResult::NoContent => AvifError::NoContent,
             avifResult::NoYuvFormatSelected => AvifError::NoYuvFormatSelected,

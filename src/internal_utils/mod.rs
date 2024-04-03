@@ -71,10 +71,22 @@ impl IFraction {
             return Ok(());
         }
         let self_d = self.1;
-        self.0 = self.0.checked_mul(val.1).ok_or(AvifError::UnknownError)?;
-        self.1 = self.1.checked_mul(val.1).ok_or(AvifError::UnknownError)?;
-        val.0 = val.0.checked_mul(self_d).ok_or(AvifError::UnknownError)?;
-        val.1 = val.1.checked_mul(self_d).ok_or(AvifError::UnknownError)?;
+        self.0 = self
+            .0
+            .checked_mul(val.1)
+            .ok_or(AvifError::UnknownError("".into()))?;
+        self.1 = self
+            .1
+            .checked_mul(val.1)
+            .ok_or(AvifError::UnknownError("".into()))?;
+        val.0 = val
+            .0
+            .checked_mul(self_d)
+            .ok_or(AvifError::UnknownError("".into()))?;
+        val.1 = val
+            .1
+            .checked_mul(self_d)
+            .ok_or(AvifError::UnknownError("".into()))?;
         Ok(())
     }
 
@@ -82,7 +94,10 @@ impl IFraction {
         let mut val = *val;
         val.simplify();
         self.common_denominator(&mut val)?;
-        self.0 = self.0.checked_add(val.0).ok_or(AvifError::UnknownError)?;
+        self.0 = self
+            .0
+            .checked_add(val.0)
+            .ok_or(AvifError::UnknownError("".into()))?;
         self.simplify();
         Ok(())
     }
@@ -91,7 +106,10 @@ impl IFraction {
         let mut val = *val;
         val.simplify();
         self.common_denominator(&mut val)?;
-        self.0 = self.0.checked_sub(val.0).ok_or(AvifError::UnknownError)?;
+        self.0 = self
+            .0
+            .checked_sub(val.0)
+            .ok_or(AvifError::UnknownError("".into()))?;
         self.simplify();
         Ok(())
     }

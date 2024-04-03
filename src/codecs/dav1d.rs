@@ -45,7 +45,9 @@ impl Decoder for Dav1d {
         let mut dec = MaybeUninit::uninit();
         let ret = unsafe { dav1d_open(dec.as_mut_ptr(), (&settings) as *const _) };
         if ret != 0 {
-            return Err(AvifError::UnknownError);
+            return Err(AvifError::UnknownError(format!(
+                "dav1d_open returned {ret}"
+            )));
         }
         self.context = Some(unsafe { dec.assume_init() });
 
@@ -72,7 +74,9 @@ impl Decoder for Dav1d {
                 /*cookie=*/ std::ptr::null_mut(),
             );
             if res != 0 {
-                return Err(AvifError::UnknownError);
+                return Err(AvifError::UnknownError(format!(
+                    "dav1d_data_wrap returned {res}"
+                )));
             }
             let mut next_frame: Dav1dPicture = std::mem::zeroed();
             let got_picture;
@@ -81,7 +85,9 @@ impl Decoder for Dav1d {
                     let res = dav1d_send_data(self.context.unwrap(), (&mut data) as *mut _);
                     if res < 0 && res != DAV1D_EAGAIN {
                         dav1d_data_unref((&mut data) as *mut _);
-                        return Err(AvifError::UnknownError);
+                        return Err(AvifError::UnknownError(format!(
+                            "dav1d_send_data returned {res}"
+                        )));
                     }
                 }
 
@@ -91,12 +97,14 @@ impl Decoder for Dav1d {
                     if !data.data.is_null() {
                         continue;
                     }
-                    return Err(AvifError::UnknownError);
+                    return Err(AvifError::UnknownError("".into()));
                 } else if res < 0 {
                     if !data.data.is_null() {
                         dav1d_data_unref((&mut data) as *mut _);
                     }
-                    return Err(AvifError::UnknownError);
+                    return Err(AvifError::UnknownError(format!(
+                        "dav1d_send_picture returned {res}"
+                    )));
                 } else {
                     // Got a picture.
                     let frame_spatial_id = (*next_frame.frame_hdr).spatial_id as u8;
@@ -123,7 +131,7 @@ impl Decoder for Dav1d {
             } else if category == Category::Alpha && self.picture.is_some() {
                 // Special case for alpha, re-use last frame.
             } else {
-                return Err(AvifError::UnknownError);
+                return Err(AvifError::UnknownError("".into()));
             }
         }
 
@@ -137,7 +145,7 @@ impl Decoder for Dav1d {
                         || image.depth != (dav1d_picture.p.bpc as u8))
                 {
                     // Alpha plane does not match the previous alpha plane.
-                    return Err(AvifError::UnknownError);
+                    return Err(AvifError::UnknownError("".into()));
                 }
                 image.width = dav1d_picture.p.w as u32;
                 image.height = dav1d_picture.p.h as u32;
@@ -161,7 +169,7 @@ impl Decoder for Dav1d {
                     1 => PixelFormat::Yuv420,
                     2 => PixelFormat::Yuv422,
                     3 => PixelFormat::Yuv444,
-                    _ => return Err(AvifError::UnknownError), // not reached.
+                    _ => return Err(AvifError::UnknownError("".into())), // not reached.
                 };
                 let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
                 image.full_range = seq_hdr.color_range != 0;

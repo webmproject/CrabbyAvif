@@ -898,7 +898,7 @@ impl Decoder {
                         .unwrap()
                         .properties;
                 }
-                _ => return Err(AvifError::UnknownError), // not reached.
+                _ => return Err(AvifError::UnknownError("".into())), // not reached.
             }
 
             // Check validity of samples.

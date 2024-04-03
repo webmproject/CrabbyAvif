@@ -57,7 +57,7 @@ impl Decoder for MediaCodec {
         }
         let format = unsafe { AMediaFormat_new() };
         if format.is_null() {
-            return Err(AvifError::UnknownError);
+            return Err(AvifError::UnknownError("".into()));
         }
         unsafe {
             c_str!(mime_type, mime_type_tmp, "video/av01");
@@ -116,8 +116,9 @@ impl Decoder for MediaCodec {
                     &mut input_buffer_size as *mut _,
                 );
                 if input_buffer.is_null() {
-                    println!("input buffer at index {input_index} was null");
-                    return Err(AvifError::UnknownError);
+                    return Err(AvifError::UnknownError(format!(
+                        "input buffer at index {input_index} was null"
+                    )));
                 }
                 // TODO: Alternative is to create a slice from raw parts and use copy_from_slice.
                 ptr::copy_nonoverlapping(av1_payload.as_ptr(), input_buffer, av1_payload.len());
@@ -130,11 +131,12 @@ impl Decoder for MediaCodec {
                     /*flags=*/ 0,
                 ) != media_status_t_AMEDIA_OK
                 {
-                    return Err(AvifError::UnknownError);
+                    return Err(AvifError::UnknownError("".into()));
                 }
             } else {
-                println!("got input index < 0: {input_index}");
-                return Err(AvifError::UnknownError);
+                return Err(AvifError::UnknownError(format!(
+                    "got input index < 0: {input_index}"
+                )));
             }
         }
         let mut buffer: Option<*mut u8> = None;
@@ -153,8 +155,7 @@ impl Decoder for MediaCodec {
                         &mut buffer_size as *mut _,
                     );
                     if output_buffer.is_null() {
-                        println!("output buffer is null");
-                        return Err(AvifError::UnknownError);
+                        return Err(AvifError::UnknownError("output buffer is null".into()));
                     }
                     buffer = Some(output_buffer);
                     self.output_buffer_index = Some(usize_from_isize(output_index)?);
@@ -165,37 +166,37 @@ impl Decoder for MediaCodec {
                 } else if output_index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED as isize {
                     let format = AMediaCodec_getOutputFormat(codec);
                     if format.is_null() {
-                        println!("output format was null");
-                        return Err(AvifError::UnknownError);
+                        return Err(AvifError::UnknownError("output format was null".into()));
                     }
                     self.format = Some(format);
                     continue;
                 } else if output_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
                     continue;
                 } else {
-                    println!("mediacodec dequeue_output_buffer failed: {output_index}");
-                    return Err(AvifError::UnknownError);
+                    return Err(AvifError::UnknownError(format!(
+                        "mediacodec dequeue_output_buffer failed: {output_index}"
+                    )));
                 }
             }
         }
         if buffer.is_none() {
-            println!("did not get buffer from mediacodec");
-            return Err(AvifError::UnknownError);
+            return Err(AvifError::UnknownError(
+                "did not get buffer from mediacodec".into(),
+            ));
         }
         if self.format.is_none() {
-            println!("format is none :(");
-            return Err(AvifError::UnknownError);
+            return Err(AvifError::UnknownError("format is none".into()));
         }
         let buffer = buffer.unwrap();
         let format = self.format.unwrap();
-        let width =
-            get_i32(format, unsafe { AMEDIAFORMAT_KEY_WIDTH }).ok_or(AvifError::UnknownError)?;
-        let height =
-            get_i32(format, unsafe { AMEDIAFORMAT_KEY_HEIGHT }).ok_or(AvifError::UnknownError)?;
-        let stride =
-            get_i32(format, unsafe { AMEDIAFORMAT_KEY_STRIDE }).ok_or(AvifError::UnknownError)?;
+        let width = get_i32(format, unsafe { AMEDIAFORMAT_KEY_WIDTH })
+            .ok_or(AvifError::UnknownError("".into()))?;
+        let height = get_i32(format, unsafe { AMEDIAFORMAT_KEY_HEIGHT })
+            .ok_or(AvifError::UnknownError("".into()))?;
+        let stride = get_i32(format, unsafe { AMEDIAFORMAT_KEY_STRIDE })
+            .ok_or(AvifError::UnknownError("".into()))?;
         let color_format = get_i32(format, unsafe { AMEDIAFORMAT_KEY_COLOR_FORMAT })
-            .ok_or(AvifError::UnknownError)?;
+            .ok_or(AvifError::UnknownError("".into()))?;
         // color-range is documented but the key variable is not exposed in the NDK:
         // https://developer.android.com/reference/android/media/MediaFormat#KEY_COLOR_RANGE
         let color_range = get_i32_from_str(format, "color-range").unwrap_or(2);
@@ -222,8 +223,9 @@ impl Decoder for MediaCodec {
                         PixelFormat::Yuv420
                     }
                     _ => {
-                        println!("unknown color format: {color_format}");
-                        return Err(AvifError::UnknownError);
+                        return Err(AvifError::UnknownError(format!(
+                            "unknown color format: {color_format}"
+                        )));
                     }
                 };
                 image.full_range = color_range == 1;
