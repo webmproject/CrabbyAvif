@@ -63,7 +63,6 @@ impl Y4MWriter {
                 PixelFormat::Monochrome => "Cmono12 XYSCSS=400",
             },
             _ => {
-                println!("image depth is invalid: {}", image.depth);
                 return false;
             }
         };
@@ -73,7 +72,6 @@ impl Y4MWriter {
             "YUV4MPEG2 W{} H{} F25:1 Ip A0:0 {y4m_format} {y4m_color_range}\n",
             image.width, image.height
         );
-        println!("{header}");
         if self.file.is_none() {
             assert!(self.filename.is_some());
             let file = File::create(self.filename.unwrap_ref());

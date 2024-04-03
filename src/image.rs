@@ -260,7 +260,6 @@ impl Image {
         // This function is used only when |tile| contains pointers and self contains buffers.
         let row_index = u64::from(tile_index / tile_info.grid.columns);
         let column_index = u64::from(tile_index % tile_info.grid.columns);
-        //println!("copying tile {tile_index} {row_index} {column_index}");
         for plane in category.planes() {
             let plane = *plane;
             let src_plane = tile.plane_data(plane);

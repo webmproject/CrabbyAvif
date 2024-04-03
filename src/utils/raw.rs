@@ -45,7 +45,6 @@ impl RawWriter {
             rgb.premultiply_alpha = true;
             rgb.is_float = true;
             if rgb.allocate().is_err() || rgb.convert_from_yuv(image).is_err() {
-                println!("conversion failed");
                 return false;
             }
             for y in 0..rgb.height {

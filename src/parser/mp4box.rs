@@ -453,7 +453,6 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
         // unsigned int (8) bits_per_channel;
         pixi.plane_depths.push(stream.read_u8()?);
         if pixi.plane_depths.last().unwrap() != pixi.plane_depths.first().unwrap() {
-            println!("unsupported mismatched plane depths in pixi box");
             return Err(AvifError::UnsupportedDepth);
         }
     }
@@ -1511,8 +1510,6 @@ pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
         ..GainMapMetadata::default()
     };
     let use_common_denominator = (flags & 8) != 0;
-    println!("channel_count: {channel_count}");
-    println!("use_common_denominator: {use_common_denominator}");
     if use_common_denominator {
         let common_denominator = stream.read_u32()?;
         metadata.base_hdr_headroom = UFraction(stream.read_u32()?, common_denominator);
@@ -1526,20 +1523,13 @@ pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
         }
     } else {
         metadata.base_hdr_headroom = stream.read_ufraction()?;
-        //println!("here1 offset: {}", stream.offset);
         metadata.alternate_hdr_headroom = stream.read_ufraction()?;
-        //println!("here2 offset: {}", stream.offset);
         for i in 0..channel_count {
             metadata.min[i] = stream.read_fraction()?;
-            //println!("here3 offset: {}", stream.offset);
             metadata.max[i] = stream.read_fraction()?;
-            //println!("here4 offset: {}", stream.offset);
             metadata.gamma[i] = stream.read_ufraction()?;
-            //println!("here5 offset: {}", stream.offset);
             metadata.base_offset[i] = stream.read_fraction()?;
-            //println!("here6 offset: {}", stream.offset);
             metadata.alternate_offset[i] = stream.read_fraction()?;
-            //println!("here7 offset: {}", stream.offset);
         }
     }
     // Fill the remaining values by copying those from the first channel.

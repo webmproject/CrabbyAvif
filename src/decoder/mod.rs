@@ -343,7 +343,6 @@ impl Decoder {
                 Some(item) => alpha_item_indices.push(*item.0),
                 None => {
                     // TODO: This case must be an error.
-                    //println!("alpha aux item was not found for color tile.");
                     return (0, None);
                 }
             }
@@ -544,21 +543,16 @@ impl Decoder {
         };
         let mut search_size = 64;
         while search_size < 4096 {
-            match Av1SequenceHeader::parse_from_obus(sample.partial_data(
+            if let Ok(sequence_header) = Av1SequenceHeader::parse_from_obus(sample.partial_data(
                 io,
                 item_data_buffer,
                 search_size,
             )?) {
-                Ok(sequence_header) => {
-                    self.image.color_primaries = sequence_header.color_primaries;
-                    self.image.transfer_characteristics = sequence_header.transfer_characteristics;
-                    self.image.matrix_coefficients = sequence_header.matrix_coefficients;
-                    self.image.full_range = sequence_header.full_range;
-                    break;
-                }
-                Err(_) => {
-                    println!("errored :(");
-                }
+                self.image.color_primaries = sequence_header.color_primaries;
+                self.image.transfer_characteristics = sequence_header.transfer_characteristics;
+                self.image.matrix_coefficients = sequence_header.matrix_coefficients;
+                self.image.full_range = sequence_header.full_range;
+                break;
             }
             search_size += 64;
         }
@@ -679,7 +673,6 @@ impl Decoder {
                     self.settings.image_dimension_limit,
                 )?;
             }
-            //println!("{:#?}", self.items);
 
             self.source = match self.settings.source {
                 // Decide the source based on the major brand.
@@ -820,10 +813,7 @@ impl Decoder {
                             let mut stream = tonemap_item.stream(self.io.unwrap_mut())?;
                             self.gainmap.metadata = mp4box::parse_tmap(&mut stream)?;
                         }
-                        //println!("gainmap: {:#?}", self.gainmap);
                     }
-
-                    //println!("item ids: {:#?}", item_ids);
 
                     self.search_exif_or_xmp_metadata(item_ids[Category::Color.usize()])?;
 
@@ -1080,7 +1070,6 @@ impl Decoder {
     ) -> AvifResult<()> {
         let tile = &mut self.tiles[category][tile_index];
         if tile.input.samples.len() <= image_index {
-            println!("sample for index {image_index} not found.");
             return Err(AvifError::NoImagesRemaining);
         }
         let sample = &tile.input.samples[image_index];
@@ -1218,7 +1207,6 @@ impl Decoder {
                         }
                         Category::Alpha => {
                             if !self.image.has_same_properties(&tile.image) {
-                                println!("Color image item does not match alpha image item");
                                 return Err(AvifError::DecodeAlphaFailed);
                             }
                             self.image.steal_from(&tile.image, category)?;

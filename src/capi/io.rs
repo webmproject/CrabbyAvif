@@ -159,7 +159,6 @@ impl crate::decoder::IO for avifIOWrapper {
         };
         if res != avifResult::Ok {
             let err: AvifError = res.into();
-            //println!("returning {:#?} from IO::read", err);
             return Err(err);
         }
         Ok(unsafe { std::slice::from_raw_parts(self.data.data, self.data.size) })
