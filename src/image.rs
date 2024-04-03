@@ -272,10 +272,10 @@ impl Image {
             let src_width_to_copy = if column_index == (tile_info.grid.columns - 1).into() {
                 let width_so_far = u64::from(src_plane.width)
                     .checked_mul(column_index)
-                    .ok_or(AvifError::BmffParseFailed)?;
+                    .ok_or(AvifError::BmffParseFailed("".into()))?;
                 u64_from_usize(self.width(plane))?
                     .checked_sub(width_so_far)
-                    .ok_or(AvifError::BmffParseFailed)?
+                    .ok_or(AvifError::BmffParseFailed("".into()))?
             } else {
                 u64::from(src_plane.width)
             };
@@ -285,10 +285,10 @@ impl Image {
             let src_height_to_copy = if row_index == (tile_info.grid.rows - 1).into() {
                 let height_so_far = u64::from(src_plane.height)
                     .checked_mul(row_index)
-                    .ok_or(AvifError::BmffParseFailed)?;
+                    .ok_or(AvifError::BmffParseFailed("".into()))?;
                 u64_from_usize(self.height(plane))?
                     .checked_sub(height_so_far)
-                    .ok_or(AvifError::BmffParseFailed)?
+                    .ok_or(AvifError::BmffParseFailed("".into()))?
             } else {
                 u64::from(src_plane.height)
             };

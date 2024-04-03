@@ -125,8 +125,9 @@ impl Tile {
                 if a1lx[i] > 0 {
                     // >= instead of > because there must be room for the last layer
                     if a1lx[i] >= remaining_size {
-                        println!("a1lx layer index [{i}] does not fit in item size");
-                        return Err(AvifError::BmffParseFailed);
+                        return Err(AvifError::BmffParseFailed(format!(
+                            "a1lx layer index [{i}] does not fit in item size"
+                        )));
                     }
                     layer_sizes[i] = a1lx[i];
                     remaining_size -= a1lx[i];
@@ -172,7 +173,9 @@ impl Tile {
                     println!("lsel layer index not found in a1lx.");
                     return Err(AvifError::InvalidImageGrid);
                 }
-                let layer_id_plus_1 = layer_id.checked_add(1).ok_or(AvifError::BmffParseFailed)?;
+                let layer_id_plus_1 = layer_id
+                    .checked_add(1)
+                    .ok_or(AvifError::BmffParseFailed("".into()))?;
                 for layer_size in layer_sizes.iter().take(layer_id_plus_1) {
                     sample_size += layer_size;
                 }
@@ -192,8 +195,9 @@ impl Tile {
             // Progressive image. Decode all layers and expose them all to the
             // user.
             if image_count_limit != 0 && layer_count as u32 > image_count_limit {
-                println!("exceeded image_count_limit (progressive)");
-                return Err(AvifError::BmffParseFailed);
+                return Err(AvifError::BmffParseFailed(
+                    "exceeded image_count_limit (progressive)".into(),
+                ));
             }
             tile.input.all_layers = true;
             let mut offset = 0;
@@ -238,12 +242,14 @@ impl Tile {
                 // Figure out how many samples are in this chunk.
                 let sample_count = sample_table.get_sample_count_of_chunk(chunk_index as u32);
                 if sample_count == 0 {
-                    println!("chunk with 0 samples found");
-                    return Err(AvifError::BmffParseFailed);
+                    return Err(AvifError::BmffParseFailed(
+                        "chunk with 0 samples found".into(),
+                    ));
                 }
                 if sample_count > image_count_limit {
-                    println!("exceeded image_count_limit");
-                    return Err(AvifError::BmffParseFailed);
+                    return Err(AvifError::BmffParseFailed(
+                        "exceeded image_count_limit".into(),
+                    ));
                 }
                 image_count_limit -= sample_count;
             }
@@ -254,8 +260,9 @@ impl Tile {
             // Figure out how many samples are in this chunk.
             let sample_count = sample_table.get_sample_count_of_chunk(chunk_index as u32);
             if sample_count == 0 {
-                println!("chunk with 0 samples found");
-                return Err(AvifError::BmffParseFailed);
+                return Err(AvifError::BmffParseFailed(
+                    "chunk with 0 samples found".into(),
+                ));
             }
 
             let mut sample_offset = *chunk_offset;
@@ -274,7 +281,7 @@ impl Tile {
                 tile.input.samples.push(sample);
                 sample_offset = sample_offset
                     .checked_add(sample_size as u64)
-                    .ok_or(AvifError::BmffParseFailed)?;
+                    .ok_or(AvifError::BmffParseFailed("".into()))?;
                 sample_size_index += 1;
             }
         }

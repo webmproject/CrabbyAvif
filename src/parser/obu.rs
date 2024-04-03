@@ -29,13 +29,12 @@ impl Av1SequenceHeader {
     fn parse_profile(&mut self, bits: &mut IBitStream) -> AvifResult<()> {
         self.config.seq_profile = bits.read(3)? as u8;
         if self.config.seq_profile > 2 {
-            println!("invalid seq_profile");
-            return Err(AvifError::BmffParseFailed);
+            return Err(AvifError::BmffParseFailed("invalid seq_profile".into()));
         }
         let still_picture = bits.read_bool()?;
         self.reduced_still_picture_header = bits.read_bool()?;
         if self.reduced_still_picture_header && !still_picture {
-            return Err(AvifError::BmffParseFailed);
+            return Err(AvifError::BmffParseFailed("".into()));
         }
         if self.reduced_still_picture_header {
             self.config.seq_level_idx0 = bits.read(5)? as u8;
@@ -274,6 +273,8 @@ impl Av1SequenceHeader {
             return Ok(sequence_header);
         }
         // Failed to parse a sequence header.
-        Err(AvifError::BmffParseFailed)
+        Err(AvifError::BmffParseFailed(
+            "could not parse sequence header".into(),
+        ))
     }
 }

@@ -27,13 +27,6 @@ fn get_decoder(filename: &str) -> decoder::Decoder {
     decoder
 }
 
-macro_rules! assert_avif_error {
-    ($res:ident, $err:ident) => {
-        assert!($res.is_err());
-        assert!(matches!($res.err().unwrap(), AvifError::$err));
-    };
-}
-
 const HAS_DECODER: bool = if cfg!(any(
     feature = "dav1d",
     feature = "libgav1",
@@ -55,7 +48,7 @@ fn alpha_no_ispe() {
         decoder::Strictness::All
     ));
     let res = decoder.parse();
-    assert_avif_error!(res, BmffParseFailed);
+    assert!(matches!(res, Err(AvifError::BmffParseFailed(_))));
     // Allow this kind of file specifically.
     decoder.settings.strictness =
         decoder::Strictness::SpecificExclude(vec![decoder::StrictnessFlag::AlphaIspeRequired]);
@@ -674,6 +667,9 @@ fn white_1x1_ftyp_size0() -> AvifResult<()> {
 
     let mut decoder = decoder::Decoder::default();
     decoder.set_io_vec(file_bytes);
-    assert_eq!(decoder.parse(), Err(AvifError::BmffParseFailed));
+    assert!(matches!(
+        decoder.parse(),
+        Err(AvifError::BmffParseFailed(_))
+    ));
     Ok(())
 }

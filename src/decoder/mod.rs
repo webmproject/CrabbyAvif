@@ -598,7 +598,9 @@ impl Decoder {
             }
             if is_first {
                 // Adopt the configuration property of the first tile.
-                first_av1C = *dimg_item.av1C().ok_or(AvifError::BmffParseFailed)?;
+                first_av1C = *dimg_item
+                    .av1C()
+                    .ok_or(AvifError::BmffParseFailed("".into()))?;
                 is_first = false;
             }
             grid_item_ids.push(item_info.item_id);
@@ -659,8 +661,9 @@ impl Decoder {
                         self.settings.image_size_limit,
                         self.settings.image_dimension_limit,
                     ) {
-                        println!("track dimension too large");
-                        return Err(AvifError::BmffParseFailed);
+                        return Err(AvifError::BmffParseFailed(
+                            "track dimension too large".into(),
+                        ));
                     }
                 }
             }
@@ -702,7 +705,7 @@ impl Decoder {
                     self.color_track_id = Some(color_track.id);
                     color_properties = color_track
                         .get_properties()
-                        .ok_or(AvifError::BmffParseFailed)?;
+                        .ok_or(AvifError::BmffParseFailed("".into()))?;
 
                     // TODO: exif/xmp from meta.
 
@@ -880,7 +883,9 @@ impl Decoder {
                             .unwrap();
                         self.gainmap.image.width = gainmap_item.width;
                         self.gainmap.image.height = gainmap_item.height;
-                        let av1C = gainmap_item.av1C().ok_or(AvifError::BmffParseFailed)?;
+                        let av1C = gainmap_item
+                            .av1C()
+                            .ok_or(AvifError::BmffParseFailed("".into()))?;
                         self.gainmap.image.depth = av1C.depth();
                         self.gainmap.image.yuv_format = av1C.pixel_format();
                         self.gainmap.image.chroma_sample_position = av1C.chroma_sample_position;
@@ -901,8 +906,9 @@ impl Decoder {
                 for tile in tiles {
                     for sample in &tile.input.samples {
                         if sample.size == 0 {
-                            println!("sample has invalid size.");
-                            return Err(AvifError::BmffParseFailed);
+                            return Err(AvifError::BmffParseFailed(
+                                "sample has invalid size.".into(),
+                            ));
                         }
                         // TODO: iostats?
                     }
@@ -940,7 +946,7 @@ impl Decoder {
             self.image.imir_axis = find_property!(color_properties, ImageMirror);
 
             let av1C = find_property!(color_properties, CodecConfiguration)
-                .ok_or(AvifError::BmffParseFailed)?;
+                .ok_or(AvifError::BmffParseFailed("".into()))?;
             self.image.depth = av1C.depth();
             self.image.yuv_format = av1C.pixel_format();
             self.image.chroma_sample_position = av1C.chroma_sample_position;
@@ -1082,7 +1088,7 @@ impl Decoder {
         let item = self
             .items
             .get_mut(&sample.item_id)
-            .ok_or(AvifError::BmffParseFailed)?;
+            .ok_or(AvifError::BmffParseFailed("".into()))?;
         if item.extents.len() == 1 {
             // Item has only one extent. Nothing to prepare.
             return Ok(());

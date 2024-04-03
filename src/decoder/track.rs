@@ -72,8 +72,9 @@ impl Track {
                 // read in order to accept files which inadvertently has a trackDuration of 0
                 // without any edit lists.
                 if self.track_duration == 0 {
-                    println!("invalid track duration 0");
-                    return Err(AvifError::BmffParseFailed);
+                    return Err(AvifError::BmffParseFailed(
+                        "invalid track duration 0".into(),
+                    ));
                 }
                 let remainder =
                     if self.track_duration % self.segment_duration != 0 { 1u64 } else { 0u64 };
@@ -183,8 +184,9 @@ impl SampleTable {
             SampleSize::FixedSize(size) => *size,
             SampleSize::Sizes(sizes) => {
                 if index >= sizes.len() {
-                    println!("not enough sampel sizes in the table");
-                    return Err(AvifError::BmffParseFailed);
+                    return Err(AvifError::BmffParseFailed(
+                        "not enough sampel sizes in the table".into(),
+                    ));
                 }
                 sizes[index]
             }

@@ -10,7 +10,7 @@ impl IBitStream<'_> {
     fn read_bit(&mut self) -> AvifResult<u8> {
         let byte_offset = self.bit_offset / 8;
         if byte_offset >= self.data.len() {
-            return Err(AvifError::BmffParseFailed);
+            return Err(AvifError::BmffParseFailed("Not enough bits".into()));
         }
         let byte = self.data[byte_offset];
         let shift = 7 - (self.bit_offset % 8);
@@ -35,7 +35,7 @@ impl IBitStream<'_> {
 
     pub fn skip(&mut self, n: usize) -> AvifResult<()> {
         if self.bit_offset + n > self.data.len() * 8 {
-            return Err(AvifError::BmffParseFailed);
+            return Err(AvifError::BmffParseFailed("Not enough bytes".into()));
         }
         self.bit_offset += n;
         Ok(())
@@ -56,7 +56,7 @@ impl IBitStream<'_> {
     pub fn remaining_bits(&self) -> AvifResult<usize> {
         (self.data.len() * 8)
             .checked_sub(self.bit_offset)
-            .ok_or(AvifError::BmffParseFailed)
+            .ok_or(AvifError::BmffParseFailed("".into()))
     }
 }
 
@@ -73,7 +73,7 @@ impl IStream<'_> {
 
     fn check(&self, size: usize) -> AvifResult<()> {
         if self.bytes_left()? < size {
-            return Err(AvifError::BmffParseFailed);
+            return Err(AvifError::BmffParseFailed("".into()));
         }
         Ok(())
     }
@@ -147,7 +147,6 @@ impl IStream<'_> {
         // For now this is used only for gainmap fractions where we need
         // wrapping conversion from u32 to i32.
         Ok(self.read_u32()? as i32)
-        //i32::try_from(val).or(Err(AvifError::BmffParseFailed))
     }
 
     pub fn skip_u32(&mut self) -> AvifResult<()> {
@@ -168,7 +167,7 @@ impl IStream<'_> {
 
     // Reads size characters of a non-null-terminated string.
     pub fn read_string(&mut self, size: usize) -> AvifResult<String> {
-        String::from_utf8(self.get_vec(size)?).or(Err(AvifError::BmffParseFailed))
+        String::from_utf8(self.get_vec(size)?).or(Err(AvifError::BmffParseFailed("".into())))
     }
 
     // Reads an xx-byte unsigner integer.
@@ -192,10 +191,10 @@ impl IStream<'_> {
         let null_position = self.data[self.offset..]
             .iter()
             .position(|&x| x == b'\0')
-            .ok_or(AvifError::BmffParseFailed)?;
+            .ok_or(AvifError::BmffParseFailed("".into()))?;
         let range = self.offset..self.offset + null_position;
         self.offset += null_position + 1;
-        String::from_utf8(self.data[range].to_vec()).or(Err(AvifError::BmffParseFailed))
+        String::from_utf8(self.data[range].to_vec()).or(Err(AvifError::BmffParseFailed("".into())))
     }
 
     pub fn read_version_and_flags(&mut self) -> AvifResult<(u8, u32)> {
@@ -210,7 +209,7 @@ impl IStream<'_> {
     ) -> AvifResult<(u8, u32)> {
         let (version, flags) = self.read_version_and_flags()?;
         if version != enforced_version {
-            return Err(AvifError::BmffParseFailed);
+            return Err(AvifError::BmffParseFailed("".into()));
         }
         Ok((version, flags))
     }
@@ -225,7 +224,7 @@ impl IStream<'_> {
         self.offset = self
             .offset
             .checked_sub(size)
-            .ok_or(AvifError::BmffParseFailed)?;
+            .ok_or(AvifError::BmffParseFailed("".into()))?;
         Ok(())
     }
 
@@ -248,8 +247,9 @@ impl IStream<'_> {
         }
         // It is a requirement of bitstream conformance that the most
         // significant bit of leb128_byte is equal to 0 if i is equal to 7.
-        println!("uleb value did not terminate after 8 bytes");
-        Err(AvifError::BmffParseFailed)
+        Err(AvifError::BmffParseFailed(
+            "uleb value did not terminate after 8 bytes".into(),
+        ))
     }
 }
 
@@ -296,10 +296,10 @@ mod tests {
         assert_eq!(IStream::create(bytes).read_string(4), Ok("abcd".into()));
         assert_eq!(IStream::create(bytes).read_string(5), Ok("abcd\0".into()));
         assert_eq!(IStream::create(bytes).read_string(6), Ok("abcd\0e".into()));
-        assert_eq!(
+        assert!(matches!(
             IStream::create(bytes).read_string(8),
-            Err(AvifError::BmffParseFailed)
-        );
+            Err(AvifError::BmffParseFailed(_))
+        ));
         assert_eq!(IStream::create(bytes).read_c_string(), Ok("abcd".into()));
     }
 }

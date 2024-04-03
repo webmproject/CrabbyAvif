@@ -100,7 +100,7 @@ impl IFraction {
 macro_rules! conversion_function {
     ($func:ident, $to: ident, $from:ty) => {
         pub fn $func(value: $from) -> AvifResult<$to> {
-            $to::try_from(value).or(Err(AvifError::BmffParseFailed))
+            $to::try_from(value).or(Err(AvifError::BmffParseFailed("".into())))
         }
     };
 }
@@ -145,8 +145,9 @@ pub fn find_nclx(properties: &[ItemProperty]) -> AvifResult<Option<&Nclx>> {
     for property in properties {
         if let ItemProperty::ColorInformation(ColorInformation::Nclx(nclx)) = property {
             if single_nclx.is_some() {
-                println!("multiple nclx were found");
-                return Err(AvifError::BmffParseFailed);
+                return Err(AvifError::BmffParseFailed(
+                    "multiple nclx were found".into(),
+                ));
             }
             single_nclx = Some(nclx);
         }
@@ -160,8 +161,7 @@ pub fn find_icc(properties: &[ItemProperty]) -> AvifResult<Option<&Vec<u8>>> {
     for property in properties {
         if let ItemProperty::ColorInformation(ColorInformation::Icc(icc)) = property {
             if single_icc.is_some() {
-                println!("multiple icc were found");
-                return Err(AvifError::BmffParseFailed);
+                return Err(AvifError::BmffParseFailed("multiple icc were found".into()));
             }
             single_icc = Some(icc);
         }

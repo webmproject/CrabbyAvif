@@ -131,12 +131,14 @@ impl Item {
                     self.width = x.width;
                     self.height = x.height;
                     if self.width == 0 || self.height == 0 {
-                        println!("item id has invalid size.");
-                        return Err(AvifError::BmffParseFailed);
+                        return Err(AvifError::BmffParseFailed(
+                            "item id has invalid size.".into(),
+                        ));
                     }
                     if !check_limits(x.width, x.height, size_limit, dimension_limit) {
-                        println!("item dimensions too large.");
-                        return Err(AvifError::BmffParseFailed);
+                        return Err(AvifError::BmffParseFailed(
+                            "item dimensions too large.".into(),
+                        ));
                     }
                 }
                 _ => return Err(AvifError::UnknownError), // not reached.
@@ -145,12 +147,14 @@ impl Item {
                 // No ispe was found.
                 if self.is_auxiliary_alpha() {
                     if alpha_ispe_required {
-                        println!("alpha auxiliary image is missing mandatory ispe");
-                        return Err(AvifError::BmffParseFailed);
+                        return Err(AvifError::BmffParseFailed(
+                            "alpha auxiliary image is missing mandatory ispe".into(),
+                        ));
                     }
                 } else {
-                    println!("item id is missing mandatory ispe property");
-                    return Err(AvifError::BmffParseFailed);
+                    return Err(AvifError::BmffParseFailed(
+                        "item id is missing mandatory ispe property".into(),
+                    ));
                 }
             }
         }
@@ -160,14 +164,17 @@ impl Item {
     #[allow(non_snake_case)]
     pub fn validate_properties(&self, items: &Items, pixi_required: bool) -> AvifResult<()> {
         //println!("validating item: {:#?}", self);
-        let av1C = self.av1C().ok_or(AvifError::BmffParseFailed)?;
+        let av1C = self.av1C().ok_or(AvifError::BmffParseFailed("".into()))?;
         if self.item_type == "grid" {
             for grid_item_id in &self.grid_item_ids {
                 let grid_item = items.get(grid_item_id).unwrap();
-                let grid_av1C = grid_item.av1C().ok_or(AvifError::BmffParseFailed)?;
+                let grid_av1C = grid_item
+                    .av1C()
+                    .ok_or(AvifError::BmffParseFailed("".into()))?;
                 if av1C != grid_av1C {
-                    println!("av1c of grid items do not match");
-                    return Err(AvifError::BmffParseFailed);
+                    return Err(AvifError::BmffParseFailed(
+                        "av1c of grid items do not match".into(),
+                    ));
                 }
             }
         }
@@ -175,15 +182,15 @@ impl Item {
             Some(pixi) => {
                 for depth in &pixi.plane_depths {
                     if *depth != av1C.depth() {
-                        println!("pixi depth does not match av1C depth");
-                        return Err(AvifError::BmffParseFailed);
+                        return Err(AvifError::BmffParseFailed(
+                            "pixi depth does not match av1C depth".into(),
+                        ));
                     }
                 }
             }
             None => {
                 if pixi_required {
-                    println!("missing pixi property");
-                    return Err(AvifError::BmffParseFailed);
+                    return Err(AvifError::BmffParseFailed("missing pixi property".into()));
                 }
             }
         }
@@ -289,7 +296,7 @@ impl Item {
                     } else {
                         start_offset = start_offset
                             .checked_add(remaining_offset)
-                            .ok_or(AvifError::BmffParseFailed)?;
+                            .ok_or(AvifError::BmffParseFailed("".into()))?;
                         size -= usize_from_u64(remaining_offset)?;
                         remaining_offset = 0;
                     }
@@ -297,7 +304,7 @@ impl Item {
                 let used_extent_size = std::cmp::min(size, remaining_size);
                 let end_offset = start_offset
                     .checked_add(u64_from_usize(used_extent_size)?)
-                    .ok_or(AvifError::BmffParseFailed)?;
+                    .ok_or(AvifError::BmffParseFailed("".into()))?;
                 min_offset = std::cmp::min(min_offset, start_offset);
                 max_offset = std::cmp::max(max_offset, end_offset);
                 remaining_size -= used_extent_size;
@@ -338,10 +345,11 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
     for iloc in &meta.iloc.items {
         let item = items
             .get_mut(&iloc.item_id)
-            .ok_or(AvifError::BmffParseFailed)?;
+            .ok_or(AvifError::BmffParseFailed("".into()))?;
         if !item.extents.is_empty() {
-            println!("item already has extents.");
-            return Err(AvifError::BmffParseFailed);
+            return Err(AvifError::BmffParseFailed(
+                "item already has extents".into(),
+            ));
         }
         if iloc.construction_method == 1 {
             item.idat = meta.idat.clone();
@@ -354,19 +362,20 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
             item.size = item
                 .size
                 .checked_add(extent.size)
-                .ok_or(AvifError::BmffParseFailed)?;
+                .ok_or(AvifError::BmffParseFailed("".into()))?;
         }
     }
     let mut ipma_seen: HashSet<u32> = HashSet::with_hasher(NonRandomHasherState);
     for association in &meta.iprp.associations {
         if ipma_seen.contains(&association.item_id) {
-            println!("item has duplictate ipma.");
-            return Err(AvifError::BmffParseFailed);
+            return Err(AvifError::BmffParseFailed(
+                "item has duplictate ipma.".into(),
+            ));
         }
         ipma_seen.insert(association.item_id);
         let item = items
             .get_mut(&association.item_id)
-            .ok_or(AvifError::BmffParseFailed)?;
+            .ok_or(AvifError::BmffParseFailed("".into()))?;
         for (property_index_ref, essential_ref) in &association.associations {
             let property_index: usize = *property_index_ref as usize;
             let essential = *essential_ref;
@@ -375,8 +384,9 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
                 continue;
             }
             if property_index > meta.iprp.properties.len() {
-                println!("invalid property_index in ipma.");
-                return Err(AvifError::BmffParseFailed);
+                return Err(AvifError::BmffParseFailed(
+                    "invalid property_index in ipma".into(),
+                ));
             }
             // property_index is 1-indexed.
             let property = meta.iprp.properties[property_index - 1].clone();
@@ -399,15 +409,17 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
             if is_supported_property {
                 if essential {
                     if let ItemProperty::AV1LayeredImageIndexing(_) = property {
-                        println!("invalid essential property.");
-                        return Err(AvifError::BmffParseFailed);
+                        return Err(AvifError::BmffParseFailed(
+                            "invalid essential property".into(),
+                        ));
                     }
                 } else {
                     match property {
                         ItemProperty::OperatingPointSelector(_)
                         | ItemProperty::LayerSelector(_) => {
-                            println!("required essential property not marked as essential.");
-                            return Err(AvifError::BmffParseFailed);
+                            return Err(AvifError::BmffParseFailed(
+                                "required essential property not marked as essential".into(),
+                            ));
                         }
                         _ => {}
                     }
@@ -421,7 +433,7 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
     for reference in &meta.iref {
         let item = items
             .get_mut(&reference.from_item_id)
-            .ok_or(AvifError::BmffParseFailed)?;
+            .ok_or(AvifError::BmffParseFailed("".into()))?;
         match reference.reference_type.as_str() {
             "thmb" => item.thumbnail_for_id = reference.to_item_id,
             "auxl" => item.aux_for_id = reference.to_item_id,
@@ -431,7 +443,7 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
                 // derived images refer in the opposite direction.
                 let dimg_item = items
                     .get_mut(&reference.to_item_id)
-                    .ok_or(AvifError::BmffParseFailed)?;
+                    .ok_or(AvifError::BmffParseFailed("".into()))?;
                 dimg_item.dimg_for_id = reference.from_item_id;
                 dimg_item.dimg_index = reference.index;
             }

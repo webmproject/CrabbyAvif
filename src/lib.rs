@@ -253,7 +253,7 @@ pub enum AvifError {
     UnsupportedDepth,
     EncodeColorFailed,
     EncodeAlphaFailed,
-    BmffParseFailed, // TODO: this can contain an error string?
+    BmffParseFailed(String),
     MissingImageItem,
     DecodeColorFailed,
     DecodeAlphaFailed,
