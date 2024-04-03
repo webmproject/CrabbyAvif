@@ -239,7 +239,7 @@ pub unsafe extern "C" fn crabby_avifDecoderNextImage(decoder: *mut avifDecoder) 
         if res.is_err() {
             early_return = true;
             if rust_decoder.settings.allow_incremental
-                && res.err().unwrap() == AvifError::WaitingOnIo
+                && matches!(res.as_ref().err().unwrap(), AvifError::WaitingOnIo)
             {
                 if previous_decoded_row_count != rust_decoder.decoded_row_count() {
                     early_return = false;
@@ -273,7 +273,7 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImage(
         if res.is_err() {
             early_return = true;
             if rust_decoder.settings.allow_incremental
-                && res.err().unwrap() == AvifError::WaitingOnIo
+                && matches!(res.as_ref().err().unwrap(), AvifError::WaitingOnIo)
             {
                 if image_index != frameIndex {
                     early_return = false;

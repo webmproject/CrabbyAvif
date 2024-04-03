@@ -258,7 +258,6 @@ impl Image {
         category: Category,
     ) -> AvifResult<()> {
         // This function is used only when |tile| contains pointers and self contains buffers.
-        let err = AvifError::BmffParseFailed;
         let row_index = u64::from(tile_index / tile_info.grid.columns);
         let column_index = u64::from(tile_index % tile_info.grid.columns);
         //println!("copying tile {tile_index} {row_index} {column_index}");
@@ -273,10 +272,10 @@ impl Image {
             let src_width_to_copy = if column_index == (tile_info.grid.columns - 1).into() {
                 let width_so_far = u64::from(src_plane.width)
                     .checked_mul(column_index)
-                    .ok_or(err)?;
+                    .ok_or(AvifError::BmffParseFailed)?;
                 u64_from_usize(self.width(plane))?
                     .checked_sub(width_so_far)
-                    .ok_or(err)?
+                    .ok_or(AvifError::BmffParseFailed)?
             } else {
                 u64::from(src_plane.width)
             };
@@ -286,10 +285,10 @@ impl Image {
             let src_height_to_copy = if row_index == (tile_info.grid.rows - 1).into() {
                 let height_so_far = u64::from(src_plane.height)
                     .checked_mul(row_index)
-                    .ok_or(err)?;
+                    .ok_or(AvifError::BmffParseFailed)?;
                 u64_from_usize(self.height(plane))?
                     .checked_sub(height_so_far)
-                    .ok_or(err)?
+                    .ok_or(AvifError::BmffParseFailed)?
             } else {
                 u64::from(src_plane.height)
             };

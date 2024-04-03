@@ -241,7 +241,7 @@ impl From<u16> for MatrixCoefficients {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Copy, Clone)]
+#[derive(Debug, Default, PartialEq)]
 pub enum AvifError {
     #[default]
     Ok,

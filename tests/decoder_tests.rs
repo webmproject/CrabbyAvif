@@ -499,7 +499,9 @@ fn incremental_decode() {
 
     // Parsing is not incremental.
     let mut parse_result = decoder.parse();
-    while parse_result.is_err() && parse_result.err().unwrap() == AvifError::WaitingOnIo {
+    while parse_result.is_err()
+        && matches!(parse_result.as_ref().err().unwrap(), AvifError::WaitingOnIo)
+    {
         {
             let mut available_size = available_size_rc.borrow_mut();
             if *available_size >= len {
@@ -518,7 +520,12 @@ fn incremental_decode() {
     // Decoding is incremental.
     let mut previous_decoded_row_count = 0;
     let mut decode_result = decoder.next_image();
-    while decode_result.is_err() && decode_result.err().unwrap() == AvifError::WaitingOnIo {
+    while decode_result.is_err()
+        && matches!(
+            decode_result.as_ref().err().unwrap(),
+            AvifError::WaitingOnIo
+        )
+    {
         {
             let mut available_size = available_size_rc.borrow_mut();
             if *available_size >= len {
