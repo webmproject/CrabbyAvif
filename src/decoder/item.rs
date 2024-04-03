@@ -66,8 +66,9 @@ impl Item {
         // unsigned int(8) version = 0;
         let version = stream.read_u8()?;
         if version != 0 {
-            println!("unsupported version for grid");
-            return Err(AvifError::InvalidImageGrid);
+            return Err(AvifError::InvalidImageGrid(
+                "unsupported version for grid".into(),
+            ));
         }
         // unsigned int(8) flags;
         let flags = stream.read_u8()?;
@@ -89,12 +90,14 @@ impl Item {
             grid.height = stream.read_u16()? as u32;
         }
         if grid.width == 0 || grid.height == 0 {
-            println!("invalid dimensions in grid box");
-            return Err(AvifError::InvalidImageGrid);
+            return Err(AvifError::InvalidImageGrid(
+                "invalid dimensions in grid box".into(),
+            ));
         }
         if !check_limits(grid.width, grid.height, size_limit, dimension_limit) {
-            println!("grid dimensions too large");
-            return Err(AvifError::InvalidImageGrid);
+            return Err(AvifError::InvalidImageGrid(
+                "grid dimensions too large".into(),
+            ));
         }
         Ok(())
     }

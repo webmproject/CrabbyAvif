@@ -170,8 +170,9 @@ impl Tile {
                 // Optimization: If we're selecting a layer that doesn't require the entire image's
                 // payload (hinted via the a1lx box).
                 if layer_id >= layer_count {
-                    println!("lsel layer index not found in a1lx.");
-                    return Err(AvifError::InvalidImageGrid);
+                    return Err(AvifError::InvalidImageGrid(
+                        "lsel layer index not found in a1lx.".into(),
+                    ));
                 }
                 let layer_id_plus_1 = layer_id
                     .checked_add(1)

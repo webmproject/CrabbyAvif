@@ -479,15 +479,16 @@ impl Decoder {
             .ok_or(AvifError::MissingImageItem)?;
         if !item.grid_item_ids.is_empty() {
             if !self.tile_info[category.usize()].is_grid() {
-                println!("multiple dimg items were found but image is not grid.");
-                return Err(AvifError::InvalidImageGrid);
+                return Err(AvifError::InvalidImageGrid(
+                    "multiple dimg items were found but image is not grid.".into(),
+                ));
             }
             let grid_item_ids = item.grid_item_ids.clone();
             for grid_item_id in &grid_item_ids {
                 let grid_item = self
                     .items
                     .get_mut(grid_item_id)
-                    .ok_or(AvifError::InvalidImageGrid)?;
+                    .ok_or(AvifError::InvalidImageGrid("".into()))?;
                 let mut tile = Tile::create_from_item(
                     grid_item,
                     self.settings.allow_progressive,
@@ -582,19 +583,20 @@ impl Decoder {
             let dimg_item = self
                 .items
                 .get(&item_info.item_id)
-                .ok_or(AvifError::InvalidImageGrid)?;
+                .ok_or(AvifError::InvalidImageGrid("".into()))?;
             if dimg_item.dimg_for_id != item_id {
                 continue;
             }
             if dimg_item.item_type != "av01" {
-                println!("invalid item_type in dimg grid");
-                return Err(AvifError::InvalidImageGrid);
+                return Err(AvifError::InvalidImageGrid(
+                    "invalid item_type in dimg grid".into(),
+                ));
             }
             if dimg_item.has_unsupported_essential_property {
-                println!(
+                return Err(AvifError::InvalidImageGrid(
                     "Grid image contains tile with an unsupported property marked as essential"
-                );
-                return Err(AvifError::InvalidImageGrid);
+                        .into(),
+                ));
             }
             if is_first {
                 // Adopt the configuration property of the first tile.
@@ -606,13 +608,14 @@ impl Decoder {
             grid_item_ids.push(item_info.item_id);
         }
         if grid_item_ids.len() as u32 != self.tile_info[category.usize()].grid_tile_count() {
-            println!("Expected number of tiles not found");
-            return Err(AvifError::InvalidImageGrid);
+            return Err(AvifError::InvalidImageGrid(
+                "Expected number of tiles not found".into(),
+            ));
         }
         let item = self
             .items
             .get_mut(&item_id)
-            .ok_or(AvifError::InvalidImageGrid)?;
+            .ok_or(AvifError::InvalidImageGrid("".into()))?;
         item.properties
             .push(ItemProperty::CodecConfiguration(first_av1C));
         item.grid_item_ids = grid_item_ids;
@@ -1176,8 +1179,9 @@ impl Decoder {
                             || tile.image.matrix_coefficients
                                 != first_tile_image.matrix_coefficients
                         {
-                            println!("grid image contains mismatched tiles");
-                            return Err(AvifError::InvalidImageGrid);
+                            return Err(AvifError::InvalidImageGrid(
+                                "grid image contains mismatched tiles".into(),
+                            ));
                         }
                     }
                     if category == Category::Alpha && !tile.image.full_range {

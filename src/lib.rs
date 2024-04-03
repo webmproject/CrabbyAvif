@@ -262,7 +262,7 @@ pub enum AvifError {
     NoCodecAvailable,
     NoImagesRemaining,
     InvalidExifPayload,
-    InvalidImageGrid,
+    InvalidImageGrid(String),
     InvalidCodecSpecificOption,
     TruncatedData,
     IoNotSet,
