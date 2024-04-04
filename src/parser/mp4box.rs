@@ -864,15 +864,17 @@ fn parse_infe(stream: &mut IStream) -> AvifResult<ItemInfo> {
     // unsigned int(32) item_type;
     entry.item_type = stream.read_string(4)?;
 
-    // TODO: libavif read vs write does not seem to match. check it out.
-    // The rust code follows libavif.
+    // utf8string item_name;
+    entry.item_name = stream.read_c_string()?;
 
     if entry.item_type == "mime" {
-        // string item_name;
-        entry.item_name = stream.read_c_string()?;
-        // string content_type;
+        // utf8string content_type;
         entry.content_type = stream.read_c_string()?;
+        // utf8string content_encoding; //optional
     }
+    // if (item_type == 'uri ') {
+    //  utf8string item_uri_type;
+    // }
     Ok(entry)
 }
 
