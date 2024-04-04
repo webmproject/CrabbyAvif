@@ -66,18 +66,18 @@ pub struct ItemLocationBox {
     pub items: Vec<ItemLocationEntry>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct ImageSpatialExtents {
     pub width: u32,
     pub height: u32,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct PixelInformation {
     pub plane_depths: Vec<u8>,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CodecConfiguration {
     pub seq_profile: u8,
     pub seq_level_idx0: u8,
@@ -114,7 +114,7 @@ impl CodecConfiguration {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct Nclx {
     pub color_primaries: ColorPrimaries,
     pub transfer_characteristics: TransferCharacteristics,
@@ -122,14 +122,14 @@ pub struct Nclx {
     pub full_range: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum ColorInformation {
     Icc(Vec<u8>),
     Nclx(Nclx),
 }
 
 /// cbindgen:rename-all=CamelCase
-#[derive(Debug, Clone, Default, Copy)]
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct PixelAspectRatio {
     pub h_spacing: u32,
@@ -138,13 +138,13 @@ pub struct PixelAspectRatio {
 
 /// cbindgen:field-names=[maxCLL, maxPALL]
 #[repr(C)]
-#[derive(Debug, Clone, Default, Copy)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ContentLightLevelInformation {
     pub max_cll: u16,
     pub max_pall: u16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum ItemProperty {
     ImageSpatialExtents(ImageSpatialExtents),
     PixelInformation(PixelInformation),

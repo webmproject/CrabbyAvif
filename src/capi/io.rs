@@ -9,8 +9,8 @@ use crate::internal_utils::io::DecoderFileIO;
 use crate::internal_utils::io::DecoderRawIO;
 use crate::*;
 
-#[derive(Clone)]
 #[repr(C)]
+#[derive(Clone)]
 pub struct avifROData {
     pub data: *const u8,
     pub size: usize,
@@ -25,8 +25,8 @@ impl Default for avifROData {
     }
 }
 
-#[derive(Debug, Clone)]
 #[repr(C)]
+#[derive(Clone, Debug)]
 pub struct avifRWData {
     data: *mut u8,
     size: usize,
@@ -122,7 +122,7 @@ pub type avifIOWriteFunc = unsafe extern "C" fn(
 ) -> avifResult;
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Clone, Copy)]
 pub struct avifIO {
     destroy: avifIODestroyFunc,
     read: avifIOReadFunc,

@@ -7,7 +7,7 @@ use crate::parser::mp4box::*;
 use crate::utils::clap::CleanAperture;
 use crate::*;
 
-#[derive(PartialEq, Copy, Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Plane {
     Y = 0,
     U = 1,
@@ -86,7 +86,7 @@ pub struct PlaneData {
     pub pixel_size: u32,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone, Copy)]
 pub enum PlaneRow<'a> {
     Depth8(&'a [u8]),
     Depth16(&'a [u16]),

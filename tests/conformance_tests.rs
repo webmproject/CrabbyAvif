@@ -48,7 +48,7 @@ fn get_avifdec() -> String {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone, Copy)]
 struct ExpectedImageInfo<'a> {
     filename: &'a str,
     width: u32,

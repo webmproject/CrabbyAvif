@@ -3,7 +3,7 @@ use crate::internal_utils::*;
 use crate::parser::mp4box::ContentLightLevelInformation;
 use crate::*;
 
-#[derive(Default, Debug)]
+#[derive(Debug, Default)]
 pub struct GainMapMetadata {
     pub min: [Fraction; 3],
     pub max: [Fraction; 3],

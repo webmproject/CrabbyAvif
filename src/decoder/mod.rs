@@ -104,7 +104,7 @@ impl CodecChoice {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum Source {
     #[default]
     Auto = 0,
@@ -152,7 +152,7 @@ impl Default for Settings {
     }
 }
 
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct Extent {
     pub offset: u64,
@@ -221,7 +221,7 @@ impl Strictness {
 }
 
 #[repr(C)]
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum ProgressiveState {
     #[default]
     Unavailable = 0,
@@ -263,7 +263,7 @@ pub struct Decoder {
     parse_state: ParseState,
 }
 
-#[derive(PartialEq, Copy, Clone, Default, Debug)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Category {
     #[default]
     Color,

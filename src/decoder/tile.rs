@@ -45,7 +45,7 @@ pub struct DecodeInput {
     pub category: Category,
 }
 
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Grid {
     pub rows: u32,
     pub columns: u32,

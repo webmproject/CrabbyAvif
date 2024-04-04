@@ -9,7 +9,7 @@ use crate::*;
 
 use std::cmp::min;
 
-#[derive(PartialEq, Copy, Clone)]
+#[derive(Clone, Copy, PartialEq)]
 enum Mode {
     YuvCoefficients(f32, f32, f32),
     Identity,

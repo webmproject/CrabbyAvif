@@ -29,7 +29,7 @@ pub type HashMap<K, V> = std::collections::HashMap<K, V, NonRandomHasherState>;
 pub type HashSet<K> = std::collections::HashSet<K, NonRandomHasherState>;
 
 // See https://aomediacodec.github.io/av1-spec/#color-config-semantics.
-#[derive(Debug, Default, PartialEq, Copy, Clone)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum PixelFormat {
     Yuv444,
     Yuv422,
@@ -64,7 +64,7 @@ impl PixelFormat {
 // See https://aomediacodec.github.io/av1-spec/#color-config-semantics
 // and https://en.wikipedia.org/wiki/Chroma_subsampling#Sampling_positions.
 #[repr(C)]
-#[derive(Debug, Default, PartialEq, Copy, Clone)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum ChromaSamplePosition {
     #[default]
     Unknown = 0, // Corresponds to AV1's CSP_UNKNOWN.
@@ -91,7 +91,7 @@ impl From<u32> for ChromaSamplePosition {
 
 // See https://aomediacodec.github.io/av1-spec/#color-config-semantics.
 #[repr(u16)]
-#[derive(Debug, Default, PartialEq, Copy, Clone)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum ColorPrimaries {
     Unknown = 0,
     Srgb = 1,
@@ -140,7 +140,7 @@ impl ColorPrimaries {
 
 // See https://aomediacodec.github.io/av1-spec/#color-config-semantics.
 #[repr(u16)]
-#[derive(Debug, Default, PartialEq, Copy, Clone)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum TransferCharacteristics {
     Unknown = 0,
     Bt709 = 1,
@@ -196,7 +196,7 @@ impl TransferCharacteristics {
 
 // See https://aomediacodec.github.io/av1-spec/#color-config-semantics.
 #[repr(u16)]
-#[derive(Debug, Default, PartialEq, Eq, Copy, Clone, Hash)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum MatrixCoefficients {
     Identity = 0,
     Bt709 = 1,

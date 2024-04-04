@@ -1,7 +1,7 @@
 use crate::internal_utils::*;
 use crate::*;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct CleanAperture {
     pub width: UFraction,
     pub height: UFraction,
@@ -9,7 +9,7 @@ pub struct CleanAperture {
     pub vert_off: UFraction,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct CropRect {
     pub x: u32,

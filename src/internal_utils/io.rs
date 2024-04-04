@@ -3,7 +3,7 @@ use crate::internal_utils::*;
 use std::fs::File;
 use std::os::unix::fs::FileExt; // TODO: what happens when this is compiled for windows?
 
-#[derive(Default, Debug)]
+#[derive(Debug, Default)]
 pub struct DecoderFileIO {
     file: Option<File>,
     buffer: Vec<u8>,

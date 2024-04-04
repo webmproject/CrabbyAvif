@@ -7,7 +7,7 @@ use crate::internal_utils::*;
 use crate::*;
 
 #[repr(C)]
-#[derive(Default, PartialEq, Copy, Clone)]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub enum Format {
     Rgb,
     #[default]
@@ -50,7 +50,7 @@ impl Format {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default)]
+#[derive(Clone, Copy, Default)]
 pub enum ChromaUpsampling {
     #[default]
     Automatic,
@@ -72,7 +72,7 @@ impl ChromaUpsampling {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default)]
+#[derive(Clone, Copy, Default)]
 pub enum ChromaDownsampling {
     #[default]
     Automatic,
@@ -97,7 +97,7 @@ pub struct Image {
     pub row_bytes: u32,
 }
 
-#[derive(Default, Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub enum AlphaMultiplyMode {
     #[default]
     NoOp,

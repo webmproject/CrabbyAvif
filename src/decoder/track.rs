@@ -207,7 +207,7 @@ impl SampleTable {
 
 /// cbindgen:rename-all=CamelCase
 #[repr(C)]
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ImageTiming {
     pub timescale: u64,
     pub pts: f64,

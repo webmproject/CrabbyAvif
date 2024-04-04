@@ -127,7 +127,7 @@ pub const AVIF_TRUE: c_int = 1;
 pub const AVIF_FALSE: c_int = 0;
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum avifPixelFormat {
     None,
     Yuv444,
@@ -183,7 +183,7 @@ impl avifPixelFormat {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum avifRange {
     Limited = 0,
     Full = 1,
