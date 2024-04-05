@@ -119,11 +119,12 @@ pub struct TimeToSample {
     pub sample_delta: u32,
 }
 
+// Section 8.7.4.3 of ISO/IEC 14496-12.
 #[derive(Debug)]
 pub struct SampleToChunk {
-    pub first_chunk: u32,
+    pub first_chunk: u32, // 1-based
     pub samples_per_chunk: u32,
-    pub sample_description_index: u32,
+    pub sample_description_index: u32, // 1-based
 }
 
 #[derive(Debug, Default)]

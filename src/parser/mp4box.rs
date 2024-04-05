@@ -10,7 +10,7 @@ use crate::*;
 
 #[derive(Debug)]
 struct BoxHeader {
-    size: usize,
+    size: usize, // In bytes, header exclusive.
     box_type: String,
 }
 
@@ -716,7 +716,6 @@ fn parse_clli(stream: &mut IStream) -> AvifResult<ItemProperty> {
     Ok(ItemProperty::ContentLightLevelInformation(clli))
 }
 
-#[allow(non_snake_case)]
 fn parse_ipco(stream: &mut IStream) -> AvifResult<Vec<ItemProperty>> {
     // Section 8.11.14.2 of ISO/IEC 14496-12.
     let mut properties: Vec<ItemProperty> = Vec::new();
@@ -1007,6 +1006,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
 }
 
 fn parse_tkhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
+    // Section 8.3.2.2 of ISO/IEC 14496-12.
     let (version, _flags) = stream.read_version_and_flags()?;
     if version == 1 {
         // unsigned int(64) creation_time;
@@ -1050,6 +1050,7 @@ fn parse_tkhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
             "Invalid reserved bits in tkhd".into(),
         ));
     }
+    // The following fields should be 0 but are ignored instead.
     // template int(16) layer = 0;
     stream.skip(2)?;
     // template int(16) alternate_group = 0;
@@ -1079,6 +1080,7 @@ fn parse_tkhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 }
 
 fn parse_mdhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
+    // Section 8.4.2.2 of ISO/IEC 14496-12.
     let (version, _flags) = stream.read_version_and_flags()?;
     if version == 1 {
         // unsigned int(64) creation_time;
@@ -1104,11 +1106,17 @@ fn parse_mdhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         )));
     }
 
-    // Skip the following 4 bytes.
+    let mut bits = stream.sub_bit_stream(4)?;
     // bit(1) pad = 0;
+    if bits.read(1)? != 0 {
+        return Err(AvifError::BmffParseFailed(
+            "Invalid reserved bits in mdhd".into(),
+        ));
+    }
     // unsigned int(5)[3] language; // ISO-639-2/T language code
-    // unsigned int(16) pre_defined = 0;
-    stream.skip(4)?;
+    bits.skip(5 * 3)?;
+    // unsigned int(16) pre_defined = 0; ("Readers should expect any value")
+    bits.skip(2)?;
     Ok(())
 }
 
@@ -1117,10 +1125,11 @@ fn parse_stco(
     sample_table: &mut SampleTable,
     large_offset: bool,
 ) -> AvifResult<()> {
+    // Section 8.7.5.2 of ISO/IEC 14496-12.
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
     // unsigned int(32) entry_count;
     let entry_count = usize_from_u32(stream.read_u32()?)?;
-    sample_table.chunk_offsets.reserve(entry_count);
+    sample_table.chunk_offsets = create_vec_exact(entry_count)?;
     for _ in 0..entry_count {
         let chunk_offset: u64 = if large_offset {
             // unsigned int(64) chunk_offset;
@@ -1135,10 +1144,11 @@ fn parse_stco(
 }
 
 fn parse_stsc(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
+    // Section 8.7.4.2 of ISO/IEC 14496-12.
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
     // unsigned int(32) entry_count;
     let entry_count = usize_from_u32(stream.read_u32()?)?;
-    sample_table.sample_to_chunk.reserve(entry_count);
+    sample_table.sample_to_chunk = create_vec_exact(entry_count)?;
     for i in 0..entry_count {
         let stsc = SampleToChunk {
             // unsigned int(32) first_chunk;
@@ -1159,12 +1169,19 @@ fn parse_stsc(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
                 "stsc chunks are not strictly increasing.".into(),
             ));
         }
+        if stsc.sample_description_index == 0 {
+            return Err(AvifError::BmffParseFailed(format!(
+                "sample_description_index is {} in stsc chunk.",
+                stsc.sample_description_index
+            )));
+        }
         sample_table.sample_to_chunk.push(stsc);
     }
     Ok(())
 }
 
 fn parse_stsz(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
+    // Section 8.7.3.2.1 of ISO/IEC 14496-12.
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
     // unsigned int(32) sample_size;
     let sample_size = stream.read_u32()?;
@@ -1175,7 +1192,7 @@ fn parse_stsz(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
         sample_table.sample_size = SampleSize::FixedSize(sample_size);
         return Ok(());
     }
-    let mut sample_sizes: Vec<u32> = Vec::with_capacity(sample_count);
+    let mut sample_sizes: Vec<u32> = create_vec_exact(sample_count)?;
     for _ in 0..sample_count {
         // unsigned int(32) entry_size;
         sample_sizes.push(stream.read_u32()?);
@@ -1185,23 +1202,24 @@ fn parse_stsz(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
 }
 
 fn parse_stss(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
+    // Section 8.6.2.2 of ISO/IEC 14496-12.
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
     // unsigned int(32) entry_count;
     let entry_count = usize_from_u32(stream.read_u32()?)?;
-    sample_table.sync_samples.reserve(entry_count);
+    sample_table.sync_samples = create_vec_exact(entry_count)?;
     for _ in 0..entry_count {
         // unsigned int(32) sample_number;
-        let sample_number = stream.read_u32()?;
-        sample_table.sync_samples.push(sample_number);
+        sample_table.sync_samples.push(stream.read_u32()?);
     }
     Ok(())
 }
 
 fn parse_stts(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
+    // Section 8.6.1.2.2 of ISO/IEC 14496-12.
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
     // unsigned int(32) entry_count;
     let entry_count = usize_from_u32(stream.read_u32()?)?;
-    sample_table.time_to_sample.reserve(entry_count);
+    sample_table.time_to_sample = create_vec_exact(entry_count)?;
     for _ in 0..entry_count {
         let stts = TimeToSample {
             // unsigned int(32) sample_count;
@@ -1214,38 +1232,125 @@ fn parse_stts(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
     Ok(())
 }
 
+fn parse_sample_entry(stream: &mut IStream, format: String) -> AvifResult<SampleDescription> {
+    // Section 8.5.2.2 of ISO/IEC 14496-12.
+    let mut sample_entry = SampleDescription {
+        format,
+        ..SampleDescription::default()
+    };
+    // const unsigned int(8) reserved[6] = 0;
+    if stream.read_u8()? != 0
+        || stream.read_u8()? != 0
+        || stream.read_u8()? != 0
+        || stream.read_u8()? != 0
+        || stream.read_u8()? != 0
+        || stream.read_u8()? != 0
+    {
+        return Err(AvifError::BmffParseFailed(
+            "Invalid reserved bits in SampleEntry of stsd".into(),
+        ));
+    }
+    // unsigned int(16) data_reference_index;
+    stream.skip(2)?;
+
+    if sample_entry.format == "av01" {
+        // https://aomediacodec.github.io/av1-isobmff/v1.2.0.html#av1sampleentry-syntax:
+        //   class AV1SampleEntry extends VisualSampleEntry('av01'){
+        //     AV1CodecConfigurationBox config;
+        //   }
+        // https://aomediacodec.github.io/av1-isobmff/v1.2.0.html#av1codecconfigurationbox-syntax:
+        //   class AV1CodecConfigurationBox extends Box('av1C'){
+        //     AV1CodecConfigurationRecord av1Config;
+        //   }
+
+        // Section 12.1.3.2 of ISO/IEC 14496-12:
+        //   class VisualSampleEntry(codingname) extends SampleEntry(codingname)
+
+        // unsigned int(16) pre_defined = 0; ("Readers should expect any value")
+        stream.skip(2)?;
+        // const unsigned int(16) reserved = 0;
+        if stream.read_u16()? != 0 {
+            return Err(AvifError::BmffParseFailed(
+                "Invalid reserved bits in VisualSampleEntry of stsd".into(),
+            ));
+        }
+        // unsigned int(32) pre_defined[3] = 0;
+        stream.skip(4 * 3)?;
+        // unsigned int(16) width;
+        stream.skip(2)?;
+        // unsigned int(16) height;
+        stream.skip(2)?;
+        // template unsigned int(32) horizresolution = 0x00480000; // 72 dpi
+        stream.skip_u32()?;
+        // template unsigned int(32) vertresolution = 0x00480000; // 72 dpi
+        stream.skip_u32()?;
+        // const unsigned int(32) reserved = 0;
+        if stream.read_u32()? != 0 {
+            return Err(AvifError::BmffParseFailed(
+                "Invalid reserved bits in VisualSampleEntry of stsd".into(),
+            ));
+        }
+        // template unsigned int(16) frame_count;
+        stream.skip(2)?;
+        // uint(8) compressorname[32];
+        stream.skip(32)?;
+        // template unsigned int(16) depth = 0x0018;
+        if stream.read_u16()? != 0x0018 {
+            return Err(AvifError::BmffParseFailed(
+                "Invalid depth in VisualSampleEntry of stsd".into(),
+            ));
+        }
+        // unsigned int(16) pre_defined = 0; ("Readers should expect any value")
+        stream.skip(2)?;
+
+        // other boxes from derived specifications
+        // CleanApertureBox clap; // optional
+        // PixelAspectRatioBox pasp; // optional
+
+        // Now read any of 'av1C', 'clap', 'pasp' etc.
+        sample_entry.properties = parse_ipco(&mut stream.sub_stream(stream.bytes_left()?)?)?;
+
+        if !sample_entry
+            .properties
+            .iter()
+            .any(|p| matches!(p, ItemProperty::CodecConfiguration(_)))
+        {
+            return Err(AvifError::BmffParseFailed(
+                "AV1SampleEntry must contain an AV1CodecConfigurationRecord".into(),
+            ));
+        }
+    }
+    Ok(sample_entry)
+}
+
 fn parse_stsd(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResult<()> {
-    let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
+    // Section 8.5.2.2 of ISO/IEC 14496-12.
+    let (version, _flags) = stream.read_version_and_flags()?;
+    if version != 0 && version != 1 {
+        // Section 8.5.2.3 of ISO/IEC 14496-12:
+        //   version is set to zero. A version number of 1 shall be treated as a version of 0.
+        return Err(AvifError::BmffParseFailed(
+            "stsd box version 0 or 1 expected.".into(),
+        ));
+    }
     // unsigned int(32) entry_count;
     let entry_count = usize_from_u32(stream.read_u32()?)?;
-    sample_table.sample_descriptions.reserve(entry_count);
+    sample_table.sample_descriptions = create_vec_exact(entry_count)?;
     for _ in 0..entry_count {
+        // aligned(8) abstract class SampleEntry (unsigned int(32) format) extends Box(format)
         let header = parse_header(stream, /*top_level=*/ false)?;
-        let mut stsd = SampleDescription {
-            format: header.box_type.clone(),
-            ..SampleDescription::default()
-        };
-
-        if stsd.format == "av01" {
-            // Skip 78 bytes for visual sample entry size.
-            stream.skip(78)?;
-            if header.size <= 78 {
-                return Err(AvifError::BmffParseFailed(
-                    "Not enough bytes to parse stsd".into(),
-                ));
-            }
-            let mut sub_stream = stream.sub_stream(header.size - 78)?;
-            stsd.properties = parse_ipco(&mut sub_stream)?;
-        }
-        sample_table.sample_descriptions.push(stsd);
+        let sample_entry =
+            parse_sample_entry(&mut stream.sub_stream(header.size)?, header.box_type)?;
+        sample_table.sample_descriptions.push(sample_entry);
     }
     Ok(())
 }
 
 fn parse_stbl(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
+    // Section 8.5.1.2 of ISO/IEC 14496-12.
     if track.sample_table.is_some() {
         return Err(AvifError::BmffParseFailed(
-            "duplciate stbl for track.".into(),
+            "duplicate stbl for track.".into(),
         ));
     }
     let mut sample_table = SampleTable::default();
@@ -1268,6 +1373,7 @@ fn parse_stbl(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 }
 
 fn parse_minf(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
+    // Section 8.4.4.2 of ISO/IEC 14496-12.
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
@@ -1279,6 +1385,7 @@ fn parse_minf(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 }
 
 fn parse_mdia(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
+    // Section 8.4.1.2 of ISO/IEC 14496-12.
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
@@ -1292,7 +1399,11 @@ fn parse_mdia(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 }
 
 fn parse_tref(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
+    // Section 8.3.3.2 of ISO/IEC 14496-12.
+
+    // TrackReferenceTypeBox [];
     while stream.has_bytes_left()? {
+        // aligned(8) class TrackReferenceTypeBox (reference_type) extends Box(reference_type)
         let header = parse_header(stream, /*top_level=*/ false)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
@@ -1319,12 +1430,20 @@ fn parse_elst(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         ));
     }
     track.elst_seen = true;
+
+    // Section 8.6.6.2 of ISO/IEC 14496-12.
     let (version, flags) = stream.read_version_and_flags()?;
+
+    // Section 8.6.6.3 of ISO/IEC 14496-12:
+    //   flags - the following values are defined. The values of flags greater than 1 are reserved
+    //     RepeatEdits 1
     if (flags & 1) == 0 {
         track.is_repeating = false;
+        // TODO: This early return is not part of the spec, investigate
         return Ok(());
     }
     track.is_repeating = true;
+
     // unsigned int(32) entry_count;
     let entry_count = stream.read_u32()?;
     if entry_count != 1 {
@@ -1332,17 +1451,27 @@ fn parse_elst(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
             "elst has entry_count ({entry_count}) != 1"
         )));
     }
+
     if version == 1 {
         // unsigned int(64) segment_duration;
         track.segment_duration = stream.read_u64()?;
+        // int(64) media_time;
+        stream.skip(8)?;
     } else if version == 0 {
         // unsigned int(32) segment_duration;
         track.segment_duration = stream.read_u32()? as u64;
+        // int(32) media_time;
+        stream.skip(4)?;
     } else {
         return Err(AvifError::BmffParseFailed(
             "unsupported version in elst".into(),
         ));
     }
+    // int(16) media_rate_integer;
+    stream.skip(2)?;
+    // int(16) media_rate_fraction;
+    stream.skip(2)?;
+
     if track.segment_duration == 0 {
         return Err(AvifError::BmffParseFailed(
             "invalid value for segment_duration (0)".into(),
@@ -1359,6 +1488,8 @@ fn parse_edts(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
             "multiple edts boxes found for track.".into(),
         ));
     }
+
+    // Section 8.6.5.2 of ISO/IEC 14496-12.
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
@@ -1366,6 +1497,7 @@ fn parse_edts(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
             parse_elst(&mut sub_stream, track)?;
         }
     }
+
     if !track.elst_seen {
         return Err(AvifError::BmffParseFailed(
             "elst box was not found in edts".into(),
@@ -1376,6 +1508,7 @@ fn parse_edts(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 
 fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
     let mut track = Track::default();
+    // Section 8.3.1.2 of ISO/IEC 14496-12.
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
@@ -1393,6 +1526,7 @@ fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
 
 fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
     let mut tracks: Vec<Track> = Vec::new();
+    // Section 8.2.1.2 of ISO/IEC 14496-12.
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
         let mut sub_stream = stream.sub_stream(header.size)?;
@@ -1409,7 +1543,7 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
     let mut tracks: Option<Vec<Track>> = None;
     let mut parse_offset: u64 = 0;
     loop {
-        // Read just enough to get the next box header (32 bytes).
+        // Read just enough to get the longest possible valid box header (4+4+8+16 bytes).
         let header_data = io.read(parse_offset, 32)?;
         if header_data.is_empty() {
             // No error and size is 0. We have reached the end of the stream.
@@ -1425,7 +1559,7 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
         match header.box_type.as_str() {
             "ftyp" | "meta" | "moov" => {
                 let box_data = if header.size == 0 {
-                    io.read(parse_offset, usize::max_value())?
+                    io.read(parse_offset, usize::max_value())? // Read till the end of the stream.
                 } else {
                     io.read_exact(parse_offset, header.size)?
                 };
@@ -1471,6 +1605,7 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
     if (ftyp.needs_meta() && meta.is_none()) || (ftyp.needs_moov() && tracks.is_none()) {
         return Err(AvifError::TruncatedData);
     }
+    // TODO: Enforce 'ftyp' as first box seen, for consistency with peek_compatible_file_type()?
     Ok(AvifBoxes {
         ftyp,
         meta: meta.unwrap_or_default(),
@@ -1482,6 +1617,9 @@ pub fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
     let mut stream = IStream::create(data);
     let header = parse_header(&mut stream, /*top_level=*/ true)?;
     if header.box_type != "ftyp" {
+        // Section 6.3.4 of ISO/IEC 14496-12:
+        //   The FileTypeBox shall occur before any variable-length box.
+        //   Only a fixed-size box such as a file signature, if required, may precede it.
         return Ok(false);
     }
     if header.size == 0 {
@@ -1496,6 +1634,8 @@ pub fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
 }
 
 pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
+    // Experimental, not yet specified.
+
     // unsigned int(8) version = 0;
     let version = stream.read_u8()?;
     if version != 0 {
