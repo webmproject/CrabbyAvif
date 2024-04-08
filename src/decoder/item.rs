@@ -27,11 +27,11 @@ pub struct Item {
 }
 
 macro_rules! find_property {
-    ($self:ident, $a:ident) => {
-        $self
-            .properties
-            .iter()
-            .find(|x| matches!(x, ItemProperty::$a(_)))
+    ($properties:expr, $property_name:ident) => {
+        $properties.iter().find_map(|p| match p {
+            ItemProperty::$property_name(value) => Some(value),
+            _ => None,
+        })
     };
 }
 
@@ -103,8 +103,8 @@ impl Item {
     }
 
     pub fn operating_point(&self) -> u8 {
-        match find_property!(self, OperatingPointSelector) {
-            Some(ItemProperty::OperatingPointSelector(operating_point)) => *operating_point,
+        match find_property!(self.properties, OperatingPointSelector) {
+            Some(operating_point_selector) => *operating_point_selector,
             _ => 0, // default operating point.
         }
     }
@@ -128,24 +128,26 @@ impl Item {
             // probably exif or some other data.
             return Ok(());
         }
-        match find_property!(self, ImageSpatialExtents) {
-            Some(property) => match property {
-                ItemProperty::ImageSpatialExtents(x) => {
-                    self.width = x.width;
-                    self.height = x.height;
-                    if self.width == 0 || self.height == 0 {
-                        return Err(AvifError::BmffParseFailed(
-                            "item id has invalid size.".into(),
-                        ));
-                    }
-                    if !check_limits(x.width, x.height, size_limit, dimension_limit) {
-                        return Err(AvifError::BmffParseFailed(
-                            "item dimensions too large.".into(),
-                        ));
-                    }
+        match find_property!(self.properties, ImageSpatialExtents) {
+            Some(image_spatial_extents) => {
+                self.width = image_spatial_extents.width;
+                self.height = image_spatial_extents.height;
+                if self.width == 0 || self.height == 0 {
+                    return Err(AvifError::BmffParseFailed(
+                        "item id has invalid size.".into(),
+                    ));
                 }
-                _ => return Err(AvifError::UnknownError("".into())), // not reached.
-            },
+                if !check_limits(
+                    image_spatial_extents.width,
+                    image_spatial_extents.height,
+                    size_limit,
+                    dimension_limit,
+                ) {
+                    return Err(AvifError::BmffParseFailed(
+                        "item dimensions too large.".into(),
+                    ));
+                }
+            }
             None => {
                 // No ispe was found.
                 if self.is_auxiliary_alpha() {
@@ -201,49 +203,30 @@ impl Item {
 
     #[allow(non_snake_case)]
     pub fn av1C(&self) -> Option<&CodecConfiguration> {
-        match find_property!(self, CodecConfiguration) {
-            Some(ItemProperty::CodecConfiguration(av1C)) => Some(av1C),
-            _ => None,
-        }
+        find_property!(self.properties, CodecConfiguration)
     }
 
     pub fn pixi(&self) -> Option<&PixelInformation> {
-        match find_property!(self, PixelInformation) {
-            Some(ItemProperty::PixelInformation(pixi)) => Some(pixi),
-            _ => None,
-        }
+        find_property!(self.properties, PixelInformation)
     }
 
     pub fn a1lx(&self) -> Option<&[usize; 3]> {
-        match find_property!(self, AV1LayeredImageIndexing) {
-            Some(ItemProperty::AV1LayeredImageIndexing(a1lx)) => Some(a1lx),
-            _ => None,
-        }
+        find_property!(self.properties, AV1LayeredImageIndexing)
     }
 
-    pub fn lsel(&self) -> Option<u16> {
-        match find_property!(self, LayerSelector) {
-            Some(ItemProperty::LayerSelector(lsel)) => Some(*lsel),
-            _ => None,
-        }
+    pub fn lsel(&self) -> Option<&u16> {
+        find_property!(self.properties, LayerSelector)
     }
 
     pub fn clli(&self) -> Option<&ContentLightLevelInformation> {
-        match find_property!(self, ContentLightLevelInformation) {
-            Some(ItemProperty::ContentLightLevelInformation(clli)) => Some(clli),
-            _ => None,
-        }
+        find_property!(self.properties, ContentLightLevelInformation)
     }
 
     #[allow(non_snake_case)]
     pub fn is_auxiliary_alpha(&self) -> bool {
-        match find_property!(self, AuxiliaryType) {
-            Some(ItemProperty::AuxiliaryType(aux_type)) => {
-                aux_type == "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha"
-                    || aux_type == "urn:mpeg:hevc:2015:auxid:1"
-            }
-            _ => false,
-        }
+        matches!(find_property!(self.properties, AuxiliaryType),
+                 Some(aux_type) if aux_type == "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha" ||
+                                   aux_type == "urn:mpeg:hevc:2015:auxid:1")
     }
 
     pub fn should_skip(&self) -> bool {
