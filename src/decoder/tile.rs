@@ -147,7 +147,7 @@ impl Tile {
         let has_lsel;
         match item.lsel() {
             Some(x) => {
-                lsel = x;
+                lsel = *x;
                 has_lsel = true;
             }
             None => {
