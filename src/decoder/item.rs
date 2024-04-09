@@ -36,24 +36,33 @@ macro_rules! find_property {
 }
 
 impl Item {
-    pub fn data_offset(&self) -> u64 {
-        self.extents[0].offset
-    }
+    pub fn stream<'a>(&'a mut self, io: &'a mut GenericIO) -> AvifResult<IStream> {
+        if !self.idat.is_empty() {
+            // TODO: assumes idat offset is 0.
+            return Ok(IStream::create(self.idat.as_slice()));
+        }
 
-    pub fn stream<'a>(&'a self, io: &'a mut GenericIO) -> AvifResult<IStream> {
-        // TODO: handle multiple extents.
-        let io_data = match self.idat.is_empty() {
-            true => io.read_exact(self.data_offset(), self.size)?,
-            false => {
-                // TODO: assumes idat offset is 0.
-                self.idat.as_slice()
+        let io_data = match self.extents.len() {
+            0 => return Err(AvifError::UnknownError("no extent".into())),
+            1 => io.read_exact(self.extents[0].offset, self.size)?,
+            _ => {
+                if self.data_buffer.is_none() {
+                    // Decoder::prepare_sample() will merge the extents the same way but only for
+                    // image items. It may be necessary here for Exif/XMP metadata for example.
+                    let mut data_buffer: Vec<u8> = create_vec_exact(self.size)?;
+                    for extent in &self.extents {
+                        data_buffer.extend_from_slice(io.read_exact(extent.offset, extent.size)?);
+                    }
+                    self.data_buffer = Some(data_buffer);
+                }
+                self.data_buffer.as_ref().unwrap().as_slice()
             }
         };
         Ok(IStream::create(io_data))
     }
 
     pub fn read_and_parse(
-        &self,
+        &mut self,
         io: &mut GenericIO,
         grid: &mut Grid,
         size_limit: u32,
