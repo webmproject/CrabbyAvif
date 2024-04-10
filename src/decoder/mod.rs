@@ -446,7 +446,11 @@ impl Decoder {
             return Ok(());
         }
         if !self.settings.ignore_exif {
-            if let Some(exif) = self.items.iter().find(|x| x.1.is_exif(color_item_index)) {
+            if let Some(exif) = self
+                .items
+                .iter_mut()
+                .find(|x| x.1.is_exif(color_item_index))
+            {
                 let mut stream = exif.1.stream(self.io.unwrap_mut())?;
                 exif::parse(&mut stream)?;
                 self.image
@@ -455,7 +459,7 @@ impl Decoder {
             }
         }
         if !self.settings.ignore_xmp {
-            if let Some(xmp) = self.items.iter().find(|x| x.1.is_xmp(color_item_index)) {
+            if let Some(xmp) = self.items.iter_mut().find(|x| x.1.is_xmp(color_item_index)) {
                 let mut stream = xmp.1.stream(self.io.unwrap_mut())?;
                 self.image
                     .xmp
@@ -802,7 +806,7 @@ impl Decoder {
                         if self.settings.enable_parsing_gainmap_metadata {
                             let tonemap_item = self
                                 .items
-                                .get(&tonemap_id)
+                                .get_mut(&tonemap_id)
                                 .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
                             let mut stream = tonemap_item.stream(self.io.unwrap_mut())?;
                             self.gainmap.metadata = mp4box::parse_tmap(&mut stream)?;
@@ -957,7 +961,7 @@ impl Decoder {
         if item_id == 0 {
             return Ok(());
         }
-        self.items.get(&item_id).unwrap().read_and_parse(
+        self.items.get_mut(&item_id).unwrap().read_and_parse(
             self.io.unwrap_mut(),
             &mut self.tile_info[category.usize()].grid,
             self.settings.image_size_limit,
@@ -1085,7 +1089,7 @@ impl Decoder {
             return Ok(());
         }
         // Item has multiple extents, merge them into a contiguous buffer.
-        let mut data: Vec<u8> = Vec::with_capacity(item.size);
+        let mut data: Vec<u8> = create_vec_exact(item.size)?;
         for extent in &item.extents {
             let io = self.io.unwrap_mut();
             data.extend_from_slice(io.read_exact(extent.offset, extent.size)?);
