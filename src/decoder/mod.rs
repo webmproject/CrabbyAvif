@@ -168,9 +168,16 @@ impl Extent {
         if extent.size == 0 {
             return Ok(());
         }
-        let max_extent_1 = self.offset + u64_from_usize(self.size)?;
-        let max_extent_2 = extent.offset + u64_from_usize(extent.size)?;
+        let max_extent_1 = self
+            .offset
+            .checked_add(u64_from_usize(self.size)?)
+            .ok_or(AvifError::BmffParseFailed("".into()))?;
+        let max_extent_2 = extent
+            .offset
+            .checked_add(u64_from_usize(extent.size)?)
+            .ok_or(AvifError::BmffParseFailed("".into()))?;
         self.offset = min(self.offset, extent.offset);
+        // The extents may not be contiguous. It does not matter for nth_image_max_extent().
         self.size = usize_from_u64(max(max_extent_1, max_extent_2) - self.offset)?;
         Ok(())
     }
