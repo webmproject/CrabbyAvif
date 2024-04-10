@@ -60,46 +60,33 @@ pub enum CodecChoice {
 }
 
 impl CodecChoice {
-    #[allow(unreachable_code)]
     fn get_codec(&self) -> AvifResult<Codec> {
         match self {
             CodecChoice::Auto => {
-                #[cfg(feature = "dav1d")]
-                {
-                    return Ok(Box::<Dav1d>::default());
-                }
-                #[cfg(feature = "libgav1")]
-                {
-                    return Ok(Box::<Libgav1>::default());
-                }
-                #[cfg(feature = "android_mediacodec")]
-                {
-                    return Ok(Box::<MediaCodec>::default());
-                }
-                Err(AvifError::NoCodecAvailable)
+                return CodecChoice::Dav1d.get_codec().or(CodecChoice::Libgav1
+                    .get_codec()
+                    .or(CodecChoice::MediaCodec.get_codec()));
             }
             CodecChoice::Dav1d => {
                 #[cfg(feature = "dav1d")]
                 {
                     return Ok(Box::<Dav1d>::default());
                 }
-                Err(AvifError::NoCodecAvailable)
             }
             CodecChoice::Libgav1 => {
                 #[cfg(feature = "libgav1")]
                 {
                     return Ok(Box::<Libgav1>::default());
                 }
-                Err(AvifError::NoCodecAvailable)
             }
             CodecChoice::MediaCodec => {
                 #[cfg(feature = "android_mediacodec")]
                 {
                     return Ok(Box::<MediaCodec>::default());
                 }
-                Err(AvifError::NoCodecAvailable)
             }
         }
+        Err(AvifError::NoCodecAvailable)
     }
 }
 
