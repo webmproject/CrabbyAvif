@@ -73,11 +73,9 @@ impl Item {
         // unsigned int(8) flags;
         let flags = stream.read_u8()?;
         // unsigned int(8) rows_minus_one;
-        grid.rows = stream.read_u8()? as u32;
-        grid.rows += 1;
+        grid.rows = stream.read_u8()? as u32 + 1;
         // unsigned int(8) columns_minus_one;
-        grid.columns = stream.read_u8()? as u32;
-        grid.columns += 1;
+        grid.columns = stream.read_u8()? as u32 + 1;
         if (flags & 1) == 1 {
             // unsigned int(32) output_width;
             grid.width = stream.read_u32()?;
@@ -115,19 +113,10 @@ impl Item {
         size_limit: u32,
         dimension_limit: u32,
     ) -> AvifResult<()> {
-        if self.size == 0 {
-            return Ok(());
-        }
-        if self.has_unsupported_essential_property {
-            // An essential property isn't supported by libavif. Ignore.
+        if self.should_skip() {
             return Ok(());
         }
 
-        let is_grid = self.item_type == "grid";
-        if self.item_type != "av01" && !is_grid {
-            // probably exif or some other data.
-            return Ok(());
-        }
         match find_property!(self.properties, ImageSpatialExtents) {
             Some(image_spatial_extents) => {
                 self.width = image_spatial_extents.width;
@@ -144,7 +133,7 @@ impl Item {
                     dimension_limit,
                 ) {
                     return Err(AvifError::BmffParseFailed(
-                        "item dimensions too large.".into(),
+                        "item dimensions too large".into(),
                     ));
                 }
             }
@@ -153,12 +142,12 @@ impl Item {
                 if self.is_auxiliary_alpha() {
                     if alpha_ispe_required {
                         return Err(AvifError::BmffParseFailed(
-                            "alpha auxiliary image is missing mandatory ispe".into(),
+                            "alpha auxiliary image item is missing mandatory ispe".into(),
                         ));
                     }
                 } else {
                     return Err(AvifError::BmffParseFailed(
-                        "item id is missing mandatory ispe property".into(),
+                        "item is missing mandatory ispe property".into(),
                     ));
                 }
             }
@@ -168,13 +157,15 @@ impl Item {
 
     #[allow(non_snake_case)]
     pub fn validate_properties(&self, items: &Items, pixi_required: bool) -> AvifResult<()> {
-        let av1C = self.av1C().ok_or(AvifError::BmffParseFailed("".into()))?;
+        let av1C = self
+            .av1C()
+            .ok_or(AvifError::BmffParseFailed("missing av1C property".into()))?;
         if self.item_type == "grid" {
             for grid_item_id in &self.grid_item_ids {
                 let grid_item = items.get(grid_item_id).unwrap();
                 let grid_av1C = grid_item
                     .av1C()
-                    .ok_or(AvifError::BmffParseFailed("".into()))?;
+                    .ok_or(AvifError::BmffParseFailed("missing av1C property".into()))?;
                 if av1C != grid_av1C {
                     return Err(AvifError::BmffParseFailed(
                         "av1c of grid items do not match".into(),
@@ -222,7 +213,6 @@ impl Item {
         find_property!(self.properties, ContentLightLevelInformation)
     }
 
-    #[allow(non_snake_case)]
     pub fn is_auxiliary_alpha(&self) -> bool {
         matches!(find_property!(self.properties, AuxiliaryType),
                  Some(aux_type) if aux_type == "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha" ||
@@ -230,13 +220,25 @@ impl Item {
     }
 
     pub fn should_skip(&self) -> bool {
-        self.size == 0
-            || self.has_unsupported_essential_property
-            || (self.item_type != "av01" && self.item_type != "grid")
-            || self.thumbnail_for_id != 0
+        if self.size == 0 {
+            // The item has no payload in idat or mdat. It cannot be a coded image item, a
+            // non-identity derived image item, or Exif/XMP metadata.
+            true
+        } else if self.has_unsupported_essential_property {
+            // An essential property isn't supported by libavif. Ignore the whole item.
+            true
+        } else if self.item_type != "av01" && self.item_type != "grid" {
+            // Probably Exif/XMP or some other data.
+            true
+        } else if self.thumbnail_for_id != 0 {
+            // libavif does not support thumbnails.
+            true
+        } else {
+            false
+        }
     }
 
-    pub fn is_metadata(&self, item_type: &str, color_id: u32) -> bool {
+    fn is_metadata(&self, item_type: &str, color_id: u32) -> bool {
         self.size != 0
             && !self.has_unsupported_essential_property
             && (color_id == 0 || self.desc_for_id == color_id)
@@ -256,9 +258,6 @@ impl Item {
     }
 
     pub fn max_extent(&self, sample: &DecodeSample) -> AvifResult<Extent> {
-        if self.extents.is_empty() {
-            return Err(AvifError::TruncatedData);
-        }
         if !self.idat.is_empty() {
             return Ok(Extent::default());
         }
@@ -266,10 +265,15 @@ impl Item {
             return Err(AvifError::TruncatedData);
         }
         let mut remaining_offset = sample.offset;
-        let mut remaining_size = sample.size;
         let mut min_offset = u64::MAX;
         let mut max_offset = 0;
-        if self.extents.len() > 1 {
+        if self.extents.is_empty() {
+            return Err(AvifError::TruncatedData);
+        } else if self.extents.len() == 1 {
+            min_offset = sample.offset;
+            max_offset = sample.offset + u64_from_usize(sample.size)?;
+        } else {
+            let mut remaining_size = sample.size;
             for extent in &self.extents {
                 let mut start_offset = extent.offset;
                 let mut size = extent.size;
@@ -281,15 +285,16 @@ impl Item {
                     } else {
                         start_offset = start_offset
                             .checked_add(remaining_offset)
-                            .ok_or(AvifError::BmffParseFailed("".into()))?;
+                            .ok_or(AvifError::BmffParseFailed("bad extent".into()))?;
                         size -= usize_from_u64(remaining_offset)?;
                         remaining_offset = 0;
                     }
                 }
+                // TODO(yguyon): Add comment to explain why it is fine to clip the extent size.
                 let used_extent_size = std::cmp::min(size, remaining_size);
                 let end_offset = start_offset
                     .checked_add(u64_from_usize(used_extent_size)?)
-                    .ok_or(AvifError::BmffParseFailed("".into()))?;
+                    .ok_or(AvifError::BmffParseFailed("bad extent".into()))?;
                 min_offset = std::cmp::min(min_offset, start_offset);
                 max_offset = std::cmp::max(max_offset, end_offset);
                 remaining_size -= used_extent_size;
@@ -297,13 +302,9 @@ impl Item {
                     break;
                 }
             }
-        } else {
-            min_offset = sample.offset;
-            max_offset = sample.offset + u64_from_usize(sample.size)?;
-            remaining_size = 0;
-        }
-        if remaining_size != 0 {
-            return Err(AvifError::TruncatedData);
+            if remaining_size != 0 {
+                return Err(AvifError::TruncatedData);
+            }
         }
         Ok(Extent {
             offset: min_offset,
@@ -330,7 +331,9 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
     for iloc in &meta.iloc.items {
         let item = items
             .get_mut(&iloc.item_id)
-            .ok_or(AvifError::BmffParseFailed("".into()))?;
+            .ok_or(AvifError::BmffParseFailed(
+                "iloc entry has no corresponding iinf entry".into(),
+            ))?;
         if !item.extents.is_empty() {
             return Err(AvifError::BmffParseFailed(
                 "item already has extents".into(),
@@ -354,10 +357,11 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
     for association in &meta.iprp.associations {
         if ipma_seen.contains(&association.item_id) {
             return Err(AvifError::BmffParseFailed(
-                "item has duplictate ipma.".into(),
+                "item has duplicate ipma entry".into(),
             ));
         }
         ipma_seen.insert(association.item_id);
+
         let item = items
             .get_mut(&association.item_id)
             .ok_or(AvifError::BmffParseFailed("".into()))?;
@@ -368,57 +372,39 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
                 // Not associated with any item.
                 continue;
             }
+            // property_index is 1-based.
             if property_index > meta.iprp.properties.len() {
                 return Err(AvifError::BmffParseFailed(
                     "invalid property_index in ipma".into(),
                 ));
             }
-            // property_index is 1-indexed.
-            let property = meta.iprp.properties[property_index - 1].clone();
-            let is_supported_property = matches!(
-                property,
-                ItemProperty::ImageSpatialExtents(_)
-                    | ItemProperty::ColorInformation(_)
-                    | ItemProperty::CodecConfiguration(_)
-                    | ItemProperty::PixelInformation(_)
-                    | ItemProperty::PixelAspectRatio(_)
-                    | ItemProperty::AuxiliaryType(_)
-                    | ItemProperty::CleanAperture(_)
-                    | ItemProperty::ImageRotation(_)
-                    | ItemProperty::ImageMirror(_)
-                    | ItemProperty::OperatingPointSelector(_)
-                    | ItemProperty::LayerSelector(_)
-                    | ItemProperty::AV1LayeredImageIndexing(_)
-                    | ItemProperty::ContentLightLevelInformation(_)
-            );
-            if is_supported_property {
-                if essential {
-                    if let ItemProperty::AV1LayeredImageIndexing(_) = property {
-                        return Err(AvifError::BmffParseFailed(
-                            "invalid essential property".into(),
-                        ));
-                    }
-                } else {
-                    match property {
-                        ItemProperty::OperatingPointSelector(_)
-                        | ItemProperty::LayerSelector(_) => {
-                            return Err(AvifError::BmffParseFailed(
-                                "required essential property not marked as essential".into(),
-                            ));
-                        }
-                        _ => {}
-                    }
+
+            match (&meta.iprp.properties[property_index - 1], essential) {
+                (ItemProperty::Unknown(_), true) => item.has_unsupported_essential_property = true,
+                (ItemProperty::AV1LayeredImageIndexing(_), true) => {
+                    return Err(AvifError::BmffParseFailed(
+                        "invalid essential property".into(),
+                    ));
                 }
-                item.properties.push(property);
-            } else if essential {
-                item.has_unsupported_essential_property = true;
+                (
+                    ItemProperty::OperatingPointSelector(_) | ItemProperty::LayerSelector(_),
+                    false,
+                ) => {
+                    return Err(AvifError::BmffParseFailed(
+                        "required essential property not marked as essential".into(),
+                    ));
+                }
+                (property, _) => item.properties.push(property.clone()),
             }
         }
     }
+
     for reference in &meta.iref {
         let item = items
             .get_mut(&reference.from_item_id)
-            .ok_or(AvifError::BmffParseFailed("".into()))?;
+            .ok_or(AvifError::BmffParseFailed(
+                "iref from_item_id has no corresponding iinf entry".into(),
+            ))?;
         match reference.reference_type.as_str() {
             "thmb" => item.thumbnail_for_id = reference.to_item_id,
             "auxl" => item.aux_for_id = reference.to_item_id,
@@ -426,9 +412,12 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
             "prem" => item.prem_by_id = reference.to_item_id,
             "dimg" => {
                 // derived images refer in the opposite direction.
-                let dimg_item = items
-                    .get_mut(&reference.to_item_id)
-                    .ok_or(AvifError::BmffParseFailed("".into()))?;
+                let dimg_item =
+                    items
+                        .get_mut(&reference.to_item_id)
+                        .ok_or(AvifError::BmffParseFailed(
+                            "iref to_item_id has no corresponding iinf entry".into(),
+                        ))?;
                 dimg_item.dimg_for_id = reference.from_item_id;
                 dimg_item.dimg_index = reference.index;
             }
