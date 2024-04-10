@@ -240,15 +240,15 @@ enum ParseState {
 #[derive(Default)]
 pub struct Decoder {
     pub settings: Settings,
-    pub image_count: u32,
-    pub image_index: i32,
-    pub image_timing: ImageTiming,
-    pub timescale: u64,
-    pub duration_in_timescales: u64,
-    pub duration: f64,
-    pub repetition_count: RepetitionCount,
-    pub gainmap: GainMap,
-    pub gainmap_present: bool,
+    image_count: u32,
+    image_index: i32,
+    image_timing: ImageTiming,
+    timescale: u64,
+    duration_in_timescales: u64,
+    duration: f64,
+    repetition_count: RepetitionCount,
+    gainmap: GainMap,
+    gainmap_present: bool,
     image: Image,
     source: Source,
     tile_info: [TileInfo; 3],
@@ -293,6 +293,34 @@ impl Category {
 }
 
 impl Decoder {
+    pub fn image_count(&self) -> u32 {
+        self.image_count
+    }
+    pub fn image_index(&self) -> i32 {
+        self.image_index
+    }
+    pub fn image_timing(&self) -> ImageTiming {
+        self.image_timing
+    }
+    pub fn timescale(&self) -> u64 {
+        self.timescale
+    }
+    pub fn duration_in_timescales(&self) -> u64 {
+        self.duration_in_timescales
+    }
+    pub fn duration(&self) -> f64 {
+        self.duration
+    }
+    pub fn repetition_count(&self) -> RepetitionCount {
+        self.repetition_count
+    }
+    pub fn gainmap(&self) -> &GainMap {
+        &self.gainmap
+    }
+    pub fn gainmap_present(&self) -> bool {
+        self.gainmap_present
+    }
+
     fn parsing_complete(&self) -> bool {
         self.parse_state == ParseState::Complete
     }

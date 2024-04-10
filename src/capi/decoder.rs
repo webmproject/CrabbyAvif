@@ -192,19 +192,19 @@ fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
     dst.imageSequenceTrackPresent = to_avifBool(image.image_sequence_track_present);
     dst.progressiveState = image.progressive_state;
 
-    dst.imageTiming = src.image_timing;
-    dst.imageCount = src.image_count as i32;
-    dst.imageIndex = src.image_index as i32;
-    dst.repetitionCount = match src.repetition_count {
+    dst.imageTiming = src.image_timing();
+    dst.imageCount = src.image_count() as i32;
+    dst.imageIndex = src.image_index() as i32;
+    dst.repetitionCount = match src.repetition_count() {
         RepetitionCount::Unknown => AVIF_REPETITION_COUNT_UNKNOWN,
         RepetitionCount::Infinite => AVIF_REPETITION_COUNT_INFINITE,
         RepetitionCount::Finite(x) => x,
     };
 
-    if src.gainmap_present {
+    if src.gainmap_present() {
         dst.gainMapPresent = AVIF_TRUE;
-        dst.gainmap_image_object = (&src.gainmap.image).into();
-        dst.gainmap_object = (&src.gainmap).into();
+        dst.gainmap_image_object = (&src.gainmap().image).into();
+        dst.gainmap_object = src.gainmap().into();
         dst.gainmap_object.image = (&mut dst.gainmap_image_object) as *mut avifImage;
         dst.image_object.gainMap = (&mut dst.gainmap_object) as *mut avifGainMap;
     }
@@ -266,7 +266,7 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImage(
         rust_decoder.settings = (&(*decoder)).into();
 
         let previous_decoded_row_count = rust_decoder.decoded_row_count();
-        let image_index = (rust_decoder.image_index + 1) as u32;
+        let image_index = (rust_decoder.image_index() + 1) as u32;
 
         let res = rust_decoder.nth_image(frameIndex);
         let mut early_return = false;
@@ -393,6 +393,7 @@ pub unsafe extern "C" fn crabby_avifDecoderDecodedRowCount(decoder: *const avifD
     rust_decoder.decoded_row_count()
 }
 
+#[allow(non_camel_case_types)]
 pub type avifExtent = Extent;
 
 #[no_mangle]

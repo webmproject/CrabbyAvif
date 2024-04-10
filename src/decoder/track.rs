@@ -3,7 +3,7 @@ use crate::parser::mp4box::ItemProperty;
 use crate::parser::mp4box::MetaBox;
 use crate::*;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum RepetitionCount {
     #[default]
     Unknown,

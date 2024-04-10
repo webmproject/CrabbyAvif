@@ -77,9 +77,9 @@ fn animated_image() {
     let image = decoder.image();
     assert!(!image.alpha_present);
     assert!(image.image_sequence_track_present);
-    assert_eq!(decoder.image_count, 5);
+    assert_eq!(decoder.image_count(), 5);
     assert!(matches!(
-        decoder.repetition_count,
+        decoder.repetition_count(),
         RepetitionCount::Finite(0)
     ));
     if !HAS_DECODER {
@@ -103,8 +103,11 @@ fn animated_image_with_source_set_to_primary_item() {
     assert!(image.image_sequence_track_present);
     // imageCount is expected to be 1 because we are using primary item as the
     // preferred source.
-    assert_eq!(decoder.image_count, 1);
-    assert!(matches!(decoder.repetition_count, RepetitionCount::Unknown));
+    assert_eq!(decoder.image_count(), 1);
+    assert!(matches!(
+        decoder.repetition_count(),
+        RepetitionCount::Unknown
+    ));
     if !HAS_DECODER {
         return;
     }
@@ -167,11 +170,11 @@ fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     ));
     assert_eq!(image.width, width);
     assert_eq!(image.height, height);
-    assert_eq!(decoder.image_count, layer_count);
+    assert_eq!(decoder.image_count(), layer_count);
     if !HAS_DECODER {
         return;
     }
-    for _i in 0..decoder.image_count {
+    for _i in 0..decoder.image_count() {
         let res = decoder.next_image();
         assert!(res.is_ok());
         let image = decoder.image();
@@ -234,12 +237,12 @@ fn color_grid_gainmap_different_grid() {
     assert_eq!(image.height, 200 * 3);
     assert_eq!(image.depth, 10);
     // Gain map: 2x2 grid of 64x80 tiles.
-    assert!(decoder.gainmap_present);
-    assert_eq!(decoder.gainmap.image.width, 64 * 2);
-    assert_eq!(decoder.gainmap.image.height, 80 * 2);
-    assert_eq!(decoder.gainmap.image.depth, 8);
-    assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.0, 6);
-    assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.1, 2);
+    assert!(decoder.gainmap_present());
+    assert_eq!(decoder.gainmap().image.width, 64 * 2);
+    assert_eq!(decoder.gainmap().image.height, 80 * 2);
+    assert_eq!(decoder.gainmap().image.depth, 8);
+    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.0, 6);
+    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.1, 2);
     if !HAS_DECODER {
         return;
     }
@@ -261,12 +264,12 @@ fn color_grid_alpha_grid_gainmap_nogrid() {
     assert_eq!(image.height, 200 * 3);
     assert_eq!(image.depth, 10);
     // Gain map: single image of size 64x80.
-    assert!(decoder.gainmap_present);
-    assert_eq!(decoder.gainmap.image.width, 64);
-    assert_eq!(decoder.gainmap.image.height, 80);
-    assert_eq!(decoder.gainmap.image.depth, 8);
-    assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.0, 6);
-    assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.1, 2);
+    assert!(decoder.gainmap_present());
+    assert_eq!(decoder.gainmap().image.width, 64);
+    assert_eq!(decoder.gainmap().image.height, 80);
+    assert_eq!(decoder.gainmap().image.depth, 8);
+    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.0, 6);
+    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.1, 2);
     if !HAS_DECODER {
         return;
     }
@@ -288,12 +291,12 @@ fn color_nogrid_alpha_nogrid_gainmap_grid() {
     assert_eq!(image.height, 200);
     assert_eq!(image.depth, 10);
     // Gain map: 2x2 grid of 64x80 tiles.
-    assert!(decoder.gainmap_present);
-    assert_eq!(decoder.gainmap.image.width, 64 * 2);
-    assert_eq!(decoder.gainmap.image.height, 80 * 2);
-    assert_eq!(decoder.gainmap.image.depth, 8);
-    assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.0, 6);
-    assert_eq!(decoder.gainmap.metadata.alternate_hdr_headroom.1, 2);
+    assert!(decoder.gainmap_present());
+    assert_eq!(decoder.gainmap().image.width, 64 * 2);
+    assert_eq!(decoder.gainmap().image.height, 80 * 2);
+    assert_eq!(decoder.gainmap().image.depth, 8);
+    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.0, 6);
+    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.1, 2);
     if !HAS_DECODER {
         return;
     }
@@ -337,7 +340,7 @@ fn raw_io() {
         .set_io_raw(data.as_ptr(), data.len())
         .expect("Failed to set IO");
     assert!(decoder.parse().is_ok());
-    assert_eq!(decoder.image_count, 5);
+    assert_eq!(decoder.image_count(), 5);
     if !HAS_DECODER {
         return;
     }
@@ -391,7 +394,7 @@ fn custom_io() {
     });
     decoder.set_io(io);
     assert!(decoder.parse().is_ok());
-    assert_eq!(decoder.image_count, 5);
+    assert_eq!(decoder.image_count(), 5);
     if !HAS_DECODER {
         return;
     }
@@ -552,7 +555,7 @@ fn nth_image() {
     let mut decoder = get_decoder("colors-animated-8bpc.avif");
     let res = decoder.parse();
     assert!(res.is_ok());
-    assert_eq!(decoder.image_count, 5);
+    assert_eq!(decoder.image_count(), 5);
     if !HAS_DECODER {
         return;
     }
