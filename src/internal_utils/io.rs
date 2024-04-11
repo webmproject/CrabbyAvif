@@ -67,7 +67,7 @@ pub struct DecoderRawIO<'a> {
 }
 
 impl DecoderRawIO<'_> {
-    pub fn create(data: *const u8, size: usize) -> Self {
+    pub unsafe fn create(data: *const u8, size: usize) -> Self {
         Self {
             data: unsafe { std::slice::from_raw_parts(data, size) },
         }

@@ -225,7 +225,7 @@ pub unsafe extern "C" fn crabby_avifIOCreateMemoryReader(
     size: usize,
 ) -> *mut avifIO {
     let cio = Box::new(avifCIOWrapper {
-        io: Box::new(DecoderRawIO::create(data, size)),
+        io: Box::new(unsafe { DecoderRawIO::create(data, size) }),
         buf: Vec::new(),
     });
     let io = Box::new(avifIO {

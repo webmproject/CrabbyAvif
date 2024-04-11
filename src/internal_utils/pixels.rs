@@ -13,7 +13,7 @@ pub enum Pixels {
 }
 
 impl Pixels {
-    pub fn from_raw_pointer(ptr: *mut u8, depth: u32) -> Self {
+    pub unsafe fn from_raw_pointer(ptr: *mut u8, depth: u32) -> Self {
         if depth > 8 {
             Pixels::Pointer16(ptr as *mut u16)
         } else {

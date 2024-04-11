@@ -333,9 +333,11 @@ fn raw_io() {
     let data =
         std::fs::read(get_test_file("colors-animated-8bpc.avif")).expect("Unable to read file");
     let mut decoder = decoder::Decoder::default();
-    let _ = decoder
-        .set_io_raw(data.as_ptr(), data.len())
-        .expect("Failed to set IO");
+    unsafe {
+        let _ = decoder
+            .set_io_raw(data.as_ptr(), data.len())
+            .expect("Failed to set IO");
+    }
     assert!(decoder.parse().is_ok());
     assert_eq!(decoder.image_count, 5);
     if !HAS_DECODER {

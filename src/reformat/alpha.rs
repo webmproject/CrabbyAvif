@@ -247,10 +247,8 @@ mod tests {
             buffer.reserve_exact(buffer_size);
             buffer.resize(buffer_size, 0);
             // Use a pointer to mimic C API calls.
-            rgb.pixels = Some(Pixels::from_raw_pointer(
-                buffer.as_mut_ptr(),
-                rgb.depth as u32,
-            ));
+            rgb.pixels =
+                Some(unsafe { Pixels::from_raw_pointer(buffer.as_mut_ptr(), rgb.depth as u32) });
             rgb.row_bytes = width * 4 * pixel_size;
         } else {
             rgb.allocate()?;
