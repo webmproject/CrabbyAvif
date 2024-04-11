@@ -50,14 +50,17 @@ fn main() {
         let _image = decoder.image();
 
         println!("\n^^^ decoder public properties ^^^");
-        println!("image_count: {}", decoder.image_count);
-        println!("timescale: {}", decoder.timescale);
-        println!("duration_in_timescales: {}", decoder.duration_in_timescales);
-        println!("duration: {}", decoder.duration);
-        println!("repetition_count: {:#?}", decoder.repetition_count);
+        println!("image_count: {}", decoder.image_count());
+        println!("timescale: {}", decoder.timescale());
+        println!(
+            "duration_in_timescales: {}",
+            decoder.duration_in_timescales()
+        );
+        println!("duration: {}", decoder.duration());
+        println!("repetition_count: {:#?}", decoder.repetition_count());
         println!("$$$ end decoder public properties $$$\n");
 
-        image_count = decoder.image_count;
+        image_count = decoder.image_count();
         //image_count = 1;
         let mut writer: crabby_avif::utils::y4m::Y4MWriter = Default::default();
         //let mut writer: crabby_avif::utils::raw::RawWriter = Default::default();
@@ -76,7 +79,7 @@ fn main() {
                 println!("error writing y4m file");
                 std::process::exit(1);
             }
-            println!("timing: {:#?}", decoder.image_timing);
+            println!("timing: {:#?}", decoder.image_timing());
         }
         println!("wrote {} frames into {}", image_count, args[2]);
     }
