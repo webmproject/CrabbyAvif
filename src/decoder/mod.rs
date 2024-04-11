@@ -245,8 +245,8 @@ pub struct Decoder {
     gainmap_present: bool,
     image: Image,
     source: Source,
-    tile_info: [TileInfo; 3],
-    tiles: [Vec<Tile>; 3],
+    tile_info: [TileInfo; Category::COUNT],
+    tiles: [Vec<Tile>; Category::COUNT],
     items: Items,
     tracks: Vec<Track>,
     // To replicate the C-API, we need to keep this optional. Otherwise this
