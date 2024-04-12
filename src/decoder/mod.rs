@@ -470,9 +470,6 @@ impl Decoder {
     }
 
     fn search_exif_or_xmp_metadata(&mut self, color_item_index: u32) -> AvifResult<()> {
-        if self.settings.ignore_exif && self.settings.ignore_xmp {
-            return Ok(());
-        }
         if !self.settings.ignore_exif {
             if let Some(exif) = self
                 .items
@@ -503,18 +500,29 @@ impl Decoder {
             .items
             .get(&item_id)
             .ok_or(AvifError::MissingImageItem)?;
-        if !item.grid_item_ids.is_empty() {
+        if item.grid_item_ids.is_empty() {
+            if item.size == 0 {
+                return Err(AvifError::MissingImageItem);
+            }
+            let mut tile = Tile::create_from_item(
+                self.items.get_mut(&item_id).unwrap(),
+                self.settings.allow_progressive,
+                self.settings.image_count_limit,
+            )?;
+            tile.input.category = category;
+            tiles.push(tile);
+        } else {
             if !self.tile_info[category.usize()].is_grid() {
                 return Err(AvifError::InvalidImageGrid(
-                    "multiple dimg items were found but image is not grid.".into(),
+                    "dimg items were found but image is not grid.".into(),
                 ));
             }
-            let grid_item_ids = item.grid_item_ids.clone();
-            for grid_item_id in &grid_item_ids {
+            let mut progressive = true;
+            for grid_item_id in item.grid_item_ids.clone() {
                 let grid_item = self
                     .items
-                    .get_mut(grid_item_id)
-                    .ok_or(AvifError::InvalidImageGrid("".into()))?;
+                    .get_mut(&grid_item_id)
+                    .ok_or(AvifError::InvalidImageGrid("missing grid item".into()))?;
                 let mut tile = Tile::create_from_item(
                     grid_item,
                     self.settings.allow_progressive,
@@ -522,32 +530,13 @@ impl Decoder {
                 )?;
                 tile.input.category = category;
                 tiles.push(tile);
+                progressive = progressive && grid_item.progressive;
             }
 
-            if category == Category::Color && self.items.get(&grid_item_ids[0]).unwrap().progressive
-            {
+            if category == Category::Color && progressive {
                 // Propagate the progressive status to the top-level grid item.
-                let item = self
-                    .items
-                    .get_mut(&item_id)
-                    .ok_or(AvifError::MissingImageItem)?;
-                item.progressive = true;
+                self.items.get_mut(&item_id).unwrap().progressive = true;
             }
-        } else {
-            if item.size == 0 {
-                return Err(AvifError::MissingImageItem);
-            }
-            let item = self
-                .items
-                .get_mut(&item_id)
-                .ok_or(AvifError::MissingImageItem)?;
-            let mut tile = Tile::create_from_item(
-                item,
-                self.settings.allow_progressive,
-                self.settings.image_count_limit,
-            )?;
-            tile.input.category = category;
-            tiles.push(tile);
         }
         self.tile_info[category.usize()].tile_count = u32_from_usize(tiles.len())?;
         Ok(tiles)
