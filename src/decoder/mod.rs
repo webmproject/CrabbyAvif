@@ -389,8 +389,8 @@ impl Decoder {
         )
     }
 
-    // returns (tone_mapped_image_item_id, gain_map_item_id)
-    fn find_tone_mapped_image_item(&self, color_item_id: u32) -> AvifResult<(u32, u32)> {
+    // returns (tone_mapped_image_item_id, gain_map_item_id) if found
+    fn find_tone_mapped_image_item(&self, color_item_id: u32) -> AvifResult<Option<(u32, u32)>> {
         let tmap_items: Vec<_> = self.items.values().filter(|x| x.is_tmap()).collect();
         for item in tmap_items {
             let dimg_items: Vec<_> = self
@@ -408,24 +408,25 @@ impl Decoder {
                 continue;
             }
             let item1 = if dimg_items[0].dimg_index == 0 { dimg_items[1] } else { dimg_items[0] };
-            return Ok((item.id, item1.id));
+            return Ok(Some((item.id, item1.id)));
         }
-        Ok((0, 0))
+        Ok(None)
     }
 
-    fn find_gainmap_item(&self, color_item_id: u32) -> AvifResult<(u32, u32)> {
-        let (tonemap_id, gainmap_id) = self.find_tone_mapped_image_item(color_item_id)?;
-        if tonemap_id == 0 || gainmap_id == 0 {
-            return Ok((0, 0));
+    // returns (tone_mapped_image_item_id, gain_map_item_id) if found
+    fn find_gainmap_item(&self, color_item_id: u32) -> AvifResult<Option<(u32, u32)>> {
+        if let Some((tonemap_id, gainmap_id)) = self.find_tone_mapped_image_item(color_item_id)? {
+            let gainmap_item = self
+                .items
+                .get(&gainmap_id)
+                .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
+            if gainmap_item.should_skip() {
+                return Err(AvifError::InvalidToneMappedImage("".into()));
+            }
+            Ok(Some((tonemap_id, gainmap_id)))
+        } else {
+            Ok(None)
         }
-        let gainmap_item = self
-            .items
-            .get(&gainmap_id)
-            .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
-        if gainmap_item.should_skip() {
-            return Err(AvifError::InvalidToneMappedImage("".into()));
-        }
-        Ok((tonemap_id, gainmap_id))
     }
 
     fn validate_gainmap_item(&mut self, gainmap_id: u32, tonemap_id: u32) -> AvifResult<()> {
@@ -444,7 +445,7 @@ impl Decoder {
             return Ok(());
         }
         // Find and adopt all colr boxes "at most one for a given value of colour type"
-        // (HEIF 6.5.5.1, from Amendment 3) Accept one of each type, and bail out if more than one
+        // (HEIF 6.5.5.1, from Amendment 3). Accept one of each type, and bail out if more than one
         // of a given type is provided.
         let tonemap_item = self
             .items
@@ -817,9 +818,9 @@ impl Decoder {
                     }
 
                     // Optional gainmap item
-                    let (tonemap_id, gainmap_id) =
-                        self.find_gainmap_item(item_ids[Category::Color.usize()])?;
-                    if tonemap_id != 0 && gainmap_id != 0 {
+                    if let Some((tonemap_id, gainmap_id)) =
+                        self.find_gainmap_item(item_ids[Category::Color.usize()])?
+                    {
                         self.read_and_parse_item(gainmap_id, Category::Gainmap)?;
                         self.populate_grid_item_ids(
                             &avif_boxes.meta.iinf,
