@@ -229,22 +229,15 @@ impl Item {
     }
 
     pub fn should_skip(&self) -> bool {
-        if self.size == 0 {
-            // The item has no payload in idat or mdat. It cannot be a coded image item, a
-            // non-identity derived image item, or Exif/XMP metadata.
-            true
-        } else if self.has_unsupported_essential_property {
+        // The item has no payload in idat or mdat. It cannot be a coded image item, a
+        // non-identity derived image item, or Exif/XMP metadata.
+        self.size == 0
             // An essential property isn't supported by libavif. Ignore the whole item.
-            true
-        } else if self.item_type != "av01" && self.item_type != "grid" {
+            || self.has_unsupported_essential_property
             // Probably Exif/XMP or some other data.
-            true
-        } else if self.thumbnail_for_id != 0 {
+            || (self.item_type != "av01" && self.item_type != "grid")
             // libavif does not support thumbnails.
-            true
-        } else {
-            false
-        }
+            || self.thumbnail_for_id != 0
     }
 
     fn is_metadata(&self, item_type: &str, color_id: u32) -> bool {
