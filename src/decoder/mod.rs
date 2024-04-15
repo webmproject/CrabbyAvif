@@ -548,19 +548,22 @@ impl Decoder {
         if self.tiles[category.usize()].is_empty() {
             return Ok(());
         }
-        // TODO: This will read the entire first sample if there are multiple extents. Might want
-        // to fix that.
-        let tile_index = 0;
-        self.prepare_sample(/*image_index=*/ 0, category, tile_index)?;
-        let io = &mut self.io.unwrap_mut();
-        let sample = &self.tiles[category.usize()][tile_index].input.samples[0];
-        let item_data_buffer = if sample.item_id == 0 {
-            &None
-        } else {
-            &self.items.get(&sample.item_id).unwrap().data_buffer
-        };
         let mut search_size = 64;
         while search_size < 4096 {
+            let tile_index = 0;
+            self.prepare_sample(
+                /*image_index=*/ 0,
+                category,
+                tile_index,
+                Some(search_size),
+            )?;
+            let io = &mut self.io.unwrap_mut();
+            let sample = &self.tiles[category.usize()][tile_index].input.samples[0];
+            let item_data_buffer = if sample.item_id == 0 {
+                &None
+            } else {
+                &self.items.get(&sample.item_id).unwrap().data_buffer
+            };
             if let Ok(sequence_header) = Av1SequenceHeader::parse_from_obus(sample.partial_data(
                 io,
                 item_data_buffer,
@@ -1078,6 +1081,7 @@ impl Decoder {
         image_index: usize,
         category: Category,
         tile_index: usize,
+        max_num_bytes: Option<usize>, // Bytes read past that size will be ignored.
     ) -> AvifResult<()> {
         let tile = &mut self.tiles[category.usize()][tile_index];
         if tile.input.samples.len() <= image_index {
@@ -1097,24 +1101,42 @@ impl Decoder {
             // Item has only one extent. Nothing to prepare.
             return Ok(());
         }
-        if item.data_buffer.is_some() {
-            // Extents have already been merged.
-            return Ok(());
+        if let Some(data) = &item.data_buffer {
+            if data.len() == item.size {
+                return Ok(()); // All extents have already been merged.
+            }
+            if max_num_bytes.is_some_and(|max_num_bytes| data.len() >= max_num_bytes) {
+                return Ok(()); // Some sufficient extents have already been merged.
+            }
         }
         // Item has multiple extents, merge them into a contiguous buffer.
-        let mut data: Vec<u8> = create_vec_exact(item.size)?;
+        if item.data_buffer.is_none() {
+            item.data_buffer = Some(create_vec_exact(item.size)?);
+        }
+        let data = item.data_buffer.unwrap_mut();
+        let mut bytes_to_skip = data.len(); // These extents were already merged.
         for extent in &item.extents {
+            if bytes_to_skip != 0 {
+                bytes_to_skip = bytes_to_skip
+                    .checked_sub(extent.size)
+                    .ok_or(AvifError::BmffParseFailed("".into()))?;
+                continue;
+            }
             let io = self.io.unwrap_mut();
             data.extend_from_slice(io.read_exact(extent.offset, extent.size)?);
+            if max_num_bytes.is_some_and(|max_num_bytes| data.len() >= max_num_bytes) {
+                return Ok(()); // There are enough merged extents to satisfy max_num_bytes.
+            }
         }
-        item.data_buffer = Some(data);
+        assert_eq!(bytes_to_skip, 0);
+        assert_eq!(data.len(), item.size);
         Ok(())
     }
 
     fn prepare_samples(&mut self, image_index: usize) -> AvifResult<()> {
         for category in Category::ALL {
             for tile_index in 0..self.tiles[category.usize()].len() {
-                self.prepare_sample(image_index, category, tile_index)?;
+                self.prepare_sample(image_index, category, tile_index, None)?;
             }
         }
         Ok(())
