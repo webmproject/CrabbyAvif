@@ -554,14 +554,16 @@ impl Decoder {
     }
 
     fn harvest_cicp_from_sequence_header(&mut self) -> AvifResult<()> {
-        if self.tiles[0].is_empty() {
+        let category = Category::Color;
+        if self.tiles[category.usize()].is_empty() {
             return Ok(());
         }
         // TODO: This will read the entire first sample if there are multiple extents. Might want
         // to fix that.
-        self.prepare_sample(0, 0, 0)?;
+        let tile_index = 0;
+        self.prepare_sample(/*image_index=*/ 0, category, tile_index)?;
         let io = &mut self.io.unwrap_mut();
-        let sample = &self.tiles[0][0].input.samples[0];
+        let sample = &self.tiles[category.usize()][tile_index].input.samples[0];
         let item_data_buffer = if sample.item_id == 0 {
             &None
         } else {
@@ -1091,10 +1093,10 @@ impl Decoder {
     fn prepare_sample(
         &mut self,
         image_index: usize,
-        category: usize,
+        category: Category,
         tile_index: usize,
     ) -> AvifResult<()> {
-        let tile = &mut self.tiles[category][tile_index];
+        let tile = &mut self.tiles[category.usize()][tile_index];
         if tile.input.samples.len() <= image_index {
             return Err(AvifError::NoImagesRemaining);
         }
@@ -1127,8 +1129,8 @@ impl Decoder {
     }
 
     fn prepare_samples(&mut self, image_index: usize) -> AvifResult<()> {
-        for category in Category::ALL_USIZE {
-            for tile_index in 0..self.tiles[category].len() {
+        for category in Category::ALL {
+            for tile_index in 0..self.tiles[category.usize()].len() {
                 self.prepare_sample(image_index, category, tile_index)?;
             }
         }
