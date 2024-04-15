@@ -5,7 +5,7 @@ pub const MAX_AV1_LAYER_COUNT: usize = 4;
 
 #[derive(Debug, Default)]
 pub struct DecodeSample {
-    pub item_id: u32,
+    pub item_id: u32, // 1-based. 0 if it comes from a track.
     pub offset: u64,
     pub size: usize,
     pub spatial_id: u8,
