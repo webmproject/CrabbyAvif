@@ -585,7 +585,6 @@ impl Decoder {
         Ok(())
     }
 
-    #[allow(non_snake_case)]
     fn populate_grid_item_ids(
         &mut self,
         iinf: &Vec<ItemInfo>,
@@ -595,9 +594,10 @@ impl Decoder {
         if self.items.get(&item_id).unwrap().item_type != "grid" {
             return Ok(());
         }
-        let mut grid_item_ids: Vec<u32> = Vec::new();
-        let mut first_av1C = CodecConfiguration::default();
-        let mut is_first = true;
+        let tile_count = self.tile_info[category.usize()].grid_tile_count() as usize;
+        let mut grid_item_ids: Vec<u32> = create_vec_exact(tile_count)?;
+        #[allow(non_snake_case)]
+        let mut first_av1C: Option<CodecConfiguration> = None;
         // Collect all the dimg items. Cannot directly iterate through items here directly
         // because HashMap is not ordered.
         for item_info in iinf {
@@ -608,37 +608,35 @@ impl Decoder {
             if dimg_item.dimg_for_id != item_id {
                 continue;
             }
-            if dimg_item.item_type != "av01" {
+            if dimg_item.item_type != "av01" || dimg_item.has_unsupported_essential_property {
                 return Err(AvifError::InvalidImageGrid(
-                    "invalid item_type in dimg grid".into(),
+                    "invalid input item in dimg grid".into(),
                 ));
             }
-            if dimg_item.has_unsupported_essential_property {
-                return Err(AvifError::InvalidImageGrid(
-                    "Grid image contains tile with an unsupported property marked as essential"
-                        .into(),
-                ));
-            }
-            if is_first {
+            if first_av1C.is_none() {
                 // Adopt the configuration property of the first tile.
-                first_av1C = *dimg_item
-                    .av1C()
-                    .ok_or(AvifError::BmffParseFailed("".into()))?;
-                is_first = false;
+                // validate_properties() makes sure they are all equal.
+                first_av1C = Some(
+                    *dimg_item
+                        .av1C()
+                        .ok_or(AvifError::BmffParseFailed("missing av1C property".into()))?,
+                );
+            }
+            if grid_item_ids.len() >= tile_count {
+                return Err(AvifError::InvalidImageGrid(
+                    "Expected number of tiles not found".into(),
+                ));
             }
             grid_item_ids.push(item_info.item_id);
         }
-        if grid_item_ids.len() as u32 != self.tile_info[category.usize()].grid_tile_count() {
+        if grid_item_ids.len() != tile_count {
             return Err(AvifError::InvalidImageGrid(
                 "Expected number of tiles not found".into(),
             ));
         }
-        let item = self
-            .items
-            .get_mut(&item_id)
-            .ok_or(AvifError::InvalidImageGrid("".into()))?;
+        let item = self.items.get_mut(&item_id).unwrap();
         item.properties
-            .push(ItemProperty::CodecConfiguration(first_av1C));
+            .push(ItemProperty::CodecConfiguration(first_av1C.unwrap()));
         item.grid_item_ids = grid_item_ids;
         Ok(())
     }
