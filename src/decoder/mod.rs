@@ -1120,122 +1120,129 @@ impl Decoder {
         Ok(())
     }
 
-    fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
-        for category in Category::ALL {
-            let is_grid = self.tile_info[category.usize()].is_grid();
-            let previous_decoded_tile_count = self.tile_info[category.usize()].decoded_tile_count;
-            for tile_index in
-                previous_decoded_tile_count as usize..self.tiles[category.usize()].len()
-            {
-                // Split the tiles array into two mutable arrays so that we can validate the
-                // properties of tiles with index > 0 with that of the first tile.
-                let (tiles_slice1, tiles_slice2) =
-                    self.tiles[category.usize()].split_at_mut(tile_index);
-                let tile = &mut tiles_slice2[0];
-                let sample = &tile.input.samples[image_index];
-                let io = &mut self.io.unwrap_mut();
+    fn decode_tile(
+        &mut self,
+        image_index: usize,
+        category: Category,
+        tile_index: usize,
+    ) -> AvifResult<()> {
+        // Split the tiles array into two mutable arrays so that we can validate the
+        // properties of tiles with index > 0 with that of the first tile.
+        let (tiles_slice1, tiles_slice2) = self.tiles[category.usize()].split_at_mut(tile_index);
+        let tile = &mut tiles_slice2[0];
+        let sample = &tile.input.samples[image_index];
+        let io = &mut self.io.unwrap_mut();
 
-                let codec = &mut self.codecs[tile.codec_index];
-                let item_data_buffer = if sample.item_id == 0 {
-                    &None
-                } else {
-                    &self.items.get(&sample.item_id).unwrap().data_buffer
-                };
-                let data = sample.data(io, item_data_buffer)?;
-                codec.get_next_image(data, sample.spatial_id, &mut tile.image, category)?;
-                self.tile_info[category.usize()].decoded_tile_count += 1;
+        let codec = &mut self.codecs[tile.codec_index];
+        let item_data_buffer = if sample.item_id == 0 {
+            &None
+        } else {
+            &self.items.get(&sample.item_id).unwrap().data_buffer
+        };
+        let data = sample.data(io, item_data_buffer)?;
+        codec.get_next_image(data, sample.spatial_id, &mut tile.image, category)?;
+        self.tile_info[category.usize()].decoded_tile_count += 1;
 
-                if is_grid {
-                    if tile_index == 0 {
-                        match category {
-                            Category::Color => {
-                                // Adopt the yuv_format and depth.
-                                self.image.yuv_format = tile.image.yuv_format;
-                                self.image.depth = tile.image.depth;
-                                self.image.allocate_planes(category)?;
-                            }
-                            Category::Alpha => {
-                                // Alpha is always just one plane and the depth has been validated
-                                // to be the same as the color planes' depth.
-                                self.image.allocate_planes(category)?;
-                            }
-                            Category::Gainmap => {
-                                // Adopt the yuv_format and depth.
-                                self.gainmap.image.yuv_format = tile.image.yuv_format;
-                                self.gainmap.image.depth = tile.image.depth;
-                                self.gainmap.image.allocate_planes(category)?;
-                            }
-                        }
+        if self.tile_info[category.usize()].is_grid() {
+            if tile_index == 0 {
+                match category {
+                    Category::Color => {
+                        // Adopt the yuv_format and depth.
+                        self.image.yuv_format = tile.image.yuv_format;
+                        self.image.depth = tile.image.depth;
+                        self.image.allocate_planes(category)?;
                     }
-                    if !tiles_slice1.is_empty() {
-                        let first_tile_image = &tiles_slice1[0].image;
-                        if tile.image.width != first_tile_image.width
-                            || tile.image.height != first_tile_image.height
-                            || tile.image.depth != first_tile_image.depth
-                            || tile.image.yuv_format != first_tile_image.yuv_format
-                            || tile.image.full_range != first_tile_image.full_range
-                            || tile.image.color_primaries != first_tile_image.color_primaries
-                            || tile.image.transfer_characteristics
-                                != first_tile_image.transfer_characteristics
-                            || tile.image.matrix_coefficients
-                                != first_tile_image.matrix_coefficients
-                        {
-                            return Err(AvifError::InvalidImageGrid(
-                                "grid image contains mismatched tiles".into(),
-                            ));
-                        }
+                    Category::Alpha => {
+                        // Alpha is always just one plane and the depth has been validated
+                        // to be the same as the color planes' depth.
+                        self.image.allocate_planes(category)?;
                     }
-                    if category == Category::Alpha && !tile.image.full_range {
-                        tile.image.alpha_to_full_range()?;
-                    }
-                    tile.image.scale(tile.width, tile.height)?;
-                    match category {
-                        Category::Gainmap => self.gainmap.image.copy_from_tile(
-                            &tile.image,
-                            &self.tile_info[category.usize()],
-                            tile_index as u32,
-                            category,
-                        )?,
-                        _ => {
-                            self.image.copy_from_tile(
-                                &tile.image,
-                                &self.tile_info[category.usize()],
-                                tile_index as u32,
-                                category,
-                            )?;
-                        }
-                    }
-                } else {
-                    // Non grid path, steal planes from the only tile.
-                    match category {
-                        Category::Color => {
-                            self.image.width = tile.image.width;
-                            self.image.height = tile.image.height;
-                            self.image.depth = tile.image.depth;
-                            self.image.yuv_format = tile.image.yuv_format;
-                            self.image.steal_from(&tile.image, category)?;
-                            self.image.scale(tile.width, tile.height)?;
-                        }
-                        Category::Alpha => {
-                            if !self.image.has_same_properties(&tile.image) {
-                                return Err(AvifError::DecodeAlphaFailed);
-                            }
-                            self.image.steal_from(&tile.image, category)?;
-                            if !tile.image.full_range {
-                                self.image.alpha_to_full_range()?;
-                            }
-                            self.image.scale(tile.width, tile.height)?;
-                        }
-                        Category::Gainmap => {
-                            self.gainmap.image.width = tile.image.width;
-                            self.gainmap.image.height = tile.image.height;
-                            self.gainmap.image.depth = tile.image.depth;
-                            self.gainmap.image.yuv_format = tile.image.yuv_format;
-                            self.gainmap.image.steal_from(&tile.image, category)?;
-                            self.gainmap.image.scale(tile.width, tile.height)?;
-                        }
+                    Category::Gainmap => {
+                        // Adopt the yuv_format and depth.
+                        self.gainmap.image.yuv_format = tile.image.yuv_format;
+                        self.gainmap.image.depth = tile.image.depth;
+                        self.gainmap.image.allocate_planes(category)?;
                     }
                 }
+            }
+            if !tiles_slice1.is_empty() {
+                let first_tile_image = &tiles_slice1[0].image;
+                if tile.image.width != first_tile_image.width
+                    || tile.image.height != first_tile_image.height
+                    || tile.image.depth != first_tile_image.depth
+                    || tile.image.yuv_format != first_tile_image.yuv_format
+                    || tile.image.full_range != first_tile_image.full_range
+                    || tile.image.color_primaries != first_tile_image.color_primaries
+                    || tile.image.transfer_characteristics
+                        != first_tile_image.transfer_characteristics
+                    || tile.image.matrix_coefficients != first_tile_image.matrix_coefficients
+                {
+                    return Err(AvifError::InvalidImageGrid(
+                        "grid image contains mismatched tiles".into(),
+                    ));
+                }
+            }
+            if category == Category::Alpha && !tile.image.full_range {
+                tile.image.alpha_to_full_range()?;
+            }
+            tile.image.scale(tile.width, tile.height)?;
+            match category {
+                Category::Gainmap => self.gainmap.image.copy_from_tile(
+                    &tile.image,
+                    &self.tile_info[category.usize()],
+                    tile_index as u32,
+                    category,
+                )?,
+                _ => {
+                    self.image.copy_from_tile(
+                        &tile.image,
+                        &self.tile_info[category.usize()],
+                        tile_index as u32,
+                        category,
+                    )?;
+                }
+            }
+        } else {
+            // Non grid path, steal planes from the only tile.
+            match category {
+                Category::Color => {
+                    self.image.width = tile.image.width;
+                    self.image.height = tile.image.height;
+                    self.image.depth = tile.image.depth;
+                    self.image.yuv_format = tile.image.yuv_format;
+                    self.image.steal_from(&tile.image, category)?;
+                    self.image.scale(tile.width, tile.height)?;
+                }
+                Category::Alpha => {
+                    if !self.image.has_same_properties(&tile.image) {
+                        return Err(AvifError::DecodeAlphaFailed);
+                    }
+                    self.image.steal_from(&tile.image, category)?;
+                    if !tile.image.full_range {
+                        self.image.alpha_to_full_range()?;
+                    }
+                    self.image.scale(tile.width, tile.height)?;
+                }
+                Category::Gainmap => {
+                    self.gainmap.image.width = tile.image.width;
+                    self.gainmap.image.height = tile.image.height;
+                    self.gainmap.image.depth = tile.image.depth;
+                    self.gainmap.image.yuv_format = tile.image.yuv_format;
+                    self.gainmap.image.steal_from(&tile.image, category)?;
+                    self.gainmap.image.scale(tile.width, tile.height)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
+        for category in Category::ALL {
+            let previous_decoded_tile_count =
+                self.tile_info[category.usize()].decoded_tile_count as usize;
+            let tile_count = self.tiles[category.usize()].len();
+            for tile_index in previous_decoded_tile_count..tile_count {
+                self.decode_tile(image_index, category, tile_index)?;
             }
         }
         Ok(())
