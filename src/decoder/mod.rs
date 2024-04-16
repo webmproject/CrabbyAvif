@@ -91,7 +91,7 @@ impl CodecChoice {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Source {
     #[default]
     Auto = 0,
@@ -655,7 +655,6 @@ impl Decoder {
         self.parse_state = decoder.parse_state;
     }
 
-    #[allow(non_snake_case)]
     pub fn parse(&mut self) -> AvifResult<()> {
         if self.parsing_complete() {
             // Parse was called again. Reset the data and start over.
@@ -708,207 +707,202 @@ impl Decoder {
             };
 
             let color_properties: &Vec<ItemProperty>;
-            match self.source {
-                Source::Tracks => {
-                    let color_track = self
-                        .tracks
-                        .iter()
-                        .find(|x| x.is_color())
-                        .ok_or(AvifError::NoContent)?;
-                    self.color_track_id = Some(color_track.id);
-                    color_properties = color_track
-                        .get_properties()
-                        .ok_or(AvifError::BmffParseFailed("".into()))?;
+            if self.source == Source::Tracks {
+                let color_track = self
+                    .tracks
+                    .iter()
+                    .find(|x| x.is_color())
+                    .ok_or(AvifError::NoContent)?;
+                self.color_track_id = Some(color_track.id);
+                color_properties = color_track
+                    .get_properties()
+                    .ok_or(AvifError::BmffParseFailed("".into()))?;
 
-                    // TODO: exif/xmp from meta.
+                // TODO: exif/xmp from meta.
 
-                    self.tiles[Category::Color.usize()].push(Tile::create_from_track(
-                        color_track,
+                self.tiles[Category::Color.usize()].push(Tile::create_from_track(
+                    color_track,
+                    self.settings.image_count_limit,
+                )?);
+                self.tile_info[Category::Color.usize()].tile_count = 1;
+
+                if let Some(alpha_track) = self.tracks.iter().find(|x| x.is_aux(color_track.id)) {
+                    self.tiles[Category::Alpha.usize()].push(Tile::create_from_track(
+                        alpha_track,
                         self.settings.image_count_limit,
                     )?);
-                    self.tile_info[Category::Color.usize()].tile_count = 1;
-
-                    if let Some(alpha_track) = self.tracks.iter().find(|x| x.is_aux(color_track.id))
-                    {
-                        self.tiles[Category::Alpha.usize()].push(Tile::create_from_track(
-                            alpha_track,
-                            self.settings.image_count_limit,
-                        )?);
-                        self.tile_info[Category::Alpha.usize()].tile_count = 1;
-                        self.image.alpha_present = true;
-                        self.image.alpha_premultiplied = color_track.prem_by_id == alpha_track.id;
-                    }
-
-                    self.image_index = -1;
-                    self.image_count =
-                        self.tiles[Category::Color.usize()][0].input.samples.len() as u32;
-                    self.timescale = color_track.media_timescale as u64;
-                    self.duration_in_timescales = color_track.media_duration;
-                    if self.timescale != 0 {
-                        self.duration =
-                            (self.duration_in_timescales as f64) / (self.timescale as f64);
-                    } else {
-                        self.duration = 0.0;
-                    }
-                    self.repetition_count = color_track.repetition_count()?;
-                    self.image_timing = Default::default();
-
-                    self.image.width = color_track.width;
-                    self.image.height = color_track.height;
+                    self.tile_info[Category::Alpha.usize()].tile_count = 1;
+                    self.image.alpha_present = true;
+                    self.image.alpha_premultiplied = color_track.prem_by_id == alpha_track.id;
                 }
-                Source::PrimaryItem => {
-                    let mut item_ids: [u32; Category::COUNT] = [0; Category::COUNT];
 
-                    // Mandatory color item.
-                    item_ids[Category::Color.usize()] = *self
-                        .items
-                        .iter()
-                        .find(|x| {
-                            !x.1.should_skip()
-                                && x.1.id != 0
-                                && x.1.id == avif_boxes.meta.primary_item_id
-                        })
-                        .ok_or(AvifError::NoContent)?
-                        .0;
-                    self.read_and_parse_item(item_ids[Category::Color.usize()], Category::Color)?;
+                self.image_index = -1;
+                self.image_count =
+                    self.tiles[Category::Color.usize()][0].input.samples.len() as u32;
+                self.timescale = color_track.media_timescale as u64;
+                self.duration_in_timescales = color_track.media_duration;
+                if self.timescale != 0 {
+                    self.duration = (self.duration_in_timescales as f64) / (self.timescale as f64);
+                } else {
+                    self.duration = 0.0;
+                }
+                self.repetition_count = color_track.repetition_count()?;
+                self.image_timing = Default::default();
+
+                self.image.width = color_track.width;
+                self.image.height = color_track.height;
+            } else {
+                assert_eq!(self.source, Source::PrimaryItem);
+                let mut item_ids: [u32; Category::COUNT] = [0; Category::COUNT];
+
+                // Mandatory color item.
+                item_ids[Category::Color.usize()] = *self
+                    .items
+                    .iter()
+                    .find(|x| {
+                        !x.1.should_skip()
+                            && x.1.id != 0
+                            && x.1.id == avif_boxes.meta.primary_item_id
+                    })
+                    .ok_or(AvifError::NoContent)?
+                    .0;
+                self.read_and_parse_item(item_ids[Category::Color.usize()], Category::Color)?;
+                self.populate_grid_item_ids(
+                    &avif_boxes.meta.iinf,
+                    item_ids[Category::Color.usize()],
+                    Category::Color,
+                )?;
+
+                // Optional alpha auxiliary item
+                let mut ignore_pixi_validation_for_alpha = false;
+                let (alpha_item_id, alpha_item) =
+                    self.find_alpha_item(item_ids[Category::Color.usize()]);
+                if alpha_item_id != 0 {
+                    self.read_and_parse_item(alpha_item_id, Category::Alpha)?;
                     self.populate_grid_item_ids(
                         &avif_boxes.meta.iinf,
-                        item_ids[Category::Color.usize()],
-                        Category::Color,
+                        alpha_item_id,
+                        Category::Alpha,
                     )?;
-
-                    // Optional alpha auxiliary item
-                    let mut ignore_pixi_validation_for_alpha = false;
-                    let (alpha_item_id, alpha_item) =
-                        self.find_alpha_item(item_ids[Category::Color.usize()]);
-                    if alpha_item_id != 0 {
-                        self.read_and_parse_item(alpha_item_id, Category::Alpha)?;
-                        self.populate_grid_item_ids(
-                            &avif_boxes.meta.iinf,
-                            alpha_item_id,
-                            Category::Alpha,
-                        )?;
-                        item_ids[Category::Alpha.usize()] = alpha_item_id;
-                    } else if alpha_item.is_some() {
-                        // Alpha item was made up and not part of the input. Make it part of the items
-                        // array.
-                        let alpha_item = alpha_item.unwrap();
-                        item_ids[Category::Alpha.usize()] = alpha_item.id;
-                        self.tile_info[Category::Alpha.usize()].grid =
-                            self.tile_info[Category::Color.usize()].grid;
-                        self.items
-                            .insert(item_ids[Category::Alpha.usize()], alpha_item);
-                        // Made up alpha item does not contain the pixi property. So do not try to
-                        // validate it.
-                        ignore_pixi_validation_for_alpha = true;
-                    } else {
-                        // No alpha channel.
-                        item_ids[Category::Alpha.usize()] = 0;
-                    }
-
-                    // Optional gainmap item
-                    if let Some((tonemap_id, gainmap_id)) =
-                        self.find_gainmap_item(item_ids[Category::Color.usize()])?
-                    {
-                        self.read_and_parse_item(gainmap_id, Category::Gainmap)?;
-                        self.populate_grid_item_ids(
-                            &avif_boxes.meta.iinf,
-                            gainmap_id,
-                            Category::Gainmap,
-                        )?;
-                        self.validate_gainmap_item(gainmap_id, tonemap_id)?;
-                        self.gainmap_present = true;
-                        if self.settings.enable_decoding_gainmap {
-                            item_ids[Category::Gainmap.usize()] = gainmap_id;
-                        }
-                        if self.settings.enable_parsing_gainmap_metadata {
-                            let tonemap_item = self
-                                .items
-                                .get_mut(&tonemap_id)
-                                .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
-                            let mut stream = tonemap_item.stream(self.io.unwrap_mut())?;
-                            self.gainmap.metadata = mp4box::parse_tmap(&mut stream)?;
-                        }
-                    }
-
-                    self.search_exif_or_xmp_metadata(item_ids[Category::Color.usize()])?;
-
-                    self.image_index = -1;
-                    self.image_count = 1;
-                    self.timescale = 1;
-                    self.duration_in_timescales = 1;
-                    self.image_timing.timescale = 1;
-                    self.image_timing.duration = 1.0;
-                    self.image_timing.duration_in_timescales = 1;
-
-                    for category in Category::ALL {
-                        let item_id = item_ids[category.usize()];
-                        if item_id == 0 {
-                            continue;
-                        }
-                        {
-                            let item = self.items.get(&item_id).unwrap();
-                            if category == Category::Alpha && item.width == 0 && item.height == 0 {
-                                // NON-STANDARD: Alpha subimage does not have an ispe property; adopt
-                                // width/height from color item.
-                                assert!(!self.settings.strictness.alpha_ispe_required());
-                                let color_item =
-                                    self.items.get(&item_ids[Category::Color.usize()]).unwrap();
-                                let width = color_item.width;
-                                let height = color_item.height;
-                                let alpha_item = self.items.get_mut(&item_id).unwrap();
-                                // Note: We cannot directly use color_item.width here because borrow
-                                // checker won't allow that.
-                                alpha_item.width = width;
-                                alpha_item.height = height;
-                            }
-                        }
-                        self.tiles[category.usize()] = self.generate_tiles(item_id, category)?;
-                        let pixi_required = self.settings.strictness.pixi_required()
-                            && (category != Category::Alpha || !ignore_pixi_validation_for_alpha);
-                        let item = self.items.get(&item_id).unwrap();
-                        item.validate_properties(&self.items, pixi_required)?;
-                    }
-
-                    let color_item = self.items.get(&item_ids[Category::Color.usize()]).unwrap();
-                    self.image.width = color_item.width;
-                    self.image.height = color_item.height;
-                    self.image.alpha_present = item_ids[Category::Alpha.usize()] != 0;
-                    // alphapremultiplied.
-
-                    if color_item.progressive {
-                        self.image.progressive_state = ProgressiveState::Available;
-                        let sample_count =
-                            self.tiles[Category::Color.usize()][0].input.samples.len();
-                        if sample_count > 1 {
-                            self.image.progressive_state = ProgressiveState::Active;
-                            self.image_count = sample_count as u32;
-                        }
-                    }
-
-                    if item_ids[Category::Gainmap.usize()] != 0 {
-                        let gainmap_item = self
-                            .items
-                            .get(&item_ids[Category::Gainmap.usize()])
-                            .unwrap();
-                        self.gainmap.image.width = gainmap_item.width;
-                        self.gainmap.image.height = gainmap_item.height;
-                        let av1C = gainmap_item
-                            .av1C()
-                            .ok_or(AvifError::BmffParseFailed("".into()))?;
-                        self.gainmap.image.depth = av1C.depth();
-                        self.gainmap.image.yuv_format = av1C.pixel_format();
-                        self.gainmap.image.chroma_sample_position = av1C.chroma_sample_position;
-                    }
-
-                    // This borrow has to be in the end of this branch.
-                    color_properties = &self
-                        .items
-                        .get(&item_ids[Category::Color.usize()])
-                        .unwrap()
-                        .properties;
+                    item_ids[Category::Alpha.usize()] = alpha_item_id;
+                } else if alpha_item.is_some() {
+                    // Alpha item was made up and not part of the input. Make it part of the items
+                    // array.
+                    let alpha_item = alpha_item.unwrap();
+                    item_ids[Category::Alpha.usize()] = alpha_item.id;
+                    self.tile_info[Category::Alpha.usize()].grid =
+                        self.tile_info[Category::Color.usize()].grid;
+                    self.items
+                        .insert(item_ids[Category::Alpha.usize()], alpha_item);
+                    // Made up alpha item does not contain the pixi property. So do not try to
+                    // validate it.
+                    ignore_pixi_validation_for_alpha = true;
+                } else {
+                    // No alpha channel.
+                    item_ids[Category::Alpha.usize()] = 0;
                 }
-                _ => return Err(AvifError::UnknownError("".into())), // not reached.
+
+                // Optional gainmap item
+                if let Some((tonemap_id, gainmap_id)) =
+                    self.find_gainmap_item(item_ids[Category::Color.usize()])?
+                {
+                    self.read_and_parse_item(gainmap_id, Category::Gainmap)?;
+                    self.populate_grid_item_ids(
+                        &avif_boxes.meta.iinf,
+                        gainmap_id,
+                        Category::Gainmap,
+                    )?;
+                    self.validate_gainmap_item(gainmap_id, tonemap_id)?;
+                    self.gainmap_present = true;
+                    if self.settings.enable_decoding_gainmap {
+                        item_ids[Category::Gainmap.usize()] = gainmap_id;
+                    }
+                    if self.settings.enable_parsing_gainmap_metadata {
+                        let tonemap_item = self
+                            .items
+                            .get_mut(&tonemap_id)
+                            .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
+                        let mut stream = tonemap_item.stream(self.io.unwrap_mut())?;
+                        self.gainmap.metadata = mp4box::parse_tmap(&mut stream)?;
+                    }
+                }
+
+                self.search_exif_or_xmp_metadata(item_ids[Category::Color.usize()])?;
+
+                self.image_index = -1;
+                self.image_count = 1;
+                self.timescale = 1;
+                self.duration_in_timescales = 1;
+                self.image_timing.timescale = 1;
+                self.image_timing.duration = 1.0;
+                self.image_timing.duration_in_timescales = 1;
+
+                for category in Category::ALL {
+                    let item_id = item_ids[category.usize()];
+                    if item_id == 0 {
+                        continue;
+                    }
+                    {
+                        let item = self.items.get(&item_id).unwrap();
+                        if category == Category::Alpha && item.width == 0 && item.height == 0 {
+                            // NON-STANDARD: Alpha subimage does not have an ispe property; adopt
+                            // width/height from color item.
+                            assert!(!self.settings.strictness.alpha_ispe_required());
+                            let color_item =
+                                self.items.get(&item_ids[Category::Color.usize()]).unwrap();
+                            let width = color_item.width;
+                            let height = color_item.height;
+                            let alpha_item = self.items.get_mut(&item_id).unwrap();
+                            // Note: We cannot directly use color_item.width here because borrow
+                            // checker won't allow that.
+                            alpha_item.width = width;
+                            alpha_item.height = height;
+                        }
+                    }
+                    self.tiles[category.usize()] = self.generate_tiles(item_id, category)?;
+                    let pixi_required = self.settings.strictness.pixi_required()
+                        && (category != Category::Alpha || !ignore_pixi_validation_for_alpha);
+                    let item = self.items.get(&item_id).unwrap();
+                    item.validate_properties(&self.items, pixi_required)?;
+                }
+
+                let color_item = self.items.get(&item_ids[Category::Color.usize()]).unwrap();
+                self.image.width = color_item.width;
+                self.image.height = color_item.height;
+                self.image.alpha_present = item_ids[Category::Alpha.usize()] != 0;
+                // alphapremultiplied.
+
+                if color_item.progressive {
+                    self.image.progressive_state = ProgressiveState::Available;
+                    let sample_count = self.tiles[Category::Color.usize()][0].input.samples.len();
+                    if sample_count > 1 {
+                        self.image.progressive_state = ProgressiveState::Active;
+                        self.image_count = sample_count as u32;
+                    }
+                }
+
+                if item_ids[Category::Gainmap.usize()] != 0 {
+                    let gainmap_item = self
+                        .items
+                        .get(&item_ids[Category::Gainmap.usize()])
+                        .unwrap();
+                    self.gainmap.image.width = gainmap_item.width;
+                    self.gainmap.image.height = gainmap_item.height;
+                    #[allow(non_snake_case)]
+                    let av1C = gainmap_item
+                        .av1C()
+                        .ok_or(AvifError::BmffParseFailed("".into()))?;
+                    self.gainmap.image.depth = av1C.depth();
+                    self.gainmap.image.yuv_format = av1C.pixel_format();
+                    self.gainmap.image.chroma_sample_position = av1C.chroma_sample_position;
+                }
+
+                // This borrow has to be in the end of this branch.
+                color_properties = &self
+                    .items
+                    .get(&item_ids[Category::Color.usize()])
+                    .unwrap()
+                    .properties;
             }
 
             // Check validity of samples.
@@ -955,6 +949,7 @@ impl Decoder {
             self.image.irot_angle = find_property!(color_properties, ImageRotation);
             self.image.imir_axis = find_property!(color_properties, ImageMirror);
 
+            #[allow(non_snake_case)]
             let av1C = find_property!(color_properties, CodecConfiguration)
                 .ok_or(AvifError::BmffParseFailed("".into()))?;
             self.image.depth = av1C.depth();
