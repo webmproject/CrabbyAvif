@@ -706,6 +706,20 @@ impl Decoder {
                 Source::PrimaryItem => Source::PrimaryItem,
             };
 
+            // ID of the primary item.
+            let color_item_id = self
+                .items
+                .iter()
+                .find(|x| {
+                    !x.1.should_skip() && x.1.id != 0 && x.1.id == avif_boxes.meta.primary_item_id
+                })
+                .map(|it| *it.0);
+
+            // Find exif/xmp from meta if any.
+            if let Some(color_item_id) = color_item_id {
+                self.search_exif_or_xmp_metadata(color_item_id)?;
+            }
+
             let color_properties: &Vec<ItemProperty>;
             if self.source == Source::Tracks {
                 let color_track = self
@@ -717,8 +731,6 @@ impl Decoder {
                 color_properties = color_track
                     .get_properties()
                     .ok_or(AvifError::BmffParseFailed("".into()))?;
-
-                // TODO: exif/xmp from meta.
 
                 self.tiles[Category::Color.usize()].push(Tile::create_from_track(
                     color_track,
@@ -756,16 +768,7 @@ impl Decoder {
                 let mut item_ids: [u32; Category::COUNT] = [0; Category::COUNT];
 
                 // Mandatory color item.
-                item_ids[Category::Color.usize()] = *self
-                    .items
-                    .iter()
-                    .find(|x| {
-                        !x.1.should_skip()
-                            && x.1.id != 0
-                            && x.1.id == avif_boxes.meta.primary_item_id
-                    })
-                    .ok_or(AvifError::NoContent)?
-                    .0;
+                item_ids[Category::Color.usize()] = color_item_id.ok_or(AvifError::NoContent)?;
                 self.read_and_parse_item(item_ids[Category::Color.usize()], Category::Color)?;
                 self.populate_grid_item_ids(
                     &avif_boxes.meta.iinf,
@@ -826,8 +829,6 @@ impl Decoder {
                         self.gainmap.metadata = mp4box::parse_tmap(&mut stream)?;
                     }
                 }
-
-                self.search_exif_or_xmp_metadata(item_ids[Category::Color.usize()])?;
 
                 self.image_index = -1;
                 self.image_count = 1;
