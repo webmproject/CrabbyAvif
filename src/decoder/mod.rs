@@ -451,11 +451,11 @@ impl Decoder {
             .items
             .get(&tonemap_id)
             .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
-        if let Some(nclx) = find_nclx(&gainmap_item.properties)? {
-            self.gainmap.image.color_primaries = nclx.color_primaries;
-            self.gainmap.image.transfer_characteristics = nclx.transfer_characteristics;
-            self.gainmap.image.matrix_coefficients = nclx.matrix_coefficients;
-            self.gainmap.image.full_range = nclx.full_range;
+        if let Some(nclx) = find_nclx(&tonemap_item.properties)? {
+            self.gainmap.alt_color_primaries = nclx.color_primaries;
+            self.gainmap.alt_transfer_characteristics = nclx.transfer_characteristics;
+            self.gainmap.alt_matrix_coefficients = nclx.matrix_coefficients;
+            self.gainmap.alt_full_range = nclx.full_range;
         }
         if let Some(icc) = find_icc(&tonemap_item.properties)? {
             self.gainmap.alt_icc = icc.clone();
