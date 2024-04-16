@@ -1044,22 +1044,24 @@ impl Decoder {
         if matches!(self.source, Source::Tracks) {
             // In this case, we will use at most two codec instances (one for the color planes and
             // one for the alpha plane). Gain maps are not supported.
+            self.codecs = create_vec_exact(2)?;
             self.create_codec(
-                self.tiles[0][0].operating_point,
-                self.tiles[0][0].input.all_layers,
+                self.tiles[Category::Color.usize()][0].operating_point,
+                self.tiles[Category::Color.usize()][0].input.all_layers,
             )?;
-            self.tiles[0][0].codec_index = 0;
-            if !self.tiles[1].is_empty() {
+            self.tiles[Category::Color.usize()][0].codec_index = 0;
+            if !self.tiles[Category::Alpha.usize()].is_empty() {
                 self.create_codec(
-                    self.tiles[1][0].operating_point,
-                    self.tiles[1][0].input.all_layers,
+                    self.tiles[Category::Alpha.usize()][0].operating_point,
+                    self.tiles[Category::Alpha.usize()][0].input.all_layers,
                 )?;
                 self.tiles[1][0].codec_index = 1;
             }
         } else if self.can_use_single_codec() {
+            self.codecs = create_vec_exact(1)?;
             self.create_codec(
-                self.tiles[0][0].operating_point,
-                self.tiles[0][0].input.all_layers,
+                self.tiles[Category::Color.usize()][0].operating_point,
+                self.tiles[Category::Color.usize()][0].input.all_layers,
             )?;
             for tiles in &mut self.tiles {
                 for tile in tiles {
@@ -1067,6 +1069,7 @@ impl Decoder {
                 }
             }
         } else {
+            self.codecs = create_vec_exact(self.tiles.iter().map(|tiles| tiles.len()).sum())?;
             for category in Category::ALL_USIZE {
                 for tile_index in 0..self.tiles[category].len() {
                     let tile = &self.tiles[category][tile_index];
