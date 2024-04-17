@@ -51,10 +51,7 @@ fn animated_image() {
     assert!(!image.alpha_present);
     assert!(image.image_sequence_track_present);
     assert_eq!(decoder.image_count(), 5);
-    assert!(matches!(
-        decoder.repetition_count(),
-        RepetitionCount::Finite(0)
-    ));
+    assert_eq!(decoder.repetition_count(), RepetitionCount::Finite(0));
     if !HAS_DECODER {
         return;
     }
@@ -77,10 +74,7 @@ fn animated_image_with_source_set_to_primary_item() {
     // imageCount is expected to be 1 because we are using primary item as the
     // preferred source.
     assert_eq!(decoder.image_count(), 1);
-    assert!(matches!(
-        decoder.repetition_count(),
-        RepetitionCount::Unknown
-    ));
+    assert_eq!(decoder.repetition_count(), RepetitionCount::Unknown);
     if !HAS_DECODER {
         return;
     }
@@ -89,6 +83,27 @@ fn animated_image_with_source_set_to_primary_item() {
     // Subsequent calls should not return anything since there is only one
     // image in the preferred source.
     assert!(decoder.next_image().is_err());
+}
+
+// From avifanimationtest.cc
+#[test]
+fn animated_image_with_alpha_and_metadata() {
+    let mut decoder = get_decoder("colors-animated-8bpc-alpha-exif-xmp.avif");
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let image = decoder.image();
+    assert!(image.alpha_present);
+    assert!(image.image_sequence_track_present);
+    assert_eq!(decoder.image_count(), 5);
+    assert_eq!(decoder.repetition_count(), RepetitionCount::Infinite);
+    assert_eq!(image.exif.len(), 1126);
+    assert_eq!(image.xmp.len(), 3898);
+    if !HAS_DECODER {
+        return;
+    }
+    for _ in 0..5 {
+        assert!(decoder.next_image().is_ok());
+    }
 }
 
 // From avifdecodetest.cc
