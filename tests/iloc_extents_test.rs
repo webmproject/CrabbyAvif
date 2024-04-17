@@ -13,7 +13,7 @@ fn iloc_extents() {
         return;
     }
     assert!(decoder.next_image().is_ok());
-    let decoded = decoder.image();
+    let decoded = decoder.image().expect("image was none");
     let mut rgb = Image::create_from_yuv(decoded);
     rgb.format = Format::Rgb;
     assert!(rgb.allocate().is_ok());

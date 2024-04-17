@@ -1344,9 +1344,12 @@ impl Decoder {
         Ok(())
     }
 
-    pub fn image(&self) -> &Image {
-        // TODO: make this optional and reutrn none if parsing is not complete.
-        &self.image
+    pub fn image(&self) -> Option<&Image> {
+        if self.parsing_complete() {
+            Some(&self.image)
+        } else {
+            None
+        }
     }
 
     pub fn nth_image_timing(&self, n: u32) -> AvifResult<ImageTiming> {
