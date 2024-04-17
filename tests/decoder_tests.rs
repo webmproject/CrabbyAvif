@@ -52,6 +52,9 @@ fn animated_image() {
     assert!(image.image_sequence_track_present);
     assert_eq!(decoder.image_count(), 5);
     assert_eq!(decoder.repetition_count(), RepetitionCount::Finite(0));
+    for i in 0..5 {
+        assert_eq!(decoder.nearest_keyframe(i), 0);
+    }
     if !HAS_DECODER {
         return;
     }
@@ -104,6 +107,37 @@ fn animated_image_with_alpha_and_metadata() {
     for _ in 0..5 {
         assert!(decoder.next_image().is_ok());
     }
+}
+
+// From avifkeyframetest.cc
+#[test]
+fn keyframes() {
+    let mut decoder = get_decoder("colors-animated-8bpc-keyframes-0-2-3.avif");
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let image = decoder.image().expect("image was none");
+    assert!(image.image_sequence_track_present);
+    assert_eq!(decoder.image_count(), 5);
+
+    // First frame is always a keyframe.
+    assert!(decoder.is_keyframe(0));
+    assert_eq!(decoder.nearest_keyframe(0), 0);
+
+    assert!(!decoder.is_keyframe(1));
+    assert_eq!(decoder.nearest_keyframe(1), 0);
+
+    assert!(decoder.is_keyframe(2));
+    assert_eq!(decoder.nearest_keyframe(2), 2);
+
+    assert!(decoder.is_keyframe(3));
+    assert_eq!(decoder.nearest_keyframe(3), 3);
+
+    assert!(!decoder.is_keyframe(4));
+    assert_eq!(decoder.nearest_keyframe(4), 3);
+
+    // Not an existing frame.
+    assert!(!decoder.is_keyframe(15));
+    assert_eq!(decoder.nearest_keyframe(15), 3);
 }
 
 // From avifdecodetest.cc
