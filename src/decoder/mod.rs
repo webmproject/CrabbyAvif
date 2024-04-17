@@ -1404,15 +1404,17 @@ impl Decoder {
         true
     }
 
-    pub fn nearest_keyframe(&self, index: u32) -> u32 {
+    pub fn nearest_keyframe(&self, mut index: u32) -> u32 {
         if !self.parsing_complete() {
             return 0;
         }
-        for i in (0..index).rev() {
-            if self.is_keyframe(i) {
-                return i;
+        while index != 0 {
+            if self.is_keyframe(index) {
+                return index;
             }
+            index -= 1;
         }
+        assert!(self.is_keyframe(0));
         0
     }
 
