@@ -14,8 +14,8 @@ pub enum RepetitionCount {
 #[derive(Debug, Default)]
 pub struct Track {
     pub id: u32,
-    pub aux_for_id: u32,
-    pub prem_by_id: u32,
+    pub aux_for_id: Option<u32>,
+    pub prem_by_id: Option<u32>,
     pub media_timescale: u32,
     pub media_duration: u64,
     pub track_duration: u64,
@@ -32,20 +32,19 @@ impl Track {
     pub fn check_limits(&self, size_limit: u32, dimension_limit: u32) -> bool {
         check_limits(self.width, self.height, size_limit, dimension_limit)
     }
-    pub fn is_aux(&self, primary_track_id: u32) -> bool {
-        if self.sample_table.is_none() || self.id == 0 {
-            return false;
-        }
-        let sample_table = self.sample_table.unwrap_ref();
-        if sample_table.chunk_offsets.is_empty() || !sample_table.has_av1_sample() {
-            return false;
-        }
-        self.aux_for_id == primary_track_id
-    }
 
+    fn has_av1_samples(&self) -> bool {
+        if let Some(sample_table) = &self.sample_table {
+            self.id != 0 && !sample_table.chunk_offsets.is_empty() && sample_table.has_av1_sample()
+        } else {
+            false
+        }
+    }
+    pub fn is_aux(&self, primary_track_id: u32) -> bool {
+        self.has_av1_samples() && self.aux_for_id == Some(primary_track_id)
+    }
     pub fn is_color(&self) -> bool {
-        // If aux_for_id is 0, then it is the color track.
-        self.is_aux(0)
+        self.has_av1_samples() && self.aux_for_id.is_none()
     }
 
     pub fn get_properties(&self) -> Option<&Vec<ItemProperty>> {

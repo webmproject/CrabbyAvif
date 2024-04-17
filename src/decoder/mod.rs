@@ -767,7 +767,7 @@ impl Decoder {
                     )?);
                     self.tile_info[Category::Alpha.usize()].tile_count = 1;
                     self.image.alpha_present = true;
-                    self.image.alpha_premultiplied = color_track.prem_by_id == alpha_track.id;
+                    self.image.alpha_premultiplied = color_track.prem_by_id == Some(alpha_track.id);
                 }
 
                 self.image_index = -1;
