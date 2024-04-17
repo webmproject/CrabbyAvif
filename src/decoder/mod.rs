@@ -342,20 +342,19 @@ impl Decoder {
         self.parse_state = ParseState::None;
     }
 
-    #[allow(non_snake_case)]
-    fn find_alpha_item(&self, color_item_index: u32) -> (u32, Option<Item>) {
+    fn find_alpha_item(&mut self, color_item_index: u32) -> AvifResult<Option<u32>> {
         let color_item = self.items.get(&color_item_index).unwrap();
         if let Some(item) = self.items.iter().find(|x| {
             !x.1.should_skip() && x.1.aux_for_id == color_item.id && x.1.is_auxiliary_alpha()
         }) {
-            return (*item.0, None);
+            return Ok(Some(*item.0));
         }
         if color_item.item_type != "grid" || color_item.grid_item_ids.is_empty() {
-            return (0, None);
+            return Ok(None);
         }
         // If color item is a grid, check if there is an alpha channel which is represented as an
         // auxl item to each color tile item.
-        let mut alpha_item_indices: Vec<u32> = Vec::new();
+        let mut alpha_item_indices: Vec<u32> = create_vec_exact(color_item.grid_item_ids.len())?;
         for color_grid_item_id in &color_item.grid_item_ids {
             match self
                 .items
@@ -364,29 +363,49 @@ impl Decoder {
             {
                 Some(item) => alpha_item_indices.push(*item.0),
                 None => {
-                    // TODO: This case must be an error.
-                    return (0, None);
+                    if alpha_item_indices.is_empty() {
+                        return Ok(None);
+                    } else {
+                        return Err(AvifError::BmffParseFailed(
+                            "Some tiles but not all have an alpha auxiliary image item".into(),
+                        ));
+                    }
                 }
             }
         }
-        assert!(color_item.grid_item_ids.len() == alpha_item_indices.len());
+
+        // Make up an alpha item for convenience.
+        // TODO(yguyon): Find another item id if max is used.
+        let alpha_item_id = self
+            .items
+            .keys()
+            .max()
+            .unwrap()
+            .checked_add(1)
+            .ok_or(AvifError::NotImplemented)?;
         let first_item = self.items.get(&alpha_item_indices[0]).unwrap();
         let properties = match first_item.av1C() {
-            Some(av1C) => vec![ItemProperty::CodecConfiguration(*av1C)],
-            None => return (0, None),
+            #[allow(non_snake_case)]
+            Some(av1C) => {
+                let mut vector: Vec<ItemProperty> = create_vec_exact(1)?;
+                vector.push(ItemProperty::CodecConfiguration(*av1C));
+                vector
+            }
+            None => return Ok(None),
         };
-        (
-            0,
-            Some(Item {
-                id: self.items.keys().max().unwrap() + 1,
-                item_type: String::from("grid"),
-                width: color_item.width,
-                height: color_item.height,
-                grid_item_ids: alpha_item_indices,
-                properties,
-                ..Item::default()
-            }),
-        )
+        let alpha_item = Item {
+            id: alpha_item_id,
+            item_type: String::from("grid"),
+            width: color_item.width,
+            height: color_item.height,
+            grid_item_ids: alpha_item_indices,
+            properties,
+            is_made_up: true,
+            ..Item::default()
+        };
+        self.tile_info[Category::Alpha.usize()].grid = self.tile_info[Category::Color.usize()].grid;
+        self.items.insert(alpha_item_id, alpha_item);
+        Ok(Some(alpha_item_id))
     }
 
     // returns (tone_mapped_image_item_id, gain_map_item_id) if found
@@ -777,32 +796,18 @@ impl Decoder {
                 )?;
 
                 // Optional alpha auxiliary item
-                let mut ignore_pixi_validation_for_alpha = false;
-                let (alpha_item_id, alpha_item) =
-                    self.find_alpha_item(item_ids[Category::Color.usize()]);
-                if alpha_item_id != 0 {
-                    self.read_and_parse_item(alpha_item_id, Category::Alpha)?;
-                    self.populate_grid_item_ids(
-                        &avif_boxes.meta.iinf,
-                        alpha_item_id,
-                        Category::Alpha,
-                    )?;
+                if let Some(alpha_item_id) =
+                    self.find_alpha_item(item_ids[Category::Color.usize()])?
+                {
+                    if !self.items.get(&alpha_item_id).unwrap().is_made_up {
+                        self.read_and_parse_item(alpha_item_id, Category::Alpha)?;
+                        self.populate_grid_item_ids(
+                            &avif_boxes.meta.iinf,
+                            alpha_item_id,
+                            Category::Alpha,
+                        )?;
+                    }
                     item_ids[Category::Alpha.usize()] = alpha_item_id;
-                } else if alpha_item.is_some() {
-                    // Alpha item was made up and not part of the input. Make it part of the items
-                    // array.
-                    let alpha_item = alpha_item.unwrap();
-                    item_ids[Category::Alpha.usize()] = alpha_item.id;
-                    self.tile_info[Category::Alpha.usize()].grid =
-                        self.tile_info[Category::Color.usize()].grid;
-                    self.items
-                        .insert(item_ids[Category::Alpha.usize()], alpha_item);
-                    // Made up alpha item does not contain the pixi property. So do not try to
-                    // validate it.
-                    ignore_pixi_validation_for_alpha = true;
-                } else {
-                    // No alpha channel.
-                    item_ids[Category::Alpha.usize()] = 0;
                 }
 
                 // Optional gainmap item
@@ -863,9 +868,11 @@ impl Decoder {
                     }
 
                     self.tiles[category.usize()] = self.generate_tiles(item_id, category)?;
-                    let pixi_required = self.settings.strictness.pixi_required()
-                        && (category != Category::Alpha || !ignore_pixi_validation_for_alpha);
                     let item = self.items.get(&item_id).unwrap();
+                    // Made up alpha item does not contain the pixi property. So do not try to
+                    // validate it.
+                    let pixi_required =
+                        self.settings.strictness.pixi_required() && !item.is_made_up;
                     item.validate_properties(&self.items, pixi_required)?;
                 }
 

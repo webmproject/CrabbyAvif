@@ -24,6 +24,7 @@ pub struct Item {
     pub idat: Vec<u8>,
     pub grid_item_ids: Vec<u32>,
     pub data_buffer: Option<Vec<u8>>,
+    pub is_made_up: bool, // Placeholder grid alpha item if true.
 }
 
 macro_rules! find_property {
