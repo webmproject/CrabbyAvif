@@ -1410,12 +1410,12 @@ fn parse_tref(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
             "auxl" => {
                 // unsigned int(32) track_IDs[];
                 // Use only the first one and skip the rest.
-                track.aux_for_id = sub_stream.read_u32()?;
+                track.aux_for_id = Some(sub_stream.read_u32()?);
             }
             "prem" => {
                 // unsigned int(32) track_IDs[];
                 // Use only the first one and skip the rest.
-                track.prem_by_id = sub_stream.read_u32()?;
+                track.prem_by_id = Some(sub_stream.read_u32()?);
             }
             _ => {}
         }
