@@ -845,23 +845,23 @@ impl Decoder {
                     if item_id == 0 {
                         continue;
                     }
-                    {
-                        let item = self.items.get(&item_id).unwrap();
-                        if category == Category::Alpha && item.width == 0 && item.height == 0 {
-                            // NON-STANDARD: Alpha subimage does not have an ispe property; adopt
-                            // width/height from color item.
-                            assert!(!self.settings.strictness.alpha_ispe_required());
-                            let color_item =
-                                self.items.get(&item_ids[Category::Color.usize()]).unwrap();
-                            let width = color_item.width;
-                            let height = color_item.height;
-                            let alpha_item = self.items.get_mut(&item_id).unwrap();
-                            // Note: We cannot directly use color_item.width here because borrow
-                            // checker won't allow that.
-                            alpha_item.width = width;
-                            alpha_item.height = height;
-                        }
+
+                    let item = self.items.get(&item_id).unwrap();
+                    if category == Category::Alpha && item.width == 0 && item.height == 0 {
+                        // NON-STANDARD: Alpha subimage does not have an ispe property; adopt
+                        // width/height from color item.
+                        assert!(!self.settings.strictness.alpha_ispe_required());
+                        let color_item =
+                            self.items.get(&item_ids[Category::Color.usize()]).unwrap();
+                        let width = color_item.width;
+                        let height = color_item.height;
+                        let alpha_item = self.items.get_mut(&item_id).unwrap();
+                        // Note: We cannot directly use color_item.width here because borrow
+                        // checker won't allow that.
+                        alpha_item.width = width;
+                        alpha_item.height = height;
                     }
+
                     self.tiles[category.usize()] = self.generate_tiles(item_id, category)?;
                     let pixi_required = self.settings.strictness.pixi_required()
                         && (category != Category::Alpha || !ignore_pixi_validation_for_alpha);
