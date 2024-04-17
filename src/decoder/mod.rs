@@ -1335,18 +1335,53 @@ impl Decoder {
         color_track.image_timing(n)
     }
 
+    // When next_image() or nth_image() returns AvifResult::WaitingOnIo, this function can be called
+    // next to retrieve the number of top rows that can be immediately accessed from the luma plane
+    // of decoder->image, and alpha if any. The corresponding rows from the chroma planes,
+    // if any, can also be accessed (half rounded up if subsampled, same number of rows otherwise).
+    // If a gain map is present, and enable_decoding_gainmap is also on, the gain map's planes can
+    // also be accessed in the same way. The number of available gain map rows is at least:
+    //   decoder.decoded_row_count() * decoder.gainmap.image.height / decoder.image.height
+    // When gain map scaling is needed, callers might choose to use a few less rows depending on how
+    // many rows are needed by the scaling algorithm, to avoid the last row(s) changing when more
+    // data becomes available. allow_incremental must be set to true before calling next_image() or
+    // nth_image(). Returns decoder.image.height when the last call to next_image() or nth_image()
+    // returned AvifResult::Ok. Returns 0 in all other cases.
     pub fn decoded_row_count(&self) -> u32 {
         let mut min_row_count = self.image.height;
         for category in Category::ALL_USIZE {
             if self.tiles[category].is_empty() {
                 continue;
             }
-            if category == 2 {
-                // TODO: handle gainmap.
-            }
             let first_tile_height = self.tiles[category][0].height;
-            let row_count =
-                self.tile_info[category].decoded_row_count(self.image.height, first_tile_height);
+            let row_count = if category == Category::Gainmap.usize()
+                && self.gainmap_present()
+                && self.settings.enable_decoding_gainmap
+                && self.gainmap.image.height != 0
+                && self.gainmap.image.height != self.image.height
+            {
+                if self.tile_info[category].is_fully_decoded() {
+                    self.image.height
+                } else {
+                    let gainmap_row_count = self.tile_info[category]
+                        .decoded_row_count(self.gainmap.image.height, first_tile_height);
+                    // row_count fits for sure in 32 bits because heights do.
+                    let row_count = (gainmap_row_count as u64 * self.image.height as u64
+                        / self.gainmap.image.height as u64)
+                        as u32;
+
+                    // Make sure it satisfies the C API guarantee.
+                    assert!(
+                        gainmap_row_count
+                            >= (row_count as f32 / self.image.height as f32
+                                * self.gainmap.image.height as f32)
+                                .round() as u32
+                    );
+                    row_count
+                }
+            } else {
+                self.tile_info[category].decoded_row_count(self.image.height, first_tile_height)
+            };
             min_row_count = std::cmp::min(min_row_count, row_count);
         }
         min_row_count
