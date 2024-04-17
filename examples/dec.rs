@@ -73,7 +73,7 @@ fn main() {
                 println!("next_image failed! {:#?}", res);
                 std::process::exit(1);
             }
-            let image = decoder.image();
+            let image = decoder.image().expect("image was none");
             let ret = writer.write_frame(image);
             if !ret {
                 println!("error writing y4m file");

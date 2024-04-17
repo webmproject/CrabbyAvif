@@ -184,7 +184,7 @@ impl From<&avifDecoder> for Settings {
 
 fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
     // Copy image.
-    let image = src.image();
+    let image = src.image().unwrap();
     dst.image_object = image.into();
 
     // Copy decoder properties.
