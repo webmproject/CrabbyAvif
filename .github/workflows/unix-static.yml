@@ -70,7 +70,7 @@ jobs:
         cargo build --features capi --release
         cmake -S c_api_tests -B c_build
         make -C c_build
-        make -C c_build test
+        ctest --test-dir c_build -E conformance_tests
 
     - name: Build libgav1
       if: steps.cache-ext.outputs.cache-hit != 'true'
@@ -87,4 +87,4 @@ jobs:
         cargo build --no-default-features --features capi,libgav1,libyuv --release
         cmake -S c_api_tests -B c_build_gav1
         make -C c_build_gav1
-        make -C c_build_gav1 test
+        ctest --test-dir c_build_gav1 -E conformance_tests

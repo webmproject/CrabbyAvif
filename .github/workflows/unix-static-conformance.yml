@@ -29,7 +29,7 @@ jobs:
         path: |
           sys
           external
-        key: ${{ runner.os }}-${{ hashFiles('sys/dav1d-sys/Cargo.toml', 'sys/dav1d-sys/dav1d.cmd', 'sys/dav1d-sys/build.rs', 'sys/libyuv-sys/Cargo.toml', 'sys/libyuv-sys/libyuv.cmd', 'sys/libyuv-sys/build.rs') }}
+        key: ${{ runner.os }}-${{ hashFiles('sys/dav1d-sys/Cargo.toml', 'sys/dav1d-sys/dav1d.cmd', 'sys/dav1d-sys/build.rs', 'sys/libyuv-sys/Cargo.toml', 'sys/libyuv-sys/libyuv.cmd', 'sys/libyuv-sys/build.rs', 'external/googletest.cmd') }}
 
     - uses: jwlawson/actions-setup-cmake@d06b37b47cfd043ec794ffa3e40e0b6b5858a7ec # v1.14.2
       if: steps.cache-ext-with-libavif.outputs.cache-hit != 'true'
@@ -75,3 +75,15 @@ jobs:
     - name: Build and run the Rust tests
       # TODO: https://github.com/AOMediaCodec/av1-avif/issues/217 - Enable test 166
       run: cargo test -- test_conformance --skip test_conformance::_166_expects
+
+    - name: Build GoogleTest
+      if: steps.cache-ext-with-libavif.outputs.cache-hit != 'true'
+      working-directory: ./external
+      run: bash -e googletest.cmd
+
+    - name: Build and run the C++ tests
+      run: |
+        cargo build --features capi --release
+        cmake -S c_api_tests -B c_build
+        make -C c_build
+        ctest --test-dir c_build -R conformance_tests
