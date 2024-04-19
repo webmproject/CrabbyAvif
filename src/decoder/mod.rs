@@ -528,6 +528,7 @@ impl Decoder {
                 self.items.get_mut(&item_id).unwrap(),
                 self.settings.allow_progressive,
                 self.settings.image_count_limit,
+                self.io.unwrap_ref().size_hint(),
             )?;
             tile.input.category = category;
             tiles.push(tile);
@@ -547,6 +548,7 @@ impl Decoder {
                     grid_item,
                     self.settings.allow_progressive,
                     self.settings.image_count_limit,
+                    self.io.unwrap_ref().size_hint(),
                 )?;
                 tile.input.category = category;
                 tiles.push(tile);
@@ -757,6 +759,7 @@ impl Decoder {
                 self.tiles[Category::Color.usize()].push(Tile::create_from_track(
                     color_track,
                     self.settings.image_count_limit,
+                    self.io.unwrap_ref().size_hint(),
                 )?);
                 self.tile_info[Category::Color.usize()].tile_count = 1;
 
@@ -764,6 +767,7 @@ impl Decoder {
                     self.tiles[Category::Alpha.usize()].push(Tile::create_from_track(
                         alpha_track,
                         self.settings.image_count_limit,
+                        self.io.unwrap_ref().size_hint(),
                     )?);
                     self.tile_info[Category::Alpha.usize()].tile_count = 1;
                     self.image.alpha_present = true;

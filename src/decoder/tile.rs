@@ -106,7 +106,11 @@ impl Tile {
         item: &mut Item,
         allow_progressive: bool,
         image_count_limit: u32,
+        size_hint: u64,
     ) -> AvifResult<Tile> {
+        if size_hint != 0 && item.size as u64 > size_hint {
+            return Err(AvifError::BmffParseFailed("exceeded size_hint".into()));
+        }
         let mut tile = Tile {
             width: item.width,
             height: item.height,
@@ -229,7 +233,11 @@ impl Tile {
         Ok(tile)
     }
 
-    pub fn create_from_track(track: &Track, mut image_count_limit: u32) -> AvifResult<Tile> {
+    pub fn create_from_track(
+        track: &Track,
+        mut image_count_limit: u32,
+        size_hint: u64,
+    ) -> AvifResult<Tile> {
         let mut tile = Tile {
             width: track.width,
             height: track.height,
@@ -269,6 +277,15 @@ impl Tile {
             let mut sample_offset = *chunk_offset;
             for _ in 0..sample_count {
                 let sample_size = sample_table.sample_size(sample_size_index)?;
+                let sample_size_hint = sample_offset.checked_add(sample_size as u64);
+                if sample_size_hint.is_none() {
+                    return Err(AvifError::BmffParseFailed(
+                        "overflow in sample offset+size".into(),
+                    ));
+                }
+                if size_hint != 0 && sample_size_hint.unwrap() > size_hint {
+                    return Err(AvifError::BmffParseFailed("exceeded size_hint".into()));
+                }
                 let sample = DecodeSample {
                     item_id: 0,
                     offset: sample_offset,
