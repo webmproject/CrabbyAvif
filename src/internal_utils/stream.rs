@@ -235,7 +235,7 @@ impl IStream<'_> {
             // leb128_byte contains 8 bits read from the bitstream.
             let leb128_byte = self.read_u8()?;
             // The bottom 7 bits are used to compute the variable value.
-            value |= ((leb128_byte & 0x7F) << (i * 7)) as u64;
+            value |= u64::from(leb128_byte & 0x7F) << (i * 7);
             // The most significant bit is used to indicate that there are more
             // bytes to be read.
             if (leb128_byte & 0x80) == 0 {
