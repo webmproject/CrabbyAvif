@@ -588,7 +588,7 @@ impl Decoder {
             if let Ok(sequence_header) = Av1SequenceHeader::parse_from_obus(sample.partial_data(
                 io,
                 item_data_buffer,
-                search_size,
+                min(search_size, sample.size),
             )?) {
                 self.image.color_primaries = sequence_header.color_primaries;
                 self.image.transfer_characteristics = sequence_header.transfer_characteristics;
