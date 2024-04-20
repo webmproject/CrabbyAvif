@@ -167,7 +167,7 @@ impl IStream<'_> {
 
     // Reads size characters of a non-null-terminated string.
     pub fn read_string(&mut self, size: usize) -> AvifResult<String> {
-        String::from_utf8(self.get_vec(size)?).or(Err(AvifError::BmffParseFailed("".into())))
+        Ok(String::from_utf8(self.get_vec(size)?).unwrap_or("".into()))
     }
 
     // Reads an xx-byte unsigner integer.
@@ -194,7 +194,7 @@ impl IStream<'_> {
             .ok_or(AvifError::BmffParseFailed("".into()))?;
         let range = self.offset..self.offset + null_position;
         self.offset += null_position + 1;
-        String::from_utf8(self.data[range].to_vec()).or(Err(AvifError::BmffParseFailed("".into())))
+        Ok(String::from_utf8(self.data[range].to_vec()).unwrap_or("".into()))
     }
 
     pub fn read_version_and_flags(&mut self) -> AvifResult<(u8, u32)> {
