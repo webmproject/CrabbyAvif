@@ -28,7 +28,14 @@ impl DecodeSample {
                 }
                 Ok(&x[start_offset..end_offset])
             }
-            None => io.read(self.offset, size),
+            None => {
+                let data = io.read(self.offset, size)?;
+                if data.len() != size {
+                    Err(AvifError::TruncatedData)
+                } else {
+                    Ok(data)
+                }
+            }
         }
     }
 
