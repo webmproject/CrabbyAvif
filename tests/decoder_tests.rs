@@ -112,7 +112,7 @@ fn animated_image_with_alpha_and_metadata() {
 // From avifkeyframetest.cc
 #[test]
 fn keyframes() {
-    let mut decoder = get_decoder("colors-animated-8bpc-keyframes-0-2-3.avif");
+    let mut decoder = get_decoder("colors-animated-12bpc-keyframes-0-2-3.avif");
     let res = decoder.parse();
     assert!(res.is_ok());
     let image = decoder.image().expect("image was none");
