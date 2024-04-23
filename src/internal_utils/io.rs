@@ -1,7 +1,9 @@
 use crate::internal_utils::*;
 
 use std::fs::File;
-use std::os::unix::fs::FileExt; // TODO: what happens when this is compiled for windows?
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
 
 #[derive(Debug, Default)]
 pub struct DecoderFileIO {
@@ -38,8 +40,9 @@ impl decoder::IO for DecoderFileIO {
             if self
                 .file
                 .unwrap_ref()
-                .read_exact_at(self.buffer.as_mut_slice(), offset)
+                .seek(SeekFrom::Start(offset))
                 .is_err()
+                || self.file.unwrap_ref().read_exact(&mut self.buffer).is_err()
             {
                 return Err(AvifError::IoError);
             }
