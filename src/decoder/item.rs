@@ -358,6 +358,9 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
     }
     let mut ipma_seen: HashSet<u32> = HashSet::with_hasher(NonRandomHasherState);
     for association in &meta.iprp.associations {
+        if association.associations.is_empty() {
+            continue;
+        }
         if ipma_seen.contains(&association.item_id) {
             return Err(AvifError::BmffParseFailed(
                 "item has duplicate ipma entry".into(),
