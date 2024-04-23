@@ -126,6 +126,7 @@ pub struct Nclx {
 pub enum ColorInformation {
     Icc(Vec<u8>),
     Nclx(Nclx),
+    Unknown,
 }
 
 /// cbindgen:rename-all=CamelCase
@@ -536,7 +537,7 @@ fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
     Ok(ItemProperty::CodecConfiguration(av1C))
 }
 
-fn parse_colr(stream: &mut IStream) -> AvifResult<Option<ItemProperty>> {
+fn parse_colr(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // Section 12.1.5.2 of ISO/IEC 14496-12.
 
     // unsigned int(32) colour_type;
@@ -553,9 +554,9 @@ fn parse_colr(stream: &mut IStream) -> AvifResult<Option<ItemProperty>> {
             )));
         }
         // ICC_profile; // restricted ("rICC") or unrestricted ("prof") ICC profile
-        return Ok(Some(ItemProperty::ColorInformation(ColorInformation::Icc(
+        return Ok(ItemProperty::ColorInformation(ColorInformation::Icc(
             stream.get_slice(stream.bytes_left()?)?.to_vec(),
-        ))));
+        )));
     }
     if color_type == "nclx" {
         let mut nclx = Nclx {
@@ -576,11 +577,9 @@ fn parse_colr(stream: &mut IStream) -> AvifResult<Option<ItemProperty>> {
                 "colr box contains invalid reserved bits".into(),
             ));
         }
-        return Ok(Some(ItemProperty::ColorInformation(
-            ColorInformation::Nclx(nclx),
-        )));
+        return Ok(ItemProperty::ColorInformation(ColorInformation::Nclx(nclx)));
     }
-    Ok(None)
+    Ok(ItemProperty::ColorInformation(ColorInformation::Unknown))
 }
 
 fn parse_pasp(stream: &mut IStream) -> AvifResult<ItemProperty> {
@@ -726,11 +725,7 @@ fn parse_ipco(stream: &mut IStream) -> AvifResult<Vec<ItemProperty>> {
             "ispe" => properties.push(parse_ispe(&mut sub_stream)?),
             "pixi" => properties.push(parse_pixi(&mut sub_stream)?),
             "av1C" => properties.push(parse_av1C(&mut sub_stream)?),
-            "colr" => {
-                if let Some(colr) = parse_colr(&mut sub_stream)? {
-                    properties.push(colr)
-                }
-            }
+            "colr" => properties.push(parse_colr(&mut sub_stream)?),
             "pasp" => properties.push(parse_pasp(&mut sub_stream)?),
             "auxC" => properties.push(parse_auxC(&mut sub_stream)?),
             "clap" => properties.push(parse_clap(&mut sub_stream)?),
