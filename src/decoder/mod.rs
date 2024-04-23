@@ -1182,8 +1182,27 @@ impl Decoder {
 
         if self.tile_info[category.usize()].is_grid() {
             if tile_index == 0 {
+                // Validate the grid image size
+                let grid = &self.tile_info[category.usize()].grid;
+                if tile.image.width * grid.columns < grid.width
+                    || tile.image.height * grid.rows < grid.height
+                {
+                    return Err(AvifError::InvalidImageGrid(
+                        "Grid image tiles do not completely cover the image (HEIF (ISO/IEC 23008-12:2017), Section 6.6.2.3.1)".into(),
+                    ));
+                }
+                if tile.image.width * (grid.columns - 1) >= grid.width
+                    || tile.image.height * (grid.rows - 1) >= grid.height
+                {
+                    return Err(AvifError::InvalidImageGrid(
+                        "Grid image tiles in the rightmost column and bottommost row do not overlap the reconstructed image grid canvas. See MIAF (ISO/IEC 23000-22:2019), Section 7.3.11.4.2, Figure 2".into(),
+                    ));
+                }
+
                 match category {
                     Category::Color => {
+                        self.image.width = grid.width;
+                        self.image.height = grid.height;
                         // Adopt the yuv_format and depth.
                         self.image.yuv_format = tile.image.yuv_format;
                         self.image.depth = tile.image.depth;
@@ -1195,6 +1214,8 @@ impl Decoder {
                         self.image.allocate_planes(category)?;
                     }
                     Category::Gainmap => {
+                        self.gainmap.image.width = grid.width;
+                        self.gainmap.image.height = grid.height;
                         // Adopt the yuv_format and depth.
                         self.gainmap.image.yuv_format = tile.image.yuv_format;
                         self.gainmap.image.depth = tile.image.depth;
