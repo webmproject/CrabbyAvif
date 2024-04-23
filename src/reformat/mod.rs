@@ -12,6 +12,7 @@ pub mod rgb_impl;
 // without it.
 #[cfg(not(feature = "libyuv"))]
 pub mod libyuv {
+    use crate::decoder::Category;
     use crate::reformat::*;
     use crate::*;
 
@@ -24,7 +25,7 @@ pub mod libyuv {
     }
 
     impl image::Image {
-        pub fn scale(&mut self, width: u32, height: u32) -> AvifResult<()> {
+        pub fn scale(&mut self, width: u32, height: u32, _category: Category) -> AvifResult<()> {
             if self.width == width && self.height == height {
                 return Ok(());
             }

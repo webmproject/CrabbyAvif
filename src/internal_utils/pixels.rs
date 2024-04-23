@@ -1,6 +1,7 @@
 use crate::internal_utils::*;
 use crate::*;
 
+#[derive(Clone)]
 pub enum Pixels {
     // Intended for use from the C API. Used for 8-bit images.
     Pointer(*mut u8),

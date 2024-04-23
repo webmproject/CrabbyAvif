@@ -6,20 +6,24 @@ use crate::*;
 use libyuv_sys::bindings::*;
 
 impl Image {
-    pub fn scale(&mut self, width: u32, height: u32) -> AvifResult<()> {
+    pub fn scale(&mut self, width: u32, height: u32, category: Category) -> AvifResult<()> {
         if self.width == width && self.height == height {
             return Ok(());
         }
         if width == 0 || height == 0 {
             return Err(AvifError::InvalidArgument);
         }
-        if (self.planes[0].is_some() && !self.planes[0].unwrap_ref().is_pointer())
-            || (self.planes[1].is_some() && !self.planes[1].unwrap_ref().is_pointer())
-            || (self.planes[2].is_some() && !self.planes[2].unwrap_ref().is_pointer())
-            || (self.planes[3].is_some() && !self.planes[3].unwrap_ref().is_pointer())
-        {
-            // TODO: implement this function for non-pointer inputs.
-            return Err(AvifError::NotImplemented);
+        let planes: &[Plane] = match category {
+            Category::Color | Category::Gainmap => &YUV_PLANES,
+            Category::Alpha => &A_PLANE,
+        };
+        for plane in planes {
+            if self.planes[plane.to_usize()].is_some()
+                && !self.planes[plane.to_usize()].unwrap_ref().is_pointer()
+            {
+                // TODO: implement this function for non-pointer inputs.
+                return Err(AvifError::NotImplemented);
+            }
         }
         let src = image::Image {
             width: self.width,
@@ -58,19 +62,19 @@ impl Image {
             if src.width > 16384 || src.height > 16384 {
                 return Err(AvifError::NotImplemented);
             }
-            if src.has_plane(Plane::Y) {
+            if src.has_plane(Plane::Y) && category != Category::Alpha {
                 self.allocate_planes(Category::Color)?;
             }
-            if src.has_plane(Plane::A) {
+            if src.has_plane(Plane::A) && category == Category::Alpha {
                 self.allocate_planes(Category::Alpha)?;
             }
         }
-        for plane in ALL_PLANES {
-            if !src.has_plane(plane) {
+        for plane in planes {
+            if !src.has_plane(*plane) {
                 continue;
             }
-            let src_pd = src.plane_data(plane).unwrap();
-            let dst_pd = self.plane_data(plane).unwrap();
+            let src_pd = src.plane_data(*plane).unwrap();
+            let dst_pd = self.plane_data(*plane).unwrap();
             // libyuv versions >= 1880 reports a return value here. Older versions do not. Ignore
             // the return value for now.
             #[allow(clippy::let_unit_value)]
@@ -141,8 +145,14 @@ mod tests {
             yuv.row_bytes[plane.to_usize()] = 2;
             yuv.image_owns_planes[plane.to_usize()] = true;
         }
-
-        assert!(yuv.scale(4, 4).is_ok());
+        let categories: &[Category] =
+            if use_alpha { &[Category::Color, Category::Alpha] } else { &[Category::Color] };
+        for category in categories {
+            assert!(yuv.scale(4, 4, *category).is_ok());
+            // Scale will update the width and height when scaling YUV planes. Reset it back.
+            yuv.width = 2;
+            yuv.height = 2;
+        }
         for plane in planes {
             let expected_samples: &[u8] = match (yuv_format, plane) {
                 (PixelFormat::Yuv422, Plane::U | Plane::V) => &[
@@ -185,6 +195,9 @@ mod tests {
             1, 2, //
             3, 4,
         ]));
-        assert_eq!(yuv.scale(4, 4), Err(AvifError::NotImplemented));
+        assert_eq!(
+            yuv.scale(4, 4, Category::Color),
+            Err(AvifError::NotImplemented)
+        );
     }
 }

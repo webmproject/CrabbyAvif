@@ -233,7 +233,7 @@ impl Image {
         match category {
             Category::Alpha => {
                 if src.planes[3].is_some() {
-                    self.planes[3] = src.planes[3].unwrap_ref().clone_pointer();
+                    self.planes[3] = Some(src.planes[3].unwrap_ref().clone());
                     self.row_bytes[3] = src.row_bytes[3];
                 }
             }
@@ -242,7 +242,7 @@ impl Image {
                     if src.planes[plane].is_none() {
                         continue;
                     }
-                    self.planes[plane] = src.planes[plane].unwrap_ref().clone_pointer();
+                    self.planes[plane] = Some(src.planes[plane].unwrap_ref().clone());
                     self.row_bytes[plane] = src.row_bytes[plane];
                 }
             }

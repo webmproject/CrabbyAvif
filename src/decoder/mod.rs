@@ -1243,7 +1243,7 @@ impl Decoder {
             if category == Category::Alpha && !tile.image.full_range {
                 tile.image.alpha_to_full_range()?;
             }
-            tile.image.scale(tile.width, tile.height)?;
+            tile.image.scale(tile.width, tile.height, category)?;
             match category {
                 Category::Gainmap => self.gainmap.image.copy_from_tile(
                     &tile.image,
@@ -1264,22 +1264,22 @@ impl Decoder {
             // Non grid path, steal planes from the only tile.
             match category {
                 Category::Color => {
+                    tile.image.scale(tile.width, tile.height, category)?;
                     self.image.width = tile.image.width;
                     self.image.height = tile.image.height;
                     self.image.depth = tile.image.depth;
                     self.image.yuv_format = tile.image.yuv_format;
                     self.image.steal_from(&tile.image, category)?;
-                    self.image.scale(tile.width, tile.height)?;
                 }
                 Category::Alpha => {
+                    if !tile.image.full_range {
+                        tile.image.alpha_to_full_range()?;
+                    }
+                    tile.image.scale(tile.width, tile.height, category)?;
                     if !self.image.has_same_properties(&tile.image) {
                         return Err(AvifError::DecodeAlphaFailed);
                     }
                     self.image.steal_from(&tile.image, category)?;
-                    if !tile.image.full_range {
-                        self.image.alpha_to_full_range()?;
-                    }
-                    self.image.scale(tile.width, tile.height)?;
                 }
                 Category::Gainmap => {
                     self.gainmap.image.width = tile.image.width;
@@ -1287,7 +1287,9 @@ impl Decoder {
                     self.gainmap.image.depth = tile.image.depth;
                     self.gainmap.image.yuv_format = tile.image.yuv_format;
                     self.gainmap.image.steal_from(&tile.image, category)?;
-                    self.gainmap.image.scale(tile.width, tile.height)?;
+                    self.gainmap
+                        .image
+                        .scale(tile.width, tile.height, category)?;
                 }
             }
         }
