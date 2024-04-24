@@ -228,8 +228,10 @@ impl Image {
         Ok(())
     }
 
-    pub fn steal_from(&mut self, src: &Image, category: Category) -> AvifResult<()> {
-        // This function is used only when both src and self contains only pointers.
+    // If src contains pointers, this function will simply make a copy of the pointer without
+    // copying the actual pixels (stealing). If src contains buffer, this function will clone the
+    // buffers (copying).
+    pub fn steal_or_copy_from(&mut self, src: &Image, category: Category) -> AvifResult<()> {
         match category {
             Category::Alpha => {
                 if src.planes[3].is_some() {

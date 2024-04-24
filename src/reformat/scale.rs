@@ -148,10 +148,11 @@ mod tests {
         let categories: &[Category] =
             if use_alpha { &[Category::Color, Category::Alpha] } else { &[Category::Color] };
         for category in categories {
-            assert!(yuv.scale(4, 4, *category).is_ok());
-            // Scale will update the width and height when scaling YUV planes. Reset it back.
+            // Scale will update the width and height when scaling YUV planes. Reset it back before
+            // calling it again.
             yuv.width = 2;
             yuv.height = 2;
+            assert!(yuv.scale(4, 4, *category).is_ok());
         }
         for plane in planes {
             let expected_samples: &[u8] = match (yuv_format, plane) {

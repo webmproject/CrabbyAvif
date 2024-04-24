@@ -11,6 +11,8 @@
 : # When updating the dav1d version, make the same change to dav1d_android.sh.
 git clone -b 1.2.1 --depth 1 https://code.videolan.org/videolan/dav1d.git
 
+: # Increment the number in line to invalidate github CI's cache of dav1d: 1
+
 cd dav1d
 mkdir build
 cd build

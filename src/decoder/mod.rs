@@ -1261,7 +1261,7 @@ impl Decoder {
                 }
             }
         } else {
-            // Non grid path, steal planes from the only tile.
+            // Non grid path, steal or copy planes from the only tile.
             match category {
                 Category::Color => {
                     tile.image.scale(tile.width, tile.height, category)?;
@@ -1269,7 +1269,7 @@ impl Decoder {
                     self.image.height = tile.image.height;
                     self.image.depth = tile.image.depth;
                     self.image.yuv_format = tile.image.yuv_format;
-                    self.image.steal_from(&tile.image, category)?;
+                    self.image.steal_or_copy_from(&tile.image, category)?;
                 }
                 Category::Alpha => {
                     if !tile.image.full_range {
@@ -1279,14 +1279,16 @@ impl Decoder {
                     if !self.image.has_same_properties(&tile.image) {
                         return Err(AvifError::DecodeAlphaFailed);
                     }
-                    self.image.steal_from(&tile.image, category)?;
+                    self.image.steal_or_copy_from(&tile.image, category)?;
                 }
                 Category::Gainmap => {
                     self.gainmap.image.width = tile.image.width;
                     self.gainmap.image.height = tile.image.height;
                     self.gainmap.image.depth = tile.image.depth;
                     self.gainmap.image.yuv_format = tile.image.yuv_format;
-                    self.gainmap.image.steal_from(&tile.image, category)?;
+                    self.gainmap
+                        .image
+                        .steal_or_copy_from(&tile.image, category)?;
                     self.gainmap
                         .image
                         .scale(tile.width, tile.height, category)?;
