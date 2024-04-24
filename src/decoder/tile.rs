@@ -23,10 +23,9 @@ impl DecodeSample {
             Some(x) => {
                 let start_offset = usize_from_u64(self.offset)?;
                 let end_offset = start_offset + size;
-                if end_offset > x.len() {
-                    return Err(AvifError::TruncatedData);
-                }
-                Ok(&x[start_offset..end_offset])
+                let range = start_offset..end_offset;
+                check_slice_range(x.len(), &range)?;
+                Ok(&x[range])
             }
             None => {
                 let data = io.read(self.offset, size)?;

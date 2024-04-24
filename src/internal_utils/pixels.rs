@@ -124,7 +124,9 @@ impl Pixels {
             Pixels::Pointer16(_) => Err(AvifError::NoContent),
             Pixels::Buffer(buffer) => {
                 let end = offset.checked_add(size).ok_or(AvifError::NoContent)?;
-                Ok(&buffer[offset..end])
+                let range = offset..end;
+                check_slice_range(buffer.len(), &range)?;
+                Ok(&buffer[range])
             }
             Pixels::Buffer16(_) => Err(AvifError::NoContent),
         }
@@ -141,7 +143,9 @@ impl Pixels {
             Pixels::Pointer16(_) => Err(AvifError::NoContent),
             Pixels::Buffer(buffer) => {
                 let end = offset.checked_add(size).ok_or(AvifError::NoContent)?;
-                Ok(&mut buffer[offset..end])
+                let range = offset..end;
+                check_slice_range(buffer.len(), &range)?;
+                Ok(&mut buffer[range])
             }
             Pixels::Buffer16(_) => Err(AvifError::NoContent),
         }
@@ -160,7 +164,9 @@ impl Pixels {
             Pixels::Buffer(_) => Err(AvifError::NoContent),
             Pixels::Buffer16(buffer) => {
                 let end = offset.checked_add(size).ok_or(AvifError::NoContent)?;
-                Ok(&buffer[offset..end])
+                let range = offset..end;
+                check_slice_range(buffer.len(), &range)?;
+                Ok(&buffer[range])
             }
         }
     }
@@ -178,7 +184,9 @@ impl Pixels {
             Pixels::Buffer(_) => Err(AvifError::NoContent),
             Pixels::Buffer16(buffer) => {
                 let end = offset.checked_add(size).ok_or(AvifError::NoContent)?;
-                Ok(&mut buffer[offset..end])
+                let range = offset..end;
+                check_slice_range(buffer.len(), &range)?;
+                Ok(&mut buffer[range])
             }
         }
     }

@@ -5,6 +5,8 @@ pub mod stream;
 use crate::parser::mp4box::*;
 use crate::*;
 
+use std::ops::Range;
+
 // Some HEIF fractional fields can be negative, hence Fraction and UFraction.
 // The denominator is always unsigned.
 #[derive(Clone, Copy, Debug, Default)]
@@ -232,4 +234,11 @@ pub fn assert_eq_f32_array(a: &[f32], b: &[f32]) {
     for i in 0..a.len() {
         assert!((a[i] - b[i]).abs() <= std::f32::EPSILON);
     }
+}
+
+pub fn check_slice_range(len: usize, range: &Range<usize>) -> AvifResult<()> {
+    if range.start >= len || range.end > len {
+        return Err(AvifError::NoContent);
+    }
+    Ok(())
 }
