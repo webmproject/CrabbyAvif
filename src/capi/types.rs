@@ -223,6 +223,41 @@ impl Default for avifDiagnostics {
     }
 }
 
+impl avifDiagnostics {
+    pub fn set_from_result<T>(&mut self, res: &AvifResult<T>) {
+        match res {
+            Ok(_) => self.set_error_empty(),
+            Err(AvifError::BmffParseFailed(s))
+            | Err(AvifError::UnknownError(s))
+            | Err(AvifError::InvalidImageGrid(s))
+            | Err(AvifError::InvalidToneMappedImage(s)) => self.set_error_string(s),
+            _ => self.set_error_empty(),
+        }
+    }
+
+    fn set_error_string(&mut self, error: &String) {
+        if let Ok(s) = std::ffi::CString::new(error.clone()) {
+            let len = std::cmp::min(
+                s.as_bytes_with_nul().len(),
+                AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE,
+            );
+            self.error
+                .get_mut(..len)
+                .unwrap()
+                .iter_mut()
+                .zip(&s.as_bytes_with_nul()[..len])
+                .for_each(|(dst, src)| *dst = *src as c_char);
+            self.error[AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE - 1] = 0;
+        } else {
+            self.set_error_empty();
+        }
+    }
+
+    pub fn set_error_empty(&mut self) {
+        self.error[0] = 0;
+    }
+}
+
 #[repr(C)]
 pub enum avifCodecChoice {
     Auto = 0,

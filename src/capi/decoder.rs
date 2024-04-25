@@ -218,6 +218,7 @@ pub unsafe extern "C" fn crabby_avifDecoderParse(decoder: *mut avifDecoder) -> a
         rust_decoder.settings = (&(*decoder)).into();
 
         let res = rust_decoder.parse();
+        (*decoder).diag.set_from_result(&res);
         if res.is_err() {
             return to_avifResult(&res);
         }
@@ -235,6 +236,7 @@ pub unsafe extern "C" fn crabby_avifDecoderNextImage(decoder: *mut avifDecoder) 
         let previous_decoded_row_count = rust_decoder.decoded_row_count();
 
         let res = rust_decoder.next_image();
+        (*decoder).diag.set_from_result(&res);
         let mut early_return = false;
         if res.is_err() {
             early_return = true;
@@ -269,6 +271,7 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImage(
         let image_index = (rust_decoder.image_index() + 1) as u32;
 
         let res = rust_decoder.nth_image(frameIndex);
+        (*decoder).diag.set_from_result(&res);
         let mut early_return = false;
         if res.is_err() {
             early_return = true;
