@@ -198,7 +198,7 @@ impl Decoder for Dav1d {
                 };
                 let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
                 image.full_range = seq_hdr.color_range != 0;
-                image.chroma_sample_position = seq_hdr.chr.into();
+                image.chroma_sample_position = (seq_hdr.chr as u32).into();
 
                 image.color_primaries = (seq_hdr.pri as u16).into();
                 image.transfer_characteristics = (seq_hdr.trc as u16).into();
