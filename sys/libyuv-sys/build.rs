@@ -32,7 +32,11 @@ fn main() {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let abs_library_dir = PathBuf::from(&project_root).join("libyuv");
     let abs_object_dir = PathBuf::from(&abs_library_dir).join(build_dir);
-    let library_file = PathBuf::from(&abs_object_dir).join("libyuv.a");
+    let library_file = PathBuf::from(&abs_object_dir).join(if cfg!(target_os = "windows") {
+        "yuv.lib"
+    } else {
+        "libyuv.a"
+    });
     let extra_includes_str;
     if Path::new(&library_file).exists() {
         println!("cargo:rustc-link-lib=static=yuv");
