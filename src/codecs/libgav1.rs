@@ -137,7 +137,8 @@ impl Decoder for Libgav1 {
                     };
                     image.full_range =
                         gav1_image.color_range != Libgav1ColorRange_kLibgav1ColorRangeStudio;
-                    image.chroma_sample_position = gav1_image.chroma_sample_position.into();
+                    image.chroma_sample_position =
+                        (gav1_image.chroma_sample_position as u32).into();
 
                     image.color_primaries = (gav1_image.color_primary as u16).into();
                     image.transfer_characteristics =

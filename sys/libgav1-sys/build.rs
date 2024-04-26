@@ -32,12 +32,17 @@ fn main() {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let abs_library_dir = PathBuf::from(&project_root).join("libgav1");
     let abs_object_dir = PathBuf::from(&abs_library_dir).join(build_dir);
-    let library_file = PathBuf::from(&abs_object_dir).join("libgav1.a");
+    let library_file = PathBuf::from(&abs_object_dir).join(if cfg!(target_os = "windows") {
+        "libgav1.lib"
+    } else {
+        "libgav1.a"
+    });
     if !Path::new(&library_file).exists() {
         panic!("libgav1 not found. Run libgav1.cmd.");
     }
     println!("cargo:rustc-link-search={}", abs_object_dir.display());
-    println!("cargo:rustc-link-lib=static=gav1");
+    let library_name = if cfg!(target_os = "windows") { "libgav1" } else { "gav1" };
+    println!("cargo:rustc-link-lib=static={library_name}");
 
     // Generate bindings.
     let header_file = PathBuf::from(&abs_library_dir).join(path_buf(&["src", "gav1", "decoder.h"]));

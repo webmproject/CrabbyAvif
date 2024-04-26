@@ -77,12 +77,11 @@ jobs:
         ctest --test-dir c_build -E conformance_tests
 
     - name: Build libgav1
-      if: steps.cache-ext.outputs.cache-hit != 'true' && runner.os != 'Windows'
+      if: steps.cache-ext.outputs.cache-hit != 'true'
       working-directory: ./sys/libgav1-sys
-      run: bash -e libgav1.cmd
+      run: ./libgav1.cmd
 
     - name: Build and run the Rust tests with libgav1
-      if: runner.os != 'Windows'
       run: cargo test --no-default-features --features libgav1,libyuv -- --skip test_conformance
 
     - name: Build and run the C++ tests with libgav1
