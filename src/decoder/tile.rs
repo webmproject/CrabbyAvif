@@ -313,11 +313,15 @@ impl Tile {
             }
         }
         for sync_sample_number in &sample_table.sync_samples {
+            let index = usize_from_u32(*sync_sample_number)?;
             // sample_table.sync_samples is 1-based.
-            let index: usize = (*sync_sample_number - 1) as usize;
-            if index < tile.input.samples.len() {
-                tile.input.samples[index].sync = true;
+            if index == 0 || index > tile.input.samples.len() {
+                return Err(AvifError::BmffParseFailed(format!(
+                    "invalid sync sample number {}",
+                    index
+                )));
             }
+            tile.input.samples[index - 1].sync = true;
         }
         Ok(tile)
     }
