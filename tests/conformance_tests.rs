@@ -16,7 +16,7 @@ use tempfile::NamedTempFile;
 fn get_test_file(filename: &str) -> String {
     let base_path = if cfg!(google3) {
         format!(
-            "{}/google3/third_party/crabbyavif/google3/test_data/av1-avif",
+            "{}/google3/third_party/crabbyavif/google/test_data/av1-avif",
             env::var("TEST_SRCDIR").expect("TEST_SRCDIR is not defined")
         )
     } else {
