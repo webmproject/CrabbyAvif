@@ -1223,6 +1223,10 @@ impl Decoder {
                     }
                 }
             }
+            if category == Category::Alpha && !tile.image.full_range {
+                tile.image.alpha_to_full_range()?;
+            }
+            tile.image.scale(tile.width, tile.height, category)?;
             if !tiles_slice1.is_empty() {
                 let first_tile_image = &tiles_slice1[0].image;
                 if tile.image.width != first_tile_image.width
@@ -1240,10 +1244,6 @@ impl Decoder {
                     ));
                 }
             }
-            if category == Category::Alpha && !tile.image.full_range {
-                tile.image.alpha_to_full_range()?;
-            }
-            tile.image.scale(tile.width, tile.height, category)?;
             match category {
                 Category::Gainmap => self.gainmap.image.copy_from_tile(
                     &tile.image,
