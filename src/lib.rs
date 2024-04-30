@@ -125,7 +125,7 @@ impl From<u16> for ColorPrimaries {
             11 => Self::Smpte431,
             12 => Self::Smpte432,
             22 => Self::Ebu3213,
-            _ => Self::Unknown,
+            _ => Self::default(),
         }
     }
 }
@@ -184,7 +184,7 @@ impl From<u16> for TransferCharacteristics {
             16 => Self::Pq,
             17 => Self::Smpte428,
             18 => Self::Hlg,
-            _ => Self::Unknown,
+            _ => Self::default(),
         }
     }
 }
