@@ -200,6 +200,9 @@ fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
         RepetitionCount::Infinite => AVIF_REPETITION_COUNT_INFINITE,
         RepetitionCount::Finite(x) => x,
     };
+    dst.timescale = src.timescale();
+    dst.durationInTimescales = src.duration_in_timescales();
+    dst.duration = src.duration();
 
     if src.gainmap_present() {
         dst.gainMapPresent = AVIF_TRUE;
