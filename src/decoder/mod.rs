@@ -669,6 +669,7 @@ impl Decoder {
         self.gainmap = decoder.gainmap;
         self.gainmap_present = decoder.gainmap_present;
         self.image = decoder.image;
+        self.image.full_range = true;
         self.tile_info = decoder.tile_info;
         self.tiles = decoder.tiles;
         self.image_index = decoder.image_index;
