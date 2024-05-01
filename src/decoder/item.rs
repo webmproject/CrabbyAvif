@@ -332,11 +332,11 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
         );
     }
     for iloc in &meta.iloc.items {
-        let item = items
-            .get_mut(&iloc.item_id)
-            .ok_or(AvifError::BmffParseFailed(
-                "iloc entry has no corresponding iinf entry".into(),
-            ))?;
+        let item = items.get_mut(&iloc.item_id);
+        if item.is_none() {
+            continue;
+        }
+        let item = item.unwrap();
         if !item.extents.is_empty() {
             return Err(AvifError::BmffParseFailed(
                 "item already has extents".into(),
