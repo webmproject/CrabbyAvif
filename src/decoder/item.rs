@@ -343,7 +343,7 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
             ));
         }
         if iloc.construction_method == 1 {
-            item.idat = meta.idat.clone();
+            item.idat.clone_from(&meta.idat);
         }
         for extent in &iloc.extents {
             item.extents.push(Extent {

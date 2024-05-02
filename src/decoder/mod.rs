@@ -477,7 +477,7 @@ impl Decoder {
             self.gainmap.alt_full_range = nclx.full_range;
         }
         if let Some(icc) = find_icc(&tonemap_item.properties)? {
-            self.gainmap.alt_icc = icc.clone();
+            self.gainmap.alt_icc.clone_from(icc);
         }
         if let Some(clli) = tonemap_item.clli() {
             self.gainmap.alt_clli = *clli;
@@ -948,7 +948,7 @@ impl Decoder {
                 cicp_set = true;
             }
             if let Some(icc) = find_icc(color_properties)? {
-                self.image.icc = icc.clone();
+                self.image.icc.clone_from(icc);
             }
 
             macro_rules! find_property {
