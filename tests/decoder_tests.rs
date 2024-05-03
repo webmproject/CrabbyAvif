@@ -77,7 +77,7 @@ fn animated_image_with_source_set_to_primary_item() {
     // imageCount is expected to be 1 because we are using primary item as the
     // preferred source.
     assert_eq!(decoder.image_count(), 1);
-    assert_eq!(decoder.repetition_count(), RepetitionCount::Unknown);
+    assert_eq!(decoder.repetition_count(), RepetitionCount::Finite(0));
     if !HAS_DECODER {
         return;
     }

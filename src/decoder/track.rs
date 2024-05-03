@@ -3,12 +3,17 @@ use crate::parser::mp4box::ItemProperty;
 use crate::parser::mp4box::MetaBox;
 use crate::*;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RepetitionCount {
-    #[default]
     Unknown,
     Infinite,
     Finite(i32),
+}
+
+impl Default for RepetitionCount {
+    fn default() -> Self {
+        Self::Finite(0)
+    }
 }
 
 #[derive(Debug, Default)]
