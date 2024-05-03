@@ -1,6 +1,7 @@
 use crate::codecs::Decoder;
 use crate::decoder::Category;
 use crate::image::Image;
+use crate::image::YuvRange;
 use crate::internal_utils::pixels::*;
 use crate::*;
 
@@ -118,8 +119,12 @@ impl Decoder for Libgav1 {
                     ));
                     image.row_bytes[3] = gav1_image.stride[0] as u32;
                     image.image_owns_planes[3] = false;
-                    image.full_range =
-                        gav1_image.color_range != Libgav1ColorRange_kLibgav1ColorRangeStudio;
+                    image.yuv_range =
+                        if gav1_image.color_range == Libgav1ColorRange_kLibgav1ColorRangeStudio {
+                            YuvRange::Limited
+                        } else {
+                            YuvRange::Full
+                        };
                 }
                 _ => {
                     image.width = gav1_image.displayed_width[0] as u32;
@@ -135,8 +140,12 @@ impl Decoder for Libgav1 {
                         Libgav1ImageFormat_kLibgav1ImageFormatYuv444 => PixelFormat::Yuv444,
                         _ => PixelFormat::Yuv420, // not reached.
                     };
-                    image.full_range =
-                        gav1_image.color_range != Libgav1ColorRange_kLibgav1ColorRangeStudio;
+                    image.yuv_range =
+                        if gav1_image.color_range == Libgav1ColorRange_kLibgav1ColorRangeStudio {
+                            YuvRange::Limited
+                        } else {
+                            YuvRange::Full
+                        };
                     image.chroma_sample_position =
                         (gav1_image.chroma_sample_position as u32).into();
 

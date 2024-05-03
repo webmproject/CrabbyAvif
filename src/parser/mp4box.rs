@@ -2,6 +2,7 @@ use crate::decoder::gainmap::GainMapMetadata;
 use crate::decoder::track::*;
 use crate::decoder::Extent;
 use crate::decoder::GenericIO;
+use crate::image::YuvRange;
 use crate::image::MAX_PLANE_COUNT;
 use crate::internal_utils::stream::*;
 use crate::internal_utils::*;
@@ -119,7 +120,7 @@ pub struct Nclx {
     pub color_primaries: ColorPrimaries,
     pub transfer_characteristics: TransferCharacteristics,
     pub matrix_coefficients: MatrixCoefficients,
-    pub full_range: bool,
+    pub yuv_range: YuvRange,
 }
 
 #[derive(Clone, Debug)]
@@ -571,7 +572,7 @@ fn parse_colr(stream: &mut IStream) -> AvifResult<ItemProperty> {
         };
         let mut bits = stream.sub_bit_stream(1)?;
         // unsigned int(1) full_range_flag;
-        nclx.full_range = bits.read_bool()?;
+        nclx.yuv_range = if bits.read_bool()? { YuvRange::Full } else { YuvRange::Limited };
         // unsigned int(7) reserved = 0;
         if bits.read(7)? != 0 {
             return Err(AvifError::BmffParseFailed(

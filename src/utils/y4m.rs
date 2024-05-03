@@ -66,8 +66,11 @@ impl Y4MWriter {
                 return false;
             }
         };
-        let y4m_color_range =
-            if image.full_range { "XCOLORRANGE=FULL" } else { "XCOLORRANGE=LIMITED" };
+        let y4m_color_range = if image.yuv_range == YuvRange::Limited {
+            "XCOLORRANGE=LIMITED"
+        } else {
+            "XCOLORRANGE=FULL"
+        };
         let header = format!(
             "YUV4MPEG2 W{} H{} F25:1 Ip A0:0 {y4m_format} {y4m_color_range}\n",
             image.width, image.height

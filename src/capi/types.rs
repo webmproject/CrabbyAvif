@@ -182,22 +182,6 @@ impl avifPixelFormat {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum avifRange {
-    Limited = 0,
-    Full = 1,
-}
-
-impl From<bool> for avifRange {
-    fn from(full_range: bool) -> Self {
-        match full_range {
-            true => Self::Full,
-            false => Self::Limited,
-        }
-    }
-}
-
 pub const AVIF_STRICT_DISABLED: u32 = 0;
 pub const AVIF_STRICT_PIXI_REQUIRED: u32 = 1 << 0;
 pub const AVIF_STRICT_CLAP_VALID: u32 = 1 << 1;

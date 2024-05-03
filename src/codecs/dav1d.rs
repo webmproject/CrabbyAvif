@@ -1,6 +1,7 @@
 use crate::codecs::Decoder;
 use crate::decoder::Category;
 use crate::image::Image;
+use crate::image::YuvRange;
 use crate::internal_utils::pixels::*;
 use crate::*;
 
@@ -182,7 +183,8 @@ impl Decoder for Dav1d {
                 image.row_bytes[3] = dav1d_picture.stride[0] as u32;
                 image.image_owns_planes[3] = false;
                 let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
-                image.full_range = seq_hdr.color_range != 0;
+                image.yuv_range =
+                    if seq_hdr.color_range == 0 { YuvRange::Limited } else { YuvRange::Full };
             }
             _ => {
                 image.width = dav1d_picture.p.w as u32;
@@ -197,7 +199,8 @@ impl Decoder for Dav1d {
                     _ => return Err(AvifError::UnknownError("".into())), // not reached.
                 };
                 let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
-                image.full_range = seq_hdr.color_range != 0;
+                image.yuv_range =
+                    if seq_hdr.color_range == 0 { YuvRange::Limited } else { YuvRange::Full };
                 image.chroma_sample_position = (seq_hdr.chr as u32).into();
 
                 image.color_primaries = (seq_hdr.pri as u16).into();

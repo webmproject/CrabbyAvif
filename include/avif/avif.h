@@ -169,6 +169,11 @@ enum avifTransferCharacteristics : uint16_t {
     AVIF_TRANSFER_CHARACTERISTICS_HLG = 18,
 };
 
+enum avifRange {
+    AVIF_RANGE_LIMITED = 0,
+    AVIF_RANGE_FULL = 1,
+};
+
 enum avifChannelIndex {
     AVIF_CHAN_Y = 0,
     AVIF_CHAN_U = 1,
@@ -209,11 +214,6 @@ enum avifPlanesFlag {
     AVIF_PLANES_YUV = (1 << 0),
     AVIF_PLANES_A = (1 << 1),
     AVIF_PLANES_ALL = 255,
-};
-
-enum avifRange {
-    AVIF_RANGE_LIMITED = 0,
-    AVIF_RANGE_FULL = 1,
 };
 
 enum avifResult {

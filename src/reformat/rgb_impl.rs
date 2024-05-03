@@ -4,6 +4,7 @@ use super::rgb::*;
 
 use crate::image::Plane;
 use crate::image::PlaneRow;
+use crate::image::YuvRange;
 use crate::internal_utils::*;
 use crate::*;
 
@@ -74,7 +75,7 @@ fn identity_yuv8_to_rgb8_full_range(image: &image::Image, rgb: &mut rgb::Image) 
 pub fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
     let mode = Mode::create_from(image)?;
     if mode == Mode::Identity {
-        if image.depth == 8 && rgb.depth == 8 && image.full_range {
+        if image.depth == 8 && rgb.depth == 8 && image.yuv_range == YuvRange::Full {
             return identity_yuv8_to_rgb8_full_range(image, rgb);
         }
         // TODO: Add more fast paths for identity.
@@ -92,12 +93,12 @@ fn unorm_lookup_tables(
     let bias_y;
     let range_y;
     // Formula specified in ISO/IEC 23091-2.
-    if image.full_range {
-        bias_y = 0.0;
-        range_y = image.max_channel_f();
-    } else {
+    if image.yuv_range == YuvRange::Limited {
         bias_y = (16 << (image.depth - 8)) as f32;
         range_y = (219 << (image.depth - 8)) as f32;
+    } else {
+        bias_y = 0.0;
+        range_y = image.max_channel_f();
     }
     for cp in 0..count {
         table_y.push(((cp as f32) - bias_y) / range_y);
@@ -107,10 +108,10 @@ fn unorm_lookup_tables(
     } else {
         // Formula specified in ISO/IEC 23091-2.
         let bias_uv = (1 << (image.depth - 1)) as f32;
-        let range_uv = if image.full_range {
-            image.max_channel_f()
-        } else {
+        let range_uv = if image.yuv_range == YuvRange::Limited {
             (224 << (image.depth - 8)) as f32
+        } else {
+            image.max_channel_f()
         };
         let mut table_uv: Vec<f32> = create_vec_exact(count)?;
         for cp in 0..count {
@@ -315,6 +316,7 @@ mod tests {
                 depth: 8,
                 yuv_format: PixelFormat::Yuv420,
                 matrix_coefficients,
+                yuv_range: YuvRange::Limited,
                 ..Default::default()
             };
             assert!(yuv.allocate_planes(decoder::Category::Color).is_ok());

@@ -1,4 +1,5 @@
 use crate::decoder::Image;
+use crate::image::YuvRange;
 use crate::internal_utils::*;
 use crate::parser::mp4box::ContentLightLevelInformation;
 use crate::*;
@@ -25,7 +26,7 @@ pub struct GainMap {
     pub alt_color_primaries: ColorPrimaries,
     pub alt_transfer_characteristics: TransferCharacteristics,
     pub alt_matrix_coefficients: MatrixCoefficients,
-    pub alt_full_range: bool,
+    pub alt_yuv_range: YuvRange,
 
     pub alt_plane_count: u8,
     pub alt_plane_depth: u8,

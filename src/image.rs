@@ -43,6 +43,15 @@ pub const YUV_PLANES: [Plane; 3] = [Plane::Y, Plane::U, Plane::V];
 pub const A_PLANE: [Plane; 1] = [Plane::A];
 pub const ALL_PLANES: [Plane; MAX_PLANE_COUNT] = [Plane::Y, Plane::U, Plane::V, Plane::A];
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+// VideoFullRangeFlag as specified in ISO/IEC 23091-2/ITU-T H.273.
+pub enum YuvRange {
+    Limited = 0,
+    #[default]
+    Full = 1,
+}
+
 #[derive(Default)]
 pub struct Image {
     pub width: u32,
@@ -50,7 +59,7 @@ pub struct Image {
     pub depth: u8,
 
     pub yuv_format: PixelFormat,
-    pub full_range: bool, // VideoFullRangeFlag as specified in ISO/IEC 23091-2/ITU-T H.273.
+    pub yuv_range: YuvRange,
     pub chroma_sample_position: ChromaSamplePosition,
 
     pub alpha_present: bool,

@@ -27,8 +27,8 @@ fn find_constants(image: &image::Image) -> Option<(&YuvConstants, &YuvConstants)
     };
     */
     unsafe {
-        match image.full_range {
-            true => match matrix_coefficients {
+        match image.yuv_range {
+            YuvRange::Full => match matrix_coefficients {
                 MatrixCoefficients::Bt709 => Some((&kYuvF709Constants, &kYvuF709Constants)),
                 MatrixCoefficients::Bt470bg
                 | MatrixCoefficients::Bt601
@@ -46,7 +46,7 @@ fn find_constants(image: &image::Image) -> Option<(&YuvConstants, &YuvConstants)
                 },
                 _ => None,
             },
-            false => match matrix_coefficients {
+            YuvRange::Limited => match matrix_coefficients {
                 MatrixCoefficients::Bt709 => Some((&kYuvH709Constants, &kYvuH709Constants)),
                 MatrixCoefficients::Bt470bg
                 | MatrixCoefficients::Bt601

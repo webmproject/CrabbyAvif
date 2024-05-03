@@ -458,7 +458,7 @@ impl Decoder {
             self.gainmap.image.color_primaries = nclx.color_primaries;
             self.gainmap.image.transfer_characteristics = nclx.transfer_characteristics;
             self.gainmap.image.matrix_coefficients = nclx.matrix_coefficients;
-            self.gainmap.image.full_range = nclx.full_range;
+            self.gainmap.image.yuv_range = nclx.yuv_range;
         }
         if tonemap_id == 0 {
             return Ok(());
@@ -474,7 +474,7 @@ impl Decoder {
             self.gainmap.alt_color_primaries = nclx.color_primaries;
             self.gainmap.alt_transfer_characteristics = nclx.transfer_characteristics;
             self.gainmap.alt_matrix_coefficients = nclx.matrix_coefficients;
-            self.gainmap.alt_full_range = nclx.full_range;
+            self.gainmap.alt_yuv_range = nclx.yuv_range;
         }
         if let Some(icc) = find_icc(&tonemap_item.properties)? {
             self.gainmap.alt_icc.clone_from(icc);
@@ -593,7 +593,7 @@ impl Decoder {
                 self.image.color_primaries = sequence_header.color_primaries;
                 self.image.transfer_characteristics = sequence_header.transfer_characteristics;
                 self.image.matrix_coefficients = sequence_header.matrix_coefficients;
-                self.image.full_range = sequence_header.full_range;
+                self.image.yuv_range = sequence_header.yuv_range;
                 break;
             }
             search_size += 64;
@@ -669,7 +669,6 @@ impl Decoder {
         self.gainmap = decoder.gainmap;
         self.gainmap_present = decoder.gainmap_present;
         self.image = decoder.image;
-        self.image.full_range = true;
         self.tile_info = decoder.tile_info;
         self.tiles = decoder.tiles;
         self.image_index = decoder.image_index;
@@ -945,7 +944,7 @@ impl Decoder {
                 self.image.color_primaries = nclx.color_primaries;
                 self.image.transfer_characteristics = nclx.transfer_characteristics;
                 self.image.matrix_coefficients = nclx.matrix_coefficients;
-                self.image.full_range = nclx.full_range;
+                self.image.yuv_range = nclx.yuv_range;
                 cicp_set = true;
             }
             if let Some(icc) = find_icc(color_properties)? {
@@ -1225,7 +1224,7 @@ impl Decoder {
                     }
                 }
             }
-            if category == Category::Alpha && !tile.image.full_range {
+            if category == Category::Alpha && tile.image.yuv_range == YuvRange::Limited {
                 tile.image.alpha_to_full_range()?;
             }
             tile.image.scale(tile.width, tile.height, category)?;
@@ -1235,7 +1234,7 @@ impl Decoder {
                     || tile.image.height != first_tile_image.height
                     || tile.image.depth != first_tile_image.depth
                     || tile.image.yuv_format != first_tile_image.yuv_format
-                    || tile.image.full_range != first_tile_image.full_range
+                    || tile.image.yuv_range != first_tile_image.yuv_range
                     || tile.image.color_primaries != first_tile_image.color_primaries
                     || tile.image.transfer_characteristics
                         != first_tile_image.transfer_characteristics
@@ -1274,7 +1273,7 @@ impl Decoder {
                     self.image.steal_or_copy_from(&tile.image, category)?;
                 }
                 Category::Alpha => {
-                    if !tile.image.full_range {
+                    if tile.image.yuv_range == YuvRange::Limited {
                         tile.image.alpha_to_full_range()?;
                     }
                     tile.image.scale(tile.width, tile.height, category)?;

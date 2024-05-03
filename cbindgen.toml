@@ -30,6 +30,7 @@ struct avifIO;
 "MatrixCoefficients" = "avifMatrixCoefficients"
 "ProgressiveState" = "avifProgressiveState"
 "Source" = "avifDecoderSource"
+"YuvRange" = "avifRange"
 "TransferCharacteristics" = "avifTransferCharacteristics"
 "AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE" = "CRABBY_AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE"
 "AVIF_FALSE" = "CRABBY_AVIF_FALSE"

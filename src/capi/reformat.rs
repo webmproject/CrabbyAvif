@@ -83,7 +83,7 @@ impl From<*const avifImage> for image::Image {
             height: image.height,
             depth: image.depth as u8,
             yuv_format: image.yuvFormat.into(),
-            full_range: image.yuvRange == avifRange::Full,
+            yuv_range: image.yuvRange,
             alpha_present: !image.alphaPlane.is_null(),
             alpha_premultiplied: image.alphaPremultiplied == AVIF_TRUE,
             planes: [

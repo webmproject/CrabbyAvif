@@ -375,6 +375,7 @@ mod tests {
     use super::*;
 
     use crate::decoder::Category;
+    use crate::image::YuvRange;
     use crate::image::ALL_PLANES;
     use crate::image::MAX_PLANE_COUNT;
 
@@ -388,7 +389,7 @@ mod tests {
         height: u32,
         depth: u8,
         format: PixelFormat,
-        full_range: bool,
+        yuv_range: YuvRange,
         color_primaries: ColorPrimaries,
         matrix_coefficients: MatrixCoefficients,
         planes: [[&'static [u16]; HEIGHT]; MAX_PLANE_COUNT],
@@ -399,7 +400,7 @@ mod tests {
         height: HEIGHT as u32,
         depth: 12,
         format: PixelFormat::Yuv420,
-        full_range: false,
+        yuv_range: YuvRange::Limited,
         color_primaries: ColorPrimaries::Srgb,
         matrix_coefficients: MatrixCoefficients::Bt709,
         planes: [
@@ -483,7 +484,7 @@ mod tests {
             yuv_format: yuv_params.format,
             color_primaries: yuv_params.color_primaries,
             matrix_coefficients: yuv_params.matrix_coefficients,
-            full_range: yuv_params.full_range,
+            yuv_range: yuv_params.yuv_range,
             ..image::Image::default()
         };
         image.allocate_planes(Category::Color)?;

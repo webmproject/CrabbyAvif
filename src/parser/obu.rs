@@ -1,3 +1,4 @@
+use crate::image::YuvRange;
 use crate::internal_utils::stream::*;
 use crate::internal_utils::*;
 use crate::parser::mp4box::CodecConfiguration;
@@ -21,7 +22,7 @@ pub struct Av1SequenceHeader {
     pub color_primaries: ColorPrimaries,
     pub transfer_characteristics: TransferCharacteristics,
     pub matrix_coefficients: MatrixCoefficients,
-    pub full_range: bool,
+    pub yuv_range: YuvRange,
     config: CodecConfiguration,
 }
 
@@ -191,7 +192,7 @@ impl Av1SequenceHeader {
         }
         if self.config.monochrome {
             let color_range = bits.read_bool()?;
-            self.full_range = color_range;
+            self.yuv_range = if color_range { YuvRange::Full } else { YuvRange::Limited };
             self.config.chroma_subsampling_x = 1;
             self.config.chroma_subsampling_y = 1;
             self.yuv_format = PixelFormat::Monochrome;
@@ -199,11 +200,11 @@ impl Av1SequenceHeader {
             && self.transfer_characteristics == TransferCharacteristics::Srgb
             && self.matrix_coefficients == MatrixCoefficients::Identity
         {
-            self.full_range = true;
+            self.yuv_range = YuvRange::Full;
             self.yuv_format = PixelFormat::Yuv444;
         } else {
             let color_range = bits.read_bool()?;
-            self.full_range = color_range;
+            self.yuv_range = if color_range { YuvRange::Full } else { YuvRange::Limited };
             match self.config.seq_profile {
                 0 => {
                     self.config.chroma_subsampling_x = 1;

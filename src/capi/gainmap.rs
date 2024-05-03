@@ -3,6 +3,7 @@ use super::io::*;
 use super::types::*;
 
 use crate::decoder::gainmap::*;
+use crate::image::YuvRange;
 use crate::parser::mp4box::*;
 use crate::*;
 
@@ -69,7 +70,7 @@ pub struct avifGainMap {
     pub altColorPrimaries: ColorPrimaries,
     pub altTransferCharacteristics: TransferCharacteristics,
     pub altMatrixCoefficients: MatrixCoefficients,
-    pub altYUVRange: avifRange,
+    pub altYUVRange: YuvRange,
     pub altDepth: u32,
     pub altPlaneCount: u32,
     pub altCLLI: avifContentLightLevelInformationBox,
@@ -84,7 +85,7 @@ impl Default for avifGainMap {
             altColorPrimaries: ColorPrimaries::default(),
             altTransferCharacteristics: TransferCharacteristics::default(),
             altMatrixCoefficients: MatrixCoefficients::default(),
-            altYUVRange: avifRange::Full,
+            altYUVRange: YuvRange::Full,
             altDepth: 0,
             altPlaneCount: 0,
             altCLLI: Default::default(),
@@ -100,7 +101,7 @@ impl From<&GainMap> for avifGainMap {
             altColorPrimaries: gainmap.alt_color_primaries,
             altTransferCharacteristics: gainmap.alt_transfer_characteristics,
             altMatrixCoefficients: gainmap.alt_matrix_coefficients,
-            altYUVRange: gainmap.alt_full_range.into(),
+            altYUVRange: gainmap.alt_yuv_range.into(),
             altDepth: u32::from(gainmap.alt_plane_depth),
             altPlaneCount: u32::from(gainmap.alt_plane_count),
             altCLLI: gainmap.alt_clli,
