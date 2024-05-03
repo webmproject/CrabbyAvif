@@ -406,11 +406,11 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
     }
 
     for reference in &meta.iref {
-        let item = items
-            .get_mut(&reference.from_item_id)
-            .ok_or(AvifError::BmffParseFailed(
-                "iref from_item_id has no corresponding iinf entry".into(),
-            ))?;
+        let item = items.get_mut(&reference.from_item_id);
+        if item.is_none() {
+            continue;
+        }
+        let item = item.unwrap();
         match reference.reference_type.as_str() {
             "thmb" => item.thumbnail_for_id = reference.to_item_id,
             "auxl" => item.aux_for_id = reference.to_item_id,
@@ -418,14 +418,10 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
             "prem" => item.prem_by_id = reference.to_item_id,
             "dimg" => {
                 // derived images refer in the opposite direction.
-                let dimg_item =
-                    items
-                        .get_mut(&reference.to_item_id)
-                        .ok_or(AvifError::BmffParseFailed(
-                            "iref to_item_id has no corresponding iinf entry".into(),
-                        ))?;
-                dimg_item.dimg_for_id = reference.from_item_id;
-                dimg_item.dimg_index = reference.index;
+                if let Some(dimg_item) = items.get_mut(&reference.to_item_id) {
+                    dimg_item.dimg_for_id = reference.from_item_id;
+                    dimg_item.dimg_index = reference.index;
+                }
             }
             _ => {
                 // unknown reference type, ignore.
