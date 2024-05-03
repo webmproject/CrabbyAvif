@@ -846,6 +846,7 @@ impl Decoder {
                 self.image_index = -1;
                 self.image_count = 1;
                 self.timescale = 1;
+                self.duration = 1.0;
                 self.duration_in_timescales = 1;
                 self.image_timing.timescale = 1;
                 self.image_timing.duration = 1.0;
