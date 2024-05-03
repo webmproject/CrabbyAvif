@@ -70,7 +70,9 @@ pub enum ChromaSamplePosition {
     Unknown = 0, // Corresponds to AV1's CSP_UNKNOWN.
     Vertical = 1,  // Corresponds to AV1's CSP_VERTICAL (MPEG-2, also called "left").
     Colocated = 2, // Corresponds to AV1's CSP_COLOCATED (BT.2020, also called "top-left").
+    Reserved = 3,  // Corresponds to AV1's CSP_RESERVED.
 }
+
 impl ChromaSamplePosition {
     // The AV1 Specification (Version 1.0.0 with Errata 1) does not have a CSP_CENTER value
     // for chroma_sample_position, so we are forced to signal CSP_UNKNOWN in the AV1 bitstream
@@ -84,6 +86,7 @@ impl From<u32> for ChromaSamplePosition {
             0 => Self::Unknown,
             1 => Self::Vertical,
             2 => Self::Colocated,
+            3 => Self::Reserved,
             _ => Self::Unknown,
         }
     }
