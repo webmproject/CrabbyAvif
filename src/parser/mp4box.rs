@@ -1351,12 +1351,33 @@ fn parse_stbl(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         ));
     }
     let mut sample_table = SampleTable::default();
+    let mut boxes_seen: HashSet<String> = HashSet::with_hasher(NonRandomHasherState);
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
+        if boxes_seen.contains(&header.box_type) {
+            return Err(AvifError::BmffParseFailed(format!(
+                "duplicate box in stbl: {}",
+                header.box_type
+            )));
+        }
         let mut sub_stream = stream.sub_stream(header.size)?;
         match header.box_type.as_str() {
-            "stco" => parse_stco(&mut sub_stream, &mut sample_table, false)?,
-            "co64" => parse_stco(&mut sub_stream, &mut sample_table, true)?,
+            "stco" => {
+                if boxes_seen.contains("co64") {
+                    return Err(AvifError::BmffParseFailed(
+                        "exactly one of co64 or stco is allowed in stbl".into(),
+                    ));
+                }
+                parse_stco(&mut sub_stream, &mut sample_table, false)?;
+            }
+            "co64" => {
+                if boxes_seen.contains("stco") {
+                    return Err(AvifError::BmffParseFailed(
+                        "exactly one of co64 or stco is allowed in stbl".into(),
+                    ));
+                }
+                parse_stco(&mut sub_stream, &mut sample_table, true)?;
+            }
             "stsc" => parse_stsc(&mut sub_stream, &mut sample_table)?,
             "stsz" => parse_stsz(&mut sub_stream, &mut sample_table)?,
             "stss" => parse_stss(&mut sub_stream, &mut sample_table)?,
@@ -1364,6 +1385,7 @@ fn parse_stbl(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
             "stsd" => parse_stsd(&mut sub_stream, &mut sample_table)?,
             _ => {}
         }
+        boxes_seen.insert(header.box_type.clone());
     }
     track.sample_table = Some(sample_table);
     Ok(())
