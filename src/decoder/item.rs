@@ -368,9 +368,11 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
         }
         ipma_seen.insert(association.item_id);
 
-        let item = items
-            .get_mut(&association.item_id)
-            .ok_or(AvifError::BmffParseFailed("".into()))?;
+        let item = items.get_mut(&association.item_id);
+        if item.is_none() {
+            continue;
+        }
+        let item = item.unwrap();
         for (property_index_ref, essential_ref) in &association.associations {
             let property_index: usize = *property_index_ref as usize;
             let essential = *essential_ref;
