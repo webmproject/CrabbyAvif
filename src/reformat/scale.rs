@@ -120,7 +120,7 @@ mod tests {
     use crate::internal_utils::pixels::Pixels;
     use test_case::test_matrix;
 
-    #[test_matrix([PixelFormat::Yuv444, PixelFormat::Yuv422, PixelFormat::Yuv420, PixelFormat::Monochrome], [false, true])]
+    #[test_matrix([PixelFormat::Yuv444, PixelFormat::Yuv422, PixelFormat::Yuv420, PixelFormat::Yuv400], [false, true])]
     fn scale_pointer(yuv_format: PixelFormat, use_alpha: bool) {
         let mut yuv = image::Image {
             width: 2,
@@ -131,8 +131,8 @@ mod tests {
         };
 
         let planes: &[Plane] = match (yuv_format, use_alpha) {
-            (PixelFormat::Monochrome, false) => &[Plane::Y],
-            (PixelFormat::Monochrome, true) => &[Plane::Y, Plane::A],
+            (PixelFormat::Yuv400, false) => &[Plane::Y],
+            (PixelFormat::Yuv400, true) => &[Plane::Y, Plane::A],
             (_, false) => &YUV_PLANES,
             (_, true) => &ALL_PLANES,
         };
@@ -188,7 +188,7 @@ mod tests {
             width: 2,
             height: 2,
             depth: 8,
-            yuv_format: PixelFormat::Monochrome,
+            yuv_format: PixelFormat::Yuv400,
             ..Default::default()
         };
 

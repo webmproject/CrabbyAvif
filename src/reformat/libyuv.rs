@@ -11,7 +11,7 @@ use libyuv_sys::bindings::*;
 use std::os::raw::c_int;
 
 fn find_constants(image: &image::Image) -> Option<(&YuvConstants, &YuvConstants)> {
-    let matrix_coefficients = if image.yuv_format == PixelFormat::Monochrome
+    let matrix_coefficients = if image.yuv_format == PixelFormat::Yuv400
         && image.matrix_coefficients == MatrixCoefficients::Identity
     {
         MatrixCoefficients::Bt601
@@ -210,7 +210,7 @@ fn find_conversion_function(
         // The fall through here is intentional. If a high bitdepth function was not found, try to
         // see if we can use a low bitdepth function with a downshift.
         //
-        (_, _, Format::Rgba | Format::Bgra, PixelFormat::Monochrome) => {
+        (_, _, Format::Rgba | Format::Bgra, PixelFormat::Yuv400) => {
             Some(ConversionFunction::YUV400ToRGBMatrix(I400ToARGBMatrix))
         }
 

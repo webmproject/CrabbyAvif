@@ -192,7 +192,7 @@ impl Decoder for Dav1d {
                 image.depth = dav1d_picture.p.bpc as u8;
 
                 image.yuv_format = match dav1d_picture.p.layout {
-                    0 => PixelFormat::Monochrome,
+                    0 => PixelFormat::Yuv400,
                     1 => PixelFormat::Yuv420,
                     2 => PixelFormat::Yuv422,
                     3 => PixelFormat::Yuv444,

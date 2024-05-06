@@ -132,9 +132,7 @@ impl Decoder for Libgav1 {
                     image.depth = gav1_image.bitdepth as u8;
 
                     image.yuv_format = match gav1_image.image_format {
-                        Libgav1ImageFormat_kLibgav1ImageFormatMonochrome400 => {
-                            PixelFormat::Monochrome
-                        }
+                        Libgav1ImageFormat_kLibgav1ImageFormatMonochrome400 => PixelFormat::Yuv400,
                         Libgav1ImageFormat_kLibgav1ImageFormatYuv420 => PixelFormat::Yuv420,
                         Libgav1ImageFormat_kLibgav1ImageFormatYuv422 => PixelFormat::Yuv422,
                         Libgav1ImageFormat_kLibgav1ImageFormatYuv444 => PixelFormat::Yuv444,

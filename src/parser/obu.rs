@@ -195,7 +195,7 @@ impl Av1SequenceHeader {
             self.yuv_range = if color_range { YuvRange::Full } else { YuvRange::Limited };
             self.config.chroma_subsampling_x = 1;
             self.config.chroma_subsampling_y = 1;
-            self.yuv_format = PixelFormat::Monochrome;
+            self.yuv_format = PixelFormat::Yuv400;
         } else if self.color_primaries == ColorPrimaries::Bt709
             && self.transfer_characteristics == TransferCharacteristics::Srgb
             && self.matrix_coefficients == MatrixCoefficients::Identity

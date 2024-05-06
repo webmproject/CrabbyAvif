@@ -28,20 +28,28 @@ impl std::hash::BuildHasher for NonRandomHasherState {
 pub type HashMap<K, V> = std::collections::HashMap<K, V, NonRandomHasherState>;
 pub type HashSet<K> = std::collections::HashSet<K, NonRandomHasherState>;
 
-// See https://aomediacodec.github.io/av1-spec/#color-config-semantics.
+/// cbindgen:enum-trailing-values=[Count]
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+// See https://aomediacodec.github.io/av1-spec/#color-config-semantics.
 pub enum PixelFormat {
-    Yuv444,
-    Yuv422,
     #[default]
-    Yuv420, // Also used for alpha items when 4:0:0 is not supported by the codec.
-    Monochrome, // 4:0:0
+    None = 0,
+    Yuv444 = 1,
+    Yuv422 = 2,
+    Yuv420 = 3, // Also used for alpha items when 4:0:0 is not supported by the codec.
+    Yuv400 = 4,
 }
 
 impl PixelFormat {
+    pub fn is_monochrome(&self) -> bool {
+        *self == Self::Yuv400
+    }
+
     pub fn plane_count(&self) -> usize {
         match self {
-            PixelFormat::Monochrome => 1,
+            PixelFormat::None => 0,
+            PixelFormat::Yuv400 => 1,
             PixelFormat::Yuv420 | PixelFormat::Yuv422 | PixelFormat::Yuv444 => 3,
         }
     }

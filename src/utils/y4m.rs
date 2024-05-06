@@ -38,6 +38,7 @@ impl Y4MWriter {
 
         let y4m_format = match image.depth {
             8 => match image.yuv_format {
+                PixelFormat::None => "",
                 PixelFormat::Yuv444 => {
                     if image.alpha_present {
                         self.write_alpha = true;
@@ -48,19 +49,21 @@ impl Y4MWriter {
                 }
                 PixelFormat::Yuv422 => "C422 XYSCSS=422",
                 PixelFormat::Yuv420 => "C420jpeg XYSCSS=420JPEG",
-                PixelFormat::Monochrome => "Cmono XYSCSS=400",
+                PixelFormat::Yuv400 => "Cmono XYSCSS=400",
             },
             10 => match image.yuv_format {
+                PixelFormat::None => "",
                 PixelFormat::Yuv444 => "C444p10 XYSCSS=444P10",
                 PixelFormat::Yuv422 => "C422p10 XYSCSS=422P10",
                 PixelFormat::Yuv420 => "C420p10 XYSCSS=420P10",
-                PixelFormat::Monochrome => "Cmono10 XYSCSS=400",
+                PixelFormat::Yuv400 => "Cmono10 XYSCSS=400",
             },
             12 => match image.yuv_format {
+                PixelFormat::None => "",
                 PixelFormat::Yuv444 => "C444p12 XYSCSS=444P12",
                 PixelFormat::Yuv422 => "C422p12 XYSCSS=422P12",
                 PixelFormat::Yuv420 => "C420p12 XYSCSS=420P12",
-                PixelFormat::Monochrome => "Cmono12 XYSCSS=400",
+                PixelFormat::Yuv400 => "Cmono12 XYSCSS=400",
             },
             _ => {
                 return false;

@@ -77,7 +77,7 @@ pub struct avifImage {
     pub height: u32,
     pub depth: u32,
 
-    pub yuvFormat: avifPixelFormat,
+    pub yuvFormat: PixelFormat,
     pub yuvRange: YuvRange,
     pub yuvChromaSamplePosition: ChromaSamplePosition,
     pub yuvPlanes: [*mut u8; AVIF_PLANE_COUNT_YUV],
@@ -112,7 +112,7 @@ impl Default for avifImage {
             width: 0,
             height: 0,
             depth: 0,
-            yuvFormat: avifPixelFormat::None,
+            yuvFormat: Default::default(),
             yuvRange: YuvRange::Full,
             yuvChromaSamplePosition: Default::default(),
             yuvPlanes: [std::ptr::null_mut(); 3],
@@ -215,7 +215,7 @@ pub unsafe extern "C" fn crabby_avifImageCreate(
     width: u32,
     height: u32,
     depth: u32,
-    yuvFormat: avifPixelFormat,
+    yuvFormat: PixelFormat,
 ) -> *mut avifImage {
     Box::into_raw(Box::new(avifImage {
         width,
@@ -238,7 +238,7 @@ fn avif_image_allocate_planes_helper(
     let y_size = y_row_bytes
         .checked_mul(usize_from_u32(image.height)?)
         .ok_or(avifResult::InvalidArgument)?;
-    if (planes & 1) != 0 && image.yuvFormat != avifPixelFormat::None {
+    if (planes & 1) != 0 && image.yuvFormat != PixelFormat::None {
         image.imageOwnsYUVPlanes = AVIF_TRUE;
         if image.yuvPlanes[0].is_null() {
             image.yuvRowBytes[0] = u32_from_usize(y_row_bytes)?;

@@ -136,7 +136,7 @@ impl Image {
             Plane::U | Plane::V => match self.yuv_format {
                 PixelFormat::Yuv444 => self.width as usize,
                 PixelFormat::Yuv420 | PixelFormat::Yuv422 => (self.width as usize + 1) / 2,
-                PixelFormat::Monochrome => 0,
+                PixelFormat::None | PixelFormat::Yuv400 => 0,
             },
         }
     }
@@ -147,7 +147,7 @@ impl Image {
             Plane::U | Plane::V => match self.yuv_format {
                 PixelFormat::Yuv444 | PixelFormat::Yuv422 => self.height as usize,
                 PixelFormat::Yuv420 => (self.height as usize + 1) / 2,
-                PixelFormat::Monochrome => 0,
+                PixelFormat::None | PixelFormat::Yuv400 => 0,
             },
         }
     }

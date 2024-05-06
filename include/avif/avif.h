@@ -136,6 +136,15 @@ enum avifMatrixCoefficients : uint16_t {
     AVIF_MATRIX_COEFFICIENTS_YCGCO_RO = 16,
 };
 
+enum avifPixelFormat {
+    AVIF_PIXEL_FORMAT_NONE = 0,
+    AVIF_PIXEL_FORMAT_YUV444 = 1,
+    AVIF_PIXEL_FORMAT_YUV422 = 2,
+    AVIF_PIXEL_FORMAT_YUV420 = 3,
+    AVIF_PIXEL_FORMAT_YUV400 = 4,
+    AVIF_PIXEL_FORMAT_COUNT,
+};
+
 enum avifProgressiveState {
     AVIF_PROGRESSIVE_STATE_UNAVAILABLE = 0,
     AVIF_PROGRESSIVE_STATE_AVAILABLE = 1,
@@ -199,15 +208,6 @@ enum avifCodecFlag {
 enum avifHeaderFormat {
     AVIF_HEADER_FULL,
     AVIF_HEADER_REDUCED,
-};
-
-enum avifPixelFormat {
-    AVIF_PIXEL_FORMAT_NONE,
-    AVIF_PIXEL_FORMAT_YUV444,
-    AVIF_PIXEL_FORMAT_YUV422,
-    AVIF_PIXEL_FORMAT_YUV420,
-    AVIF_PIXEL_FORMAT_YUV400,
-    AVIF_PIXEL_FORMAT_COUNT,
 };
 
 enum avifPlanesFlag {

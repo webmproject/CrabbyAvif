@@ -28,6 +28,7 @@ struct avifIO;
 "Format" = "avifRGBFormat"
 "ImageTiming" = "avifImageTiming"
 "MatrixCoefficients" = "avifMatrixCoefficients"
+"PixelFormat" = "avifPixelFormat"
 "ProgressiveState" = "avifProgressiveState"
 "Source" = "avifDecoderSource"
 "YuvRange" = "avifRange"

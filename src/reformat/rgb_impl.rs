@@ -33,7 +33,7 @@ impl Mode {
         }
         if image.matrix_coefficients == MatrixCoefficients::Identity
             && image.yuv_format != PixelFormat::Yuv444
-            && image.yuv_format != PixelFormat::Monochrome
+            && image.yuv_format != PixelFormat::Yuv400
         {
             return Err(AvifError::ReformatFailed);
         }
@@ -186,7 +186,7 @@ pub fn yuv_to_rgb_any(
     let chroma_upsampling = rgb.chroma_upsampling;
     let has_color = image.has_plane(Plane::U)
         && image.has_plane(Plane::V)
-        && image.yuv_format != PixelFormat::Monochrome;
+        && image.yuv_format != PixelFormat::Yuv400;
     let yuv_max_channel = image.max_channel();
     let rgb_max_channel_f = rgb.max_channel_f();
     for j in 0..image.height {

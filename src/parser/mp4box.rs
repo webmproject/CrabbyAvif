@@ -104,7 +104,7 @@ impl CodecConfiguration {
 
     pub fn pixel_format(&self) -> PixelFormat {
         if self.monochrome {
-            PixelFormat::Monochrome
+            PixelFormat::Yuv400
         } else if self.chroma_subsampling_x == 1 && self.chroma_subsampling_y == 1 {
             PixelFormat::Yuv420
         } else if self.chroma_subsampling_x == 1 {
