@@ -1,4 +1,5 @@
 use crate::internal_utils::*;
+use crate::parser::mp4box::BoxSize;
 
 #[derive(Debug)]
 pub struct IBitStream<'a> {
@@ -78,10 +79,15 @@ impl IStream<'_> {
         Ok(())
     }
 
-    pub fn sub_stream(&mut self, size: usize) -> AvifResult<IStream> {
-        self.check(size)?;
+    pub fn sub_stream(&mut self, size: &BoxSize) -> AvifResult<IStream> {
         let offset = self.offset;
-        self.offset += size;
+        self.offset += match size {
+            BoxSize::FixedSize(size) => {
+                self.check(*size)?;
+                *size
+            }
+            BoxSize::UntilEndOfStream => self.bytes_left()?,
+        };
         Ok(IStream {
             data: &self.data[offset..self.offset],
             offset: 0,

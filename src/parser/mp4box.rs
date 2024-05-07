@@ -9,10 +9,25 @@ use crate::internal_utils::*;
 use crate::utils::clap::CleanAperture;
 use crate::*;
 
+#[derive(Debug, PartialEq)]
+pub enum BoxSize {
+    FixedSize(usize), // In bytes, header exclusive.
+    UntilEndOfStream, // The box goes on until the end of the input stream.
+}
+
 #[derive(Debug)]
 struct BoxHeader {
-    size: usize, // In bytes, header exclusive.
+    size: BoxSize,
     box_type: String,
+}
+
+impl BoxHeader {
+    fn size(&self) -> usize {
+        match self.size {
+            BoxSize::FixedSize(size) => size, // not reached.
+            BoxSize::UntilEndOfStream => 0,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -241,7 +256,10 @@ fn parse_header(stream: &mut IStream, top_level: bool) -> AvifResult<BoxHeader> 
                 "non-top-level box with size 0".into(),
             ));
         }
-        return Ok(BoxHeader { box_type, size: 0 });
+        return Ok(BoxHeader {
+            box_type,
+            size: BoxSize::UntilEndOfStream,
+        });
     }
     size = size
         .checked_sub(u64_from_usize(stream.offset - start_offset)?)
@@ -250,7 +268,10 @@ fn parse_header(stream: &mut IStream, top_level: bool) -> AvifResult<BoxHeader> 
     if !top_level && size > stream.bytes_left()? {
         return Err(AvifError::BmffParseFailed("possibly truncated box".into()));
     }
-    Ok(BoxHeader { box_type, size })
+    Ok(BoxHeader {
+        box_type,
+        size: BoxSize::FixedSize(size),
+    })
 }
 
 fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
@@ -722,7 +743,7 @@ fn parse_ipco(stream: &mut IStream) -> AvifResult<Vec<ItemProperty>> {
     let mut properties: Vec<ItemProperty> = Vec::new();
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
-        let mut sub_stream = stream.sub_stream(header.size)?;
+        let mut sub_stream = stream.sub_stream(&header.size)?;
         match header.box_type.as_str() {
             "ispe" => properties.push(parse_ispe(&mut sub_stream)?),
             "pixi" => properties.push(parse_pixi(&mut sub_stream)?),
@@ -806,7 +827,7 @@ fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
     let mut iprp = ItemPropertyBox::default();
     // Parse ipco box.
     {
-        let mut sub_stream = stream.sub_stream(header.size)?;
+        let mut sub_stream = stream.sub_stream(&header.size)?;
         iprp.properties = parse_ipco(&mut sub_stream)?;
     }
     // Parse ipma boxes.
@@ -817,7 +838,7 @@ fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
                 "Found non ipma box in iprp".into(),
             ));
         }
-        let mut sub_stream = stream.sub_stream(header.size)?;
+        let mut sub_stream = stream.sub_stream(&header.size)?;
         iprp.associations.append(&mut parse_ipma(&mut sub_stream)?);
     }
     Ok(iprp)
@@ -892,7 +913,7 @@ fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
                 "Found non infe box in iinf".into(),
             ));
         }
-        let mut sub_stream = stream.sub_stream(header.size)?;
+        let mut sub_stream = stream.sub_stream(&header.size)?;
         iinf.push(parse_infe(&mut sub_stream)?);
     }
     Ok(iinf)
@@ -969,7 +990,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
                 "first box in meta is not hdlr".into(),
             ));
         }
-        parse_hdlr(&mut stream.sub_stream(header.size)?)?;
+        parse_hdlr(&mut stream.sub_stream(&header.size)?)?;
     }
 
     let mut boxes_seen: HashSet<String> = HashSet::with_hasher(NonRandomHasherState);
@@ -988,7 +1009,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
             }
             _ => {}
         }
-        let mut sub_stream = stream.sub_stream(header.size)?;
+        let mut sub_stream = stream.sub_stream(&header.size)?;
         match header.box_type.as_str() {
             "iloc" => meta.iloc = parse_iloc(&mut sub_stream)?,
             "pitm" => meta.primary_item_id = parse_pitm(&mut sub_stream)?,
@@ -1305,7 +1326,7 @@ fn parse_sample_entry(stream: &mut IStream, format: String) -> AvifResult<Sample
         // PixelAspectRatioBox pasp; // optional
 
         // Now read any of 'av1C', 'clap', 'pasp' etc.
-        sample_entry.properties = parse_ipco(&mut stream.sub_stream(stream.bytes_left()?)?)?;
+        sample_entry.properties = parse_ipco(&mut stream.sub_stream(&BoxSize::UntilEndOfStream)?)?;
 
         if !sample_entry
             .properties
@@ -1337,7 +1358,7 @@ fn parse_stsd(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
         // aligned(8) abstract class SampleEntry (unsigned int(32) format) extends Box(format)
         let header = parse_header(stream, /*top_level=*/ false)?;
         let sample_entry =
-            parse_sample_entry(&mut stream.sub_stream(header.size)?, header.box_type)?;
+            parse_sample_entry(&mut stream.sub_stream(&header.size)?, header.box_type)?;
         sample_table.sample_descriptions.push(sample_entry);
     }
     Ok(())
@@ -1360,7 +1381,7 @@ fn parse_stbl(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
                 header.box_type
             )));
         }
-        let mut sub_stream = stream.sub_stream(header.size)?;
+        let mut sub_stream = stream.sub_stream(&header.size)?;
         match header.box_type.as_str() {
             "stco" => {
                 if boxes_seen.contains("co64") {
@@ -1395,7 +1416,7 @@ fn parse_minf(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     // Section 8.4.4.2 of ISO/IEC 14496-12.
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
-        let mut sub_stream = stream.sub_stream(header.size)?;
+        let mut sub_stream = stream.sub_stream(&header.size)?;
         if header.box_type == "stbl" {
             parse_stbl(&mut sub_stream, track)?;
         }
@@ -1407,7 +1428,7 @@ fn parse_mdia(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     // Section 8.4.1.2 of ISO/IEC 14496-12.
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
-        let mut sub_stream = stream.sub_stream(header.size)?;
+        let mut sub_stream = stream.sub_stream(&header.size)?;
         match header.box_type.as_str() {
             "mdhd" => parse_mdhd(&mut sub_stream, track)?,
             "minf" => parse_minf(&mut sub_stream, track)?,
@@ -1424,7 +1445,7 @@ fn parse_tref(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     while stream.has_bytes_left()? {
         // aligned(8) class TrackReferenceTypeBox (reference_type) extends Box(reference_type)
         let header = parse_header(stream, /*top_level=*/ false)?;
-        let mut sub_stream = stream.sub_stream(header.size)?;
+        let mut sub_stream = stream.sub_stream(&header.size)?;
         match header.box_type.as_str() {
             "auxl" => {
                 // unsigned int(32) track_IDs[];
@@ -1511,7 +1532,7 @@ fn parse_edts(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     // Section 8.6.5.2 of ISO/IEC 14496-12.
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
-        let mut sub_stream = stream.sub_stream(header.size)?;
+        let mut sub_stream = stream.sub_stream(&header.size)?;
         if header.box_type == "elst" {
             parse_elst(&mut sub_stream, track)?;
         }
@@ -1530,7 +1551,7 @@ fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
     // Section 8.3.1.2 of ISO/IEC 14496-12.
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
-        let mut sub_stream = stream.sub_stream(header.size)?;
+        let mut sub_stream = stream.sub_stream(&header.size)?;
         match header.box_type.as_str() {
             "tkhd" => parse_tkhd(&mut sub_stream, &mut track)?,
             "mdia" => parse_mdia(&mut sub_stream, &mut track)?,
@@ -1548,7 +1569,7 @@ fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
     // Section 8.2.1.2 of ISO/IEC 14496-12.
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
-        let mut sub_stream = stream.sub_stream(header.size)?;
+        let mut sub_stream = stream.sub_stream(&header.size)?;
         if header.box_type == "trak" {
             tracks.push(parse_trak(&mut sub_stream)?);
         }
@@ -1582,10 +1603,9 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
         // Read the rest of the box if necessary.
         match header.box_type.as_str() {
             "ftyp" | "meta" | "moov" => {
-                let box_data = if header.size == 0 {
-                    io.read(parse_offset, usize::max_value())? // Read till the end of the stream.
-                } else {
-                    io.read_exact(parse_offset, header.size)?
+                let box_data = match header.size {
+                    BoxSize::UntilEndOfStream => io.read(parse_offset, usize::max_value())?,
+                    BoxSize::FixedSize(size) => io.read_exact(parse_offset, size)?,
                 };
                 let mut box_stream = IStream::create(box_data);
                 match header.box_type.as_str() {
@@ -1614,12 +1634,12 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
             }
             _ => {}
         }
-        if header.size == 0 {
+        if header.size == BoxSize::UntilEndOfStream {
             // There is no other box after this one because it goes till the end of the stream.
             break;
         }
         parse_offset = parse_offset
-            .checked_add(header.size as u64)
+            .checked_add(header.size() as u64)
             .ok_or(AvifError::BmffParseFailed("invalid parse offset".into()))?;
     }
     if ftyp.is_none() {
@@ -1646,13 +1666,12 @@ pub fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
         //   Only a fixed-size box such as a file signature, if required, may precede it.
         return Ok(false);
     }
-    if header.size == 0 {
-        // The size of the 'ftyp' box is 0, which means it goes till the end of the file.
-        // Either there is no brand requiring anything in the file but a FileTypebox (so not AVIF),
-        // or it is invalid.
+    if header.size == BoxSize::UntilEndOfStream {
+        // The 'ftyp' box goes on till the end of the file. Either there is no brand requiring
+        // anything in the file but a FileTypebox (so not AVIF), or it is invalid.
         return Ok(false);
     }
-    let mut header_stream = stream.sub_stream(header.size)?;
+    let mut header_stream = stream.sub_stream(&header.size)?;
     let ftyp = parse_ftyp(&mut header_stream)?;
     Ok(ftyp.is_avif())
 }
