@@ -318,6 +318,19 @@ impl Item {
 
 pub type Items = HashMap<u32, Item>;
 
+fn insert_item_if_not_exists(id: u32, items: &mut Items) {
+    if items.contains_key(&id) {
+        return;
+    }
+    items.insert(
+        id,
+        Item {
+            id,
+            ..Item::default()
+        },
+    );
+}
+
 pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
     let mut items: Items = HashMap::with_hasher(NonRandomHasherState);
     for iinf in &meta.iinf {
@@ -332,11 +345,8 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
         );
     }
     for iloc in &meta.iloc.items {
-        let item = items.get_mut(&iloc.item_id);
-        if item.is_none() {
-            continue;
-        }
-        let item = item.unwrap();
+        insert_item_if_not_exists(iloc.item_id, &mut items);
+        let item = items.get_mut(&iloc.item_id).unwrap();
         if !item.extents.is_empty() {
             return Err(AvifError::BmffParseFailed(
                 "item already has extents".into(),
@@ -368,11 +378,8 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
         }
         ipma_seen.insert(association.item_id);
 
-        let item = items.get_mut(&association.item_id);
-        if item.is_none() {
-            continue;
-        }
-        let item = item.unwrap();
+        insert_item_if_not_exists(association.item_id, &mut items);
+        let item = items.get_mut(&association.item_id).unwrap();
         for (property_index_ref, essential_ref) in &association.associations {
             let property_index: usize = *property_index_ref as usize;
             let essential = *essential_ref;
@@ -408,11 +415,8 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
     }
 
     for reference in &meta.iref {
-        let item = items.get_mut(&reference.from_item_id);
-        if item.is_none() {
-            continue;
-        }
-        let item = item.unwrap();
+        insert_item_if_not_exists(reference.from_item_id, &mut items);
+        let item = items.get_mut(&reference.from_item_id).unwrap();
         match reference.reference_type.as_str() {
             "thmb" => item.thumbnail_for_id = reference.to_item_id,
             "auxl" => item.aux_for_id = reference.to_item_id,
@@ -420,10 +424,10 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
             "prem" => item.prem_by_id = reference.to_item_id,
             "dimg" => {
                 // derived images refer in the opposite direction.
-                if let Some(dimg_item) = items.get_mut(&reference.to_item_id) {
-                    dimg_item.dimg_for_id = reference.from_item_id;
-                    dimg_item.dimg_index = reference.index;
-                }
+                insert_item_if_not_exists(reference.to_item_id, &mut items);
+                let dimg_item = items.get_mut(&reference.to_item_id).unwrap();
+                dimg_item.dimg_for_id = reference.from_item_id;
+                dimg_item.dimg_index = reference.index;
             }
             _ => {
                 // unknown reference type, ignore.
