@@ -1553,6 +1553,11 @@ fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
             tracks.push(parse_trak(&mut sub_stream)?);
         }
     }
+    if tracks.is_empty() {
+        return Err(AvifError::BmffParseFailed(
+            "moov box does not contain any tracks".into(),
+        ));
+    }
     Ok(tracks)
 }
 
