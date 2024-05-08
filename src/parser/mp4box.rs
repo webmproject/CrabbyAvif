@@ -898,6 +898,12 @@ fn parse_infe(stream: &mut IStream) -> AvifResult<ItemInfo> {
 fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
     // Section 8.11.6.2 of ISO/IEC 14496-12.
     let (version, _flags) = stream.read_version_and_flags()?;
+    if version > 1 {
+        return Err(AvifError::BmffParseFailed(format!(
+            "Unsupported version {} in iinf box",
+            version
+        )));
+    }
     let entry_count: u32 = if version == 0 {
         // unsigned int(16) entry_count;
         stream.read_u16()? as u32
