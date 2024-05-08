@@ -231,6 +231,14 @@ enum ParseState {
     Complete,
 }
 
+/// cbindgen:field-names=[colorOBUSize,alphaOBUSize]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct IOStats {
+    pub color_obu_size: usize,
+    pub alpha_obu_size: usize,
+}
+
 #[derive(Default)]
 pub struct Decoder {
     pub settings: Settings,
@@ -255,6 +263,7 @@ pub struct Decoder {
     codecs: Vec<Codec>,
     color_track_id: Option<u32>,
     parse_state: ParseState,
+    io_stats: IOStats,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -313,6 +322,9 @@ impl Decoder {
     }
     pub fn gainmap_present(&self) -> bool {
         self.gainmap_present
+    }
+    pub fn io_stats(&self) -> IOStats {
+        self.io_stats
     }
 
     fn parsing_complete(&self) -> bool {
@@ -760,6 +772,7 @@ impl Decoder {
                     color_track,
                     self.settings.image_count_limit,
                     self.io.unwrap_ref().size_hint(),
+                    Category::Color,
                 )?);
                 self.tile_info[Category::Color.usize()].tile_count = 1;
 
@@ -768,6 +781,7 @@ impl Decoder {
                         alpha_track,
                         self.settings.image_count_limit,
                         self.io.unwrap_ref().size_hint(),
+                        Category::Alpha,
                     )?);
                     self.tile_info[Category::Alpha.usize()].tile_count = 1;
                     self.image.alpha_present = true;
@@ -930,7 +944,11 @@ impl Decoder {
                                 "sample has invalid size.".into(),
                             ));
                         }
-                        // TODO: iostats?
+                        match tile.input.category {
+                            Category::Color => self.io_stats.color_obu_size += sample.size,
+                            Category::Alpha => self.io_stats.alpha_obu_size += sample.size,
+                            _ => {}
+                        }
                     }
                 }
             }

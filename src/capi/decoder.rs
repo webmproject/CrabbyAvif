@@ -37,7 +37,7 @@ pub struct avifDecoder {
 
     pub alphaPresent: avifBool,
 
-    pub ioStats: avifIOStats,
+    pub ioStats: IOStats,
     pub diag: avifDiagnostics,
     //avifIO * io;
     pub data: *mut avifDecoderData,
@@ -203,6 +203,7 @@ fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
     dst.timescale = src.timescale();
     dst.durationInTimescales = src.duration_in_timescales();
     dst.duration = src.duration();
+    dst.ioStats = src.io_stats();
 
     if src.gainmap_present() {
         dst.gainMapPresent = AVIF_TRUE;

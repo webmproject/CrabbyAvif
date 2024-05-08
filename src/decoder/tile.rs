@@ -246,11 +246,16 @@ impl Tile {
         track: &Track,
         mut image_count_limit: u32,
         size_hint: u64,
+        category: Category,
     ) -> AvifResult<Tile> {
         let mut tile = Tile {
             width: track.width,
             height: track.height,
             operating_point: 0, // No way to set operating point via tracks
+            input: DecodeInput {
+                category,
+                ..DecodeInput::default()
+            },
             ..Tile::default()
         };
         let sample_table = &track.sample_table.unwrap_ref();

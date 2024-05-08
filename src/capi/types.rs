@@ -330,14 +330,6 @@ pub enum avifCodecFlag {
 }
 pub type avifCodecFlags = u32;
 
-// TODO: This can be moved into the rust layer and renamed.
-#[repr(C)]
-#[derive(Default)]
-pub struct avifIOStats {
-    colorOBUSize: usize,
-    alphaOBUSize: usize,
-}
-
 pub const AVIF_TRANSFORM_NONE: u32 = 0;
 pub const AVIF_TRANSFORM_PASP: u32 = 1 << 0;
 pub const AVIF_TRANSFORM_CLAP: u32 = 1 << 1;

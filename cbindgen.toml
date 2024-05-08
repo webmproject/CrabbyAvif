@@ -26,6 +26,7 @@ struct avifIO;
 "ChromaUpsampling" = "avifChromaUpsampling"
 "ColorPrimaries" = "avifColorPrimaries"
 "Format" = "avifRGBFormat"
+"IOStats" = "avifIOStats"
 "ImageTiming" = "avifImageTiming"
 "MatrixCoefficients" = "avifMatrixCoefficients"
 "PixelFormat" = "avifPixelFormat"
