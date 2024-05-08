@@ -1554,18 +1554,32 @@ fn parse_edts(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 
 fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
     let mut track = Track::default();
+    let mut tkhd_seen = false;
     // Section 8.3.1.2 of ISO/IEC 14496-12.
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
         let mut sub_stream = stream.sub_stream(&header.size)?;
         match header.box_type.as_str() {
-            "tkhd" => parse_tkhd(&mut sub_stream, &mut track)?,
+            "tkhd" => {
+                if tkhd_seen {
+                    return Err(AvifError::BmffParseFailed(
+                        "trak box contains multiple tkhd boxes".into(),
+                    ));
+                }
+                parse_tkhd(&mut sub_stream, &mut track)?;
+                tkhd_seen = true;
+            }
             "mdia" => parse_mdia(&mut sub_stream, &mut track)?,
             "tref" => parse_tref(&mut sub_stream, &mut track)?,
             "edts" => parse_edts(&mut sub_stream, &mut track)?,
             "meta" => track.meta = Some(parse_meta(&mut sub_stream)?),
             _ => {}
         }
+    }
+    if !tkhd_seen {
+        return Err(AvifError::BmffParseFailed(
+            "trak box did not contain a tkhd box".into(),
+        ));
     }
     Ok(track)
 }
