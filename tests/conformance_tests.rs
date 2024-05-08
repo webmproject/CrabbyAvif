@@ -60,6 +60,8 @@ struct ExpectedImageInfo<'a> {
     color_primaries: u16,
     transfer_characteristics: u16,
     matrix_coefficients: u16,
+    color_obu_size: usize,
+    alpha_obu_size: usize,
 }
 
 fn verify_info(expected_info: &ExpectedImageInfo, image: &Image) {
@@ -135,6 +137,14 @@ fn test_conformance(index: usize) {
     let _ = decoder.set_io_file(&filename).expect("Failed to set IO");
     let res = decoder.parse();
     assert!(res.is_ok());
+    assert_eq!(
+        expected_info.color_obu_size,
+        decoder.io_stats().color_obu_size
+    );
+    assert_eq!(
+        expected_info.alpha_obu_size,
+        decoder.io_stats().alpha_obu_size
+    );
     let image = decoder.image().expect("image was none");
     verify_info(expected_info, &image);
     let res = decoder.next_image();
@@ -171,6 +181,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 12,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 122336,
+        alpha_obu_size: 0,
     },
     // index: 1
     ExpectedImageInfo {
@@ -184,6 +196,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 12,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 2063701,
+        alpha_obu_size: 0,
     },
     // index: 2
     ExpectedImageInfo {
@@ -197,6 +211,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 12,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 2063701,
+        alpha_obu_size: 0,
     },
     // index: 3
     ExpectedImageInfo {
@@ -210,6 +226,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 12,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 1999503,
+        alpha_obu_size: 0,
     },
     // index: 4
     ExpectedImageInfo {
@@ -223,6 +241,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 12,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 1999503,
+        alpha_obu_size: 0,
     },
     // index: 5
     ExpectedImageInfo {
@@ -236,6 +256,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 12,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 1999503,
+        alpha_obu_size: 0,
     },
     // index: 6
     ExpectedImageInfo {
@@ -249,6 +271,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 12,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 2306164,
+        alpha_obu_size: 0,
     },
     // index: 7
     ExpectedImageInfo {
@@ -262,6 +286,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 12,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 2306164,
+        alpha_obu_size: 0,
     },
     // index: 8
     ExpectedImageInfo {
@@ -275,6 +301,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 12,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 1999503,
+        alpha_obu_size: 0,
     },
     // index: 9
     ExpectedImageInfo {
@@ -288,6 +316,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 12,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 2063701,
+        alpha_obu_size: 0,
     },
     // index: 10
     ExpectedImageInfo {
@@ -301,6 +331,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 64098,
+        alpha_obu_size: 0,
     },
     // index: 11
     ExpectedImageInfo {
@@ -314,6 +346,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 56116,
+        alpha_obu_size: 0,
     },
     // index: 12
     ExpectedImageInfo {
@@ -327,6 +361,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 55174,
+        alpha_obu_size: 0,
     },
     // index: 13
     ExpectedImageInfo {
@@ -340,6 +376,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 55254,
+        alpha_obu_size: 0,
     },
     // index: 14
     ExpectedImageInfo {
@@ -353,6 +391,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 54589,
+        alpha_obu_size: 0,
     },
     // index: 15
     ExpectedImageInfo {
@@ -366,6 +406,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 63262,
+        alpha_obu_size: 0,
     },
     // index: 16
     ExpectedImageInfo {
@@ -379,6 +421,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 63442,
+        alpha_obu_size: 0,
     },
     // index: 17
     ExpectedImageInfo {
@@ -392,6 +436,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 62619,
+        alpha_obu_size: 0,
     },
     // index: 18
     ExpectedImageInfo {
@@ -405,6 +451,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 63157,
+        alpha_obu_size: 0,
     },
     // index: 19
     ExpectedImageInfo {
@@ -418,6 +466,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 55329,
+        alpha_obu_size: 0,
     },
     // index: 20
     ExpectedImageInfo {
@@ -431,6 +481,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 54376,
+        alpha_obu_size: 0,
     },
     // index: 21
     ExpectedImageInfo {
@@ -444,6 +496,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 54460,
+        alpha_obu_size: 0,
     },
     // index: 22
     ExpectedImageInfo {
@@ -457,6 +511,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 53836,
+        alpha_obu_size: 0,
     },
     // index: 23
     ExpectedImageInfo {
@@ -470,6 +526,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 62451,
+        alpha_obu_size: 0,
     },
     // index: 24
     ExpectedImageInfo {
@@ -483,6 +541,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 62535,
+        alpha_obu_size: 0,
     },
     // index: 25
     ExpectedImageInfo {
@@ -496,6 +556,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 61950,
+        alpha_obu_size: 0,
     },
     // index: 26
     ExpectedImageInfo {
@@ -509,6 +571,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 74745,
+        alpha_obu_size: 0,
     },
     // index: 27
     ExpectedImageInfo {
@@ -522,6 +586,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 73212,
+        alpha_obu_size: 0,
     },
     // index: 28
     ExpectedImageInfo {
@@ -535,6 +601,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 73266,
+        alpha_obu_size: 0,
     },
     // index: 29
     ExpectedImageInfo {
@@ -548,6 +616,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 72379,
+        alpha_obu_size: 0,
     },
     // index: 30
     ExpectedImageInfo {
@@ -561,6 +631,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 73902,
+        alpha_obu_size: 0,
     },
     // index: 31
     ExpectedImageInfo {
@@ -574,6 +646,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 72478,
+        alpha_obu_size: 0,
     },
     // index: 32
     ExpectedImageInfo {
@@ -587,6 +661,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 72769,
+        alpha_obu_size: 0,
     },
     // index: 33
     ExpectedImageInfo {
@@ -600,6 +676,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 71795,
+        alpha_obu_size: 0,
     },
     // index: 34
     ExpectedImageInfo {
@@ -613,6 +691,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 68524,
+        alpha_obu_size: 0,
     },
     // index: 35
     ExpectedImageInfo {
@@ -626,6 +706,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 56116,
+        alpha_obu_size: 0,
     },
     // index: 36
     ExpectedImageInfo {
@@ -639,6 +721,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 55174,
+        alpha_obu_size: 0,
     },
     // index: 37
     ExpectedImageInfo {
@@ -652,6 +736,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 55254,
+        alpha_obu_size: 0,
     },
     // index: 38
     ExpectedImageInfo {
@@ -665,6 +751,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 54589,
+        alpha_obu_size: 0,
     },
     // index: 39
     ExpectedImageInfo {
@@ -678,6 +766,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 67602,
+        alpha_obu_size: 0,
     },
     // index: 40
     ExpectedImageInfo {
@@ -691,6 +781,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 67803,
+        alpha_obu_size: 0,
     },
     // index: 41
     ExpectedImageInfo {
@@ -704,6 +796,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 66794,
+        alpha_obu_size: 0,
     },
     // index: 42
     ExpectedImageInfo {
@@ -717,6 +811,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 64688,
+        alpha_obu_size: 0,
     },
     // index: 43
     ExpectedImageInfo {
@@ -730,6 +826,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 56651,
+        alpha_obu_size: 0,
     },
     // index: 44
     ExpectedImageInfo {
@@ -743,6 +841,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 55561,
+        alpha_obu_size: 0,
     },
     // index: 45
     ExpectedImageInfo {
@@ -756,6 +856,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 55679,
+        alpha_obu_size: 0,
     },
     // index: 46
     ExpectedImageInfo {
@@ -769,6 +871,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 54936,
+        alpha_obu_size: 0,
     },
     // index: 47
     ExpectedImageInfo {
@@ -782,6 +886,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 63714,
+        alpha_obu_size: 0,
     },
     // index: 48
     ExpectedImageInfo {
@@ -795,6 +901,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 63791,
+        alpha_obu_size: 0,
     },
     // index: 49
     ExpectedImageInfo {
@@ -808,6 +916,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 63145,
+        alpha_obu_size: 0,
     },
     // index: 50
     ExpectedImageInfo {
@@ -821,6 +931,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 69054,
+        alpha_obu_size: 0,
     },
     // index: 51
     ExpectedImageInfo {
@@ -834,6 +946,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 56651,
+        alpha_obu_size: 0,
     },
     // index: 52
     ExpectedImageInfo {
@@ -847,6 +961,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 55561,
+        alpha_obu_size: 0,
     },
     // index: 53
     ExpectedImageInfo {
@@ -860,6 +976,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 55679,
+        alpha_obu_size: 0,
     },
     // index: 54
     ExpectedImageInfo {
@@ -873,6 +991,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 54936,
+        alpha_obu_size: 0,
     },
     // index: 55
     ExpectedImageInfo {
@@ -886,6 +1006,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 67792,
+        alpha_obu_size: 0,
     },
     // index: 56
     ExpectedImageInfo {
@@ -899,6 +1021,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 68051,
+        alpha_obu_size: 0,
     },
     // index: 57
     ExpectedImageInfo {
@@ -912,6 +1036,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 67328,
+        alpha_obu_size: 0,
     },
     // index: 58
     ExpectedImageInfo {
@@ -925,6 +1051,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 75004,
+        alpha_obu_size: 0,
     },
     // index: 59
     ExpectedImageInfo {
@@ -938,6 +1066,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 56651,
+        alpha_obu_size: 0,
     },
     // index: 60
     ExpectedImageInfo {
@@ -951,6 +1081,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 55561,
+        alpha_obu_size: 0,
     },
     // index: 61
     ExpectedImageInfo {
@@ -964,6 +1096,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 55679,
+        alpha_obu_size: 0,
     },
     // index: 62
     ExpectedImageInfo {
@@ -977,6 +1111,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 54936,
+        alpha_obu_size: 0,
     },
     // index: 63
     ExpectedImageInfo {
@@ -990,6 +1126,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 73694,
+        alpha_obu_size: 0,
     },
     // index: 64
     ExpectedImageInfo {
@@ -1003,6 +1141,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 73720,
+        alpha_obu_size: 0,
     },
     // index: 65
     ExpectedImageInfo {
@@ -1016,6 +1156,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 72725,
+        alpha_obu_size: 0,
     },
     // index: 66
     ExpectedImageInfo {
@@ -1029,6 +1171,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 67538,
+        alpha_obu_size: 0,
     },
     // index: 67
     ExpectedImageInfo {
@@ -1042,6 +1186,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 55329,
+        alpha_obu_size: 0,
     },
     // index: 68
     ExpectedImageInfo {
@@ -1055,6 +1201,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 54376,
+        alpha_obu_size: 0,
     },
     // index: 69
     ExpectedImageInfo {
@@ -1068,6 +1216,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 54460,
+        alpha_obu_size: 0,
     },
     // index: 70
     ExpectedImageInfo {
@@ -1081,6 +1231,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 53836,
+        alpha_obu_size: 0,
     },
     // index: 71
     ExpectedImageInfo {
@@ -1094,6 +1246,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 66814,
+        alpha_obu_size: 0,
     },
     // index: 72
     ExpectedImageInfo {
@@ -1107,6 +1261,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 66974,
+        alpha_obu_size: 0,
     },
     // index: 73
     ExpectedImageInfo {
@@ -1120,6 +1276,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 66154,
+        alpha_obu_size: 0,
     },
     // index: 74
     ExpectedImageInfo {
@@ -1133,6 +1291,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 178883,
+        alpha_obu_size: 0,
     },
     // index: 75
     ExpectedImageInfo {
@@ -1146,6 +1306,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 208271,
+        alpha_obu_size: 0,
     },
     // index: 76
     ExpectedImageInfo {
@@ -1159,6 +1321,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 177474,
+        alpha_obu_size: 0,
     },
     // index: 77
     ExpectedImageInfo {
@@ -1172,6 +1336,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 207414,
+        alpha_obu_size: 0,
     },
     // index: 78
     ExpectedImageInfo {
@@ -1185,6 +1351,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 178883,
+        alpha_obu_size: 0,
     },
     // index: 79
     ExpectedImageInfo {
@@ -1198,6 +1366,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 225894,
+        alpha_obu_size: 0,
     },
     // index: 80
     ExpectedImageInfo {
@@ -1211,6 +1381,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 2,
         matrix_coefficients: 9,
+        color_obu_size: 231531,
+        alpha_obu_size: 0,
     },
     // index: 81
     ExpectedImageInfo {
@@ -1224,6 +1396,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 226731,
+        alpha_obu_size: 0,
     },
     // index: 82
     ExpectedImageInfo {
@@ -1237,6 +1411,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 226731,
+        alpha_obu_size: 0,
     },
     // index: 83
     ExpectedImageInfo {
@@ -1250,6 +1426,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 177474,
+        alpha_obu_size: 0,
     },
     // index: 84
     ExpectedImageInfo {
@@ -1263,6 +1441,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 225881,
+        alpha_obu_size: 0,
     },
     // index: 85
     ExpectedImageInfo {
@@ -1276,6 +1456,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 9,
+        color_obu_size: 85120,
+        alpha_obu_size: 0,
     },
     // index: 86
     ExpectedImageInfo {
@@ -1289,6 +1471,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 9,
+        color_obu_size: 85120,
+        alpha_obu_size: 0,
     },
     // index: 87
     ExpectedImageInfo {
@@ -1302,6 +1486,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 9,
+        color_obu_size: 84661,
+        alpha_obu_size: 0,
     },
     // index: 88
     ExpectedImageInfo {
@@ -1315,6 +1501,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 9,
+        color_obu_size: 84297,
+        alpha_obu_size: 0,
     },
     // index: 89
     ExpectedImageInfo {
@@ -1328,6 +1516,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 9,
+        color_obu_size: 85184,
+        alpha_obu_size: 0,
     },
     // index: 90
     ExpectedImageInfo {
@@ -1341,6 +1531,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 9,
+        color_obu_size: 85184,
+        alpha_obu_size: 0,
     },
     // index: 91
     ExpectedImageInfo {
@@ -1354,6 +1546,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 9,
+        color_obu_size: 84551,
+        alpha_obu_size: 0,
     },
     // index: 92
     ExpectedImageInfo {
@@ -1367,6 +1561,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 9,
+        color_obu_size: 84502,
+        alpha_obu_size: 0,
     },
     // index: 93
     ExpectedImageInfo {
@@ -1380,6 +1576,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 95279,
+        alpha_obu_size: 0,
     },
     // index: 94
     ExpectedImageInfo {
@@ -1393,6 +1591,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 10,
+        color_obu_size: 95279,
+        alpha_obu_size: 0,
     },
     // index: 95
     ExpectedImageInfo {
@@ -1406,6 +1606,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 37860,
+        alpha_obu_size: 0,
     },
     // index: 96
     ExpectedImageInfo {
@@ -1419,6 +1621,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 27601,
+        alpha_obu_size: 0,
     },
     // index: 97
     ExpectedImageInfo {
@@ -1432,6 +1636,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 218726,
+        alpha_obu_size: 0,
     },
     // index: 98
     ExpectedImageInfo {
@@ -1445,6 +1651,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 158350,
+        alpha_obu_size: 0,
     },
     // index: 99
     ExpectedImageInfo {
@@ -1458,6 +1666,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 1,
         matrix_coefficients: 1,
+        color_obu_size: 6979,
+        alpha_obu_size: 0,
     },
     // index: 100
     ExpectedImageInfo {
@@ -1471,6 +1681,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 95912,
+        alpha_obu_size: 0,
     },
     // index: 101
     ExpectedImageInfo {
@@ -1484,6 +1696,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 279919,
+        alpha_obu_size: 0,
     },
     // index: 102
     ExpectedImageInfo {
@@ -1497,6 +1711,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 1963366,
+        alpha_obu_size: 0,
     },
     // index: 103
     ExpectedImageInfo {
@@ -1510,6 +1726,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 1,
+        color_obu_size: 7618,
+        alpha_obu_size: 0,
     },
     // index: 104
     ExpectedImageInfo {
@@ -1523,6 +1741,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 30980,
+        alpha_obu_size: 0,
     },
     // index: 105
     ExpectedImageInfo {
@@ -1536,6 +1756,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 1,
+        color_obu_size: 4508,
+        alpha_obu_size: 3202,
     },
     // index: 106
     ExpectedImageInfo {
@@ -1549,6 +1771,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 57105,
+        alpha_obu_size: 0,
     },
     // index: 107
     ExpectedImageInfo {
@@ -1562,6 +1786,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 1,
+        color_obu_size: 7618,
+        alpha_obu_size: 0,
     },
     // index: 108
     ExpectedImageInfo {
@@ -1575,6 +1801,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 1,
+        color_obu_size: 7624,
+        alpha_obu_size: 0,
     },
     // index: 109
     ExpectedImageInfo {
@@ -1588,6 +1816,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 0,
+        color_obu_size: 2030306,
+        alpha_obu_size: 0,
     },
     // index: 110
     ExpectedImageInfo {
@@ -1601,6 +1831,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 92239,
+        alpha_obu_size: 0,
     },
     // index: 111
     ExpectedImageInfo {
@@ -1614,6 +1846,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 32939,
+        alpha_obu_size: 0,
     },
     // index: 112
     ExpectedImageInfo {
@@ -1627,6 +1861,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 9547,
+        alpha_obu_size: 0,
     },
     // index: 113
     ExpectedImageInfo {
@@ -1640,6 +1876,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 129471,
+        alpha_obu_size: 0,
     },
     // index: 114
     ExpectedImageInfo {
@@ -1653,6 +1891,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 45646,
+        alpha_obu_size: 0,
     },
     // index: 115
     ExpectedImageInfo {
@@ -1666,6 +1906,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 12595,
+        alpha_obu_size: 0,
     },
     // index: 116
     ExpectedImageInfo {
@@ -1679,6 +1921,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 0,
+        color_obu_size: 2865083,
+        alpha_obu_size: 0,
     },
     // index: 117
     ExpectedImageInfo {
@@ -1692,6 +1936,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 260689,
+        alpha_obu_size: 0,
     },
     // index: 118
     ExpectedImageInfo {
@@ -1705,6 +1951,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 130393,
+        alpha_obu_size: 0,
     },
     // index: 119
     ExpectedImageInfo {
@@ -1718,6 +1966,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 29579,
+        alpha_obu_size: 0,
     },
     // index: 120
     ExpectedImageInfo {
@@ -1731,6 +1981,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 372069,
+        alpha_obu_size: 0,
     },
     // index: 121
     ExpectedImageInfo {
@@ -1744,6 +1996,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 173936,
+        alpha_obu_size: 0,
     },
     // index: 122
     ExpectedImageInfo {
@@ -1757,6 +2011,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 39535,
+        alpha_obu_size: 0,
     },
     // index: 123
     ExpectedImageInfo {
@@ -1770,6 +2026,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 0,
+        color_obu_size: 2164296,
+        alpha_obu_size: 0,
     },
     // index: 124
     ExpectedImageInfo {
@@ -1783,6 +2041,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 124229,
+        alpha_obu_size: 0,
     },
     // index: 125
     ExpectedImageInfo {
@@ -1796,6 +2056,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 40359,
+        alpha_obu_size: 0,
     },
     // index: 126
     ExpectedImageInfo {
@@ -1809,6 +2071,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 7874,
+        alpha_obu_size: 0,
     },
     // index: 127
     ExpectedImageInfo {
@@ -1822,6 +2086,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 204393,
+        alpha_obu_size: 0,
     },
     // index: 128
     ExpectedImageInfo {
@@ -1835,6 +2101,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 61973,
+        alpha_obu_size: 0,
     },
     // index: 129
     ExpectedImageInfo {
@@ -1848,6 +2116,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 11224,
+        alpha_obu_size: 0,
     },
     // index: 130
     ExpectedImageInfo {
@@ -1861,6 +2131,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 0,
+        color_obu_size: 3055111,
+        alpha_obu_size: 0,
     },
     // index: 131
     ExpectedImageInfo {
@@ -1874,6 +2146,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 95933,
+        alpha_obu_size: 0,
     },
     // index: 132
     ExpectedImageInfo {
@@ -1887,6 +2161,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 47119,
+        alpha_obu_size: 0,
     },
     // index: 133
     ExpectedImageInfo {
@@ -1900,6 +2176,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 16529,
+        alpha_obu_size: 0,
     },
     // index: 134
     ExpectedImageInfo {
@@ -1913,6 +2191,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 143650,
+        alpha_obu_size: 0,
     },
     // index: 135
     ExpectedImageInfo {
@@ -1926,6 +2206,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 66240,
+        alpha_obu_size: 0,
     },
     // index: 136
     ExpectedImageInfo {
@@ -1939,6 +2221,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 9,
         transfer_characteristics: 16,
         matrix_coefficients: 9,
+        color_obu_size: 23455,
+        alpha_obu_size: 0,
     },
     // index: 137
     ExpectedImageInfo {
@@ -1952,6 +2236,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 0,
+        color_obu_size: 1323382,
+        alpha_obu_size: 0,
     },
     // index: 138
     ExpectedImageInfo {
@@ -1965,6 +2251,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 91887,
+        alpha_obu_size: 0,
     },
     // index: 139
     ExpectedImageInfo {
@@ -1978,6 +2266,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 44338,
+        alpha_obu_size: 0,
     },
     // index: 140
     ExpectedImageInfo {
@@ -1991,6 +2281,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 12204,
+        alpha_obu_size: 0,
     },
     // index: 141
     ExpectedImageInfo {
@@ -2004,6 +2296,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 129688,
+        alpha_obu_size: 0,
     },
     // index: 142
     ExpectedImageInfo {
@@ -2017,6 +2311,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 61926,
+        alpha_obu_size: 0,
     },
     // index: 143
     ExpectedImageInfo {
@@ -2030,6 +2326,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 16744,
+        alpha_obu_size: 0,
     },
     // index: 144
     ExpectedImageInfo {
@@ -2043,6 +2341,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 0,
+        color_obu_size: 1734421,
+        alpha_obu_size: 0,
     },
     // index: 145
     ExpectedImageInfo {
@@ -2056,6 +2356,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 246525,
+        alpha_obu_size: 0,
     },
     // index: 146
     ExpectedImageInfo {
@@ -2069,6 +2371,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 128922,
+        alpha_obu_size: 0,
     },
     // index: 147
     ExpectedImageInfo {
@@ -2082,6 +2386,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 39209,
+        alpha_obu_size: 0,
     },
     // index: 148
     ExpectedImageInfo {
@@ -2095,6 +2401,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 370809,
+        alpha_obu_size: 0,
     },
     // index: 149
     ExpectedImageInfo {
@@ -2108,6 +2416,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 187912,
+        alpha_obu_size: 0,
     },
     // index: 150
     ExpectedImageInfo {
@@ -2121,6 +2431,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 53041,
+        alpha_obu_size: 0,
     },
     // index: 151
     ExpectedImageInfo {
@@ -2134,6 +2446,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 0,
+        color_obu_size: 1389248,
+        alpha_obu_size: 0,
     },
     // index: 152
     ExpectedImageInfo {
@@ -2147,6 +2461,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 131503,
+        alpha_obu_size: 0,
     },
     // index: 153
     ExpectedImageInfo {
@@ -2160,6 +2476,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 62338,
+        alpha_obu_size: 0,
     },
     // index: 154
     ExpectedImageInfo {
@@ -2173,6 +2491,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 15027,
+        alpha_obu_size: 0,
     },
     // index: 155
     ExpectedImageInfo {
@@ -2186,6 +2506,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 282438,
+        alpha_obu_size: 0,
     },
     // index: 156
     ExpectedImageInfo {
@@ -2199,6 +2521,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 134294,
+        alpha_obu_size: 0,
     },
     // index: 157
     ExpectedImageInfo {
@@ -2212,6 +2536,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 24570,
+        alpha_obu_size: 0,
     },
     // index: 158
     ExpectedImageInfo {
@@ -2225,6 +2551,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 0,
+        color_obu_size: 2061853,
+        alpha_obu_size: 0,
     },
     // index: 159
     ExpectedImageInfo {
@@ -2238,6 +2566,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 153575,
+        alpha_obu_size: 0,
     },
     // index: 160
     ExpectedImageInfo {
@@ -2251,6 +2581,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 75234,
+        alpha_obu_size: 0,
     },
     // index: 161
     ExpectedImageInfo {
@@ -2264,6 +2596,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 27418,
+        alpha_obu_size: 0,
     },
     // index: 162
     ExpectedImageInfo {
@@ -2277,6 +2611,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 285667,
+        alpha_obu_size: 0,
     },
     // index: 163
     ExpectedImageInfo {
@@ -2290,6 +2626,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 119878,
+        alpha_obu_size: 0,
     },
     // index: 164
     ExpectedImageInfo {
@@ -2303,6 +2641,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 6,
+        color_obu_size: 41906,
+        alpha_obu_size: 0,
     },
     // index: 165
     ExpectedImageInfo {
@@ -2316,6 +2656,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 142540,
+        alpha_obu_size: 0,
     },
     // index: 166
     ExpectedImageInfo {
@@ -2329,6 +2671,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 1,
         transfer_characteristics: 13,
         matrix_coefficients: 1,
+        color_obu_size: 3487,
+        alpha_obu_size: 4642,
     },
     // index: 167
     ExpectedImageInfo {
@@ -2342,6 +2686,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 141119,
+        alpha_obu_size: 0,
     },
     // index: 168
     ExpectedImageInfo {
@@ -2355,6 +2701,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 35097,
+        alpha_obu_size: 0,
     },
     // index: 169
     ExpectedImageInfo {
@@ -2368,6 +2716,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 86246,
+        alpha_obu_size: 0,
     },
     // index: 170
     ExpectedImageInfo {
@@ -2381,6 +2731,8 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 70551,
+        alpha_obu_size: 0,
     },
     // index: 171
     ExpectedImageInfo {
@@ -2394,5 +2746,7 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         color_primaries: 2,
         transfer_characteristics: 2,
         matrix_coefficients: 2,
+        color_obu_size: 64582,
+        alpha_obu_size: 0,
     },
 ];
