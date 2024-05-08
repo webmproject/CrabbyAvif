@@ -6,7 +6,7 @@ fn main() {
     println!("cargo:rerun-if-changed=cbindgen.toml");
     #[cfg(feature = "libgav1")]
     {
-        // libgav1 needs libstdc++ on *nix and libc++ on mac. TODO: what about windows?
+        // libgav1 needs libstdc++ on *nix/windows and libc++ on mac.
         if cfg!(target_os = "macos") {
             println!("cargo:rustc-link-arg=-lc++");
         } else {
