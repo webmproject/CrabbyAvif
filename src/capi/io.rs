@@ -161,7 +161,15 @@ impl crate::decoder::IO for avifIOWrapper {
             let err: AvifError = res.into();
             return Err(err);
         }
-        Ok(unsafe { std::slice::from_raw_parts(self.data.data, self.data.size) })
+        if self.data.size == 0 {
+            Ok(&[])
+        } else if self.data.data == std::ptr::null() {
+            Err(AvifError::UnknownError(
+                "data pointer was null but size was not zero".into(),
+            ))
+        } else {
+            Ok(unsafe { std::slice::from_raw_parts(self.data.data, self.data.size) })
+        }
     }
     fn size_hint(&self) -> u64 {
         self.io.sizeHint
