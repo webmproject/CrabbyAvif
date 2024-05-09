@@ -1199,6 +1199,11 @@ impl Decoder {
         codec.get_next_image(data, sample.spatial_id, &mut tile.image, category)?;
         self.tile_info[category.usize()].decoded_tile_count += 1;
 
+        if category == Category::Alpha && tile.image.yuv_range == YuvRange::Limited {
+            tile.image.alpha_to_full_range()?;
+        }
+        tile.image.scale(tile.width, tile.height, category)?;
+
         if self.tile_info[category.usize()].is_grid() {
             if tile_index == 0 {
                 // Validate the grid image size
@@ -1242,10 +1247,6 @@ impl Decoder {
                     }
                 }
             }
-            if category == Category::Alpha && tile.image.yuv_range == YuvRange::Limited {
-                tile.image.alpha_to_full_range()?;
-            }
-            tile.image.scale(tile.width, tile.height, category)?;
             if !tiles_slice1.is_empty() {
                 let first_tile_image = &tiles_slice1[0].image;
                 if tile.image.width != first_tile_image.width
@@ -1283,7 +1284,6 @@ impl Decoder {
             // Non grid path, steal or copy planes from the only tile.
             match category {
                 Category::Color => {
-                    tile.image.scale(tile.width, tile.height, category)?;
                     self.image.width = tile.image.width;
                     self.image.height = tile.image.height;
                     self.image.depth = tile.image.depth;
@@ -1291,10 +1291,6 @@ impl Decoder {
                     self.image.steal_or_copy_from(&tile.image, category)?;
                 }
                 Category::Alpha => {
-                    if tile.image.yuv_range == YuvRange::Limited {
-                        tile.image.alpha_to_full_range()?;
-                    }
-                    tile.image.scale(tile.width, tile.height, category)?;
                     if !self.image.has_same_properties(&tile.image) {
                         return Err(AvifError::DecodeAlphaFailed);
                     }
@@ -1308,9 +1304,6 @@ impl Decoder {
                     self.gainmap
                         .image
                         .steal_or_copy_from(&tile.image, category)?;
-                    self.gainmap
-                        .image
-                        .scale(tile.width, tile.height, category)?;
                 }
             }
         }
