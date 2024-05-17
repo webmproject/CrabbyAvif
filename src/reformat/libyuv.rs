@@ -334,10 +334,10 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool
     let matrix = if is_yvu { matrix_yvu } else { matrix_yuv };
     let u_plane_index: usize = if is_yvu { 2 } else { 1 };
     let v_plane_index: usize = if is_yvu { 1 } else { 2 };
-    let filter = if rgb.chroma_upsampling.nearest_neighbor_filter_allowed() {
-        FilterMode_kFilterNone
-    } else {
+    let filter = if rgb.chroma_upsampling.bilinear_or_better_filter_allowed() {
         FilterMode_kFilterBilinear
+    } else {
+        FilterMode_kFilterNone
     };
     let mut plane_u8: [*const u8; 4] = ALL_PLANES
         .iter()
