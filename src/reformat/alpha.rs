@@ -44,10 +44,6 @@ impl rgb::Image {
         if self.format == rgb::Format::Rgb565 {
             return Err(AvifError::NotImplemented);
         }
-        if self.premultiply_alpha {
-            // unpremultiply_alpha() should be called first.
-            return Err(AvifError::InvalidArgument);
-        }
         let alpha_offset = self.format.alpha_offset();
         let width = usize_from_u32(self.width)?;
         if self.depth > 8 {
