@@ -252,6 +252,22 @@ impl Image {
         if !image.has_plane(Plane::Y) {
             return Err(AvifError::ReformatFailed);
         }
+        if matches!(
+            image.matrix_coefficients,
+            MatrixCoefficients::Ycgco
+                | MatrixCoefficients::Bt2020Cl
+                | MatrixCoefficients::Smpte2085
+                | MatrixCoefficients::ChromaDerivedCl
+                | MatrixCoefficients::Ictcp
+        ) {
+            return Err(AvifError::NotImplemented);
+        }
+        if image.matrix_coefficients == MatrixCoefficients::Identity
+            && !matches!(image.yuv_format, PixelFormat::Yuv444 | PixelFormat::Yuv400)
+        {
+            return Err(AvifError::NotImplemented);
+        }
+
         let mut alpha_multiply_mode = AlphaMultiplyMode::NoOp;
         if image.has_alpha() && self.has_alpha() {
             if !image.alpha_premultiplied && self.premultiply_alpha {
