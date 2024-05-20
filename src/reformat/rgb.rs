@@ -47,6 +47,10 @@ impl Format {
     pub fn alpha_offset(&self) -> usize {
         self.offsets()[3]
     }
+
+    pub fn has_alpha(&self) -> bool {
+        !matches!(self, Format::Rgb | Format::Bgr | Format::Rgb565)
+    }
 }
 
 #[repr(C)]
@@ -300,13 +304,25 @@ impl Image {
             }
         }
         if !converted_with_libyuv {
-            match rgb_impl::yuv_to_rgb_fast(image, self) {
-                Ok(_) => (),
-                Err(AvifError::NotImplemented) => {
-                    rgb_impl::yuv_to_rgb_any(image, self, alpha_multiply_mode)?;
-                    alpha_multiply_mode = AlphaMultiplyMode::NoOp;
+            let mut converted_by_fast_path = false;
+            if (matches!(
+                self.chroma_upsampling,
+                ChromaUpsampling::Nearest | ChromaUpsampling::Fastest
+            ) || matches!(image.yuv_format, PixelFormat::Yuv444 | PixelFormat::Yuv400))
+                && (alpha_multiply_mode == AlphaMultiplyMode::NoOp || self.format.has_alpha())
+            {
+                match rgb_impl::yuv_to_rgb_fast(image, self) {
+                    Ok(_) => converted_by_fast_path = true,
+                    Err(err) => {
+                        if err != AvifError::NotImplemented {
+                            return Err(err);
+                        }
+                    }
                 }
-                Err(err) => return Err(err),
+            }
+            if !converted_by_fast_path {
+                rgb_impl::yuv_to_rgb_any(image, self, alpha_multiply_mode)?;
+                alpha_multiply_mode = AlphaMultiplyMode::NoOp;
             }
         }
         match alpha_multiply_mode {

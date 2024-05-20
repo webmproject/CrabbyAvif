@@ -72,16 +72,96 @@ fn identity_yuv8_to_rgb8_full_range(image: &image::Image, rgb: &mut rgb::Image) 
     Ok(())
 }
 
+// This is a macro and not a function because this is invoked per-pixel and there is a non-trivial
+// performance impact if this is made into a function call.
+macro_rules! store_rgb_pixel8 {
+    ($dst:ident, $rgb_565: ident, $index: ident, $r: ident, $g: ident, $b: ident, $r_offset: ident,
+     $g_offset: ident, $b_offset: ident, $rgb_channel_count: ident, $rgb_max_channel_f: ident) => {
+        if $rgb_565 {
+            // TODO: Handle rgb565.
+        } else {
+            $dst[($index * $rgb_channel_count) + $r_offset] =
+                (0.5 + ($r * $rgb_max_channel_f)) as u8;
+            $dst[($index * $rgb_channel_count) + $g_offset] =
+                (0.5 + ($g * $rgb_max_channel_f)) as u8;
+            $dst[($index * $rgb_channel_count) + $b_offset] =
+                (0.5 + ($b * $rgb_max_channel_f)) as u8;
+        }
+    };
+}
+
+fn yuv8_to_rgb8_color(
+    image: &image::Image,
+    rgb: &mut rgb::Image,
+    kr: f32,
+    kg: f32,
+    kb: f32,
+) -> AvifResult<()> {
+    let (table_y, table_uv) = unorm_lookup_tables(image, Mode::YuvCoefficients(kr, kg, kb))?;
+    let table_uv = match &table_uv {
+        Some(table_uv) => table_uv,
+        None => &table_y,
+    };
+    let rgb_max_channel_f = rgb.max_channel_f();
+    let r_offset = rgb.format.r_offset();
+    let g_offset = rgb.format.g_offset();
+    let b_offset = rgb.format.b_offset();
+    let rgb_channel_count = rgb.channel_count() as usize;
+    let rgb_565 = rgb.format == rgb::Format::Rgb565;
+    for j in 0..image.height {
+        let uv_j = j >> image.yuv_format.chroma_shift_y();
+        let y_row = image.row(Plane::Y, j)?;
+        let u_row = image.row(Plane::U, uv_j)?;
+        let v_row = image.row(Plane::V, uv_j)?;
+        let dst = rgb.row_mut(j)?;
+        for i in 0..image.width as usize {
+            let uv_i = i >> image.yuv_format.chroma_shift_x();
+            let y = table_y[y_row[i] as usize];
+            let cb = table_uv[u_row[uv_i] as usize];
+            let cr = table_uv[v_row[uv_i] as usize];
+            let r = y + (2.0 * (1.0 - kr)) * cr;
+            let b = y + (2.0 * (1.0 - kb)) * cb;
+            let g = y - ((2.0 * ((kr * (1.0 - kr) * cr) + (kb * (1.0 - kb) * cb))) / kg);
+            let r = clamp_f32(r, 0.0, 1.0);
+            let g = clamp_f32(g, 0.0, 1.0);
+            let b = clamp_f32(b, 0.0, 1.0);
+            store_rgb_pixel8!(
+                dst,
+                rgb_565,
+                i,
+                r,
+                g,
+                b,
+                r_offset,
+                g_offset,
+                b_offset,
+                rgb_channel_count,
+                rgb_max_channel_f
+            );
+        }
+    }
+    Ok(())
+}
 pub fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
     let mode = Mode::create_from(image)?;
-    if mode == Mode::Identity {
-        if image.depth == 8 && rgb.depth == 8 && image.yuv_range == YuvRange::Full {
-            return identity_yuv8_to_rgb8_full_range(image, rgb);
+    match mode {
+        Mode::Identity => {
+            if image.depth == 8 && rgb.depth == 8 && image.yuv_range == YuvRange::Full {
+                identity_yuv8_to_rgb8_full_range(image, rgb)
+            } else {
+                // TODO: Add more fast paths for identity.
+                Err(AvifError::NotImplemented)
+            }
         }
-        // TODO: Add more fast paths for identity.
-        return Err(AvifError::NotImplemented);
+        Mode::YuvCoefficients(kr, kg, kb) => {
+            let has_color = image.yuv_format != PixelFormat::Yuv400;
+            match (image.depth == 8, rgb.depth == 8, has_color) {
+                (true, true, true) => yuv8_to_rgb8_color(image, rgb, kr, kg, kb),
+                _ => Err(AvifError::NotImplemented),
+            }
+        }
+        Mode::Ycgco => Err(AvifError::NotImplemented),
     }
-    Err(AvifError::NotImplemented)
 }
 
 fn unorm_lookup_tables(
