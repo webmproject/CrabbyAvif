@@ -240,6 +240,34 @@ fn yuv16_to_rgb8_color(
     Ok(())
 }
 
+fn yuv16_to_rgb16_monochrome(
+    image: &image::Image,
+    rgb: &mut rgb::Image,
+    kr: f32,
+    kg: f32,
+    kb: f32,
+) -> AvifResult<()> {
+    let (table_y, _table_uv) = unorm_lookup_tables(image, Mode::YuvCoefficients(kr, kg, kb))?;
+    let yuv_max_channel = image.max_channel();
+    let rgb_max_channel_f = rgb.max_channel_f();
+    let r_offset = rgb.format.r_offset();
+    let g_offset = rgb.format.g_offset();
+    let b_offset = rgb.format.b_offset();
+    let rgb_channel_count = rgb.channel_count() as usize;
+    for j in 0..image.height {
+        let y_row = image.row16(Plane::Y, j)?;
+        let dst = rgb.row16_mut(j)?;
+        for i in 0..image.width as usize {
+            let y = table_y[min(y_row[i], yuv_max_channel) as usize];
+            let rgb_pixel = (0.5 + (y * rgb_max_channel_f)) as u16;
+            dst[(i * rgb_channel_count) + r_offset] = rgb_pixel;
+            dst[(i * rgb_channel_count) + g_offset] = rgb_pixel;
+            dst[(i * rgb_channel_count) + b_offset] = rgb_pixel;
+        }
+    }
+    Ok(())
+}
+
 pub fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
     let mode = Mode::create_from(image)?;
     match mode {
@@ -257,6 +285,7 @@ pub fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult
                 (true, true, true) => yuv8_to_rgb8_color(image, rgb, kr, kg, kb),
                 (false, false, true) => yuv16_to_rgb16_color(image, rgb, kr, kg, kb),
                 (false, true, true) => yuv16_to_rgb8_color(image, rgb, kr, kg, kb),
+                (false, false, false) => yuv16_to_rgb16_monochrome(image, rgb, kr, kg, kb),
                 _ => Err(AvifError::NotImplemented),
             }
         }
