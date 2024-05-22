@@ -157,6 +157,7 @@ pub enum TransferCharacteristics {
     Bt709 = 1,
     #[default]
     Unspecified = 2,
+    Reserved = 3,
     Bt470m = 4,  // 2.2 gamma
     Bt470bg = 5, // 2.8 gamma
     Bt601 = 6,
@@ -180,6 +181,7 @@ impl From<u16> for TransferCharacteristics {
             0 => Self::Unknown,
             1 => Self::Bt709,
             2 => Self::Unspecified,
+            3 => Self::Reserved,
             4 => Self::Bt470m,
             5 => Self::Bt470bg,
             6 => Self::Bt601,
@@ -213,6 +215,7 @@ pub enum MatrixCoefficients {
     Bt709 = 1,
     #[default]
     Unspecified = 2,
+    Reserved = 3,
     Fcc = 4,
     Bt470bg = 5,
     Bt601 = 6,
@@ -234,6 +237,7 @@ impl From<u16> for MatrixCoefficients {
             0 => Self::Identity,
             1 => Self::Bt709,
             2 => Self::Unspecified,
+            3 => Self::Reserved,
             4 => Self::Fcc,
             5 => Self::Bt470bg,
             6 => Self::Bt601,

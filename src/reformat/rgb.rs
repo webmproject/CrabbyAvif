@@ -258,7 +258,8 @@ impl Image {
         }
         if matches!(
             image.matrix_coefficients,
-            MatrixCoefficients::Ycgco
+            MatrixCoefficients::Reserved
+                | MatrixCoefficients::Ycgco
                 | MatrixCoefficients::Bt2020Cl
                 | MatrixCoefficients::Smpte2085
                 | MatrixCoefficients::ChromaDerivedCl
