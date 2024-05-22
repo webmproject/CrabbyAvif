@@ -3,6 +3,8 @@ use crate::internal_utils::stream::*;
 use crate::parser::mp4box::*;
 use crate::*;
 
+use std::collections::BTreeMap;
+
 #[derive(Debug, Default)]
 pub struct Item {
     pub id: u32,
@@ -316,7 +318,7 @@ impl Item {
     }
 }
 
-pub type Items = HashMap<u32, Item>;
+pub type Items = BTreeMap<u32, Item>;
 
 fn insert_item_if_not_exists(id: u32, items: &mut Items) {
     if items.contains_key(&id) {
@@ -332,7 +334,7 @@ fn insert_item_if_not_exists(id: u32, items: &mut Items) {
 }
 
 pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
-    let mut items: Items = HashMap::with_hasher(NonRandomHasherState);
+    let mut items: Items = BTreeMap::new();
     for iinf in &meta.iinf {
         items.insert(
             iinf.item_id,

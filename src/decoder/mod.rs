@@ -613,12 +613,7 @@ impl Decoder {
         Ok(())
     }
 
-    fn populate_grid_item_ids(
-        &mut self,
-        iinf: &Vec<ItemInfo>,
-        item_id: u32,
-        category: Category,
-    ) -> AvifResult<()> {
+    fn populate_grid_item_ids(&mut self, item_id: u32, category: Category) -> AvifResult<()> {
         if self.items.get(&item_id).unwrap().item_type != "grid" {
             return Ok(());
         }
@@ -626,12 +621,14 @@ impl Decoder {
         let mut grid_item_ids: Vec<u32> = create_vec_exact(tile_count)?;
         #[allow(non_snake_case)]
         let mut first_av1C: Option<CodecConfiguration> = None;
-        // Collect all the dimg items. Cannot directly iterate through items here directly
-        // because HashMap is not ordered.
-        for item_info in iinf {
+        // Collect all the dimg items.
+        for dimg_item_id in self.items.keys() {
+            if *dimg_item_id == item_id {
+                continue;
+            }
             let dimg_item = self
                 .items
-                .get(&item_info.item_id)
+                .get(dimg_item_id)
                 .ok_or(AvifError::InvalidImageGrid("".into()))?;
             if dimg_item.dimg_for_id != item_id {
                 continue;
@@ -655,7 +652,7 @@ impl Decoder {
                     "Expected number of tiles not found".into(),
                 ));
             }
-            grid_item_ids.push(item_info.item_id);
+            grid_item_ids.push(*dimg_item_id);
         }
         if grid_item_ids.len() != tile_count {
             return Err(AvifError::InvalidImageGrid(
@@ -810,11 +807,7 @@ impl Decoder {
                 // Mandatory color item.
                 item_ids[Category::Color.usize()] = color_item_id.ok_or(AvifError::NoContent)?;
                 self.read_and_parse_item(item_ids[Category::Color.usize()], Category::Color)?;
-                self.populate_grid_item_ids(
-                    &avif_boxes.meta.iinf,
-                    item_ids[Category::Color.usize()],
-                    Category::Color,
-                )?;
+                self.populate_grid_item_ids(item_ids[Category::Color.usize()], Category::Color)?;
 
                 // Optional alpha auxiliary item
                 if let Some(alpha_item_id) =
@@ -822,11 +815,7 @@ impl Decoder {
                 {
                     if !self.items.get(&alpha_item_id).unwrap().is_made_up {
                         self.read_and_parse_item(alpha_item_id, Category::Alpha)?;
-                        self.populate_grid_item_ids(
-                            &avif_boxes.meta.iinf,
-                            alpha_item_id,
-                            Category::Alpha,
-                        )?;
+                        self.populate_grid_item_ids(alpha_item_id, Category::Alpha)?;
                     }
                     item_ids[Category::Alpha.usize()] = alpha_item_id;
                 }
@@ -836,11 +825,7 @@ impl Decoder {
                     self.find_gainmap_item(item_ids[Category::Color.usize()])?
                 {
                     self.read_and_parse_item(gainmap_id, Category::Gainmap)?;
-                    self.populate_grid_item_ids(
-                        &avif_boxes.meta.iinf,
-                        gainmap_id,
-                        Category::Gainmap,
-                    )?;
+                    self.populate_grid_item_ids(gainmap_id, Category::Gainmap)?;
                     self.validate_gainmap_item(gainmap_id, tonemap_id)?;
                     self.gainmap_present = true;
                     if self.settings.enable_decoding_gainmap {
