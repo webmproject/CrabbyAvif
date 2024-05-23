@@ -56,7 +56,7 @@ impl Image {
             }
         }
         for plane in planes {
-            if !src.has_plane(*plane) {
+            if !src.has_plane(*plane) || !self.has_plane(*plane) {
                 continue;
             }
             let src_pd = src.plane_data(*plane).unwrap();
