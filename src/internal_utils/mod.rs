@@ -222,6 +222,14 @@ pub fn limited_to_full_y(depth: u8, v: u16) -> u16 {
 
 pub fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
     let mut v = Vec::<T>::new();
+    let allocation_size = size
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or(AvifError::OutOfMemory)?;
+    // TODO: b/342251590 - Do not request allocations of more than 8192 megabytes. This is the
+    // allowed limit in the chromium fuzzers.
+    if allocation_size > 8_192_000_000 {
+        return Err(AvifError::OutOfMemory);
+    }
     if v.try_reserve_exact(size).is_err() {
         return Err(AvifError::OutOfMemory);
     }
