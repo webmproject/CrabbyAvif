@@ -501,24 +501,26 @@ impl Decoder {
         Ok(())
     }
 
-    fn search_exif_or_xmp_metadata(&mut self, color_item_index: u32) -> AvifResult<()> {
-        if !self.settings.ignore_exif {
-            if let Some(exif) = self
-                .items
-                .iter_mut()
-                .find(|x| x.1.is_exif(color_item_index))
-            {
-                let mut stream = exif.1.stream(self.io.unwrap_mut())?;
+    fn search_exif_or_xmp_metadata(
+        items: &mut Items,
+        color_item_index: u32,
+        settings: &Settings,
+        io: &mut GenericIO,
+        image: &mut Image,
+    ) -> AvifResult<()> {
+        if !settings.ignore_exif {
+            if let Some(exif) = items.iter_mut().find(|x| x.1.is_exif(color_item_index)) {
+                let mut stream = exif.1.stream(io)?;
                 exif::parse(&mut stream)?;
-                self.image
+                image
                     .exif
                     .extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
             }
         }
-        if !self.settings.ignore_xmp {
-            if let Some(xmp) = self.items.iter_mut().find(|x| x.1.is_xmp(color_item_index)) {
-                let mut stream = xmp.1.stream(self.io.unwrap_mut())?;
-                self.image
+        if !settings.ignore_xmp {
+            if let Some(xmp) = items.iter_mut().find(|x| x.1.is_xmp(color_item_index)) {
+                let mut stream = xmp.1.stream(io)?;
+                image
                     .xmp
                     .extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
             }
@@ -739,20 +741,6 @@ impl Decoder {
                 Source::PrimaryItem => Source::PrimaryItem,
             };
 
-            // ID of the primary item.
-            let color_item_id = self
-                .items
-                .iter()
-                .find(|x| {
-                    !x.1.should_skip() && x.1.id != 0 && x.1.id == avif_boxes.meta.primary_item_id
-                })
-                .map(|it| *it.0);
-
-            // Find exif/xmp from meta if any.
-            if let Some(color_item_id) = color_item_id {
-                self.search_exif_or_xmp_metadata(color_item_id)?;
-            }
-
             let color_properties: &Vec<ItemProperty>;
             if self.source == Source::Tracks {
                 let color_track = self
@@ -760,6 +748,16 @@ impl Decoder {
                     .iter()
                     .find(|x| x.is_color())
                     .ok_or(AvifError::NoContent)?;
+                if let Some(meta) = &color_track.meta {
+                    let mut color_track_items = construct_items(meta)?;
+                    Self::search_exif_or_xmp_metadata(
+                        &mut color_track_items,
+                        0,
+                        &self.settings,
+                        self.io.unwrap_mut(),
+                        &mut self.image,
+                    )?;
+                }
                 self.color_track_id = Some(color_track.id);
                 color_properties = color_track
                     .get_properties()
@@ -804,10 +802,29 @@ impl Decoder {
                 assert_eq!(self.source, Source::PrimaryItem);
                 let mut item_ids: [u32; Category::COUNT] = [0; Category::COUNT];
 
-                // Mandatory color item.
+                // Mandatory color item (primary item).
+                let color_item_id = self
+                    .items
+                    .iter()
+                    .find(|x| {
+                        !x.1.should_skip()
+                            && x.1.id != 0
+                            && x.1.id == avif_boxes.meta.primary_item_id
+                    })
+                    .map(|it| *it.0);
+
                 item_ids[Category::Color.usize()] = color_item_id.ok_or(AvifError::NoContent)?;
                 self.read_and_parse_item(item_ids[Category::Color.usize()], Category::Color)?;
                 self.populate_grid_item_ids(item_ids[Category::Color.usize()], Category::Color)?;
+
+                // Find exif/xmp from meta if any.
+                Self::search_exif_or_xmp_metadata(
+                    &mut self.items,
+                    item_ids[Category::Color.usize()],
+                    &self.settings,
+                    self.io.unwrap_mut(),
+                    &mut self.image,
+                )?;
 
                 // Optional alpha auxiliary item
                 if let Some(alpha_item_id) =
