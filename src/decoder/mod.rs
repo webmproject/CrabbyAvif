@@ -503,7 +503,7 @@ impl Decoder {
 
     fn search_exif_or_xmp_metadata(
         items: &mut Items,
-        color_item_index: u32,
+        color_item_index: Option<u32>,
         settings: &Settings,
         io: &mut GenericIO,
         image: &mut Image,
@@ -752,7 +752,7 @@ impl Decoder {
                     let mut color_track_items = construct_items(meta)?;
                     Self::search_exif_or_xmp_metadata(
                         &mut color_track_items,
-                        0,
+                        None,
                         &self.settings,
                         self.io.unwrap_mut(),
                         &mut self.image,
@@ -820,7 +820,7 @@ impl Decoder {
                 // Find exif/xmp from meta if any.
                 Self::search_exif_or_xmp_metadata(
                     &mut self.items,
-                    item_ids[Category::Color.usize()],
+                    Some(item_ids[Category::Color.usize()]),
                     &self.settings,
                     self.io.unwrap_mut(),
                     &mut self.image,

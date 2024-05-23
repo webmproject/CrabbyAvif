@@ -243,23 +243,23 @@ impl Item {
             || self.thumbnail_for_id != 0
     }
 
-    fn is_metadata(&self, item_type: &str, color_id: u32) -> bool {
+    fn is_metadata(&self, item_type: &str, color_id: Option<u32>) -> bool {
         self.size != 0
             && !self.has_unsupported_essential_property
-            && (color_id == 0 || self.desc_for_id == color_id)
+            && (color_id.is_none() || self.desc_for_id == color_id.unwrap())
             && self.item_type == *item_type
     }
 
-    pub fn is_exif(&self, color_id: u32) -> bool {
+    pub fn is_exif(&self, color_id: Option<u32>) -> bool {
         self.is_metadata("Exif", color_id)
     }
 
-    pub fn is_xmp(&self, color_id: u32) -> bool {
+    pub fn is_xmp(&self, color_id: Option<u32>) -> bool {
         self.is_metadata("mime", color_id) && self.content_type == "application/rdf+xml"
     }
 
     pub fn is_tmap(&self) -> bool {
-        self.is_metadata("tmap", 0) && self.thumbnail_for_id == 0
+        self.is_metadata("tmap", None) && self.thumbnail_for_id == 0
     }
 
     pub fn max_extent(&self, sample: &DecodeSample) -> AvifResult<Extent> {
