@@ -227,7 +227,7 @@ pub fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
         .ok_or(AvifError::OutOfMemory)?;
     // TODO: b/342251590 - Do not request allocations of more than 8192 megabytes. This is the
     // allowed limit in the chromium fuzzers.
-    if allocation_size > 8_192_000_000 {
+    if u64_from_usize(allocation_size)? > 8_192_000_000 {
         return Err(AvifError::OutOfMemory);
     }
     if v.try_reserve_exact(size).is_err() {
