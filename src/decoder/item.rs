@@ -359,7 +359,10 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
         }
         for extent in &iloc.extents {
             item.extents.push(Extent {
-                offset: iloc.base_offset + extent.offset,
+                offset: iloc
+                    .base_offset
+                    .checked_add(extent.offset)
+                    .ok_or(AvifError::BmffParseFailed("".into()))?,
                 size: extent.size,
             });
             item.size = item
