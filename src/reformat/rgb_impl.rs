@@ -17,27 +17,9 @@ enum Mode {
     Ycgco,
 }
 
-impl Mode {
-    fn create_from(image: &image::Image) -> AvifResult<Self> {
-        if !image.depth_valid() {
-            return Err(AvifError::ReformatFailed);
-        }
-        // Unsupported matrix coefficients.
+impl From<&image::Image> for Mode {
+    fn from(image: &image::Image) -> Self {
         match image.matrix_coefficients {
-            MatrixCoefficients::Ycgco
-            | MatrixCoefficients::Bt2020Cl
-            | MatrixCoefficients::Smpte2085
-            | MatrixCoefficients::ChromaDerivedCl
-            | MatrixCoefficients::Ictcp => return Err(AvifError::ReformatFailed),
-            _ => {}
-        }
-        if image.matrix_coefficients == MatrixCoefficients::Identity
-            && image.yuv_format != PixelFormat::Yuv444
-            && image.yuv_format != PixelFormat::Yuv400
-        {
-            return Err(AvifError::ReformatFailed);
-        }
-        Ok(match image.matrix_coefficients {
             MatrixCoefficients::Identity => Mode::Identity,
             MatrixCoefficients::Ycgco => Mode::Ycgco,
             _ => {
@@ -45,7 +27,7 @@ impl Mode {
                     calculate_yuv_coefficients(image.color_primaries, image.matrix_coefficients);
                 Mode::YuvCoefficients(coeffs[0], coeffs[1], coeffs[2])
             }
-        })
+        }
     }
 }
 
@@ -413,7 +395,7 @@ fn yuv8_to_rgb16_monochrome(
 }
 
 pub fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
-    let mode = Mode::create_from(image)?;
+    let mode: Mode = image.into();
     match mode {
         Mode::Identity => {
             if image.depth == 8 && rgb.depth == 8 && image.yuv_range == YuvRange::Full {
@@ -528,7 +510,7 @@ pub fn yuv_to_rgb_any(
     rgb: &mut rgb::Image,
     alpha_multiply_mode: AlphaMultiplyMode,
 ) -> AvifResult<()> {
-    let mode = Mode::create_from(image)?;
+    let mode: Mode = image.into();
     let (table_y, table_uv) = unorm_lookup_tables(image, mode)?;
     let table_uv = match &table_uv {
         Some(table_uv) => table_uv,

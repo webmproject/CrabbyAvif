@@ -2,6 +2,7 @@ use super::libyuv;
 use super::rgb_impl;
 
 use crate::image::Plane;
+use crate::image::YuvRange;
 use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
 use crate::*;
@@ -253,18 +254,22 @@ impl Image {
     }
 
     pub fn convert_from_yuv(&mut self, image: &image::Image) -> AvifResult<()> {
-        if !image.has_plane(Plane::Y) {
+        if !image.has_plane(Plane::Y) || !image.depth_valid() {
             return Err(AvifError::ReformatFailed);
         }
         if matches!(
             image.matrix_coefficients,
             MatrixCoefficients::Reserved
-                | MatrixCoefficients::Ycgco
                 | MatrixCoefficients::Bt2020Cl
                 | MatrixCoefficients::Smpte2085
                 | MatrixCoefficients::ChromaDerivedCl
                 | MatrixCoefficients::Ictcp
         ) {
+            return Err(AvifError::NotImplemented);
+        }
+        if image.matrix_coefficients == MatrixCoefficients::Ycgco
+            && image.yuv_range == YuvRange::Limited
+        {
             return Err(AvifError::NotImplemented);
         }
         if image.matrix_coefficients == MatrixCoefficients::Identity
