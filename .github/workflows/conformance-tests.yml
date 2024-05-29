@@ -1,4 +1,4 @@
-name: Unix Static Conformance
+name: Conformance Tests
 on:
   push:
     branches:
@@ -14,7 +14,8 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  unix-static-conformance:
+  conformance-tests:
+    name: "Conformance Tests on ${{ matrix.os }}"
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
