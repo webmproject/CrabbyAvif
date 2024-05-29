@@ -1387,6 +1387,7 @@ fn parse_stbl(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
                 header.box_type
             )));
         }
+        let mut skipped_box = false;
         let mut sub_stream = stream.sub_stream(&header.size)?;
         match header.box_type.as_str() {
             "stco" => {
@@ -1410,9 +1411,13 @@ fn parse_stbl(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
             "stss" => parse_stss(&mut sub_stream, &mut sample_table)?,
             "stts" => parse_stts(&mut sub_stream, &mut sample_table)?,
             "stsd" => parse_stsd(&mut sub_stream, &mut sample_table)?,
-            _ => {}
+            _ => skipped_box = true,
         }
-        boxes_seen.insert(header.box_type.clone());
+        // For boxes that are skipped, we do not need to validate if they occur exactly once or
+        // not.
+        if !skipped_box {
+            boxes_seen.insert(header.box_type.clone());
+        }
     }
     track.sample_table = Some(sample_table);
     Ok(())
