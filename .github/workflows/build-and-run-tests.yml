@@ -20,7 +20,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # TODO(vigneshv): macos-latest is temporarily broken on Github CI.
+        # Probably has to do with macos upgrade to 14. Enable it once the issues
+        # are resolved.
+        os: [ubuntu-latest, windows-latest]
 
     steps:
     - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
