@@ -107,7 +107,11 @@ impl Image {
     }
 
     pub fn max_channel(&self) -> u16 {
-        ((1i32 << self.depth) - 1) as u16
+        if !self.depth_valid() {
+            0
+        } else {
+            ((1i32 << self.depth) - 1) as u16
+        }
     }
 
     pub fn max_channel_f(&self) -> f32 {
@@ -166,7 +170,7 @@ impl Image {
 
     pub fn row(&self, plane: Plane, row: u32) -> AvifResult<&[u8]> {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
-        let start = row * plane_data.row_bytes;
+        let start = checked_mul!(row, plane_data.row_bytes)?;
         self.planes[plane.to_usize()]
             .unwrap_ref()
             .slice(start, plane_data.row_bytes)
@@ -175,7 +179,7 @@ impl Image {
     pub fn row_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u8]> {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let row_bytes = plane_data.row_bytes;
-        let start = row * row_bytes;
+        let start = checked_mul!(row, row_bytes)?;
         self.planes[plane.to_usize()]
             .unwrap_mut()
             .slice_mut(start, row_bytes)
@@ -184,7 +188,7 @@ impl Image {
     pub fn row16(&self, plane: Plane, row: u32) -> AvifResult<&[u16]> {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let row_bytes = plane_data.row_bytes / 2;
-        let start = row * row_bytes;
+        let start = checked_mul!(row, row_bytes)?;
         self.planes[plane.to_usize()]
             .unwrap_ref()
             .slice16(start, row_bytes)
@@ -193,7 +197,7 @@ impl Image {
     pub fn row16_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u16]> {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let row_bytes = plane_data.row_bytes / 2;
-        let start = row * row_bytes;
+        let start = checked_mul!(row, row_bytes)?;
         self.planes[plane.to_usize()]
             .unwrap_mut()
             .slice16_mut(start, row_bytes)
@@ -213,9 +217,8 @@ impl Image {
             let plane = *plane;
             let plane_index = plane.to_usize();
             let width = self.width(plane);
-            let plane_size = width * self.height(plane);
-            let default_value =
-                if plane == Plane::A { ((1i32 << self.depth) - 1) as u16 } else { 0 };
+            let plane_size = checked_mul!(width, self.height(plane))?;
+            let default_value = if plane == Plane::A { self.max_channel() } else { 0 };
             if self.planes[plane_index].is_some()
                 && self.planes[plane_index].unwrap_ref().size() == plane_size
                 && (self.planes[plane_index].unwrap_ref().pixel_bit_size() == 0
@@ -231,7 +234,7 @@ impl Image {
             });
             let pixels = self.planes[plane_index].unwrap_mut();
             pixels.resize(plane_size, default_value)?;
-            self.row_bytes[plane_index] = u32_from_usize(width * pixel_size)?;
+            self.row_bytes[plane_index] = u32_from_usize(checked_mul!(width, pixel_size)?)?;
             self.image_owns_planes[plane_index] = true;
         }
         Ok(())
@@ -303,23 +306,27 @@ impl Image {
                 u64::from(src_plane.height)
             };
 
-            let dst_y_start = row_index * u64::from(src_plane.height);
-            let dst_x_offset = usize_from_u64(column_index * u64::from(src_plane.width))?;
+            let dst_y_start = checked_mul!(row_index, u64::from(src_plane.height))?;
+            let dst_x_offset =
+                usize_from_u64(checked_mul!(column_index, u64::from(src_plane.width))?)?;
+            let dst_x_offset_end = checked_add!(dst_x_offset, src_width_to_copy)?;
             // TODO: src_height_to_copy can just be u32?
             if self.depth == 8 {
                 for y in 0..src_height_to_copy {
                     let src_row = tile.row(plane, u32_from_u64(y)?)?;
                     let src_slice = &src_row[0..src_width_to_copy];
-                    let dst_row = self.row_mut(plane, u32_from_u64(dst_y_start + y)?)?;
-                    let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset + src_width_to_copy];
+                    let dst_row =
+                        self.row_mut(plane, u32_from_u64(checked_add!(dst_y_start, y)?)?)?;
+                    let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset_end];
                     dst_slice.copy_from_slice(src_slice);
                 }
             } else {
                 for y in 0..src_height_to_copy {
                     let src_row = tile.row16(plane, u32_from_u64(y)?)?;
                     let src_slice = &src_row[0..src_width_to_copy];
-                    let dst_row = self.row16_mut(plane, u32_from_u64(dst_y_start + y)?)?;
-                    let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset + src_width_to_copy];
+                    let dst_row =
+                        self.row16_mut(plane, u32_from_u64(checked_add!(dst_y_start, y)?)?)?;
+                    let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset_end];
                     dst_slice.copy_from_slice(src_slice);
                 }
             }
