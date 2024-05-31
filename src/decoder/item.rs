@@ -276,7 +276,7 @@ impl Item {
             return Err(AvifError::TruncatedData);
         } else if self.extents.len() == 1 {
             min_offset = sample.offset;
-            max_offset = sample.offset + u64_from_usize(sample.size)?;
+            max_offset = checked_add!(sample.offset, u64_from_usize(sample.size)?)?;
         } else {
             let mut remaining_size = sample.size;
             for extent in &self.extents {
@@ -288,18 +288,14 @@ impl Item {
                         remaining_offset -= sizeu64;
                         continue;
                     } else {
-                        start_offset = start_offset
-                            .checked_add(remaining_offset)
-                            .ok_or(AvifError::BmffParseFailed("bad extent".into()))?;
-                        size -= usize_from_u64(remaining_offset)?;
+                        checked_incr!(start_offset, remaining_offset);
+                        checked_decr!(size, usize_from_u64(remaining_offset)?);
                         remaining_offset = 0;
                     }
                 }
                 // TODO(yguyon): Add comment to explain why it is fine to clip the extent size.
                 let used_extent_size = std::cmp::min(size, remaining_size);
-                let end_offset = start_offset
-                    .checked_add(u64_from_usize(used_extent_size)?)
-                    .ok_or(AvifError::BmffParseFailed("bad extent".into()))?;
+                let end_offset = checked_add!(start_offset, u64_from_usize(used_extent_size)?)?;
                 min_offset = std::cmp::min(min_offset, start_offset);
                 max_offset = std::cmp::max(max_offset, end_offset);
                 remaining_size -= used_extent_size;
@@ -313,7 +309,7 @@ impl Item {
         }
         Ok(Extent {
             offset: min_offset,
-            size: usize_from_u64(max_offset - min_offset)?,
+            size: usize_from_u64(checked_sub!(max_offset, min_offset)?)?,
         })
     }
 }
@@ -359,16 +355,10 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
         }
         for extent in &iloc.extents {
             item.extents.push(Extent {
-                offset: iloc
-                    .base_offset
-                    .checked_add(extent.offset)
-                    .ok_or(AvifError::BmffParseFailed("".into()))?,
+                offset: checked_add!(iloc.base_offset, extent.offset)?,
                 size: extent.size,
             });
-            item.size = item
-                .size
-                .checked_add(extent.size)
-                .ok_or(AvifError::BmffParseFailed("".into()))?;
+            checked_incr!(item.size, extent.size);
         }
     }
     let mut ipma_seen: HashSet<u32> = HashSet::with_hasher(NonRandomHasherState);

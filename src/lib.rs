@@ -313,3 +313,42 @@ impl<T> OptionExtension for Option<T> {
         self.as_mut().unwrap()
     }
 }
+
+macro_rules! checked_add {
+    ($a:expr, $b:expr) => {
+        $a.checked_add($b)
+            .ok_or(AvifError::BmffParseFailed("".into()))
+    };
+}
+
+macro_rules! checked_sub {
+    ($a:expr, $b:expr) => {
+        $a.checked_sub($b)
+            .ok_or(AvifError::BmffParseFailed("".into()))
+    };
+}
+
+macro_rules! checked_mul {
+    ($a:expr, $b:expr) => {
+        $a.checked_mul($b)
+            .ok_or(AvifError::BmffParseFailed("".into()))
+    };
+}
+
+macro_rules! checked_decr {
+    ($a:expr, $b:expr) => {
+        $a = checked_sub!($a, $b)?
+    };
+}
+
+macro_rules! checked_incr {
+    ($a:expr, $b:expr) => {
+        $a = checked_add!($a, $b)?
+    };
+}
+
+pub(crate) use checked_add;
+pub(crate) use checked_decr;
+pub(crate) use checked_incr;
+pub(crate) use checked_mul;
+pub(crate) use checked_sub;

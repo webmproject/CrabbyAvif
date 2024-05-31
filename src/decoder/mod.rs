@@ -155,17 +155,11 @@ impl Extent {
         if extent.size == 0 {
             return Ok(());
         }
-        let max_extent_1 = self
-            .offset
-            .checked_add(u64_from_usize(self.size)?)
-            .ok_or(AvifError::BmffParseFailed("".into()))?;
-        let max_extent_2 = extent
-            .offset
-            .checked_add(u64_from_usize(extent.size)?)
-            .ok_or(AvifError::BmffParseFailed("".into()))?;
+        let max_extent_1 = checked_add!(self.offset, u64_from_usize(self.size)?)?;
+        let max_extent_2 = checked_add!(extent.offset, u64_from_usize(extent.size)?)?;
         self.offset = min(self.offset, extent.offset);
         // The extents may not be contiguous. It does not matter for nth_image_max_extent().
-        self.size = usize_from_u64(max(max_extent_1, max_extent_2) - self.offset)?;
+        self.size = usize_from_u64(checked_sub!(max(max_extent_1, max_extent_2), self.offset)?)?;
         Ok(())
     }
 }
@@ -619,7 +613,7 @@ impl Decoder {
         if self.items.get(&item_id).unwrap().item_type != "grid" {
             return Ok(());
         }
-        let tile_count = self.tile_info[category.usize()].grid_tile_count() as usize;
+        let tile_count = self.tile_info[category.usize()].grid_tile_count()? as usize;
         let mut grid_item_ids: Vec<u32> = create_vec_exact(tile_count)?;
         #[allow(non_snake_case)]
         let mut first_av1C: Option<CodecConfiguration> = None;
@@ -947,8 +941,12 @@ impl Decoder {
                             ));
                         }
                         match tile.input.category {
-                            Category::Color => self.io_stats.color_obu_size += sample.size,
-                            Category::Alpha => self.io_stats.alpha_obu_size += sample.size,
+                            Category::Color => {
+                                checked_incr!(self.io_stats.color_obu_size, sample.size)
+                            }
+                            Category::Alpha => {
+                                checked_incr!(self.io_stats.alpha_obu_size, sample.size)
+                            }
                             _ => {}
                         }
                     }
@@ -1019,21 +1017,24 @@ impl Decoder {
     }
 
     #[allow(unreachable_code)]
-    fn can_use_single_codec(&self) -> bool {
+    fn can_use_single_codec(&self) -> AvifResult<bool> {
         #[cfg(feature = "android_mediacodec")]
         {
             // Android MediaCodec does not support using a single codec instance for images of
             // varying formats (which could happen when image contains alpha).
             // TODO: return false for now. But investigate cases where it is possible to use a
             // single codec instance (it may work for grids).
-            return false;
+            return Ok(false);
         }
-        let total_tile_count = self.tiles[0].len() + self.tiles[1].len() + self.tiles[2].len();
+        let total_tile_count = checked_add!(
+            checked_add!(self.tiles[0].len(), self.tiles[1].len())?,
+            self.tiles[2].len()
+        )?;
         if total_tile_count == 1 {
-            return true;
+            return Ok(true);
         }
         if self.image_count != 1 {
-            return false;
+            return Ok(false);
         }
         let mut image_buffers = 0;
         let mut stolen_image_buffers = 0;
@@ -1047,18 +1048,18 @@ impl Decoder {
         }
         if stolen_image_buffers > 0 && image_buffers > 1 {
             // Stealing will cause problems. So we need separate codec instances.
-            return false;
+            return Ok(false);
         }
         let operating_point = self.tiles[0][0].operating_point;
         let all_layers = self.tiles[0][0].input.all_layers;
         for tiles in &self.tiles {
             for tile in tiles {
                 if tile.operating_point != operating_point || tile.input.all_layers != all_layers {
-                    return false;
+                    return Ok(false);
                 }
             }
         }
-        true
+        Ok(true)
     }
 
     fn create_codec(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
@@ -1088,7 +1089,7 @@ impl Decoder {
                 )?;
                 self.tiles[1][0].codec_index = 1;
             }
-        } else if self.can_use_single_codec() {
+        } else if self.can_use_single_codec()? {
             self.codecs = create_vec_exact(1)?;
             self.create_codec(
                 self.tiles[Category::Color.usize()][0].operating_point,
@@ -1153,9 +1154,7 @@ impl Decoder {
         let mut bytes_to_skip = data.len(); // These extents were already merged.
         for extent in &item.extents {
             if bytes_to_skip != 0 {
-                bytes_to_skip = bytes_to_skip
-                    .checked_sub(extent.size)
-                    .ok_or(AvifError::BmffParseFailed("".into()))?;
+                checked_decr!(bytes_to_skip, extent.size);
                 continue;
             }
             let io = self.io.unwrap_mut();
@@ -1199,7 +1198,7 @@ impl Decoder {
         };
         let data = sample.data(io, item_data_buffer)?;
         codec.get_next_image(data, sample.spatial_id, &mut tile.image, category)?;
-        self.tile_info[category.usize()].decoded_tile_count += 1;
+        checked_incr!(self.tile_info[category.usize()].decoded_tile_count, 1);
 
         if category == Category::Alpha && tile.image.yuv_range == YuvRange::Limited {
             tile.image.alpha_to_full_range()?;
@@ -1210,15 +1209,15 @@ impl Decoder {
             if tile_index == 0 {
                 // Validate the grid image size
                 let grid = &self.tile_info[category.usize()].grid;
-                if tile.image.width * grid.columns < grid.width
-                    || tile.image.height * grid.rows < grid.height
+                if checked_mul!(tile.image.width, grid.columns)? < grid.width
+                    || checked_mul!(tile.image.height, grid.rows)? < grid.height
                 {
                     return Err(AvifError::InvalidImageGrid(
                         "Grid image tiles do not completely cover the image (HEIF (ISO/IEC 23008-12:2017), Section 6.6.2.3.1)".into(),
                     ));
                 }
-                if tile.image.width * (grid.columns - 1) >= grid.width
-                    || tile.image.height * (grid.rows - 1) >= grid.height
+                if checked_mul!(tile.image.width, grid.columns - 1)? >= grid.width
+                    || checked_mul!(tile.image.height, grid.rows - 1)? >= grid.height
                 {
                     return Err(AvifError::InvalidImageGrid(
                         "Grid image tiles in the rightmost column and bottommost row do not overlap the reconstructed image grid canvas. See MIAF (ISO/IEC 23000-22:2019), Section 7.3.11.4.2, Figure 2".into(),
@@ -1337,7 +1336,7 @@ impl Decoder {
             }
         }
 
-        let next_image_index = self.image_index + 1;
+        let next_image_index = checked_add!(self.image_index, 1)?;
         self.create_codecs()?;
         self.prepare_samples(next_image_index as usize)?;
         self.decode_tiles(next_image_index as usize)?;
@@ -1366,7 +1365,7 @@ impl Decoder {
             return Err(AvifError::NoImagesRemaining);
         }
         let requested_index = i32_from_u32(index)?;
-        if requested_index == (self.image_index + 1) {
+        if requested_index == checked_add!(self.image_index, 1)? {
             return self.next_image();
         }
         if requested_index == self.image_index && self.is_current_frame_fully_decoded() {
@@ -1374,7 +1373,9 @@ impl Decoder {
             return Ok(());
         }
         let nearest_keyframe = i32_from_u32(self.nearest_keyframe(index))?;
-        if nearest_keyframe > (self.image_index + 1) || requested_index <= self.image_index {
+        if nearest_keyframe > checked_add!(self.image_index, 1)?
+            || requested_index <= self.image_index
+        {
             // Start decoding from the nearest keyframe.
             self.image_index = nearest_keyframe - 1;
         }
