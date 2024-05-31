@@ -151,38 +151,38 @@ impl Image {
         self.pixels
             .as_ref()
             .ok_or(AvifError::NoContent)?
-            .slice(row * self.row_bytes, self.row_bytes)
+            .slice(checked_mul!(row, self.row_bytes)?, self.row_bytes)
     }
 
     pub fn row_mut(&mut self, row: u32) -> AvifResult<&mut [u8]> {
         self.pixels
             .as_mut()
             .ok_or(AvifError::NoContent)?
-            .slice_mut(row * self.row_bytes, self.row_bytes)
+            .slice_mut(checked_mul!(row, self.row_bytes)?, self.row_bytes)
     }
 
     pub fn row16(&self, row: u32) -> AvifResult<&[u16]> {
         self.pixels
             .as_ref()
             .ok_or(AvifError::NoContent)?
-            .slice16(row * self.row_bytes / 2, self.row_bytes / 2)
+            .slice16(checked_mul!(row, self.row_bytes / 2)?, self.row_bytes / 2)
     }
 
     pub fn row16_mut(&mut self, row: u32) -> AvifResult<&mut [u16]> {
         self.pixels
             .as_mut()
             .ok_or(AvifError::NoContent)?
-            .slice16_mut(row * self.row_bytes / 2, self.row_bytes / 2)
+            .slice16_mut(checked_mul!(row, self.row_bytes / 2)?, self.row_bytes / 2)
     }
 
     pub fn allocate(&mut self) -> AvifResult<()> {
-        let row_bytes = self.width * self.pixel_size();
+        let row_bytes = checked_mul!(self.width, self.pixel_size())?;
         if self.channel_size() == 1 {
-            let buffer_size: usize = usize_from_u32(row_bytes * self.height)?;
+            let buffer_size: usize = usize_from_u32(checked_mul!(row_bytes, self.height)?)?;
             let buffer: Vec<u8> = vec![0; buffer_size];
             self.pixels = Some(Pixels::Buffer(buffer));
         } else {
-            let buffer_size: usize = usize_from_u32((row_bytes / 2) * self.height)?;
+            let buffer_size: usize = usize_from_u32(checked_mul!(row_bytes / 2, self.height)?)?;
             let buffer: Vec<u16> = vec![0; buffer_size];
             self.pixels = Some(Pixels::Buffer16(buffer));
         }
