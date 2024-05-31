@@ -111,8 +111,8 @@ impl Av1SequenceHeader {
         let frame_height_bits_minus_1 = bits.read(4)?;
         let max_frame_width_minus_1 = bits.read(frame_width_bits_minus_1 as usize + 1)?;
         let max_frame_height_minus_1 = bits.read(frame_height_bits_minus_1 as usize + 1)?;
-        self.max_width = max_frame_width_minus_1 + 1;
-        self.max_height = max_frame_height_minus_1 + 1;
+        self.max_width = checked_add!(max_frame_width_minus_1, 1)?;
+        self.max_height = checked_add!(max_frame_height_minus_1, 1)?;
         let frame_id_numbers_present_flag =
             if self.reduced_still_picture_header { false } else { bits.read_bool()? };
         if frame_id_numbers_present_flag {

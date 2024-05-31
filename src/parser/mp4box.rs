@@ -261,9 +261,7 @@ fn parse_header(stream: &mut IStream, top_level: bool) -> AvifResult<BoxHeader> 
             size: BoxSize::UntilEndOfStream,
         });
     }
-    size = size
-        .checked_sub(u64_from_usize(stream.offset - start_offset)?)
-        .ok_or(AvifError::BmffParseFailed("invalid size".into()))?;
+    checked_decr!(size, u64_from_usize(stream.offset - start_offset)?);
     let size = usize_from_u64(size)?;
     if !top_level && size > stream.bytes_left()? {
         return Err(AvifError::BmffParseFailed("possibly truncated box".into()));

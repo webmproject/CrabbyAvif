@@ -12,8 +12,8 @@ fn parse_exif_tiff_header_offset(stream: &mut IStream) -> AvifResult<u32> {
             stream.rewind(4)?;
             return Ok(expected_offset);
         }
-        size -= 4;
-        expected_offset += 4;
+        checked_decr!(size, 4);
+        checked_incr!(expected_offset, 4);
     }
     // Could not find the TIFF header.
     Err(AvifError::InvalidExifPayload)
