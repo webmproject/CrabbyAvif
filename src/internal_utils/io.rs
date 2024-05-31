@@ -87,7 +87,7 @@ impl decoder::IO for DecoderRawIO<'_> {
         let size_to_read: usize =
             if max_read_size > available_size { available_size } else { max_read_size };
         let slice_start = usize_from_u64(offset)?;
-        let slice_end = slice_start + size_to_read;
+        let slice_end = checked_add!(slice_start, size_to_read)?;
         let range = slice_start..slice_end;
         check_slice_range(self.data.len(), &range)?;
         Ok(&self.data[range])
@@ -116,7 +116,7 @@ impl decoder::IO for DecoderMemoryIO {
         let size_to_read: usize =
             if max_read_size > available_size { available_size } else { max_read_size };
         let slice_start = usize_from_u64(offset)?;
-        let slice_end = slice_start + size_to_read;
+        let slice_end = checked_add!(slice_start, size_to_read)?;
         let range = slice_start..slice_end;
         check_slice_range(self.data.len(), &range)?;
         Ok(&self.data[range])

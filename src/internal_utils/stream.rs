@@ -35,7 +35,7 @@ impl IBitStream<'_> {
     }
 
     pub fn skip(&mut self, n: usize) -> AvifResult<()> {
-        if self.bit_offset + n > self.data.len() * 8 {
+        if checked_add!(self.bit_offset, n)? > checked_mul!(self.data.len(), 8)? {
             return Err(AvifError::BmffParseFailed("Not enough bytes".into()));
         }
         self.bit_offset += n;
@@ -55,9 +55,7 @@ impl IBitStream<'_> {
     }
 
     pub fn remaining_bits(&self) -> AvifResult<usize> {
-        (self.data.len() * 8)
-            .checked_sub(self.bit_offset)
-            .ok_or(AvifError::BmffParseFailed("".into()))
+        checked_sub!(checked_mul!(self.data.len(), 8)?, self.bit_offset)
     }
 }
 
@@ -81,13 +79,16 @@ impl IStream<'_> {
 
     pub fn sub_stream(&mut self, size: &BoxSize) -> AvifResult<IStream> {
         let offset = self.offset;
-        self.offset += match size {
-            BoxSize::FixedSize(size) => {
-                self.check(*size)?;
-                *size
+        checked_incr!(
+            self.offset,
+            match size {
+                BoxSize::FixedSize(size) => {
+                    self.check(*size)?;
+                    *size
+                }
+                BoxSize::UntilEndOfStream => self.bytes_left()?,
             }
-            BoxSize::UntilEndOfStream => self.bytes_left()?,
-        };
+        );
         Ok(IStream {
             data: &self.data[offset..self.offset],
             offset: 0,
@@ -97,7 +98,7 @@ impl IStream<'_> {
     pub fn sub_bit_stream(&mut self, size: usize) -> AvifResult<IBitStream> {
         self.check(size)?;
         let offset = self.offset;
-        self.offset += size;
+        checked_incr!(self.offset, size);
         Ok(IBitStream {
             data: &self.data[offset..self.offset],
             bit_offset: 0,
@@ -118,7 +119,7 @@ impl IStream<'_> {
     pub fn get_slice(&mut self, size: usize) -> AvifResult<&[u8]> {
         self.check(size)?;
         let offset_start = self.offset;
-        self.offset += size;
+        checked_incr!(self.offset, size);
         Ok(&self.data[offset_start..offset_start + size])
     }
 
@@ -129,7 +130,7 @@ impl IStream<'_> {
     pub fn read_u8(&mut self) -> AvifResult<u8> {
         self.check(1)?;
         let value = self.data[self.offset];
-        self.offset += 1;
+        checked_incr!(self.offset, 1);
         Ok(value)
     }
 
@@ -222,15 +223,12 @@ impl IStream<'_> {
 
     pub fn skip(&mut self, size: usize) -> AvifResult<()> {
         self.check(size)?;
-        self.offset += size;
+        checked_incr!(self.offset, size);
         Ok(())
     }
 
     pub fn rewind(&mut self, size: usize) -> AvifResult<()> {
-        self.offset = self
-            .offset
-            .checked_sub(size)
-            .ok_or(AvifError::BmffParseFailed("".into()))?;
+        checked_decr!(self.offset, size);
         Ok(())
     }
 
