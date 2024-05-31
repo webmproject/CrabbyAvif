@@ -20,12 +20,14 @@ pub struct CropRect {
 
 impl CropRect {
     fn is_valid(&self, image_width: u32, image_height: u32, pixel_format: PixelFormat) -> bool {
+        let x_plus_width = checked_add!(self.x, self.width);
+        let y_plus_height = checked_add!(self.y, self.height);
         if self.width == 0
             || self.height == 0
-            || self.x.checked_add(self.width).is_none()
-            || self.y.checked_add(self.height).is_none()
-            || self.x + self.width > image_width
-            || self.y + self.height > image_height
+            || x_plus_width.is_err()
+            || y_plus_height.is_err()
+            || x_plus_width.unwrap() > image_width
+            || y_plus_height.unwrap() > image_height
         {
             return false;
         }
