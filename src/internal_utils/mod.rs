@@ -225,9 +225,13 @@ pub fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
     let allocation_size = size
         .checked_mul(std::mem::size_of::<T>())
         .ok_or(AvifError::OutOfMemory)?;
-    // TODO: b/342251590 - Do not request allocations of more than 8192 megabytes. This is the
-    // allowed limit in the chromium fuzzers.
-    if u64_from_usize(allocation_size)? > 8_192_000_000 {
+    // TODO: b/342251590 - Do not request allocations of more than what is allowed in Chromium's
+    // partition allocator. This is the allowed limit in the chromium fuzzers. The value comes
+    // from:
+    // https://source.chromium.org/chromium/chromium/src/+/main:base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h;l=433-440;drc=c0265133106c7647e90f9aaa4377d28190b1a6a9.
+    // Requesting an allocation larger than this value will cause the fuzzers to crash instead of
+    // returning null. Remove this check once that behavior is fixed.
+    if u64_from_usize(allocation_size)? >= 2_145_386_496 {
         return Err(AvifError::OutOfMemory);
     }
     if v.try_reserve_exact(size).is_err() {
