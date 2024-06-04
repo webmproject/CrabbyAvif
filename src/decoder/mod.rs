@@ -459,8 +459,10 @@ impl Decoder {
             .items
             .get(&gainmap_id)
             .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
-        // Ignore CICP if multiple nclx properties were found.
-        if let Ok(Some(nclx)) = find_nclx(&gainmap_item.properties) {
+        // Find and adopt all colr boxes "at most one for a given value of colour type"
+        // (HEIF 6.5.5.1, from Amendment 3). Accept one of each type, and bail out if more than one
+        // of a given type is provided.
+        if let Some(nclx) = find_nclx(&gainmap_item.properties)? {
             self.gainmap.image.color_primaries = nclx.color_primaries;
             self.gainmap.image.transfer_characteristics = nclx.transfer_characteristics;
             self.gainmap.image.matrix_coefficients = nclx.matrix_coefficients;
