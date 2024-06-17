@@ -174,6 +174,10 @@ impl Decoder for Libgav1 {
                         image.row_bytes[plane] = gav1_image.stride[plane] as u32;
                         image.image_owns_planes[plane] = false;
                     }
+                    if image.yuv_format == PixelFormat::Yuv400 {
+                        // Clear left over chroma planes from previous frames.
+                        image.clear_chroma_planes();
+                    }
                 }
             }
         }

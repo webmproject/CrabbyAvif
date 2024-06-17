@@ -230,6 +230,10 @@ impl Decoder for Dav1d {
                     image.row_bytes[plane] = dav1d_picture.stride[stride_index] as u32;
                     image.image_owns_planes[plane] = false;
                 }
+                if image.yuv_format == PixelFormat::Yuv400 {
+                    // Clear left over chroma planes from previous frames.
+                    image.clear_chroma_planes();
+                }
             }
         }
         Ok(())

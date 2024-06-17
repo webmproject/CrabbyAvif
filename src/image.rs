@@ -225,6 +225,15 @@ impl Image {
         })
     }
 
+    pub fn clear_chroma_planes(&mut self) {
+        for plane in [Plane::U, Plane::V] {
+            let plane = plane.to_usize();
+            self.planes[plane] = None;
+            self.row_bytes[plane] = 0;
+            self.image_owns_planes[plane] = false;
+        }
+    }
+
     pub fn allocate_planes(&mut self, category: Category) -> AvifResult<()> {
         let pixel_size: usize = if self.depth == 8 { 1 } else { 2 };
         for plane in category.planes() {
