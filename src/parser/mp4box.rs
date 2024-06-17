@@ -1641,7 +1641,7 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
         match header.box_type.as_str() {
             "ftyp" | "meta" | "moov" => {
                 let box_data = match header.size {
-                    BoxSize::UntilEndOfStream => io.read(parse_offset, usize::max_value())?,
+                    BoxSize::UntilEndOfStream => io.read(parse_offset, usize::MAX)?,
                     BoxSize::FixedSize(size) => io.read_exact(parse_offset, size)?,
                 };
                 let mut box_stream = IStream::create(box_data);
