@@ -21,9 +21,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-    env:
-      CC: clang
-      CXX: clang++
 
     steps:
     - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
@@ -58,6 +55,9 @@ jobs:
       if: steps.cache-ext-with-libavif.outputs.cache-hit != 'true'
       working-directory: ./sys/libyuv-sys
       run: ./libyuv.cmd
+      env:
+        CC: clang
+        CXX: clang++
 
     - name: Clone av1-avif (specification repository for testFiles)
       if: steps.cache-ext-with-libavif.outputs.cache-hit != 'true'
@@ -73,7 +73,7 @@ jobs:
       run: |
         git clone https://github.com/AOMediaCodec/libavif.git
         cd libavif
-        git checkout da70b0177613ae94b18a8467ca70b03d2276f099
+        git checkout 329dc9987e63e1e201f55cad5b5c42a6f750a29e
 
     - name: Copy dav1d into libavif (for windows)
       if: steps.cache-ext-with-libavif.outputs.cache-hit != 'true' && runner.os == 'Windows'
@@ -85,24 +85,24 @@ jobs:
       working-directory: ./external/libavif
       run: cp -R ../../sys/dav1d-sys/dav1d ext/dav1d
 
-    - name: Set up ext/zlib for libavif
-      if: steps.cache-ext-with-libavif.outputs.cache-hit != 'true'
-      working-directory: ./external/libavif/ext
-      run: ./zlibpng.cmd
-
-    - name: Set up ext/libjpeg for libavif
-      if: steps.cache-ext-with-libavif.outputs.cache-hit != 'true'
-      working-directory: ./external/libavif/ext
-      run: ./libjpeg.cmd
+    - name: vcpkg build (for windows)
+      if: runner.os == 'Windows'
+      uses: johnwason/vcpkg-action@v6
+      id: vcpkg
+      with:
+        pkgs: libjpeg-turbo libpng zlib
+        triplet: x64-windows-release
+        token: ${{ github.token }}
+        github-binarycache: true
 
     - name: Configure libavif (cmake)
       if: steps.cache-ext-with-libavif.outputs.cache-hit != 'true'
       working-directory: ./external/libavif
       run: >
-        cmake -S . -B build -G Ninja
-        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
-        -DAVIF_CODEC_DAV1D=LOCAL -DAVIF_JPEG=LOCAL -DAVIF_LIBYUV=0
-        -DAVIF_ZLIBPNG=LOCAL -DAVIF_BUILD_APPS=ON
+        cmake ${{ steps.vcpkg.outputs.vcpkg-cmake-config }} -G Ninja -S .
+        -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+        -DAVIF_CODEC_DAV1D=LOCAL -DAVIF_JPEG=SYSTEM -DAVIF_LIBYUV=OFF
+        -DAVIF_ZLIBPNG=SYSTEM -DAVIF_BUILD_APPS=ON
 
     - name: Build libavif (avifdec for conformance comparison)
       if: steps.cache-ext-with-libavif.outputs.cache-hit != 'true'
