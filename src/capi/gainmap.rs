@@ -40,7 +40,6 @@ pub struct avifGainMapMetadata {
     pub baseHdrHeadroomD: u32,
     pub alternateHdrHeadroomN: u32,
     pub alternateHdrHeadroomD: u32,
-    pub backwardDirection: avifBool,
     pub useBaseColorSpace: avifBool,
 }
 
@@ -69,7 +68,6 @@ impl From<&GainMapMetadata> for avifGainMapMetadata {
             baseHdrHeadroomD: m.base_hdr_headroom.1,
             alternateHdrHeadroomN: m.alternate_hdr_headroom.0,
             alternateHdrHeadroomD: m.alternate_hdr_headroom.1,
-            backwardDirection: m.backward_direction as avifBool,
             useBaseColorSpace: m.use_base_color_space as avifBool,
         }
     }

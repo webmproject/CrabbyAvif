@@ -314,7 +314,6 @@ struct avifGainMapMetadata {
     uint32_t baseHdrHeadroomD;
     uint32_t alternateHdrHeadroomN;
     uint32_t alternateHdrHeadroomD;
-    avifBool backwardDirection;
     avifBool useBaseColorSpace;
 };
 

@@ -27,7 +27,6 @@ pub struct GainMapMetadata {
     pub alternate_offset: [Fraction; 3],
     pub base_hdr_headroom: UFraction,
     pub alternate_hdr_headroom: UFraction,
-    pub backward_direction: bool,
     pub use_base_color_space: bool,
 }
 
