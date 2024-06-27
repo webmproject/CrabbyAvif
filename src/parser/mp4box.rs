@@ -1716,42 +1716,36 @@ pub fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
 pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
     // Experimental, not yet specified.
 
-    // unsigned int(8) version = 0;
     let version = stream.read_u8()?;
     if version != 0 {
         return Err(AvifError::InvalidToneMappedImage(
             "unsupported version in tmap box".into(),
         ));
     }
-    // unsigned int(8) flags;
+
+    let minimum_version = stream.read_u16()?;
+    if minimum_version != 0 {
+        return Err(AvifError::InvalidToneMappedImage(
+            "unsupported minimum_version in tmap box".into(),
+        ));
+    }
+
+    let _writer_version = stream.read_u16()?;
+
     let flags = stream.read_u8()?;
-    let channel_count: usize = ((flags & 1) * 2 + 1).into();
+    let channel_count: usize = if flags & (1u8 << 7) != 0 {3} else {1};
     let mut metadata = GainMapMetadata {
-        use_base_color_space: (flags & 2) != 0,
+        use_base_color_space: (flags & (1u8 << 6)) != 0,
         ..GainMapMetadata::default()
     };
-    let use_common_denominator = (flags & 8) != 0;
-    if use_common_denominator {
-        let common_denominator = stream.read_u32()?;
-        metadata.base_hdr_headroom = UFraction(stream.read_u32()?, common_denominator);
-        metadata.alternate_hdr_headroom = UFraction(stream.read_u32()?, common_denominator);
-        for i in 0..channel_count {
-            metadata.min[i] = Fraction(stream.read_i32()?, common_denominator);
-            metadata.max[i] = Fraction(stream.read_i32()?, common_denominator);
-            metadata.gamma[i] = UFraction(stream.read_u32()?, common_denominator);
-            metadata.base_offset[i] = Fraction(stream.read_i32()?, common_denominator);
-            metadata.alternate_offset[i] = Fraction(stream.read_i32()?, common_denominator);
-        }
-    } else {
-        metadata.base_hdr_headroom = stream.read_ufraction()?;
-        metadata.alternate_hdr_headroom = stream.read_ufraction()?;
-        for i in 0..channel_count {
-            metadata.min[i] = stream.read_fraction()?;
-            metadata.max[i] = stream.read_fraction()?;
-            metadata.gamma[i] = stream.read_ufraction()?;
-            metadata.base_offset[i] = stream.read_fraction()?;
-            metadata.alternate_offset[i] = stream.read_fraction()?;
-        }
+    metadata.base_hdr_headroom = stream.read_ufraction()?;
+    metadata.alternate_hdr_headroom = stream.read_ufraction()?;
+    for i in 0..channel_count {
+        metadata.min[i] = stream.read_fraction()?;
+        metadata.max[i] = stream.read_fraction()?;
+        metadata.gamma[i] = stream.read_ufraction()?;
+        metadata.base_offset[i] = stream.read_fraction()?;
+        metadata.alternate_offset[i] = stream.read_fraction()?;
     }
     // Fill the remaining values by copying those from the first channel.
     for i in channel_count..3 {

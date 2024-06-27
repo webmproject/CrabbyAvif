@@ -11,9 +11,9 @@ namespace {
 // Used to pass the data folder path to the GoogleTest suites.
 const char* data_path = nullptr;
 
-TEST(GainMapTest, DecodeGainMapGrid) {
+TEST(GainMapTest, DecodeGainmapImage) {
   const std::string path =
-      std::string(data_path) + "color_grid_gainmap_different_grid.avif";
+      std::string(data_path) + "seine_sdr_gainmap_srgb.avif";
   DecoderPtr decoder(avifDecoderCreate());
   ASSERT_NE(decoder, nullptr);
   decoder->enableDecodingGainMap = true;
@@ -30,20 +30,51 @@ TEST(GainMapTest, DecodeGainMapGrid) {
   avifImage* decoded = decoder->image;
   ASSERT_NE(decoded, nullptr);
 
-  // Verify that the gain map is present and matches the input.
+  // Verify that the gain map is present and has the expected metadata.
   EXPECT_TRUE(decoder->gainMapPresent);
-  // Color+alpha: 4x3 grid of 128x200 tiles.
-  EXPECT_EQ(decoded->width, 128u * 4u);
-  EXPECT_EQ(decoded->height, 200u * 3u);
-  EXPECT_EQ(decoded->depth, 10u);
+  EXPECT_EQ(decoded->width, 400u);
+  EXPECT_EQ(decoded->height, 300u);
+  EXPECT_EQ(decoded->depth, 8u);
   ASSERT_NE(decoded->gainMap, nullptr);
   ASSERT_NE(decoded->gainMap->image, nullptr);
-  // Gain map: 2x2 grid of 64x80 tiles.
-  EXPECT_EQ(decoded->gainMap->image->width, 64u * 2u);
-  EXPECT_EQ(decoded->gainMap->image->height, 80u * 2u);
+
+  EXPECT_EQ(decoded->gainMap->image->width, 400u);
+  EXPECT_EQ(decoded->gainMap->image->height, 300u);
   EXPECT_EQ(decoded->gainMap->image->depth, 8u);
-  EXPECT_EQ(decoded->gainMap->metadata.alternateHdrHeadroomN, 6u);
-  EXPECT_EQ(decoded->gainMap->metadata.alternateHdrHeadroomD, 2u);
+  EXPECT_EQ(decoded->gainMap->metadata.baseHdrHeadroomN, 0);
+  EXPECT_EQ(decoded->gainMap->metadata.baseHdrHeadroomD, 1u);
+  EXPECT_EQ(decoded->gainMap->metadata.alternateHdrHeadroomN, 13);
+  EXPECT_EQ(decoded->gainMap->metadata.alternateHdrHeadroomD, 10u);
+  EXPECT_EQ(decoded->gainMap->metadata.useBaseColorSpace, true);
+
+  for (size_t i = 0; i < 3; ++i) {
+    EXPECT_EQ(decoded->gainMap->metadata.baseOffsetN[i], 1);
+    EXPECT_EQ(decoded->gainMap->metadata.baseOffsetD[i], 64u);
+    EXPECT_EQ(decoded->gainMap->metadata.alternateOffsetN[i], 1);
+    EXPECT_EQ(decoded->gainMap->metadata.alternateOffsetD[i], 64u);
+    EXPECT_EQ(decoded->gainMap->metadata.gainMapMaxD[i], 1000000u);
+  }
+
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapMinN[0], -256907);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapMinD[0], 1000000u);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapMinN[1], -52273);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapMinD[1], 200000u);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapMinN[2], -70071);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapMinD[2], 250000u);
+
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapMaxN[0], 1277177);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapMaxD[0], 1000000u);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapMaxN[1], 1277203);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapMaxD[1], 1000000u);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapMaxN[2], 1277969);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapMaxD[2], 1000000u);
+
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapGammaN[0], 119223);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapGammaD[0], 125000u);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapGammaN[1], 188219);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapGammaD[1], 200000u);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapGammaN[2], 459711);
+  EXPECT_EQ(decoded->gainMap->metadata.gainMapGammaD[2], 500000u);
 
   // Decode the image.
   result = avifDecoderNextImage(decoder.get());
