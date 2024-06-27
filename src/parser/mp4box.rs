@@ -1728,7 +1728,6 @@ pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
     let channel_count: usize = ((flags & 1) * 2 + 1).into();
     let mut metadata = GainMapMetadata {
         use_base_color_space: (flags & 2) != 0,
-        backward_direction: (flags & 4) != 0,
         ..GainMapMetadata::default()
     };
     let use_common_denominator = (flags & 8) != 0;
