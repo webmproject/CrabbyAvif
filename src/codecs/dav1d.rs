@@ -44,7 +44,13 @@ const DAV1D_EAGAIN: i32 = if libc::EPERM > 0 { -libc::EAGAIN } else { libc::EAGA
 // So allow clippy to ignore unnecessary cast warnings.
 #[allow(clippy::unnecessary_cast)]
 impl Decoder for Dav1d {
-    fn initialize(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
+    fn initialize(
+        &mut self,
+        operating_point: u8,
+        all_layers: bool,
+        _width: u32,
+        _height: u32,
+    ) -> AvifResult<()> {
         if self.context.is_some() {
             return Ok(());
         }
@@ -77,7 +83,7 @@ impl Decoder for Dav1d {
         category: Category,
     ) -> AvifResult<()> {
         if self.context.is_none() {
-            self.initialize(0, true)?;
+            self.initialize(0, true, 0, 0)?;
         }
         unsafe {
             let mut data: Dav1dData = std::mem::zeroed();
