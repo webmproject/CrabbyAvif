@@ -35,7 +35,13 @@ pub struct Libgav1 {
 // unnecessary cast warnings.
 #[allow(clippy::unnecessary_cast)]
 impl Decoder for Libgav1 {
-    fn initialize(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
+    fn initialize(
+        &mut self,
+        operating_point: u8,
+        all_layers: bool,
+        _width: u32,
+        _height: u32,
+    ) -> AvifResult<()> {
         if self.decoder.is_some() {
             return Ok(()); // Already initialized.
         }
@@ -68,7 +74,7 @@ impl Decoder for Libgav1 {
         category: Category,
     ) -> AvifResult<()> {
         if self.decoder.is_none() {
-            self.initialize(0, true)?;
+            self.initialize(0, true, 0, 0)?;
         }
         unsafe {
             let ret = Libgav1DecoderEnqueueFrame(

@@ -77,9 +77,10 @@ impl CodecChoice {
     fn get_codec(&self) -> AvifResult<Codec> {
         match self {
             CodecChoice::Auto => {
-                return CodecChoice::Dav1d.get_codec().or(CodecChoice::Libgav1
+                // Preferred order of codecs in Auto mode: Android MediaCodec, Dav1d, Libgav1.
+                return CodecChoice::MediaCodec.get_codec().or(CodecChoice::Dav1d
                     .get_codec()
-                    .or(CodecChoice::MediaCodec.get_codec()));
+                    .or(CodecChoice::Libgav1.get_codec()));
             }
             CodecChoice::Dav1d => {
                 #[cfg(feature = "dav1d")]
@@ -1078,9 +1079,15 @@ impl Decoder {
         Ok(true)
     }
 
-    fn create_codec(&mut self, operating_point: u8, all_layers: bool) -> AvifResult<()> {
+    fn create_codec(&mut self, category: Category, tile_index: usize) -> AvifResult<()> {
+        let tile = &self.tiles[category.usize()][tile_index];
         let mut codec: Codec = self.settings.codec_choice.get_codec()?;
-        codec.initialize(operating_point, all_layers)?;
+        codec.initialize(
+            tile.operating_point,
+            tile.input.all_layers,
+            tile.width,
+            tile.height,
+        )?;
         self.codecs.push(codec);
         Ok(())
     }
@@ -1093,24 +1100,15 @@ impl Decoder {
             // In this case, we will use at most two codec instances (one for the color planes and
             // one for the alpha plane). Gain maps are not supported.
             self.codecs = create_vec_exact(2)?;
-            self.create_codec(
-                self.tiles[Category::Color.usize()][0].operating_point,
-                self.tiles[Category::Color.usize()][0].input.all_layers,
-            )?;
+            self.create_codec(Category::Color, 0)?;
             self.tiles[Category::Color.usize()][0].codec_index = 0;
             if !self.tiles[Category::Alpha.usize()].is_empty() {
-                self.create_codec(
-                    self.tiles[Category::Alpha.usize()][0].operating_point,
-                    self.tiles[Category::Alpha.usize()][0].input.all_layers,
-                )?;
-                self.tiles[1][0].codec_index = 1;
+                self.create_codec(Category::Alpha, 0)?;
+                self.tiles[Category::Alpha.usize()][0].codec_index = 1;
             }
         } else if self.can_use_single_codec()? {
             self.codecs = create_vec_exact(1)?;
-            self.create_codec(
-                self.tiles[Category::Color.usize()][0].operating_point,
-                self.tiles[Category::Color.usize()][0].input.all_layers,
-            )?;
+            self.create_codec(Category::Color, 0)?;
             for tiles in &mut self.tiles {
                 for tile in tiles {
                     tile.codec_index = 0;
@@ -1118,11 +1116,10 @@ impl Decoder {
             }
         } else {
             self.codecs = create_vec_exact(self.tiles.iter().map(|tiles| tiles.len()).sum())?;
-            for category in Category::ALL_USIZE {
-                for tile_index in 0..self.tiles[category].len() {
-                    let tile = &self.tiles[category][tile_index];
-                    self.create_codec(tile.operating_point, tile.input.all_layers)?;
-                    self.tiles[category][tile_index].codec_index = self.codecs.len() - 1;
+            for category in Category::ALL {
+                for tile_index in 0..self.tiles[category.usize()].len() {
+                    self.create_codec(category, tile_index)?;
+                    self.tiles[category.usize()][tile_index].codec_index = self.codecs.len() - 1;
                 }
             }
         }
