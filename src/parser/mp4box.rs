@@ -1733,7 +1733,7 @@ pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
     let _writer_version = stream.read_u16()?;
 
     let flags = stream.read_u8()?;
-    let channel_count: usize = if flags & (1u8 << 7) != 0 {3} else {1};
+    let channel_count: usize = if flags & (1u8 << 7) != 0 { 3 } else { 1 };
     let mut metadata = GainMapMetadata {
         use_base_color_space: (flags & (1u8 << 6)) != 0,
         ..GainMapMetadata::default()
