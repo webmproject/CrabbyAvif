@@ -340,6 +340,22 @@ fn color_nogrid_alpha_nogrid_gainmap_grid() {
     assert!(res.is_ok());
 }
 
+// From avifgainmaptest.cc
+#[test]
+fn gainmap_oriented() {
+    let mut decoder = get_decoder("gainmap_oriented.avif");
+    decoder.settings.enable_decoding_gainmap = true;
+    decoder.settings.enable_parsing_gainmap_metadata = true;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let image = decoder.image().expect("image was none");
+    assert_eq!(image.irot_angle, Some(1));
+    assert_eq!(image.imir_axis, Some(0));
+    assert!(decoder.gainmap_present());
+    assert_eq!(decoder.gainmap().image.irot_angle, None);
+    assert_eq!(decoder.gainmap().image.imir_axis, None);
+}
+
 // From avifcllitest.cc
 #[test_case::test_case("clli_0_0.avif", 0, 0; "clli_0_0")]
 #[test_case::test_case("clli_0_1.avif", 0, 1; "clli_0_1")]

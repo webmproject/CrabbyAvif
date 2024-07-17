@@ -51,7 +51,26 @@ TEST(GainMapTest, DecodeGainMapGrid) {
       << avifResultToString(result) << " " << decoder->diag.error;
 }
 
-// The following two functions use avifDecoderReadFile which is not supported in CAPI yet.
+TEST(GainMapTest, DecodeOriented) {
+  const std::string path = std::string(data_path) + "gainmap_oriented.avif";
+  DecoderPtr decoder(avifDecoderCreate());
+  ASSERT_NE(decoder, nullptr);
+  decoder->enableDecodingGainMap = AVIF_TRUE;
+  decoder->enableParsingGainMapMetadata = AVIF_TRUE;
+  ASSERT_EQ(avifDecoderSetIOFile(decoder.get(), path.c_str()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+
+  // Verify that the transformative properties were kept.
+  EXPECT_EQ(decoder->image->transformFlags,
+            AVIF_TRANSFORM_IROT | AVIF_TRANSFORM_IMIR);
+  EXPECT_EQ(decoder->image->irot.angle, 1);
+  EXPECT_EQ(decoder->image->imir.axis, 0);
+  EXPECT_EQ(decoder->image->gainMap->image->transformFlags,
+            AVIF_TRANSFORM_NONE);
+}
+
+// The following two functions use avifDecoderReadFile which is not supported in
+// CAPI yet.
 
 /*
 TEST(GainMapTest, DecodeColorGridGainMapNoGrid) {

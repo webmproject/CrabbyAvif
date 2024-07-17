@@ -160,7 +160,7 @@ pub enum ColorInformation {
 }
 
 /// cbindgen:rename-all=CamelCase
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[repr(C)]
 pub struct PixelAspectRatio {
     pub h_spacing: u32,

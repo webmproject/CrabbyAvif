@@ -304,6 +304,15 @@ impl Category {
     }
 }
 
+macro_rules! find_property {
+    ($properties:expr, $property_name:ident) => {
+        $properties.iter().find_map(|p| match p {
+            ItemProperty::$property_name(value) => Some(*value),
+            _ => None,
+        })
+    };
+}
+
 impl Decoder {
     pub fn image_count(&self) -> u32 {
         self.image_count
@@ -508,6 +517,13 @@ impl Decoder {
         if let Some(pixi) = tonemap_item.pixi() {
             self.gainmap.alt_plane_count = pixi.plane_depths.len() as u8;
             self.gainmap.alt_plane_depth = pixi.plane_depths[0];
+        }
+        if find_property!(tonemap_item.properties, PixelAspectRatio).is_some()
+            || find_property!(tonemap_item.properties, CleanAperture).is_some()
+            || find_property!(tonemap_item.properties, ImageRotation).is_some()
+            || find_property!(tonemap_item.properties, ImageMirror).is_some()
+        {
+            return Err(AvifError::InvalidToneMappedImage("".into()));
         }
         Ok(())
     }
@@ -753,6 +769,7 @@ impl Decoder {
             };
 
             let color_properties: &Vec<ItemProperty>;
+            let gainmap_properties: Option<&Vec<ItemProperty>>;
             if self.source == Source::Tracks {
                 let color_track = self
                     .tracks
@@ -773,6 +790,7 @@ impl Decoder {
                 color_properties = color_track
                     .get_properties()
                     .ok_or(AvifError::BmffParseFailed("".into()))?;
+                gainmap_properties = None;
 
                 self.tiles[Category::Color.usize()].push(Tile::create_from_track(
                     color_track,
@@ -946,6 +964,17 @@ impl Decoder {
                     .get(&item_ids[Category::Color.usize()])
                     .unwrap()
                     .properties;
+                gainmap_properties = if item_ids[Category::Gainmap.usize()] != 0 {
+                    Some(
+                        &self
+                            .items
+                            .get(&item_ids[Category::Gainmap.usize()])
+                            .unwrap()
+                            .properties,
+                    )
+                } else {
+                    None
+                };
             }
 
             // Check validity of samples.
@@ -986,19 +1015,23 @@ impl Decoder {
                 self.image.icc.clone_from(icc);
             }
 
-            macro_rules! find_property {
-                ($properties:expr, $property_name:ident) => {
-                    $properties.iter().find_map(|p| match p {
-                        ItemProperty::$property_name(value) => Some(*value),
-                        _ => None,
-                    })
-                };
-            }
             self.image.clli = find_property!(color_properties, ContentLightLevelInformation);
             self.image.pasp = find_property!(color_properties, PixelAspectRatio);
             self.image.clap = find_property!(color_properties, CleanAperture);
             self.image.irot_angle = find_property!(color_properties, ImageRotation);
             self.image.imir_axis = find_property!(color_properties, ImageMirror);
+
+            if let Some(gainmap_properties) = gainmap_properties {
+                // Ensure that the bitstream contains the same 'pasp', 'clap', 'irot and 'imir'
+                // properties for both the base and gain map image items.
+                if self.image.pasp != find_property!(gainmap_properties, PixelAspectRatio)
+                    || self.image.clap != find_property!(gainmap_properties, CleanAperture)
+                    || self.image.irot_angle != find_property!(gainmap_properties, ImageRotation)
+                    || self.image.imir_axis != find_property!(gainmap_properties, ImageMirror)
+                {
+                    return Err(AvifError::DecodeGainMapFailed);
+                }
+            }
 
             #[allow(non_snake_case)]
             let av1C = find_property!(color_properties, CodecConfiguration)
