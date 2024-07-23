@@ -55,8 +55,21 @@ macro_rules! find_property {
 impl Item {
     pub fn stream<'a>(&'a mut self, io: &'a mut GenericIO) -> AvifResult<IStream> {
         if !self.idat.is_empty() {
-            // TODO: assumes idat offset is 0.
-            return Ok(IStream::create(self.idat.as_slice()));
+            match self.extents.len() {
+                0 => return Err(AvifError::UnknownError("no extent".into())),
+                1 => {
+                    let idat = self.idat.as_slice();
+                    let offset = usize_from_u64(self.extents[0].offset)?;
+                    let range = offset..checked_add!(offset, self.size)?;
+                    check_slice_range(idat.len(), &range)?;
+                    return Ok(IStream::create(&idat[range]));
+                }
+                _ => {
+                    return Err(AvifError::UnknownError(
+                        "idat with multiple extents is not supported".into(),
+                    ));
+                }
+            }
         }
 
         let io_data = match self.extents.len() {
