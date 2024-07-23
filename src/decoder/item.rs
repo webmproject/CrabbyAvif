@@ -136,6 +136,11 @@ impl Item {
                 "grid dimensions too large".into(),
             ));
         }
+        if stream.has_bytes_left()? {
+            return Err(AvifError::InvalidImageGrid(
+                "found unknown extra bytes in the grid box".into(),
+            ));
+        }
         Ok(())
     }
 
