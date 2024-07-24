@@ -453,6 +453,19 @@ pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
                 // derived images refer in the opposite direction.
                 insert_item_if_not_exists(reference.to_item_id, &mut items);
                 let dimg_item = items.get_mut(&reference.to_item_id).unwrap();
+                if dimg_item.dimg_for_id != 0 {
+                    return Err(if dimg_item.dimg_for_id == reference.from_item_id {
+                        // Section 8.11.12.1 of ISO/IEC 14496-12:
+                        //   The items linked to are then represented by an array of to_item_IDs;
+                        //   within a given array, a given value shall occur at most once.
+                        AvifError::BmffParseFailed(format!(
+                            "multiple dimg references for item ID {}",
+                            dimg_item.dimg_for_id
+                        ))
+                    } else {
+                        AvifError::NotImplemented
+                    });
+                }
                 dimg_item.dimg_for_id = reference.from_item_id;
                 dimg_item.dimg_index = reference.index;
             }
