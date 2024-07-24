@@ -729,3 +729,20 @@ fn white_1x1_ftyp_size0() -> AvifResult<()> {
     ));
     Ok(())
 }
+
+#[test]
+fn dimg_repetition() {
+    let mut decoder = get_decoder("sofa_grid1x5_420_dimg_repeat.avif");
+    assert_eq!(
+        decoder.parse(),
+        Err(AvifError::BmffParseFailed(
+            "multiple dimg references for item ID 1".into()
+        ))
+    );
+}
+
+#[test]
+fn dimg_shared() {
+    let mut decoder = get_decoder("color_grid_alpha_grid_tile_shared_in_dimg.avif");
+    assert_eq!(decoder.parse(), Err(AvifError::NotImplemented));
+}
