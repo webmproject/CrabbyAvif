@@ -38,3 +38,6 @@ android_mediacodec = ["dep:ndk-sys"]
 [package.metadata.capi.header]
 name = "avif"
 subdirectory = "avif"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(google3)'] }
