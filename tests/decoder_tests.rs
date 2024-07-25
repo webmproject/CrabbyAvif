@@ -746,3 +746,26 @@ fn dimg_shared() {
     let mut decoder = get_decoder("color_grid_alpha_grid_tile_shared_in_dimg.avif");
     assert_eq!(decoder.parse(), Err(AvifError::NotImplemented));
 }
+
+#[test]
+fn dimg_ordering() {
+    if !HAS_DECODER {
+        return;
+    }
+    let mut decoder1 = get_decoder("sofa_grid1x5_420.avif");
+    let res = decoder1.parse();
+    assert!(res.is_ok());
+    let res = decoder1.next_image();
+    assert!(res.is_ok());
+    let mut decoder2 = get_decoder("sofa_grid1x5_420_random_dimg_order.avif");
+    let res = decoder2.parse();
+    assert!(res.is_ok());
+    let res = decoder2.next_image();
+    assert!(res.is_ok());
+    let image1 = decoder1.image().expect("image1 was none");
+    let image2 = decoder2.image().expect("image2 was none");
+    // Ensure that the pixels in image1 and image2 are not the same.
+    let row1 = image1.row(Plane::Y, 0).expect("row1 was none");
+    let row2 = image2.row(Plane::Y, 0).expect("row2 was none");
+    assert_ne!(row1, row2);
+}

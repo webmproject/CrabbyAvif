@@ -688,6 +688,12 @@ impl Decoder {
                 "Expected number of tiles not found".into(),
             ));
         }
+        // ISO/IEC 23008-12: The input images are inserted in row-major order,
+        // top-row first, left to right, in the order of SingleItemTypeReferenceBox of type 'dimg'
+        // for this derived image item within the ItemReferenceBox.
+        // Sort the grid items by dimg_index. dimg_index is the order in which the items appear in
+        // the 'iref' box.
+        grid_item_ids.sort_by_key(|k| self.items.get(k).unwrap().dimg_index);
         let item = self.items.get_mut(&item_id).unwrap();
         item.properties
             .push(ItemProperty::CodecConfiguration(first_av1C.unwrap()));
