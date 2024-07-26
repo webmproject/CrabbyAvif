@@ -277,8 +277,8 @@ fn color_grid_gainmap_different_grid() {
     assert_eq!(decoder.gainmap().image.width, 64 * 2);
     assert_eq!(decoder.gainmap().image.height, 80 * 2);
     assert_eq!(decoder.gainmap().image.depth, 8);
-    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.0, 6);
-    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.1, 2);
+    assert_eq!(decoder.gainmap().metadata.base_hdr_headroom.0, 6);
+    assert_eq!(decoder.gainmap().metadata.base_hdr_headroom.1, 2);
     if !HAS_DECODER {
         return;
     }
@@ -304,8 +304,8 @@ fn color_grid_alpha_grid_gainmap_nogrid() {
     assert_eq!(decoder.gainmap().image.width, 64);
     assert_eq!(decoder.gainmap().image.height, 80);
     assert_eq!(decoder.gainmap().image.depth, 8);
-    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.0, 6);
-    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.1, 2);
+    assert_eq!(decoder.gainmap().metadata.base_hdr_headroom.0, 6);
+    assert_eq!(decoder.gainmap().metadata.base_hdr_headroom.1, 2);
     if !HAS_DECODER {
         return;
     }
@@ -331,8 +331,8 @@ fn color_nogrid_alpha_nogrid_gainmap_grid() {
     assert_eq!(decoder.gainmap().image.width, 64 * 2);
     assert_eq!(decoder.gainmap().image.height, 80 * 2);
     assert_eq!(decoder.gainmap().image.depth, 8);
-    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.0, 6);
-    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.1, 2);
+    assert_eq!(decoder.gainmap().metadata.base_hdr_headroom.0, 6);
+    assert_eq!(decoder.gainmap().metadata.base_hdr_headroom.1, 2);
     if !HAS_DECODER {
         return;
     }

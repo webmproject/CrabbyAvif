@@ -1723,36 +1723,50 @@ pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
             "unsupported version in tmap box".into(),
         ));
     }
-    // unsigned int(8) flags;
-    let flags = stream.read_u8()?;
-    let channel_count: usize = ((flags & 1) * 2 + 1).into();
-    let mut metadata = GainMapMetadata {
-        use_base_color_space: (flags & 2) != 0,
-        ..GainMapMetadata::default()
-    };
-    let use_common_denominator = (flags & 8) != 0;
-    if use_common_denominator {
-        let common_denominator = stream.read_u32()?;
-        metadata.base_hdr_headroom = UFraction(stream.read_u32()?, common_denominator);
-        metadata.alternate_hdr_headroom = UFraction(stream.read_u32()?, common_denominator);
-        for i in 0..channel_count {
-            metadata.min[i] = Fraction(stream.read_i32()?, common_denominator);
-            metadata.max[i] = Fraction(stream.read_i32()?, common_denominator);
-            metadata.gamma[i] = UFraction(stream.read_u32()?, common_denominator);
-            metadata.base_offset[i] = Fraction(stream.read_i32()?, common_denominator);
-            metadata.alternate_offset[i] = Fraction(stream.read_i32()?, common_denominator);
-        }
-    } else {
-        metadata.base_hdr_headroom = stream.read_ufraction()?;
-        metadata.alternate_hdr_headroom = stream.read_ufraction()?;
-        for i in 0..channel_count {
-            metadata.min[i] = stream.read_fraction()?;
-            metadata.max[i] = stream.read_fraction()?;
-            metadata.gamma[i] = stream.read_ufraction()?;
-            metadata.base_offset[i] = stream.read_fraction()?;
-            metadata.alternate_offset[i] = stream.read_fraction()?;
-        }
+    // unsigned int(16) minimum_version;
+    let minimum_version = stream.read_u16()?;
+    if minimum_version != 0 {
+        return Err(AvifError::InvalidToneMappedImage(format!(
+            "unsupported minimum_version ({minimum_version}) in tmap box"
+        )));
     }
+    // unsigned int(16) writer_version;
+    stream.skip_u16()?;
+
+    let mut metadata = GainMapMetadata::default();
+    let mut bits = stream.sub_bit_stream(1)?;
+    // unsigned int(1) is_multichannel;
+    let is_multichannel = bits.read_bool()?;
+    let channel_count = if is_multichannel { 3 } else { 1 };
+    // unsigned int(1) use_base_colour_space;
+    metadata.use_base_color_space = bits.read_bool()?;
+    // unsigned int(6) reserved;
+    bits.skip(6)?;
+
+    // unsigned int(32) base_hdr_headroom_numerator;
+    // unsigned int(32) base_hdr_headroom_denominator;
+    metadata.base_hdr_headroom = stream.read_ufraction()?;
+    // unsigned int(32) alternate_hdr_headroom_numerator;
+    // unsigned int(32) alternate_hdr_headroom_denominator;
+    metadata.alternate_hdr_headroom = stream.read_ufraction()?;
+    for i in 0..channel_count {
+        // int(32) gain_map_min_numerator;
+        // unsigned int(32) gain_map_min_denominator
+        metadata.min[i] = stream.read_fraction()?;
+        // int(32) gain_map_max_numerator;
+        // unsigned int(32) gain_map_max_denominator;
+        metadata.max[i] = stream.read_fraction()?;
+        // unsigned int(32) gamma_numerator;
+        // unsigned int(32) gamma_denominator;
+        metadata.gamma[i] = stream.read_ufraction()?;
+        // int(32) base_offset_numerator;
+        // unsigned int(32) base_offset_denominator;
+        metadata.base_offset[i] = stream.read_fraction()?;
+        // int(32) alternate_offset_numerator;
+        // unsigned int(32) alternate_offset_denominator;
+        metadata.alternate_offset[i] = stream.read_fraction()?;
+    }
+
     // Fill the remaining values by copying those from the first channel.
     for i in channel_count..3 {
         metadata.min[i] = metadata.min[0];
