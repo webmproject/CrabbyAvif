@@ -536,7 +536,11 @@ impl Decoder {
         image: &mut Image,
     ) -> AvifResult<()> {
         if !settings.ignore_exif {
-            if let Some(exif) = items.iter_mut().find(|x| x.1.is_exif(color_item_index)) {
+            if let Some(exif) = items
+                .iter_mut()
+                .rev()
+                .find(|x| x.1.is_exif(color_item_index))
+            {
                 let mut stream = exif.1.stream(io)?;
                 exif::parse(&mut stream)?;
                 image
@@ -545,7 +549,11 @@ impl Decoder {
             }
         }
         if !settings.ignore_xmp {
-            if let Some(xmp) = items.iter_mut().find(|x| x.1.is_xmp(color_item_index)) {
+            if let Some(xmp) = items
+                .iter_mut()
+                .rev()
+                .find(|x| x.1.is_xmp(color_item_index))
+            {
                 let mut stream = xmp.1.stream(io)?;
                 image
                     .xmp
