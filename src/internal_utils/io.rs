@@ -86,6 +86,9 @@ pub struct DecoderRawIO<'a> {
 impl DecoderRawIO<'_> {
     pub fn create(data: *const u8, size: usize) -> Self {
         Self {
+            // SAFETY: This function is only used from the C/C++ API when the input comes from
+            // native callers. The assumption is that the caller will always pass in a valid
+            // pointer and size.
             data: unsafe { std::slice::from_raw_parts(data, size) },
         }
     }

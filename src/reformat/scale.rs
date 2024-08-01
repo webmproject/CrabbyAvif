@@ -75,6 +75,9 @@ impl Image {
             }
             let src_pd = src.plane_data(*plane).unwrap();
             let dst_pd = self.plane_data(*plane).unwrap();
+            // SAFETY: This function calls into libyuv which is a C++ library. We pass in pointers
+            // and strides to rust slices that are guaranteed to be valid.
+            //
             // libyuv versions >= 1880 reports a return value here. Older versions do not. Ignore
             // the return value for now.
             #[allow(clippy::let_unit_value)]
