@@ -154,8 +154,8 @@ impl Image {
             return std::ptr::null_mut();
         }
         match self.pixels.unwrap_mut() {
-            Pixels::Pointer(ptr) => *ptr,
-            Pixels::Pointer16(ptr) => *ptr as *mut u8,
+            Pixels::Pointer(ptr) => ptr.ptr_mut(),
+            Pixels::Pointer16(ptr) => ptr.ptr_mut() as *mut u8,
             Pixels::Buffer(buffer) => buffer.as_mut_ptr(),
             Pixels::Buffer16(buffer) => buffer.as_mut_ptr() as *mut u8,
         }
