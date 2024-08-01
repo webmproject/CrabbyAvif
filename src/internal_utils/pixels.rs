@@ -133,6 +133,10 @@ impl Pixels {
         match self {
             Pixels::Pointer(ptr) => {
                 let offset = isize_from_usize(offset)?;
+                // SAFETY: This code creates a slice from the data allocated by the underlying
+                // native library (dav1d, libgav1, etc.). It is used to fetch a row of pixels and
+                // the offset and size are guaranteed to be within the range of the underlying
+                // native buffer.
                 Ok(unsafe { std::slice::from_raw_parts(ptr.offset(offset), size) })
             }
             Pixels::Pointer16(_) => Err(AvifError::NoContent),
@@ -152,6 +156,10 @@ impl Pixels {
         match self {
             Pixels::Pointer(ptr) => {
                 let offset = isize_from_usize(offset)?;
+                // SAFETY: This code creates a slice from the data allocated by the underlying
+                // native library (dav1d, libgav1, etc.). It is used to fetch a row of pixels and
+                // the offset and size are guaranteed to be within the range of the underlying
+                // native buffer.
                 Ok(unsafe { std::slice::from_raw_parts_mut(ptr.offset(offset), size) })
             }
             Pixels::Pointer16(_) => Err(AvifError::NoContent),
@@ -173,6 +181,10 @@ impl Pixels {
             Pixels::Pointer16(ptr) => {
                 let offset = isize_from_usize(offset)?;
                 let ptr = (*ptr) as *const u16;
+                // SAFETY: This code creates a slice from the data allocated by the underlying
+                // native library (dav1d, libgav1, etc.). It is used to fetch a row of pixels and
+                // the offset and size are guaranteed to be within the range of the underlying
+                // native buffer.
                 Ok(unsafe { std::slice::from_raw_parts(ptr.offset(offset), size) })
             }
             Pixels::Buffer(_) => Err(AvifError::NoContent),
@@ -193,6 +205,10 @@ impl Pixels {
             Pixels::Pointer16(ptr) => {
                 let offset = isize_from_usize(offset)?;
                 let ptr = *ptr;
+                // SAFETY: This code creates a slice from the data allocated by the underlying
+                // native library (dav1d, libgav1, etc.). It is used to fetch a row of pixels and
+                // the offset and size are guaranteed to be within the range of the underlying
+                // native buffer.
                 Ok(unsafe { std::slice::from_raw_parts_mut(ptr.offset(offset), size) })
             }
             Pixels::Buffer(_) => Err(AvifError::NoContent),
