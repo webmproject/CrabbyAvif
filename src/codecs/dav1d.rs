@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::codecs::Decoder;
-use crate::codecs::InitializeDecoderArgs;
+use crate::codecs::DecoderConfig;
 use crate::decoder::Category;
 use crate::image::Image;
 use crate::image::YuvRange;
@@ -45,7 +45,7 @@ const DAV1D_EAGAIN: i32 = if libc::EPERM > 0 { -libc::EAGAIN } else { libc::EAGA
 // So allow clippy to ignore unnecessary cast warnings.
 #[allow(clippy::unnecessary_cast)]
 impl Decoder for Dav1d {
-    fn initialize(&mut self, args: &InitializeDecoderArgs) -> AvifResult<()> {
+    fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
         if self.context.is_some() {
             return Ok(());
         }
@@ -55,8 +55,8 @@ impl Decoder for Dav1d {
         settings.max_frame_delay = 1;
         settings.n_threads = 8;
         // settings.frame_size_limit = xx;
-        settings.operating_point = args.operating_point as i32;
-        settings.all_layers = if args.all_layers { 1 } else { 0 };
+        settings.operating_point = config.operating_point as i32;
+        settings.all_layers = if config.all_layers { 1 } else { 0 };
 
         let mut dec = MaybeUninit::uninit();
         let ret = unsafe { dav1d_open(dec.as_mut_ptr(), (&settings) as *const _) };
@@ -78,7 +78,7 @@ impl Decoder for Dav1d {
         category: Category,
     ) -> AvifResult<()> {
         if self.context.is_none() {
-            self.initialize(&InitializeDecoderArgs::default())?;
+            self.initialize(&DecoderConfig::default())?;
         }
         unsafe {
             let mut data: Dav1dData = std::mem::zeroed();

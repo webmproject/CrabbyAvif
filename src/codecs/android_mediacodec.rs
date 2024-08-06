@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::codecs::Decoder;
-use crate::codecs::InitializeDecoderArgs;
+use crate::codecs::DecoderConfig;
 use crate::decoder::Category;
 use crate::image::Image;
 use crate::image::YuvRange;
@@ -59,7 +59,7 @@ fn get_i32_from_str(format: *mut AMediaFormat, key: &str) -> Option<i32> {
 }
 
 impl Decoder for MediaCodec {
-    fn initialize(&mut self, args: &InitializeDecoderArgs) -> AvifResult<()> {
+    fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
         // Does not support operating point and all layers.
         if self.codec.is_some() {
             return Ok(()); // Already initialized.
@@ -78,8 +78,12 @@ impl Decoder for MediaCodec {
         unsafe {
             c_str!(mime_type, mime_type_tmp, "video/av01");
             AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, mime_type);
-            AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_WIDTH, i32_from_u32(args.width)?);
-            AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_HEIGHT, i32_from_u32(args.height)?);
+            AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_WIDTH, i32_from_u32(config.width)?);
+            AMediaFormat_setInt32(
+                format,
+                AMEDIAFORMAT_KEY_HEIGHT,
+                i32_from_u32(config.height)?,
+            );
 
             // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Flexible
             //AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_FORMAT, 2135033992);
@@ -112,7 +116,7 @@ impl Decoder for MediaCodec {
         category: Category,
     ) -> AvifResult<()> {
         if self.codec.is_none() {
-            self.initialize(&InitializeDecoderArgs::default())?;
+            self.initialize(&DecoderConfig::default())?;
         }
         let codec = self.codec.unwrap();
         if self.output_buffer_index.is_some() {

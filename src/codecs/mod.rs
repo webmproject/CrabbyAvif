@@ -25,9 +25,8 @@ use crate::decoder::Category;
 use crate::image::Image;
 use crate::AvifResult;
 
-// Information needed to initialize a codec.
 #[derive(Default)]
-pub struct InitializeDecoderArgs {
+pub struct DecoderConfig {
     pub operating_point: u8,
     pub all_layers: bool,
     pub width: u32,
@@ -35,7 +34,7 @@ pub struct InitializeDecoderArgs {
 }
 
 pub trait Decoder {
-    fn initialize(&mut self, args: &InitializeDecoderArgs) -> AvifResult<()>;
+    fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()>;
     fn get_next_image(
         &mut self,
         av1_payload: &[u8],

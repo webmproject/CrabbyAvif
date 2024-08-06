@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::codecs::Decoder;
-use crate::codecs::InitializeDecoderArgs;
+use crate::codecs::DecoderConfig;
 use crate::decoder::Category;
 use crate::image::Image;
 use crate::image::YuvRange;
@@ -36,7 +36,7 @@ pub struct Libgav1 {
 // unnecessary cast warnings.
 #[allow(clippy::unnecessary_cast)]
 impl Decoder for Libgav1 {
-    fn initialize(&mut self, args: &InitializeDecoderArgs) -> AvifResult<()> {
+    fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
         if self.decoder.is_some() {
             return Ok(()); // Already initialized.
         }
@@ -46,8 +46,8 @@ impl Decoder for Libgav1 {
         }
         let mut settings = unsafe { settings_uninit.assume_init() };
         settings.threads = 8;
-        settings.operating_point = args.operating_point as i32;
-        settings.output_all_layers = if args.all_layers { 1 } else { 0 };
+        settings.operating_point = config.operating_point as i32;
+        settings.output_all_layers = if config.all_layers { 1 } else { 0 };
         unsafe {
             let mut dec = MaybeUninit::uninit();
             let ret = Libgav1DecoderCreate(&settings, dec.as_mut_ptr());
@@ -69,7 +69,7 @@ impl Decoder for Libgav1 {
         category: Category,
     ) -> AvifResult<()> {
         if self.decoder.is_none() {
-            self.initialize(&InitializeDecoderArgs::default())?;
+            self.initialize(&DecoderConfig::default())?;
         }
         unsafe {
             let ret = Libgav1DecoderEnqueueFrame(
