@@ -134,6 +134,7 @@ pub struct Settings {
     pub image_size_limit: u32,
     pub image_dimension_limit: u32,
     pub image_count_limit: u32,
+    pub max_threads: u32,
 }
 
 impl Default for Settings {
@@ -151,6 +152,7 @@ impl Default for Settings {
             image_size_limit: DEFAULT_IMAGE_SIZE_LIMIT,
             image_dimension_limit: DEFAULT_IMAGE_DIMENSION_LIMIT,
             image_count_limit: DEFAULT_IMAGE_COUNT_LIMIT,
+            max_threads: 1,
         }
     }
 }
@@ -1127,6 +1129,7 @@ impl Decoder {
             all_layers: tile.input.all_layers,
             width: tile.width,
             height: tile.height,
+            max_threads: self.settings.max_threads,
         };
         codec.initialize(&config)?;
         self.codecs.push(codec);

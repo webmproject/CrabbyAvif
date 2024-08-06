@@ -53,8 +53,7 @@ impl Decoder for Dav1d {
         unsafe { dav1d_default_settings(settings_uninit.as_mut_ptr()) };
         let mut settings = unsafe { settings_uninit.assume_init() };
         settings.max_frame_delay = 1;
-        settings.n_threads = 8;
-        // settings.frame_size_limit = xx;
+        settings.n_threads = i32::try_from(config.max_threads).unwrap_or(1);
         settings.operating_point = config.operating_point as i32;
         settings.all_layers = if config.all_layers { 1 } else { 0 };
 

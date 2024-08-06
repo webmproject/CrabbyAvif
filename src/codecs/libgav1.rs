@@ -45,7 +45,7 @@ impl Decoder for Libgav1 {
             Libgav1DecoderSettingsInitDefault(settings_uninit.as_mut_ptr());
         }
         let mut settings = unsafe { settings_uninit.assume_init() };
-        settings.threads = 8;
+        settings.threads = i32::try_from(config.max_threads).unwrap_or(1);
         settings.operating_point = config.operating_point as i32;
         settings.output_all_layers = if config.all_layers { 1 } else { 0 };
         unsafe {

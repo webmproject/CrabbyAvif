@@ -192,6 +192,7 @@ impl From<&avifDecoder> for Settings {
             image_size_limit: decoder.imageSizeLimit,
             image_dimension_limit: decoder.imageDimensionLimit,
             image_count_limit: decoder.imageCountLimit,
+            max_threads: u32::try_from(decoder.maxThreads).unwrap_or(0),
         }
     }
 }
