@@ -31,6 +31,7 @@ use crate::codecs::libgav1::Libgav1;
 #[cfg(feature = "android_mediacodec")]
 use crate::codecs::android_mediacodec::MediaCodec;
 
+use crate::codecs::InitializeDecoderArgs;
 use crate::image::*;
 use crate::internal_utils::io::*;
 use crate::internal_utils::*;
@@ -1121,12 +1122,13 @@ impl Decoder {
     fn create_codec(&mut self, category: Category, tile_index: usize) -> AvifResult<()> {
         let tile = &self.tiles[category.usize()][tile_index];
         let mut codec: Codec = self.settings.codec_choice.get_codec()?;
-        codec.initialize(
-            tile.operating_point,
-            tile.input.all_layers,
-            tile.width,
-            tile.height,
-        )?;
+        let args = InitializeDecoderArgs {
+            operating_point: tile.operating_point,
+            all_layers: tile.input.all_layers,
+            width: tile.width,
+            height: tile.height,
+        };
+        codec.initialize(&args)?;
         self.codecs.push(codec);
         Ok(())
     }
