@@ -79,9 +79,10 @@ impl CodecChoice {
         match self {
             CodecChoice::Auto => {
                 // Preferred order of codecs in Auto mode: Android MediaCodec, Dav1d, Libgav1.
-                return CodecChoice::MediaCodec.get_codec().or(CodecChoice::Dav1d
+                return CodecChoice::MediaCodec
                     .get_codec()
-                    .or(CodecChoice::Libgav1.get_codec()));
+                    .or_else(|_| CodecChoice::Dav1d.get_codec())
+                    .or_else(|_| CodecChoice::Libgav1.get_codec());
             }
             CodecChoice::Dav1d => {
                 #[cfg(feature = "dav1d")]
