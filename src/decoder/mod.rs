@@ -1235,6 +1235,65 @@ impl Decoder {
         Ok(())
     }
 
+    fn validate_grid_image_dimensions(image: &Image, grid: &Grid) -> AvifResult<()> {
+        if checked_mul!(image.width, grid.columns)? < grid.width
+            || checked_mul!(image.height, grid.rows)? < grid.height
+        {
+            return Err(AvifError::InvalidImageGrid(
+                        "Grid image tiles do not completely cover the image (HEIF (ISO/IEC 23008-12:2017), Section 6.6.2.3.1)".into(),
+                    ));
+        }
+        if checked_mul!(image.width, grid.columns)? < grid.width
+            || checked_mul!(image.height, grid.rows)? < grid.height
+        {
+            return Err(AvifError::InvalidImageGrid(
+                "Grid image tiles do not completely cover the image (HEIF (ISO/IEC 23008-12:2017), \
+                    Section 6.6.2.3.1)"
+                    .into(),
+            ));
+        }
+        if checked_mul!(image.width, grid.columns - 1)? >= grid.width
+            || checked_mul!(image.height, grid.rows - 1)? >= grid.height
+        {
+            return Err(AvifError::InvalidImageGrid(
+                "Grid image tiles in the rightmost column and bottommost row do not overlap the \
+                     reconstructed image grid canvas. See MIAF (ISO/IEC 23000-22:2019), Section \
+                     7.3.11.4.2, Figure 2"
+                    .into(),
+            ));
+        }
+        // ISO/IEC 23000-22:2019, Section 7.3.11.4.2:
+        //   - the tile_width shall be greater than or equal to 64, and should be a multiple of 64
+        //   - the tile_height shall be greater than or equal to 64, and should be a multiple of 64
+        // The "should" part is ignored here.
+        if image.width < 64 || image.height < 64 {
+            return Err(AvifError::InvalidImageGrid(format!(
+                "Grid image tile width ({}) or height ({}) cannot be smaller than 64. See MIAF \
+                     (ISO/IEC 23000-22:2019), Section 7.3.11.4.2",
+                image.width, image.height
+            )));
+        }
+        // ISO/IEC 23000-22:2019, Section 7.3.11.4.2:
+        //   - when the images are in the 4:2:2 chroma sampling format the horizontal tile offsets
+        //     and widths, and the output width, shall be even numbers;
+        //   - when the images are in the 4:2:0 chroma sampling format both the horizontal and
+        //     vertical tile offsets and widths, and the output width and height, shall be even
+        //     numbers.
+        if ((image.yuv_format == PixelFormat::Yuv420 || image.yuv_format == PixelFormat::Yuv422)
+            && (grid.width % 2 != 0 || image.width % 2 != 0))
+            || (image.yuv_format == PixelFormat::Yuv420
+                && (grid.height % 2 != 0 || image.height % 2 != 0))
+        {
+            return Err(AvifError::InvalidImageGrid(format!(
+                "Grid image width ({}) or height ({}) or tile width ({}) or height ({}) shall be \
+                    even if chroma is subsampled in that dimension. See MIAF \
+                    (ISO/IEC 23000-22:2019), Section 7.3.11.4.2",
+                grid.width, grid.height, image.width, image.height
+            )));
+        }
+        Ok(())
+    }
+
     fn decode_tile(
         &mut self,
         image_index: usize,
@@ -1265,23 +1324,8 @@ impl Decoder {
 
         if self.tile_info[category.usize()].is_grid() {
             if tile_index == 0 {
-                // Validate the grid image size
                 let grid = &self.tile_info[category.usize()].grid;
-                if checked_mul!(tile.image.width, grid.columns)? < grid.width
-                    || checked_mul!(tile.image.height, grid.rows)? < grid.height
-                {
-                    return Err(AvifError::InvalidImageGrid(
-                        "Grid image tiles do not completely cover the image (HEIF (ISO/IEC 23008-12:2017), Section 6.6.2.3.1)".into(),
-                    ));
-                }
-                if checked_mul!(tile.image.width, grid.columns - 1)? >= grid.width
-                    || checked_mul!(tile.image.height, grid.rows - 1)? >= grid.height
-                {
-                    return Err(AvifError::InvalidImageGrid(
-                        "Grid image tiles in the rightmost column and bottommost row do not overlap the reconstructed image grid canvas. See MIAF (ISO/IEC 23000-22:2019), Section 7.3.11.4.2, Figure 2".into(),
-                    ));
-                }
-
+                Self::validate_grid_image_dimensions(&tile.image, grid)?;
                 match category {
                     Category::Color => {
                         self.image.width = grid.width;
