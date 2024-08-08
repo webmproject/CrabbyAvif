@@ -276,11 +276,10 @@ impl Image {
             }
             _ => {
                 for plane in 0..3usize {
-                    if src.planes[plane].is_none() {
-                        continue;
+                    (self.planes[plane], self.row_bytes[plane]) = match &src.planes[plane] {
+                        Some(src_plane) => (Some(src_plane.clone()), src.row_bytes[plane]),
+                        None => (None, 0),
                     }
-                    self.planes[plane] = Some(src.planes[plane].unwrap_ref().clone());
-                    self.row_bytes[plane] = src.row_bytes[plane];
                 }
             }
         }
