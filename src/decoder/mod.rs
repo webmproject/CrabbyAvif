@@ -893,7 +893,16 @@ impl Decoder {
                             .get_mut(&tonemap_id)
                             .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
                         let mut stream = tonemap_item.stream(self.io.unwrap_mut())?;
-                        self.gainmap.metadata = mp4box::parse_tmap(&mut stream)?;
+                        let parse_tmap_res = mp4box::parse_tmap(&mut stream);
+                        match parse_tmap_res {
+                            Ok(metadata) => self.gainmap.metadata = metadata,
+                            Err(AvifError::NotImplemented) => {
+                                // Ingore unsupported gain map metadata.
+                                item_ids[Category::Gainmap.usize()] = 0;
+                                self.gainmap_present = false;
+                            }
+                            Err(e) => return Err(e),
+                        }
                     }
                 }
 
