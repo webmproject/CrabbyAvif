@@ -267,20 +267,11 @@ impl Image {
     // copying the actual pixels (stealing). If src contains buffer, this function will clone the
     // buffers (copying).
     pub fn steal_or_copy_from(&mut self, src: &Image, category: Category) -> AvifResult<()> {
-        match category {
-            Category::Alpha => {
-                if src.planes[3].is_some() {
-                    self.planes[3] = Some(src.planes[3].unwrap_ref().clone());
-                    self.row_bytes[3] = src.row_bytes[3];
-                }
-            }
-            _ => {
-                for plane in 0..3usize {
-                    (self.planes[plane], self.row_bytes[plane]) = match &src.planes[plane] {
-                        Some(src_plane) => (Some(src_plane.clone()), src.row_bytes[plane]),
-                        None => (None, 0),
-                    }
-                }
+        for plane in category.planes() {
+            let plane = plane.to_usize();
+            (self.planes[plane], self.row_bytes[plane]) = match &src.planes[plane] {
+                Some(src_plane) => (Some(src_plane.clone()), src.row_bytes[plane]),
+                None => (None, 0),
             }
         }
         Ok(())
