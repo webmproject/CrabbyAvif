@@ -226,8 +226,13 @@ impl Decoder for MediaCodec {
                 image.height = height as u32;
                 image.depth = 8; // TODO: 10?
                 image.yuv_range = if color_range == 0 { YuvRange::Limited } else { YuvRange::Full };
-                image.planes[3] = Some(Pixels::Pointer(buffer));
                 image.row_bytes[3] = stride as u32;
+                image.planes[3] = Some(Pixels::from_raw_pointer(
+                    buffer,
+                    image.depth as u32,
+                    image.height,
+                    image.row_bytes[3],
+                ));
             }
             _ => {
                 image.width = width as u32;
@@ -253,22 +258,34 @@ impl Decoder for MediaCodec {
                 image.color_primaries = ColorPrimaries::Unspecified;
                 image.transfer_characteristics = TransferCharacteristics::Unspecified;
                 image.matrix_coefficients = MatrixCoefficients::Unspecified;
-
-                image.planes[0] = Some(Pixels::Pointer(buffer));
-                // TODO: u and v order must be inverted for color format 19.
-                let u_plane_offset = isize_from_i32(stride * height)?;
-                let u_index = if reverse_uv { 2 } else { 1 };
-                image.planes[u_index] =
-                    Some(Pixels::Pointer(unsafe { buffer.offset(u_plane_offset) }));
-                let u_plane_size = isize_from_i32(((width + 1) / 2) * ((height + 1) / 2))?;
-                let v_plane_offset = u_plane_offset + u_plane_size;
-                let v_index = if reverse_uv { 1 } else { 2 };
-                image.planes[v_index] =
-                    Some(Pixels::Pointer(unsafe { buffer.offset(v_plane_offset) }));
-
                 image.row_bytes[0] = stride as u32;
                 image.row_bytes[1] = ((stride + 1) / 2) as u32;
                 image.row_bytes[2] = ((stride + 1) / 2) as u32;
+
+                image.planes[0] = Some(Pixels::from_raw_pointer(
+                    buffer,
+                    image.depth as u32,
+                    image.height,
+                    image.row_bytes[0],
+                ));
+                // TODO: u and v order must be inverted for color format 19.
+                let u_plane_offset = isize_from_i32(stride * height)?;
+                let u_index = if reverse_uv { 2 } else { 1 };
+                image.planes[u_index] = Some(Pixels::from_raw_pointer(
+                    unsafe { buffer.offset(u_plane_offset) },
+                    image.depth as u32,
+                    (image.height + 1) / 2,
+                    image.row_bytes[u_index],
+                ));
+                let u_plane_size = isize_from_i32(((width + 1) / 2) * ((height + 1) / 2))?;
+                let v_plane_offset = u_plane_offset + u_plane_size;
+                let v_index = if reverse_uv { 1 } else { 2 };
+                image.planes[v_index] = Some(Pixels::from_raw_pointer(
+                    unsafe { buffer.offset(v_plane_offset) },
+                    image.depth as u32,
+                    (image.height + 1) / 2,
+                    image.row_bytes[v_index],
+                ));
             }
         }
         // TODO: gainmap category.

@@ -153,7 +153,6 @@ conversion_function!(i32_from_u32, i32, u32);
 conversion_function!(isize_from_i32, isize, i32);
 #[cfg(feature = "capi")]
 conversion_function!(isize_from_u32, isize, u32);
-conversion_function!(isize_from_usize, isize, usize);
 
 macro_rules! clamp_function {
     ($func:ident, $type:ty) => {

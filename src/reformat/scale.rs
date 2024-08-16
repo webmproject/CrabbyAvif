@@ -117,7 +117,7 @@ impl Image {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::internal_utils::pixels::Pixels;
+    use crate::internal_utils::pixels::*;
     use test_case::test_matrix;
 
     #[test_matrix([PixelFormat::Yuv444, PixelFormat::Yuv422, PixelFormat::Yuv420, PixelFormat::Yuv400], [false, true], [false, true])]
@@ -142,7 +142,7 @@ mod tests {
         ];
         for plane in planes {
             yuv.planes[plane.to_usize()] = Some(if is_pointer_input {
-                Pixels::Pointer(values.as_mut_ptr())
+                Pixels::Pointer(unsafe { PointerSlice::create(values.as_mut_ptr(), values.len()) })
             } else {
                 Pixels::Buffer(values.to_vec())
             });

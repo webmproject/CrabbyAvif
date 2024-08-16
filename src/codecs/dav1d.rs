@@ -190,11 +190,13 @@ impl Decoder for Dav1d {
                 image.width = dav1d_picture.p.w as u32;
                 image.height = dav1d_picture.p.h as u32;
                 image.depth = dav1d_picture.p.bpc as u8;
+                image.row_bytes[3] = dav1d_picture.stride[0] as u32;
                 image.planes[3] = Some(Pixels::from_raw_pointer(
                     dav1d_picture.data[0] as *mut u8,
                     image.depth as u32,
+                    image.height,
+                    image.row_bytes[3],
                 ));
-                image.row_bytes[3] = dav1d_picture.stride[0] as u32;
                 image.image_owns_planes[3] = false;
                 let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
                 image.yuv_range =
@@ -222,12 +224,14 @@ impl Decoder for Dav1d {
                 image.matrix_coefficients = (seq_hdr.mtrx as u16).into();
 
                 for plane in 0usize..image.yuv_format.plane_count() {
+                    let stride_index = if plane == 0 { 0 } else { 1 };
+                    image.row_bytes[plane] = dav1d_picture.stride[stride_index] as u32;
                     image.planes[plane] = Some(Pixels::from_raw_pointer(
                         dav1d_picture.data[plane] as *mut u8,
                         image.depth as u32,
+                        image.height,
+                        image.row_bytes[plane],
                     ));
-                    let stride_index = if plane == 0 { 0 } else { 1 };
-                    image.row_bytes[plane] = dav1d_picture.stride[stride_index] as u32;
                     image.image_owns_planes[plane] = false;
                 }
                 if image.yuv_format == PixelFormat::Yuv400 {
