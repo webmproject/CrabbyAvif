@@ -139,7 +139,6 @@ impl Decoder for MediaCodec {
                         "input buffer at index {input_index} was null"
                     )));
                 }
-                // TODO: Alternative is to create a slice from raw parts and use copy_from_slice.
                 ptr::copy_nonoverlapping(av1_payload.as_ptr(), input_buffer, av1_payload.len());
                 if AMediaCodec_queueInputBuffer(
                     codec,
@@ -180,7 +179,6 @@ impl Decoder for MediaCodec {
                     self.output_buffer_index = Some(usize_from_isize(output_index)?);
                     break;
                 } else if output_index == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED as isize {
-                    // TODO: what to do?
                     continue;
                 } else if output_index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED as isize {
                     let format = AMediaCodec_getOutputFormat(codec);
@@ -238,10 +236,13 @@ impl Decoder for MediaCodec {
                 image.width = width as u32;
                 image.height = height as u32;
                 image.depth = 8; // TODO: 10?
-                let mut reverse_uv = true;
+                let reverse_uv;
                 image.yuv_format = match color_format {
                     // Android maps all AV1 8-bit images into yuv 420.
-                    2135033992 => PixelFormat::Yuv420,
+                    2135033992 => {
+                        reverse_uv = true;
+                        PixelFormat::Yuv420
+                    }
                     19 => {
                         reverse_uv = false;
                         PixelFormat::Yuv420
@@ -268,9 +269,8 @@ impl Decoder for MediaCodec {
                     image.height,
                     image.row_bytes[0],
                 ));
-                // TODO: u and v order must be inverted for color format 19.
                 let u_plane_offset = isize_from_i32(stride * height)?;
-                let u_index = if reverse_uv { 2 } else { 1 };
+                let (u_index, v_index) = if reverse_uv { (2, 1) } else { (1, 2) };
                 image.planes[u_index] = Some(Pixels::from_raw_pointer(
                     unsafe { buffer.offset(u_plane_offset) },
                     image.depth as u32,
@@ -279,7 +279,6 @@ impl Decoder for MediaCodec {
                 ));
                 let u_plane_size = isize_from_i32(((width + 1) / 2) * ((height + 1) / 2))?;
                 let v_plane_offset = u_plane_offset + u_plane_size;
-                let v_index = if reverse_uv { 1 } else { 2 };
                 image.planes[v_index] = Some(Pixels::from_raw_pointer(
                     unsafe { buffer.offset(v_plane_offset) },
                     image.depth as u32,
@@ -288,7 +287,6 @@ impl Decoder for MediaCodec {
                 ));
             }
         }
-        // TODO: gainmap category.
         Ok(())
     }
 }
