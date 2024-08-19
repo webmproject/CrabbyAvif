@@ -364,9 +364,12 @@ impl Decoder {
         self.parse_state = ParseState::None;
     }
 
-    // This has an unsafe block and is intended for use only from the C API.
-    pub fn set_io_raw(&mut self, data: *const u8, size: usize) -> AvifResult<()> {
-        self.io = Some(Box::new(DecoderRawIO::create(data, size)));
+    /// # Safety
+    ///
+    /// This function is intended for use only from the C API. The assumption is that the caller
+    /// will always pass in a valid pointer and size.
+    pub unsafe fn set_io_raw(&mut self, data: *const u8, size: usize) -> AvifResult<()> {
+        self.io = Some(Box::new(unsafe { DecoderRawIO::create(data, size) }));
         self.parse_state = ParseState::None;
         Ok(())
     }

@@ -139,7 +139,7 @@ pub unsafe extern "C" fn crabby_avifDecoderSetIOMemory(
     size: usize,
 ) -> avifResult {
     let rust_decoder = unsafe { &mut (*decoder).rust_decoder };
-    to_avifResult(&rust_decoder.set_io_raw(data, size))
+    to_avifResult(unsafe { &rust_decoder.set_io_raw(data, size) })
 }
 
 #[no_mangle]
