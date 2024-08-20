@@ -68,12 +68,7 @@ impl From<*mut avifRGBImage> for rgb::Image {
             premultiply_alpha: rgb.alpha_premultiplied,
             is_float: rgb.is_float,
             max_threads: rgb.max_threads,
-            pixels: Some(Pixels::from_raw_pointer(
-                rgb.pixels,
-                rgb.depth,
-                rgb.height,
-                rgb.row_bytes,
-            )),
+            pixels: Pixels::from_raw_pointer(rgb.pixels, rgb.depth, rgb.height, rgb.row_bytes).ok(),
             row_bytes: rgb.row_bytes,
         };
         let format = match (rgb.format, rgb.ignore_alpha) {
@@ -106,30 +101,34 @@ impl From<*const avifImage> for image::Image {
             alpha_present: !image.alphaPlane.is_null(),
             alpha_premultiplied: image.alphaPremultiplied == AVIF_TRUE,
             planes: [
-                Some(Pixels::from_raw_pointer(
+                Pixels::from_raw_pointer(
                     image.yuvPlanes[0],
                     image.depth,
                     image.height,
                     image.yuvRowBytes[0],
-                )),
-                Some(Pixels::from_raw_pointer(
+                )
+                .ok(),
+                Pixels::from_raw_pointer(
                     image.yuvPlanes[1],
                     image.depth,
                     image.height,
                     image.yuvRowBytes[1],
-                )),
-                Some(Pixels::from_raw_pointer(
+                )
+                .ok(),
+                Pixels::from_raw_pointer(
                     image.yuvPlanes[2],
                     image.depth,
                     image.height,
                     image.yuvRowBytes[2],
-                )),
-                Some(Pixels::from_raw_pointer(
+                )
+                .ok(),
+                Pixels::from_raw_pointer(
                     image.alphaPlane,
                     image.depth,
                     image.height,
                     image.alphaRowBytes,
-                )),
+                )
+                .ok(),
             ],
             row_bytes: [
                 image.yuvRowBytes[0],

@@ -230,7 +230,7 @@ impl Decoder for MediaCodec {
                     image.depth as u32,
                     image.height,
                     image.row_bytes[3],
-                ));
+                )?);
             }
             _ => {
                 image.width = width as u32;
@@ -268,7 +268,7 @@ impl Decoder for MediaCodec {
                     image.depth as u32,
                     image.height,
                     image.row_bytes[0],
-                ));
+                )?);
                 let u_plane_offset = isize_from_i32(stride * height)?;
                 let (u_index, v_index) = if reverse_uv { (2, 1) } else { (1, 2) };
                 image.planes[u_index] = Some(Pixels::from_raw_pointer(
@@ -276,7 +276,7 @@ impl Decoder for MediaCodec {
                     image.depth as u32,
                     (image.height + 1) / 2,
                     image.row_bytes[u_index],
-                ));
+                )?);
                 let u_plane_size = isize_from_i32(((width + 1) / 2) * ((height + 1) / 2))?;
                 let v_plane_offset = u_plane_offset + u_plane_size;
                 image.planes[v_index] = Some(Pixels::from_raw_pointer(
@@ -284,7 +284,7 @@ impl Decoder for MediaCodec {
                     image.depth as u32,
                     (image.height + 1) / 2,
                     image.row_bytes[v_index],
-                ));
+                )?);
             }
         }
         Ok(())

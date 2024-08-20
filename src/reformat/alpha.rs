@@ -402,7 +402,7 @@ mod tests {
                 rgb.depth as u32,
                 height,
                 rgb.row_bytes,
-            ));
+            )?);
         } else {
             rgb.allocate()?;
         }

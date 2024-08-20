@@ -196,7 +196,7 @@ impl Decoder for Dav1d {
                     image.depth as u32,
                     image.height,
                     image.row_bytes[3],
-                ));
+                )?);
                 image.image_owns_planes[3] = false;
                 let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
                 image.yuv_range =
@@ -231,7 +231,7 @@ impl Decoder for Dav1d {
                         image.depth as u32,
                         image.height,
                         image.row_bytes[plane],
-                    ));
+                    )?);
                     image.image_owns_planes[plane] = false;
                 }
                 if image.yuv_format == PixelFormat::Yuv400 {

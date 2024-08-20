@@ -24,10 +24,15 @@ impl<T> PointerSlice<T> {
     /// # Safety
     /// `ptr` must live at least as long as the struct, and not be accessed other than through this
     /// struct. It must point to a memory region of at least `size` elements.
-    pub unsafe fn create(ptr: *mut T, size: usize) -> Self {
-        Self {
-            ptr: unsafe { std::slice::from_raw_parts_mut(ptr, size) },
+    pub unsafe fn create(ptr: *mut T, size: usize) -> AvifResult<Self> {
+        if ptr.is_null() || size == 0 {
+            return Err(AvifError::NoContent);
         }
+        // Ensure that size does not exceed isize::MAX.
+        let _ = isize_from_usize(size)?;
+        Ok(Self {
+            ptr: unsafe { std::slice::from_raw_parts_mut(ptr, size) },
+        })
     }
 
     fn slice_impl(&self) -> &[T] {
@@ -83,25 +88,22 @@ pub enum Pixels {
 }
 
 impl Pixels {
-    pub fn from_raw_pointer(ptr: *mut u8, depth: u32, height: u32, row_bytes: u32) -> Self {
+    pub fn from_raw_pointer(
+        ptr: *mut u8,
+        depth: u32,
+        height: u32,
+        mut row_bytes: u32,
+    ) -> AvifResult<Self> {
         if depth > 8 {
-            match checked_mul!(height, row_bytes / 2) {
-                Ok(size) => match usize_from_u32(size) {
-                    Ok(size) => {
-                        Pixels::Pointer16(unsafe { PointerSlice::create(ptr as *mut u16, size) })
-                    }
-                    _ => Pixels::Buffer16(Vec::new()),
-                },
-                _ => Pixels::Buffer16(Vec::new()),
-            }
+            row_bytes /= 2;
+        }
+        let size = usize_from_u32(checked_mul!(height, row_bytes)?)?;
+        if depth > 8 {
+            Ok(Pixels::Pointer16(unsafe {
+                PointerSlice::create(ptr as *mut u16, size)?
+            }))
         } else {
-            match checked_mul!(height, row_bytes) {
-                Ok(size) => match usize_from_u32(size) {
-                    Ok(size) => Pixels::Pointer(unsafe { PointerSlice::create(ptr, size) }),
-                    _ => Pixels::Buffer(Vec::new()),
-                },
-                _ => Pixels::Buffer(Vec::new()),
-            }
+            Ok(Pixels::Pointer(unsafe { PointerSlice::create(ptr, size)? }))
         }
     }
 

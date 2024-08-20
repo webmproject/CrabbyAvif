@@ -145,7 +145,9 @@ mod tests {
         ];
         for plane in planes {
             yuv.planes[plane.to_usize()] = Some(if is_pointer_input {
-                Pixels::Pointer(unsafe { PointerSlice::create(values.as_mut_ptr(), values.len()) })
+                Pixels::Pointer(unsafe {
+                    PointerSlice::create(values.as_mut_ptr(), values.len()).unwrap()
+                })
             } else {
                 Pixels::Buffer(values.to_vec())
             });
