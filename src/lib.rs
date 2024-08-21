@@ -241,8 +241,8 @@ pub enum MatrixCoefficients {
     ChromaDerivedNcl = 12,
     ChromaDerivedCl = 13,
     Ictcp = 14,
-    YcgcoRe = 15,
-    YcgcoRo = 16,
+    YcgcoRe = 16,
+    YcgcoRo = 17,
 }
 
 impl From<u16> for MatrixCoefficients {
@@ -263,8 +263,8 @@ impl From<u16> for MatrixCoefficients {
             12 => Self::ChromaDerivedNcl,
             13 => Self::ChromaDerivedCl,
             14 => Self::Ictcp,
-            15 => Self::YcgcoRe,
-            16 => Self::YcgcoRo,
+            16 => Self::YcgcoRe,
+            17 => Self::YcgcoRo,
             _ => Self::default(),
         }
     }
