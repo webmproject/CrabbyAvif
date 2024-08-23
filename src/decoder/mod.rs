@@ -738,6 +738,10 @@ impl Decoder {
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
         }
+        if self.settings.enable_decoding_gainmap && !self.settings.enable_parsing_gainmap_metadata {
+            return Err(AvifError::InvalidArgument);
+        }
+
         if self.parse_state == ParseState::None {
             self.reset();
             let avif_boxes = mp4box::parse(self.io.unwrap_mut())?;
@@ -880,23 +884,25 @@ impl Decoder {
                 }
 
                 // Optional gainmap item
-                if let Some((tonemap_id, gainmap_id)) =
-                    self.find_gainmap_item(item_ids[Category::Color.usize()])?
-                {
-                    self.read_and_parse_item(gainmap_id, Category::Gainmap)?;
-                    self.populate_grid_item_ids(gainmap_id, Category::Gainmap)?;
-                    self.validate_gainmap_item(gainmap_id, tonemap_id)?;
-                    self.gainmap_present = true;
-                    if self.settings.enable_decoding_gainmap {
-                        item_ids[Category::Gainmap.usize()] = gainmap_id;
-                    }
-                    if self.settings.enable_parsing_gainmap_metadata {
+                if self.settings.enable_parsing_gainmap_metadata && avif_boxes.ftyp.has_tmap() {
+                    if let Some((tonemap_id, gainmap_id)) =
+                        self.find_gainmap_item(item_ids[Category::Color.usize()])?
+                    {
                         let tonemap_item = self
                             .items
                             .get_mut(&tonemap_id)
                             .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
                         let mut stream = tonemap_item.stream(self.io.unwrap_mut())?;
-                        self.gainmap.metadata = mp4box::parse_tmap(&mut stream)?;
+                        if let Some(metadata) = mp4box::parse_tmap(&mut stream)? {
+                            self.gainmap.metadata = metadata;
+                            self.read_and_parse_item(gainmap_id, Category::Gainmap)?;
+                            self.populate_grid_item_ids(gainmap_id, Category::Gainmap)?;
+                            self.validate_gainmap_item(gainmap_id, tonemap_id)?;
+                            self.gainmap_present = true;
+                            if self.settings.enable_decoding_gainmap {
+                                item_ids[Category::Gainmap.usize()] = gainmap_id;
+                            }
+                        }
                     }
                 }
 

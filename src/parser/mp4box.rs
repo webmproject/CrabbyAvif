@@ -76,6 +76,10 @@ impl FileTypeBox {
     pub fn needs_moov(&self) -> bool {
         self.has_brand("avis")
     }
+
+    pub fn has_tmap(&self) -> bool {
+        self.has_brand("tmap")
+    }
 }
 
 #[derive(Debug, Default)]
@@ -1713,25 +1717,22 @@ pub fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
     Ok(ftyp.is_avif())
 }
 
-pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
+pub fn parse_tmap(stream: &mut IStream) -> AvifResult<Option<GainMapMetadata>> {
     // Experimental, not yet specified.
 
     // unsigned int(8) version = 0;
     let version = stream.read_u8()?;
     if version != 0 {
-        return Err(AvifError::InvalidToneMappedImage(
-            "unsupported version in tmap box".into(),
-        ));
+        return Ok(None); // Unsupported version.
     }
     // unsigned int(16) minimum_version;
     let minimum_version = stream.read_u16()?;
-    if minimum_version != 0 {
-        return Err(AvifError::InvalidToneMappedImage(format!(
-            "unsupported minimum_version ({minimum_version}) in tmap box"
-        )));
+    let supported_version = 0;
+    if minimum_version > supported_version {
+        return Ok(None); // Unsupported version.
     }
     // unsigned int(16) writer_version;
-    stream.skip_u16()?;
+    let writer_version = stream.read_u16()?;
 
     let mut metadata = GainMapMetadata::default();
     let mut bits = stream.sub_bit_stream(1)?;
@@ -1775,12 +1776,12 @@ pub fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
         metadata.base_offset[i] = metadata.base_offset[0];
         metadata.alternate_offset[i] = metadata.alternate_offset[0];
     }
-    if stream.has_bytes_left()? {
+    if writer_version <= supported_version && stream.has_bytes_left()? {
         return Err(AvifError::InvalidToneMappedImage(
             "invalid trailing bytes in tmap box".into(),
         ));
     }
-    Ok(metadata)
+    Ok(Some(metadata))
 }
 
 #[cfg(test)]

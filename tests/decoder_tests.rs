@@ -356,6 +356,85 @@ fn gainmap_oriented() {
     assert_eq!(decoder.gainmap().image.imir_axis, None);
 }
 
+// The two test files should produce the same results:
+// One has an unsupported 'version' field, the other an unsupported
+// 'minimum_version' field, but the behavior of these two files is the same.
+// From avifgainmaptest.cc
+#[test_case::test_case("unsupported_gainmap_version.avif")]
+#[test_case::test_case("unsupported_gainmap_minimum_version.avif")]
+fn decode_unsupported_version(filename: &str) {
+    // Parse with various enable_decoding_gainmap and
+    // enable_parsing_gainmap_metadata settings.
+    let mut decoder = get_decoder(filename);
+    decoder.settings.enable_decoding_gainmap = false;
+    decoder.settings.enable_parsing_gainmap_metadata = false;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    // Gain map not found since enable_parsing_gainmap_metadata is false.
+    assert!(!decoder.gainmap_present());
+    assert_eq!(decoder.gainmap().image.width, 0);
+    assert_eq!(decoder.gainmap().metadata.base_hdr_headroom.0, 0);
+    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.0, 0);
+
+    decoder = get_decoder(filename);
+    decoder.settings.enable_decoding_gainmap = false;
+    decoder.settings.enable_parsing_gainmap_metadata = true;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    // Gain map marked as not present because the metadata is not supported.
+    assert!(!decoder.gainmap_present());
+    assert_eq!(decoder.gainmap().image.width, 0);
+    assert_eq!(decoder.gainmap().metadata.base_hdr_headroom.0, 0);
+    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.0, 0);
+
+    decoder = get_decoder(filename);
+    decoder.settings.enable_decoding_gainmap = true;
+    decoder.settings.enable_parsing_gainmap_metadata = false;
+    let res = decoder.parse();
+    // Invalid enableDecodingGainMap=true and enable_parsing_gainmap_metadata
+    // combination.
+    assert_eq!(res.err(), Some(AvifError::InvalidArgument));
+
+    decoder = get_decoder(filename);
+    decoder.settings.enable_decoding_gainmap = true;
+    decoder.settings.enable_parsing_gainmap_metadata = true;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    // Gainmap not found: its metadata is not supported.
+    assert!(!decoder.gainmap_present());
+    assert_eq!(decoder.gainmap().image.width, 0);
+    assert_eq!(decoder.gainmap().metadata.base_hdr_headroom.0, 0);
+    assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.0, 0);
+}
+
+// From avifgainmaptest.cc
+#[test]
+fn decode_unsupported_writer_version_with_extra_bytes() {
+    let mut decoder = get_decoder("unsupported_gainmap_writer_version_with_extra_bytes.avif");
+    decoder.settings.enable_decoding_gainmap = false;
+    decoder.settings.enable_parsing_gainmap_metadata = true;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    // Decodes successfully: there are extra bytes at the end of the gain map
+    // metadata but that's expected as the writer_version field is higher
+    // that supported.
+    assert!(decoder.gainmap_present());
+    assert_eq!(decoder.gainmap().metadata.base_hdr_headroom.0, 6);
+    assert_eq!(decoder.gainmap().metadata.base_hdr_headroom.1, 2);
+}
+
+// From avifgainmaptest.cc
+#[test]
+fn decode_supported_writer_version_with_extra_bytes() {
+    let mut decoder = get_decoder("supported_gainmap_writer_version_with_extra_bytes.avif");
+    decoder.settings.enable_decoding_gainmap = false;
+    decoder.settings.enable_parsing_gainmap_metadata = true;
+    let res = decoder.parse();
+    // Fails to decode: there are extra bytes at the end of the gain map metadata
+    // that shouldn't be there.
+    assert!(matches!(res, Err(AvifError::InvalidToneMappedImage(_))));
+}
+
 // From avifcllitest.cc
 #[test_case::test_case("clli_0_0.avif", 0, 0; "clli_0_0")]
 #[test_case::test_case("clli_0_1.avif", 0, 1; "clli_0_1")]
