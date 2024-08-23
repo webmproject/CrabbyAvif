@@ -286,6 +286,19 @@ impl Image {
         {
             return Err(AvifError::NotImplemented);
         }
+        if matches!(
+            image.matrix_coefficients,
+            MatrixCoefficients::YcgcoRe | MatrixCoefficients::YcgcoRo
+        ) {
+            if image.yuv_range == YuvRange::Limited {
+                return Err(AvifError::NotImplemented);
+            }
+            let bit_offset =
+                if image.matrix_coefficients == MatrixCoefficients::YcgcoRe { 2 } else { 1 };
+            if image.depth - bit_offset != self.depth {
+                return Err(AvifError::NotImplemented);
+            }
+        }
         if image.matrix_coefficients == MatrixCoefficients::Identity
             && !matches!(image.yuv_format, PixelFormat::Yuv444 | PixelFormat::Yuv400)
         {
