@@ -760,6 +760,11 @@ impl Decoder {
                 }
             }
             self.items = construct_items(&avif_boxes.meta)?;
+            if avif_boxes.ftyp.has_tmap() && !self.items.values().any(|x| x.item_type == "tmap") {
+                return Err(AvifError::BmffParseFailed(
+                    "tmap was required but not found".into(),
+                ));
+            }
             for item in self.items.values_mut() {
                 item.harvest_ispe(
                     self.settings.strictness.alpha_ispe_required(),
