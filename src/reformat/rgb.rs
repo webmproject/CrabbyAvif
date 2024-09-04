@@ -332,6 +332,15 @@ impl Image {
                 }
             }
         }
+        if image.yuv_format == PixelFormat::AndroidP010 {
+            // P010 conversion is only supported via libyuv.
+            // TODO: b/362984605 - Handle alpha channel for P010.
+            if converted_with_libyuv {
+                return Ok(());
+            } else {
+                return Err(AvifError::NotImplemented);
+            }
+        }
         if self.has_alpha() && !alpha_reformatted_with_libyuv {
             if image.has_alpha() {
                 self.import_alpha_from(image)?;
