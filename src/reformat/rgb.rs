@@ -32,6 +32,7 @@ pub enum Format {
     Bgra,
     Abgr,
     Rgb565,
+    Rgba1010102, // https://developer.android.com/reference/android/graphics/Bitmap.Config#RGBA_1010102
 }
 
 impl Format {
@@ -43,7 +44,7 @@ impl Format {
             Format::Bgr => [2, 1, 0, 0],
             Format::Bgra => [2, 1, 0, 3],
             Format::Abgr => [3, 2, 1, 0],
-            Format::Rgb565 => [0; 4],
+            Format::Rgb565 | Format::Rgba1010102 => [0; 4],
         }
     }
 
@@ -216,7 +217,7 @@ impl Image {
 
     pub fn has_alpha(&self) -> bool {
         match self.format {
-            Format::Rgba | Format::Bgra | Format::Argb | Format::Abgr => true,
+            Format::Rgba | Format::Bgra | Format::Argb | Format::Abgr | Format::Rgba1010102 => true,
             Format::Rgb | Format::Bgr | Format::Rgb565 => false,
         }
     }
@@ -233,6 +234,7 @@ impl Image {
         match self.format {
             Format::Rgba | Format::Bgra | Format::Argb | Format::Abgr => 4,
             Format::Rgb | Format::Bgr | Format::Rgb565 => 3,
+            Format::Rgba1010102 => 0, // This is never used.
         }
     }
 
@@ -241,6 +243,7 @@ impl Image {
             Format::Rgba | Format::Bgra | Format::Argb | Format::Abgr => self.channel_size() * 4,
             Format::Rgb | Format::Bgr => self.channel_size() * 3,
             Format::Rgb565 => 2,
+            Format::Rgba1010102 => 4,
         }
     }
 

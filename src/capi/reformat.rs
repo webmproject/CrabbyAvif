@@ -83,6 +83,7 @@ impl From<*mut avifRGBImage> for rgb::Image {
             (rgb::Format::Abgr, true) => rgb::Format::Bgr,
             (rgb::Format::Abgr, false) => rgb::Format::Abgr,
             (rgb::Format::Rgb565, _) => rgb::Format::Rgb565,
+            (rgb::Format::Rgba1010102, _) => rgb::Format::Rgba1010102,
         };
         dst.shuffle_channels_to(format).unwrap()
     }

@@ -53,6 +53,10 @@ pub enum PixelFormat {
     Yuv422 = 2,
     Yuv420 = 3, // Also used for alpha items when 4:0:0 is not supported by the codec.
     Yuv400 = 4,
+    // The following formats are not found in the AV1 spec. They are formats that are supported by
+    // Android platform. They are intended to be pass-through formats that are used only by the
+    // Android MediaCodec wrapper. All internal functions will treat them as opaque.
+    AndroidP010 = 5,
 }
 
 impl PixelFormat {
@@ -62,7 +66,7 @@ impl PixelFormat {
 
     pub fn plane_count(&self) -> usize {
         match self {
-            PixelFormat::None => 0,
+            PixelFormat::None | PixelFormat::AndroidP010 => 0,
             PixelFormat::Yuv400 => 1,
             PixelFormat::Yuv420 | PixelFormat::Yuv422 | PixelFormat::Yuv444 => 3,
         }
