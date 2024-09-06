@@ -53,7 +53,7 @@ macro_rules! find_property {
 }
 
 impl Item {
-    pub fn stream<'a>(&'a mut self, io: &'a mut GenericIO) -> AvifResult<IStream> {
+    pub fn stream<'a>(&'a mut self, io: &'a mut GenericIO) -> AvifResult<IStream<'a>> {
         if !self.idat.is_empty() {
             match self.extents.len() {
                 0 => return Err(AvifError::UnknownError("no extent".into())),
