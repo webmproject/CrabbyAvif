@@ -62,5 +62,4 @@ target_include_directories(conformance_tests PRIVATE ${CRABBY_AVIF_INCLUDE_DIR})
 target_link_libraries(conformance_tests PRIVATE ${GTEST_LIBRARIES})
 target_link_libraries(conformance_tests PRIVATE ${GTEST_MAIN_LIBRARIES})
 target_link_libraries(conformance_tests PRIVATE ${CRABBY_AVIF_LIBRARIES})
-# TODO: https://github.com/AOMediaCodec/av1-avif/issues/217 - Enable test 166
-add_test(NAME conformance_tests COMMAND conformance_tests ${CARGO_ROOT_DIR}/external/av1-avif/testFiles/ --gtest_filter=-*ValidateDecode/166)
+add_test(NAME conformance_tests COMMAND conformance_tests ${CARGO_ROOT_DIR}/external/av1-avif/testFiles/)
