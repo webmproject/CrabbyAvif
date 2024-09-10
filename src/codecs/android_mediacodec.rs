@@ -58,25 +58,25 @@ fn get_i32_from_str(format: *mut AMediaFormat, key: &str) -> Option<i32> {
     }
 }
 
+fn get_codec_names() -> Vec<String> {
+    // Default codec list.
+    vec![
+        "c2.android.av1-dav1d.decoder".to_string(),
+        "c2.android.av1.decoder".to_string(),
+    ]
+}
+
 impl Decoder for MediaCodec {
     fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
-        // Does not support operating point and all layers.
         if self.codec.is_some() {
             return Ok(()); // Already initialized.
-        }
-        //c_str!(codec_mime_type, codec_mime_type_tmp, "video/av01");
-        //let codec = unsafe { AMediaCodec_createDecoderByType(codec_mime_type) };
-        c_str!(codec_name, codec_name_tmp, "c2.android.av1.decoder");
-        let codec = unsafe { AMediaCodec_createCodecByName(codec_name) };
-        if codec.is_null() {
-            return Err(AvifError::NoCodecAvailable);
         }
         let format = unsafe { AMediaFormat_new() };
         if format.is_null() {
             return Err(AvifError::UnknownError("".into()));
         }
+        c_str!(mime_type, mime_type_tmp, "video/av01");
         unsafe {
-            c_str!(mime_type, mime_type_tmp, "video/av01");
             AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, mime_type);
             AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_WIDTH, i32_from_u32(config.width)?);
             AMediaFormat_setInt32(
@@ -93,16 +93,44 @@ impl Decoder for MediaCodec {
             // output. Or maybe it is possible to get RGB 1010102 itself?
             // int32_t COLOR_FormatYUVP010 = 54;
             // rgb 1010102 = 2130750114
+        }
 
-            if AMediaCodec_configure(codec, format, ptr::null_mut(), ptr::null_mut(), 0)
-                != media_status_t_AMEDIA_OK
-            {
-                return Err(AvifError::NoCodecAvailable);
+        let codec_names = get_codec_names();
+        let mut codec = ptr::null_mut();
+        for i in 0..codec_names.len() + 1 {
+            codec = if i == codec_names.len() {
+                // In the last iteration, look for any available AV1 codec.
+                unsafe { AMediaCodec_createDecoderByType(mime_type) }
+            } else {
+                c_str!(codec_name, codec_name_tmp, codec_names[i].as_str());
+                unsafe { AMediaCodec_createCodecByName(codec_name) }
+            };
+            if codec.is_null() {
+                continue;
             }
-            if AMediaCodec_start(codec) != media_status_t_AMEDIA_OK {
-                return Err(AvifError::NoCodecAvailable);
+            let status = unsafe {
+                AMediaCodec_configure(codec, format, ptr::null_mut(), ptr::null_mut(), 0)
+            };
+            if status != media_status_t_AMEDIA_OK {
+                unsafe {
+                    AMediaCodec_delete(codec);
+                }
+                codec = ptr::null_mut();
+                continue;
             }
-            AMediaFormat_delete(format);
+            let status = unsafe { AMediaCodec_start(codec) };
+            if status != media_status_t_AMEDIA_OK {
+                unsafe {
+                    AMediaCodec_delete(codec);
+                }
+                codec = ptr::null_mut();
+                continue;
+            }
+            break;
+        }
+        if codec.is_null() {
+            unsafe { AMediaFormat_delete(format) };
+            return Err(AvifError::NoCodecAvailable);
         }
         self.codec = Some(codec);
         Ok(())
