@@ -1144,6 +1144,7 @@ impl Decoder {
             all_layers: tile.input.all_layers,
             width: tile.width,
             height: tile.height,
+            depth: self.image.depth,
             max_threads: self.settings.max_threads,
         };
         codec.initialize(&config)?;

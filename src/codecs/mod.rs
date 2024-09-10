@@ -31,6 +31,7 @@ pub struct DecoderConfig {
     pub all_layers: bool,
     pub width: u32,
     pub height: u32,
+    pub depth: u8,
     pub max_threads: u32,
 }
 

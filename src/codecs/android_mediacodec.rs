@@ -66,6 +66,19 @@ fn get_codec_names() -> Vec<String> {
     ]
 }
 
+impl MediaCodec {
+    // Flexible YUV 420 format used for 8-bit images:
+    // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Flexible
+    const YUV_420_FLEXIBLE: i32 = 2135033992;
+    // Old YUV 420 planar format used for 8-bit images. This is not used by newer codecs, but is
+    // there for backwards compatibility with some old codecs:
+    // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Planar
+    const YUV_420_PLANAR: i32 = 19;
+    // YUV P010 format used for 10-bit images:
+    // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUVP010
+    const YUV_P010: i32 = 54;
+}
+
 impl Decoder for MediaCodec {
     fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
         if self.codec.is_some() {
@@ -84,16 +97,11 @@ impl Decoder for MediaCodec {
                 AMEDIAFORMAT_KEY_HEIGHT,
                 i32_from_u32(config.height)?,
             );
-
-            // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Flexible
-            //AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_FORMAT, 2135033992);
-            AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_FORMAT, 19);
-
-            // TODO: for 10-bit need to set format to 54 in order to get 10-bit
-            // output. Or maybe it is possible to get RGB 1010102 itself?
-            // int32_t COLOR_FormatYUVP010 = 54;
-            // rgb 1010102 = 2130750114
-
+            AMediaFormat_setInt32(
+                format,
+                AMEDIAFORMAT_KEY_COLOR_FORMAT,
+                if config.depth > 8 { Self::YUV_P010 } else { Self::YUV_420_FLEXIBLE },
+            );
             // low-latency is documented but isn't exposed as a constant in the NDK:
             // https://developer.android.com/reference/android/media/MediaFormat#KEY_LOW_LATENCY
             c_str!(low_latency, low_latency_tmp, "low-latency");
@@ -255,7 +263,21 @@ impl Decoder for MediaCodec {
                 // TODO: make sure alpha plane matches previous alpha plane.
                 image.width = width as u32;
                 image.height = height as u32;
-                image.depth = 8; // TODO: 10?
+                match color_format {
+                    Self::YUV_420_PLANAR | Self::YUV_420_FLEXIBLE => {
+                        image.yuv_format = PixelFormat::Yuv420;
+                        image.depth = 8;
+                    }
+                    Self::YUV_P010 => {
+                        image.yuv_format = PixelFormat::AndroidP010;
+                        image.depth = 10;
+                    }
+                    _ => {
+                        return Err(AvifError::UnknownError(format!(
+                            "unknown color format: {color_format}"
+                        )));
+                    }
+                }
                 image.yuv_range = if color_range == 0 { YuvRange::Limited } else { YuvRange::Full };
                 image.row_bytes[3] = stride as u32;
                 image.planes[3] = Some(Pixels::from_raw_pointer(
@@ -268,17 +290,22 @@ impl Decoder for MediaCodec {
             _ => {
                 image.width = width as u32;
                 image.height = height as u32;
-                image.depth = 8; // TODO: 10?
                 let reverse_uv;
-                image.yuv_format = match color_format {
-                    // Android maps all AV1 8-bit images into yuv 420.
-                    2135033992 => {
+                match color_format {
+                    Self::YUV_420_FLEXIBLE => {
                         reverse_uv = true;
-                        PixelFormat::Yuv420
+                        image.yuv_format = PixelFormat::Yuv420;
+                        image.depth = 8;
                     }
-                    19 => {
+                    Self::YUV_420_PLANAR => {
                         reverse_uv = false;
-                        PixelFormat::Yuv420
+                        image.yuv_format = PixelFormat::Yuv420;
+                        image.depth = 8;
+                    }
+                    Self::YUV_P010 => {
+                        reverse_uv = false;
+                        image.yuv_format = PixelFormat::AndroidP010;
+                        image.depth = 10;
                     }
                     _ => {
                         return Err(AvifError::UnknownError(format!(
@@ -292,32 +319,46 @@ impl Decoder for MediaCodec {
                 image.color_primaries = ColorPrimaries::Unspecified;
                 image.transfer_characteristics = TransferCharacteristics::Unspecified;
                 image.matrix_coefficients = MatrixCoefficients::Unspecified;
-                image.row_bytes[0] = stride as u32;
-                image.row_bytes[1] = ((stride + 1) / 2) as u32;
-                image.row_bytes[2] = ((stride + 1) / 2) as u32;
 
+                // Populate the Y plane.
+                image.row_bytes[0] = stride as u32;
                 image.planes[0] = Some(Pixels::from_raw_pointer(
                     buffer,
                     image.depth as u32,
                     image.height,
                     image.row_bytes[0],
                 )?);
-                let u_plane_offset = isize_from_i32(stride * height)?;
-                let (u_index, v_index) = if reverse_uv { (2, 1) } else { (1, 2) };
-                image.planes[u_index] = Some(Pixels::from_raw_pointer(
-                    unsafe { buffer.offset(u_plane_offset) },
-                    image.depth as u32,
-                    (image.height + 1) / 2,
-                    image.row_bytes[u_index],
-                )?);
-                let u_plane_size = isize_from_i32(((width + 1) / 2) * ((height + 1) / 2))?;
-                let v_plane_offset = u_plane_offset + u_plane_size;
-                image.planes[v_index] = Some(Pixels::from_raw_pointer(
-                    unsafe { buffer.offset(v_plane_offset) },
-                    image.depth as u32,
-                    (image.height + 1) / 2,
-                    image.row_bytes[v_index],
-                )?);
+
+                // Populate the UV planes.
+                if image.yuv_format == PixelFormat::Yuv420 {
+                    image.row_bytes[1] = ((stride + 1) / 2) as u32;
+                    image.row_bytes[2] = ((stride + 1) / 2) as u32;
+                    let u_plane_offset = isize_from_i32(stride * height)?;
+                    let (u_index, v_index) = if reverse_uv { (2, 1) } else { (1, 2) };
+                    image.planes[u_index] = Some(Pixels::from_raw_pointer(
+                        unsafe { buffer.offset(u_plane_offset) },
+                        image.depth as u32,
+                        (image.height + 1) / 2,
+                        image.row_bytes[u_index],
+                    )?);
+                    let u_plane_size = isize_from_i32(((width + 1) / 2) * ((height + 1) / 2))?;
+                    let v_plane_offset = u_plane_offset + u_plane_size;
+                    image.planes[v_index] = Some(Pixels::from_raw_pointer(
+                        unsafe { buffer.offset(v_plane_offset) },
+                        image.depth as u32,
+                        (image.height + 1) / 2,
+                        image.row_bytes[v_index],
+                    )?);
+                } else {
+                    let uv_plane_offset = isize_from_i32(stride * height)?;
+                    image.row_bytes[1] = stride as u32;
+                    image.planes[1] = Some(Pixels::from_raw_pointer(
+                        unsafe { buffer.offset(uv_plane_offset) },
+                        image.depth as u32,
+                        (image.height + 1) / 2,
+                        image.row_bytes[1],
+                    )?);
+                }
             }
         }
         Ok(())
