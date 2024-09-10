@@ -93,6 +93,11 @@ impl Decoder for MediaCodec {
             // output. Or maybe it is possible to get RGB 1010102 itself?
             // int32_t COLOR_FormatYUVP010 = 54;
             // rgb 1010102 = 2130750114
+
+            // low-latency is documented but isn't exposed as a constant in the NDK:
+            // https://developer.android.com/reference/android/media/MediaFormat#KEY_LOW_LATENCY
+            c_str!(low_latency, low_latency_tmp, "low-latency");
+            AMediaFormat_setInt32(format, low_latency, 1);
         }
 
         let codec_names = get_codec_names();
@@ -242,7 +247,7 @@ impl Decoder for MediaCodec {
             .ok_or(AvifError::UnknownError("".into()))?;
         let color_format = get_i32(format, unsafe { AMEDIAFORMAT_KEY_COLOR_FORMAT })
             .ok_or(AvifError::UnknownError("".into()))?;
-        // color-range is documented but the key variable is not exposed in the NDK:
+        // color-range is documented but isn't exposed as a constant in the NDK:
         // https://developer.android.com/reference/android/media/MediaFormat#KEY_COLOR_RANGE
         let color_range = get_i32_from_str(format, "color-range").unwrap_or(2);
         match category {
