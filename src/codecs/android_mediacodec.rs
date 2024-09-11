@@ -341,7 +341,7 @@ impl Decoder for MediaCodec {
                         (image.height + 1) / 2,
                         image.row_bytes[u_index],
                     )?);
-                    let u_plane_size = isize_from_i32(((width + 1) / 2) * ((height + 1) / 2))?;
+                    let u_plane_size = isize_from_i32(((stride + 1) / 2) * ((height + 1) / 2))?;
                     let v_plane_offset = u_plane_offset + u_plane_size;
                     image.planes[v_index] = Some(Pixels::from_raw_pointer(
                         unsafe { buffer.offset(v_plane_offset) },
