@@ -320,7 +320,7 @@ impl Decoder for MediaCodec {
                             "unknown color format: {color_format}"
                         )));
                     }
-                };
+                }
                 image.yuv_range = if color_range == 0 { YuvRange::Limited } else { YuvRange::Full };
                 image.chroma_sample_position = ChromaSamplePosition::Unknown;
 
