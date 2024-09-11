@@ -100,7 +100,7 @@ impl Decoder for MediaCodec {
             AMediaFormat_setInt32(
                 format,
                 AMEDIAFORMAT_KEY_COLOR_FORMAT,
-                if config.depth > 8 { Self::YUV_P010 } else { Self::YUV_420_FLEXIBLE },
+                if config.depth == 10 { Self::YUV_P010 } else { Self::YUV_420_FLEXIBLE },
             );
             // low-latency is documented but isn't exposed as a constant in the NDK:
             // https://developer.android.com/reference/android/media/MediaFormat#KEY_LOW_LATENCY
