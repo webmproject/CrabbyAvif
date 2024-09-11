@@ -58,11 +58,17 @@ fn get_i32_from_str(format: *mut AMediaFormat, key: &str) -> Option<i32> {
     }
 }
 
-fn get_codec_names() -> Vec<String> {
-    // Default codec list.
+enum CodecInitializer {
+    ByName(String),
+    ByMimeType(String),
+}
+
+fn get_codec_initializers(mime_type: &str) -> Vec<CodecInitializer> {
+    // Default list of initializers.
     vec![
-        "c2.android.av1-dav1d.decoder".to_string(),
-        "c2.android.av1.decoder".to_string(),
+        CodecInitializer::ByName("c2.android.av1-dav1d.decoder".to_string()),
+        CodecInitializer::ByName("c2.android.av1.decoder".to_string()),
+        CodecInitializer::ByMimeType(mime_type.to_string()),
     ]
 }
 
@@ -108,15 +114,17 @@ impl Decoder for MediaCodec {
             AMediaFormat_setInt32(format, low_latency, 1);
         }
 
-        let codec_names = get_codec_names();
         let mut codec = ptr::null_mut();
-        for i in 0..codec_names.len() + 1 {
-            codec = if i == codec_names.len() {
-                // In the last iteration, look for any available AV1 codec.
-                unsafe { AMediaCodec_createDecoderByType(mime_type) }
-            } else {
-                c_str!(codec_name, codec_name_tmp, codec_names[i].as_str());
-                unsafe { AMediaCodec_createCodecByName(codec_name) }
+        for codec_initializer in get_codec_initializers("video/av01") {
+            codec = match codec_initializer {
+                CodecInitializer::ByName(name) => {
+                    c_str!(codec_name, codec_name_tmp, name.as_str());
+                    unsafe { AMediaCodec_createCodecByName(codec_name) }
+                }
+                CodecInitializer::ByMimeType(mime_type) => {
+                    c_str!(codec_mime, codec_mime_tmp, mime_type.as_str());
+                    unsafe { AMediaCodec_createDecoderByType(codec_mime) }
+                }
             };
             if codec.is_null() {
                 continue;
