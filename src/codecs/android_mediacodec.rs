@@ -51,11 +51,7 @@ fn get_i32(format: *mut AMediaFormat, key: *const c_char) -> Option<i32> {
 
 fn get_i32_from_str(format: *mut AMediaFormat, key: &str) -> Option<i32> {
     c_str!(key_str, key_str_tmp, key);
-    let mut value: i32 = 0;
-    match unsafe { AMediaFormat_getInt32(format, key_str, &mut value as *mut _) } {
-        true => Some(value),
-        false => None,
-    }
+    get_i32(format, key_str)
 }
 
 enum CodecInitializer {
