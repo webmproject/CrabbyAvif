@@ -284,6 +284,8 @@ impl Decoder for MediaCodec {
             .ok_or(AvifError::UnknownError("".into()))?;
         let height = get_i32(format, unsafe { AMEDIAFORMAT_KEY_HEIGHT })
             .ok_or(AvifError::UnknownError("".into()))?;
+        let slice_height =
+            get_i32(format, unsafe { AMEDIAFORMAT_KEY_SLICE_HEIGHT }).unwrap_or(height);
         let stride = get_i32(format, unsafe { AMEDIAFORMAT_KEY_STRIDE })
             .ok_or(AvifError::UnknownError("".into()))?;
         let color_format = get_i32(format, unsafe { AMEDIAFORMAT_KEY_COLOR_FORMAT })
@@ -366,7 +368,7 @@ impl Decoder for MediaCodec {
                 if image.yuv_format == PixelFormat::Yuv420 {
                     image.row_bytes[1] = ((stride + 1) / 2) as u32;
                     image.row_bytes[2] = ((stride + 1) / 2) as u32;
-                    let u_plane_offset = isize_from_i32(stride * height)?;
+                    let u_plane_offset = isize_from_i32(stride * slice_height)?;
                     let (u_index, v_index) = if reverse_uv { (2, 1) } else { (1, 2) };
                     image.planes[u_index] = Some(Pixels::from_raw_pointer(
                         unsafe { buffer.offset(u_plane_offset) },
@@ -383,7 +385,7 @@ impl Decoder for MediaCodec {
                         image.row_bytes[v_index],
                     )?);
                 } else {
-                    let uv_plane_offset = isize_from_i32(stride * height)?;
+                    let uv_plane_offset = isize_from_i32(stride * slice_height)?;
                     image.row_bytes[1] = stride as u32;
                     image.planes[1] = Some(Pixels::from_raw_pointer(
                         unsafe { buffer.offset(uv_plane_offset) },
