@@ -40,4 +40,4 @@ name = "avif"
 subdirectory = "avif"
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(google3)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(google3)', 'cfg(android_soong)'] }

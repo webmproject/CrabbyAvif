@@ -64,10 +64,35 @@ enum CodecInitializer {
 }
 
 fn get_codec_initializers(mime_type: &str) -> Vec<CodecInitializer> {
+    let dav1d = String::from("c2.android.av1-dav1d.decoder");
+    let gav1 = String::from("c2.android.av1.decoder");
+    #[cfg(android_soong)]
+    {
+        // Use a specific decoder if it is requested.
+        if let Ok(Some(decoder)) =
+            rustutils::system_properties::read("media.crabbyavif.debug.decoder")
+        {
+            return vec![CodecInitializer::ByName(decoder)];
+        }
+        // If hardware decoders are allowed, then search by mime type first and then try the
+        // software decoders.
+        let prefer_hw = rustutils::system_properties::read_bool(
+            "media.stagefright.thumbnail.prefer_hw_codecs",
+            false,
+        )
+        .unwrap_or(false);
+        if prefer_hw {
+            return vec![
+                CodecInitializer::ByMimeType(mime_type.to_string()),
+                CodecInitializer::ByName(dav1d),
+                CodecInitializer::ByName(gav1),
+            ];
+        }
+    }
     // Default list of initializers.
     vec![
-        CodecInitializer::ByName("c2.android.av1-dav1d.decoder".to_string()),
-        CodecInitializer::ByName("c2.android.av1.decoder".to_string()),
+        CodecInitializer::ByName(dav1d),
+        CodecInitializer::ByName(gav1),
         CodecInitializer::ByMimeType(mime_type.to_string()),
     ]
 }
