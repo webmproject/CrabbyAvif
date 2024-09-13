@@ -15,9 +15,12 @@
 use super::image::*;
 use super::types::*;
 
-use crate::image;
+use crate::decoder::Category;
+use crate::image::*;
 use crate::internal_utils::pixels::*;
+use crate::internal_utils::*;
 use crate::reformat::rgb;
+use crate::*;
 
 /// cbindgen:rename-all=CamelCase
 #[repr(C)]
@@ -166,4 +169,91 @@ pub unsafe extern "C" fn crabby_avifImageYUVToRGB(
     let mut rgb: rgb::Image = unsafe { &(*rgb) }.into();
     let image: image::Image = unsafe { &(*image) }.into();
     to_avifResult(&rgb.convert_from_yuv(&image))
+}
+
+fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
+    for plane in ALL_PLANES {
+        if !src.has_plane(plane) {
+            continue;
+        }
+        let plane_data = src.plane_data(plane).unwrap();
+        if src.depth == 8 {
+            let dst_planes = [
+                dst.yuvPlanes[0],
+                dst.yuvPlanes[1],
+                dst.yuvPlanes[2],
+                dst.alphaPlane,
+            ];
+            let dst_row_bytes = [
+                dst.yuvRowBytes[0],
+                dst.yuvRowBytes[1],
+                dst.yuvRowBytes[2],
+                dst.alphaRowBytes,
+            ];
+            for y in 0..plane_data.height {
+                let src_slice = &src.row(plane, y).unwrap()[..plane_data.width as usize];
+                let dst_slice = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        dst_planes[plane.to_usize()]
+                            .offset(isize_from_u32(y * dst_row_bytes[plane.to_usize()])?),
+                        usize_from_u32(plane_data.width)?,
+                    )
+                };
+                dst_slice.copy_from_slice(src_slice);
+            }
+        } else {
+            let dst_planes = [
+                dst.yuvPlanes[0] as *mut u16,
+                dst.yuvPlanes[1] as *mut u16,
+                dst.yuvPlanes[2] as *mut u16,
+                dst.alphaPlane as *mut u16,
+            ];
+            let dst_row_bytes = [
+                dst.yuvRowBytes[0] / 2,
+                dst.yuvRowBytes[1] / 2,
+                dst.yuvRowBytes[2] / 2,
+                dst.alphaRowBytes / 2,
+            ];
+            for y in 0..plane_data.height {
+                let src_slice = &src.row16(plane, y).unwrap()[..plane_data.width as usize];
+                let dst_slice = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        dst_planes[plane.to_usize()]
+                            .offset(isize_from_u32(y * dst_row_bytes[plane.to_usize()])?),
+                        usize_from_u32(plane_data.width)?,
+                    )
+                };
+                dst_slice.copy_from_slice(src_slice);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifImageScale(
+    image: *mut avifImage,
+    dstWidth: u32,
+    dstHeight: u32,
+    _diag: *mut avifDiagnostics,
+) -> avifResult {
+    // To avoid buffer reallocations, we only support scaling to a smaller size.
+    let dst_image = unsafe { &mut (*image) };
+    if dstWidth > dst_image.width || dstHeight > dst_image.height {
+        return avifResult::NotImplemented;
+    }
+
+    let mut rust_image: image::Image = unsafe { &(*image) }.into();
+    let res = rust_image.scale(dstWidth, dstHeight, Category::Color);
+    if res.is_err() {
+        return to_avifResult(&res);
+    }
+    let res = rust_image.scale(dstWidth, dstHeight, Category::Alpha);
+    if res.is_err() {
+        return to_avifResult(&res);
+    }
+
+    dst_image.width = rust_image.width;
+    dst_image.height = rust_image.height;
+    to_avifResult(&CopyPlanes(dst_image, &rust_image))
 }

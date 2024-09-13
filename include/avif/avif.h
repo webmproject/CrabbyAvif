@@ -596,6 +596,11 @@ void crabby_avifRGBImageSetDefaults(avifRGBImage *rgb, const avifImage *image);
 
 avifResult crabby_avifImageYUVToRGB(const avifImage *image, avifRGBImage *rgb);
 
+avifResult crabby_avifImageScale(avifImage *image,
+                                 uint32_t dstWidth,
+                                 uint32_t dstHeight,
+                                 avifDiagnostics *_diag);
+
 const char *crabby_avifResultToString(avifResult _res);
 
 avifBool crabby_avifCropRectConvertCleanApertureBox(avifCropRect *cropRect,

@@ -53,6 +53,7 @@ add_avif_gtest(avifkeyframetest)
 add_avif_gtest(avifmetadatatest)
 add_avif_gtest(avifprogressivetest)
 add_avif_gtest(avifreformattest)
+add_avif_gtest(avifscaletest)
 add_avif_gtest(aviftest)
 
 # Conformance test.
