@@ -55,9 +55,8 @@ impl From<rgb::Image> for avifRGBImage {
     }
 }
 
-impl From<*mut avifRGBImage> for rgb::Image {
-    fn from(rgb: *mut avifRGBImage) -> rgb::Image {
-        let rgb = unsafe { &(*rgb) };
+impl From<&avifRGBImage> for rgb::Image {
+    fn from(rgb: &avifRGBImage) -> rgb::Image {
         let dst = rgb::Image {
             width: rgb.width,
             height: rgb.height,
@@ -89,15 +88,14 @@ impl From<*mut avifRGBImage> for rgb::Image {
     }
 }
 
-impl From<*const avifImage> for image::Image {
+impl From<&avifImage> for image::Image {
     // Only copies fields necessary for reformatting.
-    fn from(image: *const avifImage) -> image::Image {
-        let image = unsafe { &(*image) };
+    fn from(image: &avifImage) -> image::Image {
         image::Image {
             width: image.width,
             height: image.height,
             depth: image.depth as u8,
-            yuv_format: image.yuvFormat.into(),
+            yuv_format: image.yuvFormat,
             yuv_range: image.yuvRange,
             alpha_present: !image.alphaPlane.is_null(),
             alpha_premultiplied: image.alphaPremultiplied == AVIF_TRUE,
@@ -151,7 +149,7 @@ pub unsafe extern "C" fn crabby_avifRGBImageSetDefaults(
     image: *const avifImage,
 ) {
     let rgb = unsafe { &mut (*rgb) };
-    let image: image::Image = image.into();
+    let image: image::Image = unsafe { &(*image) }.into();
     *rgb = rgb::Image::create_from_yuv(&image).into();
 }
 
@@ -165,7 +163,7 @@ pub unsafe extern "C" fn crabby_avifImageYUVToRGB(
             return avifResult::Ok;
         }
     }
-    let mut rgb: rgb::Image = rgb.into();
-    let image: image::Image = image.into();
+    let mut rgb: rgb::Image = unsafe { &(*rgb) }.into();
+    let image: image::Image = unsafe { &(*image) }.into();
     to_avifResult(&rgb.convert_from_yuv(&image))
 }

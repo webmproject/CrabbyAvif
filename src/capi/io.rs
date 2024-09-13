@@ -177,7 +177,7 @@ impl crate::decoder::IO for avifIOWrapper {
         }
         if self.data.size == 0 {
             Ok(&[])
-        } else if self.data.data == std::ptr::null() {
+        } else if self.data.data.is_null() {
             Err(AvifError::UnknownError(
                 "data pointer was null but size was not zero".into(),
             ))
