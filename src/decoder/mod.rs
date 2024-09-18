@@ -1090,16 +1090,7 @@ impl Decoder {
         )
     }
 
-    #[allow(unreachable_code)]
     fn can_use_single_codec(&self) -> AvifResult<bool> {
-        #[cfg(feature = "android_mediacodec")]
-        {
-            // Android MediaCodec does not support using a single codec instance for images of
-            // varying formats (which could happen when image contains alpha).
-            // TODO: return false for now. But investigate cases where it is possible to use a
-            // single codec instance (it may work for grids).
-            return Ok(false);
-        }
         let total_tile_count = checked_add!(
             checked_add!(self.tiles[0].len(), self.tiles[1].len())?,
             self.tiles[2].len()
@@ -1156,15 +1147,21 @@ impl Decoder {
         if !self.codecs.is_empty() {
             return Ok(());
         }
-        if matches!(self.source, Source::Tracks) {
-            // In this case, we will use at most two codec instances (one for the color planes and
-            // one for the alpha plane). Gain maps are not supported.
-            self.codecs = create_vec_exact(2)?;
-            self.create_codec(Category::Color, 0)?;
-            self.tiles[Category::Color.usize()][0].codec_index = 0;
-            if !self.tiles[Category::Alpha.usize()].is_empty() {
-                self.create_codec(Category::Alpha, 0)?;
-                self.tiles[Category::Alpha.usize()][0].codec_index = 1;
+        if matches!(self.source, Source::Tracks) || cfg!(feature = "android_mediacodec") {
+            // In this case, there are two possibilities in the following order:
+            //  1) If source is Tracks, then we will use at most two codec instances (one each for
+            //     Color and Alpha). Gainmap will always be empty.
+            //  2) If android_mediacodec is true, then we will use at most three codec instances
+            //     (one for each category).
+            self.codecs = create_vec_exact(3)?;
+            for category in Category::ALL {
+                if self.tiles[category.usize()].is_empty() {
+                    continue;
+                }
+                self.create_codec(category, 0)?;
+                for tile in &mut self.tiles[category.usize()] {
+                    tile.codec_index = self.codecs.len() - 1;
+                }
             }
         } else if self.can_use_single_codec()? {
             self.codecs = create_vec_exact(1)?;
