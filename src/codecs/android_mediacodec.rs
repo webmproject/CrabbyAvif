@@ -27,6 +27,9 @@ use std::ffi::CString;
 use std::os::raw::c_char;
 use std::ptr;
 
+#[cfg(android_soong)]
+include!(concat!(env!("OUT_DIR"), "/mediaimage2_bindgen.rs"));
+
 #[derive(Debug, Default)]
 pub struct MediaCodec {
     codec: Option<*mut AMediaCodec>,
@@ -52,6 +55,113 @@ fn get_i32(format: *mut AMediaFormat, key: *const c_char) -> Option<i32> {
 fn get_i32_from_str(format: *mut AMediaFormat, key: &str) -> Option<i32> {
     c_str!(key_str, key_str_tmp, key);
     get_i32(format, key_str)
+}
+
+#[derive(Debug, Default)]
+struct PlaneInfo {
+    color_format: i32,
+    offset: [isize; 3],
+    row_stride: [u32; 3],
+    column_stride: [u32; 3],
+}
+
+impl PlaneInfo {
+    fn pixel_format(&self) -> PixelFormat {
+        match self.color_format {
+            MediaCodec::YUV_P010 => PixelFormat::AndroidP010,
+            _ => PixelFormat::Yuv420,
+        }
+    }
+
+    fn depth(&self) -> u8 {
+        match self.color_format {
+            MediaCodec::YUV_P010 => 10,
+            _ => 8,
+        }
+    }
+}
+
+fn guess_plane_info(format: *mut AMediaFormat) -> AvifResult<PlaneInfo> {
+    let height = get_i32(format, unsafe { AMEDIAFORMAT_KEY_HEIGHT })
+        .ok_or(AvifError::UnknownError("".into()))?;
+    let slice_height = get_i32(format, unsafe { AMEDIAFORMAT_KEY_SLICE_HEIGHT }).unwrap_or(height);
+    let stride = get_i32(format, unsafe { AMEDIAFORMAT_KEY_STRIDE })
+        .ok_or(AvifError::UnknownError("".into()))?;
+    let color_format = get_i32(format, unsafe { AMEDIAFORMAT_KEY_COLOR_FORMAT })
+        .ok_or(AvifError::UnknownError("".into()))?;
+    let mut plane_info = PlaneInfo {
+        color_format,
+        ..Default::default()
+    };
+    match color_format {
+        MediaCodec::YUV_P010 => {
+            plane_info.row_stride = [
+                u32_from_i32(stride)?,
+                u32_from_i32(stride)?,
+                0, // V plane is not used for P010.
+            ];
+            plane_info.column_stride = [
+                2, 2, 0, // V plane is not used for P010.
+            ];
+            plane_info.offset = [
+                0,
+                isize_from_i32(stride * slice_height)?,
+                0, // V plane is not used for P010.
+            ];
+        }
+        _ => {
+            plane_info.row_stride = [
+                u32_from_i32(stride)?,
+                u32_from_i32((stride + 1) / 2)?,
+                u32_from_i32((stride + 1) / 2)?,
+            ];
+            plane_info.column_stride = [1, 1, 1];
+            plane_info.offset[0] = 0;
+            plane_info.offset[1] = isize_from_i32(stride * slice_height)?;
+            let u_plane_size = isize_from_i32(((stride + 1) / 2) * ((height + 1) / 2))?;
+            plane_info.offset[2] = plane_info.offset[1] + u_plane_size;
+        }
+    }
+    Ok(plane_info)
+}
+
+fn get_plane_info(format: *mut AMediaFormat) -> AvifResult<PlaneInfo> {
+    // When not building for the Android platform, image-data is not available, so simply try to
+    // guess the buffer format based on the available keys in the format.
+    #[cfg(not(android_soong))]
+    return guess_plane_info(format);
+
+    #[cfg(android_soong)]
+    {
+        c_str!(key_str, key_str_tmp, "image-data");
+        let mut data: *mut std::ffi::c_void = ptr::null_mut();
+        let mut size: usize = 0;
+        if !unsafe {
+            AMediaFormat_getBuffer(format, key_str, &mut data as *mut _, &mut size as *mut _)
+        } {
+            return guess_plane_info(format);
+        }
+        if size != std::mem::size_of::<android_MediaImage2>() {
+            return guess_plane_info(format);
+        }
+        let image_data = unsafe { *(data as *const android_MediaImage2) };
+        if image_data.mType != android_MediaImage2_Type_MEDIA_IMAGE_TYPE_YUV {
+            return guess_plane_info(format);
+        }
+        let planes = unsafe { ptr::read_unaligned(ptr::addr_of!(image_data.mPlane)) };
+        let color_format = get_i32(format, unsafe { AMEDIAFORMAT_KEY_COLOR_FORMAT })
+            .ok_or(AvifError::UnknownError("".into()))?;
+        let mut plane_info = PlaneInfo {
+            color_format,
+            ..Default::default()
+        };
+        for plane_index in 0usize..3 {
+            plane_info.offset[plane_index] = isize_from_u32(planes[plane_index].mOffset)?;
+            plane_info.row_stride[plane_index] = u32_from_i32(planes[plane_index].mRowInc)?;
+            plane_info.column_stride[plane_index] = u32_from_i32(planes[plane_index].mColInc)?;
+        }
+        return Ok(plane_info);
+    }
 }
 
 enum CodecInitializer {
@@ -97,10 +207,6 @@ impl MediaCodec {
     // Flexible YUV 420 format used for 8-bit images:
     // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Flexible
     const YUV_420_FLEXIBLE: i32 = 2135033992;
-    // Old YUV 420 planar format used for 8-bit images. This is not used by newer codecs, but is
-    // there for backwards compatibility with some old codecs:
-    // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Planar
-    const YUV_420_PLANAR: i32 = 19;
     // YUV P010 format used for 10-bit images:
     // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUVP010
     const YUV_P010: i32 = 54;
@@ -280,114 +386,46 @@ impl Decoder for MediaCodec {
             .ok_or(AvifError::UnknownError("".into()))?;
         let height = get_i32(format, unsafe { AMEDIAFORMAT_KEY_HEIGHT })
             .ok_or(AvifError::UnknownError("".into()))?;
-        let slice_height =
-            get_i32(format, unsafe { AMEDIAFORMAT_KEY_SLICE_HEIGHT }).unwrap_or(height);
-        let stride = get_i32(format, unsafe { AMEDIAFORMAT_KEY_STRIDE })
-            .ok_or(AvifError::UnknownError("".into()))?;
-        let color_format = get_i32(format, unsafe { AMEDIAFORMAT_KEY_COLOR_FORMAT })
-            .ok_or(AvifError::UnknownError("".into()))?;
         // color-range is documented but isn't exposed as a constant in the NDK:
         // https://developer.android.com/reference/android/media/MediaFormat#KEY_COLOR_RANGE
         let color_range = get_i32_from_str(format, "color-range").unwrap_or(2);
+
+        image.width = width as u32;
+        image.height = height as u32;
+        image.yuv_range = if color_range == 0 { YuvRange::Limited } else { YuvRange::Full };
+
+        let plane_info = get_plane_info(format)?;
+        image.depth = plane_info.depth();
+        image.yuv_format = plane_info.pixel_format();
         match category {
             Category::Alpha => {
                 // TODO: make sure alpha plane matches previous alpha plane.
-                image.width = width as u32;
-                image.height = height as u32;
-                match color_format {
-                    Self::YUV_420_PLANAR | Self::YUV_420_FLEXIBLE => {
-                        image.yuv_format = PixelFormat::Yuv420;
-                        image.depth = 8;
-                    }
-                    Self::YUV_P010 => {
-                        image.yuv_format = PixelFormat::AndroidP010;
-                        image.depth = 10;
-                    }
-                    _ => {
-                        return Err(AvifError::UnknownError(format!(
-                            "unknown color format: {color_format}"
-                        )));
-                    }
-                }
-                image.yuv_range = if color_range == 0 { YuvRange::Limited } else { YuvRange::Full };
-                image.row_bytes[3] = stride as u32;
+                image.row_bytes[3] = plane_info.row_stride[0];
                 image.planes[3] = Some(Pixels::from_raw_pointer(
-                    buffer,
+                    unsafe { buffer.offset(plane_info.offset[0]) },
                     image.depth as u32,
                     image.height,
                     image.row_bytes[3],
                 )?);
             }
             _ => {
-                image.width = width as u32;
-                image.height = height as u32;
-                let reverse_uv;
-                match color_format {
-                    Self::YUV_420_FLEXIBLE => {
-                        reverse_uv = true;
-                        image.yuv_format = PixelFormat::Yuv420;
-                        image.depth = 8;
-                    }
-                    Self::YUV_420_PLANAR => {
-                        reverse_uv = false;
-                        image.yuv_format = PixelFormat::Yuv420;
-                        image.depth = 8;
-                    }
-                    Self::YUV_P010 => {
-                        reverse_uv = false;
-                        image.yuv_format = PixelFormat::AndroidP010;
-                        image.depth = 10;
-                    }
-                    _ => {
-                        return Err(AvifError::UnknownError(format!(
-                            "unknown color format: {color_format}"
-                        )));
-                    }
-                }
-                image.yuv_range = if color_range == 0 { YuvRange::Limited } else { YuvRange::Full };
                 image.chroma_sample_position = ChromaSamplePosition::Unknown;
-
                 image.color_primaries = ColorPrimaries::Unspecified;
                 image.transfer_characteristics = TransferCharacteristics::Unspecified;
                 image.matrix_coefficients = MatrixCoefficients::Unspecified;
 
-                // Populate the Y plane.
-                image.row_bytes[0] = stride as u32;
-                image.planes[0] = Some(Pixels::from_raw_pointer(
-                    buffer,
-                    image.depth as u32,
-                    image.height,
-                    image.row_bytes[0],
-                )?);
-
-                // Populate the UV planes.
-                if image.yuv_format == PixelFormat::Yuv420 {
-                    image.row_bytes[1] = ((stride + 1) / 2) as u32;
-                    image.row_bytes[2] = ((stride + 1) / 2) as u32;
-                    let u_plane_offset = isize_from_i32(stride * slice_height)?;
-                    let (u_index, v_index) = if reverse_uv { (2, 1) } else { (1, 2) };
-                    image.planes[u_index] = Some(Pixels::from_raw_pointer(
-                        unsafe { buffer.offset(u_plane_offset) },
+                for i in 0usize..3 {
+                    if i == 2 && image.yuv_format == PixelFormat::AndroidP010 {
+                        // V plane is not needed for P010.
+                        break;
+                    }
+                    image.row_bytes[i] = plane_info.row_stride[i];
+                    let plane_height = if i == 0 { image.height } else { (image.height + 1) / 2 };
+                    image.planes[i] = Some(Pixels::from_raw_pointer(
+                        unsafe { buffer.offset(plane_info.offset[i]) },
                         image.depth as u32,
-                        (image.height + 1) / 2,
-                        image.row_bytes[u_index],
-                    )?);
-                    let u_plane_size = isize_from_i32(((stride + 1) / 2) * ((height + 1) / 2))?;
-                    let v_plane_offset = u_plane_offset + u_plane_size;
-                    image.planes[v_index] = Some(Pixels::from_raw_pointer(
-                        unsafe { buffer.offset(v_plane_offset) },
-                        image.depth as u32,
-                        (image.height + 1) / 2,
-                        image.row_bytes[v_index],
-                    )?);
-                } else {
-                    let uv_plane_offset = isize_from_i32(stride * slice_height)?;
-                    image.row_bytes[1] = stride as u32;
-                    image.planes[1] = Some(Pixels::from_raw_pointer(
-                        unsafe { buffer.offset(uv_plane_offset) },
-                        image.depth as u32,
-                        (image.height + 1) / 2,
-                        image.row_bytes[1],
+                        plane_height,
+                        image.row_bytes[i],
                     )?);
                 }
             }
