@@ -179,17 +179,15 @@ impl MediaFormat {
                 return self.guess_plane_info();
             }
             if size != std::mem::size_of::<android_MediaImage2>() {
-                return guess_plane_info(format);
+                return self.guess_plane_info();
             }
             let image_data = unsafe { *(data as *const android_MediaImage2) };
             if image_data.mType != android_MediaImage2_Type_MEDIA_IMAGE_TYPE_YUV {
                 return self.guess_plane_info();
             }
             let planes = unsafe { ptr::read_unaligned(ptr::addr_of!(image_data.mPlane)) };
-            let color_format = get_i32(format, unsafe { AMEDIAFORMAT_KEY_COLOR_FORMAT })
-                .ok_or(AvifError::UnknownError("".into()))?;
             let mut plane_info = PlaneInfo {
-                color_format,
+                color_format: self.color_format()?,
                 ..Default::default()
             };
             for plane_index in 0usize..3 {
