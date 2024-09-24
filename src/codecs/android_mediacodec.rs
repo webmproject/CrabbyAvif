@@ -30,11 +30,9 @@ use std::ptr;
 #[cfg(android_soong)]
 include!(concat!(env!("OUT_DIR"), "/mediaimage2_bindgen.rs"));
 
-#[derive(Debug, Default)]
-pub struct MediaCodec {
-    codec: Option<*mut AMediaCodec>,
-    format: Option<*mut AMediaFormat>,
-    output_buffer_index: Option<usize>,
+#[derive(Debug)]
+struct MediaFormat {
+    format: *mut AMediaFormat,
 }
 
 macro_rules! c_str {
@@ -42,19 +40,6 @@ macro_rules! c_str {
         let $var_tmp = CString::new($str).unwrap();
         let $var = $var_tmp.as_ptr();
     };
-}
-
-fn get_i32(format: *mut AMediaFormat, key: *const c_char) -> Option<i32> {
-    let mut value: i32 = 0;
-    match unsafe { AMediaFormat_getInt32(format, key, &mut value as *mut _) } {
-        true => Some(value),
-        false => None,
-    }
-}
-
-fn get_i32_from_str(format: *mut AMediaFormat, key: &str) -> Option<i32> {
-    c_str!(key_str, key_str_tmp, key);
-    get_i32(format, key_str)
 }
 
 #[derive(Debug, Default)]
@@ -81,86 +66,139 @@ impl PlaneInfo {
     }
 }
 
-fn guess_plane_info(format: *mut AMediaFormat) -> AvifResult<PlaneInfo> {
-    let height = get_i32(format, unsafe { AMEDIAFORMAT_KEY_HEIGHT })
-        .ok_or(AvifError::UnknownError("".into()))?;
-    let slice_height = get_i32(format, unsafe { AMEDIAFORMAT_KEY_SLICE_HEIGHT }).unwrap_or(height);
-    let stride = get_i32(format, unsafe { AMEDIAFORMAT_KEY_STRIDE })
-        .ok_or(AvifError::UnknownError("".into()))?;
-    let color_format = get_i32(format, unsafe { AMEDIAFORMAT_KEY_COLOR_FORMAT })
-        .ok_or(AvifError::UnknownError("".into()))?;
-    let mut plane_info = PlaneInfo {
-        color_format,
-        ..Default::default()
-    };
-    match color_format {
-        MediaCodec::YUV_P010 => {
-            plane_info.row_stride = [
-                u32_from_i32(stride)?,
-                u32_from_i32(stride)?,
-                0, // V plane is not used for P010.
-            ];
-            plane_info.column_stride = [
-                2, 2, 0, // V plane is not used for P010.
-            ];
-            plane_info.offset = [
-                0,
-                isize_from_i32(stride * slice_height)?,
-                0, // V plane is not used for P010.
-            ];
-        }
-        _ => {
-            plane_info.row_stride = [
-                u32_from_i32(stride)?,
-                u32_from_i32((stride + 1) / 2)?,
-                u32_from_i32((stride + 1) / 2)?,
-            ];
-            plane_info.column_stride = [1, 1, 1];
-            plane_info.offset[0] = 0;
-            plane_info.offset[1] = isize_from_i32(stride * slice_height)?;
-            let u_plane_size = isize_from_i32(((stride + 1) / 2) * ((height + 1) / 2))?;
-            plane_info.offset[2] = plane_info.offset[1] + u_plane_size;
+impl MediaFormat {
+    fn get_i32(&self, key: *const c_char) -> Option<i32> {
+        let mut value: i32 = 0;
+        match unsafe { AMediaFormat_getInt32(self.format, key, &mut value as *mut _) } {
+            true => Some(value),
+            false => None,
         }
     }
-    Ok(plane_info)
-}
 
-fn get_plane_info(format: *mut AMediaFormat) -> AvifResult<PlaneInfo> {
-    // When not building for the Android platform, image-data is not available, so simply try to
-    // guess the buffer format based on the available keys in the format.
-    #[cfg(not(android_soong))]
-    return guess_plane_info(format);
+    fn get_i32_from_str(&self, key: &str) -> Option<i32> {
+        c_str!(key_str, key_str_tmp, key);
+        self.get_i32(key_str)
+    }
 
-    #[cfg(android_soong)]
-    {
-        c_str!(key_str, key_str_tmp, "image-data");
-        let mut data: *mut std::ffi::c_void = ptr::null_mut();
-        let mut size: usize = 0;
-        if !unsafe {
-            AMediaFormat_getBuffer(format, key_str, &mut data as *mut _, &mut size as *mut _)
-        } {
-            return guess_plane_info(format);
+    fn width(&self) -> AvifResult<i32> {
+        self.get_i32(unsafe { AMEDIAFORMAT_KEY_WIDTH })
+            .ok_or(AvifError::UnknownError("".into()))
+    }
+
+    fn height(&self) -> AvifResult<i32> {
+        self.get_i32(unsafe { AMEDIAFORMAT_KEY_HEIGHT })
+            .ok_or(AvifError::UnknownError("".into()))
+    }
+
+    fn slice_height(&self) -> AvifResult<i32> {
+        self.get_i32(unsafe { AMEDIAFORMAT_KEY_SLICE_HEIGHT })
+            .ok_or(AvifError::UnknownError("".into()))
+    }
+
+    fn stride(&self) -> AvifResult<i32> {
+        self.get_i32(unsafe { AMEDIAFORMAT_KEY_STRIDE })
+            .ok_or(AvifError::UnknownError("".into()))
+    }
+
+    fn color_format(&self) -> AvifResult<i32> {
+        self.get_i32(unsafe { AMEDIAFORMAT_KEY_COLOR_FORMAT })
+            .ok_or(AvifError::UnknownError("".into()))
+    }
+
+    fn color_range(&self) -> YuvRange {
+        // color-range is documented but isn't exposed as a constant in the NDK:
+        // https://developer.android.com/reference/android/media/MediaFormat#KEY_COLOR_RANGE
+        let color_range = self.get_i32_from_str("color-range").unwrap_or(2);
+        if color_range == 0 {
+            YuvRange::Limited
+        } else {
+            YuvRange::Full
         }
-        if size != std::mem::size_of::<android_MediaImage2>() {
-            return guess_plane_info(format);
-        }
-        let image_data = unsafe { *(data as *const android_MediaImage2) };
-        if image_data.mType != android_MediaImage2_Type_MEDIA_IMAGE_TYPE_YUV {
-            return guess_plane_info(format);
-        }
-        let planes = unsafe { ptr::read_unaligned(ptr::addr_of!(image_data.mPlane)) };
-        let color_format = get_i32(format, unsafe { AMEDIAFORMAT_KEY_COLOR_FORMAT })
-            .ok_or(AvifError::UnknownError("".into()))?;
+    }
+
+    fn guess_plane_info(&self) -> AvifResult<PlaneInfo> {
+        let height = self.height()?;
+        let slice_height = self.slice_height().unwrap_or(height);
+        let stride = self.stride()?;
+        let color_format = self.color_format()?;
         let mut plane_info = PlaneInfo {
             color_format,
             ..Default::default()
         };
-        for plane_index in 0usize..3 {
-            plane_info.offset[plane_index] = isize_from_u32(planes[plane_index].mOffset)?;
-            plane_info.row_stride[plane_index] = u32_from_i32(planes[plane_index].mRowInc)?;
-            plane_info.column_stride[plane_index] = u32_from_i32(planes[plane_index].mColInc)?;
+        match color_format {
+            MediaCodec::YUV_P010 => {
+                plane_info.row_stride = [
+                    u32_from_i32(stride)?,
+                    u32_from_i32(stride)?,
+                    0, // V plane is not used for P010.
+                ];
+                plane_info.column_stride = [
+                    2, 2, 0, // V plane is not used for P010.
+                ];
+                plane_info.offset = [
+                    0,
+                    isize_from_i32(stride * slice_height)?,
+                    0, // V plane is not used for P010.
+                ];
+            }
+            _ => {
+                plane_info.row_stride = [
+                    u32_from_i32(stride)?,
+                    u32_from_i32((stride + 1) / 2)?,
+                    u32_from_i32((stride + 1) / 2)?,
+                ];
+                plane_info.column_stride = [1, 1, 1];
+                plane_info.offset[0] = 0;
+                plane_info.offset[1] = isize_from_i32(stride * slice_height)?;
+                let u_plane_size = isize_from_i32(((stride + 1) / 2) * ((height + 1) / 2))?;
+                plane_info.offset[2] = plane_info.offset[1] + u_plane_size;
+            }
         }
-        return Ok(plane_info);
+        Ok(plane_info)
+    }
+
+    fn get_plane_info(&self) -> AvifResult<PlaneInfo> {
+        // When not building for the Android platform, image-data is not available, so simply try to
+        // guess the buffer format based on the available keys in the format.
+        #[cfg(not(android_soong))]
+        return self.guess_plane_info();
+
+        #[cfg(android_soong)]
+        {
+            c_str!(key_str, key_str_tmp, "image-data");
+            let mut data: *mut std::ffi::c_void = ptr::null_mut();
+            let mut size: usize = 0;
+            if !unsafe {
+                AMediaFormat_getBuffer(
+                    self.format,
+                    key_str,
+                    &mut data as *mut _,
+                    &mut size as *mut _,
+                )
+            } {
+                return self.guess_plane_info();
+            }
+            if size != std::mem::size_of::<android_MediaImage2>() {
+                return guess_plane_info(format);
+            }
+            let image_data = unsafe { *(data as *const android_MediaImage2) };
+            if image_data.mType != android_MediaImage2_Type_MEDIA_IMAGE_TYPE_YUV {
+                return self.guess_plane_info();
+            }
+            let planes = unsafe { ptr::read_unaligned(ptr::addr_of!(image_data.mPlane)) };
+            let color_format = get_i32(format, unsafe { AMEDIAFORMAT_KEY_COLOR_FORMAT })
+                .ok_or(AvifError::UnknownError("".into()))?;
+            let mut plane_info = PlaneInfo {
+                color_format,
+                ..Default::default()
+            };
+            for plane_index in 0usize..3 {
+                plane_info.offset[plane_index] = isize_from_u32(planes[plane_index].mOffset)?;
+                plane_info.row_stride[plane_index] = u32_from_i32(planes[plane_index].mRowInc)?;
+                plane_info.column_stride[plane_index] = u32_from_i32(planes[plane_index].mColInc)?;
+            }
+            return Ok(plane_info);
+        }
     }
 }
 
@@ -201,6 +239,13 @@ fn get_codec_initializers(mime_type: &str) -> Vec<CodecInitializer> {
         CodecInitializer::ByName(gav1),
         CodecInitializer::ByMimeType(mime_type.to_string()),
     ]
+}
+
+#[derive(Debug, Default)]
+pub struct MediaCodec {
+    codec: Option<*mut AMediaCodec>,
+    format: Option<MediaFormat>,
+    output_buffer_index: Option<usize>,
 }
 
 impl MediaCodec {
@@ -361,7 +406,7 @@ impl Decoder for MediaCodec {
                     if format.is_null() {
                         return Err(AvifError::UnknownError("output format was null".into()));
                     }
-                    self.format = Some(format);
+                    self.format = Some(MediaFormat { format });
                     continue;
                 } else if output_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
                     continue;
@@ -381,20 +426,11 @@ impl Decoder for MediaCodec {
             return Err(AvifError::UnknownError("format is none".into()));
         }
         let buffer = buffer.unwrap();
-        let format = self.format.unwrap();
-        let width = get_i32(format, unsafe { AMEDIAFORMAT_KEY_WIDTH })
-            .ok_or(AvifError::UnknownError("".into()))?;
-        let height = get_i32(format, unsafe { AMEDIAFORMAT_KEY_HEIGHT })
-            .ok_or(AvifError::UnknownError("".into()))?;
-        // color-range is documented but isn't exposed as a constant in the NDK:
-        // https://developer.android.com/reference/android/media/MediaFormat#KEY_COLOR_RANGE
-        let color_range = get_i32_from_str(format, "color-range").unwrap_or(2);
-
-        image.width = width as u32;
-        image.height = height as u32;
-        image.yuv_range = if color_range == 0 { YuvRange::Limited } else { YuvRange::Full };
-
-        let plane_info = get_plane_info(format)?;
+        let format = self.format.unwrap_ref();
+        image.width = format.width()? as u32;
+        image.height = format.height()? as u32;
+        image.yuv_range = format.color_range();
+        let plane_info = format.get_plane_info()?;
         image.depth = plane_info.depth();
         image.yuv_format = plane_info.pixel_format();
         match category {
@@ -434,6 +470,12 @@ impl Decoder for MediaCodec {
     }
 }
 
+impl Drop for MediaFormat {
+    fn drop(&mut self) {
+        unsafe { AMediaFormat_delete(self.format) };
+    }
+}
+
 impl Drop for MediaCodec {
     fn drop(&mut self) {
         if self.codec.is_some() {
@@ -453,9 +495,6 @@ impl Drop for MediaCodec {
             }
             self.codec = None;
         }
-        if self.format.is_some() {
-            unsafe { AMediaFormat_delete(self.format.unwrap()) };
-            self.format = None;
-        }
+        self.format = None;
     }
 }
