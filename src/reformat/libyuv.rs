@@ -124,6 +124,10 @@ type P010ToAR30Matrix = unsafe extern "C" fn(
 #[rustfmt::skip]
 type AR30ToAB30 = unsafe extern "C" fn(
     *const u8, c_int, *mut u8, c_int, c_int, c_int) -> c_int;
+#[rustfmt::skip]
+type NVToARGBMatrix = unsafe extern "C" fn(
+    *const u8, c_int, *const u8, c_int, *mut u8, c_int, *const YuvConstants, c_int,
+    c_int) -> c_int;
 
 #[derive(Debug)]
 enum ConversionFunction {
@@ -137,6 +141,7 @@ enum ConversionFunction {
     YUVToRGBMatrixHighBitDepth(YUVToRGBMatrixHighBitDepth),
     YUVAToRGBMatrixHighBitDepth(YUVAToRGBMatrixHighBitDepth),
     P010ToRGBA1010102Matrix(P010ToAR30Matrix, AR30ToAB30),
+    NVToARGBMatrix(NVToARGBMatrix),
 }
 
 impl ConversionFunction {
@@ -158,6 +163,14 @@ fn find_conversion_function(
     alpha_preferred: bool,
 ) -> Option<ConversionFunction> {
     match (alpha_preferred, yuv_depth, rgb.format, yuv_format) {
+        (_, 8, Format::Rgba, PixelFormat::AndroidNv12) => {
+            // What Android considers to be NV12 is actually NV21 in libyuv.
+            Some(ConversionFunction::NVToARGBMatrix(NV21ToARGBMatrix))
+        }
+        (_, 8, Format::Rgba, PixelFormat::AndroidNv21) => {
+            // What Android considers to be NV21 is actually NV12 in libyuv.
+            Some(ConversionFunction::NVToARGBMatrix(NV12ToARGBMatrix))
+        }
         (_, 10, Format::Rgba1010102, PixelFormat::AndroidP010) => Some(
             ConversionFunction::P010ToRGBA1010102Matrix(P010ToAR30Matrix, AR30ToAB30),
         ),
@@ -544,6 +557,17 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool
                 .unwrap();
         }
         result = match conversion_function {
+            ConversionFunction::NVToARGBMatrix(func) => func(
+                plane_u8[0],
+                plane_row_bytes[0],
+                plane_u8[1],
+                plane_row_bytes[1],
+                rgb.pixels(),
+                rgb_row_bytes,
+                matrix,
+                width,
+                height,
+            ),
             ConversionFunction::YUV400ToRGBMatrix(func) => func(
                 plane_u8[0],
                 plane_row_bytes[0],

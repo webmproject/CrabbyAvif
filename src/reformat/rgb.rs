@@ -332,9 +332,12 @@ impl Image {
                 }
             }
         }
-        if image.yuv_format == PixelFormat::AndroidP010 {
-            // P010 conversion is only supported via libyuv.
-            // TODO: b/362984605 - Handle alpha channel for P010.
+        if matches!(
+            image.yuv_format,
+            PixelFormat::AndroidP010 | PixelFormat::AndroidNv12 | PixelFormat::AndroidNv21
+        ) {
+            // These conversions are only supported via libyuv.
+            // TODO: b/362984605 - Handle alpha channel for these formats.
             if converted_with_libyuv {
                 return Ok(());
             } else {

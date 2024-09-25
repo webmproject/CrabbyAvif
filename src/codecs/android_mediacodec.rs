@@ -54,7 +54,16 @@ impl PlaneInfo {
     fn pixel_format(&self) -> PixelFormat {
         match self.color_format {
             MediaCodec::YUV_P010 => PixelFormat::AndroidP010,
-            _ => PixelFormat::Yuv420,
+            _ => {
+                let u_before_v = self.offset[2] == self.offset[1] + 1;
+                let v_before_u = self.offset[1] == self.offset[2] + 1;
+                let is_nv_format = self.column_stride == [1, 2, 2] && (u_before_v || v_before_u);
+                match (is_nv_format, u_before_v) {
+                    (true, true) => PixelFormat::AndroidNv12,
+                    (true, false) => PixelFormat::AndroidNv21,
+                    (false, _) => PixelFormat::Yuv420,
+                }
+            }
         }
     }
 
@@ -449,8 +458,15 @@ impl Decoder for MediaCodec {
                 image.matrix_coefficients = MatrixCoefficients::Unspecified;
 
                 for i in 0usize..3 {
-                    if i == 2 && image.yuv_format == PixelFormat::AndroidP010 {
-                        // V plane is not needed for P010.
+                    if i == 2
+                        && matches!(
+                            image.yuv_format,
+                            PixelFormat::AndroidP010
+                                | PixelFormat::AndroidNv12
+                                | PixelFormat::AndroidNv21
+                        )
+                    {
+                        // V plane is not needed for these formats.
                         break;
                     }
                     image.row_bytes[i] = plane_info.row_stride[i];
