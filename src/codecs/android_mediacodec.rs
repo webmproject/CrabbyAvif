@@ -223,7 +223,9 @@ fn get_codec_initializers(mime_type: &str) -> Vec<CodecInitializer> {
         if let Ok(Some(decoder)) =
             rustutils::system_properties::read("media.crabbyavif.debug.decoder")
         {
-            return vec![CodecInitializer::ByName(decoder)];
+            if !decoder.is_empty() {
+                return vec![CodecInitializer::ByName(decoder)];
+            }
         }
         // If hardware decoders are allowed, then search by mime type first and then try the
         // software decoders.
