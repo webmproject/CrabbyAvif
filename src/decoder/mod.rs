@@ -79,31 +79,30 @@ impl CodecChoice {
         match self {
             CodecChoice::Auto => {
                 // Preferred order of codecs in Auto mode: Android MediaCodec, Dav1d, Libgav1.
-                return CodecChoice::MediaCodec
+                CodecChoice::MediaCodec
                     .get_codec()
                     .or_else(|_| CodecChoice::Dav1d.get_codec())
-                    .or_else(|_| CodecChoice::Libgav1.get_codec());
+                    .or_else(|_| CodecChoice::Libgav1.get_codec())
             }
             CodecChoice::Dav1d => {
                 #[cfg(feature = "dav1d")]
-                {
-                    return Ok(Box::<Dav1d>::default());
-                }
+                return Ok(Box::<Dav1d>::default());
+                #[cfg(not(feature = "dav1d"))]
+                return Err(AvifError::NoCodecAvailable);
             }
             CodecChoice::Libgav1 => {
                 #[cfg(feature = "libgav1")]
-                {
-                    return Ok(Box::<Libgav1>::default());
-                }
+                return Ok(Box::<Libgav1>::default());
+                #[cfg(not(feature = "libgav1"))]
+                return Err(AvifError::NoCodecAvailable);
             }
             CodecChoice::MediaCodec => {
                 #[cfg(feature = "android_mediacodec")]
-                {
-                    return Ok(Box::<MediaCodec>::default());
-                }
+                return Ok(Box::<MediaCodec>::default());
+                #[cfg(not(feature = "android_mediacodec"))]
+                return Err(AvifError::NoCodecAvailable);
             }
         }
-        Err(AvifError::NoCodecAvailable)
     }
 }
 
