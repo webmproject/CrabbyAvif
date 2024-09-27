@@ -369,6 +369,12 @@ impl Decoder for MediaCodec {
                         "input buffer at index {input_index} was null"
                     )));
                 }
+                if input_buffer_size < av1_payload.len() {
+                    return Err(AvifError::UnknownError(format!(
+                        "input buffer (size {input_buffer_size}) was not big enough. required size: {}",
+                        av1_payload.len()
+                    )));
+                }
                 ptr::copy_nonoverlapping(av1_payload.as_ptr(), input_buffer, av1_payload.len());
                 if AMediaCodec_queueInputBuffer(
                     codec,
