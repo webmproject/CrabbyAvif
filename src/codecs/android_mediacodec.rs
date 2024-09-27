@@ -214,9 +214,12 @@ enum CodecInitializer {
     ByMimeType(String),
 }
 
-fn get_codec_initializers(mime_type: &str) -> Vec<CodecInitializer> {
+fn get_codec_initializers(mime_type: &str, depth: u8) -> Vec<CodecInitializer> {
     let dav1d = String::from("c2.android.av1-dav1d.decoder");
     let gav1 = String::from("c2.android.av1.decoder");
+    // As of Sep 2024, c2.android.av1.decoder is the only known decoder to support 12-bit AV1. So
+    // prefer that for 12 bit images.
+    let prefer_gav1 = depth == 12;
     #[cfg(android_soong)]
     {
         // Use a specific decoder if it is requested.
@@ -235,19 +238,35 @@ fn get_codec_initializers(mime_type: &str) -> Vec<CodecInitializer> {
         )
         .unwrap_or(false);
         if prefer_hw {
-            return vec![
-                CodecInitializer::ByMimeType(mime_type.to_string()),
-                CodecInitializer::ByName(dav1d),
-                CodecInitializer::ByName(gav1),
-            ];
+            if prefer_gav1 {
+                return vec![
+                    CodecInitializer::ByName(gav1),
+                    CodecInitializer::ByMimeType(mime_type.to_string()),
+                    CodecInitializer::ByName(dav1d),
+                ];
+            } else {
+                return vec![
+                    CodecInitializer::ByMimeType(mime_type.to_string()),
+                    CodecInitializer::ByName(dav1d),
+                    CodecInitializer::ByName(gav1),
+                ];
+            }
         }
     }
     // Default list of initializers.
-    vec![
-        CodecInitializer::ByName(dav1d),
-        CodecInitializer::ByName(gav1),
-        CodecInitializer::ByMimeType(mime_type.to_string()),
-    ]
+    if prefer_gav1 {
+        vec![
+            CodecInitializer::ByName(gav1),
+            CodecInitializer::ByName(dav1d),
+            CodecInitializer::ByMimeType(mime_type.to_string()),
+        ]
+    } else {
+        vec![
+            CodecInitializer::ByName(dav1d),
+            CodecInitializer::ByName(gav1),
+            CodecInitializer::ByMimeType(mime_type.to_string()),
+        ]
+    }
 }
 
 #[derive(Debug, Default)]
@@ -296,7 +315,7 @@ impl Decoder for MediaCodec {
         }
 
         let mut codec = ptr::null_mut();
-        for codec_initializer in get_codec_initializers("video/av01") {
+        for codec_initializer in get_codec_initializers("video/av01", config.depth) {
             codec = match codec_initializer {
                 CodecInitializer::ByName(name) => {
                     c_str!(codec_name, codec_name_tmp, name.as_str());
