@@ -86,24 +86,23 @@ impl CodecChoice {
             }
             CodecChoice::Dav1d => {
                 #[cfg(feature = "dav1d")]
-                {
-                    return Ok(Box::<Dav1d>::default());
-                }
+                return Ok(Box::<Dav1d>::default());
+                #[cfg(not(feature = "dav1d"))]
+                return Err(AvifError::NoCodecAvailable);
             }
             CodecChoice::Libgav1 => {
                 #[cfg(feature = "libgav1")]
-                {
-                    return Ok(Box::<Libgav1>::default());
-                }
+                return Ok(Box::<Libgav1>::default());
+                #[cfg(not(feature = "libgav1"))]
+                return Err(AvifError::NoCodecAvailable);
             }
             CodecChoice::MediaCodec => {
                 #[cfg(feature = "android_mediacodec")]
-                {
-                    return Ok(Box::<MediaCodec>::default());
-                }
+                return Ok(Box::<MediaCodec>::default());
+                #[cfg(not(feature = "android_mediacodec"))]
+                return Err(AvifError::NoCodecAvailable);
             }
         }
-        Err(AvifError::NoCodecAvailable)
     }
 }
 
