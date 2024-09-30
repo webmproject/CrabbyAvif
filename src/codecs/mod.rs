@@ -33,6 +33,7 @@ pub struct DecoderConfig {
     pub height: u32,
     pub depth: u8,
     pub max_threads: u32,
+    pub max_input_size: usize,
 }
 
 pub trait Decoder {

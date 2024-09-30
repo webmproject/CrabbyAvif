@@ -312,6 +312,11 @@ impl Decoder for MediaCodec {
             // https://developer.android.com/reference/android/media/MediaFormat#KEY_LOW_LATENCY
             c_str!(low_latency, low_latency_tmp, "low-latency");
             AMediaFormat_setInt32(format, low_latency, 1);
+            AMediaFormat_setInt32(
+                format,
+                AMEDIAFORMAT_KEY_MAX_INPUT_SIZE,
+                i32_from_usize(config.max_input_size)?,
+            );
         }
 
         let mut codec = ptr::null_mut();

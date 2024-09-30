@@ -1136,6 +1136,7 @@ impl Decoder {
             height: tile.height,
             depth: self.image.depth,
             max_threads: self.settings.max_threads,
+            max_input_size: tile.max_sample_size(),
         };
         codec.initialize(&config)?;
         self.codecs.push(codec);

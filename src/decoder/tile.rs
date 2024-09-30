@@ -335,4 +335,11 @@ impl Tile {
         }
         Ok(tile)
     }
+
+    pub fn max_sample_size(&self) -> usize {
+        match self.input.samples.iter().max_by_key(|sample| sample.size) {
+            Some(sample) => sample.size,
+            None => 0,
+        }
+    }
 }
