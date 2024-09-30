@@ -302,6 +302,10 @@ impl Image {
                 return Err(AvifError::NotImplemented);
             }
         }
+        // Android MediaCodec maps all underlying YUV formats to PixelFormat::Yuv420. So do not
+        // perform this validation for Android MediaCodec. The libyuv wrapper will simply use Bt601
+        // coefficients for this color conversion.
+        #[cfg(not(feature = "android_mediacodec"))]
         if image.matrix_coefficients == MatrixCoefficients::Identity
             && !matches!(image.yuv_format, PixelFormat::Yuv444 | PixelFormat::Yuv400)
         {
