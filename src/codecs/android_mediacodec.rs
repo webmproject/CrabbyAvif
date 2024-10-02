@@ -160,7 +160,8 @@ impl MediaFormat {
                 plane_info.offset[0] = 0;
                 plane_info.offset[1] = isize_from_i32(stride * slice_height)?;
                 let u_plane_size = isize_from_i32(((stride + 1) / 2) * ((height + 1) / 2))?;
-                plane_info.offset[2] = plane_info.offset[1] + u_plane_size;
+                // When color format is YUV_420_FLEXIBLE, the V plane comes before the U plane.
+                plane_info.offset[2] = plane_info.offset[1] - u_plane_size;
             }
         }
         Ok(plane_info)
