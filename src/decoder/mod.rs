@@ -1141,6 +1141,7 @@ impl Decoder {
             max_threads: self.settings.max_threads,
             max_input_size: tile.max_sample_size(),
             codec_config: tile.codec_config.clone(),
+            category,
         };
         codec.initialize(&config)?;
         self.codecs.push(codec);

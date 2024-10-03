@@ -36,6 +36,7 @@ pub struct DecoderConfig {
     pub max_threads: u32,
     pub max_input_size: usize,
     pub codec_config: CodecConfiguration,
+    pub category: Category,
 }
 
 pub trait Decoder {

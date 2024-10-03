@@ -215,22 +215,19 @@ enum CodecInitializer {
     ByMimeType(String),
 }
 
-fn prefer_hw() -> bool {
-    #[cfg(not(android_soong))]
-    return false;
-
-    #[cfg(android_soong)]
-    {
-        let prefer_hw = rustutils::system_properties::read_bool(
-            "media.stagefright.thumbnail.prefer_hw_codecs",
-            false,
-        )
-        .unwrap_or(false);
-        if !prefer_hw {
-            return false;
-        }
-        return true;
-    }
+#[cfg(android_soong)]
+fn prefer_hw(config: &DecoderConfig) -> bool {
+    let prefer_hw = rustutils::system_properties::read_bool(
+        "media.stagefright.thumbnail.prefer_hw_codecs",
+        false,
+    )
+    .unwrap_or(false);
+    // We will return true when all of the below conditions are true:
+    // 1) prefer_hw is true.
+    // 2) category is not Alpha. We do not prefer hardware for decoding the alpha plane since
+    //    they generally tend to be monochrome images and using hardware for that is
+    //    unreliable.
+    prefer_hw && config.category != Category::Alpha
 }
 
 fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {
@@ -251,7 +248,10 @@ fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {
     // prefer that for 12 bit images.
     let prefer_gav1 = config.depth == 12;
     let mime_type = MediaCodec::AV1_MIME;
-    match (prefer_hw(), prefer_gav1) {
+    let prefer_hw = false;
+    #[cfg(android_soong)]
+    let prefer_hw = prefer_hw(config);
+    match (prefer_hw, prefer_gav1) {
         (true, true) => vec![
             CodecInitializer::ByName(gav1),
             CodecInitializer::ByMimeType(mime_type.to_string()),
