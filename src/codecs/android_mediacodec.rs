@@ -227,7 +227,9 @@ fn prefer_hw(config: &DecoderConfig) -> bool {
     // 2) category is not Alpha. We do not prefer hardware for decoding the alpha plane since
     //    they generally tend to be monochrome images and using hardware for that is
     //    unreliable.
-    prefer_hw && config.category != Category::Alpha
+    // 3) profile is 0. As of Sep 2024, there are no AV1 hardware decoders that support
+    //    anything other than profile 0.
+    prefer_hw && config.category != Category::Alpha && config.codec_config.profile() == 0;
 }
 
 fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {

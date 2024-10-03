@@ -165,6 +165,12 @@ impl CodecConfiguration {
             Self::Av1(config) => &config.raw_data,
         }
     }
+
+    pub fn profile(&self) -> u8 {
+        match self {
+            Self::Av1(config) => config.seq_profile,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
