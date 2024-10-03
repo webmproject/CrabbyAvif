@@ -215,13 +215,25 @@ enum CodecInitializer {
     ByMimeType(String),
 }
 
+fn prefer_hw() -> bool {
+    #[cfg(not(android_soong))]
+    return false;
+
+    #[cfg(android_soong)]
+    {
+        let prefer_hw = rustutils::system_properties::read_bool(
+            "media.stagefright.thumbnail.prefer_hw_codecs",
+            false,
+        )
+        .unwrap_or(false);
+        if !prefer_hw {
+            return false;
+        }
+        return true;
+    }
+}
+
 fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {
-    let dav1d = String::from("c2.android.av1-dav1d.decoder");
-    let gav1 = String::from("c2.android.av1.decoder");
-    // As of Sep 2024, c2.android.av1.decoder is the only known decoder to support 12-bit AV1. So
-    // prefer that for 12 bit images.
-    let prefer_gav1 = config.depth == 12;
-    let mime_type = MediaCodec::AV1_MIME;
     #[cfg(android_soong)]
     {
         // Use a specific decoder if it is requested.
@@ -232,42 +244,34 @@ fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {
                 return vec![CodecInitializer::ByName(decoder)];
             }
         }
-        // If hardware decoders are allowed, then search by mime type first and then try the
-        // software decoders.
-        let prefer_hw = rustutils::system_properties::read_bool(
-            "media.stagefright.thumbnail.prefer_hw_codecs",
-            false,
-        )
-        .unwrap_or(false);
-        if prefer_hw {
-            if prefer_gav1 {
-                return vec![
-                    CodecInitializer::ByName(gav1),
-                    CodecInitializer::ByMimeType(mime_type.to_string()),
-                    CodecInitializer::ByName(dav1d),
-                ];
-            } else {
-                return vec![
-                    CodecInitializer::ByMimeType(mime_type.to_string()),
-                    CodecInitializer::ByName(dav1d),
-                    CodecInitializer::ByName(gav1),
-                ];
-            }
-        }
     }
-    // Default list of initializers.
-    if prefer_gav1 {
-        vec![
+    let dav1d = String::from("c2.android.av1-dav1d.decoder");
+    let gav1 = String::from("c2.android.av1.decoder");
+    // As of Sep 2024, c2.android.av1.decoder is the only known decoder to support 12-bit AV1. So
+    // prefer that for 12 bit images.
+    let prefer_gav1 = config.depth == 12;
+    let mime_type = MediaCodec::AV1_MIME;
+    match (prefer_hw(), prefer_gav1) {
+        (true, true) => vec![
+            CodecInitializer::ByName(gav1),
+            CodecInitializer::ByMimeType(mime_type.to_string()),
+            CodecInitializer::ByName(dav1d),
+        ],
+        (true, false) => vec![
+            CodecInitializer::ByMimeType(mime_type.to_string()),
+            CodecInitializer::ByName(dav1d),
+            CodecInitializer::ByName(gav1),
+        ],
+        (false, true) => vec![
             CodecInitializer::ByName(gav1),
             CodecInitializer::ByName(dav1d),
             CodecInitializer::ByMimeType(mime_type.to_string()),
-        ]
-    } else {
-        vec![
+        ],
+        (false, false) => vec![
             CodecInitializer::ByName(dav1d),
             CodecInitializer::ByName(gav1),
             CodecInitializer::ByMimeType(mime_type.to_string()),
-        ]
+        ],
     }
 }
 
