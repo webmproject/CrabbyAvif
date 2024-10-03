@@ -303,27 +303,26 @@ struct avifImageMirror {
     uint8_t axis;
 };
 
-struct avifGainMapMetadata {
-    int32_t gainMapMinN[3];
-    uint32_t gainMapMinD[3];
-    int32_t gainMapMaxN[3];
-    uint32_t gainMapMaxD[3];
-    uint32_t gainMapGammaN[3];
-    uint32_t gainMapGammaD[3];
-    int32_t baseOffsetN[3];
-    uint32_t baseOffsetD[3];
-    int32_t alternateOffsetN[3];
-    uint32_t alternateOffsetD[3];
-    uint32_t baseHdrHeadroomN;
-    uint32_t baseHdrHeadroomD;
-    uint32_t alternateHdrHeadroomN;
-    uint32_t alternateHdrHeadroomD;
-    avifBool useBaseColorSpace;
+struct avifSignedFraction {
+    int32_t n;
+    uint32_t d;
+};
+
+struct avifUnsignedFraction {
+    uint32_t n;
+    uint32_t d;
 };
 
 struct avifGainMap {
     avifImage *image;
-    avifGainMapMetadata metadata;
+    avifSignedFraction gainMapMin[3];
+    avifSignedFraction gainMapMax[3];
+    avifUnsignedFraction gainMapGamma[3];
+    avifSignedFraction baseOffset[3];
+    avifSignedFraction alternateOffset[3];
+    avifUnsignedFraction baseHdrHeadroom;
+    avifUnsignedFraction alternateHdrHeadroom;
+    avifBool useBaseColorSpace;
     avifRWData altICC;
     avifColorPrimaries altColorPrimaries;
     avifTransferCharacteristics altTransferCharacteristics;
