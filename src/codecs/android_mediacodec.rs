@@ -215,12 +215,13 @@ enum CodecInitializer {
     ByMimeType(String),
 }
 
-fn get_codec_initializers(mime_type: &str, depth: u8) -> Vec<CodecInitializer> {
+fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {
     let dav1d = String::from("c2.android.av1-dav1d.decoder");
     let gav1 = String::from("c2.android.av1.decoder");
     // As of Sep 2024, c2.android.av1.decoder is the only known decoder to support 12-bit AV1. So
     // prefer that for 12 bit images.
-    let prefer_gav1 = depth == 12;
+    let prefer_gav1 = config.depth == 12;
+    let mime_type = MediaCodec::AV1_MIME;
     #[cfg(android_soong)]
     {
         // Use a specific decoder if it is requested.
@@ -284,6 +285,7 @@ impl MediaCodec {
     // YUV P010 format used for 10-bit images:
     // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUVP010
     const YUV_P010: i32 = 54;
+    const AV1_MIME: &str = "video/av01";
 }
 
 impl Decoder for MediaCodec {
@@ -295,7 +297,7 @@ impl Decoder for MediaCodec {
         if format.is_null() {
             return Err(AvifError::UnknownError("".into()));
         }
-        c_str!(mime_type, mime_type_tmp, "video/av01");
+        c_str!(mime_type, mime_type_tmp, Self::AV1_MIME);
         unsafe {
             AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, mime_type);
             AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_WIDTH, i32_from_u32(config.width)?);
@@ -330,7 +332,7 @@ impl Decoder for MediaCodec {
         }
 
         let mut codec = ptr::null_mut();
-        for codec_initializer in get_codec_initializers("video/av01", config.depth) {
+        for codec_initializer in get_codec_initializers(config) {
             codec = match codec_initializer {
                 CodecInitializer::ByName(name) => {
                     c_str!(codec_name, codec_name_tmp, name.as_str());
