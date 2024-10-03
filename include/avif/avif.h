@@ -303,15 +303,19 @@ struct avifImageMirror {
     uint8_t axis;
 };
 
-struct avifSignedFraction {
+struct Fraction {
     int32_t n;
     uint32_t d;
 };
 
-struct avifUnsignedFraction {
+using avifSignedFraction = Fraction;
+
+struct UFraction {
     uint32_t n;
     uint32_t d;
 };
+
+using avifUnsignedFraction = UFraction;
 
 struct avifGainMap {
     avifImage *image;

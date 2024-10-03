@@ -23,38 +23,8 @@ use crate::parser::mp4box::*;
 use crate::*;
 
 pub type avifContentLightLevelInformationBox = ContentLightLevelInformation;
-
-#[repr(C)]
-#[derive(Debug)]
-pub struct avifSignedFraction {
-    pub n: i32,
-    pub d: u32,
-}
-
-impl From<&Fraction> for avifSignedFraction {
-    fn from(fraction: &Fraction) -> Self {
-        avifSignedFraction {
-            n: fraction.0,
-            d: fraction.1,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug)]
-pub struct avifUnsignedFraction {
-    pub n: u32,
-    pub d: u32,
-}
-
-impl From<&UFraction> for avifUnsignedFraction {
-    fn from(fraction: &UFraction) -> Self {
-        avifUnsignedFraction {
-            n: fraction.0,
-            d: fraction.1,
-        }
-    }
-}
+pub type avifSignedFraction = Fraction;
+pub type avifUnsignedFraction = UFraction;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -82,33 +52,13 @@ impl Default for avifGainMap {
     fn default() -> Self {
         avifGainMap {
             image: std::ptr::null_mut(),
-            gainMapMin: [
-                avifSignedFraction { n: 1, d: 1 },
-                avifSignedFraction { n: 1, d: 1 },
-                avifSignedFraction { n: 1, d: 1 },
-            ],
-            gainMapMax: [
-                avifSignedFraction { n: 1, d: 1 },
-                avifSignedFraction { n: 1, d: 1 },
-                avifSignedFraction { n: 1, d: 1 },
-            ],
-            gainMapGamma: [
-                avifUnsignedFraction { n: 1, d: 1 },
-                avifUnsignedFraction { n: 1, d: 1 },
-                avifUnsignedFraction { n: 1, d: 1 },
-            ],
-            baseOffset: [
-                avifSignedFraction { n: 1, d: 64 },
-                avifSignedFraction { n: 1, d: 64 },
-                avifSignedFraction { n: 1, d: 64 },
-            ],
-            alternateOffset: [
-                avifSignedFraction { n: 1, d: 64 },
-                avifSignedFraction { n: 1, d: 64 },
-                avifSignedFraction { n: 1, d: 64 },
-            ],
-            baseHdrHeadroom: avifUnsignedFraction { n: 0, d: 1 },
-            alternateHdrHeadroom: avifUnsignedFraction { n: 1, d: 1 },
+            gainMapMin: [Fraction(1, 1), Fraction(1, 1), Fraction(1, 1)],
+            gainMapMax: [Fraction(1, 1), Fraction(1, 1), Fraction(1, 1)],
+            gainMapGamma: [UFraction(1, 1), UFraction(1, 1), UFraction(1, 1)],
+            baseOffset: [Fraction(1, 64), Fraction(1, 64), Fraction(1, 64)],
+            alternateOffset: [Fraction(1, 64), Fraction(1, 64), Fraction(1, 64)],
+            baseHdrHeadroom: UFraction(0, 1),
+            alternateHdrHeadroom: UFraction(1, 1),
             useBaseColorSpace: to_avifBool(false),
             altICC: avifRWData::default(),
             altColorPrimaries: ColorPrimaries::default(),
@@ -125,13 +75,13 @@ impl Default for avifGainMap {
 impl From<&GainMap> for avifGainMap {
     fn from(gainmap: &GainMap) -> Self {
         avifGainMap {
-            gainMapMin: gainmap.metadata.min.map(|v| (&v).into()),
-            gainMapMax: gainmap.metadata.max.map(|v| (&v).into()),
-            gainMapGamma: gainmap.metadata.gamma.map(|v| (&v).into()),
-            baseOffset: gainmap.metadata.base_offset.map(|v| (&v).into()),
-            alternateOffset: gainmap.metadata.alternate_offset.map(|v| (&v).into()),
-            baseHdrHeadroom: (&gainmap.metadata.base_hdr_headroom).into(),
-            alternateHdrHeadroom: (&gainmap.metadata.alternate_hdr_headroom).into(),
+            gainMapMin: gainmap.metadata.min,
+            gainMapMax: gainmap.metadata.max,
+            gainMapGamma: gainmap.metadata.gamma,
+            baseOffset: gainmap.metadata.base_offset,
+            alternateOffset: gainmap.metadata.alternate_offset,
+            baseHdrHeadroom: gainmap.metadata.base_hdr_headroom,
+            alternateHdrHeadroom: gainmap.metadata.alternate_hdr_headroom,
             useBaseColorSpace: gainmap.metadata.use_base_color_space as avifBool,
             altICC: (&gainmap.alt_icc).into(),
             altColorPrimaries: gainmap.alt_color_primaries,
