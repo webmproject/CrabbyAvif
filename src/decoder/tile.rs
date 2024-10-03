@@ -122,6 +122,7 @@ pub struct Tile {
     pub image: Image,
     pub input: DecodeInput,
     pub codec_index: usize,
+    pub codec_config: CodecConfiguration,
 }
 
 impl Tile {
@@ -139,6 +140,10 @@ impl Tile {
             height: item.height,
             operating_point: item.operating_point(),
             image: Image::default(),
+            codec_config: item
+                .codec_config()
+                .ok_or(AvifError::BmffParseFailed("missing av1C property".into()))?
+                .clone(),
             ..Tile::default()
         };
         let mut layer_sizes: [usize; MAX_AV1_LAYER_COUNT] = [0; MAX_AV1_LAYER_COUNT];

@@ -69,6 +69,7 @@ fn main() {
         "AMediaFormat_delete",
         "AMediaFormat_getInt32",
         "AMediaFormat_new",
+        "AMediaFormat_setBuffer",
         "AMediaFormat_setInt32",
         "AMediaFormat_setString",
     ];
@@ -83,6 +84,7 @@ fn main() {
         "AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED",
         "AMEDIACODEC_INFO_TRY_AGAIN_LATER",
         "AMEDIAFORMAT_KEY_COLOR_FORMAT",
+        "AMEDIAFORMAT_KEY_CSD_0",
         "AMEDIAFORMAT_KEY_HEIGHT",
         "AMEDIAFORMAT_KEY_MAX_INPUT_SIZE",
         "AMEDIAFORMAT_KEY_MIME",

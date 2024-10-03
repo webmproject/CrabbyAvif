@@ -318,6 +318,15 @@ impl Decoder for MediaCodec {
                 AMEDIAFORMAT_KEY_MAX_INPUT_SIZE,
                 i32_from_usize(config.max_input_size)?,
             );
+            let codec_specific_data = config.codec_config.raw_data();
+            if !codec_specific_data.is_empty() {
+                AMediaFormat_setBuffer(
+                    format,
+                    AMEDIAFORMAT_KEY_CSD_0,
+                    codec_specific_data.as_ptr() as *const _,
+                    codec_specific_data.len(),
+                );
+            }
         }
 
         let mut codec = ptr::null_mut();

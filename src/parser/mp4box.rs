@@ -111,7 +111,7 @@ pub struct PixelInformation {
     pub plane_depths: Vec<u8>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Av1CodecConfiguration {
     pub seq_profile: u8,
     pub seq_level_idx0: u8,
@@ -122,6 +122,7 @@ pub struct Av1CodecConfiguration {
     pub chroma_subsampling_x: u8,
     pub chroma_subsampling_y: u8,
     pub chroma_sample_position: ChromaSamplePosition,
+    pub raw_data: Vec<u8>,
 }
 
 impl CodecConfiguration {
@@ -156,6 +157,12 @@ impl CodecConfiguration {
     pub fn chroma_sample_position(&self) -> ChromaSamplePosition {
         match self {
             Self::Av1(config) => config.chroma_sample_position,
+        }
+    }
+
+    pub fn raw_data(&self) -> &Vec<u8> {
+        match self {
+            Self::Av1(config) => &config.raw_data,
         }
     }
 }
@@ -194,6 +201,12 @@ pub struct ContentLightLevelInformation {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CodecConfiguration {
     Av1(Av1CodecConfiguration),
+}
+
+impl Default for CodecConfiguration {
+    fn default() -> Self {
+        Self::Av1(Av1CodecConfiguration::default())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -518,6 +531,7 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
 
 #[allow(non_snake_case)]
 fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    let raw_data = stream.get_immutable_vec(stream.bytes_left()?)?;
     // See https://aomediacodec.github.io/av1-isobmff/v1.2.0.html#av1codecconfigurationbox-syntax.
     let mut bits = stream.sub_bit_stream(4)?;
     // unsigned int (1) marker = 1;
@@ -553,6 +567,7 @@ fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
         chroma_subsampling_x: bits.read(1)? as u8,
         chroma_subsampling_y: bits.read(1)? as u8,
         chroma_sample_position: bits.read(2)?.into(),
+        raw_data,
     };
 
     // unsigned int(3) reserved = 0;

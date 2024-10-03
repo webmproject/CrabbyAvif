@@ -424,7 +424,7 @@ impl Decoder {
             Some(CodecConfiguration::Av1(config)) => {
                 let mut vector: Vec<ItemProperty> = create_vec_exact(1)?;
                 vector.push(ItemProperty::CodecConfiguration(CodecConfiguration::Av1(
-                    *config,
+                    config.clone(),
                 )));
                 vector
             }
@@ -1140,6 +1140,7 @@ impl Decoder {
             depth: self.image.depth,
             max_threads: self.settings.max_threads,
             max_input_size: tile.max_sample_size(),
+            codec_config: tile.codec_config.clone(),
         };
         codec.initialize(&config)?;
         self.codecs.push(codec);
