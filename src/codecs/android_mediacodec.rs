@@ -216,7 +216,7 @@ enum CodecInitializer {
 }
 
 #[cfg(android_soong)]
-fn prefer_hw(config: &DecoderConfig) -> bool {
+fn prefer_hardware_decoder(config: &DecoderConfig) -> bool {
     let prefer_hw = rustutils::system_properties::read_bool(
         "media.stagefright.thumbnail.prefer_hw_codecs",
         false,
@@ -229,7 +229,7 @@ fn prefer_hw(config: &DecoderConfig) -> bool {
     //    unreliable.
     // 3) profile is 0. As of Sep 2024, there are no AV1 hardware decoders that support
     //    anything other than profile 0.
-    prefer_hw && config.category != Category::Alpha && config.codec_config.profile() == 0;
+    prefer_hw && config.category != Category::Alpha && config.codec_config.profile() == 0
 }
 
 fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {
@@ -252,7 +252,7 @@ fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {
     let mime_type = MediaCodec::AV1_MIME;
     let prefer_hw = false;
     #[cfg(android_soong)]
-    let prefer_hw = prefer_hw(config);
+    let prefer_hw = prefer_hardware_decoder(config);
     match (prefer_hw, prefer_gav1) {
         (true, true) => vec![
             CodecInitializer::ByName(gav1),
