@@ -58,7 +58,7 @@ pub struct avifDecoder {
     pub gainMapPresent: avifBool,
     pub enableDecodingGainMap: avifBool,
     pub enableParsingGainMapMetadata: avifBool,
-    // avifBool ignoreColorAndAlpha;
+    pub ignoreColorAndAlpha: avifBool,
     pub imageSequenceTrackPresent: avifBool,
 
     // TODO: maybe wrap these fields in a private data kind of field?
@@ -98,6 +98,7 @@ impl Default for avifDecoder {
             gainMapPresent: AVIF_FALSE,
             enableDecodingGainMap: AVIF_FALSE,
             enableParsingGainMapMetadata: AVIF_FALSE,
+            ignoreColorAndAlpha: AVIF_FALSE,
             imageSequenceTrackPresent: AVIF_FALSE,
             rust_decoder: Box::<Decoder>::default(),
             image_object: avifImage::default(),
@@ -182,6 +183,7 @@ impl From<&avifDecoder> for Settings {
             ignore_xmp: decoder.ignoreXMP == AVIF_TRUE,
             enable_decoding_gainmap: decoder.enableDecodingGainMap == AVIF_TRUE,
             enable_parsing_gainmap_metadata: decoder.enableParsingGainMapMetadata == AVIF_TRUE,
+            ignore_color_and_alpha: decoder.ignoreColorAndAlpha == AVIF_TRUE,
             codec_choice: match decoder.codecChoice {
                 avifCodecChoice::Auto => CodecChoice::Auto,
                 avifCodecChoice::Dav1d => CodecChoice::Dav1d,
@@ -224,7 +226,9 @@ fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
         dst.gainMapPresent = AVIF_TRUE;
         dst.gainmap_image_object = (&src.gainmap().image).into();
         dst.gainmap_object = src.gainmap().into();
-        dst.gainmap_object.image = (&mut dst.gainmap_image_object) as *mut avifImage;
+        if src.settings.enable_decoding_gainmap {
+            dst.gainmap_object.image = (&mut dst.gainmap_image_object) as *mut avifImage;
+        }
         dst.image_object.gainMap = (&mut dst.gainmap_object) as *mut avifGainMap;
     }
     dst.image = (&mut dst.image_object) as *mut avifImage;

@@ -415,6 +415,7 @@ struct avifDecoder {
     avifBool gainMapPresent;
     avifBool enableDecodingGainMap;
     avifBool enableParsingGainMapMetadata;
+    avifBool ignoreColorAndAlpha;
     avifBool imageSequenceTrackPresent;
     Box<Decoder> rust_decoder;
     avifImage image_object;

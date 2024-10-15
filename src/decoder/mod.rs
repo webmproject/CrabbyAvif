@@ -130,6 +130,7 @@ pub struct Settings {
     pub allow_incremental: bool,
     pub enable_decoding_gainmap: bool,
     pub enable_parsing_gainmap_metadata: bool,
+    pub ignore_color_and_alpha: bool,
     pub codec_choice: CodecChoice,
     pub image_size_limit: u32,
     pub image_dimension_limit: u32,
@@ -148,6 +149,7 @@ impl Default for Settings {
             allow_incremental: false,
             enable_decoding_gainmap: false,
             enable_parsing_gainmap_metadata: false,
+            ignore_color_and_alpha: false,
             codec_choice: Default::default(),
             image_size_limit: DEFAULT_IMAGE_SIZE_LIMIT,
             image_dimension_limit: DEFAULT_IMAGE_DIMENSION_LIMIT,
@@ -1431,15 +1433,27 @@ impl Decoder {
     }
 
     fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
+        let mut decoded_something = false;
         for category in Category::ALL {
+            if self.settings.ignore_color_and_alpha
+                && (category == Category::Color || category == Category::Alpha)
+            {
+                continue;
+            }
+
             let previous_decoded_tile_count =
                 self.tile_info[category.usize()].decoded_tile_count as usize;
             let tile_count = self.tiles[category.usize()].len();
             for tile_index in previous_decoded_tile_count..tile_count {
                 self.decode_tile(image_index, category, tile_index)?;
+                decoded_something = true;
             }
         }
-        Ok(())
+        if decoded_something {
+            Ok(())
+        } else {
+            Err(AvifError::NoContent)
+        }
     }
 
     pub fn next_image(&mut self) -> AvifResult<()> {
