@@ -607,7 +607,7 @@ avifResult crabby_avifImageScale(avifImage *image,
                                  uint32_t dstHeight,
                                  avifDiagnostics *_diag);
 
-const char *crabby_avifResultToString(avifResult _res);
+const char *crabby_avifResultToString(avifResult res);
 
 avifBool crabby_avifCropRectConvertCleanApertureBox(avifCropRect *cropRect,
                                                     const avifCleanApertureBox *clap,
