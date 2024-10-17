@@ -213,6 +213,10 @@ impl CodecConfiguration {
             }
         }
     }
+
+    pub fn is_avif(&self) -> bool {
+        matches!(self, Self::Av1(_))
+    }
 }
 
 #[derive(Clone, Debug, Default)]

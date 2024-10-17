@@ -246,30 +246,40 @@ fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {
     }
     let dav1d = String::from("c2.android.av1-dav1d.decoder");
     let gav1 = String::from("c2.android.av1.decoder");
+    let hevc = String::from("c2.android.hevc.decoder");
     // As of Sep 2024, c2.android.av1.decoder is the only known decoder to support 12-bit AV1. So
     // prefer that for 12 bit images.
     let prefer_gav1 = config.depth == 12;
-    let mime_type = MediaCodec::AV1_MIME;
+    let is_avif = config.codec_config.is_avif();
+    let mime_type = if is_avif { MediaCodec::AV1_MIME } else { MediaCodec::HEVC_MIME };
     let prefer_hw = false;
     #[cfg(android_soong)]
     let prefer_hw = prefer_hardware_decoder(config);
-    match (prefer_hw, prefer_gav1) {
-        (true, true) => vec![
+    match (prefer_hw, is_avif, prefer_gav1) {
+        (true, false, _) => vec![
+            CodecInitializer::ByMimeType(mime_type.to_string()),
+            CodecInitializer::ByName(hevc),
+        ],
+        (false, false, _) => vec![
+            CodecInitializer::ByName(hevc),
+            CodecInitializer::ByMimeType(mime_type.to_string()),
+        ],
+        (true, true, true) => vec![
             CodecInitializer::ByName(gav1),
             CodecInitializer::ByMimeType(mime_type.to_string()),
             CodecInitializer::ByName(dav1d),
         ],
-        (true, false) => vec![
+        (true, true, false) => vec![
             CodecInitializer::ByMimeType(mime_type.to_string()),
             CodecInitializer::ByName(dav1d),
             CodecInitializer::ByName(gav1),
         ],
-        (false, true) => vec![
+        (false, true, true) => vec![
             CodecInitializer::ByName(gav1),
             CodecInitializer::ByName(dav1d),
             CodecInitializer::ByMimeType(mime_type.to_string()),
         ],
-        (false, false) => vec![
+        (false, true, false) => vec![
             CodecInitializer::ByName(dav1d),
             CodecInitializer::ByName(gav1),
             CodecInitializer::ByMimeType(mime_type.to_string()),
@@ -292,6 +302,7 @@ impl MediaCodec {
     // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUVP010
     const YUV_P010: i32 = 54;
     const AV1_MIME: &str = "video/av01";
+    const HEVC_MIME: &str = "video/hevc";
 }
 
 impl Decoder for MediaCodec {
@@ -303,7 +314,11 @@ impl Decoder for MediaCodec {
         if format.is_null() {
             return Err(AvifError::UnknownError("".into()));
         }
-        c_str!(mime_type, mime_type_tmp, Self::AV1_MIME);
+        c_str!(
+            mime_type,
+            mime_type_tmp,
+            if config.codec_config.is_avif() { Self::AV1_MIME } else { Self::HEVC_MIME }
+        );
         unsafe {
             AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, mime_type);
             AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_WIDTH, i32_from_u32(config.width)?);
