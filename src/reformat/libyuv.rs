@@ -117,11 +117,11 @@ type YUVAToRGBMatrixHighBitDepth = unsafe extern "C" fn(
     *const u16, c_int, *const u16, c_int, *const u16, c_int, *const u16, c_int, *mut u8, c_int,
     *const YuvConstants, c_int, c_int, c_int) -> c_int;
 #[rustfmt::skip]
-type P010ToAR30Matrix = unsafe extern "C" fn(
+type P010ToRGBMatrix = unsafe extern "C" fn(
     *const u16, c_int, *const u16, c_int, *mut u8, c_int, *const YuvConstants, c_int,
     c_int) -> c_int;
 #[rustfmt::skip]
-type AR30ToAB30 = unsafe extern "C" fn(
+type ARGBToABGR = unsafe extern "C" fn(
     *const u8, c_int, *mut u8, c_int, c_int, c_int) -> c_int;
 #[rustfmt::skip]
 type NVToARGBMatrix = unsafe extern "C" fn(
@@ -139,7 +139,7 @@ enum ConversionFunction {
     YUVAToRGBMatrixFilterHighBitDepth(YUVAToRGBMatrixFilterHighBitDepth),
     YUVToRGBMatrixHighBitDepth(YUVToRGBMatrixHighBitDepth),
     YUVAToRGBMatrixHighBitDepth(YUVAToRGBMatrixHighBitDepth),
-    P010ToRGBA1010102Matrix(P010ToAR30Matrix, AR30ToAB30),
+    P010ToRGBMatrix(P010ToRGBMatrix, ARGBToABGR),
     NVToARGBMatrix(NVToARGBMatrix),
 }
 
@@ -171,7 +171,10 @@ fn find_conversion_function(
             Some(ConversionFunction::NVToARGBMatrix(NV12ToARGBMatrix))
         }
         (_, 10, Format::Rgba1010102, PixelFormat::AndroidP010) => Some(
-            ConversionFunction::P010ToRGBA1010102Matrix(P010ToAR30Matrix, AR30ToAB30),
+            ConversionFunction::P010ToRGBMatrix(P010ToAR30Matrix, AR30ToAB30),
+        ),
+        (_, 10, Format::Rgba, PixelFormat::AndroidP010) => Some(
+            ConversionFunction::P010ToRGBMatrix(P010ToARGBMatrix, ARGBToABGR),
         ),
         (true, 10, Format::Rgba | Format::Bgra, PixelFormat::Yuv422)
             if rgb.chroma_upsampling.bilinear_or_better_filter_allowed() =>
@@ -428,7 +431,7 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool
         let mut high_bd_matched = true;
         // Apply one of the high bitdepth functions if possible.
         result = match conversion_function {
-            ConversionFunction::P010ToRGBA1010102Matrix(func1, func2) => {
+            ConversionFunction::P010ToRGBMatrix(func1, func2) => {
                 let result = func1(
                     plane_u16[0],
                     plane_row_bytes[0] / 2,
@@ -441,8 +444,8 @@ pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool
                     height,
                 );
                 if result == 0 {
-                    // It is okay to use the same pointer as source and destintaion for AR30 to
-                    // AB30 conversion.
+                    // It is okay to use the same pointer as source and destination for this
+                    // conversion.
                     func2(
                         rgb.pixels(),
                         rgb_row_bytes,
