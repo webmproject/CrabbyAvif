@@ -75,22 +75,28 @@ pub enum CodecChoice {
 }
 
 impl CodecChoice {
-    fn get_codec(&self) -> AvifResult<Codec> {
+    fn get_codec(&self, is_avif: bool) -> AvifResult<Codec> {
         match self {
             CodecChoice::Auto => {
                 // Preferred order of codecs in Auto mode: Android MediaCodec, Dav1d, Libgav1.
                 CodecChoice::MediaCodec
-                    .get_codec()
-                    .or_else(|_| CodecChoice::Dav1d.get_codec())
-                    .or_else(|_| CodecChoice::Libgav1.get_codec())
+                    .get_codec(is_avif)
+                    .or_else(|_| CodecChoice::Dav1d.get_codec(is_avif))
+                    .or_else(|_| CodecChoice::Libgav1.get_codec(is_avif))
             }
             CodecChoice::Dav1d => {
+                if !is_avif {
+                    return Err(AvifError::NoCodecAvailable);
+                }
                 #[cfg(feature = "dav1d")]
                 return Ok(Box::<Dav1d>::default());
                 #[cfg(not(feature = "dav1d"))]
                 return Err(AvifError::NoCodecAvailable);
             }
             CodecChoice::Libgav1 => {
+                if !is_avif {
+                    return Err(AvifError::NoCodecAvailable);
+                }
                 #[cfg(feature = "libgav1")]
                 return Ok(Box::<Libgav1>::default());
                 #[cfg(not(feature = "libgav1"))]
@@ -1127,7 +1133,10 @@ impl Decoder {
 
     fn create_codec(&mut self, category: Category, tile_index: usize) -> AvifResult<()> {
         let tile = &self.tiles[category.usize()][tile_index];
-        let mut codec: Codec = self.settings.codec_choice.get_codec()?;
+        let mut codec: Codec = self
+            .settings
+            .codec_choice
+            .get_codec(tile.codec_config.is_avif())?;
         let config = DecoderConfig {
             operating_point: tile.operating_point,
             all_layers: tile.input.all_layers,
