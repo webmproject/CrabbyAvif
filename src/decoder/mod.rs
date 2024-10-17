@@ -423,13 +423,7 @@ impl Decoder {
             .ok_or(AvifError::NotImplemented)?;
         let first_item = self.items.get(&alpha_item_indices[0]).unwrap();
         let properties = match first_item.codec_config() {
-            Some(CodecConfiguration::Av1(config)) => {
-                let mut vector: Vec<ItemProperty> = create_vec_exact(1)?;
-                vector.push(ItemProperty::CodecConfiguration(CodecConfiguration::Av1(
-                    config.clone(),
-                )));
-                vector
-            }
+            Some(config) => vec![ItemProperty::CodecConfiguration(config.clone())],
             None => return Ok(None),
         };
         let alpha_item = Item {
