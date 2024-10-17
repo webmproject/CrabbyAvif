@@ -125,6 +125,14 @@ pub struct Av1CodecConfiguration {
     pub raw_data: Vec<u8>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HevcCodecConfiguration {
+    pub bitdepth: u8,
+    pub vps: Vec<u8>,
+    pub sps: Vec<u8>,
+    pub pps: Vec<u8>,
+}
+
 impl CodecConfiguration {
     pub fn depth(&self) -> u8 {
         match self {
@@ -135,6 +143,7 @@ impl CodecConfiguration {
                     false => 8,
                 },
             },
+            Self::Hevc(config) => config.bitdepth,
         }
     }
 
@@ -151,24 +160,57 @@ impl CodecConfiguration {
                     PixelFormat::Yuv444
                 }
             }
+            Self::Hevc(_) => {
+                // It is okay to always return Yuv420 here since that is the only format that
+                // android_mediacodec returns.
+                // TODO: b/370549923 - Identify the correct YUV subsampling type from the codec
+                // configuration data.
+                PixelFormat::Yuv420
+            }
         }
     }
 
     pub fn chroma_sample_position(&self) -> ChromaSamplePosition {
         match self {
             Self::Av1(config) => config.chroma_sample_position,
+            Self::Hevc(_) => {
+                // It is okay to always return ChromaSamplePosition::default() here since that is
+                // the only format that android_mediacodec returns.
+                // TODO: b/370549923 - Identify the correct chroma sample position from the codec
+                // configuration data.
+                ChromaSamplePosition::default()
+            }
         }
     }
 
-    pub fn raw_data(&self) -> &Vec<u8> {
+    pub fn raw_data(&self) -> Vec<u8> {
         match self {
-            Self::Av1(config) => &config.raw_data,
+            Self::Av1(config) => config.raw_data.clone(),
+            Self::Hevc(config) => {
+                // For HEVC, the codec specific data consists of the following 3 NAL units in
+                // order: VPS, SPS and PPS. Each unit should be preceded by a start code of
+                // "\x00\x00\x00\x01".
+                // https://developer.android.com/reference/android/media/MediaCodec#CSD
+                let mut data: Vec<u8> = Vec::new();
+                for nal_unit in [&config.vps, &config.sps, &config.pps] {
+                    // Start code.
+                    data.extend_from_slice(&[0, 0, 0, 1]);
+                    // Data.
+                    data.extend_from_slice(&nal_unit[..]);
+                }
+                data
+            }
         }
     }
 
     pub fn profile(&self) -> u8 {
         match self {
             Self::Av1(config) => config.seq_profile,
+            Self::Hevc(_) => {
+                // TODO: b/370549923 - Identify the correct profile from the codec configuration
+                // data.
+                0
+            }
         }
     }
 }
@@ -207,6 +249,7 @@ pub struct ContentLightLevelInformation {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CodecConfiguration {
     Av1(Av1CodecConfiguration),
+    Hevc(HevcCodecConfiguration),
 }
 
 impl Default for CodecConfiguration {
@@ -616,6 +659,78 @@ fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
     )))
 }
 
+#[allow(non_snake_case)]
+#[cfg(feature = "heic")]
+fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    // unsigned int(8) configurationVersion;
+    let configuration_version = stream.read_u8()?;
+    if configuration_version != 0 && configuration_version != 1 {
+        return Err(AvifError::BmffParseFailed(format!(
+            "Unknown configurationVersion({configuration_version}) in hvcC. Expected 0 or 1."
+        )));
+    }
+    let mut bits = stream.sub_bit_stream(21)?;
+    // unsigned int(2) general_profile_space;
+    // unsigned int(1) general_tier_flag;
+    // unsigned int(5) general_profile_idc;
+    // unsigned int(32) general_profile_compatibility_flags;
+    // unsigned int(48) general_constraint_indicator_flags;
+    // unsigned int(8) general_level_idc;
+    // bit(4) reserved = '1111'b;
+    // unsigned int(12) min_spatial_segmentation_idc;
+    // bit(6) reserved = '111111'b;
+    // unsigned int(2) parallelismType;
+    // bit(6) reserved = '111111'b;
+    // unsigned int(2) chroma_format_idc;
+    // bit(5) reserved = '11111'b;
+    bits.skip(2 + 1 + 5 + 32 + 48 + 8 + 4 + 12 + 6 + 2 + 6 + 2 + 5)?;
+    // unsigned int(3) bit_depth_luma_minus8;
+    let bitdepth = bits.read(3)? as u8 + 8;
+    // bit(5) reserved = '11111'b;
+    // unsigned int(3) bit_depth_chroma_minus8;
+    // unsigned int(16) avgFrameRate;
+    // unsigned int(2) constantFrameRate;
+    // unsigned int(3) numTemporalLayers;
+    // unsigned int(1) temporalIdNested;
+    // unsigned int(2) lengthSizeMinusOne;
+    bits.skip(5 + 3 + 16 + 2 + 3 + 1 + 2)?;
+    assert!(bits.remaining_bits()? == 0);
+
+    // unsigned int(8) numOfArrays;
+    let num_of_arrays = stream.read_u8()?;
+    let mut vps: Vec<u8> = Vec::new();
+    let mut sps: Vec<u8> = Vec::new();
+    let mut pps: Vec<u8> = Vec::new();
+    for _i in 0..num_of_arrays {
+        // unsigned int(1) array_completeness;
+        // bit(1) reserved = 0;
+        // unsigned int(6) NAL_unit_type;
+        stream.skip(1)?;
+        // unsigned int(16) numNalus;
+        let num_nalus = stream.read_u16()?;
+        for _j in 0..num_nalus {
+            // unsigned int(16) nalUnitLength;
+            let nal_unit_length = stream.read_u16()?;
+            let nal_unit = stream.get_slice(nal_unit_length as usize)?;
+            let nal_unit_type = (nal_unit[0] >> 1) & 0x3f;
+            match nal_unit_type {
+                32 => vps = nal_unit.to_vec(),
+                33 => sps = nal_unit.to_vec(),
+                34 => pps = nal_unit.to_vec(),
+                _ => {}
+            }
+        }
+    }
+    Ok(ItemProperty::CodecConfiguration(CodecConfiguration::Hevc(
+        HevcCodecConfiguration {
+            bitdepth,
+            vps,
+            pps,
+            sps,
+        },
+    )))
+}
+
 fn parse_colr(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // Section 12.1.5.2 of ISO/IEC 14496-12.
 
@@ -814,6 +929,8 @@ fn parse_ipco(stream: &mut IStream) -> AvifResult<Vec<ItemProperty>> {
             "lsel" => properties.push(parse_lsel(&mut sub_stream)?),
             "a1lx" => properties.push(parse_a1lx(&mut sub_stream)?),
             "clli" => properties.push(parse_clli(&mut sub_stream)?),
+            #[cfg(feature = "heic")]
+            "hvcC" => properties.push(parse_hvcC(&mut sub_stream)?),
             _ => properties.push(ItemProperty::Unknown(header.box_type)),
         }
     }
