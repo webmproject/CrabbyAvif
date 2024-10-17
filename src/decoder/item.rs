@@ -261,6 +261,10 @@ impl Item {
                                    aux_type == "urn:mpeg:hevc:2015:auxid:1")
     }
 
+    pub fn is_image_item(&self) -> bool {
+        ["av01", "grid"].contains(&self.item_type.as_str())
+    }
+
     pub fn should_skip(&self) -> bool {
         // The item has no payload in idat or mdat. It cannot be a coded image item, a
         // non-identity derived image item, or Exif/XMP metadata.
@@ -268,7 +272,7 @@ impl Item {
             // An essential property isn't supported by libavif. Ignore the whole item.
             || self.has_unsupported_essential_property
             // Probably Exif/XMP or some other data.
-            || (self.item_type != "av01" && self.item_type != "grid")
+            || !self.is_image_item()
             // libavif does not support thumbnails.
             || self.thumbnail_for_id != 0
     }
