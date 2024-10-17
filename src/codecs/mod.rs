@@ -26,7 +26,7 @@ use crate::image::Image;
 use crate::parser::mp4box::CodecConfiguration;
 use crate::AvifResult;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct DecoderConfig {
     pub operating_point: u8,
     pub all_layers: bool,

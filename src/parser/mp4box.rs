@@ -128,6 +128,7 @@ pub struct Av1CodecConfiguration {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HevcCodecConfiguration {
     pub bitdepth: u8,
+    pub nal_length_size: u8,
     pub vps: Vec<u8>,
     pub sps: Vec<u8>,
     pub pps: Vec<u8>,
@@ -214,8 +215,19 @@ impl CodecConfiguration {
         }
     }
 
+    pub fn nal_length_size(&self) -> u8 {
+        match self {
+            Self::Av1(_) => 0, // Unused. This function is only used for HEVC.
+            Self::Hevc(config) => config.nal_length_size,
+        }
+    }
+
     pub fn is_avif(&self) -> bool {
         matches!(self, Self::Av1(_))
+    }
+
+    pub fn is_heic(&self) -> bool {
+        matches!(self, Self::Hevc(_))
     }
 }
 
@@ -696,8 +708,9 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // unsigned int(2) constantFrameRate;
     // unsigned int(3) numTemporalLayers;
     // unsigned int(1) temporalIdNested;
+    bits.skip(5 + 3 + 16 + 2 + 3 + 1)?;
     // unsigned int(2) lengthSizeMinusOne;
-    bits.skip(5 + 3 + 16 + 2 + 3 + 1 + 2)?;
+    let nal_length_size = 1 + bits.read(2)? as u8;
     assert!(bits.remaining_bits()? == 0);
 
     // unsigned int(8) numOfArrays;
@@ -728,6 +741,7 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
     Ok(ItemProperty::CodecConfiguration(CodecConfiguration::Hevc(
         HevcCodecConfiguration {
             bitdepth,
+            nal_length_size,
             vps,
             pps,
             sps,
