@@ -262,7 +262,13 @@ impl Item {
     }
 
     pub fn is_image_item(&self) -> bool {
-        ["av01", "grid"].contains(&self.item_type.as_str())
+        [
+            "av01",
+            "grid",
+            #[cfg(feature = "heic")]
+            "hvc1",
+        ]
+        .contains(&self.item_type.as_str())
     }
 
     pub fn should_skip(&self) -> bool {

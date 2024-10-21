@@ -63,18 +63,37 @@ impl FileTypeBox {
         self.compatible_brands.iter().any(|x| x.as_str() == brand)
     }
 
+    fn has_brand_any(&self, brands: &[&str]) -> bool {
+        brands.iter().any(|brand| self.has_brand(brand))
+    }
+
     pub fn is_avif(&self) -> bool {
-        self.has_brand("avif") || self.has_brand("avis")
         // "avio" also exists but does not identify the file as AVIF on its own. See
         // https://aomediacodec.github.io/av1-avif/v1.1.0.html#image-and-image-collection-brand
+        self.has_brand_any(&[
+            "avif",
+            "avis",
+            #[cfg(feature = "heic")]
+            "heic",
+        ])
     }
 
     pub fn needs_meta(&self) -> bool {
-        self.has_brand("avif")
+        self.has_brand_any(&[
+            "avif",
+            #[cfg(feature = "heic")]
+            "heic",
+        ])
     }
 
     pub fn needs_moov(&self) -> bool {
-        self.has_brand("avis")
+        self.has_brand_any(&[
+            "avis",
+            #[cfg(feature = "heic")]
+            "hevc",
+            #[cfg(feature = "heic")]
+            "msf1",
+        ])
     }
 
     pub fn has_tmap(&self) -> bool {

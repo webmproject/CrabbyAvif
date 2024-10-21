@@ -952,3 +952,33 @@ fn dimg_ordering() {
     let row2 = image2.row(Plane::Y, 0).expect("row2 was none");
     assert_ne!(row1, row2);
 }
+
+#[test]
+fn heic_peek() {
+    let file_data = std::fs::read(get_test_file("blue.heic")).expect("could not read file");
+    assert_eq!(
+        decoder::Decoder::peek_compatible_file_type(&file_data),
+        cfg!(feature = "heic")
+    );
+}
+
+#[test]
+fn heic_parsing() {
+    let mut decoder = get_decoder("blue.heic");
+    let res = decoder.parse();
+    if cfg!(feature = "heic") {
+        assert!(res.is_ok());
+        let image = decoder.image().expect("image was none");
+        assert_eq!(image.width, 320);
+        assert_eq!(image.height, 240);
+        if cfg!(feature = "android_mediacodec") {
+            // Decoding is available only via android_mediacodec.
+            assert!(!matches!(
+                decoder.next_image(),
+                Err(AvifError::NoCodecAvailable)
+            ));
+        }
+    } else {
+        assert!(res.is_err());
+    }
+}
