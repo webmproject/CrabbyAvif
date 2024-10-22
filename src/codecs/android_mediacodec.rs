@@ -572,13 +572,14 @@ impl MediaCodec {
             let payload_slice = &payload[offset..];
             let mut stream = IStream::create(payload_slice);
             let nal_length = usize_from_u64(stream.read_uxx(nal_length_size as u8)?)?;
-            let nal_unit_range = nal_length_size..nal_length;
+            let nal_unit_end = checked_add!(nal_length, nal_length_size)?;
+            let nal_unit_range = nal_length_size..nal_unit_end;
             check_slice_range(payload_slice.len(), &nal_unit_range)?;
             // Start code.
             hevc_payload.extend_from_slice(&[0, 0, 0, 1]);
             // NAL Unit.
             hevc_payload.extend_from_slice(&payload_slice[nal_unit_range]);
-            offset = checked_add!(offset, checked_add!(nal_length, nal_length_size)?)?;
+            offset = checked_add!(offset, nal_unit_end)?;
         }
         Ok(Some(hevc_payload))
     }
