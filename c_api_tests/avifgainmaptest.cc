@@ -18,8 +18,7 @@ TEST(GainMapTest, DecodeGainMapGrid) {
       std::string(data_path) + "color_grid_gainmap_different_grid.avif";
   DecoderPtr decoder(avifDecoderCreate());
   ASSERT_NE(decoder, nullptr);
-  decoder->enableDecodingGainMap = true;
-  decoder->enableParsingGainMapMetadata = true;
+  decoder->imageContentToDecode |= AVIF_IMAGE_CONTENT_GAIN_MAP;
 
   avifResult result = avifDecoderSetIOFile(decoder.get(), path.c_str());
   ASSERT_EQ(result, AVIF_RESULT_OK)
@@ -33,12 +32,11 @@ TEST(GainMapTest, DecodeGainMapGrid) {
   ASSERT_NE(decoded, nullptr);
 
   // Verify that the gain map is present and matches the input.
-  EXPECT_TRUE(decoder->gainMapPresent);
+  EXPECT_NE(decoder->image->gainMap, nullptr);
   // Color+alpha: 4x3 grid of 128x200 tiles.
   EXPECT_EQ(decoded->width, 128u * 4u);
   EXPECT_EQ(decoded->height, 200u * 3u);
   EXPECT_EQ(decoded->depth, 10u);
-  ASSERT_NE(decoded->gainMap, nullptr);
   ASSERT_NE(decoded->gainMap->image, nullptr);
   // Gain map: 2x2 grid of 64x80 tiles.
   EXPECT_EQ(decoded->gainMap->image->width, 64u * 2u);
@@ -57,8 +55,7 @@ TEST(GainMapTest, DecodeOriented) {
   const std::string path = std::string(data_path) + "gainmap_oriented.avif";
   DecoderPtr decoder(avifDecoderCreate());
   ASSERT_NE(decoder, nullptr);
-  decoder->enableDecodingGainMap = AVIF_TRUE;
-  decoder->enableParsingGainMapMetadata = AVIF_TRUE;
+  decoder->imageContentToDecode |= AVIF_IMAGE_CONTENT_GAIN_MAP;
   ASSERT_EQ(avifDecoderSetIOFile(decoder.get(), path.c_str()), AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
 
@@ -71,37 +68,11 @@ TEST(GainMapTest, DecodeOriented) {
             AVIF_TRANSFORM_NONE);
 }
 
-TEST(GainMapTest, IgnoreGainMap) {
-  const std::string path =
-      std::string(data_path) + "seine_sdr_gainmap_srgb.avif";
-  DecoderPtr decoder(avifDecoderCreate());
-  ASSERT_NE(decoder, nullptr);
-  // Decode image, with enableDecodingGainMap false by default.
-
-  avifResult result = avifDecoderSetIOFile(decoder.get(), path.c_str());
-  ASSERT_EQ(result, AVIF_RESULT_OK)
-      << avifResultToString(result) << " " << decoder->diag.error;
-
-  // Just parse the image first.
-  result = avifDecoderParse(decoder.get());
-  ASSERT_EQ(result, AVIF_RESULT_OK)
-      << avifResultToString(result) << " " << decoder->diag.error;
-  avifImage* decoded = decoder->image;
-  ASSERT_NE(decoded, nullptr);
-
-  // Verify that the gain map is not detected.
-  EXPECT_FALSE(decoder->gainMapPresent);
-  // And not decoded because enableDecodingGainMap is false by default.
-  EXPECT_EQ(decoded->gainMap, nullptr);
-}
-
 TEST(GainMapTest, IgnoreGainMapButReadMetadata) {
   const std::string path =
       std::string(data_path) + "seine_sdr_gainmap_srgb.avif";
   DecoderPtr decoder(avifDecoderCreate());
   ASSERT_NE(decoder, nullptr);
-  // Decode image, with enableDecodingGainMap false by default.
-  decoder->enableParsingGainMapMetadata = AVIF_TRUE;  // Read gain map metadata
 
   avifResult result = avifDecoderSetIOFile(decoder.get(), path.c_str());
   ASSERT_EQ(result, AVIF_RESULT_OK)
@@ -113,8 +84,7 @@ TEST(GainMapTest, IgnoreGainMapButReadMetadata) {
   ASSERT_NE(decoded, nullptr);
 
   // Verify that the gain map was detected...
-  EXPECT_TRUE(decoder->gainMapPresent);
-  ASSERT_NE(decoded->gainMap, nullptr);
+  EXPECT_NE(decoder->image->gainMap, nullptr);
   // ... but not decoded because enableDecodingGainMap is false by default.
   EXPECT_EQ(decoded->gainMap->image, nullptr);
   // Check that the gain map metadata WAS populated.
@@ -122,34 +92,12 @@ TEST(GainMapTest, IgnoreGainMapButReadMetadata) {
   EXPECT_EQ(decoded->gainMap->alternateHdrHeadroom.d, 10);
 }
 
-TEST(GainMapTest, DecodeGainMapTrueParseMetadataFalse) {
-  const std::string path =
-      std::string(data_path) + "seine_sdr_gainmap_srgb.avif";
-  DecoderPtr decoder(avifDecoderCreate());
-  ASSERT_NE(decoder, nullptr);
-  decoder->enableParsingGainMapMetadata = AVIF_FALSE;
-  decoder->enableDecodingGainMap = AVIF_TRUE;
-
-  avifResult result = avifDecoderSetIOFile(decoder.get(), path.c_str());
-  ASSERT_EQ(result, AVIF_RESULT_OK)
-      << avifResultToString(result) << " " << decoder->diag.error;
-  result = avifDecoderParse(decoder.get());
-
-  // Verify we get an error because the combination of
-  // enableDecodingGainMap=false and enableParsingGainMapMetadata=true
-  // is not allowed.
-  ASSERT_EQ(result, AVIF_RESULT_INVALID_ARGUMENT)
-      << avifResultToString(result) << " " << decoder->diag.error;
-}
-
 TEST(GainMapTest, IgnoreColorAndAlpha) {
   const std::string path =
       std::string(data_path) + "seine_sdr_gainmap_srgb.avif";
   DecoderPtr decoder(avifDecoderCreate());
   ASSERT_NE(decoder, nullptr);
-  decoder->ignoreColorAndAlpha = AVIF_TRUE;
-  decoder->enableDecodingGainMap = AVIF_TRUE;
-  decoder->enableParsingGainMapMetadata = AVIF_TRUE;
+  decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_GAIN_MAP;
 
   avifResult result = avifDecoderSetIOFile(decoder.get(), path.c_str());
   ASSERT_EQ(result, AVIF_RESULT_OK)
@@ -172,8 +120,7 @@ TEST(GainMapTest, IgnoreColorAndAlpha) {
   EXPECT_EQ(decoded->yuvRowBytes[2], 0u);
   EXPECT_EQ(decoded->alphaRowBytes, 0u);
   // The gain map was decoded.
-  EXPECT_TRUE(decoder->gainMapPresent);
-  ASSERT_NE(decoded->gainMap, nullptr);
+  EXPECT_NE(decoder->image->gainMap, nullptr);
   ASSERT_NE(decoded->gainMap->image, nullptr);
   // Including pixels.
   EXPECT_GT(decoded->gainMap->image->yuvRowBytes[0], 0u);
@@ -184,11 +131,7 @@ TEST(GainMapTest, IgnoreAll) {
       std::string(data_path) + "seine_sdr_gainmap_srgb.avif";
   DecoderPtr decoder(avifDecoderCreate());
   ASSERT_NE(decoder, nullptr);
-  // Ignore both the main image and the gain map.
-  decoder->ignoreColorAndAlpha = AVIF_TRUE;
-  decoder->enableDecodingGainMap = AVIF_FALSE;
-  // But do read the gain map metadata
-  decoder->enableParsingGainMapMetadata = AVIF_TRUE;
+  decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_NONE;
 
   avifResult result = avifDecoderSetIOFile(decoder.get(), path.c_str());
   ASSERT_EQ(result, AVIF_RESULT_OK)
@@ -199,7 +142,7 @@ TEST(GainMapTest, IgnoreAll) {
   avifImage* decoded = decoder->image;
   ASSERT_NE(decoded, nullptr);
 
-  EXPECT_TRUE(decoder->gainMapPresent);
+  EXPECT_NE(decoder->image->gainMap, nullptr);
   ASSERT_EQ(decoder->image->gainMap->image, nullptr);
 
   // But trying to access the next image should give an error because both

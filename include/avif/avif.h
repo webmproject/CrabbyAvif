@@ -40,6 +40,14 @@ constexpr static const uint32_t AVIF_STRICT_ALPHA_ISPE_REQUIRED = (1 << 2);
 
 constexpr static const uint32_t AVIF_STRICT_ENABLED = ((AVIF_STRICT_PIXI_REQUIRED | AVIF_STRICT_CLAP_VALID) | AVIF_STRICT_ALPHA_ISPE_REQUIRED);
 
+constexpr static const uint32_t AVIF_IMAGE_CONTENT_NONE = 0;
+
+constexpr static const uint32_t AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA = ((1 << 0) | (1 << 1));
+
+constexpr static const uint32_t AVIF_IMAGE_CONTENT_GAIN_MAP = (1 << 2);
+
+constexpr static const uint32_t AVIF_IMAGE_CONTENT_ALL = (AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA | AVIF_IMAGE_CONTENT_GAIN_MAP);
+
 constexpr static const size_t CRABBY_AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE = 256;
 
 constexpr static const size_t CRABBY_AVIF_PLANE_COUNT_YUV = 3;
@@ -387,6 +395,8 @@ struct avifDecoderData {
 
 };
 
+using avifImageContentTypeFlags = uint32_t;
+
 struct avifDecoder {
     avifCodecChoice codecChoice;
     int32_t maxThreads;
@@ -412,10 +422,7 @@ struct avifDecoder {
     avifIOStats ioStats;
     avifDiagnostics diag;
     avifDecoderData *data;
-    avifBool gainMapPresent;
-    avifBool enableDecodingGainMap;
-    avifBool enableParsingGainMapMetadata;
-    avifBool ignoreColorAndAlpha;
+    avifImageContentTypeFlags imageContentToDecode;
     avifBool imageSequenceTrackPresent;
     Box<Decoder> rust_decoder;
     avifImage image_object;

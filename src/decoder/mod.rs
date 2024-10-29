@@ -126,6 +126,23 @@ pub const DEFAULT_IMAGE_SIZE_LIMIT: u32 = 16384 * 16384;
 pub const DEFAULT_IMAGE_DIMENSION_LIMIT: u32 = 32768;
 pub const DEFAULT_IMAGE_COUNT_LIMIT: u32 = 12 * 3600 * 60;
 
+#[derive(Debug, PartialEq)]
+pub enum ImageContentType {
+    None,
+    ColorAndAlpha,
+    GainMap,
+    All,
+}
+
+impl ImageContentType {
+    pub fn color_and_alpha(&self) -> bool {
+        matches!(self, Self::ColorAndAlpha | Self::All)
+    }
+    pub fn gainmap(&self) -> bool {
+        matches!(self, Self::GainMap | Self::All)
+    }
+}
+
 #[derive(Debug)]
 pub struct Settings {
     pub source: Source,
@@ -134,9 +151,7 @@ pub struct Settings {
     pub strictness: Strictness,
     pub allow_progressive: bool,
     pub allow_incremental: bool,
-    pub enable_decoding_gainmap: bool,
-    pub enable_parsing_gainmap_metadata: bool,
-    pub ignore_color_and_alpha: bool,
+    pub image_content_to_decode: ImageContentType,
     pub codec_choice: CodecChoice,
     pub image_size_limit: u32,
     pub image_dimension_limit: u32,
@@ -153,9 +168,7 @@ impl Default for Settings {
             strictness: Default::default(),
             allow_progressive: false,
             allow_incremental: false,
-            enable_decoding_gainmap: false,
-            enable_parsing_gainmap_metadata: false,
-            ignore_color_and_alpha: false,
+            image_content_to_decode: ImageContentType::ColorAndAlpha,
             codec_choice: Default::default(),
             image_size_limit: DEFAULT_IMAGE_SIZE_LIMIT,
             image_dimension_limit: DEFAULT_IMAGE_DIMENSION_LIMIT,
@@ -743,9 +756,6 @@ impl Decoder {
         if self.io.is_none() {
             return Err(AvifError::IoNotSet);
         }
-        if self.settings.enable_decoding_gainmap && !self.settings.enable_parsing_gainmap_metadata {
-            return Err(AvifError::InvalidArgument);
-        }
 
         if self.parse_state == ParseState::None {
             self.reset();
@@ -894,7 +904,7 @@ impl Decoder {
                 }
 
                 // Optional gainmap item
-                if self.settings.enable_parsing_gainmap_metadata && avif_boxes.ftyp.has_tmap() {
+                if avif_boxes.ftyp.has_tmap() {
                     if let Some((tonemap_id, gainmap_id)) =
                         self.find_gainmap_item(item_ids[Category::Color.usize()])?
                     {
@@ -909,7 +919,7 @@ impl Decoder {
                             self.populate_grid_item_ids(gainmap_id, Category::Gainmap)?;
                             self.validate_gainmap_item(gainmap_id, tonemap_id)?;
                             self.gainmap_present = true;
-                            if self.settings.enable_decoding_gainmap {
+                            if self.settings.image_content_to_decode.gainmap() {
                                 item_ids[Category::Gainmap.usize()] = gainmap_id;
                             }
                         }
@@ -1438,7 +1448,7 @@ impl Decoder {
     fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
         let mut decoded_something = false;
         for category in Category::ALL {
-            if self.settings.ignore_color_and_alpha
+            if !self.settings.image_content_to_decode.color_and_alpha()
                 && (category == Category::Color || category == Category::Alpha)
             {
                 continue;
@@ -1555,8 +1565,9 @@ impl Decoder {
     // next to retrieve the number of top rows that can be immediately accessed from the luma plane
     // of decoder->image, and alpha if any. The corresponding rows from the chroma planes,
     // if any, can also be accessed (half rounded up if subsampled, same number of rows otherwise).
-    // If a gain map is present, and enable_decoding_gainmap is also on, the gain map's planes can
-    // also be accessed in the same way. The number of available gain map rows is at least:
+    // If a gain map is present, and image_content_to_decode contains ImageContentType::GainMap,
+    // the gain map's planes can also be accessed in the same way.
+    // The number of available gain map rows is at least:
     //   decoder.decoded_row_count() * decoder.gainmap.image.height / decoder.image.height
     // When gain map scaling is needed, callers might choose to use a few less rows depending on how
     // many rows are needed by the scaling algorithm, to avoid the last row(s) changing when more
@@ -1572,7 +1583,7 @@ impl Decoder {
             let first_tile_height = self.tiles[category][0].height;
             let row_count = if category == Category::Gainmap.usize()
                 && self.gainmap_present()
-                && self.settings.enable_decoding_gainmap
+                && self.settings.image_content_to_decode.gainmap()
                 && self.gainmap.image.height != 0
                 && self.gainmap.image.height != self.image.height
             {
