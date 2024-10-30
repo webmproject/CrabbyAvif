@@ -135,9 +135,15 @@ pub enum ImageContentType {
 }
 
 impl ImageContentType {
-    pub fn color_and_alpha(&self) -> bool {
-        matches!(self, Self::ColorAndAlpha | Self::All)
+    pub fn categories(&self) -> Vec<Category> {
+        match self {
+            Self::None => vec![],
+            Self::ColorAndAlpha => vec![Category::Color, Category::Alpha],
+            Self::GainMap => vec![Category::Gainmap],
+            Self::All => Category::ALL.to_vec(),
+        }
     }
+
     pub fn gainmap(&self) -> bool {
         matches!(self, Self::GainMap | Self::All)
     }
@@ -1174,7 +1180,7 @@ impl Decoder {
             //  2) If android_mediacodec is true, then we will use at most three codec instances
             //     (one for each category).
             self.codecs = create_vec_exact(3)?;
-            for category in Category::ALL {
+            for category in self.settings.image_content_to_decode.categories() {
                 if self.tiles[category.usize()].is_empty() {
                     continue;
                 }
@@ -1193,7 +1199,7 @@ impl Decoder {
             }
         } else {
             self.codecs = create_vec_exact(self.tiles.iter().map(|tiles| tiles.len()).sum())?;
-            for category in Category::ALL {
+            for category in self.settings.image_content_to_decode.categories() {
                 for tile_index in 0..self.tiles[category.usize()].len() {
                     self.create_codec(category, tile_index)?;
                     self.tiles[category.usize()][tile_index].codec_index = self.codecs.len() - 1;
@@ -1259,7 +1265,7 @@ impl Decoder {
     }
 
     fn prepare_samples(&mut self, image_index: usize) -> AvifResult<()> {
-        for category in Category::ALL {
+        for category in self.settings.image_content_to_decode.categories() {
             for tile_index in 0..self.tiles[category.usize()].len() {
                 self.prepare_sample(image_index, category, tile_index, None)?;
             }
@@ -1447,13 +1453,7 @@ impl Decoder {
 
     fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
         let mut decoded_something = false;
-        for category in Category::ALL {
-            if !self.settings.image_content_to_decode.color_and_alpha()
-                && (category == Category::Color || category == Category::Alpha)
-            {
-                continue;
-            }
-
+        for category in self.settings.image_content_to_decode.categories() {
             let previous_decoded_tile_count =
                 self.tile_info[category.usize()].decoded_tile_count as usize;
             let tile_count = self.tiles[category.usize()].len();
@@ -1495,8 +1495,8 @@ impl Decoder {
         if !self.parsing_complete() {
             return false;
         }
-        for category in Category::ALL_USIZE {
-            if !self.tile_info[category].is_fully_decoded() {
+        for category in self.settings.image_content_to_decode.categories() {
+            if !self.tile_info[category.usize()].is_fully_decoded() {
                 return false;
             }
         }
