@@ -456,7 +456,6 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
     {
         return avifResult::InvalidArgument;
     }
-    // TODO: This is avifimagecopynoalloc.
     *dst = avifImage {
         width: src.width,
         height: src.height,

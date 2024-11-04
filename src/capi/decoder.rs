@@ -48,17 +48,14 @@ pub struct avifDecoder {
     pub duration: f64,
     pub durationInTimescales: u64,
     pub repetitionCount: i32,
-
     pub alphaPresent: avifBool,
-
     pub ioStats: IOStats,
     pub diag: avifDiagnostics,
-    //avifIO * io;
     pub data: *mut avifDecoderData,
     pub imageContentToDecode: avifImageContentTypeFlags,
     pub imageSequenceTrackPresent: avifBool,
 
-    // TODO: maybe wrap these fields in a private data kind of field?
+    // Rust specific fields that are not accessed from the C/C++ layer.
     rust_decoder: Box<Decoder>,
     image_object: avifImage,
     gainmap_object: avifGainMap,
@@ -145,7 +142,6 @@ pub unsafe extern "C" fn crabby_avifDecoderSetSource(
     unsafe {
         (*decoder).requestedSource = source;
     }
-    // TODO: should decoder be reset here in case this is called after parse?
     avifResult::Ok
 }
 

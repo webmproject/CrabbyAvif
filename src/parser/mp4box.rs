@@ -1853,10 +1853,7 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
                         }
                     }
                     "meta" => meta = Some(parse_meta(&mut box_stream)?),
-                    "moov" => {
-                        tracks = Some(parse_moov(&mut box_stream)?);
-                        // decoder.image_sequence_track_present = true;
-                    }
+                    "moov" => tracks = Some(parse_moov(&mut box_stream)?),
                     _ => {} // Not reached.
                 }
                 if ftyp.is_some() {
