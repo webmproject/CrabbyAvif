@@ -437,15 +437,13 @@ impl Decoder {
             }
         }
 
-        // Make up an alpha item for convenience.
-        // TODO(yguyon): Find another item id if max is used.
-        let alpha_item_id = self
-            .items
-            .keys()
-            .max()
-            .unwrap()
-            .checked_add(1)
-            .ok_or(AvifError::NotImplemented)?;
+        // Make up an alpha item for convenience. For the item_id, choose the first id that is not
+        // found in the actual image. In the very unlikely case that all the item ids are used,
+        // treat this as an image without alpha channel.
+        let alpha_item_id = match (1..u32::MAX).find(|&id| !self.items.contains_key(&id)) {
+            Some(id) => id,
+            None => return Ok(None),
+        };
         let first_item = self.items.get(&alpha_item_indices[0]).unwrap();
         let properties = match first_item.codec_config() {
             Some(config) => vec![ItemProperty::CodecConfiguration(config.clone())],
