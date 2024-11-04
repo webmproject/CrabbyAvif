@@ -1699,8 +1699,10 @@ fn parse_elst(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     //   flags - the following values are defined. The values of flags greater than 1 are reserved
     //     RepeatEdits 1
     if (flags & 1) == 0 {
+        // The only EditList feature that we support is repetition count for animated images. So in
+        // this case, we know that the repetition count is zero and we do not care about the rest
+        // of this box.
         track.is_repeating = false;
-        // TODO: This early return is not part of the spec, investigate
         return Ok(());
     }
     track.is_repeating = true;
