@@ -44,7 +44,7 @@ impl BoxHeader {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct FileTypeBox {
     pub major_brand: String,
     // minor_version "is informative only" (section 4.3.1 of ISO/IEC 14496-12)
@@ -404,8 +404,31 @@ fn parse_header(stream: &mut IStream, top_level: bool) -> AvifResult<BoxHeader> 
     })
 }
 
+// Reads a truncated ftyp box. Populates as many brands as it can read.
+fn parse_truncated_ftyp(stream: &mut IStream) -> FileTypeBox {
+    // Section 4.3.2 of ISO/IEC 14496-12.
+    // unsigned int(32) major_brand;
+    let major_brand = match stream.read_string(4) {
+        Ok(major_brand) => major_brand,
+        Err(_) => return FileTypeBox::default(),
+    };
+    let mut compatible_brands: Vec<String> = Vec::new();
+    // unsigned int(32) compatible_brands[];  // to end of the box
+    while stream.has_bytes_left().unwrap_or_default() {
+        match stream.read_string(4) {
+            Ok(brand) => compatible_brands.push(brand),
+            Err(_) => break,
+        }
+    }
+    FileTypeBox {
+        major_brand,
+        compatible_brands,
+    }
+}
+
 fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
     // Section 4.3.2 of ISO/IEC 14496-12.
+    // unsigned int(32) major_brand;
     let major_brand = stream.read_string(4)?;
     // unsigned int(4) minor_version;
     stream.skip_u32()?;
@@ -416,6 +439,7 @@ fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
         )));
     }
     let mut compatible_brands: Vec<String> = create_vec_exact(stream.bytes_left()? / 4)?;
+    // unsigned int(32) compatible_brands[];  // to end of the box
     while stream.has_bytes_left()? {
         compatible_brands.push(stream.read_string(4)?);
     }
@@ -1908,13 +1932,19 @@ pub fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
         //   Only a fixed-size box such as a file signature, if required, may precede it.
         return Ok(false);
     }
-    if header.size == BoxSize::UntilEndOfStream {
+    let header_size = match header.size {
+        BoxSize::FixedSize(size) => size,
         // The 'ftyp' box goes on till the end of the file. Either there is no brand requiring
         // anything in the file but a FileTypebox (so not AVIF), or it is invalid.
-        return Ok(false);
-    }
-    let mut header_stream = stream.sub_stream(&header.size)?;
-    let ftyp = parse_ftyp(&mut header_stream)?;
+        BoxSize::UntilEndOfStream => return Ok(false),
+    };
+    let ftyp = if header_size > stream.bytes_left()? {
+        let mut header_stream = stream.sub_stream(&BoxSize::FixedSize(stream.bytes_left()?))?;
+        parse_truncated_ftyp(&mut header_stream)
+    } else {
+        let mut header_stream = stream.sub_stream(&header.size)?;
+        parse_ftyp(&mut header_stream)?
+    };
     Ok(ftyp.is_avif())
 }
 
@@ -2000,12 +2030,14 @@ mod tests {
             0x00, 0x00, 0x00, 0xf2, 0x6d, 0x65, 0x74, 0x61, //
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x28, //
         ];
-        let min_required_bytes = 32;
+        // Peeking should succeed starting from byte length 12. Since that is the end offset of the
+        // first valid AVIF brand.
+        let min_required_bytes = 12;
         for i in 0..buf.len() {
             let res = mp4box::peek_compatible_file_type(&buf[..i]);
             if i < min_required_bytes {
-                // Not enough bytes.
-                assert!(res.is_err());
+                // Not enough bytes. The return should either be an error or false.
+                assert!(res.is_err() || !res.unwrap());
             } else {
                 assert!(res?);
             }
