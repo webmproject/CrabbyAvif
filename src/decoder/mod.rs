@@ -690,7 +690,7 @@ impl Decoder {
             if dimg_item.dimg_for_id != item_id {
                 continue;
             }
-            if dimg_item.item_type != "av01" || dimg_item.has_unsupported_essential_property {
+            if !dimg_item.is_image_codec_item() || dimg_item.has_unsupported_essential_property {
                 return Err(AvifError::InvalidImageGrid(
                     "invalid input item in dimg grid".into(),
                 ));

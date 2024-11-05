@@ -261,14 +261,17 @@ impl Item {
                                    aux_type == "urn:mpeg:hevc:2015:auxid:1")
     }
 
-    pub fn is_image_item(&self) -> bool {
+    pub fn is_image_codec_item(&self) -> bool {
         [
             "av01",
-            "grid",
             #[cfg(feature = "heic")]
             "hvc1",
         ]
         .contains(&self.item_type.as_str())
+    }
+
+    pub fn is_image_item(&self) -> bool {
+        self.is_image_codec_item() || self.item_type == "grid"
     }
 
     pub fn should_skip(&self) -> bool {
