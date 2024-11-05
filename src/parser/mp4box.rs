@@ -1840,6 +1840,15 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
         // Read the rest of the box if necessary.
         match header.box_type.as_str() {
             "ftyp" | "meta" | "moov" => {
+                if ftyp.is_none() && header.box_type != "ftyp" {
+                    // Section 6.3.4 of ISO/IEC 14496-12:
+                    //   The FileTypeBox shall occur before any variable-length box. Only a
+                    //   fixed-size box such as a file signature, if required, may precede it.
+                    return Err(AvifError::BmffParseFailed(format!(
+                        "expected ftyp box. found {}.",
+                        header.box_type,
+                    )));
+                }
                 let box_data = match header.size {
                     BoxSize::UntilEndOfStream => io.read(parse_offset, usize::MAX)?,
                     BoxSize::FixedSize(size) => io.read_exact(parse_offset, size)?,
@@ -1883,7 +1892,6 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
     if (ftyp.needs_meta() && meta.is_none()) || (ftyp.needs_moov() && tracks.is_none()) {
         return Err(AvifError::TruncatedData);
     }
-    // TODO: Enforce 'ftyp' as first box seen, for consistency with peek_compatible_file_type()?
     Ok(AvifBoxes {
         ftyp,
         meta: meta.unwrap_or_default(),
