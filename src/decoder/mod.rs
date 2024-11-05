@@ -544,6 +544,9 @@ impl Decoder {
             self.gainmap.alt_plane_count = pixi.plane_depths.len() as u8;
             self.gainmap.alt_plane_depth = pixi.plane_depths[0];
         }
+        // HEIC files created by Apple have some of these properties set in the Tonemap item. So do
+        // not perform this validation when HEIC is enabled.
+        #[cfg(not(feature = "heic"))]
         if find_property!(tonemap_item.properties, PixelAspectRatio).is_some()
             || find_property!(tonemap_item.properties, CleanAperture).is_some()
             || find_property!(tonemap_item.properties, ImageRotation).is_some()
