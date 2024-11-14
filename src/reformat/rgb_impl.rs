@@ -77,15 +77,23 @@ fn identity_yuv8_to_rgb8_full_range(image: &image::Image, rgb: &mut rgb::Image) 
 macro_rules! store_rgb_pixel8 {
     ($dst:ident, $rgb_565: ident, $index: ident, $r: ident, $g: ident, $b: ident, $r_offset: ident,
      $g_offset: ident, $b_offset: ident, $rgb_channel_count: ident, $rgb_max_channel_f: ident) => {
+        let r8 = (0.5 + ($r * $rgb_max_channel_f)) as u8;
+        let g8 = (0.5 + ($g * $rgb_max_channel_f)) as u8;
+        let b8 = (0.5 + ($b * $rgb_max_channel_f)) as u8;
         if $rgb_565 {
-            // TODO: Handle rgb565.
+            // References for RGB565 color conversion:
+            // * https://docs.microsoft.com/en-us/windows/win32/directshow/working-with-16-bit-rgb
+            // * https://chromium.googlesource.com/libyuv/libyuv/+/9892d70c965678381d2a70a1c9002d1cf136ee78/source/row_common.cc#2362
+            let r16 = ((r8 >> 3) as u16) << 11;
+            let g16 = ((g8 >> 2) as u16) << 5;
+            let b16 = (b8 >> 3) as u16;
+            let rgb565 = (r16 | g16 | b16).to_le_bytes();
+            $dst[($index * $rgb_channel_count) + $r_offset] = rgb565[0];
+            $dst[($index * $rgb_channel_count) + $r_offset + 1] = rgb565[1];
         } else {
-            $dst[($index * $rgb_channel_count) + $r_offset] =
-                (0.5 + ($r * $rgb_max_channel_f)) as u8;
-            $dst[($index * $rgb_channel_count) + $g_offset] =
-                (0.5 + ($g * $rgb_max_channel_f)) as u8;
-            $dst[($index * $rgb_channel_count) + $b_offset] =
-                (0.5 + ($b * $rgb_max_channel_f)) as u8;
+            $dst[($index * $rgb_channel_count) + $r_offset] = r8;
+            $dst[($index * $rgb_channel_count) + $g_offset] = g8;
+            $dst[($index * $rgb_channel_count) + $b_offset] = b8;
         }
     };
 }

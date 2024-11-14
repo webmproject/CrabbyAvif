@@ -233,7 +233,8 @@ impl Image {
     pub fn channel_count(&self) -> u32 {
         match self.format {
             Format::Rgba | Format::Bgra | Format::Argb | Format::Abgr => 4,
-            Format::Rgb | Format::Bgr | Format::Rgb565 => 3,
+            Format::Rgb | Format::Bgr => 3,
+            Format::Rgb565 => 2,
             Format::Rgba1010102 => 0, // This is never used.
         }
     }
