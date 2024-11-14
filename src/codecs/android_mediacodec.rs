@@ -45,7 +45,7 @@ macro_rules! c_str {
 
 #[derive(Debug, Default)]
 struct PlaneInfo {
-    color_format: i32,
+    color_format: AndroidMediaCodecOutputColorFormat,
     offset: [isize; 3],
     row_stride: [u32; 3],
     column_stride: [u32; 3],
@@ -54,8 +54,8 @@ struct PlaneInfo {
 impl PlaneInfo {
     fn pixel_format(&self) -> PixelFormat {
         match self.color_format {
-            MediaCodec::YUV_P010 => PixelFormat::AndroidP010,
-            _ => {
+            AndroidMediaCodecOutputColorFormat::P010 => PixelFormat::AndroidP010,
+            AndroidMediaCodecOutputColorFormat::Yuv420Flexible => {
                 let u_before_v = self.offset[2] == self.offset[1] + 1;
                 let v_before_u = self.offset[1] == self.offset[2] + 1;
                 let is_nv_format = self.column_stride == [1, 2, 2] && (u_before_v || v_before_u);
@@ -70,8 +70,8 @@ impl PlaneInfo {
 
     fn depth(&self) -> u8 {
         match self.color_format {
-            MediaCodec::YUV_P010 => 10,
-            _ => 8,
+            AndroidMediaCodecOutputColorFormat::P010 => 10,
+            AndroidMediaCodecOutputColorFormat::Yuv420Flexible => 8,
         }
     }
 }
@@ -130,13 +130,13 @@ impl MediaFormat {
         let height = self.height()?;
         let slice_height = self.slice_height().unwrap_or(height);
         let stride = self.stride()?;
-        let color_format = self.color_format()?;
+        let color_format: AndroidMediaCodecOutputColorFormat = self.color_format()?.into();
         let mut plane_info = PlaneInfo {
             color_format,
             ..Default::default()
         };
         match color_format {
-            MediaCodec::YUV_P010 => {
+            AndroidMediaCodecOutputColorFormat::P010 => {
                 plane_info.row_stride = [
                     u32_from_i32(stride)?,
                     u32_from_i32(stride)?,
@@ -151,7 +151,7 @@ impl MediaFormat {
                     0, // V plane is not used for P010.
                 ];
             }
-            _ => {
+            AndroidMediaCodecOutputColorFormat::Yuv420Flexible => {
                 plane_info.row_stride = [
                     u32_from_i32(stride)?,
                     u32_from_i32((stride + 1) / 2)?,
@@ -198,7 +198,7 @@ impl MediaFormat {
             }
             let planes = unsafe { ptr::read_unaligned(ptr::addr_of!(image_data.mPlane)) };
             let mut plane_info = PlaneInfo {
-                color_format: self.color_format()?,
+                color_format: self.color_format()?.into(),
                 ..Default::default()
             };
             for plane_index in 0usize..3 {
@@ -297,12 +297,6 @@ pub struct MediaCodec {
 }
 
 impl MediaCodec {
-    // Flexible YUV 420 format used for 8-bit images:
-    // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Flexible
-    const YUV_420_FLEXIBLE: i32 = 2135033992;
-    // YUV P010 format used for 10-bit images:
-    // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUVP010
-    const YUV_P010: i32 = 54;
     const AV1_MIME: &str = "video/av01";
     const HEVC_MIME: &str = "video/hevc";
 }
@@ -332,7 +326,7 @@ impl Decoder for MediaCodec {
             AMediaFormat_setInt32(
                 format,
                 AMEDIAFORMAT_KEY_COLOR_FORMAT,
-                if config.depth == 10 { Self::YUV_P010 } else { Self::YUV_420_FLEXIBLE },
+                config.android_mediacodec_output_color_format as i32,
             );
             // low-latency is documented but isn't exposed as a constant in the NDK:
             // https://developer.android.com/reference/android/media/MediaFormat#KEY_LOW_LATENCY

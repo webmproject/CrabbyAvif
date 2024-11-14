@@ -163,6 +163,7 @@ pub struct Settings {
     pub image_dimension_limit: u32,
     pub image_count_limit: u32,
     pub max_threads: u32,
+    pub android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat,
 }
 
 impl Default for Settings {
@@ -180,6 +181,7 @@ impl Default for Settings {
             image_dimension_limit: DEFAULT_IMAGE_DIMENSION_LIMIT,
             image_count_limit: DEFAULT_IMAGE_COUNT_LIMIT,
             max_threads: 1,
+            android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat::default(),
         }
     }
 }
@@ -1164,6 +1166,9 @@ impl Decoder {
             max_input_size: tile.max_sample_size(),
             codec_config: tile.codec_config.clone(),
             category,
+            android_mediacodec_output_color_format: self
+                .settings
+                .android_mediacodec_output_color_format,
         };
         codec.initialize(&config)?;
         self.codecs.push(codec);

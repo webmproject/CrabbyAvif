@@ -76,6 +76,11 @@ constexpr static const uint32_t AVIF_COLOR_PRIMARIES_DCI_P3 = 12;
 
 constexpr static const uint32_t AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084 = 16;
 
+enum AndroidMediaCodecOutputColorFormat : int32_t {
+    ANDROID_MEDIA_CODEC_OUTPUT_COLOR_FORMAT_YUV420_FLEXIBLE = 2135033992,
+    ANDROID_MEDIA_CODEC_OUTPUT_COLOR_FORMAT_P010 = 54,
+};
+
 enum avifChromaDownsampling {
     AVIF_CHROMA_DOWNSAMPLING_AUTOMATIC,
     AVIF_CHROMA_DOWNSAMPLING_FASTEST,
@@ -424,6 +429,7 @@ struct avifDecoder {
     avifDecoderData *data;
     avifImageContentTypeFlags imageContentToDecode;
     avifBool imageSequenceTrackPresent;
+    AndroidMediaCodecOutputColorFormat androidMediaCodecOutputColorFormat;
     Box<Decoder> rust_decoder;
     avifImage image_object;
     avifGainMap gainmap_object;

@@ -318,6 +318,28 @@ pub enum AvifError {
 
 pub type AvifResult<T> = Result<T, AvifError>;
 
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, Default)]
+pub enum AndroidMediaCodecOutputColorFormat {
+    // Flexible YUV 420 format used for 8-bit images:
+    // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Flexible
+    #[default]
+    Yuv420Flexible = 2135033992,
+    // YUV P010 format used for 10-bit images:
+    // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUVP010
+    P010 = 54,
+}
+
+impl From<i32> for AndroidMediaCodecOutputColorFormat {
+    fn from(value: i32) -> Self {
+        match value {
+            2135033992 => Self::Yuv420Flexible,
+            54 => Self::P010,
+            _ => Self::default(),
+        }
+    }
+}
+
 trait OptionExtension {
     type Value;
 

@@ -24,6 +24,7 @@ pub mod android_mediacodec;
 use crate::decoder::Category;
 use crate::image::Image;
 use crate::parser::mp4box::CodecConfiguration;
+use crate::AndroidMediaCodecOutputColorFormat;
 use crate::AvifResult;
 
 #[derive(Clone, Default)]
@@ -37,6 +38,7 @@ pub struct DecoderConfig {
     pub max_input_size: usize,
     pub codec_config: CodecConfiguration,
     pub category: Category,
+    pub android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat,
 }
 
 pub trait Decoder {
