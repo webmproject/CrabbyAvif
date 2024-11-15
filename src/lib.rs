@@ -86,7 +86,7 @@ impl PixelFormat {
 
     pub fn chroma_shift_y(&self) -> u32 {
         match self {
-            Self::Yuv420 => 1,
+            Self::Yuv420 | Self::AndroidP010 | Self::AndroidNv12 | Self::AndroidNv21 => 1,
             _ => 0,
         }
     }
