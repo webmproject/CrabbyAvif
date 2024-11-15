@@ -567,6 +567,10 @@ avifImage *crabby_avifImageCreate(uint32_t width,
                                   uint32_t depth,
                                   avifPixelFormat yuvFormat);
 
+avifResult crabby_avifImageCopy(avifImage *dstImage,
+                                const avifImage *srcImage,
+                                avifPlanesFlags planes);
+
 avifResult crabby_avifImageAllocatePlanes(avifImage *image, avifPlanesFlags planes);
 
 void crabby_avifImageFreePlanes(avifImage *image, avifPlanesFlags planes);

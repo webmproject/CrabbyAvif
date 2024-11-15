@@ -240,6 +240,83 @@ pub unsafe extern "C" fn crabby_avifImageCreate(
     }))
 }
 
+#[no_mangle]
+#[allow(unused)]
+pub unsafe extern "C" fn crabby_avifImageCopy(
+    dstImage: *mut avifImage,
+    srcImage: *const avifImage,
+    planes: avifPlanesFlags,
+) -> avifResult {
+    unsafe {
+        crabby_avifImageFreePlanes(dstImage, avifPlanesFlag::AvifPlanesAll as u32);
+    }
+    let dst = unsafe { &mut (*dstImage) };
+    let src = unsafe { &(*srcImage) };
+    dst.width = src.width;
+    dst.height = src.height;
+    dst.depth = src.depth;
+    dst.yuvFormat = src.yuvFormat;
+    dst.yuvRange = src.yuvRange;
+    dst.yuvChromaSamplePosition = src.yuvChromaSamplePosition;
+    dst.alphaPremultiplied = src.alphaPremultiplied;
+    dst.colorPrimaries = src.colorPrimaries;
+    dst.transferCharacteristics = src.transferCharacteristics;
+    dst.matrixCoefficients = src.matrixCoefficients;
+    dst.clli = src.clli;
+    dst.transformFlags = src.transformFlags;
+    dst.pasp = src.pasp;
+    dst.clap = src.clap;
+    dst.irot = src.irot;
+    dst.imir = src.imir;
+    let res = unsafe { crabby_avifRWDataSet(&mut dst.icc, src.icc.data, src.icc.size) };
+    if res != avifResult::Ok {
+        return res;
+    }
+    let res = unsafe { crabby_avifRWDataSet(&mut dst.exif, src.exif.data, src.exif.size) };
+    if res != avifResult::Ok {
+        return res;
+    }
+    let res = unsafe { crabby_avifRWDataSet(&mut dst.xmp, src.xmp.data, src.xmp.size) };
+    if res != avifResult::Ok {
+        return res;
+    }
+    if (planes & 1) != 0 {
+        for plane in 0usize..3 {
+            if src.yuvPlanes[plane].is_null() || src.yuvRowBytes[plane] == 0 {
+                continue;
+            }
+            let plane_height = unsafe { crabby_avifImagePlaneHeight(srcImage, plane as i32) };
+            let plane_size = match usize_from_u32(src.yuvRowBytes[plane] * plane_height) {
+                Ok(size) => size,
+                Err(_) => return avifResult::UnknownError,
+            };
+            dst.yuvPlanes[plane] = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    src.yuvPlanes[plane],
+                    dst.yuvPlanes[plane],
+                    plane_size,
+                );
+            }
+            dst.yuvRowBytes[plane] = src.yuvRowBytes[plane];
+            dst.imageOwnsYUVPlanes = AVIF_TRUE;
+        }
+    }
+    if (planes & 2) != 0 && !src.alphaPlane.is_null() && src.alphaRowBytes != 0 {
+        let plane_size = match usize_from_u32(src.alphaRowBytes * src.height) {
+            Ok(size) => size,
+            Err(_) => return avifResult::UnknownError,
+        };
+        dst.alphaPlane = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
+        unsafe {
+            std::ptr::copy_nonoverlapping(src.alphaPlane, dst.alphaPlane, plane_size);
+        }
+        dst.alphaRowBytes = src.alphaRowBytes;
+        dst.imageOwnsAlphaPlane = AVIF_TRUE;
+    }
+    avifResult::Ok
+}
+
 fn avif_image_allocate_planes_helper(
     image: &mut avifImage,
     planes: avifPlanesFlags,
@@ -324,6 +401,7 @@ pub unsafe extern "C" fn crabby_avifImageFreePlanes(
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageDestroy(image: *mut avifImage) {
     unsafe {
+        crabby_avifImageFreePlanes(image, avifPlanesFlag::AvifPlanesAll as u32);
         let _ = Box::from_raw(image);
     }
 }

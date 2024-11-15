@@ -42,8 +42,8 @@ impl Default for avifROData {
 #[repr(C)]
 #[derive(Clone, Debug)]
 pub struct avifRWData {
-    data: *mut u8,
-    size: usize,
+    pub data: *mut u8,
+    pub size: usize,
 }
 
 impl Default for avifRWData {
