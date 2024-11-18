@@ -175,7 +175,9 @@ fn yuv16_to_rgb16_color(
         let uv_j = j >> image.yuv_format.chroma_shift_y();
         let y_row = image.row16(Plane::Y, j)?;
         let u_row = image.row16(Plane::U, uv_j)?;
-        let v_row = image.row16(Plane::V, uv_j)?;
+        // If V plane is missing, then the format is P010. In that case, set V
+        // as U plane but starting at offset 1.
+        let v_row = image.row16(Plane::V, uv_j).unwrap_or(&u_row[1..]);
         let dst = rgb.row16_mut(j)?;
         for i in 0..image.width as usize {
             let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
@@ -220,7 +222,9 @@ fn yuv16_to_rgb8_color(
         let uv_j = j >> image.yuv_format.chroma_shift_y();
         let y_row = image.row16(Plane::Y, j)?;
         let u_row = image.row16(Plane::U, uv_j)?;
-        let v_row = image.row16(Plane::V, uv_j)?;
+        // If V plane is missing, then the format is P010. In that case, set V
+        // as U plane but starting at offset 1.
+        let v_row = image.row16(Plane::V, uv_j).unwrap_or(&u_row[1..]);
         let dst = rgb.row_mut(j)?;
         for i in 0..image.width as usize {
             let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
