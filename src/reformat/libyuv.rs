@@ -170,10 +170,10 @@ fn find_conversion_function(
             // What Android considers to be NV21 is actually NV12 in libyuv.
             Some(ConversionFunction::NVToARGBMatrix(NV12ToARGBMatrix))
         }
-        (_, 10, Format::Rgba1010102, PixelFormat::AndroidP010) => Some(
+        (_, 16, Format::Rgba1010102, PixelFormat::AndroidP010) => Some(
             ConversionFunction::P010ToRGBMatrix(P010ToAR30Matrix, AR30ToAB30),
         ),
-        (_, 10, Format::Rgba, PixelFormat::AndroidP010) => Some(
+        (_, 16, Format::Rgba, PixelFormat::AndroidP010) => Some(
             ConversionFunction::P010ToRGBMatrix(P010ToARGBMatrix, ARGBToABGR),
         ),
         (true, 10, Format::Rgba | Format::Bgra, PixelFormat::Yuv422)
@@ -362,9 +362,7 @@ fn find_conversion_function(
 }
 
 pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool> {
-    if (rgb.depth != 8 && rgb.depth != 10)
-        || (image.depth != 8 && image.depth != 10 && image.depth != 12)
-    {
+    if (rgb.depth != 8 && rgb.depth != 10) || !image.depth_valid() {
         return Err(AvifError::NotImplemented);
     }
     if rgb.depth == 10

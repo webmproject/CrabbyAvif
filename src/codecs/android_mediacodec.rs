@@ -70,7 +70,7 @@ impl PlaneInfo {
 
     fn depth(&self) -> u8 {
         match self.color_format {
-            AndroidMediaCodecOutputColorFormat::P010 => 10,
+            AndroidMediaCodecOutputColorFormat::P010 => 16,
             AndroidMediaCodecOutputColorFormat::Yuv420Flexible => 8,
         }
     }
