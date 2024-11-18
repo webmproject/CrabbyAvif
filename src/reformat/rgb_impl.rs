@@ -116,6 +116,7 @@ fn yuv8_to_rgb8_color(
     let b_offset = rgb.format.b_offset();
     let rgb_channel_count = rgb.channel_count() as usize;
     let rgb_565 = rgb.format == rgb::Format::Rgb565;
+    let chroma_shift = image.yuv_format.chroma_shift_x();
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
         let y_row = image.row(Plane::Y, j)?;
@@ -123,7 +124,7 @@ fn yuv8_to_rgb8_color(
         let v_row = image.row(Plane::V, uv_j)?;
         let dst = rgb.row_mut(j)?;
         for i in 0..image.width as usize {
-            let uv_i = i >> image.yuv_format.chroma_shift_x();
+            let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
             let y = table_y[y_row[i] as usize];
             let cb = table_uv[u_row[uv_i] as usize];
             let cr = table_uv[v_row[uv_i] as usize];
@@ -169,6 +170,7 @@ fn yuv16_to_rgb16_color(
     let g_offset = rgb.format.g_offset();
     let b_offset = rgb.format.b_offset();
     let rgb_channel_count = rgb.channel_count() as usize;
+    let chroma_shift = image.yuv_format.chroma_shift_x();
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
         let y_row = image.row16(Plane::Y, j)?;
@@ -176,7 +178,7 @@ fn yuv16_to_rgb16_color(
         let v_row = image.row16(Plane::V, uv_j)?;
         let dst = rgb.row16_mut(j)?;
         for i in 0..image.width as usize {
-            let uv_i = i >> image.yuv_format.chroma_shift_x();
+            let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
             let y = table_y[min(y_row[i], yuv_max_channel) as usize];
             let cb = table_uv[min(u_row[uv_i], yuv_max_channel) as usize];
             let cr = table_uv[min(v_row[uv_i], yuv_max_channel) as usize];
@@ -213,6 +215,7 @@ fn yuv16_to_rgb8_color(
     let b_offset = rgb.format.b_offset();
     let rgb_channel_count = rgb.channel_count() as usize;
     let rgb_565 = rgb.format == rgb::Format::Rgb565;
+    let chroma_shift = image.yuv_format.chroma_shift_x();
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
         let y_row = image.row16(Plane::Y, j)?;
@@ -220,7 +223,7 @@ fn yuv16_to_rgb8_color(
         let v_row = image.row16(Plane::V, uv_j)?;
         let dst = rgb.row_mut(j)?;
         for i in 0..image.width as usize {
-            let uv_i = i >> image.yuv_format.chroma_shift_x();
+            let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
             let y = table_y[min(y_row[i], yuv_max_channel) as usize];
             let cb = table_uv[min(u_row[uv_i], yuv_max_channel) as usize];
             let cr = table_uv[min(v_row[uv_i], yuv_max_channel) as usize];
@@ -265,6 +268,7 @@ fn yuv8_to_rgb16_color(
     let g_offset = rgb.format.g_offset();
     let b_offset = rgb.format.b_offset();
     let rgb_channel_count = rgb.channel_count() as usize;
+    let chroma_shift = image.yuv_format.chroma_shift_x();
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
         let y_row = image.row(Plane::Y, j)?;
@@ -272,7 +276,7 @@ fn yuv8_to_rgb16_color(
         let v_row = image.row(Plane::V, uv_j)?;
         let dst = rgb.row16_mut(j)?;
         for i in 0..image.width as usize {
-            let uv_i = i >> image.yuv_format.chroma_shift_x();
+            let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
             let y = table_y[y_row[i] as usize];
             let cb = table_uv[u_row[uv_i] as usize];
             let cr = table_uv[v_row[uv_i] as usize];
@@ -576,6 +580,7 @@ pub fn yuv_to_rgb_any(
     let yuv_max_channel = image.max_channel();
     let rgb_max_channel = rgb.max_channel();
     let rgb_max_channel_f = rgb.max_channel_f();
+    let chroma_shift = image.yuv_format.chroma_shift_x();
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
         let y_row = image.row_generic(Plane::Y, j)?;
@@ -590,7 +595,7 @@ pub fn yuv_to_rgb_any(
             if has_color {
                 let u_row = u_row.unwrap();
                 let v_row = v_row.unwrap();
-                let uv_i = i >> image.yuv_format.chroma_shift_x();
+                let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
                 if image.yuv_format == PixelFormat::Yuv444
                     || matches!(
                         chroma_upsampling,

@@ -77,10 +77,11 @@ impl PixelFormat {
         }
     }
 
-    pub fn chroma_shift_x(&self) -> u32 {
+    pub fn chroma_shift_x(&self) -> (u32, u32) {
         match self {
-            Self::Yuv422 | Self::Yuv420 => 1,
-            _ => 0,
+            Self::Yuv422 | Self::Yuv420 => (1, 0),
+            Self::AndroidP010 => (1, 1),
+            _ => (0, 0),
         }
     }
 

@@ -336,8 +336,9 @@ fn avif_image_allocate_planes_helper(
             image.yuvPlanes[0] = unsafe { crabby_avifAlloc(y_size) as *mut u8 };
         }
         if !image.yuvFormat.is_monochrome() {
-            let csx = image.yuvFormat.chroma_shift_x() as u64;
-            let width = ((image.width as u64) + csx) >> csx;
+            let csx0 = image.yuvFormat.chroma_shift_x().0 as u64;
+            let csx1 = image.yuvFormat.chroma_shift_x().1 as u64;
+            let width = (((image.width as u64) + csx0) >> csx0) << csx1;
             let csy = image.yuvFormat.chroma_shift_y() as u64;
             let height = ((image.height as u64) + csy) >> csy;
             let uv_row_bytes = usize_from_u64(width * channel_size as u64)?;
@@ -466,7 +467,7 @@ pub unsafe extern "C" fn crabby_avifImagePlaneWidth(
                     0
                 } else {
                     let shift_x = (*image).yuvFormat.chroma_shift_x();
-                    ((*image).width + shift_x) >> shift_x
+                    (((*image).width + shift_x.0) >> shift_x.0) << shift_x.1
                 }
             }
             3 => {
@@ -529,7 +530,7 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
         return avifResult::InvalidArgument;
     }
     if !src.yuvFormat.is_monochrome()
-        && ((rect.x & src.yuvFormat.chroma_shift_x()) != 0
+        && ((rect.x & src.yuvFormat.chroma_shift_x().0) != 0
             || (rect.y & src.yuvFormat.chroma_shift_y()) != 0)
     {
         return avifResult::InvalidArgument;
@@ -560,7 +561,8 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
         if src.yuvPlanes[plane].is_null() {
             continue;
         }
-        let x = if plane == 0 { rect.x } else { rect.x >> src.yuvFormat.chroma_shift_x() };
+        let chroma_shift = src.yuvFormat.chroma_shift_x();
+        let x = if plane == 0 { rect.x } else { (rect.x >> chroma_shift.0) << chroma_shift.1 };
         let y = if plane == 0 { rect.y } else { rect.y >> src.yuvFormat.chroma_shift_y() };
         let offset = match isize_from_u32(y * src.yuvRowBytes[plane] + x * pixel_size) {
             Ok(x) => x,
