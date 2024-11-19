@@ -248,6 +248,11 @@ pub unsafe extern "C" fn crabby_avifImageScale(
     if res.is_err() {
         return to_avifResult(&res);
     }
+    // The scale function is designed to work only for one category at a time.
+    // Restore the width and height to the original values before scaling the
+    // alpha plane.
+    rust_image.width = unsafe { (*image).width };
+    rust_image.height = unsafe { (*image).height };
     let res = rust_image.scale(dstWidth, dstHeight, Category::Alpha);
     if res.is_err() {
         return to_avifResult(&res);
