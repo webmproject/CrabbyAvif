@@ -338,10 +338,9 @@ impl Decoder for MediaCodec {
                 format,
                 AMEDIAFORMAT_KEY_COLOR_FORMAT,
                 if config.depth == 8 {
-                    // Always use Yuv420Flexible for 8-bit images.
                     AndroidMediaCodecOutputColorFormat::Yuv420Flexible
                 } else {
-                    config.android_mediacodec_output_color_format
+                    AndroidMediaCodecOutputColorFormat::P010
                 } as i32,
             );
             // low-latency is documented but isn't exposed as a constant in the NDK:
