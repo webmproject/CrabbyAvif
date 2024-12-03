@@ -424,54 +424,65 @@ impl Decoder for MediaCodec {
                 AMediaCodec_releaseOutputBuffer(codec, self.output_buffer_index.unwrap(), false);
             }
         }
+        let mut retry_count = 0;
         unsafe {
-            let input_index = AMediaCodec_dequeueInputBuffer(codec, 0);
-            if input_index >= 0 {
-                let mut input_buffer_size: usize = 0;
-                let input_buffer = AMediaCodec_getInputBuffer(
-                    codec,
-                    input_index as usize,
-                    &mut input_buffer_size as *mut _,
-                );
-                if input_buffer.is_null() {
-                    return Err(AvifError::UnknownError(format!(
-                        "input buffer at index {input_index} was null"
-                    )));
-                }
-                let hevc_whole_nal_units = self.hevc_whole_nal_units(payload)?;
-                let codec_payload = match &hevc_whole_nal_units {
-                    Some(hevc_payload) => hevc_payload,
-                    None => payload,
-                };
-                if input_buffer_size < codec_payload.len() {
-                    return Err(AvifError::UnknownError(format!(
+            while retry_count < 100 {
+                retry_count += 1;
+                let input_index = AMediaCodec_dequeueInputBuffer(codec, 10000);
+                if input_index >= 0 {
+                    let mut input_buffer_size: usize = 0;
+                    let input_buffer = AMediaCodec_getInputBuffer(
+                        codec,
+                        input_index as usize,
+                        &mut input_buffer_size as *mut _,
+                    );
+                    if input_buffer.is_null() {
+                        return Err(AvifError::UnknownError(format!(
+                            "input buffer at index {input_index} was null"
+                        )));
+                    }
+                    let hevc_whole_nal_units = self.hevc_whole_nal_units(payload)?;
+                    let codec_payload = match &hevc_whole_nal_units {
+                        Some(hevc_payload) => hevc_payload,
+                        None => payload,
+                    };
+                    if input_buffer_size < codec_payload.len() {
+                        return Err(AvifError::UnknownError(format!(
                         "input buffer (size {input_buffer_size}) was not big enough. required size: {}",
                         codec_payload.len()
                     )));
-                }
-                ptr::copy_nonoverlapping(codec_payload.as_ptr(), input_buffer, codec_payload.len());
+                    }
+                    ptr::copy_nonoverlapping(
+                        codec_payload.as_ptr(),
+                        input_buffer,
+                        codec_payload.len(),
+                    );
 
-                if AMediaCodec_queueInputBuffer(
-                    codec,
-                    usize_from_isize(input_index)?,
-                    /*offset=*/ 0,
-                    codec_payload.len(),
-                    /*pts=*/ 0,
-                    /*flags=*/ 0,
-                ) != media_status_t_AMEDIA_OK
-                {
-                    return Err(AvifError::UnknownError("".into()));
+                    if AMediaCodec_queueInputBuffer(
+                        codec,
+                        usize_from_isize(input_index)?,
+                        /*offset=*/ 0,
+                        codec_payload.len(),
+                        /*pts=*/ 0,
+                        /*flags=*/ 0,
+                    ) != media_status_t_AMEDIA_OK
+                    {
+                        return Err(AvifError::UnknownError("".into()));
+                    }
+                    break;
+                } else if input_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
+                    continue;
+                } else {
+                    return Err(AvifError::UnknownError(format!(
+                        "got input index < 0: {input_index}"
+                    )));
                 }
-            } else {
-                return Err(AvifError::UnknownError(format!(
-                    "got input index < 0: {input_index}"
-                )));
             }
         }
         let mut buffer: Option<*mut u8> = None;
         let mut buffer_size: usize = 0;
-        let mut retry_count = 0;
         let mut buffer_info = AMediaCodecBufferInfo::default();
+        retry_count = 0;
         while retry_count < 100 {
             retry_count += 1;
             unsafe {
