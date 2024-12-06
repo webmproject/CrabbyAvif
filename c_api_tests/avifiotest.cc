@@ -25,6 +25,7 @@ TEST(AvifDecodeTest, SetRawIO) {
   ASSERT_EQ(avifDecoderSetIOMemory(decoder.get(), data.data(), data.size()),
             AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(decoder->alphaPresent, AVIF_FALSE);
   EXPECT_EQ(decoder->imageSequenceTrackPresent, AVIF_TRUE);
   EXPECT_EQ(decoder->imageCount, 5);
@@ -61,6 +62,7 @@ TEST(AvifDecodeTest, SetCustomIO) {
                .data = static_cast<void*>(&ro_data)};
   avifDecoderSetIO(decoder.get(), &io);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(decoder->alphaPresent, AVIF_FALSE);
   EXPECT_EQ(decoder->imageSequenceTrackPresent, AVIF_TRUE);
   EXPECT_EQ(decoder->imageCount, 5);

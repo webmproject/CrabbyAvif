@@ -305,6 +305,15 @@ pub struct Decoder {
     color_track_id: Option<u32>,
     parse_state: ParseState,
     io_stats: IOStats,
+    compression_format: CompressionFormat,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum CompressionFormat {
+    #[default]
+    Avif = 0,
+    Heic = 1,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -375,6 +384,9 @@ impl Decoder {
     }
     pub fn io_stats(&self) -> IOStats {
         self.io_stats
+    }
+    pub fn compression_format(&self) -> CompressionFormat {
+        self.compression_format
     }
 
     fn parsing_complete(&self) -> bool {
@@ -755,6 +767,7 @@ impl Decoder {
         self.codecs = decoder.codecs;
         self.color_track_id = decoder.color_track_id;
         self.parse_state = decoder.parse_state;
+        self.compression_format = decoder.compression_format;
     }
 
     pub fn parse(&mut self) -> AvifResult<()> {
@@ -1086,6 +1099,11 @@ impl Decoder {
             self.image.depth = codec_config.depth();
             self.image.yuv_format = codec_config.pixel_format();
             self.image.chroma_sample_position = codec_config.chroma_sample_position();
+            self.compression_format = if codec_config.is_avif() {
+                CompressionFormat::Avif
+            } else {
+                CompressionFormat::Heic
+            };
 
             if cicp_set {
                 self.parse_state = ParseState::Complete;

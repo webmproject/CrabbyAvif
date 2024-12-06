@@ -120,6 +120,11 @@ enum avifColorPrimaries : uint16_t {
     AVIF_COLOR_PRIMARIES_EBU3213 = 22,
 };
 
+enum CompressionFormat {
+    COMPRESSION_FORMAT_AVIF = 0,
+    COMPRESSION_FORMAT_HEIC = 1,
+};
+
 enum avifRGBFormat {
     AVIF_RGB_FORMAT_RGB,
     AVIF_RGB_FORMAT_RGBA,
@@ -430,6 +435,7 @@ struct avifDecoder {
     avifImageContentTypeFlags imageContentToDecode;
     avifBool imageSequenceTrackPresent;
     AndroidMediaCodecOutputColorFormat androidMediaCodecOutputColorFormat;
+    CompressionFormat compressionFormat;
     Box<Decoder> rust_decoder;
     avifImage image_object;
     avifGainMap gainmap_object;

@@ -106,6 +106,7 @@ TEST(AvifDecodeTest, NthImage) {
                                  (std::string(data_path) + file_name).c_str()),
             AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(decoder->imageCount, 5);
   EXPECT_EQ(avifDecoderNthImage(decoder.get(), 3), AVIF_RESULT_OK);
   EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);

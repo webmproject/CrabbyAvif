@@ -22,6 +22,7 @@ TEST(MetadataTest, DecoderParseICC) {
   decoder->ignoreXMP = AVIF_TRUE;
   decoder->ignoreExif = AVIF_TRUE;
   EXPECT_EQ(avifDecoderParse(decoder), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
 
   ASSERT_GE(decoder->image->icc.size, 4u);
   EXPECT_EQ(decoder->image->icc.data[0], 0);
@@ -35,6 +36,7 @@ TEST(MetadataTest, DecoderParseICC) {
   decoder->ignoreXMP = AVIF_FALSE;
   decoder->ignoreExif = AVIF_FALSE;
   EXPECT_EQ(avifDecoderParse(decoder), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
 
   ASSERT_GE(decoder->image->exif.size, 4u);
   EXPECT_EQ(decoder->image->exif.data[0], 73);

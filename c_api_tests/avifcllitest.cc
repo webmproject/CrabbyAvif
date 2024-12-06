@@ -36,6 +36,7 @@ TEST(ClliTest, Simple) {
                                    (std::string(data_path) + param.file_name).c_str()),
               AVIF_RESULT_OK);
     ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+    EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
     avifImage* decoded = decoder->image;
     ASSERT_NE(decoded, nullptr);
     ASSERT_EQ(decoded->clli.maxCLL, param.maxCLL);

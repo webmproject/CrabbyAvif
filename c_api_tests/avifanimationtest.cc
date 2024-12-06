@@ -22,6 +22,7 @@ TEST(AvifDecodeTest, AnimatedImage) {
                                  (std::string(data_path) + file_name).c_str()),
             AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(decoder->alphaPresent, AVIF_FALSE);
   EXPECT_EQ(decoder->imageSequenceTrackPresent, AVIF_TRUE);
   EXPECT_EQ(decoder->imageCount, 5);
@@ -45,6 +46,7 @@ TEST(AvifDecodeTest, AnimatedImageWithSourceSetToPrimaryItem) {
       avifDecoderSetSource(decoder.get(), AVIF_DECODER_SOURCE_PRIMARY_ITEM),
       AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(decoder->alphaPresent, AVIF_FALSE);
   EXPECT_EQ(decoder->imageSequenceTrackPresent, AVIF_TRUE);
   // imageCount is expected to be 1 because we are using primary item as the
@@ -66,6 +68,7 @@ TEST(AvifDecodeTest, AnimatedImageWithAlphaAndMetadata) {
                                  (std::string(data_path) + file_name).c_str()),
             AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(decoder->alphaPresent, AVIF_TRUE);
   EXPECT_EQ(decoder->imageSequenceTrackPresent, AVIF_TRUE);
   EXPECT_EQ(decoder->imageCount, 5);

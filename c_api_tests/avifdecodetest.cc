@@ -23,6 +23,7 @@ TEST(AvifDecodeTest, ColorGridAlphaNoGrid) {
                                  (std::string(data_path) + file_name).c_str()),
             AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(decoder->alphaPresent, AVIF_TRUE);
   EXPECT_EQ(decoder->imageSequenceTrackPresent, AVIF_FALSE);
   EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);

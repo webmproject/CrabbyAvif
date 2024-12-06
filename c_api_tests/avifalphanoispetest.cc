@@ -29,6 +29,7 @@ TEST(AvifDecodeTest, AlphaNoIspe) {
   decoder->strictFlags = (avifStrictFlags)AVIF_STRICT_ENABLED &
                          ~(avifStrictFlags)AVIF_STRICT_ALPHA_ISPE_REQUIRED;
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(decoder->alphaPresent, AVIF_TRUE);
   EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
   EXPECT_NE(decoder->image->alphaPlane, nullptr);

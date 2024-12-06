@@ -28,6 +28,7 @@ TEST(GainMapTest, DecodeGainMapGrid) {
   result = avifDecoderParse(decoder.get());
   ASSERT_EQ(result, AVIF_RESULT_OK)
       << avifResultToString(result) << " " << decoder->diag.error;
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   avifImage* decoded = decoder->image;
   ASSERT_NE(decoded, nullptr);
 
