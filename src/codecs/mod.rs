@@ -35,6 +35,7 @@ pub struct DecoderConfig {
     pub height: u32,
     pub depth: u8,
     pub max_threads: u32,
+    pub image_size_limit: u32,
     pub max_input_size: usize,
     pub codec_config: CodecConfiguration,
     pub category: Category,

@@ -1181,6 +1181,7 @@ impl Decoder {
             height: tile.height,
             depth: self.image.depth,
             max_threads: self.settings.max_threads,
+            image_size_limit: self.settings.image_size_limit,
             max_input_size: tile.max_sample_size(),
             codec_config: tile.codec_config.clone(),
             category,
