@@ -77,6 +77,9 @@ impl PlaneInfo {
 }
 
 impl MediaFormat {
+    // https://developer.android.com/reference/android/media/MediaFormat#COLOR_RANGE_LIMITED
+    const COLOR_RANGE_LIMITED: i32 = 2;
+
     fn get_i32(&self, key: *const c_char) -> Option<i32> {
         let mut value: i32 = 0;
         match unsafe { AMediaFormat_getInt32(self.format, key, &mut value as *mut _) } {
@@ -118,8 +121,10 @@ impl MediaFormat {
     fn color_range(&self) -> YuvRange {
         // color-range is documented but isn't exposed as a constant in the NDK:
         // https://developer.android.com/reference/android/media/MediaFormat#KEY_COLOR_RANGE
-        let color_range = self.get_i32_from_str("color-range").unwrap_or(2);
-        if color_range == 0 {
+        let color_range = self
+            .get_i32_from_str("color-range")
+            .unwrap_or(Self::COLOR_RANGE_LIMITED);
+        if color_range == Self::COLOR_RANGE_LIMITED {
             YuvRange::Limited
         } else {
             YuvRange::Full
