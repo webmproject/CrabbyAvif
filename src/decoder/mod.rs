@@ -51,7 +51,7 @@ pub trait IO {
 }
 
 impl dyn IO {
-    pub fn read_exact(&mut self, offset: u64, read_size: usize) -> AvifResult<&[u8]> {
+    pub(crate) fn read_exact(&mut self, offset: u64, read_size: usize) -> AvifResult<&[u8]> {
         let result = self.read(offset, read_size)?;
         if result.len() < read_size {
             Err(AvifError::TruncatedData)
@@ -135,7 +135,7 @@ pub enum ImageContentType {
 }
 
 impl ImageContentType {
-    pub fn categories(&self) -> Vec<Category> {
+    pub(crate) fn categories(&self) -> Vec<Category> {
         match self {
             Self::None => vec![],
             Self::ColorAndAlpha => vec![Category::Color, Category::Alpha],
@@ -144,7 +144,7 @@ impl ImageContentType {
         }
     }
 
-    pub fn gainmap(&self) -> bool {
+    pub(crate) fn gainmap(&self) -> bool {
         matches!(self, Self::GainMap | Self::All)
     }
 }
@@ -228,7 +228,7 @@ pub enum Strictness {
 }
 
 impl Strictness {
-    pub fn pixi_required(&self) -> bool {
+    pub(crate) fn pixi_required(&self) -> bool {
         match self {
             Strictness::All => true,
             Strictness::SpecificInclude(flags) => flags
@@ -241,7 +241,7 @@ impl Strictness {
         }
     }
 
-    pub fn alpha_ispe_required(&self) -> bool {
+    pub(crate) fn alpha_ispe_required(&self) -> bool {
         match self {
             Strictness::All => true,
             Strictness::SpecificInclude(flags) => flags
@@ -329,7 +329,7 @@ impl Category {
     const ALL: [Category; Category::COUNT] = [Self::Color, Self::Alpha, Self::Gainmap];
     const ALL_USIZE: [usize; Category::COUNT] = [0, 1, 2];
 
-    pub fn usize(self) -> usize {
+    pub(crate) fn usize(self) -> usize {
         match self {
             Category::Color => 0,
             Category::Alpha => 1,
@@ -337,7 +337,7 @@ impl Category {
         }
     }
 
-    pub fn planes(&self) -> &[Plane] {
+    pub(crate) fn planes(&self) -> &[Plane] {
         match self {
             Category::Alpha => &A_PLANE,
             _ => &YUV_PLANES,

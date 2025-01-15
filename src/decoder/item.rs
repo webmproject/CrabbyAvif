@@ -53,7 +53,7 @@ macro_rules! find_property {
 }
 
 impl Item {
-    pub fn stream<'a>(&'a mut self, io: &'a mut GenericIO) -> AvifResult<IStream<'a>> {
+    pub(crate) fn stream<'a>(&'a mut self, io: &'a mut GenericIO) -> AvifResult<IStream<'a>> {
         if !self.idat.is_empty() {
             match self.extents.len() {
                 0 => return Err(AvifError::UnknownError("no extent".into())),
@@ -91,7 +91,7 @@ impl Item {
         Ok(IStream::create(io_data))
     }
 
-    pub fn read_and_parse(
+    pub(crate) fn read_and_parse(
         &mut self,
         io: &mut GenericIO,
         grid: &mut Grid,
@@ -144,14 +144,14 @@ impl Item {
         Ok(())
     }
 
-    pub fn operating_point(&self) -> u8 {
+    pub(crate) fn operating_point(&self) -> u8 {
         match find_property!(self.properties, OperatingPointSelector) {
             Some(operating_point_selector) => *operating_point_selector,
             _ => 0, // default operating point.
         }
     }
 
-    pub fn harvest_ispe(
+    pub(crate) fn harvest_ispe(
         &mut self,
         alpha_ispe_required: bool,
         size_limit: u32,
@@ -199,7 +199,7 @@ impl Item {
         Ok(())
     }
 
-    pub fn validate_properties(&self, items: &Items, pixi_required: bool) -> AvifResult<()> {
+    pub(crate) fn validate_properties(&self, items: &Items, pixi_required: bool) -> AvifResult<()> {
         let codec_config = self
             .codec_config()
             .ok_or(AvifError::BmffParseFailed("missing av1C property".into()))?;
@@ -235,33 +235,33 @@ impl Item {
         Ok(())
     }
 
-    pub fn codec_config(&self) -> Option<&CodecConfiguration> {
+    pub(crate) fn codec_config(&self) -> Option<&CodecConfiguration> {
         find_property!(self.properties, CodecConfiguration)
     }
 
-    pub fn pixi(&self) -> Option<&PixelInformation> {
+    pub(crate) fn pixi(&self) -> Option<&PixelInformation> {
         find_property!(self.properties, PixelInformation)
     }
 
-    pub fn a1lx(&self) -> Option<&[usize; 3]> {
+    pub(crate) fn a1lx(&self) -> Option<&[usize; 3]> {
         find_property!(self.properties, AV1LayeredImageIndexing)
     }
 
-    pub fn lsel(&self) -> Option<&u16> {
+    pub(crate) fn lsel(&self) -> Option<&u16> {
         find_property!(self.properties, LayerSelector)
     }
 
-    pub fn clli(&self) -> Option<&ContentLightLevelInformation> {
+    pub(crate) fn clli(&self) -> Option<&ContentLightLevelInformation> {
         find_property!(self.properties, ContentLightLevelInformation)
     }
 
-    pub fn is_auxiliary_alpha(&self) -> bool {
+    pub(crate) fn is_auxiliary_alpha(&self) -> bool {
         matches!(find_property!(self.properties, AuxiliaryType),
                  Some(aux_type) if aux_type == "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha" ||
                                    aux_type == "urn:mpeg:hevc:2015:auxid:1")
     }
 
-    pub fn is_image_codec_item(&self) -> bool {
+    pub(crate) fn is_image_codec_item(&self) -> bool {
         [
             "av01",
             #[cfg(feature = "heic")]
@@ -270,11 +270,11 @@ impl Item {
         .contains(&self.item_type.as_str())
     }
 
-    pub fn is_image_item(&self) -> bool {
+    pub(crate) fn is_image_item(&self) -> bool {
         self.is_image_codec_item() || self.item_type == "grid"
     }
 
-    pub fn should_skip(&self) -> bool {
+    pub(crate) fn should_skip(&self) -> bool {
         // The item has no payload in idat or mdat. It cannot be a coded image item, a
         // non-identity derived image item, or Exif/XMP metadata.
         self.size == 0
@@ -293,19 +293,19 @@ impl Item {
             && self.item_type == *item_type
     }
 
-    pub fn is_exif(&self, color_id: Option<u32>) -> bool {
+    pub(crate) fn is_exif(&self, color_id: Option<u32>) -> bool {
         self.is_metadata("Exif", color_id)
     }
 
-    pub fn is_xmp(&self, color_id: Option<u32>) -> bool {
+    pub(crate) fn is_xmp(&self, color_id: Option<u32>) -> bool {
         self.is_metadata("mime", color_id) && self.content_type == "application/rdf+xml"
     }
 
-    pub fn is_tmap(&self) -> bool {
+    pub(crate) fn is_tmap(&self) -> bool {
         self.is_metadata("tmap", None) && self.thumbnail_for_id == 0
     }
 
-    pub fn max_extent(&self, sample: &DecodeSample) -> AvifResult<Extent> {
+    pub(crate) fn max_extent(&self, sample: &DecodeSample) -> AvifResult<Extent> {
         if !self.idat.is_empty() {
             return Ok(Extent::default());
         }
@@ -372,7 +372,7 @@ fn insert_item_if_not_exists(id: u32, items: &mut Items) {
     );
 }
 
-pub fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
+pub(crate) fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
     let mut items: Items = BTreeMap::new();
     for iinf in &meta.iinf {
         items.insert(
