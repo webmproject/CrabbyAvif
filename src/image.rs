@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::decoder::tile::Tile;
 use crate::decoder::tile::TileInfo;
 use crate::decoder::Category;
 use crate::decoder::ProgressiveState;
@@ -286,10 +287,20 @@ impl Image {
         Ok(())
     }
 
+    pub(crate) fn copy_properties_from(&mut self, tile: &Tile) {
+        self.yuv_format = tile.image.yuv_format;
+        self.depth = tile.image.depth;
+        if cfg!(feature = "heic") && tile.codec_config.is_heic() {
+            // For AVIF, the information in the `colr` box takes precedence over what is reported
+            // by the decoder. For HEIC, we always honor what is reported by the decoder.
+            self.yuv_range = tile.image.yuv_range;
+        }
+    }
+
     // If src contains pointers, this function will simply make a copy of the pointer without
     // copying the actual pixels (stealing). If src contains buffer, this function will clone the
     // buffers (copying).
-    pub fn steal_or_copy_from(&mut self, src: &Image, category: Category) -> AvifResult<()> {
+    pub fn steal_or_copy_planes_from(&mut self, src: &Image, category: Category) -> AvifResult<()> {
         for plane in category.planes() {
             let plane = plane.to_usize();
             (self.planes[plane], self.row_bytes[plane]) = match &src.planes[plane] {
