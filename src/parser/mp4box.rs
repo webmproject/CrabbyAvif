@@ -231,17 +231,6 @@ impl CodecConfiguration {
         }
     }
 
-    pub fn profile(&self) -> u8 {
-        match self {
-            Self::Av1(config) => config.seq_profile,
-            Self::Hevc(_) => {
-                // TODO: b/370549923 - Identify the correct profile from the codec configuration
-                // data.
-                0
-            }
-        }
-    }
-
     pub fn nal_length_size(&self) -> u8 {
         match self {
             Self::Av1(_) => 0, // Unused. This function is only used for HEVC.
