@@ -930,6 +930,7 @@ impl Decoder {
                     if let Some((tonemap_id, gainmap_id)) =
                         self.find_gainmap_item(item_ids[Category::Color.usize()])?
                     {
+                        self.validate_gainmap_item(gainmap_id, tonemap_id)?;
                         let tonemap_item = self
                             .items
                             .get_mut(&tonemap_id)
@@ -939,7 +940,6 @@ impl Decoder {
                             self.gainmap.metadata = metadata;
                             self.read_and_parse_item(gainmap_id, Category::Gainmap)?;
                             self.populate_grid_item_ids(gainmap_id, Category::Gainmap)?;
-                            self.validate_gainmap_item(gainmap_id, tonemap_id)?;
                             self.gainmap_present = true;
                             if self.settings.image_content_to_decode.gainmap() {
                                 item_ids[Category::Gainmap.usize()] = gainmap_id;
