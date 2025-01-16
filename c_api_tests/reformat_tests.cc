@@ -4,8 +4,8 @@
 #include <vector>
 
 #include "avif/avif.h"
-#include "aviftest_helpers.h"
 #include "gtest/gtest.h"
+#include "testutil.h"
 
 namespace avif {
 namespace {
@@ -52,7 +52,7 @@ constexpr uint8_t kRgb[][kWidth * kHeight * 4] = {
      0xe5, 0x4b, 0x63, 0xff, 0x80, 0x80, 0xc8, 0xff, 0x80, 0x80, 0xc8,
      0xff, 0x80, 0x80, 0xc8, 0xff, 0x80, 0x80, 0xc8, 0xff}};
 
-TEST(AvifDecodeTest, YUVToRGBConversion) {
+TEST(ReformatTest, YUVToRGBConversion) {
   for (int p = 0; p < 3; ++p) {
     ImagePtr image(
         avifImageCreate(kWidth, kHeight, 8, AVIF_PIXEL_FORMAT_YUV444));

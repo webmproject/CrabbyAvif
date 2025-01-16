@@ -6,8 +6,8 @@
 #include <string>
 
 #include "avif/avif.h"
-#include "aviftest_helpers.h"
 #include "gtest/gtest.h"
+#include "testutil.h"
 
 using testing::Bool;
 using testing::Combine;
