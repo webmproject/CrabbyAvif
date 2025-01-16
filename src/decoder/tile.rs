@@ -27,7 +27,7 @@ pub struct DecodeSample {
 }
 
 impl DecodeSample {
-    pub fn partial_data<'a>(
+    pub(crate) fn partial_data<'a>(
         &'a self,
         io: &'a mut Box<impl decoder::IO + ?Sized>,
         buffer: &'a Option<Vec<u8>>,
@@ -52,7 +52,7 @@ impl DecodeSample {
         }
     }
 
-    pub fn data<'a>(
+    pub(crate) fn data<'a>(
         &'a self,
         io: &'a mut Box<impl decoder::IO + ?Sized>,
         buffer: &'a Option<Vec<u8>>,
@@ -84,11 +84,11 @@ pub struct TileInfo {
 }
 
 impl TileInfo {
-    pub fn is_grid(&self) -> bool {
+    pub(crate) fn is_grid(&self) -> bool {
         self.grid.rows > 0 && self.grid.columns > 0
     }
 
-    pub fn grid_tile_count(&self) -> AvifResult<u32> {
+    pub(crate) fn grid_tile_count(&self) -> AvifResult<u32> {
         if self.is_grid() {
             checked_mul!(self.grid.rows, self.grid.columns)
         } else {
@@ -96,7 +96,7 @@ impl TileInfo {
         }
     }
 
-    pub fn decoded_row_count(&self, image_height: u32, tile_height: u32) -> u32 {
+    pub(crate) fn decoded_row_count(&self, image_height: u32, tile_height: u32) -> u32 {
         if self.decoded_tile_count == 0 {
             return 0;
         }
@@ -109,7 +109,7 @@ impl TileInfo {
         )
     }
 
-    pub fn is_fully_decoded(&self) -> bool {
+    pub(crate) fn is_fully_decoded(&self) -> bool {
         self.tile_count == self.decoded_tile_count
     }
 }
@@ -126,7 +126,7 @@ pub struct Tile {
 }
 
 impl Tile {
-    pub fn create_from_item(
+    pub(crate) fn create_from_item(
         item: &mut Item,
         allow_progressive: bool,
         image_count_limit: u32,
@@ -259,7 +259,7 @@ impl Tile {
         Ok(tile)
     }
 
-    pub fn create_from_track(
+    pub(crate) fn create_from_track(
         track: &Track,
         mut image_count_limit: u32,
         size_hint: u64,
@@ -341,7 +341,7 @@ impl Tile {
         Ok(tile)
     }
 
-    pub fn max_sample_size(&self) -> usize {
+    pub(crate) fn max_sample_size(&self) -> usize {
         match self.input.samples.iter().max_by_key(|sample| sample.size) {
             Some(sample) => sample.size,
             None => 0,

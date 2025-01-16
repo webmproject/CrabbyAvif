@@ -61,15 +61,15 @@ impl<T> PointerSlice<T> {
         Ok(&mut data[range])
     }
 
-    pub fn ptr(&self) -> *const T {
+    pub(crate) fn ptr(&self) -> *const T {
         self.slice_impl().as_ptr()
     }
 
-    pub fn ptr_mut(&mut self) -> *mut T {
+    pub(crate) fn ptr_mut(&mut self) -> *mut T {
         self.slice_impl_mut().as_mut_ptr()
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.slice_impl().is_empty()
     }
 }
@@ -88,7 +88,7 @@ pub enum Pixels {
 }
 
 impl Pixels {
-    pub fn from_raw_pointer(
+    pub(crate) fn from_raw_pointer(
         ptr: *mut u8,
         depth: u32,
         height: u32,
@@ -107,7 +107,7 @@ impl Pixels {
         }
     }
 
-    pub fn size(&self) -> usize {
+    pub(crate) fn size(&self) -> usize {
         match self {
             Pixels::Pointer(_) => 0,
             Pixels::Pointer16(_) => 0,
@@ -116,7 +116,7 @@ impl Pixels {
         }
     }
 
-    pub fn pixel_bit_size(&self) -> usize {
+    pub(crate) fn pixel_bit_size(&self) -> usize {
         match self {
             Pixels::Pointer(_) => 0,
             Pixels::Pointer16(_) => 0,
@@ -125,7 +125,7 @@ impl Pixels {
         }
     }
 
-    pub fn has_data(&self) -> bool {
+    pub(crate) fn has_data(&self) -> bool {
         match self {
             Pixels::Pointer(ptr) => !ptr.is_empty(),
             Pixels::Pointer16(ptr) => !ptr.is_empty(),
@@ -134,7 +134,7 @@ impl Pixels {
         }
     }
 
-    pub fn resize(&mut self, size: usize, default: u16) -> AvifResult<()> {
+    pub(crate) fn resize(&mut self, size: usize, default: u16) -> AvifResult<()> {
         match self {
             Pixels::Pointer(_) => return Err(AvifError::InvalidArgument),
             Pixels::Pointer16(_) => return Err(AvifError::InvalidArgument),
@@ -154,11 +154,11 @@ impl Pixels {
         Ok(())
     }
 
-    pub fn is_pointer(&self) -> bool {
+    pub(crate) fn is_pointer(&self) -> bool {
         matches!(self, Pixels::Pointer(_) | Pixels::Pointer16(_))
     }
 
-    pub fn ptr(&self) -> *const u8 {
+    pub(crate) fn ptr(&self) -> *const u8 {
         match self {
             Pixels::Pointer(ptr) => ptr.ptr(),
             Pixels::Buffer(buffer) => buffer.as_ptr(),
@@ -166,7 +166,7 @@ impl Pixels {
         }
     }
 
-    pub fn ptr16(&self) -> *const u16 {
+    pub(crate) fn ptr16(&self) -> *const u16 {
         match self {
             Pixels::Pointer16(ptr) => ptr.ptr(),
             Pixels::Buffer16(buffer) => buffer.as_ptr(),
@@ -174,7 +174,7 @@ impl Pixels {
         }
     }
 
-    pub fn ptr_mut(&mut self) -> *mut u8 {
+    pub(crate) fn ptr_mut(&mut self) -> *mut u8 {
         match self {
             Pixels::Pointer(ptr) => ptr.ptr_mut(),
             Pixels::Buffer(buffer) => buffer.as_mut_ptr(),
@@ -182,7 +182,7 @@ impl Pixels {
         }
     }
 
-    pub fn ptr16_mut(&mut self) -> *mut u16 {
+    pub(crate) fn ptr16_mut(&mut self) -> *mut u16 {
         match self {
             Pixels::Pointer16(ptr) => ptr.ptr_mut(),
             Pixels::Buffer16(buffer) => buffer.as_mut_ptr(),
@@ -190,7 +190,7 @@ impl Pixels {
         }
     }
 
-    pub fn clone_pointer(&self) -> Option<Pixels> {
+    pub(crate) fn clone_pointer(&self) -> Option<Pixels> {
         match self {
             Pixels::Pointer(ptr) => Some(Pixels::Pointer(*ptr)),
             Pixels::Pointer16(ptr) => Some(Pixels::Pointer16(*ptr)),
