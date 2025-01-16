@@ -42,7 +42,7 @@ impl From<usize> for Plane {
 }
 
 impl Plane {
-    pub fn to_usize(&self) -> usize {
+    pub(crate) fn as_usize(&self) -> usize {
         match self {
             Plane::Y => 0,
             Plane::U => 1,
@@ -134,7 +134,7 @@ impl Image {
     }
 
     pub fn has_plane(&self, plane: Plane) -> bool {
-        let plane_index = plane.to_usize();
+        let plane_index = plane.as_usize();
         if self.planes[plane_index].is_none() || self.row_bytes[plane_index] == 0 {
             return false;
         }
@@ -202,7 +202,7 @@ impl Image {
         Some(PlaneData {
             width: self.width(plane) as u32,
             height: self.height(plane) as u32,
-            row_bytes: self.row_bytes[plane.to_usize()],
+            row_bytes: self.row_bytes[plane.as_usize()],
             pixel_size: if self.depth == 8 { 1 } else { 2 },
         })
     }
@@ -210,7 +210,7 @@ impl Image {
     pub fn row(&self, plane: Plane, row: u32) -> AvifResult<&[u8]> {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let start = checked_mul!(row, plane_data.row_bytes)?;
-        self.planes[plane.to_usize()]
+        self.planes[plane.as_usize()]
             .unwrap_ref()
             .slice(start, plane_data.row_bytes)
     }
@@ -219,7 +219,7 @@ impl Image {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let row_bytes = plane_data.row_bytes;
         let start = checked_mul!(row, row_bytes)?;
-        self.planes[plane.to_usize()]
+        self.planes[plane.as_usize()]
             .unwrap_mut()
             .slice_mut(start, row_bytes)
     }
@@ -228,7 +228,7 @@ impl Image {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let row_bytes = plane_data.row_bytes / 2;
         let start = checked_mul!(row, row_bytes)?;
-        self.planes[plane.to_usize()]
+        self.planes[plane.as_usize()]
             .unwrap_ref()
             .slice16(start, row_bytes)
     }
@@ -237,7 +237,7 @@ impl Image {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let row_bytes = plane_data.row_bytes / 2;
         let start = checked_mul!(row, row_bytes)?;
-        self.planes[plane.to_usize()]
+        self.planes[plane.as_usize()]
             .unwrap_mut()
             .slice16_mut(start, row_bytes)
     }
@@ -252,7 +252,7 @@ impl Image {
 
     pub fn clear_chroma_planes(&mut self) {
         for plane in [Plane::U, Plane::V] {
-            let plane = plane.to_usize();
+            let plane = plane.as_usize();
             self.planes[plane] = None;
             self.row_bytes[plane] = 0;
             self.image_owns_planes[plane] = false;
@@ -263,7 +263,7 @@ impl Image {
         let pixel_size: usize = if self.depth == 8 { 1 } else { 2 };
         for plane in category.planes() {
             let plane = *plane;
-            let plane_index = plane.to_usize();
+            let plane_index = plane.as_usize();
             let width = self.width(plane);
             let plane_size = checked_mul!(width, self.height(plane))?;
             let default_value = if plane == Plane::A { self.max_channel() } else { 0 };
@@ -302,7 +302,7 @@ impl Image {
     // buffers (copying).
     pub fn steal_or_copy_planes_from(&mut self, src: &Image, category: Category) -> AvifResult<()> {
         for plane in category.planes() {
-            let plane = plane.to_usize();
+            let plane = plane.as_usize();
             (self.planes[plane], self.row_bytes[plane]) = match &src.planes[plane] {
                 Some(src_plane) => (Some(src_plane.clone()), src.row_bytes[plane]),
                 None => (None, 0),

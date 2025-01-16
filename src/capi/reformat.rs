@@ -194,8 +194,8 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
                 let src_slice = &src.row(plane, y).unwrap()[..plane_data.width as usize];
                 let dst_slice = unsafe {
                     std::slice::from_raw_parts_mut(
-                        dst_planes[plane.to_usize()]
-                            .offset(isize_from_u32(y * dst_row_bytes[plane.to_usize()])?),
+                        dst_planes[plane.as_usize()]
+                            .offset(isize_from_u32(y * dst_row_bytes[plane.as_usize()])?),
                         usize_from_u32(plane_data.width)?,
                     )
                 };
@@ -218,8 +218,8 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
                 let src_slice = &src.row16(plane, y).unwrap()[..plane_data.width as usize];
                 let dst_slice = unsafe {
                     std::slice::from_raw_parts_mut(
-                        dst_planes[plane.to_usize()]
-                            .offset(isize_from_u32(y * dst_row_bytes[plane.to_usize()])?),
+                        dst_planes[plane.as_usize()]
+                            .offset(isize_from_u32(y * dst_row_bytes[plane.as_usize()])?),
                         usize_from_u32(plane_data.width)?,
                     )
                 };

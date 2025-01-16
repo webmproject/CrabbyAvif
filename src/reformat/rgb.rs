@@ -577,7 +577,7 @@ mod tests {
         image.allocate_planes(Category::Alpha)?;
         let yuva_planes = &yuv_params.planes;
         for plane in ALL_PLANES {
-            let plane_index = plane.to_usize();
+            let plane_index = plane.as_usize();
             if yuva_planes[plane_index].is_empty() {
                 continue;
             }

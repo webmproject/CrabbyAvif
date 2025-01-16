@@ -137,7 +137,7 @@ impl From<avifResult> for AvifError {
 }
 
 impl avifResult {
-    pub fn to_usize(&self) -> usize {
+    pub(crate) fn as_usize(&self) -> usize {
         match self {
             Self::Ok => 0,
             Self::UnknownError => 1,
@@ -313,7 +313,7 @@ const RESULT_TO_STRING: &[&str] = &[
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifResultToString(res: avifResult) -> *const c_char {
     unsafe {
-        std::ffi::CStr::from_bytes_with_nul_unchecked(RESULT_TO_STRING[res.to_usize()].as_bytes())
+        std::ffi::CStr::from_bytes_with_nul_unchecked(RESULT_TO_STRING[res.as_usize()].as_bytes())
             .as_ptr() as *const _
     }
 }
