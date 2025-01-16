@@ -205,7 +205,7 @@ impl Image {
         Ok(())
     }
 
-    pub fn depth_valid(&self) -> bool {
+    pub(crate) fn depth_valid(&self) -> bool {
         match (self.format, self.is_float, self.depth) {
             (Format::Rgb565, false, 8) => true,
             (Format::Rgb565, _, _) => false,
@@ -272,7 +272,7 @@ impl Image {
     }
 
     pub fn convert_from_yuv(&mut self, image: &image::Image) -> AvifResult<()> {
-        if !image.has_plane(Plane::Y) || !image.depth_valid() {
+        if !image.has_plane(Plane::Y) || !image.depth_valid() || !self.depth_valid() {
             return Err(AvifError::ReformatFailed);
         }
         if matches!(
