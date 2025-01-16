@@ -361,7 +361,7 @@ fn find_conversion_function(
     }
 }
 
-pub fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool> {
+pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool> {
     if (rgb.depth != 8 && rgb.depth != 10) || !image.depth_valid() {
         return Err(AvifError::NotImplemented);
     }
@@ -691,7 +691,7 @@ fn downshift_to_8bit(
     Ok(())
 }
 
-pub fn process_alpha(rgb: &mut rgb::Image, multiply: bool) -> AvifResult<()> {
+pub(crate) fn process_alpha(rgb: &mut rgb::Image, multiply: bool) -> AvifResult<()> {
     if rgb.depth != 8 {
         return Err(AvifError::NotImplemented);
     }
@@ -727,7 +727,7 @@ pub fn process_alpha(rgb: &mut rgb::Image, multiply: bool) -> AvifResult<()> {
     }
 }
 
-pub fn convert_to_half_float(rgb: &mut rgb::Image, scale: f32) -> AvifResult<()> {
+pub(crate) fn convert_to_half_float(rgb: &mut rgb::Image, scale: f32) -> AvifResult<()> {
     let res = unsafe {
         HalfFloatPlane(
             rgb.pixels() as *const u16,

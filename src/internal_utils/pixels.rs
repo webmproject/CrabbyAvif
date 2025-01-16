@@ -107,7 +107,7 @@ impl Pixels {
         }
     }
 
-    pub fn size(&self) -> usize {
+    pub(crate) fn size(&self) -> usize {
         match self {
             Pixels::Pointer(_) => 0,
             Pixels::Pointer16(_) => 0,
@@ -116,7 +116,7 @@ impl Pixels {
         }
     }
 
-    pub fn pixel_bit_size(&self) -> usize {
+    pub(crate) fn pixel_bit_size(&self) -> usize {
         match self {
             Pixels::Pointer(_) => 0,
             Pixels::Pointer16(_) => 0,
@@ -125,7 +125,7 @@ impl Pixels {
         }
     }
 
-    pub fn has_data(&self) -> bool {
+    pub(crate) fn has_data(&self) -> bool {
         match self {
             Pixels::Pointer(ptr) => !ptr.is_empty(),
             Pixels::Pointer16(ptr) => !ptr.is_empty(),
@@ -134,7 +134,7 @@ impl Pixels {
         }
     }
 
-    pub fn resize(&mut self, size: usize, default: u16) -> AvifResult<()> {
+    pub(crate) fn resize(&mut self, size: usize, default: u16) -> AvifResult<()> {
         match self {
             Pixels::Pointer(_) => return Err(AvifError::InvalidArgument),
             Pixels::Pointer16(_) => return Err(AvifError::InvalidArgument),
@@ -154,7 +154,7 @@ impl Pixels {
         Ok(())
     }
 
-    pub fn is_pointer(&self) -> bool {
+    pub(crate) fn is_pointer(&self) -> bool {
         matches!(self, Pixels::Pointer(_) | Pixels::Pointer16(_))
     }
 
@@ -190,7 +190,7 @@ impl Pixels {
         }
     }
 
-    pub fn clone_pointer(&self) -> Option<Pixels> {
+    pub(crate) fn clone_pointer(&self) -> Option<Pixels> {
         match self {
             Pixels::Pointer(ptr) => Some(Pixels::Pointer(*ptr)),
             Pixels::Pointer16(ptr) => Some(Pixels::Pointer16(*ptr)),

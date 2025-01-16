@@ -20,7 +20,7 @@ use crate::*;
 use libyuv_sys::bindings::*;
 
 impl Image {
-    pub fn scale(&mut self, width: u32, height: u32, category: Category) -> AvifResult<()> {
+    pub(crate) fn scale(&mut self, width: u32, height: u32, category: Category) -> AvifResult<()> {
         if self.width == width && self.height == height {
             return Ok(());
         }

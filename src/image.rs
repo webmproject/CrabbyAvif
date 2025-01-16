@@ -117,11 +117,11 @@ pub enum PlaneRow<'a> {
 }
 
 impl Image {
-    pub fn depth_valid(&self) -> bool {
+    pub(crate) fn depth_valid(&self) -> bool {
         matches!(self.depth, 8 | 10 | 12 | 16)
     }
 
-    pub fn max_channel(&self) -> u16 {
+    pub(crate) fn max_channel(&self) -> u16 {
         if !self.depth_valid() {
             0
         } else {
@@ -129,7 +129,7 @@ impl Image {
         }
     }
 
-    pub fn max_channel_f(&self) -> f32 {
+    pub(crate) fn max_channel_f(&self) -> f32 {
         self.max_channel() as f32
     }
 
@@ -145,7 +145,7 @@ impl Image {
         self.has_plane(Plane::A)
     }
 
-    pub fn has_same_properties(&self, other: &Image) -> bool {
+    pub(crate) fn has_same_properties(&self, other: &Image) -> bool {
         self.width == other.width && self.height == other.height && self.depth == other.depth
     }
 
@@ -242,7 +242,7 @@ impl Image {
             .slice16_mut(start, row_bytes)
     }
 
-    pub fn row_generic(&self, plane: Plane, row: u32) -> AvifResult<PlaneRow> {
+    pub(crate) fn row_generic(&self, plane: Plane, row: u32) -> AvifResult<PlaneRow> {
         Ok(if self.depth == 8 {
             PlaneRow::Depth8(self.row(plane, row)?)
         } else {
@@ -250,7 +250,8 @@ impl Image {
         })
     }
 
-    pub fn clear_chroma_planes(&mut self) {
+    #[cfg(any(feature = "dav1d", feature = "libgav1"))]
+    pub(crate) fn clear_chroma_planes(&mut self) {
         for plane in [Plane::U, Plane::V] {
             let plane = plane.as_usize();
             self.planes[plane] = None;
@@ -259,7 +260,7 @@ impl Image {
         }
     }
 
-    pub fn allocate_planes(&mut self, category: Category) -> AvifResult<()> {
+    pub(crate) fn allocate_planes(&mut self, category: Category) -> AvifResult<()> {
         let pixel_size: usize = if self.depth == 8 { 1 } else { 2 };
         for plane in category.planes() {
             let plane = *plane;
@@ -300,7 +301,11 @@ impl Image {
     // If src contains pointers, this function will simply make a copy of the pointer without
     // copying the actual pixels (stealing). If src contains buffer, this function will clone the
     // buffers (copying).
-    pub fn steal_or_copy_planes_from(&mut self, src: &Image, category: Category) -> AvifResult<()> {
+    pub(crate) fn steal_or_copy_planes_from(
+        &mut self,
+        src: &Image,
+        category: Category,
+    ) -> AvifResult<()> {
         for plane in category.planes() {
             let plane = plane.as_usize();
             (self.planes[plane], self.row_bytes[plane]) = match &src.planes[plane] {
@@ -311,7 +316,7 @@ impl Image {
         Ok(())
     }
 
-    pub fn copy_from_tile(
+    pub(crate) fn copy_from_tile(
         &mut self,
         tile: &Image,
         tile_info: &TileInfo,

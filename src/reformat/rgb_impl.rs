@@ -428,7 +428,7 @@ fn yuv8_to_rgb16_monochrome(
     Ok(())
 }
 
-pub fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
+pub(crate) fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
     let mode: Mode = image.into();
     match mode {
         Mode::Identity => {
@@ -561,7 +561,7 @@ fn unorm_value(row: PlaneRow, index: usize, max_channel: u16, table: &[f32]) -> 
     table[clamped_pixel(row, index, max_channel) as usize]
 }
 
-pub fn yuv_to_rgb_any(
+pub(crate) fn yuv_to_rgb_any(
     image: &image::Image,
     rgb: &mut rgb::Image,
     alpha_multiply_mode: AlphaMultiplyMode,

@@ -67,7 +67,7 @@ impl FileTypeBox {
         brands.iter().any(|brand| self.has_brand(brand))
     }
 
-    pub fn is_avif(&self) -> bool {
+    pub(crate) fn is_avif(&self) -> bool {
         // "avio" also exists but does not identify the file as AVIF on its own. See
         // https://aomediacodec.github.io/av1-avif/v1.1.0.html#image-and-image-collection-brand
         self.has_brand_any(&[
@@ -82,7 +82,7 @@ impl FileTypeBox {
         ])
     }
 
-    pub fn needs_meta(&self) -> bool {
+    pub(crate) fn needs_meta(&self) -> bool {
         self.has_brand_any(&[
             "avif",
             #[cfg(feature = "heic")]
@@ -94,7 +94,7 @@ impl FileTypeBox {
         ])
     }
 
-    pub fn needs_moov(&self) -> bool {
+    pub(crate) fn needs_moov(&self) -> bool {
         self.has_brand_any(&[
             "avis",
             #[cfg(feature = "heic")]
@@ -104,7 +104,7 @@ impl FileTypeBox {
         ])
     }
 
-    pub fn has_tmap(&self) -> bool {
+    pub(crate) fn has_tmap(&self) -> bool {
         self.has_brand("tmap")
     }
 }
@@ -162,7 +162,7 @@ pub struct HevcCodecConfiguration {
 }
 
 impl CodecConfiguration {
-    pub fn depth(&self) -> u8 {
+    pub(crate) fn depth(&self) -> u8 {
         match self {
             Self::Av1(config) => match config.twelve_bit {
                 true => 12,
@@ -175,7 +175,7 @@ impl CodecConfiguration {
         }
     }
 
-    pub fn pixel_format(&self) -> PixelFormat {
+    pub(crate) fn pixel_format(&self) -> PixelFormat {
         match self {
             Self::Av1(config) => {
                 if config.monochrome {
@@ -198,7 +198,7 @@ impl CodecConfiguration {
         }
     }
 
-    pub fn chroma_sample_position(&self) -> ChromaSamplePosition {
+    pub(crate) fn chroma_sample_position(&self) -> ChromaSamplePosition {
         match self {
             Self::Av1(config) => config.chroma_sample_position,
             Self::Hevc(_) => {
@@ -211,7 +211,8 @@ impl CodecConfiguration {
         }
     }
 
-    pub fn raw_data(&self) -> Vec<u8> {
+    #[cfg(feature = "android_mediacodec")]
+    pub(crate) fn raw_data(&self) -> Vec<u8> {
         match self {
             Self::Av1(config) => config.raw_data.clone(),
             Self::Hevc(config) => {
@@ -231,18 +232,19 @@ impl CodecConfiguration {
         }
     }
 
-    pub fn nal_length_size(&self) -> u8 {
+    #[cfg(feature = "android_mediacodec")]
+    pub(crate) fn nal_length_size(&self) -> u8 {
         match self {
             Self::Av1(_) => 0, // Unused. This function is only used for HEVC.
             Self::Hevc(config) => config.nal_length_size,
         }
     }
 
-    pub fn is_avif(&self) -> bool {
+    pub(crate) fn is_avif(&self) -> bool {
         matches!(self, Self::Av1(_))
     }
 
-    pub fn is_heic(&self) -> bool {
+    pub(crate) fn is_heic(&self) -> bool {
         matches!(self, Self::Hevc(_))
     }
 }
@@ -1840,7 +1842,7 @@ fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
     Ok(tracks)
 }
 
-pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
+pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
     let mut ftyp: Option<FileTypeBox> = None;
     let mut meta: Option<MetaBox> = None;
     let mut tracks: Option<Vec<Track>> = None;
@@ -1920,7 +1922,7 @@ pub fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
     })
 }
 
-pub fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
+pub(crate) fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
     let mut stream = IStream::create(data);
     let header = parse_header(&mut stream, /*top_level=*/ true)?;
     if header.box_type != "ftyp" {
@@ -1945,7 +1947,7 @@ pub fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
     Ok(ftyp.is_avif())
 }
 
-pub fn parse_tmap(stream: &mut IStream) -> AvifResult<Option<GainMapMetadata>> {
+pub(crate) fn parse_tmap(stream: &mut IStream) -> AvifResult<Option<GainMapMetadata>> {
     // Experimental, not yet specified.
 
     // unsigned int(8) version = 0;

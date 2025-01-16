@@ -212,7 +212,7 @@ impl Default for avifDiagnostics {
 }
 
 impl avifDiagnostics {
-    pub fn set_from_result<T>(&mut self, res: &AvifResult<T>) {
+    pub(crate) fn set_from_result<T>(&mut self, res: &AvifResult<T>) {
         match res {
             Ok(_) => self.set_error_empty(),
             Err(AvifError::BmffParseFailed(s))
@@ -241,7 +241,7 @@ impl avifDiagnostics {
         }
     }
 
-    pub fn set_error_empty(&mut self) {
+    pub(crate) fn set_error_empty(&mut self) {
         self.error[0] = 0;
     }
 }
@@ -257,7 +257,7 @@ pub enum avifCodecChoice {
     Avm = 6,
 }
 
-pub fn to_avifBool(val: bool) -> avifBool {
+pub(crate) fn to_avifBool(val: bool) -> avifBool {
     if val {
         AVIF_TRUE
     } else {
@@ -265,7 +265,7 @@ pub fn to_avifBool(val: bool) -> avifBool {
     }
 }
 
-pub fn to_avifResult<T>(res: &AvifResult<T>) -> avifResult {
+pub(crate) fn to_avifResult<T>(res: &AvifResult<T>) -> avifResult {
     match res {
         Ok(_) => avifResult::Ok,
         Err(err) => {
