@@ -17,14 +17,14 @@ namespace {
 // Used to pass the data folder path to the GoogleTest suites.
 const char* data_path = nullptr;
 
-std::string get_file_name(const char* file_name) {
+std::string GetFilename(const char* file_name) {
   return std::string(data_path) + file_name;
 }
 
 DecoderPtr CreateDecoder(const char* file_name) {
   DecoderPtr decoder(avifDecoderCreate());
   if (decoder == nullptr ||
-      avifDecoderSetIOFile(decoder.get(), get_file_name(file_name).c_str()) !=
+      avifDecoderSetIOFile(decoder.get(), GetFilename(file_name).c_str()) !=
           AVIF_RESULT_OK) {
     return nullptr;
   }
@@ -115,7 +115,7 @@ TEST(DecoderTest, OneShotDecodeFile) {
   ASSERT_NE(decoder, nullptr);
   avifImage image;
   ASSERT_EQ(avifDecoderReadFile(decoder.get(), &image,
-                                get_file_name(file_name).c_str()),
+                                GetFilename(file_name).c_str()),
             AVIF_RESULT_OK);
   EXPECT_EQ(image.width, 1024);
   EXPECT_EQ(image.height, 770);
@@ -125,7 +125,7 @@ TEST(DecoderTest, OneShotDecodeFile) {
   // instance.
   file_name = "white_1x1.avif";
   ASSERT_EQ(avifDecoderReadFile(decoder.get(), &image,
-                                get_file_name(file_name).c_str()),
+                                GetFilename(file_name).c_str()),
             AVIF_RESULT_OK);
   EXPECT_EQ(image.width, 1);
   EXPECT_EQ(image.height, 1);
@@ -137,7 +137,7 @@ TEST(DecoderTest, OneShotDecodeMemory) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
   const char* file_name = "sofa_grid1x5_420.avif";
-  auto file_data = testutil::read_file(get_file_name(file_name).c_str());
+  auto file_data = testutil::read_file(GetFilename(file_name).c_str());
   DecoderPtr decoder(avifDecoderCreate());
   ASSERT_NE(decoder, nullptr);
   avifImage image;
@@ -169,7 +169,7 @@ TEST(DecoderTest, OneShotDecodeCustomIO) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
   const char* file_name = "sofa_grid1x5_420.avif";
-  auto data = testutil::read_file(get_file_name(file_name).c_str());
+  auto data = testutil::read_file(GetFilename(file_name).c_str());
   avifROData ro_data = {.data = data.data(), .size = data.size()};
   avifIO io = {.destroy = nullptr,
                .read = io_read,
@@ -227,7 +227,7 @@ TEST(DecoderTest, Clli) {
     ASSERT_NE(decoder, nullptr);
     decoder->allowProgressive = true;
     ASSERT_EQ(avifDecoderSetIOFile(decoder.get(),
-                                   get_file_name(param.file_name).c_str()),
+                                   GetFilename(param.file_name).c_str()),
               AVIF_RESULT_OK);
     ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
     EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
@@ -417,7 +417,7 @@ TEST(DecoderTest, Progressive) {
     ASSERT_NE(decoder, nullptr);
     decoder->allowProgressive = true;
     ASSERT_EQ(avifDecoderSetIOFile(decoder.get(),
-                                   get_file_name(param.file_name).c_str()),
+                                   GetFilename(param.file_name).c_str()),
               AVIF_RESULT_OK);
     ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
     EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
@@ -523,7 +523,7 @@ TEST(DecoderTest, SetRawIO) {
   DecoderPtr decoder(avifDecoderCreate());
   ASSERT_NE(decoder, nullptr);
   auto data =
-      testutil::read_file(get_file_name("colors-animated-8bpc.avif").c_str());
+      testutil::read_file(GetFilename("colors-animated-8bpc.avif").c_str());
   ASSERT_EQ(avifDecoderSetIOMemory(decoder.get(), data.data(), data.size()),
             AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
@@ -541,7 +541,7 @@ TEST(DecoderTest, SetCustomIO) {
   DecoderPtr decoder(avifDecoderCreate());
   ASSERT_NE(decoder, nullptr);
   auto data =
-      testutil::read_file(get_file_name("colors-animated-8bpc.avif").c_str());
+      testutil::read_file(GetFilename("colors-animated-8bpc.avif").c_str());
   avifROData ro_data = {.data = data.data(), .size = data.size()};
   avifIO io = {.destroy = nullptr,
                .read = io_read,
@@ -562,7 +562,7 @@ TEST(DecoderTest, SetCustomIO) {
 
 TEST(DecoderTest, IOMemoryReader) {
   auto data =
-      testutil::read_file(get_file_name("colors-animated-8bpc.avif").c_str());
+      testutil::read_file(GetFilename("colors-animated-8bpc.avif").c_str());
   avifIO* io = avifIOCreateMemoryReader(data.data(), data.size());
   ASSERT_NE(io, nullptr);
   EXPECT_EQ(io->sizeHint, data.size());
@@ -584,8 +584,8 @@ TEST(DecoderTest, IOMemoryReader) {
 
 TEST(DecoderTest, IOFileReader) {
   const char* file_name = "colors-animated-8bpc.avif";
-  auto data = testutil::read_file(get_file_name(file_name).c_str());
-  avifIO* io = avifIOCreateFileReader(get_file_name(file_name).c_str());
+  auto data = testutil::read_file(GetFilename(file_name).c_str());
+  avifIO* io = avifIOCreateFileReader(GetFilename(file_name).c_str());
   ASSERT_NE(io, nullptr);
   EXPECT_EQ(io->sizeHint, data.size());
   avifROData ro_data;
