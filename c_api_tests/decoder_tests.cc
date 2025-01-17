@@ -21,17 +21,23 @@ std::string get_file_name(const char* file_name) {
   return std::string(data_path) + file_name;
 }
 
+DecoderPtr CreateDecoder(const char* file_name) {
+  DecoderPtr decoder(avifDecoderCreate());
+  if (decoder == nullptr ||
+      avifDecoderSetIOFile(decoder.get(), get_file_name(file_name).c_str()) !=
+          AVIF_RESULT_OK) {
+    return nullptr;
+  }
+  return decoder;
+}
+
 TEST(DecoderTest, AlphaNoIspe) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
   // See https://github.com/AOMediaCodec/libavif/pull/745.
-  const char* file_name = "alpha_noispe.avif";
-  DecoderPtr decoder(avifDecoderCreate());
+  auto decoder = CreateDecoder("alpha_noispe.avif");
   ASSERT_NE(decoder, nullptr);
-  ASSERT_EQ(
-      avifDecoderSetIOFile(decoder.get(), get_file_name(file_name).c_str()),
-      AVIF_RESULT_OK);
   // By default, loose files are refused. Cast to avoid C4389 Windows warning.
   EXPECT_EQ(decoder->strictFlags, (avifStrictFlags)AVIF_STRICT_ENABLED);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_BMFF_PARSE_FAILED);
@@ -50,12 +56,8 @@ TEST(DecoderTest, AnimatedImage) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
-  const char* file_name = "colors-animated-8bpc.avif";
-  DecoderPtr decoder(avifDecoderCreate());
+  auto decoder = CreateDecoder("colors-animated-8bpc.avif");
   ASSERT_NE(decoder, nullptr);
-  ASSERT_EQ(
-      avifDecoderSetIOFile(decoder.get(), get_file_name(file_name).c_str()),
-      AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
   EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(decoder->alphaPresent, AVIF_FALSE);
@@ -71,12 +73,8 @@ TEST(DecoderTest, AnimatedImageWithSourceSetToPrimaryItem) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
-  const char* file_name = "colors-animated-8bpc.avif";
-  DecoderPtr decoder(avifDecoderCreate());
+  auto decoder = CreateDecoder("colors-animated-8bpc.avif");
   ASSERT_NE(decoder, nullptr);
-  ASSERT_EQ(
-      avifDecoderSetIOFile(decoder.get(), get_file_name(file_name).c_str()),
-      AVIF_RESULT_OK);
   ASSERT_EQ(
       avifDecoderSetSource(decoder.get(), AVIF_DECODER_SOURCE_PRIMARY_ITEM),
       AVIF_RESULT_OK);
@@ -96,12 +94,8 @@ TEST(DecoderTest, AnimatedImageWithSourceSetToPrimaryItem) {
 }
 
 TEST(DecoderTest, AnimatedImageWithAlphaAndMetadata) {
-  const char* file_name = "colors-animated-8bpc-alpha-exif-xmp.avif";
-  DecoderPtr decoder(avifDecoderCreate());
+  auto decoder = CreateDecoder("colors-animated-8bpc-alpha-exif-xmp.avif");
   ASSERT_NE(decoder, nullptr);
-  ASSERT_EQ(
-      avifDecoderSetIOFile(decoder.get(), get_file_name(file_name).c_str()),
-      AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
   EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(decoder->alphaPresent, AVIF_TRUE);
@@ -196,12 +190,8 @@ TEST(DecoderTest, NthImage) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
-  const char* file_name = "colors-animated-8bpc.avif";
-  DecoderPtr decoder(avifDecoderCreate());
+  auto decoder = CreateDecoder("colors-animated-8bpc.avif");
   ASSERT_NE(decoder, nullptr);
-  ASSERT_EQ(
-      avifDecoderSetIOFile(decoder.get(), get_file_name(file_name).c_str()),
-      AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
   EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(decoder->imageCount, 5);
@@ -253,12 +243,8 @@ TEST(DecoderTest, ColorGridAlphaNoGrid) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
   // Test case from https://github.com/AOMediaCodec/libavif/issues/1203.
-  const char* file_name = "color_grid_alpha_nogrid.avif";
-  DecoderPtr decoder(avifDecoderCreate());
+  auto decoder = CreateDecoder("color_grid_alpha_nogrid.avif");
   ASSERT_NE(decoder, nullptr);
-  ASSERT_EQ(
-      avifDecoderSetIOFile(decoder.get(), get_file_name(file_name).c_str()),
-      AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
   EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(decoder->alphaPresent, AVIF_TRUE);
@@ -269,18 +255,12 @@ TEST(DecoderTest, ColorGridAlphaNoGrid) {
 }
 
 TEST(DecoderTest, GainMapGrid) {
-  const std::string path =
-      get_file_name("color_grid_gainmap_different_grid.avif");
-  DecoderPtr decoder(avifDecoderCreate());
+  auto decoder = CreateDecoder("color_grid_gainmap_different_grid.avif");
   ASSERT_NE(decoder, nullptr);
   decoder->imageContentToDecode |= AVIF_IMAGE_CONTENT_GAIN_MAP;
 
-  avifResult result = avifDecoderSetIOFile(decoder.get(), path.c_str());
-  ASSERT_EQ(result, AVIF_RESULT_OK)
-      << avifResultToString(result) << " " << decoder->diag.error;
-
   // Just parse the image first.
-  result = avifDecoderParse(decoder.get());
+  auto result = avifDecoderParse(decoder.get());
   ASSERT_EQ(result, AVIF_RESULT_OK)
       << avifResultToString(result) << " " << decoder->diag.error;
   EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
@@ -308,11 +288,9 @@ TEST(DecoderTest, GainMapGrid) {
 }
 
 TEST(DecoderTest, GainMapOriented) {
-  const std::string path = get_file_name("gainmap_oriented.avif");
-  DecoderPtr decoder(avifDecoderCreate());
+  auto decoder = CreateDecoder(("gainmap_oriented.avif"));
   ASSERT_NE(decoder, nullptr);
   decoder->imageContentToDecode |= AVIF_IMAGE_CONTENT_GAIN_MAP;
-  ASSERT_EQ(avifDecoderSetIOFile(decoder.get(), path.c_str()), AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
 
   // Verify that the transformative properties were kept.
@@ -325,14 +303,9 @@ TEST(DecoderTest, GainMapOriented) {
 }
 
 TEST(DecoderTest, IgnoreGainMapButReadMetadata) {
-  const std::string path = get_file_name("seine_sdr_gainmap_srgb.avif");
-  DecoderPtr decoder(avifDecoderCreate());
+  auto decoder = CreateDecoder(("seine_sdr_gainmap_srgb.avif"));
   ASSERT_NE(decoder, nullptr);
-
-  avifResult result = avifDecoderSetIOFile(decoder.get(), path.c_str());
-  ASSERT_EQ(result, AVIF_RESULT_OK)
-      << avifResultToString(result) << " " << decoder->diag.error;
-  result = avifDecoderParse(decoder.get());
+  auto result = avifDecoderParse(decoder.get());
   ASSERT_EQ(result, AVIF_RESULT_OK)
       << avifResultToString(result) << " " << decoder->diag.error;
   avifImage* decoded = decoder->image;
@@ -348,15 +321,10 @@ TEST(DecoderTest, IgnoreGainMapButReadMetadata) {
 }
 
 TEST(DecoderTest, IgnoreColorAndAlpha) {
-  const std::string path = get_file_name("seine_sdr_gainmap_srgb.avif");
-  DecoderPtr decoder(avifDecoderCreate());
+  auto decoder = CreateDecoder(("seine_sdr_gainmap_srgb.avif"));
   ASSERT_NE(decoder, nullptr);
   decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_GAIN_MAP;
-
-  avifResult result = avifDecoderSetIOFile(decoder.get(), path.c_str());
-  ASSERT_EQ(result, AVIF_RESULT_OK)
-      << avifResultToString(result) << " " << decoder->diag.error;
-  result = avifDecoderParse(decoder.get());
+  auto result = avifDecoderParse(decoder.get());
   ASSERT_EQ(result, AVIF_RESULT_OK)
       << avifResultToString(result) << " " << decoder->diag.error;
   result = avifDecoderNextImage(decoder.get());
@@ -381,15 +349,10 @@ TEST(DecoderTest, IgnoreColorAndAlpha) {
 }
 
 TEST(DecoderTest, IgnoreAll) {
-  const std::string path = get_file_name("seine_sdr_gainmap_srgb.avif");
-  DecoderPtr decoder(avifDecoderCreate());
+  auto decoder = CreateDecoder(("seine_sdr_gainmap_srgb.avif"));
   ASSERT_NE(decoder, nullptr);
   decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_NONE;
-
-  avifResult result = avifDecoderSetIOFile(decoder.get(), path.c_str());
-  ASSERT_EQ(result, AVIF_RESULT_OK)
-      << avifResultToString(result) << " " << decoder->diag.error;
-  result = avifDecoderParse(decoder.get());
+  auto result = avifDecoderParse(decoder.get());
   ASSERT_EQ(result, AVIF_RESULT_OK)
       << avifResultToString(result) << " " << decoder->diag.error;
   avifImage* decoded = decoder->image;
@@ -407,13 +370,8 @@ TEST(DecoderTest, KeyFrame) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
-
-  DecoderPtr decoder(avifDecoderCreate());
+  auto decoder = CreateDecoder("colors-animated-12bpc-keyframes-0-2-3.avif");
   ASSERT_NE(decoder, nullptr);
-  const char* file_name = "colors-animated-12bpc-keyframes-0-2-3.avif";
-  ASSERT_EQ(
-      avifDecoderSetIOFile(decoder.get(), get_file_name(file_name).c_str()),
-      AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
   EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
 
@@ -478,14 +436,12 @@ TEST(DecoderTest, Progressive) {
 // A test for https://github.com/AOMediaCodec/libavif/issues/1086 to prevent
 // regression.
 TEST(DecoderTest, ParseICC) {
-  std::string file_path = get_file_name("paris_icc_exif_xmp.avif");
-  avifDecoder* decoder = avifDecoderCreate();
+  auto decoder = CreateDecoder(("paris_icc_exif_xmp.avif"));
   ASSERT_NE(decoder, nullptr);
-  EXPECT_EQ(avifDecoderSetIOFile(decoder, file_path.c_str()), AVIF_RESULT_OK);
 
   decoder->ignoreXMP = AVIF_TRUE;
   decoder->ignoreExif = AVIF_TRUE;
-  EXPECT_EQ(avifDecoderParse(decoder), AVIF_RESULT_OK);
+  EXPECT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
   EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
 
   ASSERT_GE(decoder->image->icc.size, 4u);
@@ -499,7 +455,7 @@ TEST(DecoderTest, ParseICC) {
 
   decoder->ignoreXMP = AVIF_FALSE;
   decoder->ignoreExif = AVIF_FALSE;
-  EXPECT_EQ(avifDecoderParse(decoder), AVIF_RESULT_OK);
+  EXPECT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
   EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
 
   ASSERT_GE(decoder->image->exif.size, 4u);
@@ -513,8 +469,6 @@ TEST(DecoderTest, ParseICC) {
   EXPECT_EQ(decoder->image->xmp.data[1], 63);
   EXPECT_EQ(decoder->image->xmp.data[2], 120);
   EXPECT_EQ(decoder->image->xmp.data[3], 112);
-
-  avifDecoderDestroy(decoder);
 }
 
 class ImageTest : public testing::TestWithParam<const char*> {};
@@ -523,12 +477,8 @@ TEST_P(ImageTest, ImageCopy) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
-  const char* file_name = GetParam();
-  DecoderPtr decoder(avifDecoderCreate());
+  auto decoder = CreateDecoder(GetParam());
   ASSERT_NE(decoder, nullptr);
-  ASSERT_EQ(
-      avifDecoderSetIOFile(decoder.get(), get_file_name(file_name).c_str()),
-      AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
   EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
@@ -660,12 +610,8 @@ TEST_P(ScaleTest, Scaling) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
-  const char* file_name = GetParam();
-  DecoderPtr decoder(avifDecoderCreate());
+  auto decoder = CreateDecoder(GetParam());
   ASSERT_NE(decoder, nullptr);
-  ASSERT_EQ(
-      avifDecoderSetIOFile(decoder.get(), get_file_name(file_name).c_str()),
-      AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
   EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
