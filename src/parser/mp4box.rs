@@ -1521,7 +1521,7 @@ fn parse_sample_entry(stream: &mut IStream, format: String) -> AvifResult<Sample
     // unsigned int(16) data_reference_index;
     stream.skip(2)?;
 
-    if sample_entry.format == "av01" {
+    if sample_entry.is_supported_format() {
         // https://aomediacodec.github.io/av1-isobmff/v1.2.0.html#av1sampleentry-syntax:
         //   class AV1SampleEntry extends VisualSampleEntry('av01'){
         //     AV1CodecConfigurationBox config;

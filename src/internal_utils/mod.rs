@@ -182,6 +182,15 @@ clamp_function!(clamp_u16, u16);
 clamp_function!(clamp_f32, f32);
 clamp_function!(clamp_i32, i32);
 
+macro_rules! find_property {
+    ($properties:expr, $property_name:ident) => {
+        $properties.iter().find_map(|p| match p {
+            ItemProperty::$property_name(value) => Some(value.clone()),
+            _ => None,
+        })
+    };
+}
+
 // Returns the colr nclx property. Returns an error if there are multiple ones.
 pub(crate) fn find_nclx(properties: &[ItemProperty]) -> AvifResult<Option<&Nclx>> {
     let mut single_nclx: Option<&Nclx> = None;

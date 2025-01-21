@@ -265,6 +265,12 @@ impl Tile {
         size_hint: u64,
         category: Category,
     ) -> AvifResult<Tile> {
+        let properties = track
+            .get_properties()
+            .ok_or(AvifError::BmffParseFailed("".into()))?;
+        let codec_config = find_property!(properties, CodecConfiguration)
+            .ok_or(AvifError::BmffParseFailed("".into()))?
+            .clone();
         let mut tile = Tile {
             width: track.width,
             height: track.height,
@@ -273,6 +279,7 @@ impl Tile {
                 category,
                 ..DecodeInput::default()
             },
+            codec_config,
             ..Tile::default()
         };
         let sample_table = &track.sample_table.unwrap_ref();

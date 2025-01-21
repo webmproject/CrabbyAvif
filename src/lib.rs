@@ -14,6 +14,9 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+#[macro_use]
+mod internal_utils;
+
 pub mod decoder;
 pub mod image;
 pub mod reformat;
@@ -25,7 +28,6 @@ pub mod capi;
 /// cbindgen:ignore
 mod codecs;
 
-mod internal_utils;
 mod parser;
 
 // Workaround for https://bugs.chromium.org/p/chromium/issues/detail?id=1516634.

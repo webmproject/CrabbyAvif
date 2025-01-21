@@ -345,15 +345,6 @@ impl Category {
     }
 }
 
-macro_rules! find_property {
-    ($properties:expr, $property_name:ident) => {
-        $properties.iter().find_map(|p| match p {
-            ItemProperty::$property_name(value) => Some(value.clone()),
-            _ => None,
-        })
-    };
-}
-
 impl Decoder {
     pub fn image_count(&self) -> u32 {
         self.image_count

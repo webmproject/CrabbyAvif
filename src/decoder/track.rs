@@ -152,6 +152,17 @@ pub struct SampleDescription {
     pub properties: Vec<ItemProperty>,
 }
 
+impl SampleDescription {
+    pub(crate) fn is_supported_format(&self) -> bool {
+        [
+            "av01",
+            #[cfg(feature = "heic")]
+            "hvc1",
+        ]
+        .contains(&self.format.as_str())
+    }
+}
+
 #[derive(Debug)]
 pub enum SampleSize {
     FixedSize(u32),
@@ -176,7 +187,9 @@ pub struct SampleTable {
 
 impl SampleTable {
     pub(crate) fn has_av1_sample(&self) -> bool {
-        self.sample_descriptions.iter().any(|x| x.format == "av01")
+        self.sample_descriptions
+            .iter()
+            .any(|x| x.is_supported_format())
     }
 
     // returns the number of samples in the chunk.
@@ -194,7 +207,7 @@ impl SampleTable {
             &self
                 .sample_descriptions
                 .iter()
-                .find(|x| x.format == "av01")?
+                .find(|x| x.is_supported_format())?
                 .properties,
         )
     }
