@@ -6,7 +6,10 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <numeric>
 #include <string>
+#include <tuple>
+#include <vector>
 
 #include "avif/avif.h"
 #include "gtest/gtest.h"
@@ -528,6 +531,72 @@ TEST_P(ImageCopyFileTest, ImageCopy) {
 INSTANTIATE_TEST_SUITE_P(ImageCopyFileTestInstance, ImageCopyFileTest,
                          testing::ValuesIn({"paris_10bpc.avif", "alpha.avif",
                                             "colors-animated-8bpc.avif"}));
+
+class ImageCopyTest : public testing::TestWithParam<
+                          std::tuple<int, avifPixelFormat, avifPlanesFlag>> {};
+
+TEST_P(ImageCopyTest, RightEdgeDoesNotOverreadInLastRow) {
+  const auto depth = std::get<0>(GetParam());
+  const auto pixel_format = std::get<1>(GetParam());
+
+  if ((pixel_format == AVIF_PIXEL_FORMAT_ANDROID_P010 && depth == 8) ||
+      ((pixel_format == AVIF_PIXEL_FORMAT_ANDROID_NV12 ||
+        pixel_format == AVIF_PIXEL_FORMAT_ANDROID_NV21) &&
+       depth != 8)) {
+    GTEST_SKIP() << "This combination of parameters is not valid. Skipping.";
+  }
+
+  constexpr int kWidth = 100;
+  constexpr int kHeight = 100;
+  ImagePtr src(avifImageCreate(kWidth, kHeight, depth, pixel_format));
+
+  const auto planes = std::get<2>(GetParam());
+  ASSERT_EQ(avifImageAllocatePlanes(src.get(), planes), AVIF_RESULT_OK);
+  for (int i = 0; i < 4; ++i) {
+    const int plane_width_bytes =
+        avifImagePlaneWidth(src.get(), i) * ((depth > 8) ? 2 : 1);
+    const int plane_height = avifImagePlaneHeight(src.get(), i);
+    uint8_t* plane = avifImagePlane(src.get(), i);
+    const int row_bytes = avifImagePlaneRowBytes(src.get(), i);
+    for (int y = 0; y < plane_height; ++y) {
+      std::iota(plane, plane + plane_width_bytes, y);
+      plane += row_bytes;
+    }
+  }
+
+  constexpr int kSubsetWidth = 20;
+  constexpr int kSubsetHeight = kHeight;
+
+  // Get a subset of the image near the right edge (last 20 pixel columns). If
+  // the copy implementation is correct, it will copy the exact 20 columns
+  // without over-reading beyond the |width| pixels irrespective of what the
+  // source stride is.
+  ImagePtr subset_image(avifImageCreateEmpty());
+  const avifCropRect rect{
+      .x = 80, .y = 0, .width = kSubsetWidth, .height = kSubsetHeight};
+  auto result = avifImageSetViewRect(subset_image.get(), src.get(), &rect);
+  ASSERT_EQ(result, AVIF_RESULT_OK);
+  auto* image = subset_image.get();
+
+  EXPECT_EQ(image->width, kSubsetWidth);
+  EXPECT_EQ(image->height, kSubsetHeight);
+
+  // Perform a copy of the subset.
+  ImagePtr copied_image(avifImageCreateEmpty());
+  result =
+      avifImageCopy(copied_image.get(), subset_image.get(), AVIF_PLANES_ALL);
+  ASSERT_EQ(result, AVIF_RESULT_OK);
+  EXPECT_TRUE(CompareImages(*subset_image, *copied_image));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ImageCopyTestInstance, ImageCopyTest,
+    testing::Combine(testing::ValuesIn({8, 10, 12}),
+                     testing::ValuesIn({AVIF_PIXEL_FORMAT_YUV420,
+                                        AVIF_PIXEL_FORMAT_ANDROID_NV12,
+                                        AVIF_PIXEL_FORMAT_ANDROID_NV21,
+                                        AVIF_PIXEL_FORMAT_ANDROID_P010}),
+                     testing::ValuesIn({AVIF_PLANES_ALL, AVIF_PLANES_YUV})));
 
 TEST(DecoderTest, SetRawIO) {
   DecoderPtr decoder(avifDecoderCreate());

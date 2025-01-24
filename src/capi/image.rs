@@ -240,6 +240,34 @@ pub unsafe extern "C" fn crabby_avifImageCreate(
     }))
 }
 
+macro_rules! usize_from_u32_or_fail {
+    ($param: expr) => {
+        match usize_from_u32($param) {
+            Ok(value) => value,
+            Err(_) => return avifResult::UnknownError,
+        }
+    };
+}
+
+fn copy_plane_helper(
+    mut src_plane_ptr: *const u8,
+    src_row_bytes: u32,
+    mut dst_plane_ptr: *mut u8,
+    dst_row_bytes: u32,
+    mut width: usize,
+    height: usize,
+    pixel_size: usize,
+) {
+    width *= pixel_size;
+    for _ in 0..height {
+        unsafe {
+            std::ptr::copy_nonoverlapping(src_plane_ptr, dst_plane_ptr, width);
+            src_plane_ptr = src_plane_ptr.offset(src_row_bytes as isize);
+            dst_plane_ptr = dst_plane_ptr.offset(dst_row_bytes as isize);
+        }
+    }
+}
+
 #[no_mangle]
 #[allow(unused)]
 pub unsafe extern "C" fn crabby_avifImageCopy(
@@ -280,38 +308,48 @@ pub unsafe extern "C" fn crabby_avifImageCopy(
     if res != avifResult::Ok {
         return res;
     }
+    let pixel_size: usize = if src.depth > 8 { 2 } else { 1 };
     if (planes & 1) != 0 {
         for plane in 0usize..3 {
             if src.yuvPlanes[plane].is_null() || src.yuvRowBytes[plane] == 0 {
                 continue;
             }
-            let plane_height = unsafe { crabby_avifImagePlaneHeight(srcImage, plane as i32) };
-            let plane_size = match usize_from_u32(src.yuvRowBytes[plane] * plane_height) {
-                Ok(size) => size,
-                Err(_) => return avifResult::UnknownError,
-            };
+            let plane_height = usize_from_u32_or_fail!(unsafe {
+                crabby_avifImagePlaneHeight(srcImage, plane as i32)
+            });
+            let plane_width = usize_from_u32_or_fail!(unsafe {
+                crabby_avifImagePlaneWidth(srcImage, plane as i32)
+            });
+            let plane_size = plane_width * plane_height * pixel_size;
             dst.yuvPlanes[plane] = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    src.yuvPlanes[plane],
-                    dst.yuvPlanes[plane],
-                    plane_size,
-                );
-            }
-            dst.yuvRowBytes[plane] = src.yuvRowBytes[plane];
+            dst.yuvRowBytes[plane] = (pixel_size * plane_width) as u32;
+            copy_plane_helper(
+                src.yuvPlanes[plane],
+                src.yuvRowBytes[plane],
+                dst.yuvPlanes[plane],
+                dst.yuvRowBytes[plane],
+                plane_width,
+                plane_height,
+                pixel_size,
+            );
             dst.imageOwnsYUVPlanes = AVIF_TRUE;
         }
     }
     if (planes & 2) != 0 && !src.alphaPlane.is_null() && src.alphaRowBytes != 0 {
-        let plane_size = match usize_from_u32(src.alphaRowBytes * src.height) {
-            Ok(size) => size,
-            Err(_) => return avifResult::UnknownError,
-        };
+        let plane_height = usize_from_u32_or_fail!(src.height);
+        let plane_width = usize_from_u32_or_fail!(src.width);
+        let plane_size = plane_width * plane_height * pixel_size;
         dst.alphaPlane = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
-        unsafe {
-            std::ptr::copy_nonoverlapping(src.alphaPlane, dst.alphaPlane, plane_size);
-        }
-        dst.alphaRowBytes = src.alphaRowBytes;
+        dst.alphaRowBytes = (pixel_size * plane_width) as u32;
+        copy_plane_helper(
+            src.alphaPlane,
+            src.alphaRowBytes,
+            dst.alphaPlane,
+            dst.alphaRowBytes,
+            plane_width,
+            plane_height,
+            pixel_size,
+        );
         dst.imageOwnsAlphaPlane = AVIF_TRUE;
     }
     avifResult::Ok
