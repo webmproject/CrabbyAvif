@@ -1,6 +1,7 @@
 // Copyright 2025 Google LLC
 // SPDX-License-Identifier: BSD-2-Clause
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -471,9 +472,44 @@ TEST(DecoderTest, ParseICC) {
   EXPECT_EQ(decoder->image->xmp.data[3], 112);
 }
 
-class ImageTest : public testing::TestWithParam<const char*> {};
+bool CompareImages(const avifImage& image1, const avifImage image2) {
+  EXPECT_EQ(image1.width, image2.width);
+  EXPECT_EQ(image1.height, image2.height);
+  EXPECT_EQ(image1.depth, image2.depth);
+  EXPECT_EQ(image1.yuvFormat, image2.yuvFormat);
+  EXPECT_EQ(image1.yuvRange, image2.yuvRange);
+  for (int c = 0; c < 4; ++c) {
+    const uint8_t* row1 = avifImagePlane(&image1, c);
+    const uint8_t* row2 = avifImagePlane(&image2, c);
+    if (!row1 != !row2) {
+      return false;
+    }
+    const uint32_t row_bytes1 = avifImagePlaneRowBytes(&image1, c);
+    const uint32_t row_bytes2 = avifImagePlaneRowBytes(&image2, c);
+    const uint32_t plane_width = avifImagePlaneWidth(&image1, c);
+    const uint32_t plane_height = avifImagePlaneHeight(&image1, c);
+    for (uint32_t y = 0; y < plane_height; ++y) {
+      if (avifImageUsesU16(&image1)) {
+        if (!std::equal(reinterpret_cast<const uint16_t*>(row1),
+                        reinterpret_cast<const uint16_t*>(row1) + plane_width,
+                        reinterpret_cast<const uint16_t*>(row2))) {
+          return false;
+        }
+      } else {
+        if (!std::equal(row1, row1 + plane_width, row2)) {
+          return false;
+        }
+      }
+      row1 += row_bytes1;
+      row2 += row_bytes2;
+    }
+  }
+  return true;
+}
 
-TEST_P(ImageTest, ImageCopy) {
+class ImageCopyFileTest : public testing::TestWithParam<const char*> {};
+
+TEST_P(ImageCopyFileTest, ImageCopy) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
@@ -486,36 +522,10 @@ TEST_P(ImageTest, ImageCopy) {
   ImagePtr image2(avifImageCreateEmpty());
   ASSERT_EQ(avifImageCopy(image2.get(), decoder->image, AVIF_PLANES_ALL),
             AVIF_RESULT_OK);
-  EXPECT_EQ(decoder->image->width, image2->width);
-  EXPECT_EQ(decoder->image->height, image2->height);
-  EXPECT_EQ(decoder->image->depth, image2->depth);
-  EXPECT_EQ(decoder->image->yuvFormat, image2->yuvFormat);
-  EXPECT_EQ(decoder->image->yuvRange, image2->yuvRange);
-  for (int plane = 0; plane < 3; ++plane) {
-    EXPECT_EQ(decoder->image->yuvPlanes[plane] == nullptr,
-              image2->yuvPlanes[plane] == nullptr);
-    if (decoder->image->yuvPlanes[plane] == nullptr) continue;
-    EXPECT_EQ(decoder->image->yuvRowBytes[plane], image2->yuvRowBytes[plane]);
-    EXPECT_NE(decoder->image->yuvPlanes[plane], image2->yuvPlanes[plane]);
-    const auto plane_height = avifImagePlaneHeight(decoder->image, plane);
-    const auto plane_size = plane_height * decoder->image->yuvRowBytes[plane];
-    EXPECT_EQ(memcmp(decoder->image->yuvPlanes[plane], image2->yuvPlanes[plane],
-                     plane_size),
-              0);
-  }
-  EXPECT_EQ(decoder->image->alphaPlane == nullptr,
-            image2->alphaPlane == nullptr);
-  if (decoder->image->alphaPlane != nullptr) {
-    EXPECT_EQ(decoder->image->alphaRowBytes, image2->alphaRowBytes);
-    EXPECT_NE(decoder->image->alphaPlane, image2->alphaPlane);
-    const auto plane_size =
-        decoder->image->height * decoder->image->alphaRowBytes;
-    EXPECT_EQ(
-        memcmp(decoder->image->alphaPlane, image2->alphaPlane, plane_size), 0);
-  }
+  EXPECT_TRUE(CompareImages(*decoder->image, *image2));
 }
 
-INSTANTIATE_TEST_SUITE_P(ImageTestInstance, ImageTest,
+INSTANTIATE_TEST_SUITE_P(ImageCopyFileTestInstance, ImageCopyFileTest,
                          testing::ValuesIn({"paris_10bpc.avif", "alpha.avif",
                                             "colors-animated-8bpc.avif"}));
 
