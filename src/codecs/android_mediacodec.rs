@@ -77,8 +77,18 @@ impl PlaneInfo {
 }
 
 impl MediaFormat {
-    // https://developer.android.com/reference/android/media/MediaFormat#COLOR_RANGE_LIMITED
+    // These constants are documented in
+    // https://developer.android.com/reference/android/media/MediaFormat
     const COLOR_RANGE_LIMITED: i32 = 2;
+
+    const COLOR_STANDARD_BT709: i32 = 1;
+    const COLOR_STANDARD_BT601_PAL: i32 = 2;
+    const COLOR_STANDARD_BT601_NTSC: i32 = 4;
+    const COLOR_STANDARD_BT2020: i32 = 6;
+
+    const COLOR_TRANSFER_LINEAR: i32 = 1;
+    const COLOR_TRANSFER_SDR_VIDEO: i32 = 3;
+    const COLOR_TRANSFER_HLG: i32 = 7;
 
     fn get_i32(&self, key: *const c_char) -> Option<i32> {
         let mut value: i32 = 0;
@@ -128,6 +138,31 @@ impl MediaFormat {
             YuvRange::Limited
         } else {
             YuvRange::Full
+        }
+    }
+
+    fn color_primaries(&self) -> ColorPrimaries {
+        // color-standard is documented but isn't exposed as a constant in the NDK:
+        // https://developer.android.com/reference/android/media/MediaFormat#KEY_COLOR_STANDARD
+        let color_standard = self.get_i32_from_str("color-standard").unwrap_or(-1);
+        match color_standard {
+            Self::COLOR_STANDARD_BT709 => ColorPrimaries::Bt709,
+            Self::COLOR_STANDARD_BT2020 => ColorPrimaries::Bt2020,
+            Self::COLOR_STANDARD_BT601_PAL | Self::COLOR_STANDARD_BT601_NTSC => {
+                ColorPrimaries::Bt601
+            }
+            _ => ColorPrimaries::Unspecified,
+        }
+    }
+
+    fn transfer_characteristics(&self) -> TransferCharacteristics {
+        // color-transfer is documented but isn't exposed as a constant in the NDK:
+        // https://developer.android.com/reference/android/media/MediaFormat#KEY_COLOR_TRANSFER
+        match self.get_i32_from_str("color-transfer").unwrap_or(-1) {
+            Self::COLOR_TRANSFER_LINEAR => TransferCharacteristics::Linear,
+            Self::COLOR_TRANSFER_HLG => TransferCharacteristics::Hlg,
+            Self::COLOR_TRANSFER_SDR_VIDEO => TransferCharacteristics::Bt601,
+            _ => TransferCharacteristics::Unspecified,
         }
     }
 
@@ -544,9 +579,16 @@ impl MediaCodec {
             }
             _ => {
                 image.chroma_sample_position = ChromaSamplePosition::Unknown;
-                image.color_primaries = ColorPrimaries::Unspecified;
-                image.transfer_characteristics = TransferCharacteristics::Unspecified;
-                image.matrix_coefficients = MatrixCoefficients::Unspecified;
+                image.color_primaries = format.color_primaries();
+                image.transfer_characteristics = format.transfer_characteristics();
+                // MediaCodec does not expose matrix coefficients. Try to infer that based on color
+                // primaries to get the most accurate color conversion possible.
+                image.matrix_coefficients = match image.color_primaries {
+                    ColorPrimaries::Bt601 => MatrixCoefficients::Bt601,
+                    ColorPrimaries::Bt709 => MatrixCoefficients::Bt709,
+                    ColorPrimaries::Bt2020 => MatrixCoefficients::Bt2020Ncl,
+                    _ => MatrixCoefficients::Unspecified,
+                };
 
                 for i in 0usize..3 {
                     if i == 2
