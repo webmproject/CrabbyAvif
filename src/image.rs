@@ -295,6 +295,9 @@ impl Image {
             // For AVIF, the information in the `colr` box takes precedence over what is reported
             // by the decoder. For HEIC, we always honor what is reported by the decoder.
             self.yuv_range = tile.image.yuv_range;
+            self.color_primaries = tile.image.color_primaries;
+            self.transfer_characteristics = tile.image.transfer_characteristics;
+            self.matrix_coefficients = tile.image.matrix_coefficients;
         }
     }
 
