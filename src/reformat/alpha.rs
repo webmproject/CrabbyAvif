@@ -317,7 +317,7 @@ impl image::Image {
                     None,
                     None,
                     None,
-                    self.planes[3].unwrap_ref().clone_pointer(),
+                    Some(self.planes[3].unwrap_ref().try_clone()?),
                 ],
                 row_bytes: [0, 0, 0, self.row_bytes[3]],
                 ..image::Image::default()

@@ -74,7 +74,9 @@ impl<T> PointerSlice<T> {
     }
 }
 
-#[derive(Clone, Debug)]
+// This struct must not be derived from the default `Clone` trait as it has to be cloned with error
+// checking using the `try_clone` function.
+#[derive(Debug)]
 pub enum Pixels {
     // Intended for holding data from underlying native libraries. Used for 8-bit images.
     Pointer(PointerSlice<u8>),
@@ -190,11 +192,26 @@ impl Pixels {
         }
     }
 
-    pub(crate) fn clone_pointer(&self) -> Option<Pixels> {
+    pub(crate) fn try_clone(&self) -> AvifResult<Pixels> {
         match self {
-            Pixels::Pointer(ptr) => Some(Pixels::Pointer(*ptr)),
-            Pixels::Pointer16(ptr) => Some(Pixels::Pointer16(*ptr)),
-            _ => None,
+            Pixels::Pointer(ptr) => Ok(Pixels::Pointer(*ptr)),
+            Pixels::Pointer16(ptr) => Ok(Pixels::Pointer16(*ptr)),
+            Pixels::Buffer(buffer) => {
+                let mut cloned_buffer: Vec<u8> = vec![];
+                cloned_buffer
+                    .try_reserve_exact(buffer.len())
+                    .or(Err(AvifError::OutOfMemory))?;
+                cloned_buffer.extend_from_slice(buffer);
+                Ok(Pixels::Buffer(cloned_buffer))
+            }
+            Pixels::Buffer16(buffer16) => {
+                let mut cloned_buffer16: Vec<u16> = vec![];
+                cloned_buffer16
+                    .try_reserve_exact(buffer16.len())
+                    .or(Err(AvifError::OutOfMemory))?;
+                cloned_buffer16.extend_from_slice(buffer16);
+                Ok(Pixels::Buffer16(cloned_buffer16))
+            }
         }
     }
 

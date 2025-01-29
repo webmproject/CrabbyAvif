@@ -312,7 +312,7 @@ impl Image {
         for plane in category.planes() {
             let plane = plane.as_usize();
             (self.planes[plane], self.row_bytes[plane]) = match &src.planes[plane] {
-                Some(src_plane) => (Some(src_plane.clone()), src.row_bytes[plane]),
+                Some(src_plane) => (Some(src_plane.try_clone()?), src.row_bytes[plane]),
                 None => (None, 0),
             }
         }

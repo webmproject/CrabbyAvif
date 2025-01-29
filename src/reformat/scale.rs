@@ -43,7 +43,7 @@ impl Image {
                 .map(
                     |plane| {
                         if plane.is_some() {
-                            Some(plane.unwrap_ref().clone())
+                            plane.unwrap_ref().try_clone().ok()
                         } else {
                             None
                         }
