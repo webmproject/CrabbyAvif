@@ -1381,7 +1381,23 @@ impl Decoder {
             &self.items.get(&sample.item_id).unwrap().data_buffer
         };
         let data = sample.data(io, item_data_buffer)?;
-        codec.get_next_image(data, sample.spatial_id, &mut tile.image, category)?;
+        let next_image_result =
+            codec.get_next_image(data, sample.spatial_id, &mut tile.image, category);
+        if next_image_result.is_err() {
+            if cfg!(feature = "android_mediacodec")
+                && cfg!(feature = "heic")
+                && tile.codec_config.is_heic()
+                && category == Category::Alpha
+            {
+                // When decoding HEIC on Android, if the alpha channel decoding fails, simply
+                // ignore it and return the rest of the image.
+                checked_incr!(self.tile_info[category.usize()].decoded_tile_count, 1);
+                return Ok(());
+            } else {
+                return next_image_result;
+            }
+        }
+
         checked_incr!(self.tile_info[category.usize()].decoded_tile_count, 1);
 
         if category == Category::Alpha && tile.image.yuv_range == YuvRange::Limited {
