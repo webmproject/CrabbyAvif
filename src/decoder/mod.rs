@@ -892,6 +892,19 @@ impl Decoder {
                     })
                     .map(|it| *it.0);
 
+                // TODO: b/393135956 - There are some unsupported HEIC primary item types (like
+                // overlay derivation). In that case, try and return the first available HEIC item.
+                // Remove this workaround once overlay derivation is supported.
+                let color_item_id = if cfg!(feature = "heic") && color_item_id.is_none() {
+                    // Look for the first valid HEIC item.
+                    self.items
+                        .iter()
+                        .find(|x| !x.1.should_skip() && x.1.id != 0 && x.1.is_image_item())
+                        .map(|it| *it.0)
+                } else {
+                    color_item_id
+                };
+
                 item_ids[Category::Color.usize()] = color_item_id.ok_or(AvifError::NoContent)?;
                 self.read_and_parse_item(item_ids[Category::Color.usize()], Category::Color)?;
                 self.populate_grid_item_ids(item_ids[Category::Color.usize()], Category::Color)?;
