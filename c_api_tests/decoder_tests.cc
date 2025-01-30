@@ -868,6 +868,13 @@ TEST_P(ValidClapPropertyTest, ValidateClapProperty) {
 INSTANTIATE_TEST_SUITE_P(Parameterized, ValidClapPropertyTest,
                          ::testing::ValuesIn(kValidClapPropertyTestParams));
 
+TEST(DecoderTest, ClapIrotImirNonEssential) {
+  // Invalid file with non-essential transformative properties.
+  auto decoder = CreateDecoder("clap_irot_imir_non_essential.avif");
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_BMFF_PARSE_FAILED);
+}
+
 }  // namespace
 }  // namespace avif
 

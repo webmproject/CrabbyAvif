@@ -952,3 +952,10 @@ fn heic_parsing() {
         assert!(res.is_err());
     }
 }
+
+#[test]
+fn clap_irot_imir_non_essential() {
+    let mut decoder = get_decoder("clap_irot_imir_non_essential.avif");
+    let res = decoder.parse();
+    assert!(res.is_err());
+}

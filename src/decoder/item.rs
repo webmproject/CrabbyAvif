@@ -422,7 +422,12 @@ pub(crate) fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
             let property_index: usize = *property_index_ref as usize;
             let essential = *essential_ref;
             if property_index == 0 {
-                // Not associated with any item.
+                if essential {
+                    return Err(AvifError::BmffParseFailed(format!(
+                        "item id {} contains an illegal essential property index 0",
+                        { item.id }
+                    )));
+                }
                 continue;
             }
             // property_index is 1-based.
@@ -440,7 +445,14 @@ pub(crate) fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
                     ));
                 }
                 (
-                    ItemProperty::OperatingPointSelector(_) | ItemProperty::LayerSelector(_),
+                    ItemProperty::OperatingPointSelector(_)
+                    | ItemProperty::LayerSelector(_)
+                    // MIAF 2019/Amd. 2:2021: Section 7.3.9:
+                    //   All transformative properties associated with coded and derived images
+                    //   shall be marked as essential.
+                    | ItemProperty::CleanAperture(_)
+                    | ItemProperty::ImageRotation(_)
+                    | ItemProperty::ImageMirror(_),
                     false,
                 ) => {
                     return Err(AvifError::BmffParseFailed(
