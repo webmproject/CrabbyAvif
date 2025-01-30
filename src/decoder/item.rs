@@ -91,6 +91,20 @@ impl Item {
         Ok(IStream::create(io_data))
     }
 
+    fn validate_derived_image_dimensions(
+        width: u32,
+        height: u32,
+        size_limit: u32,
+        dimension_limit: u32,
+    ) -> AvifResult<()> {
+        if width == 0 || height == 0 || !check_limits(width, height, size_limit, dimension_limit) {
+            return Err(AvifError::InvalidImageGrid(
+                "invalid derived image dimensions".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn read_and_parse(
         &mut self,
         io: &mut GenericIO,
@@ -126,16 +140,12 @@ impl Item {
             // unsigned int(16) output_height;
             grid.height = stream.read_u16()? as u32;
         }
-        if grid.width == 0 || grid.height == 0 {
-            return Err(AvifError::InvalidImageGrid(
-                "invalid dimensions in grid box".into(),
-            ));
-        }
-        if !check_limits(grid.width, grid.height, size_limit, dimension_limit) {
-            return Err(AvifError::InvalidImageGrid(
-                "grid dimensions too large".into(),
-            ));
-        }
+        Self::validate_derived_image_dimensions(
+            grid.width,
+            grid.height,
+            size_limit,
+            dimension_limit,
+        )?;
         if stream.has_bytes_left()? {
             return Err(AvifError::InvalidImageGrid(
                 "found unknown extra bytes in the grid box".into(),
