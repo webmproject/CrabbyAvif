@@ -907,7 +907,6 @@ impl Decoder {
 
                 item_ids[Category::Color.usize()] = color_item_id.ok_or(AvifError::NoContent)?;
                 self.read_and_parse_item(item_ids[Category::Color.usize()], Category::Color)?;
-                self.populate_grid_item_ids(item_ids[Category::Color.usize()], Category::Color)?;
 
                 // Find exif/xmp from meta if any.
                 Self::search_exif_or_xmp_metadata(
@@ -924,7 +923,6 @@ impl Decoder {
                 {
                     if !self.items.get(&alpha_item_id).unwrap().is_made_up {
                         self.read_and_parse_item(alpha_item_id, Category::Alpha)?;
-                        self.populate_grid_item_ids(alpha_item_id, Category::Alpha)?;
                     }
                     item_ids[Category::Alpha.usize()] = alpha_item_id;
                 }
@@ -943,7 +941,6 @@ impl Decoder {
                         if let Some(metadata) = mp4box::parse_tmap(&mut stream)? {
                             self.gainmap.metadata = metadata;
                             self.read_and_parse_item(gainmap_id, Category::Gainmap)?;
-                            self.populate_grid_item_ids(gainmap_id, Category::Gainmap)?;
                             self.gainmap_present = true;
                             if self.settings.image_content_to_decode.gainmap() {
                                 item_ids[Category::Gainmap.usize()] = gainmap_id;
@@ -1132,7 +1129,8 @@ impl Decoder {
             &mut self.tile_info[category.usize()].grid,
             self.settings.image_size_limit,
             self.settings.image_dimension_limit,
-        )
+        )?;
+        self.populate_grid_item_ids(item_id, category)
     }
 
     fn can_use_single_codec(&self) -> AvifResult<bool> {
