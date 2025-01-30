@@ -417,13 +417,13 @@ impl Decoder {
         }) {
             return Ok(Some(*item.0));
         }
-        if color_item.item_type != "grid" || color_item.grid_item_ids.is_empty() {
+        if color_item.item_type != "grid" || color_item.derived_item_ids.is_empty() {
             return Ok(None);
         }
         // If color item is a grid, check if there is an alpha channel which is represented as an
         // auxl item to each color tile item.
-        let mut alpha_item_indices: Vec<u32> = create_vec_exact(color_item.grid_item_ids.len())?;
-        for color_grid_item_id in &color_item.grid_item_ids {
+        let mut alpha_item_indices: Vec<u32> = create_vec_exact(color_item.derived_item_ids.len())?;
+        for color_grid_item_id in &color_item.derived_item_ids {
             match self
                 .items
                 .iter()
@@ -459,7 +459,7 @@ impl Decoder {
             item_type: String::from("grid"),
             width: color_item.width,
             height: color_item.height,
-            grid_item_ids: alpha_item_indices,
+            derived_item_ids: alpha_item_indices,
             properties,
             is_made_up: true,
             ..Item::default()
@@ -595,7 +595,7 @@ impl Decoder {
             .items
             .get(&item_id)
             .ok_or(AvifError::MissingImageItem)?;
-        if item.grid_item_ids.is_empty() {
+        if item.derived_item_ids.is_empty() {
             if item.size == 0 {
                 return Err(AvifError::MissingImageItem);
             }
@@ -614,24 +614,24 @@ impl Decoder {
                 ));
             }
             let mut progressive = true;
-            for grid_item_id in item.grid_item_ids.clone() {
-                let grid_item = self
+            for derived_item_id in item.derived_item_ids.clone() {
+                let derived_item = self
                     .items
-                    .get_mut(&grid_item_id)
-                    .ok_or(AvifError::InvalidImageGrid("missing grid item".into()))?;
+                    .get_mut(&derived_item_id)
+                    .ok_or(AvifError::InvalidImageGrid("missing derived item".into()))?;
                 let mut tile = Tile::create_from_item(
-                    grid_item,
+                    derived_item,
                     self.settings.allow_progressive,
                     self.settings.image_count_limit,
                     self.io.unwrap_ref().size_hint(),
                 )?;
                 tile.input.category = category;
                 tiles.push(tile);
-                progressive = progressive && grid_item.progressive;
+                progressive = progressive && derived_item.progressive;
             }
 
             if category == Category::Color && progressive {
-                // Propagate the progressive status to the top-level grid item.
+                // Propagate the progressive status to the top-level item.
                 self.items.get_mut(&item_id).unwrap().progressive = true;
             }
         }
@@ -734,7 +734,7 @@ impl Decoder {
         item.properties.push(ItemProperty::CodecConfiguration(
             first_codec_config.unwrap(),
         ));
-        item.grid_item_ids = grid_item_ids;
+        item.derived_item_ids = grid_item_ids;
         Ok(())
     }
 

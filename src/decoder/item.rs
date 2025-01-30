@@ -38,7 +38,7 @@ pub struct Item {
     pub has_unsupported_essential_property: bool,
     pub progressive: bool,
     pub idat: Vec<u8>,
-    pub grid_item_ids: Vec<u32>,
+    pub derived_item_ids: Vec<u32>,
     pub data_buffer: Option<Vec<u8>>,
     pub is_made_up: bool, // Placeholder grid alpha item if true.
 }
@@ -204,14 +204,17 @@ impl Item {
             .codec_config()
             .ok_or(AvifError::BmffParseFailed("missing av1C property".into()))?;
         if self.item_type == "grid" {
-            for grid_item_id in &self.grid_item_ids {
-                let grid_item = items.get(grid_item_id).unwrap();
-                let grid_codec_config = grid_item.codec_config().ok_or(
-                    AvifError::BmffParseFailed("missing codec config property".into()),
-                )?;
-                if codec_config != grid_codec_config {
+            for derived_item_id in &self.derived_item_ids {
+                let derived_item = items.get(derived_item_id).unwrap();
+                let derived_codec_config =
+                    derived_item
+                        .codec_config()
+                        .ok_or(AvifError::BmffParseFailed(
+                            "missing codec config property".into(),
+                        ))?;
+                if codec_config != derived_codec_config {
                     return Err(AvifError::BmffParseFailed(
-                        "codec config of grid items do not match".into(),
+                        "codec config of derived items do not match".into(),
                     ));
                 }
             }
