@@ -1506,23 +1506,29 @@ impl Decoder {
         } else if self.tile_info[category.usize()].is_overlay() {
             if tile_index == 0 {
                 let overlay = &self.tile_info[category.usize()].overlay;
+                let canvas_fill_values =
+                    self.image.convert_rgba16_to_yuva(overlay.canvas_fill_value);
                 match category {
                     Category::Color => {
                         self.image.width = overlay.width;
                         self.image.height = overlay.height;
                         self.image.copy_properties_from(tile);
-                        self.image.allocate_planes(category)?;
+                        self.image
+                            .allocate_planes_with_default_values(category, canvas_fill_values)?;
                     }
                     Category::Alpha => {
                         // Alpha is always just one plane and the depth has been validated
                         // to be the same as the color planes' depth.
-                        self.image.allocate_planes(category)?;
+                        self.image
+                            .allocate_planes_with_default_values(category, canvas_fill_values)?;
                     }
                     Category::Gainmap => {
                         self.gainmap.image.width = overlay.width;
                         self.gainmap.image.height = overlay.height;
                         self.gainmap.image.copy_properties_from(tile);
-                        self.gainmap.image.allocate_planes(category)?;
+                        self.gainmap
+                            .image
+                            .allocate_planes_with_default_values(category, canvas_fill_values)?;
                     }
                 }
             }

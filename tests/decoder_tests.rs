@@ -971,8 +971,10 @@ struct ExpectedOverlayImageInfo<'a> {
 const RED: [u8; 4] = [255, 0, 0, 255];
 const GREEN: [u8; 4] = [0, 255, 0, 255];
 const BLUE: [u8; 4] = [0, 0, 255, 255];
+const BLACK: [u8; 4] = [0, 0, 0, 255];
+const YELLOW: [u8; 4] = [255, 255, 0, 255];
 
-const EXPECTED_OVERLAY_IMAGE_INFOS: [ExpectedOverlayImageInfo; 3] = [
+const EXPECTED_OVERLAY_IMAGE_INFOS: [ExpectedOverlayImageInfo; 4] = [
     ExpectedOverlayImageInfo {
         // Three 80x60 sub-images with the following offsets:
         // horizontal_offsets: [0, 40, 80]
@@ -993,6 +995,10 @@ const EXPECTED_OVERLAY_IMAGE_INFOS: [ExpectedOverlayImageInfo; 3] = [
             (80, 80, BLUE),
             (90, 90, BLUE),
             (100, 100, BLUE),
+            // Top right should be background color.
+            (159, 0, BLACK),
+            // Bottom left should be background color.
+            (0, 139, BLACK),
         ],
     },
     ExpectedOverlayImageInfo {
@@ -1003,6 +1009,8 @@ const EXPECTED_OVERLAY_IMAGE_INFOS: [ExpectedOverlayImageInfo; 3] = [
         width: 200,
         height: 180,
         expected_pixels: &[
+            // Top left should be background color.
+            (0, 0, BLACK),
             // Red should be overlaid starting at (20, 20).
             (20, 20, RED),
             (30, 30, RED),
@@ -1015,6 +1023,12 @@ const EXPECTED_OVERLAY_IMAGE_INFOS: [ExpectedOverlayImageInfo; 3] = [
             (100, 100, BLUE),
             (110, 110, BLUE),
             (120, 120, BLUE),
+            // Top right should be background color.
+            (199, 0, BLACK),
+            // Bottom left should be background color.
+            (0, 179, BLACK),
+            // Bottom right should be background color.
+            (199, 179, BLACK),
         ],
     },
     ExpectedOverlayImageInfo {
@@ -1029,10 +1043,45 @@ const EXPECTED_OVERLAY_IMAGE_INFOS: [ExpectedOverlayImageInfo; 3] = [
             (0, 0, RED),
             (15, 15, RED),
             (39, 19, RED),
+            (40, 20, BLACK),
             // Blue overlay is 40x40 in the bottom right.
+            (119, 99, BLACK),
             (120, 100, BLUE),
             (140, 120, BLUE),
             (159, 139, BLUE),
+            // Center of the image should be background color.
+            (80, 70, BLACK),
+            // Top right should be background color.
+            (159, 0, BLACK),
+            // Bottom left should be background color.
+            (0, 139, BLACK),
+        ],
+    },
+    ExpectedOverlayImageInfo {
+        // Three 80x60 sub-images with the following offsets:
+        // horizontal_offsets: [0, 40, 80]
+        // vertical_offsets: [0, 40, 80]
+        // canvas background color: yellow.
+        filename: "overlay_yellow_bg.avif",
+        width: 160,
+        height: 140,
+        expected_pixels: &[
+            // Top left should be red.
+            (0, 0, RED),
+            (10, 10, RED),
+            (20, 20, RED),
+            // Green should be overlaid on top of the red block starting at (40, 40).
+            (40, 40, GREEN),
+            (50, 50, GREEN),
+            (60, 60, GREEN),
+            // Blue should be overlaid on top of the green block starting at (80, 80).
+            (80, 80, BLUE),
+            (90, 90, BLUE),
+            (100, 100, BLUE),
+            // Top right should be background color.
+            (159, 0, YELLOW),
+            // Bottom left should be background color.
+            (0, 139, YELLOW),
         ],
     },
 ];
@@ -1043,7 +1092,7 @@ macro_rules! pixel_eq {
     };
 }
 
-#[test_case::test_matrix(0usize..3)]
+#[test_case::test_matrix(0usize..4)]
 fn overlay(index: usize) {
     let info = &EXPECTED_OVERLAY_IMAGE_INFOS[index];
     let mut decoder = get_decoder(info.filename);
