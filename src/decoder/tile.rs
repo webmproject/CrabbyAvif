@@ -77,15 +77,29 @@ pub struct Grid {
 }
 
 #[derive(Debug, Default)]
+pub struct Overlay {
+    pub canvas_fill_value: [u16; 4],
+    pub width: u32,
+    pub height: u32,
+    pub horizontal_offsets: Vec<i32>,
+    pub vertical_offsets: Vec<i32>,
+}
+
+#[derive(Debug, Default)]
 pub struct TileInfo {
     pub tile_count: u32,
     pub decoded_tile_count: u32,
     pub grid: Grid,
+    pub overlay: Overlay,
 }
 
 impl TileInfo {
     pub(crate) fn is_grid(&self) -> bool {
         self.grid.rows > 0 && self.grid.columns > 0
+    }
+
+    pub(crate) fn is_overlay(&self) -> bool {
+        !self.overlay.horizontal_offsets.is_empty() && !self.overlay.vertical_offsets.is_empty()
     }
 
     pub(crate) fn grid_tile_count(&self) -> AvifResult<u32> {

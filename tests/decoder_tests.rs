@@ -959,3 +959,124 @@ fn clap_irot_imir_non_essential() {
     let res = decoder.parse();
     assert!(res.is_err());
 }
+
+#[derive(Clone)]
+struct ExpectedOverlayImageInfo<'a> {
+    filename: &'a str,
+    width: u32,
+    height: u32,
+    expected_pixels: &'a [(usize, u32, [u8; 4])], // (x, y, [rgba]).
+}
+
+const RED: [u8; 4] = [255, 0, 0, 255];
+const GREEN: [u8; 4] = [0, 255, 0, 255];
+const BLUE: [u8; 4] = [0, 0, 255, 255];
+
+const EXPECTED_OVERLAY_IMAGE_INFOS: [ExpectedOverlayImageInfo; 3] = [
+    ExpectedOverlayImageInfo {
+        // Three 80x60 sub-images with the following offsets:
+        // horizontal_offsets: [0, 40, 80]
+        // vertical_offsets: [0, 40, 80]
+        filename: "overlay_exact_bounds.avif",
+        width: 160,
+        height: 140,
+        expected_pixels: &[
+            // Top left should be red.
+            (0, 0, RED),
+            (10, 10, RED),
+            (20, 20, RED),
+            // Green should be overlaid on top of the red block starting at (40, 40).
+            (40, 40, GREEN),
+            (50, 50, GREEN),
+            (60, 60, GREEN),
+            // Blue should be overlaid on top of the green block starting at (80, 80).
+            (80, 80, BLUE),
+            (90, 90, BLUE),
+            (100, 100, BLUE),
+        ],
+    },
+    ExpectedOverlayImageInfo {
+        // Three 80x60 sub-images with the following offsets:
+        // horizontal_offsets: [20, 60, 100]
+        // vertical_offsets: [20, 60, 100]
+        filename: "overlay_with_border.avif",
+        width: 200,
+        height: 180,
+        expected_pixels: &[
+            // Red should be overlaid starting at (20, 20).
+            (20, 20, RED),
+            (30, 30, RED),
+            (40, 40, RED),
+            // Green should be overlaid on top of the red block starting at (60, 60).
+            (60, 60, GREEN),
+            (70, 70, GREEN),
+            (80, 80, GREEN),
+            // Blue should be overlaid on top of the green block starting at (100, 100).
+            (100, 100, BLUE),
+            (110, 110, BLUE),
+            (120, 120, BLUE),
+        ],
+    },
+    ExpectedOverlayImageInfo {
+        // Two 80x60 sub-images with the following offsets:
+        // horizontal_offsets: [-40, 120]
+        // vertical_offsets: [-40, 100]
+        filename: "overlay_outside_bounds.avif",
+        width: 160,
+        height: 140,
+        expected_pixels: &[
+            // Red overlay is 40x20 in the top left.
+            (0, 0, RED),
+            (15, 15, RED),
+            (39, 19, RED),
+            // Blue overlay is 40x40 in the bottom right.
+            (120, 100, BLUE),
+            (140, 120, BLUE),
+            (159, 139, BLUE),
+        ],
+    },
+];
+
+macro_rules! pixel_eq {
+    ($a:expr, $b:expr) => {
+        assert!((i32::from($a) - i32::from($b)).abs() <= 3);
+    };
+}
+
+#[test_case::test_matrix(0usize..3)]
+fn overlay(index: usize) {
+    let info = &EXPECTED_OVERLAY_IMAGE_INFOS[index];
+    let mut decoder = get_decoder(info.filename);
+    decoder.settings.strictness = decoder::Strictness::None;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
+    let image = decoder.image().expect("image was none");
+    assert_eq!(image.width, info.width);
+    assert_eq!(image.height, info.height);
+    if !HAS_DECODER {
+        return;
+    }
+    let res = decoder.next_image();
+    assert!(res.is_ok());
+    let image = decoder.image().expect("image was none");
+    assert_eq!(image.width, info.width);
+    assert_eq!(image.height, info.height);
+    let mut rgb = rgb::Image::create_from_yuv(image);
+    rgb.format = rgb::Format::Rgba;
+    assert!(rgb.allocate().is_ok());
+    assert!(rgb.convert_from_yuv(image).is_ok());
+    for expected_pixel in info.expected_pixels {
+        let column = expected_pixel.0;
+        let row = expected_pixel.1;
+        let pixels = rgb.row(row).expect("row was none");
+        let r = pixels[column * 4];
+        let g = pixels[(column * 4) + 1];
+        let b = pixels[(column * 4) + 2];
+        let a = pixels[(column * 4) + 3];
+        pixel_eq!(r, expected_pixel.2[0]);
+        pixel_eq!(g, expected_pixel.2[1]);
+        pixel_eq!(b, expected_pixel.2[2]);
+        pixel_eq!(a, expected_pixel.2[3]);
+    }
+}

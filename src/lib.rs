@@ -87,11 +87,20 @@ impl PixelFormat {
         }
     }
 
+    pub fn apply_chroma_shift_x(&self, value: u32) -> u32 {
+        let chroma_shift = self.chroma_shift_x();
+        (value >> chroma_shift.0) << chroma_shift.1
+    }
+
     pub fn chroma_shift_y(&self) -> u32 {
         match self {
             Self::Yuv420 | Self::AndroidP010 | Self::AndroidNv12 | Self::AndroidNv21 => 1,
             _ => 0,
         }
+    }
+
+    pub fn apply_chroma_shift_y(&self, value: u32) -> u32 {
+        value >> self.chroma_shift_y()
     }
 }
 

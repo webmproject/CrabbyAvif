@@ -170,9 +170,11 @@ impl IStream<'_> {
     }
 
     pub(crate) fn read_i32(&mut self) -> AvifResult<i32> {
-        // For now this is used only for gainmap fractions where we need
-        // wrapping conversion from u32 to i32.
         Ok(self.read_u32()? as i32)
+    }
+
+    pub(crate) fn read_i16(&mut self) -> AvifResult<i16> {
+        Ok(self.read_u16()? as i16)
     }
 
     pub(crate) fn skip_u32(&mut self) -> AvifResult<()> {
