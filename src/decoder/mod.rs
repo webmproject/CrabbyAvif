@@ -715,6 +715,10 @@ impl Decoder {
             }
             overlay_item_ids.push(*dimg_item_id);
         }
+        if first_codec_config.is_none() {
+            // No derived images were found.
+            return Ok(());
+        }
         // ISO/IEC 23008-12: The input images are listed in the order they are layered, i.e. the
         // bottom-most input image first and the top-most input image last, in the
         // SingleItemTypeReferenceBox of type 'dimg' for this derived image item within the
