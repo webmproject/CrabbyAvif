@@ -1702,6 +1702,9 @@ impl Decoder {
             .iter()
             .find(|x| x.id == color_track_id)
             .ok_or(AvifError::NoContent)?;
+        if color_track.sample_table.is_none() {
+            return Ok(self.image_timing);
+        }
         color_track.image_timing(n)
     }
 

@@ -105,7 +105,7 @@ impl Track {
     }
 
     pub(crate) fn image_timing(&self, image_index: u32) -> AvifResult<ImageTiming> {
-        let sample_table = self.sample_table.as_ref().ok_or(AvifError::NoContent)?;
+        let sample_table = self.sample_table.unwrap_ref();
         let mut image_timing = ImageTiming {
             timescale: self.media_timescale as u64,
             pts_in_timescales: 0,
