@@ -12,35 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[allow(unused_imports)]
 use crate::image::*;
 use crate::*;
+
 use std::fs::File;
 use std::io::prelude::*;
 
+use super::Writer;
+
 #[derive(Default)]
-pub struct Y4MWriter {
-    pub filename: Option<String>,
+pub(crate) struct Y4MWriter {
     header_written: bool,
-    file: Option<File>,
     write_alpha: bool,
 }
 
 impl Y4MWriter {
-    pub fn create(filename: &str) -> Self {
-        Self {
-            filename: Some(filename.to_owned()),
-            ..Self::default()
-        }
-    }
-
-    pub fn create_from_file(file: File) -> Self {
-        Self {
-            file: Some(file),
-            ..Self::default()
-        }
-    }
-
-    fn write_header(&mut self, image: &Image) -> bool {
+    fn write_header(&mut self, file: &mut File, image: &Image) -> bool {
         if self.header_written {
             return true;
         }
@@ -101,32 +89,21 @@ impl Y4MWriter {
             "YUV4MPEG2 W{} H{} F25:1 Ip A0:0 {y4m_format} {y4m_color_range}\n",
             image.width, image.height
         );
-        if self.file.is_none() {
-            assert!(self.filename.is_some());
-            let file = File::create(self.filename.unwrap_ref());
-            if file.is_err() {
-                return false;
-            }
-            self.file = Some(file.unwrap());
-        }
-        if self.file.unwrap_ref().write_all(header.as_bytes()).is_err() {
+        if file.write_all(header.as_bytes()).is_err() {
             return false;
         }
         self.header_written = true;
         true
     }
+}
 
-    pub fn write_frame(&mut self, image: &Image) -> bool {
-        if !self.write_header(image) {
+impl Writer for Y4MWriter {
+    fn write_frame(&mut self, file: &mut File, image: &Image) -> bool {
+        if !self.write_header(file, image) {
             return false;
         }
         let frame_marker = "FRAME\n";
-        if self
-            .file
-            .unwrap_ref()
-            .write_all(frame_marker.as_bytes())
-            .is_err()
-        {
+        if file.write_all(frame_marker.as_bytes()).is_err() {
             return false;
         }
         let planes: &[Plane] = if self.write_alpha { &ALL_PLANES } else { &YUV_PLANES };
@@ -143,7 +120,7 @@ impl Y4MWriter {
                         return false;
                     };
                     let pixels = &row[..image.width(plane)];
-                    if self.file.unwrap_ref().write_all(pixels).is_err() {
+                    if file.write_all(pixels).is_err() {
                         return false;
                     }
                 }
@@ -160,7 +137,7 @@ impl Y4MWriter {
                     for &pixel16 in pixels16 {
                         pixels.extend_from_slice(&pixel16.to_le_bytes());
                     }
-                    if self.file.unwrap_ref().write_all(&pixels[..]).is_err() {
+                    if file.write_all(&pixels[..]).is_err() {
                         return false;
                     }
                 }

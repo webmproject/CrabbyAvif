@@ -1,4 +1,4 @@
-// Copyright 2024 Google LLC
+// Copyright 2025 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,5 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod clap;
-pub mod raw;
+pub(crate) mod y4m;
+
+use crabby_avif::image::Image;
+
+use std::fs::File;
+
+pub trait Writer {
+    fn write_frame(&mut self, file: &mut File, image: &Image) -> bool;
+}
