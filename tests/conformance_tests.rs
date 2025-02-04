@@ -112,7 +112,8 @@ fn write_y4m(image: &Image) -> String {
     let mut y4m = writer::y4m::Y4MWriter::default();
     let filename = get_tempfile();
     let mut file = File::create(&filename).expect("unable to open output file");
-    assert!(y4m.write_frame(&mut file, image));
+    y4m.write_frame(&mut file, image)
+        .expect("unable to write y4m frame");
     filename
 }
 

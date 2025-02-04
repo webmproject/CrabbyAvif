@@ -230,7 +230,7 @@ fn max_threads(jobs: &Option<u32>) -> u32 {
     }
 }
 
-fn create_decoder_and_parse(args: &CommandLineArgs) -> Option<Decoder> {
+fn create_decoder_and_parse(args: &CommandLineArgs) -> AvifResult<Decoder> {
     let settings = Settings {
         strictness: if args.no_strict.unwrap_or(false) {
             Strictness::None
@@ -243,27 +243,22 @@ fn create_decoder_and_parse(args: &CommandLineArgs) -> Option<Decoder> {
     };
     let mut decoder = Decoder::default();
     decoder.settings = settings;
-    if let Err(err) = decoder.set_io_file(&args.input_file) {
-        eprintln!("ERROR: Cannot open input file: {:#?}", err);
-        return None;
-    }
-    if let Err(err) = decoder.parse() {
-        eprintln!("ERROR: Failed to parse image: {:#?}", err);
-        return None;
-    }
-    Some(decoder)
+    decoder
+        .set_io_file(&args.input_file)
+        .or(Err(AvifError::UnknownError(
+            "Cannot open input file".into(),
+        )))?;
+    decoder.parse()?;
+    Ok(decoder)
 }
 
-fn info(args: &CommandLineArgs) -> bool {
+fn info(args: &CommandLineArgs) -> AvifResult<()> {
     if args.output_file.is_some() {
-        eprintln!("output_file is not allowed with --info");
-        return false;
+        return Err(AvifError::UnknownError(
+            "output_file is not allowed with --info".into(),
+        ));
     }
-
-    let mut decoder = match create_decoder_and_parse(&args) {
-        Some(decoder) => decoder,
-        None => return false,
-    };
+    let mut decoder = create_decoder_and_parse(&args)?;
     println!("Image decoded: {}", args.input_file);
     print_image_info(&decoder);
     println!(
@@ -304,11 +299,10 @@ fn info(args: &CommandLineArgs) -> bool {
                 index += 1;
             }
             Err(AvifError::NoImagesRemaining) => {
-                return true;
+                return Ok(());
             }
             Err(err) => {
-                eprintln!("ERROR: Failed to decode frame: {:#?}", err);
-                return false;
+                return Err(err);
             }
         }
     }
@@ -321,25 +315,17 @@ fn get_extension(filename: &str) -> &str {
         .unwrap_or("")
 }
 
-fn decode(args: &CommandLineArgs) -> bool {
+fn decode(args: &CommandLineArgs) -> AvifResult<()> {
     if args.output_file.is_none() {
-        eprintln!("output_file is required");
-        return false;
+        return Err(AvifError::UnknownError("output_file is required".into()));
     }
     let max_threads = max_threads(&args.jobs);
     println!(
         "Decoding with {max_threads} worker thread{}, please wait...",
         if max_threads == 1 { "" } else { "s" }
     );
-    let mut decoder = match create_decoder_and_parse(&args) {
-        Some(decoder) => decoder,
-        None => return false,
-    };
-    let res = decoder.nth_image(args.index.unwrap_or(0));
-    if res.is_err() {
-        eprintln!("(ERROR: Failed to decode image: {:#?}", res);
-        return false;
-    }
+    let mut decoder = create_decoder_and_parse(&args)?;
+    decoder.nth_image(args.index.unwrap_or(0))?;
     println!("Image Decoded: {}", args.input_file);
     println!("Image details:");
     print_image_info(&decoder);
@@ -354,31 +340,31 @@ fn decode(args: &CommandLineArgs) -> bool {
             Box::<Y4MWriter>::default()
         }
         extension => {
-            println!("ERROR: Unknown output file extension ({extension})");
-            return false;
+            return Err(AvifError::UnknownError(format!(
+                "Unknown output file extension ({extension})"
+            )));
         }
     };
-    let mut output_file = match File::create(output_filename) {
-        Ok(file) => file,
-        Err(err) => {
-            eprintln!("ERROR: Could not open output file: {:#?}", err);
-            return false;
-        }
-    };
-    if !writer.write_frame(&mut output_file, image) {
-        eprintln!("ERROR: Could not write output frame");
-        return false;
-    }
+    let mut output_file = File::create(output_filename).or(Err(AvifError::UnknownError(
+        "Could not open output file".into(),
+    )))?;
+    writer.write_frame(&mut output_file, image)?;
     println!(
         "Wrote image at index {} to output {}",
         args.index.unwrap_or(0),
         output_filename,
     );
-    true
+    Ok(())
 }
 
 fn main() {
     let args = CommandLineArgs::parse();
-    let success = if args.info { info(&args) } else { decode(&args) };
-    std::process::exit(if success { 0 } else { 1 });
+    let res = if args.info { info(&args) } else { decode(&args) };
+    match res {
+        Ok(_) => std::process::exit(0),
+        Err(err) => {
+            eprintln!("ERROR: {:#?}", err);
+            std::process::exit(1);
+        }
+    }
 }

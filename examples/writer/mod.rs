@@ -15,9 +15,10 @@
 pub(crate) mod y4m;
 
 use crabby_avif::image::Image;
+use crabby_avif::AvifResult;
 
 use std::fs::File;
 
 pub trait Writer {
-    fn write_frame(&mut self, file: &mut File, image: &Image) -> bool;
+    fn write_frame(&mut self, file: &mut File, image: &Image) -> AvifResult<()>;
 }
