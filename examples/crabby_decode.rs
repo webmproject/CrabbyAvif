@@ -18,6 +18,13 @@ use crabby_avif::decoder::track::RepetitionCount;
 use crabby_avif::decoder::*;
 use crabby_avif::*;
 
+mod writer;
+
+use writer::y4m::Y4MWriter;
+use writer::Writer;
+
+use std::fs::File;
+
 #[derive(Parser)]
 struct CommandLineArgs {
     /// Disable strict decoding, which disables strict validation checks and errors
@@ -38,6 +45,11 @@ struct CommandLineArgs {
 
     #[arg(long)]
     jobs: Option<u32>,
+
+    /// When decoding an image sequence or progressive image, specify which frame index to decode
+    /// (Default: 0)
+    #[arg(long, short = 'I')]
+    index: Option<u32>,
 }
 
 fn print_data_as_columns(rows: &[(usize, &str, String)]) {
@@ -204,12 +216,21 @@ fn print_image_info(decoder: &Decoder) {
     print_data_as_columns(&image_data);
 }
 
-fn info(args: &CommandLineArgs) -> bool {
-    if args.output_file.is_some() {
-        eprintln!("output_file is not allowed with --info");
-        return false;
+fn max_threads(jobs: &Option<u32>) -> u32 {
+    match jobs {
+        Some(x) => {
+            if *x == 0 {
+                // TODO: b/394162563 - Query the number of available CPU cores for this case.
+                1
+            } else {
+                *x
+            }
+        }
+        None => 1,
     }
+}
 
+fn create_decoder_and_parse(args: &CommandLineArgs) -> Option<Decoder> {
     let settings = Settings {
         strictness: if args.no_strict.unwrap_or(false) {
             Strictness::None
@@ -217,19 +238,32 @@ fn info(args: &CommandLineArgs) -> bool {
             Strictness::All
         },
         image_content_to_decode: ImageContentType::All,
-        max_threads: args.jobs.unwrap_or(1),
+        max_threads: max_threads(&args.jobs),
         ..Settings::default()
     };
     let mut decoder = Decoder::default();
     decoder.settings = settings;
     if let Err(err) = decoder.set_io_file(&args.input_file) {
         eprintln!("ERROR: Cannot open input file: {:#?}", err);
-        return false;
+        return None;
     }
     if let Err(err) = decoder.parse() {
         eprintln!("ERROR: Failed to parse image: {:#?}", err);
+        return None;
+    }
+    Some(decoder)
+}
+
+fn info(args: &CommandLineArgs) -> bool {
+    if args.output_file.is_some() {
+        eprintln!("output_file is not allowed with --info");
         return false;
     }
+
+    let mut decoder = match create_decoder_and_parse(&args) {
+        Some(decoder) => decoder,
+        None => return false,
+    };
     println!("Image decoded: {}", args.input_file);
     print_image_info(&decoder);
     println!(
@@ -280,8 +314,67 @@ fn info(args: &CommandLineArgs) -> bool {
     }
 }
 
-fn decode(_args: &CommandLineArgs) -> bool {
-    todo!("Implement decoding to file");
+fn get_extension(filename: &str) -> &str {
+    std::path::Path::new(filename)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+}
+
+fn decode(args: &CommandLineArgs) -> bool {
+    if args.output_file.is_none() {
+        eprintln!("output_file is required");
+        return false;
+    }
+    let max_threads = max_threads(&args.jobs);
+    println!(
+        "Decoding with {max_threads} worker thread{}, please wait...",
+        if max_threads == 1 { "" } else { "s" }
+    );
+    let mut decoder = match create_decoder_and_parse(&args) {
+        Some(decoder) => decoder,
+        None => return false,
+    };
+    let res = decoder.nth_image(args.index.unwrap_or(0));
+    if res.is_err() {
+        eprintln!("(ERROR: Failed to decode image: {:#?}", res);
+        return false;
+    }
+    println!("Image Decoded: {}", args.input_file);
+    println!("Image details:");
+    print_image_info(&decoder);
+
+    let output_filename = &args.output_file.as_ref().unwrap().as_str();
+    let image = decoder.image().unwrap();
+    let mut writer: Box<dyn Writer> = match get_extension(output_filename) {
+        "y4m" => {
+            if !image.icc.is_empty() || !image.exif.is_empty() || !image.xmp.is_empty() {
+                println!("Warning: metadata dropped when saving to y4m");
+            }
+            Box::<Y4MWriter>::default()
+        }
+        extension => {
+            println!("ERROR: Unknown output file extension ({extension})");
+            return false;
+        }
+    };
+    let mut output_file = match File::create(output_filename) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("ERROR: Could not open output file: {:#?}", err);
+            return false;
+        }
+    };
+    if !writer.write_frame(&mut output_file, image) {
+        eprintln!("ERROR: Could not write output frame");
+        return false;
+    }
+    println!(
+        "Wrote image at index {} to output {}",
+        args.index.unwrap_or(0),
+        output_filename,
+    );
+    true
 }
 
 fn main() {
