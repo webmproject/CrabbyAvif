@@ -122,7 +122,7 @@ impl Image {
         matches!(self.depth, 8 | 10 | 12 | 16)
     }
 
-    pub(crate) fn max_channel(&self) -> u16 {
+    pub fn max_channel(&self) -> u16 {
         if !self.depth_valid() {
             0
         } else {
