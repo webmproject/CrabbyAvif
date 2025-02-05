@@ -51,6 +51,10 @@ struct CommandLineArgs {
     /// (Default: 0)
     #[arg(long, short = 'I')]
     index: Option<u32>,
+
+    /// Output depth, either 8 or 16. (PNG only; For y4m/yuv, source depth is retained)
+    #[arg(long, short = 'd')]
+    depth: Option<u8>,
 }
 
 fn print_data_as_columns(rows: &[(usize, &str, String)]) {
@@ -320,6 +324,13 @@ fn decode(args: &CommandLineArgs) -> AvifResult<()> {
     if args.output_file.is_none() {
         return Err(AvifError::UnknownError("output_file is required".into()));
     }
+    if let Some(depth) = args.depth {
+        if depth != 8 && depth != 16 {
+            return Err(AvifError::UnknownError(format!(
+                "Invalid depth requested: {depth}"
+            )));
+        }
+    }
     let max_threads = max_threads(&args.jobs);
     println!(
         "Decoding with {max_threads} worker thread{}, please wait...",
@@ -341,7 +352,7 @@ fn decode(args: &CommandLineArgs) -> AvifResult<()> {
             }
             Box::new(Y4MWriter::create(extension == "yuv"))
         }
-        "png" => Box::<PngWriter>::default(),
+        "png" => Box::new(PngWriter { depth: args.depth }),
         _ => {
             return Err(AvifError::UnknownError(format!(
                 "Unknown output file extension ({extension})"
