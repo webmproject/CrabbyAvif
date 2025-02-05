@@ -57,6 +57,18 @@ impl Writer for PngWriter {
         let mut encoder = png::Encoder::new(file, image.width, image.height);
         encoder.set_color(png_color_type);
         encoder.set_depth(if depth == 8 { png::BitDepth::Eight } else { png::BitDepth::Sixteen });
+        if !image.xmp.is_empty() {
+            if let Ok(text) = String::from_utf8(image.xmp.clone()) {
+                if encoder
+                    .add_itxt_chunk("XML:com.adobe.xmp".to_string(), text)
+                    .is_err()
+                {
+                    eprintln!("Warning: Ignoring XMP data");
+                }
+            } else {
+                eprintln!("Warning: Ignoring XMP data because it is not a valid UTF-8 string");
+            }
+        }
         let mut writer = encoder.write_header().or(Err(AvifError::UnknownError(
             "Could not write the PNG header".into(),
         )))?;
