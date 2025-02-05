@@ -25,9 +25,18 @@ use super::Writer;
 pub(crate) struct Y4MWriter {
     header_written: bool,
     write_alpha: bool,
+    skip_headers: bool,
 }
 
 impl Y4MWriter {
+    #[allow(unused)]
+    pub(crate) fn create(skip_headers: bool) -> Self {
+        Self {
+            skip_headers,
+            ..Default::default()
+        }
+    }
+
     fn write_header(&mut self, file: &mut File, image: &Image) -> AvifResult<()> {
         if self.header_written {
             return Ok(());
@@ -98,10 +107,12 @@ impl Y4MWriter {
 
 impl Writer for Y4MWriter {
     fn write_frame(&mut self, file: &mut File, image: &Image) -> AvifResult<()> {
-        self.write_header(file, image)?;
-        let frame_marker = "FRAME\n";
-        file.write_all(frame_marker.as_bytes())
-            .or(Err(AvifError::IoError))?;
+        if !self.skip_headers {
+            self.write_header(file, image)?;
+            let frame_marker = "FRAME\n";
+            file.write_all(frame_marker.as_bytes())
+                .or(Err(AvifError::IoError))?;
+        }
         let planes: &[Plane] = if self.write_alpha { &ALL_PLANES } else { &YUV_PLANES };
         for plane in planes {
             let plane = *plane;

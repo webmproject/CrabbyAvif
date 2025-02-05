@@ -332,14 +332,15 @@ fn decode(args: &CommandLineArgs) -> AvifResult<()> {
 
     let output_filename = &args.output_file.as_ref().unwrap().as_str();
     let image = decoder.image().unwrap();
-    let mut writer: Box<dyn Writer> = match get_extension(output_filename) {
-        "y4m" => {
+    let extension = get_extension(output_filename);
+    let mut writer: Box<dyn Writer> = match extension {
+        "y4m" | "raw" => {
             if !image.icc.is_empty() || !image.exif.is_empty() || !image.xmp.is_empty() {
-                println!("Warning: metadata dropped when saving to y4m");
+                println!("Warning: metadata dropped when saving to {extension}");
             }
-            Box::<Y4MWriter>::default()
+            Box::new(Y4MWriter::create(extension == "raw"))
         }
-        extension => {
+        _ => {
             return Err(AvifError::UnknownError(format!(
                 "Unknown output file extension ({extension})"
             )));
