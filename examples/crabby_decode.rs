@@ -20,6 +20,7 @@ use crabby_avif::*;
 
 mod writer;
 
+use writer::png::PngWriter;
 use writer::y4m::Y4MWriter;
 use writer::Writer;
 
@@ -340,6 +341,7 @@ fn decode(args: &CommandLineArgs) -> AvifResult<()> {
             }
             Box::new(Y4MWriter::create(extension == "yuv"))
         }
+        "png" => Box::<PngWriter>::default(),
         _ => {
             return Err(AvifError::UnknownError(format!(
                 "Unknown output file extension ({extension})"

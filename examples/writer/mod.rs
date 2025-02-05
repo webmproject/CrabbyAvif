@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Not all sub-modules are used by all targets. Ignore dead code warnings.
+#![allow(dead_code)]
+
+pub(crate) mod png;
 pub(crate) mod y4m;
 
 use crabby_avif::image::Image;
