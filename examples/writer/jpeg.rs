@@ -17,11 +17,10 @@ use crabby_avif::reformat::rgb;
 use crabby_avif::AvifError;
 use crabby_avif::AvifResult;
 
-use std::fs::File;
-
 use super::Writer;
 
 use image::codecs::jpeg;
+use std::fs::File;
 
 #[derive(Default)]
 pub(crate) struct JpegWriter {
