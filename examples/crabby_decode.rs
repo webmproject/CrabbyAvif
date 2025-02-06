@@ -63,6 +63,11 @@ struct CommandLineArgs {
     #[arg(long, short = 'q', value_parser = value_parser!(u8).range(0..=100))]
     quality: Option<u8>,
 
+    /// Enable progressive AVIF processing. If a progressive image is encountered and --progressive
+    /// is passed, --index will be used to choose which layer to decode (in progressive order).
+    #[arg(long, default_value = "false")]
+    progressive: bool,
+
     /// Input AVIF file
     #[arg(allow_hyphen_values = false)]
     input_file: String,
@@ -255,6 +260,7 @@ fn create_decoder_and_parse(args: &CommandLineArgs) -> AvifResult<Decoder> {
         strictness: if args.no_strict { Strictness::None } else { Strictness::All },
         image_content_to_decode: ImageContentType::All,
         max_threads: max_threads(&args.jobs),
+        allow_progressive: args.progressive,
         ..Settings::default()
     };
     let mut decoder = Decoder::default();
