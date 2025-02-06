@@ -20,6 +20,7 @@ use crabby_avif::*;
 
 mod writer;
 
+use writer::jpeg::JpegWriter;
 use writer::png::PngWriter;
 use writer::y4m::Y4MWriter;
 use writer::Writer;
@@ -52,9 +53,14 @@ struct CommandLineArgs {
     #[arg(long, short = 'I')]
     index: Option<u32>,
 
-    /// Output depth, either 8 or 16. (PNG only; For y4m/yuv, source depth is retained)
+    /// Output depth, either 8 or 16. (PNG only; For y4m/yuv, source depth is retained; JPEG is
+    /// always 8bit)
     #[arg(long, short = 'd')]
     depth: Option<u8>,
+
+    /// Output quality in 0..100. (JPEG only, default: 90)
+    #[arg(long, short = 'q')]
+    quality: Option<u8>,
 }
 
 fn print_data_as_columns(rows: &[(usize, &str, String)]) {
@@ -331,6 +337,13 @@ fn decode(args: &CommandLineArgs) -> AvifResult<()> {
             )));
         }
     }
+    if let Some(quality) = args.quality {
+        if quality > 100 {
+            return Err(AvifError::UnknownError(format!(
+                "Invalid output quality requested: {quality}"
+            )));
+        }
+    }
     let max_threads = max_threads(&args.jobs);
     println!(
         "Decoding with {max_threads} worker thread{}, please wait...",
@@ -353,6 +366,9 @@ fn decode(args: &CommandLineArgs) -> AvifResult<()> {
             Box::new(Y4MWriter::create(extension == "yuv"))
         }
         "png" => Box::new(PngWriter { depth: args.depth }),
+        "jpg" | "jpeg" => Box::new(JpegWriter {
+            quality: args.quality,
+        }),
         _ => {
             return Err(AvifError::UnknownError(format!(
                 "Unknown output file extension ({extension})"

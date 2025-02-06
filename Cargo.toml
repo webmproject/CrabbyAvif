@@ -29,6 +29,7 @@ rand = "0.8.5"
 clap = { version = "4.5.28", features = ["derive"] }
 clap_derive = { version = "4.5.28" }
 png = "0.17.16"
+image = { version = "0.24.0", features = ["jpeg"] }
 
 [build-dependencies]
 bindgen = "0.69.1"
