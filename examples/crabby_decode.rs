@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use clap::value_parser;
 use clap::Parser;
 
 use crabby_avif::decoder::track::RepetitionCount;
@@ -27,23 +28,23 @@ use writer::Writer;
 
 use std::fs::File;
 
+fn depth_parser(s: &str) -> Result<u8, String> {
+    match s.parse::<u8>() {
+        Ok(8) => Ok(8),
+        Ok(16) => Ok(16),
+        _ => Err("Value must be either 8 or 16".into()),
+    }
+}
+
 #[derive(Parser)]
 struct CommandLineArgs {
     /// Disable strict decoding, which disables strict validation checks and errors
-    #[arg(long)]
-    no_strict: Option<bool>,
+    #[arg(long, default_value = "false")]
+    no_strict: bool,
 
     /// Decode all frames and display all image information instead of saving to disk
-    #[arg(short, long, default_value = "false")]
+    #[arg(short = 'i', long, default_value = "false")]
     info: bool,
-
-    /// Input AVIF file
-    #[arg(allow_hyphen_values = false)]
-    input_file: String,
-
-    /// Output file
-    #[arg(allow_hyphen_values = false)]
-    output_file: Option<String>,
 
     #[arg(long)]
     jobs: Option<u32>,
@@ -55,12 +56,20 @@ struct CommandLineArgs {
 
     /// Output depth, either 8 or 16. (PNG only; For y4m/yuv, source depth is retained; JPEG is
     /// always 8bit)
-    #[arg(long, short = 'd')]
+    #[arg(long, short = 'd', value_parser = depth_parser)]
     depth: Option<u8>,
 
     /// Output quality in 0..100. (JPEG only, default: 90)
-    #[arg(long, short = 'q')]
+    #[arg(long, short = 'q', value_parser = value_parser!(u8).range(0..=100))]
     quality: Option<u8>,
+
+    /// Input AVIF file
+    #[arg(allow_hyphen_values = false)]
+    input_file: String,
+
+    /// Output file
+    #[arg(allow_hyphen_values = false)]
+    output_file: Option<String>,
 }
 
 fn print_data_as_columns(rows: &[(usize, &str, String)]) {
@@ -243,11 +252,7 @@ fn max_threads(jobs: &Option<u32>) -> u32 {
 
 fn create_decoder_and_parse(args: &CommandLineArgs) -> AvifResult<Decoder> {
     let settings = Settings {
-        strictness: if args.no_strict.unwrap_or(false) {
-            Strictness::None
-        } else {
-            Strictness::All
-        },
+        strictness: if args.no_strict { Strictness::None } else { Strictness::All },
         image_content_to_decode: ImageContentType::All,
         max_threads: max_threads(&args.jobs),
         ..Settings::default()
@@ -329,20 +334,6 @@ fn get_extension(filename: &str) -> &str {
 fn decode(args: &CommandLineArgs) -> AvifResult<()> {
     if args.output_file.is_none() {
         return Err(AvifError::UnknownError("output_file is required".into()));
-    }
-    if let Some(depth) = args.depth {
-        if depth != 8 && depth != 16 {
-            return Err(AvifError::UnknownError(format!(
-                "Invalid depth requested: {depth}"
-            )));
-        }
-    }
-    if let Some(quality) = args.quality {
-        if quality > 100 {
-            return Err(AvifError::UnknownError(format!(
-                "Invalid output quality requested: {quality}"
-            )));
-        }
     }
     let max_threads = max_threads(&args.jobs);
     println!(
