@@ -275,11 +275,6 @@ fn create_decoder_and_parse(args: &CommandLineArgs) -> AvifResult<Decoder> {
 }
 
 fn info(args: &CommandLineArgs) -> AvifResult<()> {
-    if args.output_file.is_some() {
-        return Err(AvifError::UnknownError(
-            "output_file is not allowed with --info".into(),
-        ));
-    }
     let mut decoder = create_decoder_and_parse(&args)?;
     println!("Image decoded: {}", args.input_file);
     print_image_info(&decoder);
@@ -338,9 +333,6 @@ fn get_extension(filename: &str) -> &str {
 }
 
 fn decode(args: &CommandLineArgs) -> AvifResult<()> {
-    if args.output_file.is_none() {
-        return Err(AvifError::UnknownError("output_file is required".into()));
-    }
     let max_threads = max_threads(&args.jobs);
     println!(
         "Decoding with {max_threads} worker thread{}, please wait...",
@@ -384,8 +376,43 @@ fn decode(args: &CommandLineArgs) -> AvifResult<()> {
     Ok(())
 }
 
+fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
+    if args.info {
+        if args.output_file.is_some()
+            || args.quality.is_some()
+            || args.depth.is_some()
+            || args.index.is_some()
+        {
+            return Err(AvifError::UnknownError(
+                "--info contains unsupported extra arguments".into(),
+            ));
+        }
+    } else {
+        if args.output_file.is_none() {
+            return Err(AvifError::UnknownError("output_file is required".into()));
+        }
+        let output_filename = &args.output_file.as_ref().unwrap().as_str();
+        let extension = get_extension(output_filename);
+        if args.quality.is_some() && extension != "jpg" && extension != "jpeg" {
+            return Err(AvifError::UnknownError(
+                "quality is only supported for jpeg output".into(),
+            ));
+        }
+        if args.depth.is_some() && extension != "png" {
+            return Err(AvifError::UnknownError(
+                "depth is only supported for png output".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn main() {
     let args = CommandLineArgs::parse();
+    if let Err(err) = validate_args(&args) {
+        eprintln!("ERROR: {:#?}", err);
+        std::process::exit(1);
+    }
     let res = if args.info { info(&args) } else { decode(&args) };
     match res {
         Ok(_) => std::process::exit(0),
