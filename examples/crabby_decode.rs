@@ -17,6 +17,7 @@ use clap::Parser;
 
 use crabby_avif::decoder::track::RepetitionCount;
 use crabby_avif::decoder::*;
+use crabby_avif::utils::clap::CropRect;
 use crabby_avif::*;
 
 mod writer;
@@ -170,9 +171,30 @@ fn print_image_info(decoder: &Decoder) {
                 format!("{}/{}", pasp.h_spacing, pasp.v_spacing),
             ));
         }
-        if let Some(_clap) = image.clap {
-            // TODO: b/394162563 - print clap info.
+        if let Some(clap) = image.clap {
             image_data.push((1, "clap (Clean Aperture)", format!("")));
+            image_data.push((2, "W", format!("{}/{}", clap.width.0, clap.width.1)));
+            image_data.push((2, "H", format!("{}/{}", clap.height.0, clap.height.1)));
+            image_data.push((
+                2,
+                "hOff",
+                format!("{}/{}", clap.horiz_off.0, clap.horiz_off.1),
+            ));
+            image_data.push((
+                2,
+                "vOff",
+                format!("{}/{}", clap.vert_off.0, clap.vert_off.1),
+            ));
+            match CropRect::create_from(&clap, image.width, image.height, image.yuv_format) {
+                Ok(rect) => image_data.extend_from_slice(&[
+                    (2, "Valid, derived crop rect", format!("")),
+                    (3, "X", format!("{}", rect.x)),
+                    (3, "Y", format!("{}", rect.y)),
+                    (3, "W", format!("{}", rect.width)),
+                    (3, "H", format!("{}", rect.height)),
+                ]),
+                Err(_) => image_data.push((2, "Invalid", format!(""))),
+            }
         }
         if let Some(angle) = image.irot_angle {
             image_data.push((1, "irot (Rotation)", format!("{angle}")));
