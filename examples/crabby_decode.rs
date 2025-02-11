@@ -106,6 +106,11 @@ fn print_vec(data: &[u8]) -> String {
 fn print_image_info(decoder: &Decoder) {
     let image = decoder.image().unwrap();
     let mut image_data = vec![
+        (
+            0,
+            "File Format",
+            format!("{:#?}", decoder.compression_format()),
+        ),
         (0, "Resolution", format!("{}x{}", image.width, image.height)),
         (0, "Bit Depth", format!("{}", image.depth)),
         (0, "Format", format!("{:#?}", image.yuv_format)),
