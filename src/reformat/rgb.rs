@@ -346,8 +346,12 @@ impl Image {
         ) | matches!(self.format, Format::Rgba1010102)
         {
             // These conversions are only supported via libyuv.
-            // TODO: b/362984605 - Handle alpha channel for these formats.
             if converted_with_libyuv {
+                if image.has_alpha() && matches!(self.format, Format::Rgba1010102) {
+                    // If the source image has an alpha channel, scale them to 2 bits and fill it
+                    // into the rgb image. Otherwise, libyuv writes them as opaque by default.
+                    self.import_alpha_from(image)?;
+                }
                 return Ok(());
             } else {
                 return Err(AvifError::NotImplemented);
