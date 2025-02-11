@@ -272,8 +272,10 @@ fn max_threads(jobs: &Option<u32>) -> u32 {
     match jobs {
         Some(x) => {
             if *x == 0 {
-                // TODO: b/394162563 - Query the number of available CPU cores for this case.
-                1
+                match std::thread::available_parallelism() {
+                    Ok(value) => value.get() as u32,
+                    Err(_) => 1,
+                }
             } else {
                 *x
             }
