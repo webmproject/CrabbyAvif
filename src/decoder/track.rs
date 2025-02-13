@@ -17,6 +17,8 @@ use crate::parser::mp4box::ItemProperty;
 use crate::parser::mp4box::MetaBox;
 use crate::*;
 
+use std::num::NonZero;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RepetitionCount {
     Unknown,
@@ -48,7 +50,11 @@ pub struct Track {
 }
 
 impl Track {
-    pub(crate) fn check_limits(&self, size_limit: u32, dimension_limit: u32) -> bool {
+    pub(crate) fn check_limits(
+        &self,
+        size_limit: Option<NonZero<u32>>,
+        dimension_limit: Option<NonZero<u32>>,
+    ) -> bool {
         check_limits(self.width, self.height, size_limit, dimension_limit)
     }
 

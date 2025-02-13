@@ -43,6 +43,7 @@ use crate::*;
 
 use std::cmp::max;
 use std::cmp::min;
+use std::num::NonZero;
 
 pub trait IO {
     fn read(&mut self, offset: u64, max_read_size: usize) -> AvifResult<&[u8]>;
@@ -159,9 +160,9 @@ pub struct Settings {
     pub allow_incremental: bool,
     pub image_content_to_decode: ImageContentType,
     pub codec_choice: CodecChoice,
-    pub image_size_limit: u32,
-    pub image_dimension_limit: u32,
-    pub image_count_limit: u32,
+    pub image_size_limit: Option<NonZero<u32>>,
+    pub image_dimension_limit: Option<NonZero<u32>>,
+    pub image_count_limit: Option<NonZero<u32>>,
     pub max_threads: u32,
     pub android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat,
 }
@@ -177,9 +178,9 @@ impl Default for Settings {
             allow_incremental: false,
             image_content_to_decode: ImageContentType::ColorAndAlpha,
             codec_choice: Default::default(),
-            image_size_limit: DEFAULT_IMAGE_SIZE_LIMIT,
-            image_dimension_limit: DEFAULT_IMAGE_DIMENSION_LIMIT,
-            image_count_limit: DEFAULT_IMAGE_COUNT_LIMIT,
+            image_size_limit: NonZero::new(DEFAULT_IMAGE_SIZE_LIMIT),
+            image_dimension_limit: NonZero::new(DEFAULT_IMAGE_DIMENSION_LIMIT),
+            image_count_limit: NonZero::new(DEFAULT_IMAGE_COUNT_LIMIT),
             max_threads: 1,
             android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat::default(),
         }
@@ -1694,8 +1695,10 @@ impl Decoder {
         if !self.parsing_complete() {
             return Err(AvifError::NoContent);
         }
-        if n > self.settings.image_count_limit {
-            return Err(AvifError::NoImagesRemaining);
+        if let Some(limit) = self.settings.image_count_limit {
+            if n > limit.get() {
+                return Err(AvifError::NoImagesRemaining);
+            }
         }
         if self.color_track_id.is_none() {
             return Ok(self.image_timing);

@@ -19,6 +19,7 @@ pub mod stream;
 use crate::parser::mp4box::*;
 use crate::*;
 
+use std::num::NonZero;
 use std::ops::Range;
 
 // Some HEIF fractional fields can be negative, hence Fraction and UFraction.
@@ -221,15 +222,24 @@ pub(crate) fn find_icc(properties: &[ItemProperty]) -> AvifResult<Option<&Vec<u8
     Ok(single_icc)
 }
 
-pub(crate) fn check_limits(width: u32, height: u32, size_limit: u32, dimension_limit: u32) -> bool {
+pub(crate) fn check_limits(
+    width: u32,
+    height: u32,
+    size_limit: Option<NonZero<u32>>,
+    dimension_limit: Option<NonZero<u32>>,
+) -> bool {
     if height == 0 {
         return false;
     }
-    if width > size_limit / height {
-        return false;
+    if let Some(limit) = size_limit {
+        if width > limit.get() / height {
+            return false;
+        }
     }
-    if dimension_limit != 0 && (width > dimension_limit || height > dimension_limit) {
-        return false;
+    if let Some(limit) = dimension_limit {
+        if width > limit.get() || height > limit.get() {
+            return false;
+        }
     }
     true
 }

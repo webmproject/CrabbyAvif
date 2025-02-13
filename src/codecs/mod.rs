@@ -27,6 +27,8 @@ use crate::parser::mp4box::CodecConfiguration;
 use crate::AndroidMediaCodecOutputColorFormat;
 use crate::AvifResult;
 
+use std::num::NonZero;
+
 #[derive(Clone, Default)]
 pub struct DecoderConfig {
     pub operating_point: u8,
@@ -35,7 +37,7 @@ pub struct DecoderConfig {
     pub height: u32,
     pub depth: u8,
     pub max_threads: u32,
-    pub image_size_limit: u32,
+    pub image_size_limit: Option<NonZero<u32>>,
     pub max_input_size: usize,
     pub codec_config: CodecConfiguration,
     pub category: Category,

@@ -28,6 +28,7 @@ use writer::y4m::Y4MWriter;
 use writer::Writer;
 
 use std::fs::File;
+use std::num::NonZero;
 
 fn depth_parser(s: &str) -> Result<u8, String> {
     match s.parse::<u8>() {
@@ -68,6 +69,14 @@ struct CommandLineArgs {
     /// is passed, --index will be used to choose which layer to decode (in progressive order).
     #[arg(long, default_value = "false")]
     progressive: bool,
+
+    /// Maximum image size (in total pixels) that should be tolerated (0 means unlimited)
+    #[arg(long)]
+    size_limit: Option<u32>,
+
+    /// Maximum image dimension (width or height) that should be tolerated (0 means unlimited)
+    #[arg(long)]
+    dimension_limit: Option<u32>,
 
     /// Input AVIF file
     #[arg(allow_hyphen_values = false)]
@@ -285,13 +294,21 @@ fn max_threads(jobs: &Option<u32>) -> u32 {
 }
 
 fn create_decoder_and_parse(args: &CommandLineArgs) -> AvifResult<Decoder> {
-    let settings = Settings {
+    let mut settings = Settings {
         strictness: if args.no_strict { Strictness::None } else { Strictness::All },
         image_content_to_decode: ImageContentType::All,
         max_threads: max_threads(&args.jobs),
         allow_progressive: args.progressive,
         ..Settings::default()
     };
+    // These values cannot be initialized in the list above since we need the default values to be
+    // retain unless they are explicitly specified.
+    if let Some(size_limit) = args.size_limit {
+        settings.image_size_limit = NonZero::new(size_limit);
+    }
+    if let Some(dimension_limit) = args.dimension_limit {
+        settings.image_dimension_limit = NonZero::new(dimension_limit);
+    }
     let mut decoder = Decoder::default();
     decoder.settings = settings;
     decoder
