@@ -83,13 +83,11 @@ pub enum ChromaUpsampling {
 impl ChromaUpsampling {
     #[cfg(feature = "libyuv")]
     pub(crate) fn nearest_neighbor_filter_allowed(&self) -> bool {
-        // TODO: this function has to return different values based on whether libyuv is used.
         !matches!(self, Self::Bilinear | Self::BestQuality)
     }
 
     #[cfg(feature = "libyuv")]
     pub(crate) fn bilinear_or_better_filter_allowed(&self) -> bool {
-        // TODO: this function has to return different values based on whether libyuv is used.
         !matches!(self, Self::Nearest | Self::Fastest)
     }
 }
