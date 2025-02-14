@@ -72,6 +72,14 @@ impl Track {
         self.has_av1_samples() && self.aux_for_id.is_none()
     }
 
+    pub(crate) fn is_auxiliary_alpha(&self) -> bool {
+        if let Some(properties) = self.get_properties() {
+            is_auxiliary_alpha(&properties)
+        } else {
+            false
+        }
+    }
+
     pub(crate) fn get_properties(&self) -> Option<&Vec<ItemProperty>> {
         self.sample_table.as_ref()?.get_properties()
     }
@@ -96,9 +104,7 @@ impl Track {
                 // read in order to accept files which inadvertently has a trackDuration of 0
                 // without any edit lists.
                 if self.track_duration == 0 {
-                    return Err(AvifError::BmffParseFailed(
-                        "invalid track duration 0".into(),
-                    ));
+                    return Err(AvifError::BmffParseFailed("invalid track duration 0".into()));
                 }
                 let repetition_count: u64 = self.track_duration.div_ceil(self.segment_duration) - 1;
                 return match i32::try_from(repetition_count) {
@@ -118,10 +124,7 @@ impl Track {
             ..ImageTiming::default()
         };
         for i in 0..image_index as usize {
-            checked_incr!(
-                image_timing.pts_in_timescales,
-                sample_table.image_delta(i)? as u64
-            );
+            checked_incr!(image_timing.pts_in_timescales, sample_table.image_delta(i)? as u64);
         }
         image_timing.duration_in_timescales =
             sample_table.image_delta(image_index as usize)? as u64;
@@ -193,9 +196,7 @@ pub struct SampleTable {
 
 impl SampleTable {
     pub(crate) fn has_av1_sample(&self) -> bool {
-        self.sample_descriptions
-            .iter()
-            .any(|x| x.is_supported_format())
+        self.sample_descriptions.iter().any(|x| x.is_supported_format())
     }
 
     // returns the number of samples in the chunk.
@@ -209,13 +210,7 @@ impl SampleTable {
     }
 
     pub(crate) fn get_properties(&self) -> Option<&Vec<ItemProperty>> {
-        Some(
-            &self
-                .sample_descriptions
-                .iter()
-                .find(|x| x.is_supported_format())?
-                .properties,
-        )
+        Some(&self.sample_descriptions.iter().find(|x| x.is_supported_format())?.properties)
     }
 
     pub(crate) fn sample_size(&self, index: usize) -> AvifResult<usize> {

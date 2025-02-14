@@ -95,22 +95,10 @@ impl IFraction {
             return Ok(());
         }
         let self_d = self.1;
-        self.0 = self
-            .0
-            .checked_mul(val.1)
-            .ok_or(AvifError::UnknownError("".into()))?;
-        self.1 = self
-            .1
-            .checked_mul(val.1)
-            .ok_or(AvifError::UnknownError("".into()))?;
-        val.0 = val
-            .0
-            .checked_mul(self_d)
-            .ok_or(AvifError::UnknownError("".into()))?;
-        val.1 = val
-            .1
-            .checked_mul(self_d)
-            .ok_or(AvifError::UnknownError("".into()))?;
+        self.0 = self.0.checked_mul(val.1).ok_or(AvifError::UnknownError("".into()))?;
+        self.1 = self.1.checked_mul(val.1).ok_or(AvifError::UnknownError("".into()))?;
+        val.0 = val.0.checked_mul(self_d).ok_or(AvifError::UnknownError("".into()))?;
+        val.1 = val.1.checked_mul(self_d).ok_or(AvifError::UnknownError("".into()))?;
         Ok(())
     }
 
@@ -118,10 +106,7 @@ impl IFraction {
         let mut val = *val;
         val.simplify();
         self.common_denominator(&mut val)?;
-        self.0 = self
-            .0
-            .checked_add(val.0)
-            .ok_or(AvifError::UnknownError("".into()))?;
+        self.0 = self.0.checked_add(val.0).ok_or(AvifError::UnknownError("".into()))?;
         self.simplify();
         Ok(())
     }
@@ -130,10 +115,7 @@ impl IFraction {
         let mut val = *val;
         val.simplify();
         self.common_denominator(&mut val)?;
-        self.0 = self
-            .0
-            .checked_sub(val.0)
-            .ok_or(AvifError::UnknownError("".into()))?;
+        self.0 = self.0.checked_sub(val.0).ok_or(AvifError::UnknownError("".into()))?;
         self.simplify();
         Ok(())
     }
@@ -198,9 +180,7 @@ pub(crate) fn find_nclx(properties: &[ItemProperty]) -> AvifResult<Option<&Nclx>
     for property in properties {
         if let ItemProperty::ColorInformation(ColorInformation::Nclx(nclx)) = property {
             if single_nclx.is_some() {
-                return Err(AvifError::BmffParseFailed(
-                    "multiple nclx were found".into(),
-                ));
+                return Err(AvifError::BmffParseFailed("multiple nclx were found".into()));
             }
             single_nclx = Some(nclx);
         }
@@ -246,11 +226,7 @@ pub(crate) fn check_limits(
 
 fn limited_to_full(min: i32, max: i32, full: i32, v: u16) -> u16 {
     let v = v as i32;
-    clamp_i32(
-        (((v - min) * full) + ((max - min) / 2)) / (max - min),
-        0,
-        full,
-    ) as u16
+    clamp_i32((((v - min) * full) + ((max - min) / 2)) / (max - min), 0, full) as u16
 }
 
 pub(crate) fn limited_to_full_y(depth: u8, v: u16) -> u16 {
@@ -264,9 +240,8 @@ pub(crate) fn limited_to_full_y(depth: u8, v: u16) -> u16 {
 
 pub(crate) fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
     let mut v = Vec::<T>::new();
-    let allocation_size = size
-        .checked_mul(std::mem::size_of::<T>())
-        .ok_or(AvifError::OutOfMemory)?;
+    let allocation_size =
+        size.checked_mul(std::mem::size_of::<T>()).ok_or(AvifError::OutOfMemory)?;
     // TODO: b/342251590 - Do not request allocations of more than what is allowed in Chromium's
     // partition allocator. This is the allowed limit in the chromium fuzzers. The value comes
     // from:
@@ -295,4 +270,10 @@ pub(crate) fn check_slice_range(len: usize, range: &Range<usize>) -> AvifResult<
         return Err(AvifError::NoContent);
     }
     Ok(())
+}
+
+pub(crate) fn is_auxiliary_alpha(properties: &[ItemProperty]) -> bool {
+    matches!(find_property!(properties, AuxiliaryType),
+             Some(aux_type) if aux_type == "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha" ||
+                               aux_type == "urn:mpeg:hevc:2015:auxid:1")
 }

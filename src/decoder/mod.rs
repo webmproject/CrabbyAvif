@@ -232,12 +232,12 @@ impl Strictness {
     pub(crate) fn pixi_required(&self) -> bool {
         match self {
             Strictness::All => true,
-            Strictness::SpecificInclude(flags) => flags
-                .iter()
-                .any(|x| matches!(x, StrictnessFlag::PixiRequired)),
-            Strictness::SpecificExclude(flags) => !flags
-                .iter()
-                .any(|x| matches!(x, StrictnessFlag::PixiRequired)),
+            Strictness::SpecificInclude(flags) => {
+                flags.iter().any(|x| matches!(x, StrictnessFlag::PixiRequired))
+            }
+            Strictness::SpecificExclude(flags) => {
+                !flags.iter().any(|x| matches!(x, StrictnessFlag::PixiRequired))
+            }
             _ => false,
         }
     }
@@ -245,12 +245,12 @@ impl Strictness {
     pub(crate) fn alpha_ispe_required(&self) -> bool {
         match self {
             Strictness::All => true,
-            Strictness::SpecificInclude(flags) => flags
-                .iter()
-                .any(|x| matches!(x, StrictnessFlag::AlphaIspeRequired)),
-            Strictness::SpecificExclude(flags) => !flags
-                .iter()
-                .any(|x| matches!(x, StrictnessFlag::AlphaIspeRequired)),
+            Strictness::SpecificInclude(flags) => {
+                flags.iter().any(|x| matches!(x, StrictnessFlag::AlphaIspeRequired))
+            }
+            Strictness::SpecificExclude(flags) => {
+                !flags.iter().any(|x| matches!(x, StrictnessFlag::AlphaIspeRequired))
+            }
             _ => false,
         }
     }
@@ -474,11 +474,8 @@ impl Decoder {
     fn find_tone_mapped_image_item(&self, color_item_id: u32) -> AvifResult<Option<(u32, u32)>> {
         let tmap_items: Vec<_> = self.items.values().filter(|x| x.is_tmap()).collect();
         for item in tmap_items {
-            let dimg_items: Vec<_> = self
-                .items
-                .values()
-                .filter(|x| x.dimg_for_id == item.id)
-                .collect();
+            let dimg_items: Vec<_> =
+                self.items.values().filter(|x| x.dimg_for_id == item.id).collect();
             if dimg_items.len() != 2 {
                 return Err(AvifError::InvalidToneMappedImage(
                     "Expected tmap to have 2 dimg items".into(),
@@ -497,10 +494,8 @@ impl Decoder {
     // returns (tone_mapped_image_item_id, gain_map_item_id) if found
     fn find_gainmap_item(&self, color_item_id: u32) -> AvifResult<Option<(u32, u32)>> {
         if let Some((tonemap_id, gainmap_id)) = self.find_tone_mapped_image_item(color_item_id)? {
-            let gainmap_item = self
-                .items
-                .get(&gainmap_id)
-                .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
+            let gainmap_item =
+                self.items.get(&gainmap_id).ok_or(AvifError::InvalidToneMappedImage("".into()))?;
             if gainmap_item.should_skip() {
                 return Err(AvifError::InvalidToneMappedImage("".into()));
             }
@@ -511,10 +506,8 @@ impl Decoder {
     }
 
     fn validate_gainmap_item(&mut self, gainmap_id: u32, tonemap_id: u32) -> AvifResult<()> {
-        let gainmap_item = self
-            .items
-            .get(&gainmap_id)
-            .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
+        let gainmap_item =
+            self.items.get(&gainmap_id).ok_or(AvifError::InvalidToneMappedImage("".into()))?;
         // Find and adopt all colr boxes "at most one for a given value of colour type"
         // (HEIF 6.5.5.1, from Amendment 3). Accept one of each type, and bail out if more than one
         // of a given type is provided.
@@ -530,10 +523,8 @@ impl Decoder {
         // Find and adopt all colr boxes "at most one for a given value of colour type"
         // (HEIF 6.5.5.1, from Amendment 3). Accept one of each type, and bail out if more than one
         // of a given type is provided.
-        let tonemap_item = self
-            .items
-            .get(&tonemap_id)
-            .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
+        let tonemap_item =
+            self.items.get(&tonemap_id).ok_or(AvifError::InvalidToneMappedImage("".into()))?;
         if let Some(nclx) = find_nclx(&tonemap_item.properties)? {
             self.gainmap.alt_color_primaries = nclx.color_primaries;
             self.gainmap.alt_transfer_characteristics = nclx.transfer_characteristics;
@@ -574,17 +565,13 @@ impl Decoder {
             if let Some(exif) = items.iter_mut().rfind(|x| x.1.is_exif(color_item_index)) {
                 let mut stream = exif.1.stream(io)?;
                 exif::parse(&mut stream)?;
-                image
-                    .exif
-                    .extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
+                image.exif.extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
             }
         }
         if !settings.ignore_xmp {
             if let Some(xmp) = items.iter_mut().rfind(|x| x.1.is_xmp(color_item_index)) {
                 let mut stream = xmp.1.stream(io)?;
-                image
-                    .xmp
-                    .extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
+                image.xmp.extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
             }
         }
         Ok(())
@@ -592,10 +579,7 @@ impl Decoder {
 
     fn generate_tiles(&mut self, item_id: u32, category: Category) -> AvifResult<Vec<Tile>> {
         let mut tiles: Vec<Tile> = Vec::new();
-        let item = self
-            .items
-            .get(&item_id)
-            .ok_or(AvifError::MissingImageItem)?;
+        let item = self.items.get(&item_id).ok_or(AvifError::MissingImageItem)?;
         if item.derived_item_ids.is_empty() {
             if item.size == 0 {
                 return Err(AvifError::MissingImageItem);
@@ -650,12 +634,7 @@ impl Decoder {
         let mut search_size = 64;
         while search_size < 4096 {
             let tile_index = 0;
-            self.prepare_sample(
-                /*image_index=*/ 0,
-                category,
-                tile_index,
-                Some(search_size),
-            )?;
+            self.prepare_sample(/*image_index=*/ 0, category, tile_index, Some(search_size))?;
             let io = &mut self.io.unwrap_mut();
             let sample = &self.tiles[category.usize()][tile_index].input.samples[0];
             let item_data_buffer = if sample.item_id == 0 {
@@ -690,17 +669,13 @@ impl Decoder {
             if *dimg_item_id == item_id {
                 continue;
             }
-            let dimg_item = self
-                .items
-                .get(dimg_item_id)
-                .ok_or(AvifError::InvalidImageGrid("".into()))?;
+            let dimg_item =
+                self.items.get(dimg_item_id).ok_or(AvifError::InvalidImageGrid("".into()))?;
             if dimg_item.dimg_for_id != item_id {
                 continue;
             }
             if !dimg_item.is_image_codec_item() || dimg_item.has_unsupported_essential_property {
-                return Err(AvifError::InvalidImageGrid(
-                    "invalid input item in dimg grid".into(),
-                ));
+                return Err(AvifError::InvalidImageGrid("invalid input item in dimg grid".into()));
             }
             if first_codec_config.is_none() {
                 // Adopt the configuration property of the first tile.
@@ -708,9 +683,7 @@ impl Decoder {
                 first_codec_config = Some(
                     dimg_item
                         .codec_config()
-                        .ok_or(AvifError::BmffParseFailed(
-                            "missing codec config property".into(),
-                        ))?
+                        .ok_or(AvifError::BmffParseFailed("missing codec config property".into()))?
                         .clone(),
                 );
             }
@@ -728,9 +701,7 @@ impl Decoder {
         // in the 'iref' box.
         overlay_item_ids.sort_by_key(|k| self.items.get(k).unwrap().dimg_index);
         let item = self.items.get_mut(&item_id).unwrap();
-        item.properties.push(ItemProperty::CodecConfiguration(
-            first_codec_config.unwrap(),
-        ));
+        item.properties.push(ItemProperty::CodecConfiguration(first_codec_config.unwrap()));
         item.derived_item_ids = overlay_item_ids;
         Ok(())
     }
@@ -747,17 +718,13 @@ impl Decoder {
             if *dimg_item_id == item_id {
                 continue;
             }
-            let dimg_item = self
-                .items
-                .get(dimg_item_id)
-                .ok_or(AvifError::InvalidImageGrid("".into()))?;
+            let dimg_item =
+                self.items.get(dimg_item_id).ok_or(AvifError::InvalidImageGrid("".into()))?;
             if dimg_item.dimg_for_id != item_id {
                 continue;
             }
             if !dimg_item.is_image_codec_item() || dimg_item.has_unsupported_essential_property {
-                return Err(AvifError::InvalidImageGrid(
-                    "invalid input item in dimg grid".into(),
-                ));
+                return Err(AvifError::InvalidImageGrid("invalid input item in dimg grid".into()));
             }
             if first_codec_config.is_none() {
                 // Adopt the configuration property of the first tile.
@@ -765,9 +732,7 @@ impl Decoder {
                 first_codec_config = Some(
                     dimg_item
                         .codec_config()
-                        .ok_or(AvifError::BmffParseFailed(
-                            "missing codec config property".into(),
-                        ))?
+                        .ok_or(AvifError::BmffParseFailed("missing codec config property".into()))?
                         .clone(),
                 );
             }
@@ -779,9 +744,7 @@ impl Decoder {
             grid_item_ids.push(*dimg_item_id);
         }
         if grid_item_ids.len() != tile_count {
-            return Err(AvifError::InvalidImageGrid(
-                "Expected number of tiles not found".into(),
-            ));
+            return Err(AvifError::InvalidImageGrid("Expected number of tiles not found".into()));
         }
         // ISO/IEC 23008-12: The input images are inserted in row-major order,
         // top-row first, left to right, in the order of SingleItemTypeReferenceBox of type 'dimg'
@@ -790,9 +753,7 @@ impl Decoder {
         // the 'iref' box.
         grid_item_ids.sort_by_key(|k| self.items.get(k).unwrap().dimg_index);
         let item = self.items.get_mut(&item_id).unwrap();
-        item.properties.push(ItemProperty::CodecConfiguration(
-            first_codec_config.unwrap(),
-        ));
+        item.properties.push(ItemProperty::CodecConfiguration(first_codec_config.unwrap()));
         item.derived_item_ids = grid_item_ids;
         Ok(())
     }
@@ -840,17 +801,13 @@ impl Decoder {
                         self.settings.image_size_limit,
                         self.settings.image_dimension_limit,
                     ) {
-                        return Err(AvifError::BmffParseFailed(
-                            "track dimension too large".into(),
-                        ));
+                        return Err(AvifError::BmffParseFailed("track dimension too large".into()));
                     }
                 }
             }
             self.items = construct_items(&avif_boxes.meta)?;
             if avif_boxes.ftyp.has_tmap() && !self.items.values().any(|x| x.item_type == "tmap") {
-                return Err(AvifError::BmffParseFailed(
-                    "tmap was required but not found".into(),
-                ));
+                return Err(AvifError::BmffParseFailed("tmap was required but not found".into()));
             }
             for item in self.items.values_mut() {
                 item.harvest_ispe(
@@ -880,11 +837,8 @@ impl Decoder {
             let color_properties: &Vec<ItemProperty>;
             let gainmap_properties: Option<&Vec<ItemProperty>>;
             if self.source == Source::Tracks {
-                let color_track = self
-                    .tracks
-                    .iter()
-                    .find(|x| x.is_color())
-                    .ok_or(AvifError::NoContent)?;
+                let color_track =
+                    self.tracks.iter().find(|x| x.is_color()).ok_or(AvifError::NoContent)?;
                 if let Some(meta) = &color_track.meta {
                     let mut color_track_items = construct_items(meta)?;
                     Self::search_exif_or_xmp_metadata(
@@ -896,9 +850,8 @@ impl Decoder {
                     )?;
                 }
                 self.color_track_id = Some(color_track.id);
-                color_properties = color_track
-                    .get_properties()
-                    .ok_or(AvifError::BmffParseFailed("".into()))?;
+                color_properties =
+                    color_track.get_properties().ok_or(AvifError::BmffParseFailed("".into()))?;
                 gainmap_properties = None;
 
                 self.tiles[Category::Color.usize()].push(Tile::create_from_track(
@@ -909,7 +862,9 @@ impl Decoder {
                 )?);
                 self.tile_info[Category::Color.usize()].tile_count = 1;
 
-                if let Some(alpha_track) = self.tracks.iter().find(|x| x.is_aux(color_track.id)) {
+                if let Some(alpha_track) =
+                    self.tracks.iter().find(|x| x.is_aux(color_track.id) && x.is_auxiliary_alpha())
+                {
                     self.tiles[Category::Alpha.usize()].push(Tile::create_from_track(
                         alpha_track,
                         self.settings.image_count_limit,
@@ -1051,15 +1006,12 @@ impl Decoder {
                 }
 
                 if item_ids[Category::Gainmap.usize()] != 0 {
-                    let gainmap_item = self
-                        .items
-                        .get(&item_ids[Category::Gainmap.usize()])
-                        .unwrap();
+                    let gainmap_item =
+                        self.items.get(&item_ids[Category::Gainmap.usize()]).unwrap();
                     self.gainmap.image.width = gainmap_item.width;
                     self.gainmap.image.height = gainmap_item.height;
-                    let codec_config = gainmap_item
-                        .codec_config()
-                        .ok_or(AvifError::BmffParseFailed("".into()))?;
+                    let codec_config =
+                        gainmap_item.codec_config().ok_or(AvifError::BmffParseFailed("".into()))?;
                     self.gainmap.image.depth = codec_config.depth();
                     self.gainmap.image.yuv_format = codec_config.pixel_format();
                     self.gainmap.image.chroma_sample_position =
@@ -1067,19 +1019,10 @@ impl Decoder {
                 }
 
                 // This borrow has to be in the end of this branch.
-                color_properties = &self
-                    .items
-                    .get(&item_ids[Category::Color.usize()])
-                    .unwrap()
-                    .properties;
+                color_properties =
+                    &self.items.get(&item_ids[Category::Color.usize()]).unwrap().properties;
                 gainmap_properties = if item_ids[Category::Gainmap.usize()] != 0 {
-                    Some(
-                        &self
-                            .items
-                            .get(&item_ids[Category::Gainmap.usize()])
-                            .unwrap()
-                            .properties,
-                    )
+                    Some(&self.items.get(&item_ids[Category::Gainmap.usize()]).unwrap().properties)
                 } else {
                     None
                 };
@@ -1220,10 +1163,7 @@ impl Decoder {
 
     fn create_codec(&mut self, category: Category, tile_index: usize) -> AvifResult<()> {
         let tile = &self.tiles[category.usize()][tile_index];
-        let mut codec: Codec = self
-            .settings
-            .codec_choice
-            .get_codec(tile.codec_config.is_avif())?;
+        let mut codec: Codec = self.settings.codec_choice.get_codec(tile.codec_config.is_avif())?;
         let config = DecoderConfig {
             operating_point: tile.operating_point,
             all_layers: tile.input.all_layers,
@@ -1301,10 +1241,8 @@ impl Decoder {
             return Ok(());
         }
         // Data comes from an item.
-        let item = self
-            .items
-            .get_mut(&sample.item_id)
-            .ok_or(AvifError::BmffParseFailed("".into()))?;
+        let item =
+            self.items.get_mut(&sample.item_id).ok_or(AvifError::BmffParseFailed("".into()))?;
         if item.extents.len() == 1 {
             // Item has only one extent. Nothing to prepare.
             return Ok(());
@@ -1577,23 +1515,19 @@ impl Decoder {
                     self.image.width = tile.image.width;
                     self.image.height = tile.image.height;
                     self.image.copy_properties_from(tile);
-                    self.image
-                        .steal_or_copy_planes_from(&tile.image, category)?;
+                    self.image.steal_or_copy_planes_from(&tile.image, category)?;
                 }
                 Category::Alpha => {
                     if !self.image.has_same_properties(&tile.image) {
                         return Err(AvifError::DecodeAlphaFailed);
                     }
-                    self.image
-                        .steal_or_copy_planes_from(&tile.image, category)?;
+                    self.image.steal_or_copy_planes_from(&tile.image, category)?;
                 }
                 Category::Gainmap => {
                     self.gainmap.image.width = tile.image.width;
                     self.gainmap.image.height = tile.image.height;
                     self.gainmap.image.copy_properties_from(tile);
-                    self.gainmap
-                        .image
-                        .steal_or_copy_planes_from(&tile.image, category)?;
+                    self.gainmap.image.steal_or_copy_planes_from(&tile.image, category)?;
                 }
             }
         }
@@ -1704,11 +1638,8 @@ impl Decoder {
             return Ok(self.image_timing);
         }
         let color_track_id = self.color_track_id.unwrap();
-        let color_track = self
-            .tracks
-            .iter()
-            .find(|x| x.id == color_track_id)
-            .ok_or(AvifError::NoContent)?;
+        let color_track =
+            self.tracks.iter().find(|x| x.id == color_track_id).ok_or(AvifError::NoContent)?;
         if color_track.sample_table.is_none() {
             return Ok(self.image_timing);
         }
@@ -1816,10 +1747,7 @@ impl Decoder {
                         let item = self.items.get(&sample.item_id).unwrap();
                         item.max_extent(sample)?
                     } else {
-                        Extent {
-                            offset: sample.offset,
-                            size: sample.size,
-                        }
+                        Extent { offset: sample.offset, size: sample.size }
                     };
                     extent.merge(&sample_extent)?;
                 }
@@ -1848,14 +1776,8 @@ mod tests {
         expected_offset: u64,
         expected_size: usize,
     ) {
-        let mut e1 = Extent {
-            offset: offset1,
-            size: size1,
-        };
-        let e2 = Extent {
-            offset: offset2,
-            size: size2,
-        };
+        let mut e1 = Extent { offset: offset1, size: size1 };
+        let e2 = Extent { offset: offset2, size: size2 };
         assert!(e1.merge(&e2).is_ok());
         assert_eq!(e1.offset, expected_offset);
         assert_eq!(e1.size, expected_size);

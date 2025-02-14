@@ -99,9 +99,7 @@ impl Item {
         dimension_limit: Option<NonZero<u32>>,
     ) -> AvifResult<()> {
         if width == 0 || height == 0 || !check_limits(width, height, size_limit, dimension_limit) {
-            return Err(AvifError::InvalidImageGrid(
-                "invalid derived image dimensions".into(),
-            ));
+            return Err(AvifError::InvalidImageGrid("invalid derived image dimensions".into()));
         }
         Ok(())
     }
@@ -120,9 +118,7 @@ impl Item {
                 // unsigned int(8) version = 0;
                 let version = stream.read_u8()?;
                 if version != 0 {
-                    return Err(AvifError::InvalidImageGrid(
-                        "unsupported version for grid".into(),
-                    ));
+                    return Err(AvifError::InvalidImageGrid("unsupported version for grid".into()));
                 }
                 // unsigned int(8) flags;
                 let flags = stream.read_u8()?;
@@ -233,9 +229,7 @@ impl Item {
                 self.width = image_spatial_extents.width;
                 self.height = image_spatial_extents.height;
                 if self.width == 0 || self.height == 0 {
-                    return Err(AvifError::BmffParseFailed(
-                        "item id has invalid size.".into(),
-                    ));
+                    return Err(AvifError::BmffParseFailed("item id has invalid size.".into()));
                 }
                 if !check_limits(
                     image_spatial_extents.width,
@@ -243,9 +237,7 @@ impl Item {
                     size_limit,
                     dimension_limit,
                 ) {
-                    return Err(AvifError::BmffParseFailed(
-                        "item dimensions too large".into(),
-                    ));
+                    return Err(AvifError::BmffParseFailed("item dimensions too large".into()));
                 }
             }
             None => {
@@ -273,12 +265,9 @@ impl Item {
         if self.item_type == "grid" || self.item_type == "iovl" {
             for derived_item_id in &self.derived_item_ids {
                 let derived_item = items.get(derived_item_id).unwrap();
-                let derived_codec_config =
-                    derived_item
-                        .codec_config()
-                        .ok_or(AvifError::BmffParseFailed(
-                            "missing codec config property".into(),
-                        ))?;
+                let derived_codec_config = derived_item
+                    .codec_config()
+                    .ok_or(AvifError::BmffParseFailed("missing codec config property".into()))?;
                 if codec_config != derived_codec_config {
                     return Err(AvifError::BmffParseFailed(
                         "codec config of derived items do not match".into(),
@@ -326,9 +315,7 @@ impl Item {
     }
 
     pub(crate) fn is_auxiliary_alpha(&self) -> bool {
-        matches!(find_property!(self.properties, AuxiliaryType),
-                 Some(aux_type) if aux_type == "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha" ||
-                                   aux_type == "urn:mpeg:hevc:2015:auxid:1")
+        is_auxiliary_alpha(&self.properties)
     }
 
     pub(crate) fn is_image_codec_item(&self) -> bool {
@@ -433,13 +420,7 @@ fn insert_item_if_not_exists(id: u32, items: &mut Items) {
     if items.contains_key(&id) {
         return;
     }
-    items.insert(
-        id,
-        Item {
-            id,
-            ..Item::default()
-        },
-    );
+    items.insert(id, Item { id, ..Item::default() });
 }
 
 pub(crate) fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
@@ -459,9 +440,7 @@ pub(crate) fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
         insert_item_if_not_exists(iloc.item_id, &mut items);
         let item = items.get_mut(&iloc.item_id).unwrap();
         if !item.extents.is_empty() {
-            return Err(AvifError::BmffParseFailed(
-                "item already has extents".into(),
-            ));
+            return Err(AvifError::BmffParseFailed("item already has extents".into()));
         }
         if iloc.construction_method == 1 {
             item.idat.clone_from(&meta.idat);
@@ -480,9 +459,7 @@ pub(crate) fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
             continue;
         }
         if ipma_seen.contains(&association.item_id) {
-            return Err(AvifError::BmffParseFailed(
-                "item has duplicate ipma entry".into(),
-            ));
+            return Err(AvifError::BmffParseFailed("item has duplicate ipma entry".into()));
         }
         ipma_seen.insert(association.item_id);
 
@@ -502,9 +479,7 @@ pub(crate) fn construct_items(meta: &MetaBox) -> AvifResult<Items> {
             }
             // property_index is 1-based.
             if property_index > meta.iprp.properties.len() {
-                return Err(AvifError::BmffParseFailed(
-                    "invalid property_index in ipma".into(),
-                ));
+                return Err(AvifError::BmffParseFailed("invalid property_index in ipma".into()));
             }
 
             match (&meta.iprp.properties[property_index - 1], essential) {
