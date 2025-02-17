@@ -47,6 +47,7 @@ pub struct Track {
     pub sample_table: Option<SampleTable>,
     pub elst_seen: bool,
     pub meta: Option<MetaBox>,
+    pub handler_type: String,
 }
 
 impl Track {
@@ -65,11 +66,14 @@ impl Track {
             false
         }
     }
+    pub(crate) fn is_pict(&self) -> bool {
+        self.handler_type == "pict"
+    }
     pub(crate) fn is_aux(&self, primary_track_id: u32) -> bool {
         self.has_av1_samples() && self.aux_for_id == Some(primary_track_id)
     }
     pub(crate) fn is_color(&self) -> bool {
-        self.has_av1_samples() && self.aux_for_id.is_none()
+        self.is_pict() && self.has_av1_samples() && self.aux_for_id.is_none()
     }
 
     pub(crate) fn get_properties(&self) -> Option<&Vec<ItemProperty>> {
