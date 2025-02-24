@@ -30,6 +30,24 @@ pub struct GainMapMetadata {
     pub use_base_color_space: bool,
 }
 
+impl GainMapMetadata {
+    pub(crate) fn is_valid(&self) -> AvifResult<()> {
+        for i in 0..3 {
+            self.min[i].is_valid()?;
+            self.max[i].is_valid()?;
+            self.gamma[i].is_valid()?;
+            self.base_offset[i].is_valid()?;
+            self.alternate_offset[i].is_valid()?;
+            if self.max[i].as_f64()? < self.min[i].as_f64()? || self.gamma[i].0 == 0 {
+                return Err(AvifError::InvalidArgument);
+            }
+        }
+        self.base_hdr_headroom.is_valid()?;
+        self.alternate_hdr_headroom.is_valid()?;
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 pub struct GainMap {
     pub image: Image,

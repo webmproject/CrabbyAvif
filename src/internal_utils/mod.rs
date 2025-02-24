@@ -42,6 +42,29 @@ pub struct UFraction(pub u32, pub u32);
 #[derive(Clone, Copy, Debug, Default)]
 pub struct IFraction(pub i32, pub i32);
 
+impl Fraction {
+    pub(crate) fn is_valid(&self) -> AvifResult<()> {
+        match self.1 {
+            0 => Err(AvifError::InvalidArgument),
+            _ => Ok(()),
+        }
+    }
+
+    pub(crate) fn as_f64(&self) -> AvifResult<f64> {
+        self.is_valid()?;
+        Ok(self.0 as f64 / self.1 as f64)
+    }
+}
+
+impl UFraction {
+    pub(crate) fn is_valid(&self) -> AvifResult<()> {
+        match self.1 {
+            0 => Err(AvifError::InvalidArgument),
+            _ => Ok(()),
+        }
+    }
+}
+
 impl TryFrom<UFraction> for IFraction {
     type Error = AvifError;
 

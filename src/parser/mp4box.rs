@@ -2022,6 +2022,7 @@ pub(crate) fn parse_tmap(stream: &mut IStream) -> AvifResult<Option<GainMapMetad
             "invalid trailing bytes in tmap box".into(),
         ));
     }
+    metadata.is_valid()?;
     Ok(Some(metadata))
 }
 
