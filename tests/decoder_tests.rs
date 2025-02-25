@@ -32,10 +32,7 @@ fn alpha_no_ispe() {
     // See https://github.com/AOMediaCodec/libavif/pull/745.
     let mut decoder = get_decoder("alpha_noispe.avif");
     // By default, non-strict files are refused.
-    assert!(matches!(
-        decoder.settings.strictness,
-        decoder::Strictness::All
-    ));
+    assert!(matches!(decoder.settings.strictness, decoder::Strictness::All));
     let res = decoder.parse();
     assert!(matches!(res, Err(AvifError::BmffParseFailed(_))));
     // Allow this kind of file specifically.
@@ -128,6 +125,54 @@ fn animated_image_with_alpha_and_metadata() {
     }
 }
 
+#[test]
+fn animated_image_with_depth_and_metadata() {
+    // Depth map data is not supported and should be ignored.
+    let mut decoder = get_decoder("colors-animated-8bpc-depth-exif-xmp.avif");
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
+    let image = decoder.image().expect("image was none");
+    assert!(!image.alpha_present);
+    assert!(image.image_sequence_track_present);
+    assert_eq!(decoder.image_count(), 5);
+    assert_eq!(decoder.repetition_count(), RepetitionCount::Infinite);
+    assert_eq!(image.exif.len(), 1126);
+    assert_eq!(image.xmp.len(), 3898);
+    if !HAS_DECODER {
+        return;
+    }
+    for _ in 0..5 {
+        assert!(decoder.next_image().is_ok());
+    }
+}
+
+#[test]
+fn animated_image_with_depth_and_metadata_source_set_to_primary_item() {
+    // Depth map data is not supported and should be ignored.
+    let mut decoder = get_decoder("colors-animated-8bpc-depth-exif-xmp.avif");
+    decoder.settings.source = decoder::Source::PrimaryItem;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
+    let image = decoder.image().expect("image was none");
+    assert!(!image.alpha_present);
+    // This will be reported as true irrespective of the preferred source.
+    assert!(image.image_sequence_track_present);
+    // imageCount is expected to be 1 because we are using primary item as the
+    // preferred source.
+    assert_eq!(decoder.image_count(), 1);
+    assert_eq!(decoder.repetition_count(), RepetitionCount::Finite(0));
+    if !HAS_DECODER {
+        return;
+    }
+    // Get the first (and only) image.
+    assert!(decoder.next_image().is_ok());
+    // Subsequent calls should not return anything since there is only one
+    // image in the preferred source.
+    assert!(decoder.next_image().is_err());
+}
+
 // From avifkeyframetest.cc
 #[test]
 fn keyframes() {
@@ -199,20 +244,14 @@ fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
     let image = decoder.image().expect("image was none");
-    assert!(matches!(
-        image.progressive_state,
-        decoder::ProgressiveState::Available
-    ));
+    assert!(matches!(image.progressive_state, decoder::ProgressiveState::Available));
 
     decoder.settings.allow_progressive = true;
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
     let image = decoder.image().expect("image was none");
-    assert!(matches!(
-        image.progressive_state,
-        decoder::ProgressiveState::Active
-    ));
+    assert!(matches!(image.progressive_state, decoder::ProgressiveState::Active));
     assert_eq!(image.width, width);
     assert_eq!(image.height, height);
     assert_eq!(decoder.image_count(), layer_count);
@@ -530,11 +569,7 @@ fn raw_io() {
     let data =
         std::fs::read(get_test_file("colors-animated-8bpc.avif")).expect("Unable to read file");
     let mut decoder = decoder::Decoder::default();
-    let _ = unsafe {
-        decoder
-            .set_io_raw(data.as_ptr(), data.len())
-            .expect("Failed to set IO")
-    };
+    let _ = unsafe { decoder.set_io_raw(data.as_ptr(), data.len()).expect("Failed to set IO") };
     assert!(decoder.parse().is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
     assert_eq!(decoder.image_count(), 5);
@@ -585,10 +620,7 @@ fn custom_io() {
         std::fs::read(get_test_file("colors-animated-8bpc.avif")).expect("Unable to read file");
     let mut decoder = decoder::Decoder::default();
     let available_size_rc = Rc::new(RefCell::new(data.len()));
-    let io = Box::new(CustomIO {
-        available_size_rc: available_size_rc.clone(),
-        data,
-    });
+    let io = Box::new(CustomIO { available_size_rc: available_size_rc.clone(), data });
     decoder.set_io(io);
     assert!(decoder.parse().is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
@@ -671,23 +703,15 @@ fn expected_min_decoded_row_count_computation() {
 fn incremental_decode() {
     // Grid item offsets for sofa_grid1x5_420.avif:
     // Each line is "$extent_offset + $extent_length".
-    let grid_cell_offsets: Vec<usize> = vec![
-        578 + 2680,
-        3258 + 7385,
-        10643 + 7203,
-        17846 + 4305,
-        22151 + 3258,
-    ];
+    let grid_cell_offsets: Vec<usize> =
+        vec![578 + 2680, 3258 + 7385, 10643 + 7203, 17846 + 4305, 22151 + 3258];
 
     let data = std::fs::read(get_test_file("sofa_grid1x5_420.avif")).expect("Unable to read file");
     let len = data.len();
     let available_size_rc = Rc::new(RefCell::new(0usize));
     let mut decoder = decoder::Decoder::default();
     decoder.settings.allow_incremental = true;
-    let io = Box::new(CustomIO {
-        available_size_rc: available_size_rc.clone(),
-        data,
-    });
+    let io = Box::new(CustomIO { available_size_rc: available_size_rc.clone(), data });
     decoder.set_io(io);
     let step: usize = std::cmp::max(1, len / 10000) as usize;
 
@@ -715,10 +739,7 @@ fn incremental_decode() {
     let mut previous_decoded_row_count = 0;
     let mut decode_result = decoder.next_image();
     while decode_result.is_err()
-        && matches!(
-            decode_result.as_ref().err().unwrap(),
-            AvifError::WaitingOnIo
-        )
+        && matches!(decode_result.as_ref().err().unwrap(), AvifError::WaitingOnIo)
     {
         {
             let mut available_size = available_size_rc.borrow_mut();
@@ -875,10 +896,7 @@ fn white_1x1_ftyp_size0() -> AvifResult<()> {
 
     let mut decoder = decoder::Decoder::default();
     decoder.set_io_vec(file_bytes);
-    assert!(matches!(
-        decoder.parse(),
-        Err(AvifError::BmffParseFailed(_))
-    ));
+    assert!(matches!(decoder.parse(), Err(AvifError::BmffParseFailed(_))));
     Ok(())
 }
 
@@ -887,9 +905,7 @@ fn dimg_repetition() {
     let mut decoder = get_decoder("sofa_grid1x5_420_dimg_repeat.avif");
     assert_eq!(
         decoder.parse(),
-        Err(AvifError::BmffParseFailed(
-            "multiple dimg references for item ID 1".into()
-        ))
+        Err(AvifError::BmffParseFailed("multiple dimg references for item ID 1".into()))
     );
 }
 
@@ -925,10 +941,7 @@ fn dimg_ordering() {
 #[test]
 fn heic_peek() {
     let file_data = std::fs::read(get_test_file("blue.heic")).expect("could not read file");
-    assert_eq!(
-        decoder::Decoder::peek_compatible_file_type(&file_data),
-        cfg!(feature = "heic")
-    );
+    assert_eq!(decoder::Decoder::peek_compatible_file_type(&file_data), cfg!(feature = "heic"));
 }
 
 #[test]
@@ -943,10 +956,7 @@ fn heic_parsing() {
         assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
         if cfg!(feature = "android_mediacodec") {
             // Decoding is available only via android_mediacodec.
-            assert!(!matches!(
-                decoder.next_image(),
-                Err(AvifError::NoCodecAvailable)
-            ));
+            assert!(!matches!(decoder.next_image(), Err(AvifError::NoCodecAvailable)));
         }
     } else {
         assert!(res.is_err());
