@@ -43,6 +43,7 @@ libgav1 = ["dep:libgav1-sys"]
 libyuv = ["dep:libyuv-sys"]
 android_mediacodec = ["dep:ndk-sys"]
 heic = []
+disable_cfi = []
 
 [package.metadata.capi.header]
 name = "avif"
