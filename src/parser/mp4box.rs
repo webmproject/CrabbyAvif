@@ -980,7 +980,7 @@ fn parse_clli(stream: &mut IStream) -> AvifResult<ItemProperty> {
     Ok(ItemProperty::ContentLightLevelInformation(clli))
 }
 
-fn parse_ipco(stream: &mut IStream) -> AvifResult<Vec<ItemProperty>> {
+fn parse_ipco(stream: &mut IStream, is_track: bool) -> AvifResult<Vec<ItemProperty>> {
     // Section 8.11.14.2 of ISO/IEC 14496-12.
     let mut properties: Vec<ItemProperty> = Vec::new();
     while stream.has_bytes_left()? {
@@ -992,7 +992,8 @@ fn parse_ipco(stream: &mut IStream) -> AvifResult<Vec<ItemProperty>> {
             "av1C" => properties.push(parse_av1C(&mut sub_stream)?),
             "colr" => properties.push(parse_colr(&mut sub_stream)?),
             "pasp" => properties.push(parse_pasp(&mut sub_stream)?),
-            "auxC" => properties.push(parse_auxC(&mut sub_stream)?),
+            "auxC" if !is_track => properties.push(parse_auxC(&mut sub_stream)?),
+            "auxi" if is_track => properties.push(parse_auxC(&mut sub_stream)?),
             "clap" => properties.push(parse_clap(&mut sub_stream)?),
             "irot" => properties.push(parse_irot(&mut sub_stream)?),
             "imir" => properties.push(parse_imir(&mut sub_stream)?),
@@ -1072,7 +1073,7 @@ fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
     // Parse ipco box.
     {
         let mut sub_stream = stream.sub_stream(&header.size)?;
-        iprp.properties = parse_ipco(&mut sub_stream)?;
+        iprp.properties = parse_ipco(&mut sub_stream, /*is_track=*/ false)?;
     }
     // Parse ipma boxes.
     while stream.has_bytes_left()? {
@@ -1576,7 +1577,10 @@ fn parse_sample_entry(stream: &mut IStream, format: String) -> AvifResult<Sample
         // PixelAspectRatioBox pasp; // optional
 
         // Now read any of 'av1C', 'clap', 'pasp' etc.
-        sample_entry.properties = parse_ipco(&mut stream.sub_stream(&BoxSize::UntilEndOfStream)?)?;
+        sample_entry.properties = parse_ipco(
+            &mut stream.sub_stream(&BoxSize::UntilEndOfStream)?,
+            /*is_track=*/ true,
+        )?;
 
         if !sample_entry
             .properties

@@ -326,9 +326,8 @@ impl Item {
     }
 
     pub(crate) fn is_auxiliary_alpha(&self) -> bool {
-        matches!(find_property!(self.properties, AuxiliaryType),
-                 Some(aux_type) if aux_type == "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha" ||
-                                   aux_type == "urn:mpeg:hevc:2015:auxid:1")
+        matches!(find_property!(&self.properties, AuxiliaryType),
+                 Some(aux_type) if is_auxiliary_type_alpha(aux_type))
     }
 
     pub(crate) fn is_image_codec_item(&self) -> bool {

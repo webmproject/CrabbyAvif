@@ -909,7 +909,11 @@ impl Decoder {
                 )?);
                 self.tile_info[Category::Color.usize()].tile_count = 1;
 
-                if let Some(alpha_track) = self.tracks.iter().find(|x| x.is_aux(color_track.id)) {
+                if let Some(alpha_track) = self
+                    .tracks
+                    .iter()
+                    .find(|x| x.is_aux(color_track.id) && x.is_auxiliary_alpha())
+                {
                     self.tiles[Category::Alpha.usize()].push(Tile::create_from_track(
                         alpha_track,
                         self.settings.image_count_limit,

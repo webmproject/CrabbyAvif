@@ -72,6 +72,15 @@ impl Track {
         self.has_av1_samples() && self.aux_for_id.is_none()
     }
 
+    pub(crate) fn is_auxiliary_alpha(&self) -> bool {
+        if let Some(properties) = self.get_properties() {
+            if let Some(aux_type) = &find_property!(properties, AuxiliaryType) {
+                return is_auxiliary_type_alpha(aux_type);
+            }
+        }
+        true // Assume alpha if no type is present
+    }
+
     pub(crate) fn get_properties(&self) -> Option<&Vec<ItemProperty>> {
         self.sample_table.as_ref()?.get_properties()
     }

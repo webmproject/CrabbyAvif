@@ -128,6 +128,54 @@ fn animated_image_with_alpha_and_metadata() {
     }
 }
 
+#[test]
+fn animated_image_with_depth_and_metadata() {
+    // Depth map data is not supported and should be ignored.
+    let mut decoder = get_decoder("colors-animated-8bpc-depth-exif-xmp.avif");
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
+    let image = decoder.image().expect("image was none");
+    assert!(!image.alpha_present);
+    assert!(image.image_sequence_track_present);
+    assert_eq!(decoder.image_count(), 5);
+    assert_eq!(decoder.repetition_count(), RepetitionCount::Infinite);
+    assert_eq!(image.exif.len(), 1126);
+    assert_eq!(image.xmp.len(), 3898);
+    if !HAS_DECODER {
+        return;
+    }
+    for _ in 0..5 {
+        assert!(decoder.next_image().is_ok());
+    }
+}
+
+#[test]
+fn animated_image_with_depth_and_metadata_source_set_to_primary_item() {
+    // Depth map data is not supported and should be ignored.
+    let mut decoder = get_decoder("colors-animated-8bpc-depth-exif-xmp.avif");
+    decoder.settings.source = decoder::Source::PrimaryItem;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
+    let image = decoder.image().expect("image was none");
+    assert!(!image.alpha_present);
+    // This will be reported as true irrespective of the preferred source.
+    assert!(image.image_sequence_track_present);
+    // imageCount is expected to be 1 because we are using primary item as the
+    // preferred source.
+    assert_eq!(decoder.image_count(), 1);
+    assert_eq!(decoder.repetition_count(), RepetitionCount::Finite(0));
+    if !HAS_DECODER {
+        return;
+    }
+    // Get the first (and only) image.
+    assert!(decoder.next_image().is_ok());
+    // Subsequent calls should not return anything since there is only one
+    // image in the preferred source.
+    assert!(decoder.next_image().is_err());
+}
+
 // From avifkeyframetest.cc
 #[test]
 fn keyframes() {
