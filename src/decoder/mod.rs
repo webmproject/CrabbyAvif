@@ -836,10 +836,12 @@ impl Decoder {
             if !self.tracks.is_empty() {
                 self.image.image_sequence_track_present = true;
                 for track in &self.tracks {
-                    if !track.check_limits(
-                        self.settings.image_size_limit,
-                        self.settings.image_dimension_limit,
-                    ) {
+                    if track.is_video_handler()
+                        && !track.check_limits(
+                            self.settings.image_size_limit,
+                            self.settings.image_dimension_limit,
+                        )
+                    {
                         return Err(AvifError::BmffParseFailed(
                             "track dimension too large".into(),
                         ));

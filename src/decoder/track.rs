@@ -47,6 +47,7 @@ pub struct Track {
     pub sample_table: Option<SampleTable>,
     pub elst_seen: bool,
     pub meta: Option<MetaBox>,
+    pub handler_type: String,
 }
 
 impl Track {
@@ -65,10 +66,19 @@ impl Track {
             false
         }
     }
+    pub(crate) fn is_video_handler(&self) -> bool {
+        // Handler types known to be associated with video content.
+        self.handler_type == "pict" || self.handler_type == "vide" || self.handler_type == "auxv"
+    }
     pub(crate) fn is_aux(&self, primary_track_id: u32) -> bool {
+        // Do not check the track's handler_type. It should be "auxv" according to
+        // HEIF (ISO/IEC 23008-12:2022), Section 7.5.3.1, but old versions of libavif used to write
+        // "pict" instead.
         self.has_av1_samples() && self.aux_for_id == Some(primary_track_id)
     }
     pub(crate) fn is_color(&self) -> bool {
+        // Do not check the track's handler_type. It should be "pict" according to
+        // HEIF (ISO/IEC 23008-12:2022), Section 7 but some existing files might be using "vide".
         self.has_av1_samples() && self.aux_for_id.is_none()
     }
 

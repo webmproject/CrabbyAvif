@@ -459,7 +459,7 @@ fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
     })
 }
 
-fn parse_hdlr(stream: &mut IStream) -> AvifResult<()> {
+fn parse_hdlr(stream: &mut IStream) -> AvifResult<String> {
     // Section 8.4.3.2 of ISO/IEC 14496-12.
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
     // unsigned int(32) pre_defined = 0;
@@ -471,16 +471,6 @@ fn parse_hdlr(stream: &mut IStream) -> AvifResult<()> {
     }
     // unsigned int(32) handler_type;
     let handler_type = stream.read_string(4)?;
-    if handler_type != "pict" {
-        // Section 6.2 of ISO/IEC 23008-12:
-        //   The handler type for the MetaBox shall be 'pict'.
-        // https://aomediacodec.github.io/av1-avif/v1.1.0.html#image-sequences does not apply
-        // because this function is only called for the MetaBox but it would work too:
-        //   The track handler for an AV1 Image Sequence shall be pict.
-        return Err(AvifError::BmffParseFailed(
-            "Box[hdlr] handler_type is not 'pict'".into(),
-        ));
-    }
     // const unsigned int(32)[3] reserved = 0;
     if stream.read_u32()? != 0 || stream.read_u32()? != 0 || stream.read_u32()? != 0 {
         return Err(AvifError::BmffParseFailed(
@@ -492,7 +482,7 @@ fn parse_hdlr(stream: &mut IStream) -> AvifResult<()> {
     //   name gives a human-readable name for the track type (for debugging and inspection
     //   purposes).
     stream.read_c_string()?;
-    Ok(())
+    Ok(handler_type)
 }
 
 fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
@@ -1241,7 +1231,17 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
                 "first box in meta is not hdlr".into(),
             ));
         }
-        parse_hdlr(&mut stream.sub_stream(&header.size)?)?;
+        let handler_type = parse_hdlr(&mut stream.sub_stream(&header.size)?)?;
+        if handler_type != "pict" {
+            // Section 6.2 of ISO/IEC 23008-12:
+            //   The handler type for the MetaBox shall be 'pict'.
+            // https://aomediacodec.github.io/av1-avif/v1.1.0.html#image-sequences does not apply
+            // because this function is only called for the MetaBox but it would work too:
+            //   The track handler for an AV1 Image Sequence shall be pict.
+            return Err(AvifError::BmffParseFailed(
+                "Box[hdlr] handler_type is not 'pict'".into(),
+            ));
+        }
     }
 
     let mut boxes_seen: HashSet<String> = HashSet::with_hasher(NonRandomHasherState);
@@ -1340,11 +1340,6 @@ fn parse_tkhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     // unsigned int(32) height;
     track.height = stream.read_u32()? >> 16;
 
-    if track.width == 0 || track.height == 0 {
-        return Err(AvifError::BmffParseFailed(
-            "invalid track dimensions".into(),
-        ));
-    }
     Ok(())
 }
 
@@ -1691,6 +1686,7 @@ fn parse_mdia(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         match header.box_type.as_str() {
             "mdhd" => parse_mdhd(&mut sub_stream, track)?,
             "minf" => parse_minf(&mut sub_stream, track)?,
+            "hdlr" => track.handler_type = parse_hdlr(&mut sub_stream)?,
             _ => {}
         }
     }
@@ -1846,7 +1842,13 @@ fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
         let header = parse_header(stream, /*top_level=*/ false)?;
         let mut sub_stream = stream.sub_stream(&header.size)?;
         if header.box_type == "trak" {
-            tracks.push(parse_trak(&mut sub_stream)?);
+            let track = parse_trak(&mut sub_stream)?;
+            if track.is_video_handler() && (track.width == 0 || track.height == 0) {
+                return Err(AvifError::BmffParseFailed(
+                    "invalid track dimensions".into(),
+                ));
+            }
+            tracks.push(track);
         }
     }
     if tracks.is_empty() {

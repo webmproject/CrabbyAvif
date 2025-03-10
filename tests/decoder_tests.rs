@@ -58,9 +58,10 @@ fn alpha_no_ispe() {
 }
 
 // From avifanimationtest.cc
-#[test]
-fn animated_image() {
-    let mut decoder = get_decoder("colors-animated-8bpc.avif");
+#[test_case::test_case("colors-animated-8bpc.avif")]
+#[test_case::test_case("colors-animated-8bpc-audio.avif")]
+fn animated_image(filename: &str) {
+    let mut decoder = get_decoder(filename);
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
@@ -81,9 +82,10 @@ fn animated_image() {
 }
 
 // From avifanimationtest.cc
-#[test]
-fn animated_image_with_source_set_to_primary_item() {
-    let mut decoder = get_decoder("colors-animated-8bpc.avif");
+#[test_case::test_case("colors-animated-8bpc.avif")]
+#[test_case::test_case("colors-animated-8bpc-audio.avif")]
+fn animated_image_with_source_set_to_primary_item(filename: &str) {
+    let mut decoder = get_decoder(filename);
     decoder.settings.source = decoder::Source::PrimaryItem;
     let res = decoder.parse();
     assert!(res.is_ok());
