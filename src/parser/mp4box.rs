@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::decoder::tile::SampleTransform;
+#[cfg(feature = "sample_transform")]
+use crate::decoder::tile::*;
 use crate::decoder::track::*;
 use crate::decoder::Extent;
 use crate::decoder::GenericIO;
@@ -612,6 +615,9 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
             return Err(AvifError::UnsupportedDepth);
         }
     }
+    if !Image::is_supported_depth(*pixi.plane_depths.last().unwrap()) {
+        return Err(AvifError::UnsupportedDepth);
+    }
     Ok(ItemProperty::PixelInformation(pixi))
 }
 
@@ -995,10 +1001,6 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
     let mut ipma: Vec<ItemPropertyAssociation> = create_vec_exact(usize_from_u32(entry_count)?)?;
     for _i in 0..entry_count {
         let mut entry = ItemPropertyAssociation::default();
-        // ISO/IEC 23008-12, First edition, 2017-12, Section 9.3.1:
-        //   Each ItemPropertyAssociation box shall be ordered by increasing item_ID, and there
-        //   shall be at most one association box for each item_ID, in any
-        //   ItemPropertyAssociation box.
         if version < 1 {
             // unsigned int(16) item_ID;
             entry.item_id = stream.read_u16()? as u32;
@@ -1013,6 +1015,10 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
             )));
         }
         if !ipma.is_empty() {
+            // ISO/IEC 23008-12, First edition, 2017-12, Section 9.3.1:
+            //   Each ItemPropertyAssociation box shall be ordered by increasing item_ID, and there
+            //   shall be at most one association box for each item_ID, in any
+            //   ItemPropertyAssociation box.
             let previous_item_id = ipma.last().unwrap().item_id;
             if entry.item_id <= previous_item_id {
                 return Err(AvifError::BmffParseFailed(
@@ -2040,6 +2046,80 @@ pub(crate) fn parse_tmap(stream: &mut IStream) -> AvifResult<Option<GainMapMetad
     }
     metadata.is_valid()?;
     Ok(Some(metadata))
+}
+
+#[cfg(feature = "sample_transform")]
+pub(crate) fn parse_sato(stream: &mut IStream, num_inputs: usize) -> AvifResult<SampleTransform> {
+    let mut bits = stream.sub_bit_stream(1)?;
+    // unsigned int(2) version = 0;
+    let version = bits.read(2)?;
+    if version != 0 {
+        return Err(AvifError::InvalidImageGrid(
+            "unsupported version for sato".into(),
+        ));
+    }
+    // unsigned int(4) flags;
+    let _reserved = bits.read(4)?;
+    // unsigned int(2) bit_depth; // Enum signaling signed 8, 16, 32 or 64-bit.
+    let bit_depth = 1 << (bits.read(2)? + 3);
+    let bytes = bit_depth / 8;
+
+    // unsigned int(8) token_count;
+    let token_count = stream.read_u8()?;
+    let mut tokens = create_vec_exact(usize_from_u8(token_count)?)?;
+    for _i in 0..token_count {
+        let token = stream.read_u8()?;
+        let sato_token = match token {
+            0 => {
+                let constant = match bytes {
+                    1 => stream.read_i8()? as i64,
+                    2 => stream.read_i16()? as i64,
+                    4 => stream.read_i32()? as i64,
+                    8 => stream.read_i64()?,
+                    _ => unreachable!(),
+                };
+                SampleTransformToken::Constant(constant)
+            }
+            1..=32 => {
+                let source_item_idx = usize_from_u8(token - 1)?;
+                if source_item_idx >= num_inputs {
+                    return Err(AvifError::InvalidImageGrid(
+                        "invalid item reference in sato".into(),
+                    ));
+                }
+                SampleTransformToken::ImageItem(source_item_idx)
+            }
+            64 => SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Negation),
+            65 => SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Absolute),
+            66 => SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Not),
+            67 => SampleTransformToken::UnaryOp(SampleTransformUnaryOp::BSR),
+            128 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Sum),
+            129 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Difference),
+            130 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Product),
+            131 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Quotient),
+            132 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::And),
+            133 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Or),
+            134 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Xor),
+            135 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Pow),
+            136 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Min),
+            137 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Max),
+            _ => return Err(AvifError::InvalidImageGrid("invalid token in sato".into())),
+        };
+        tokens.push(sato_token);
+    }
+
+    if stream.has_bytes_left()? {
+        return Err(AvifError::InvalidImageGrid(
+            "found unknown extra bytes in the sato box".into(),
+        ));
+    }
+
+    SampleTransform::create_from(bit_depth, num_inputs, tokens)
+}
+
+#[cfg(not(feature = "sample_transform"))]
+pub(crate) fn parse_sato(_stream: &mut IStream, _num_inputs: usize) -> AvifResult<SampleTransform> {
+    Ok(SampleTransform::default())
 }
 
 #[cfg(test)]

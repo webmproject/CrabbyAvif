@@ -33,6 +33,8 @@ macro_rules! conversion_function {
 conversion_function!(usize_from_u64, usize, u64);
 conversion_function!(usize_from_u32, usize, u32);
 conversion_function!(usize_from_u16, usize, u16);
+#[cfg(feature = "sample_transform")]
+conversion_function!(usize_from_u8, usize, u8);
 #[cfg(feature = "android_mediacodec")]
 conversion_function!(usize_from_isize, usize, isize);
 conversion_function!(u64_from_usize, u64, usize);

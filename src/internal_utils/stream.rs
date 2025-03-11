@@ -169,12 +169,22 @@ impl IStream<'_> {
         Ok(u64::from_be_bytes(self.get_slice(8)?.try_into().unwrap()))
     }
 
-    pub(crate) fn read_i32(&mut self) -> AvifResult<i32> {
-        Ok(self.read_u32()? as i32)
+    #[cfg(feature = "sample_transform")]
+    pub(crate) fn read_i8(&mut self) -> AvifResult<i8> {
+        Ok(self.read_u8()? as i8)
     }
 
     pub(crate) fn read_i16(&mut self) -> AvifResult<i16> {
         Ok(self.read_u16()? as i16)
+    }
+
+    pub(crate) fn read_i32(&mut self) -> AvifResult<i32> {
+        Ok(self.read_u32()? as i32)
+    }
+
+    #[cfg(feature = "sample_transform")]
+    pub(crate) fn read_i64(&mut self) -> AvifResult<i64> {
+        Ok(self.read_u64()? as i64)
     }
 
     pub(crate) fn skip_u32(&mut self) -> AvifResult<()> {
