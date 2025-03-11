@@ -14,11 +14,9 @@
 
 use crate::decoder::tile::Tile;
 use crate::decoder::tile::TileInfo;
-use crate::decoder::Category;
 use crate::decoder::ProgressiveState;
 use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
-use crate::parser::mp4box::*;
 use crate::reformat::coeffs::*;
 use crate::utils::clap::CleanAperture;
 use crate::*;

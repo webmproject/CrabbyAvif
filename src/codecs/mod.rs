@@ -21,11 +21,11 @@ pub mod libgav1;
 #[cfg(feature = "android_mediacodec")]
 pub mod android_mediacodec;
 
-use crate::decoder::Category;
 use crate::image::Image;
 use crate::parser::mp4box::CodecConfiguration;
 use crate::AndroidMediaCodecOutputColorFormat;
 use crate::AvifResult;
+use crate::Category;
 
 use std::num::NonZero;
 

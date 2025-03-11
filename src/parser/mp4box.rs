@@ -260,35 +260,11 @@ impl CodecConfiguration {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct Nclx {
-    pub color_primaries: ColorPrimaries,
-    pub transfer_characteristics: TransferCharacteristics,
-    pub matrix_coefficients: MatrixCoefficients,
-    pub yuv_range: YuvRange,
-}
-
 #[derive(Clone, Debug)]
 pub enum ColorInformation {
     Icc(Vec<u8>),
     Nclx(Nclx),
     Unknown,
-}
-
-/// cbindgen:rename-all=CamelCase
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-#[repr(C)]
-pub struct PixelAspectRatio {
-    pub h_spacing: u32,
-    pub v_spacing: u32,
-}
-
-/// cbindgen:field-names=[maxCLL, maxPALL]
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ContentLightLevelInformation {
-    pub max_cll: u16,
-    pub max_pall: u16,
 }
 
 #[derive(Clone, Debug, PartialEq)]

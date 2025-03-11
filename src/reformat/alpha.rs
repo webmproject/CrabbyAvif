@@ -17,7 +17,6 @@ use super::libyuv;
 
 use super::rgb;
 
-use crate::decoder::Category;
 use crate::image::Plane;
 use crate::internal_utils::*;
 use crate::reformat::rgb::Format;

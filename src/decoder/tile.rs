@@ -17,8 +17,6 @@ use crate::*;
 
 use std::num::NonZero;
 
-pub const MAX_AV1_LAYER_COUNT: usize = 4;
-
 #[derive(Debug, Default)]
 pub struct DecodeSample {
     pub item_id: u32, // 1-based. 0 if it comes from a track.
@@ -70,14 +68,6 @@ pub struct DecodeInput {
     pub category: Category,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Grid {
-    pub rows: u32,
-    pub columns: u32,
-    pub width: u32,
-    pub height: u32,
-}
-
 #[derive(Debug, Default)]
 pub struct Overlay {
     pub canvas_fill_value: [u16; 4],
@@ -88,7 +78,7 @@ pub struct Overlay {
 }
 
 #[derive(Debug, Default)]
-pub struct TileInfo {
+pub(crate) struct TileInfo {
     pub tile_count: u32,
     pub decoded_tile_count: u32,
     pub grid: Grid,

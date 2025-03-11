@@ -15,7 +15,6 @@
 use super::rgb;
 use super::rgb::*;
 
-use crate::decoder::Category;
 use crate::image::*;
 use crate::internal_utils::*;
 use crate::*;

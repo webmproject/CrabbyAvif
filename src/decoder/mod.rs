@@ -317,35 +317,6 @@ pub enum CompressionFormat {
     Heic = 1,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub enum Category {
-    #[default]
-    Color,
-    Alpha,
-    Gainmap,
-}
-
-impl Category {
-    const COUNT: usize = 3;
-    const ALL: [Category; Category::COUNT] = [Self::Color, Self::Alpha, Self::Gainmap];
-    const ALL_USIZE: [usize; Category::COUNT] = [0, 1, 2];
-
-    pub(crate) fn usize(self) -> usize {
-        match self {
-            Category::Color => 0,
-            Category::Alpha => 1,
-            Category::Gainmap => 2,
-        }
-    }
-
-    pub(crate) fn planes(&self) -> &[Plane] {
-        match self {
-            Category::Alpha => &A_PLANE,
-            _ => &YUV_PLANES,
-        }
-    }
-}
-
 impl Decoder {
     pub fn image_count(&self) -> u32 {
         self.image_count

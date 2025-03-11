@@ -465,10 +465,10 @@ impl Image {
 mod tests {
     use super::*;
 
-    use crate::decoder::Category;
     use crate::image::YuvRange;
     use crate::image::ALL_PLANES;
     use crate::image::MAX_PLANE_COUNT;
+    use crate::Category;
 
     use test_case::test_case;
     use test_case::test_matrix;

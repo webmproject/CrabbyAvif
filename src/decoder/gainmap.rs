@@ -15,7 +15,6 @@
 use crate::decoder::Image;
 use crate::image::YuvRange;
 use crate::internal_utils::*;
-use crate::parser::mp4box::ContentLightLevelInformation;
 use crate::*;
 
 #[derive(Debug, Default)]
