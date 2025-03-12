@@ -1,4 +1,5 @@
 workspace = { members = [
+  "sys/aom-sys",
   "sys/dav1d-sys",
   "sys/libyuv-sys",
   "sys/libgav1-sys",
@@ -19,6 +20,7 @@ ndk-sys = { version = "0.1.0", path = "sys/ndk-sys", optional = true }
 dav1d-sys = { version = "0.1.0", path = "sys/dav1d-sys", optional = true }
 libgav1-sys = { version = "0.1.0", path = "sys/libgav1-sys", optional = true }
 libyuv-sys = { version = "0.1.0", path = "sys/libyuv-sys", optional = true }
+aom-sys = { version = "0.1.0", path = "sys/aom-sys", optional = true }
 
 [dev-dependencies]
 test-case = "3.3.1"
@@ -44,6 +46,7 @@ libyuv = ["dep:libyuv-sys"]
 android_mediacodec = ["dep:ndk-sys"]
 heic = []
 disable_cfi = []
+aom = ["dep:aom-sys"]
 
 [package.metadata.capi.header]
 name = "avif"
