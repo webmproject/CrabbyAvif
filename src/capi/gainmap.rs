@@ -18,7 +18,7 @@ use super::types::*;
 
 use crate::decoder::gainmap::*;
 use crate::image::YuvRange;
-use crate::internal_utils::*;
+use crate::utils::*;
 use crate::*;
 
 pub type avifContentLightLevelInformationBox = ContentLightLevelInformation;

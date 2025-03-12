@@ -17,23 +17,11 @@ pub mod pixels;
 pub mod stream;
 
 use crate::parser::mp4box::*;
+use crate::utils::*;
 use crate::*;
 
 use std::num::NonZero;
 use std::ops::Range;
-
-// Some HEIF fractional fields can be negative, hence Fraction and UFraction.
-// The denominator is always unsigned.
-
-/// cbindgen:field-names=[n,d]
-#[derive(Clone, Copy, Debug, Default)]
-#[repr(C)]
-pub struct Fraction(pub i32, pub u32);
-
-/// cbindgen:field-names=[n,d]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-#[repr(C)]
-pub struct UFraction(pub u32, pub u32);
 
 // 'clap' fractions do not follow this pattern: both numerators and denominators
 // are used as i32, but they are signalled as u32 according to the specification
@@ -41,29 +29,6 @@ pub struct UFraction(pub u32, pub u32);
 // https://github.com/AOMediaCodec/libavif/pull/1749#discussion_r1391612932.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct IFraction(pub i32, pub i32);
-
-impl Fraction {
-    pub(crate) fn is_valid(&self) -> AvifResult<()> {
-        match self.1 {
-            0 => Err(AvifError::InvalidArgument),
-            _ => Ok(()),
-        }
-    }
-
-    pub(crate) fn as_f64(&self) -> AvifResult<f64> {
-        self.is_valid()?;
-        Ok(self.0 as f64 / self.1 as f64)
-    }
-}
-
-impl UFraction {
-    pub(crate) fn is_valid(&self) -> AvifResult<()> {
-        match self.1 {
-            0 => Err(AvifError::InvalidArgument),
-            _ => Ok(()),
-        }
-    }
-}
 
 impl TryFrom<UFraction> for IFraction {
     type Error = AvifError;

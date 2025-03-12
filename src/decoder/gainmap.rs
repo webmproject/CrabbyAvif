@@ -14,7 +14,7 @@
 
 use crate::decoder::Image;
 use crate::image::YuvRange;
-use crate::internal_utils::*;
+use crate::utils::*;
 use crate::*;
 
 #[derive(Debug, Default)]
