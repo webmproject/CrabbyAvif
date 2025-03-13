@@ -465,6 +465,115 @@ impl MediaCodec {
         Ok(())
     }
 
+    fn output_buffer_to_image(
+        &self,
+        buffer: *mut u8,
+        image: &mut Image,
+        category: Category,
+    ) -> AvifResult<()> {
+        if self.format.is_none() {
+            return Err(AvifError::UnknownError("format is none".into()));
+        }
+        let format = self.format.unwrap_ref();
+        image.width = format.width()? as u32;
+        image.height = format.height()? as u32;
+        image.yuv_range = format.color_range();
+        let plane_info = format.get_plane_info()?;
+        image.depth = plane_info.depth();
+        image.yuv_format = plane_info.pixel_format();
+        match category {
+            Category::Alpha => {
+                image.row_bytes[3] = plane_info.row_stride[0];
+                image.planes[3] = Some(Pixels::from_raw_pointer(
+                    unsafe { buffer.offset(plane_info.offset[0]) },
+                    image.depth as u32,
+                    image.height,
+                    image.row_bytes[3],
+                )?);
+            }
+            _ => {
+                image.chroma_sample_position = ChromaSamplePosition::Unknown;
+                image.color_primaries = format.color_primaries();
+                image.transfer_characteristics = format.transfer_characteristics();
+                // MediaCodec does not expose matrix coefficients. Try to infer that based on color
+                // primaries to get the most accurate color conversion possible.
+                image.matrix_coefficients = match image.color_primaries {
+                    ColorPrimaries::Bt601 => MatrixCoefficients::Bt601,
+                    ColorPrimaries::Bt709 => MatrixCoefficients::Bt709,
+                    ColorPrimaries::Bt2020 => MatrixCoefficients::Bt2020Ncl,
+                    _ => MatrixCoefficients::Unspecified,
+                };
+
+                for i in 0usize..3 {
+                    if i == 2
+                        && matches!(
+                            image.yuv_format,
+                            PixelFormat::AndroidP010
+                                | PixelFormat::AndroidNv12
+                                | PixelFormat::AndroidNv21
+                        )
+                    {
+                        // V plane is not needed for these formats.
+                        break;
+                    }
+                    image.row_bytes[i] = plane_info.row_stride[i];
+                    let plane_height = if i == 0 { image.height } else { (image.height + 1) / 2 };
+                    image.planes[i] = Some(Pixels::from_raw_pointer(
+                        unsafe { buffer.offset(plane_info.offset[i]) },
+                        image.depth as u32,
+                        plane_height,
+                        image.row_bytes[i],
+                    )?);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn enqueue_payload(&self, input_index: isize, payload: &[u8]) -> AvifResult<()> {
+        let codec = self.codec.unwrap();
+        let mut input_buffer_size: usize = 0;
+        let input_buffer = unsafe {
+            AMediaCodec_getInputBuffer(
+                codec,
+                input_index as usize,
+                &mut input_buffer_size as *mut _,
+            )
+        };
+        if input_buffer.is_null() {
+            return Err(AvifError::UnknownError(format!(
+                "input buffer at index {input_index} was null"
+            )));
+        }
+        let hevc_whole_nal_units = self.hevc_whole_nal_units(payload)?;
+        let codec_payload = match &hevc_whole_nal_units {
+            Some(hevc_payload) => hevc_payload,
+            None => payload,
+        };
+        if input_buffer_size < codec_payload.len() {
+            return Err(AvifError::UnknownError(format!(
+                "input buffer (size {input_buffer_size}) was not big enough. required size: {}",
+                codec_payload.len()
+            )));
+        }
+        unsafe {
+            ptr::copy_nonoverlapping(codec_payload.as_ptr(), input_buffer, codec_payload.len());
+
+            if AMediaCodec_queueInputBuffer(
+                codec,
+                usize_from_isize(input_index)?,
+                /*offset=*/ 0,
+                codec_payload.len(),
+                /*pts=*/ 0,
+                /*flags=*/ 0,
+            ) != media_status_t_AMEDIA_OK
+            {
+                return Err(AvifError::UnknownError("".into()));
+            }
+        }
+        Ok(())
+    }
+
     fn get_next_image_impl(
         &mut self,
         payload: &[u8],
@@ -488,45 +597,7 @@ impl MediaCodec {
                 retry_count += 1;
                 let input_index = AMediaCodec_dequeueInputBuffer(codec, 10000);
                 if input_index >= 0 {
-                    let mut input_buffer_size: usize = 0;
-                    let input_buffer = AMediaCodec_getInputBuffer(
-                        codec,
-                        input_index as usize,
-                        &mut input_buffer_size as *mut _,
-                    );
-                    if input_buffer.is_null() {
-                        return Err(AvifError::UnknownError(format!(
-                            "input buffer at index {input_index} was null"
-                        )));
-                    }
-                    let hevc_whole_nal_units = self.hevc_whole_nal_units(payload)?;
-                    let codec_payload = match &hevc_whole_nal_units {
-                        Some(hevc_payload) => hevc_payload,
-                        None => payload,
-                    };
-                    if input_buffer_size < codec_payload.len() {
-                        return Err(AvifError::UnknownError(format!(
-                        "input buffer (size {input_buffer_size}) was not big enough. required size: {}",
-                        codec_payload.len()
-                    )));
-                    }
-                    ptr::copy_nonoverlapping(
-                        codec_payload.as_ptr(),
-                        input_buffer,
-                        codec_payload.len(),
-                    );
-
-                    if AMediaCodec_queueInputBuffer(
-                        codec,
-                        usize_from_isize(input_index)?,
-                        /*offset=*/ 0,
-                        codec_payload.len(),
-                        /*pts=*/ 0,
-                        /*flags=*/ 0,
-                    ) != media_status_t_AMEDIA_OK
-                    {
-                        return Err(AvifError::UnknownError("".into()));
-                    }
+                    self.enqueue_payload(input_index, payload)?;
                     break;
                 } else if input_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
                     continue;
@@ -581,64 +652,7 @@ impl MediaCodec {
                 "did not get buffer from mediacodec".into(),
             ));
         }
-        if self.format.is_none() {
-            return Err(AvifError::UnknownError("format is none".into()));
-        }
-        let buffer = buffer.unwrap();
-        let format = self.format.unwrap_ref();
-        image.width = format.width()? as u32;
-        image.height = format.height()? as u32;
-        image.yuv_range = format.color_range();
-        let plane_info = format.get_plane_info()?;
-        image.depth = plane_info.depth();
-        image.yuv_format = plane_info.pixel_format();
-        match category {
-            Category::Alpha => {
-                // TODO: make sure alpha plane matches previous alpha plane.
-                image.row_bytes[3] = plane_info.row_stride[0];
-                image.planes[3] = Some(Pixels::from_raw_pointer(
-                    unsafe { buffer.offset(plane_info.offset[0]) },
-                    image.depth as u32,
-                    image.height,
-                    image.row_bytes[3],
-                )?);
-            }
-            _ => {
-                image.chroma_sample_position = ChromaSamplePosition::Unknown;
-                image.color_primaries = format.color_primaries();
-                image.transfer_characteristics = format.transfer_characteristics();
-                // MediaCodec does not expose matrix coefficients. Try to infer that based on color
-                // primaries to get the most accurate color conversion possible.
-                image.matrix_coefficients = match image.color_primaries {
-                    ColorPrimaries::Bt601 => MatrixCoefficients::Bt601,
-                    ColorPrimaries::Bt709 => MatrixCoefficients::Bt709,
-                    ColorPrimaries::Bt2020 => MatrixCoefficients::Bt2020Ncl,
-                    _ => MatrixCoefficients::Unspecified,
-                };
-
-                for i in 0usize..3 {
-                    if i == 2
-                        && matches!(
-                            image.yuv_format,
-                            PixelFormat::AndroidP010
-                                | PixelFormat::AndroidNv12
-                                | PixelFormat::AndroidNv21
-                        )
-                    {
-                        // V plane is not needed for these formats.
-                        break;
-                    }
-                    image.row_bytes[i] = plane_info.row_stride[i];
-                    let plane_height = if i == 0 { image.height } else { (image.height + 1) / 2 };
-                    image.planes[i] = Some(Pixels::from_raw_pointer(
-                        unsafe { buffer.offset(plane_info.offset[i]) },
-                        image.depth as u32,
-                        plane_height,
-                        image.row_bytes[i],
-                    )?);
-                }
-            }
-        }
+        self.output_buffer_to_image(buffer.unwrap(), image, category)?;
         Ok(())
     }
 
