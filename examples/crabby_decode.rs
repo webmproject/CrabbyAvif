@@ -78,6 +78,14 @@ struct CommandLineArgs {
     #[arg(long)]
     dimension_limit: Option<u32>,
 
+    /// If the input file contains embedded Exif metadata, ignore it (no-op if absent)
+    #[arg(long, default_value = "false")]
+    ignore_exif: bool,
+
+    /// If the input file contains embedded XMP metadata, ignore it (no-op if absent)
+    #[arg(long, default_value = "false")]
+    ignore_xmp: bool,
+
     /// Input AVIF file
     #[arg(allow_hyphen_values = false)]
     input_file: String,
@@ -299,6 +307,8 @@ fn create_decoder_and_parse(args: &CommandLineArgs) -> AvifResult<Decoder> {
         image_content_to_decode: ImageContentType::All,
         max_threads: max_threads(&args.jobs),
         allow_progressive: args.progressive,
+        ignore_exif: args.ignore_exif,
+        ignore_xmp: args.ignore_xmp,
         ..Settings::default()
     };
     // These values cannot be initialized in the list above since we need the default values to be
