@@ -1015,8 +1015,10 @@ impl Decoder {
                 let color_item = self.items.get(&item_ids[Category::Color.usize()]).unwrap();
                 self.image.width = color_item.width;
                 self.image.height = color_item.height;
-                self.image.alpha_present = item_ids[Category::Alpha.usize()] != 0;
-                // alphapremultiplied.
+                let alpha_item_id = item_ids[Category::Alpha.usize()];
+                self.image.alpha_present = alpha_item_id != 0;
+                self.image.alpha_premultiplied =
+                    alpha_item_id != 0 && color_item.prem_by_id == alpha_item_id;
 
                 if color_item.progressive {
                     self.image.progressive_state = ProgressiveState::Available;

@@ -57,6 +57,27 @@ fn alpha_no_ispe() {
     assert!(alpha_plane.unwrap().row_bytes > 0);
 }
 
+#[test]
+fn alpha_premultiplied() {
+    let mut decoder = get_decoder("alpha_premultiplied.avif");
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let image = decoder.image().expect("image was none");
+    assert!(image.alpha_present);
+    assert!(image.alpha_premultiplied);
+    if !HAS_DECODER {
+        return;
+    }
+    let res = decoder.next_image();
+    assert!(res.is_ok());
+    let image = decoder.image().expect("image was none");
+    assert!(image.alpha_present);
+    assert!(image.alpha_premultiplied);
+    let alpha_plane = image.plane_data(Plane::A);
+    assert!(alpha_plane.is_some());
+    assert!(alpha_plane.unwrap().row_bytes > 0);
+}
+
 // From avifanimationtest.cc
 #[test_case::test_case("colors-animated-8bpc.avif")]
 #[test_case::test_case("colors-animated-8bpc-audio.avif")]
