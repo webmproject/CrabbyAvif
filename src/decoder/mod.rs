@@ -1438,7 +1438,8 @@ impl Decoder {
                     Category::Color => {
                         self.image.width = grid.width;
                         self.image.height = grid.height;
-                        self.image.copy_properties_from(tile);
+                        self.image
+                            .copy_properties_from(&tile.image, &tile.codec_config);
                         self.image.allocate_planes(category)?;
                     }
                     Category::Alpha => {
@@ -1449,7 +1450,9 @@ impl Decoder {
                     Category::Gainmap => {
                         self.gainmap.image.width = grid.width;
                         self.gainmap.image.height = grid.height;
-                        self.gainmap.image.copy_properties_from(tile);
+                        self.gainmap
+                            .image
+                            .copy_properties_from(&tile.image, &tile.codec_config);
                         self.gainmap.image.allocate_planes(category)?;
                     }
                 }
@@ -1496,7 +1499,8 @@ impl Decoder {
                     Category::Color => {
                         self.image.width = overlay.width;
                         self.image.height = overlay.height;
-                        self.image.copy_properties_from(tile);
+                        self.image
+                            .copy_properties_from(&tile.image, &tile.codec_config);
                         self.image
                             .allocate_planes_with_default_values(category, canvas_fill_values)?;
                     }
@@ -1509,7 +1513,9 @@ impl Decoder {
                     Category::Gainmap => {
                         self.gainmap.image.width = overlay.width;
                         self.gainmap.image.height = overlay.height;
-                        self.gainmap.image.copy_properties_from(tile);
+                        self.gainmap
+                            .image
+                            .copy_properties_from(&tile.image, &tile.codec_config);
                         self.gainmap
                             .image
                             .allocate_planes_with_default_values(category, canvas_fill_values)?;
@@ -1555,7 +1561,8 @@ impl Decoder {
                 Category::Color => {
                     self.image.width = tile.image.width;
                     self.image.height = tile.image.height;
-                    self.image.copy_properties_from(tile);
+                    self.image
+                        .copy_properties_from(&tile.image, &tile.codec_config);
                     self.image
                         .steal_or_copy_planes_from(&tile.image, category)?;
                 }
@@ -1569,7 +1576,9 @@ impl Decoder {
                 Category::Gainmap => {
                     self.gainmap.image.width = tile.image.width;
                     self.gainmap.image.height = tile.image.height;
-                    self.gainmap.image.copy_properties_from(tile);
+                    self.gainmap
+                        .image
+                        .copy_properties_from(&tile.image, &tile.codec_config);
                     self.gainmap
                         .image
                         .steal_or_copy_planes_from(&tile.image, category)?;
