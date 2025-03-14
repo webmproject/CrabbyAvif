@@ -441,6 +441,29 @@ impl Decoder {
         Ok(Some(alpha_item_id))
     }
 
+    /// Returns true if the two entity ids (usually item ids) are part of an
+    /// 'altr' group (representing entities that are alternatives of each other)
+    /// with 'id1' appearing before 'id2' (meaning that 'id1' should be preferred).
+    fn is_preferred_alternative_to(&self, id1: u32, id2: u32, grpl: &Vec<EntityGroup>) -> bool {
+        for group in grpl {
+            if group.grouping_type != "altr" {
+                continue;
+            }
+            let mut id1_found = false;
+            for entity_id in &group.entity_ids {
+                if *entity_id == id1 {
+                    id1_found = true;
+                } else if *entity_id == id2 {
+                    if id1_found {
+                        return true;
+                    }
+                    break;
+                }
+            }
+        }
+        false
+    }
+
     // returns (tone_mapped_image_item_id, gain_map_item_id) if found
     fn find_tone_mapped_image_item(&self, color_item_id: u32) -> AvifResult<Option<(u32, u32)>> {
         let tmap_items: Vec<_> = self.items.values().filter(|x| x.is_tmap()).collect();
@@ -466,7 +489,11 @@ impl Decoder {
     }
 
     // returns (tone_mapped_image_item_id, gain_map_item_id) if found
-    fn find_gainmap_item(&self, color_item_id: u32) -> AvifResult<Option<(u32, u32)>> {
+    fn find_gainmap_item(
+        &self,
+        color_item_id: u32,
+        grpl: &Vec<EntityGroup>,
+    ) -> AvifResult<Option<(u32, u32)>> {
         if let Some((tonemap_id, gainmap_id)) = self.find_tone_mapped_image_item(color_item_id)? {
             let gainmap_item = self
                 .items
@@ -474,6 +501,9 @@ impl Decoder {
                 .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
             if gainmap_item.should_skip() {
                 return Err(AvifError::InvalidToneMappedImage("".into()));
+            }
+            if !self.is_preferred_alternative_to(tonemap_id, color_item_id, grpl) {
+                return Ok(None);
             }
             Ok(Some((tonemap_id, gainmap_id)))
         } else {
@@ -952,9 +982,10 @@ impl Decoder {
 
                 // Optional gainmap item
                 if avif_boxes.ftyp.has_tmap() {
-                    if let Some((tonemap_id, gainmap_id)) =
-                        self.find_gainmap_item(item_ids[Category::Color.usize()])?
-                    {
+                    if let Some((tonemap_id, gainmap_id)) = self.find_gainmap_item(
+                        item_ids[Category::Color.usize()],
+                        &avif_boxes.meta.grpl,
+                    )? {
                         self.validate_gainmap_item(gainmap_id, tonemap_id)?;
                         self.read_and_parse_item(gainmap_id, Category::Gainmap)?;
                         let tonemap_item = self
