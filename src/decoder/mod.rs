@@ -1477,14 +1477,14 @@ impl Decoder {
             match category {
                 Category::Gainmap => self.gainmap.image.copy_from_tile(
                     &tile.image,
-                    &self.tile_info[category.usize()],
+                    &self.tile_info[category.usize()].grid,
                     tile_index as u32,
                     category,
                 )?,
                 _ => {
                     self.image.copy_from_tile(
                         &tile.image,
-                        &self.tile_info[category.usize()],
+                        &self.tile_info[category.usize()].grid,
                         tile_index as u32,
                         category,
                     )?;
