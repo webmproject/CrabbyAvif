@@ -94,6 +94,10 @@ impl TileInfo {
         !self.overlay.horizontal_offsets.is_empty() && !self.overlay.vertical_offsets.is_empty()
     }
 
+    pub(crate) fn is_derived_image(&self) -> bool {
+        self.is_grid() || self.is_overlay()
+    }
+
     pub(crate) fn grid_tile_count(&self) -> AvifResult<u32> {
         if self.is_grid() {
             checked_mul!(self.grid.rows, self.grid.columns)

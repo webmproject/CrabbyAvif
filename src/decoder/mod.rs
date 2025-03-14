@@ -389,13 +389,13 @@ impl Decoder {
         }) {
             return Ok(Some(*item.0));
         }
-        if color_item.item_type != "grid" || color_item.derived_item_ids.is_empty() {
+        if !color_item.is_grid_item() || color_item.source_item_ids.is_empty() {
             return Ok(None);
         }
         // If color item is a grid, check if there is an alpha channel which is represented as an
         // auxl item to each color tile item.
-        let mut alpha_item_indices: Vec<u32> = create_vec_exact(color_item.derived_item_ids.len())?;
-        for color_grid_item_id in &color_item.derived_item_ids {
+        let mut alpha_item_indices: Vec<u32> = create_vec_exact(color_item.source_item_ids.len())?;
+        for color_grid_item_id in &color_item.source_item_ids {
             match self
                 .items
                 .iter()
@@ -431,7 +431,7 @@ impl Decoder {
             item_type: String::from("grid"),
             width: color_item.width,
             height: color_item.height,
-            derived_item_ids: alpha_item_indices,
+            source_item_ids: alpha_item_indices,
             properties,
             is_made_up: true,
             ..Item::default()
@@ -567,7 +567,7 @@ impl Decoder {
             .items
             .get(&item_id)
             .ok_or(AvifError::MissingImageItem)?;
-        if item.derived_item_ids.is_empty() {
+        if item.source_item_ids.is_empty() {
             if item.size == 0 {
                 return Err(AvifError::MissingImageItem);
             }
@@ -580,15 +580,13 @@ impl Decoder {
             tile.input.category = category;
             tiles.push(tile);
         } else {
-            if !self.tile_info[category.usize()].is_grid()
-                && !self.tile_info[category.usize()].is_overlay()
-            {
+            if !self.tile_info[category.usize()].is_derived_image() {
                 return Err(AvifError::InvalidImageGrid(
-                    "dimg items were found but image is not grid or overlay.".into(),
+                    "dimg items were found but image is not a derived image.".into(),
                 ));
             }
             let mut progressive = true;
-            for derived_item_id in item.derived_item_ids.clone() {
+            for derived_item_id in item.source_item_ids.clone() {
                 let derived_item = self
                     .items
                     .get_mut(&derived_item_id)
@@ -650,11 +648,14 @@ impl Decoder {
         Ok(())
     }
 
-    fn populate_overlay_item_ids(&mut self, item_id: u32) -> AvifResult<()> {
-        if self.items.get(&item_id).unwrap().item_type != "iovl" {
+    // Populates the source item ids for a derived image item.
+    // These are the ids that are in the item's `dimg` box.
+    fn populate_source_item_ids(&mut self, item_id: u32) -> AvifResult<()> {
+        if !self.items.get(&item_id).unwrap().is_derived_image_item() {
             return Ok(());
         }
-        let mut overlay_item_ids: Vec<u32> = vec![];
+
+        let mut source_item_ids: Vec<u32> = vec![];
         let mut first_codec_config: Option<CodecConfiguration> = None;
         // Collect all the dimg items.
         for dimg_item_id in self.items.keys() {
@@ -670,7 +671,7 @@ impl Decoder {
             }
             if !dimg_item.is_image_codec_item() || dimg_item.has_unsupported_essential_property {
                 return Err(AvifError::InvalidImageGrid(
-                    "invalid input item in dimg grid".into(),
+                    "invalid input item in dimg".into(),
                 ));
             }
             if first_codec_config.is_none() {
@@ -685,86 +686,41 @@ impl Decoder {
                         .clone(),
                 );
             }
-            overlay_item_ids.push(*dimg_item_id);
+            source_item_ids.push(*dimg_item_id);
         }
         if first_codec_config.is_none() {
             // No derived images were found.
             return Ok(());
         }
-        // ISO/IEC 23008-12: The input images are listed in the order they are layered, i.e. the
-        // bottom-most input image first and the top-most input image last, in the
-        // SingleItemTypeReferenceBox of type 'dimg' for this derived image item within the
-        // ItemReferenceBox.
-        // Sort the overlay items by dimg_index. dimg_index is the order in which the items appear
-        // in the 'iref' box.
-        overlay_item_ids.sort_by_key(|k| self.items.get(k).unwrap().dimg_index);
+        // The order of derived item ids matters: sort them by dimg_index, which is the order that
+        // items appear in the 'iref' box.
+        source_item_ids.sort_by_key(|k| self.items.get(k).unwrap().dimg_index);
         let item = self.items.get_mut(&item_id).unwrap();
         item.properties.push(ItemProperty::CodecConfiguration(
             first_codec_config.unwrap(),
         ));
-        item.derived_item_ids = overlay_item_ids;
+        item.source_item_ids = source_item_ids;
         Ok(())
     }
 
-    fn populate_grid_item_ids(&mut self, item_id: u32, category: Category) -> AvifResult<()> {
-        if self.items.get(&item_id).unwrap().item_type != "grid" {
-            return Ok(());
-        }
-        let tile_count = self.tile_info[category.usize()].grid_tile_count()? as usize;
-        let mut grid_item_ids: Vec<u32> = create_vec_exact(tile_count)?;
-        let mut first_codec_config: Option<CodecConfiguration> = None;
-        // Collect all the dimg items.
-        for dimg_item_id in self.items.keys() {
-            if *dimg_item_id == item_id {
-                continue;
-            }
-            let dimg_item = self
-                .items
-                .get(dimg_item_id)
-                .ok_or(AvifError::InvalidImageGrid("".into()))?;
-            if dimg_item.dimg_for_id != item_id {
-                continue;
-            }
-            if !dimg_item.is_image_codec_item() || dimg_item.has_unsupported_essential_property {
-                return Err(AvifError::InvalidImageGrid(
-                    "invalid input item in dimg grid".into(),
-                ));
-            }
-            if first_codec_config.is_none() {
-                // Adopt the configuration property of the first tile.
-                // validate_properties() makes sure they are all equal.
-                first_codec_config = Some(
-                    dimg_item
-                        .codec_config()
-                        .ok_or(AvifError::BmffParseFailed(
-                            "missing codec config property".into(),
-                        ))?
-                        .clone(),
-                );
-            }
-            if grid_item_ids.len() >= tile_count {
+    fn validate_source_item_counts(&self, item_id: u32, tile_info: &TileInfo) -> AvifResult<()> {
+        let item = self.items.get(&item_id).unwrap();
+        if item.is_grid_item() {
+            let tile_count = tile_info.grid_tile_count()? as usize;
+            if item.source_item_ids.len() != tile_count {
                 return Err(AvifError::InvalidImageGrid(
                     "Expected number of tiles not found".into(),
                 ));
             }
-            grid_item_ids.push(*dimg_item_id);
-        }
-        if grid_item_ids.len() != tile_count {
-            return Err(AvifError::InvalidImageGrid(
-                "Expected number of tiles not found".into(),
+        } else if item.is_overlay_item() && item.source_item_ids.is_empty() {
+            return Err(AvifError::BmffParseFailed(
+                "No dimg items found for iovl".into(),
+            ));
+        } else if item.is_tmap() && item.source_item_ids.len() != 2 {
+            return Err(AvifError::InvalidToneMappedImage(
+                "Expected tmap to have 2 dimg items".into(),
             ));
         }
-        // ISO/IEC 23008-12: The input images are inserted in row-major order,
-        // top-row first, left to right, in the order of SingleItemTypeReferenceBox of type 'dimg'
-        // for this derived image item within the ItemReferenceBox.
-        // Sort the grid items by dimg_index. dimg_index is the order in which the items appear in
-        // the 'iref' box.
-        grid_item_ids.sort_by_key(|k| self.items.get(k).unwrap().dimg_index);
-        let item = self.items.get_mut(&item_id).unwrap();
-        item.properties.push(ItemProperty::CodecConfiguration(
-            first_codec_config.unwrap(),
-        ));
-        item.derived_item_ids = grid_item_ids;
         Ok(())
     }
 
@@ -1149,7 +1105,7 @@ impl Decoder {
         if item_id == 0 {
             return Ok(());
         }
-        self.populate_overlay_item_ids(item_id)?;
+        self.populate_source_item_ids(item_id)?;
         self.items.get_mut(&item_id).unwrap().read_and_parse(
             self.io.unwrap_mut(),
             &mut self.tile_info[category.usize()].grid,
@@ -1157,7 +1113,7 @@ impl Decoder {
             self.settings.image_size_limit,
             self.settings.image_dimension_limit,
         )?;
-        self.populate_grid_item_ids(item_id, category)
+        self.validate_source_item_counts(item_id, &self.tile_info[category.usize()])
     }
 
     fn can_use_single_codec(&self) -> AvifResult<bool> {
