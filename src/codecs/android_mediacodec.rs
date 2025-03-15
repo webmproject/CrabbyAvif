@@ -530,7 +530,7 @@ impl MediaCodec {
         Ok(())
     }
 
-    fn enqueue_payload(&self, input_index: isize, payload: &[u8]) -> AvifResult<()> {
+    fn enqueue_payload(&self, input_index: isize, payload: &[u8], flags: u32) -> AvifResult<()> {
         let codec = self.codec.unwrap();
         let mut input_buffer_size: usize = 0;
         let input_buffer = unsafe {
@@ -565,7 +565,7 @@ impl MediaCodec {
                 /*offset=*/ 0,
                 codec_payload.len(),
                 /*pts=*/ 0,
-                /*flags=*/ 0,
+                flags,
             ) != media_status_t_AMEDIA_OK
             {
                 return Err(AvifError::UnknownError("".into()));
@@ -597,7 +597,7 @@ impl MediaCodec {
                 retry_count += 1;
                 let input_index = AMediaCodec_dequeueInputBuffer(codec, 10000);
                 if input_index >= 0 {
-                    self.enqueue_payload(input_index, payload)?;
+                    self.enqueue_payload(input_index, payload, 0)?;
                     break;
                 } else if input_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
                     continue;
