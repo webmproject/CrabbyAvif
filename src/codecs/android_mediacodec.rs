@@ -707,6 +707,17 @@ impl Decoder for MediaCodec {
             "all the codecs failed to extract an image".into(),
         ))
     }
+
+    fn get_next_image_grid(
+        &mut self,
+        _payloads: &[Vec<u8>],
+        _spatial_id: u8,
+        _images: &mut Image,
+        _grid: &Grid,
+        _category: Category,
+    ) -> AvifResult<()> {
+        Err(AvifError::NotImplemented)
+    }
 }
 
 impl MediaCodec {
