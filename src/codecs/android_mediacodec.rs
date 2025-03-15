@@ -268,12 +268,15 @@ impl MediaFormat {
             color_format: self.color_format()?.into(),
             ..Default::default()
         };
+        // Clippy suggests using an iterator with an enumerator which does not seem more readable
+        // than using explicit indices.
+        #[allow(clippy::needless_range_loop)]
         for plane_index in 0usize..3 {
             plane_info.offset[plane_index] = isize_from_u32(planes[plane_index].mOffset)?;
             plane_info.row_stride[plane_index] = u32_from_i32(planes[plane_index].mRowInc)?;
             plane_info.column_stride[plane_index] = u32_from_i32(planes[plane_index].mColInc)?;
         }
-        return Ok(plane_info);
+        Ok(plane_info)
     }
 }
 
