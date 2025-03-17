@@ -148,6 +148,20 @@ impl Image {
         self.width == other.width && self.height == other.height && self.depth == other.depth
     }
 
+    fn has_same_cicp(&self, other: &Image) -> bool {
+        self.depth == other.depth
+            && self.yuv_format == other.yuv_format
+            && self.yuv_range == other.yuv_range
+            && self.chroma_sample_position == other.chroma_sample_position
+            && self.color_primaries == other.color_primaries
+            && self.transfer_characteristics == other.transfer_characteristics
+            && self.matrix_coefficients == other.matrix_coefficients
+    }
+
+    pub(crate) fn has_same_properties_and_cicp(&self, other: &Image) -> bool {
+        self.has_same_properties(other) && self.has_same_cicp(other)
+    }
+
     pub fn width(&self, plane: Plane) -> usize {
         match plane {
             Plane::Y | Plane::A => self.width as usize,

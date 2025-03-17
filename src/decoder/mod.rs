@@ -1354,22 +1354,14 @@ impl Decoder {
                     }
                 }
             }
-            if !tiles_slice1.is_empty() {
-                let first_tile_image = &tiles_slice1[0].image;
-                if tile.image.width != first_tile_image.width
-                    || tile.image.height != first_tile_image.height
-                    || tile.image.depth != first_tile_image.depth
-                    || tile.image.yuv_format != first_tile_image.yuv_format
-                    || tile.image.yuv_range != first_tile_image.yuv_range
-                    || tile.image.color_primaries != first_tile_image.color_primaries
-                    || tile.image.transfer_characteristics
-                        != first_tile_image.transfer_characteristics
-                    || tile.image.matrix_coefficients != first_tile_image.matrix_coefficients
-                {
-                    return Err(AvifError::InvalidImageGrid(
-                        "grid image contains mismatched tiles".into(),
-                    ));
-                }
+            if !tiles_slice1.is_empty()
+                && !tile
+                    .image
+                    .has_same_properties_and_cicp(&tiles_slice1[0].image)
+            {
+                return Err(AvifError::InvalidImageGrid(
+                    "grid image contains mismatched tiles".into(),
+                ));
             }
             match category {
                 Category::Gainmap => self.gainmap.image.copy_from_tile(
