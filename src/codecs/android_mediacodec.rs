@@ -382,7 +382,7 @@ impl MediaCodec {
     const AV1_MIME: &str = "video/av01";
     const HEVC_MIME: &str = "video/hevc";
 
-    fn initialize_impl(&mut self) -> AvifResult<()> {
+    fn initialize_impl(&mut self, low_latency: bool) -> AvifResult<()> {
         let config = self.config.unwrap_ref();
         if self.codec_index >= self.codec_initializers.len() {
             return Err(AvifError::NoCodecAvailable);
@@ -413,10 +413,12 @@ impl MediaCodec {
                     AndroidMediaCodecOutputColorFormat::P010
                 } as i32,
             );
-            // low-latency is documented but isn't exposed as a constant in the NDK:
-            // https://developer.android.com/reference/android/media/MediaFormat#KEY_LOW_LATENCY
-            c_str!(low_latency, low_latency_tmp, "low-latency");
-            AMediaFormat_setInt32(format, low_latency, 1);
+            if low_latency {
+                // low-latency is documented but isn't exposed as a constant in the NDK:
+                // https://developer.android.com/reference/android/media/MediaFormat#KEY_LOW_LATENCY
+                c_str!(low_latency_str, low_latency_tmp, "low-latency");
+                AMediaFormat_setInt32(format, low_latency_str, 1);
+            }
             AMediaFormat_setInt32(
                 format,
                 AMEDIAFORMAT_KEY_MAX_INPUT_SIZE,
@@ -585,7 +587,7 @@ impl MediaCodec {
         category: Category,
     ) -> AvifResult<()> {
         if self.codec.is_none() {
-            self.initialize_impl()?;
+            self.initialize_impl(/*low_latency=*/ true)?;
         }
         let codec = self.codec.unwrap();
         if self.output_buffer_index.is_some() {
