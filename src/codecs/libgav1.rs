@@ -187,6 +187,17 @@ impl Decoder for Libgav1 {
         }
         Ok(())
     }
+
+    fn get_next_image_grid(
+        &mut self,
+        _payloads: &[Vec<u8>],
+        _spatial_id: u8,
+        _images: &mut Image,
+        _grid: &Grid,
+        _category: Category,
+    ) -> AvifResult<()> {
+        Err(AvifError::NotImplemented)
+    }
 }
 
 impl Drop for Libgav1 {

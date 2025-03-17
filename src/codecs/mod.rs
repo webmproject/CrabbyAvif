@@ -26,6 +26,7 @@ use crate::parser::mp4box::CodecConfiguration;
 use crate::AndroidMediaCodecOutputColorFormat;
 use crate::AvifResult;
 use crate::Category;
+use crate::Grid;
 
 use std::num::NonZero;
 
@@ -46,11 +47,22 @@ pub struct DecoderConfig {
 
 pub trait Decoder {
     fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()>;
+    // Decode a single image and write the output into |image|.
     fn get_next_image(
         &mut self,
         av1_payload: &[u8],
         spatial_id: u8,
         image: &mut Image,
+        category: Category,
+    ) -> AvifResult<()>;
+    // Decode a list of input images as a grid image as specified by |grid| and write the output
+    // into |image|.
+    fn get_next_image_grid(
+        &mut self,
+        payloads: &[Vec<u8>],
+        spatial_id: u8,
+        images: &mut Image,
+        grid: &Grid,
         category: Category,
     ) -> AvifResult<()>;
     // Destruction must be implemented using Drop.
