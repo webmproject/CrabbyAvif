@@ -383,6 +383,7 @@ impl MediaCodec {
     const AV1_MIME: &str = "video/av01";
     const HEVC_MIME: &str = "video/hevc";
     const MAX_RETRIES: u32 = 100;
+    const TIMEOUT: u32 = 10000;
 
     fn initialize_impl(&mut self, low_latency: bool) -> AvifResult<()> {
         let config = self.config.unwrap_ref();
@@ -602,7 +603,7 @@ impl MediaCodec {
         unsafe {
             while retry_count < Self::MAX_RETRIES {
                 retry_count += 1;
-                let input_index = AMediaCodec_dequeueInputBuffer(codec, 10000);
+                let input_index = AMediaCodec_dequeueInputBuffer(codec, Self::TIMEOUT as _);
                 if input_index >= 0 {
                     self.enqueue_payload(input_index, payload, 0)?;
                     break;
@@ -622,8 +623,11 @@ impl MediaCodec {
         while retry_count < Self::MAX_RETRIES {
             retry_count += 1;
             unsafe {
-                let output_index =
-                    AMediaCodec_dequeueOutputBuffer(codec, &mut buffer_info as *mut _, 10000);
+                let output_index = AMediaCodec_dequeueOutputBuffer(
+                    codec,
+                    &mut buffer_info as *mut _,
+                    Self::TIMEOUT as _,
+                );
                 if output_index >= 0 {
                     let output_buffer = AMediaCodec_getOutputBuffer(
                         codec,
@@ -700,8 +704,11 @@ impl MediaCodec {
                 }
                 loop {
                     let mut buffer_info = AMediaCodecBufferInfo::default();
-                    let output_index =
-                        AMediaCodec_dequeueOutputBuffer(codec, &mut buffer_info as *mut _, 10000);
+                    let output_index = AMediaCodec_dequeueOutputBuffer(
+                        codec,
+                        &mut buffer_info as *mut _,
+                        Self::TIMEOUT as _,
+                    );
                     if output_index == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED as isize {
                         continue;
                     } else if output_index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED as isize {
