@@ -24,10 +24,11 @@ use dav1d_sys::bindings::*;
 
 use std::mem::MaybeUninit;
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Dav1d {
     context: Option<*mut Dav1dContext>,
     picture: Option<Dav1dPicture>,
+    config: Option<DecoderConfig>,
 }
 
 unsafe extern "C" fn avif_dav1d_free_callback(
@@ -40,15 +41,12 @@ unsafe extern "C" fn avif_dav1d_free_callback(
 // See https://code.videolan.org/videolan/dav1d/-/blob/9849ede1304da1443cfb4a86f197765081034205/include/dav1d/common.h#L55-59
 const DAV1D_EAGAIN: i32 = if libc::EPERM > 0 { -libc::EAGAIN } else { libc::EAGAIN };
 
-// The type of the fields from dav1d_sys::bindings::* are dependent on the
-// compiler that is used to generate the bindings, version of dav1d, etc.
-// So allow clippy to ignore unnecessary cast warnings.
-#[allow(clippy::unnecessary_cast)]
-impl Decoder for Dav1d {
-    fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
+impl Dav1d {
+    fn initialize_impl(&mut self) -> AvifResult<()> {
         if self.context.is_some() {
             return Ok(());
         }
+        let config = self.config.unwrap_ref();
         let mut settings_uninit: MaybeUninit<Dav1dSettings> = MaybeUninit::uninit();
         unsafe { dav1d_default_settings(settings_uninit.as_mut_ptr()) };
         let mut settings = unsafe { settings_uninit.assume_init() };
@@ -78,7 +76,17 @@ impl Decoder for Dav1d {
             )));
         }
         self.context = Some(unsafe { dec.assume_init() });
+        Ok(())
+    }
+}
 
+// The type of the fields from dav1d_sys::bindings::* are dependent on the
+// compiler that is used to generate the bindings, version of dav1d, etc.
+// So allow clippy to ignore unnecessary cast warnings.
+#[allow(clippy::unnecessary_cast)]
+impl Decoder for Dav1d {
+    fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
+        self.config = Some(config.clone());
         Ok(())
     }
 
@@ -90,7 +98,7 @@ impl Decoder for Dav1d {
         category: Category,
     ) -> AvifResult<()> {
         if self.context.is_none() {
-            self.initialize(&DecoderConfig::default())?;
+            self.initialize_impl()?;
         }
         unsafe {
             let mut data: Dav1dData = std::mem::zeroed();
