@@ -42,6 +42,10 @@ unsafe extern "C" fn avif_dav1d_free_callback(
 // See https://code.videolan.org/videolan/dav1d/-/blob/9849ede1304da1443cfb4a86f197765081034205/include/dav1d/common.h#L55-59
 const DAV1D_EAGAIN: i32 = if libc::EPERM > 0 { -libc::EAGAIN } else { libc::EAGAIN };
 
+// The type of the fields from dav1d_sys::bindings::* are dependent on the
+// compiler that is used to generate the bindings, version of dav1d, etc.
+// So allow clippy to ignore unnecessary cast warnings.
+#[allow(clippy::unnecessary_cast)]
 impl Dav1d {
     fn initialize_impl(&mut self, low_latency: bool) -> AvifResult<()> {
         if self.context.is_some() {
@@ -154,6 +158,28 @@ impl Dav1d {
         }
         Ok(())
     }
+
+    fn flush(&mut self) -> AvifResult<()> {
+        unsafe {
+            let mut buffered_frame: Dav1dPicture = std::mem::zeroed();
+            loop {
+                let res = dav1d_get_picture(self.context.unwrap(), (&mut buffered_frame) as *mut _);
+                if res < 0 {
+                    if res != DAV1D_EAGAIN {
+                        return Err(AvifError::UnknownError(format!(
+                            "error draining buffered frames {res}"
+                        )));
+                    }
+                } else {
+                    dav1d_picture_unref((&mut buffered_frame) as *mut _);
+                }
+                if res != 0 {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 // The type of the fields from dav1d_sys::bindings::* are dependent on the
@@ -236,32 +262,12 @@ impl Decoder for Dav1d {
             if !data.data.is_null() {
                 dav1d_data_unref((&mut data) as *mut _);
             }
-
-            // Drain all buffered frames in the decoder.
-            //
-            // The sample should have only one frame of the desired layer. If there are more frames
-            // after that frame, we need to discard them so that they won't be mistakenly output
-            // when the decoder is used to decode another sample.
-            let mut buffered_frame: Dav1dPicture = std::mem::zeroed();
-            loop {
-                let res = dav1d_get_picture(self.context.unwrap(), (&mut buffered_frame) as *mut _);
-                if res < 0 {
-                    if res != DAV1D_EAGAIN {
-                        if got_picture {
-                            dav1d_picture_unref((&mut next_frame) as *mut _);
-                        }
-                        return Err(AvifError::UnknownError(format!(
-                            "error draining buffered frames {res}"
-                        )));
-                    }
-                } else {
-                    dav1d_picture_unref((&mut buffered_frame) as *mut _);
+            if let Err(err) = self.flush() {
+                if got_picture {
+                    dav1d_picture_unref((&mut next_frame) as *mut _);
                 }
-                if res != 0 {
-                    break;
-                }
+                return Err(err);
             }
-
             if got_picture {
                 // unref previous frame.
                 if self.picture.is_some() {
