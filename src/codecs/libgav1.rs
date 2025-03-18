@@ -14,6 +14,7 @@
 
 use crate::codecs::Decoder;
 use crate::codecs::DecoderConfig;
+use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::image::YuvRange;
 use crate::internal_utils::pixels::*;
@@ -192,9 +193,7 @@ impl Decoder for Libgav1 {
         &mut self,
         _payloads: &[Vec<u8>],
         _spatial_id: u8,
-        _images: &mut Image,
-        _grid: &Grid,
-        _category: Category,
+        _grid_image_helper: &mut GridImageHelper,
     ) -> AvifResult<()> {
         Err(AvifError::NotImplemented)
     }

@@ -116,6 +116,33 @@ pub enum PlaneRow<'a> {
 }
 
 impl Image {
+    pub(crate) fn shallow_clone(&self) -> Self {
+        Self {
+            width: self.width,
+            height: self.height,
+            depth: self.depth,
+            yuv_format: self.yuv_format,
+            yuv_range: self.yuv_range,
+            chroma_sample_position: self.chroma_sample_position,
+            alpha_present: self.alpha_present,
+            alpha_premultiplied: self.alpha_premultiplied,
+            color_primaries: self.color_primaries,
+            transfer_characteristics: self.transfer_characteristics,
+            matrix_coefficients: self.matrix_coefficients,
+            clli: self.clli,
+            pasp: self.pasp,
+            clap: self.clap,
+            irot_angle: self.irot_angle,
+            imir_axis: self.imir_axis,
+            exif: self.exif.clone(),
+            icc: self.icc.clone(),
+            xmp: self.xmp.clone(),
+            image_sequence_track_present: self.image_sequence_track_present,
+            progressive_state: self.progressive_state,
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn depth_valid(&self) -> bool {
         matches!(self.depth, 8 | 10 | 12 | 16)
     }

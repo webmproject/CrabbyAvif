@@ -317,6 +317,50 @@ pub enum CompressionFormat {
     Heic = 1,
 }
 
+pub struct GridImageHelper<'a> {
+    grid: &'a Grid,
+    image: &'a mut Image,
+    pub(crate) category: Category,
+    cell_index: usize,
+    codec_config: &'a CodecConfiguration,
+    first_cell_image: Option<Image>,
+}
+
+// These functions are not used in all configurations.
+#[allow(unused)]
+impl GridImageHelper<'_> {
+    pub(crate) fn is_grid_complete(&self) -> AvifResult<bool> {
+        Ok(self.cell_index as u32 == checked_mul!(self.grid.rows, self.grid.columns)?)
+    }
+
+    pub(crate) fn copy_from_cell_image(&mut self, cell_image: &Image) -> AvifResult<()> {
+        if self.is_grid_complete()? {
+            return Ok(());
+        }
+        if self.cell_index == 0 {
+            validate_grid_image_dimensions(cell_image, self.grid)?;
+            if self.category != Category::Alpha {
+                self.image.width = self.grid.width;
+                self.image.height = self.grid.height;
+                self.image
+                    .copy_properties_from(cell_image, self.codec_config);
+            }
+            self.image.allocate_planes(self.category)?;
+        } else if !cell_image.has_same_properties_and_cicp(self.first_cell_image.unwrap_ref()) {
+            return Err(AvifError::InvalidImageGrid(
+                "grid image contains mismatched tiles".into(),
+            ));
+        }
+        self.image
+            .copy_from_tile(cell_image, self.grid, self.cell_index as u32, self.category)?;
+        if self.cell_index == 0 {
+            self.first_cell_image = Some(cell_image.shallow_clone());
+        }
+        self.cell_index += 1;
+        Ok(())
+    }
+}
+
 impl Decoder {
     pub fn image_count(&self) -> u32 {
         self.image_count
@@ -1477,15 +1521,90 @@ impl Decoder {
         Ok(())
     }
 
+    fn decode_grid(&mut self, image_index: usize, category: Category) -> AvifResult<()> {
+        let tile_count = self.tiles[category.usize()].len();
+        if tile_count == 0 {
+            return Ok(());
+        }
+        let previous_decoded_tile_count =
+            self.tile_info[category.usize()].decoded_tile_count as usize;
+        let mut payloads = vec![];
+        for tile_index in previous_decoded_tile_count..tile_count {
+            let tile = &self.tiles[category.usize()][tile_index];
+            let sample = &tile.input.samples[image_index];
+            let item_data_buffer = if sample.item_id == 0 {
+                &None
+            } else {
+                &self.items.get(&sample.item_id).unwrap().data_buffer
+            };
+            let io = &mut self.io.unwrap_mut();
+            let data = sample.data(io, item_data_buffer)?;
+            payloads.push(data.to_vec());
+        }
+        let grid = &self.tile_info[category.usize()].grid;
+        if checked_mul!(grid.rows, grid.columns)? != payloads.len() as u32 {
+            return Err(AvifError::InvalidArgument);
+        }
+        let first_tile = &self.tiles[category.usize()][previous_decoded_tile_count];
+        let mut grid_image_helper = GridImageHelper {
+            grid,
+            image: if category == Category::Gainmap {
+                &mut self.gainmap.image
+            } else {
+                &mut self.image
+            },
+            category,
+            cell_index: 0,
+            codec_config: &first_tile.codec_config,
+            first_cell_image: None,
+        };
+        let codec = &mut self.codecs[first_tile.codec_index];
+        let next_image_result = codec.get_next_image_grid(
+            &payloads,
+            first_tile.input.samples[image_index].spatial_id,
+            &mut grid_image_helper,
+        );
+        if next_image_result.is_err() {
+            if cfg!(feature = "android_mediacodec")
+                && cfg!(feature = "heic")
+                && first_tile.codec_config.is_heic()
+                && category == Category::Alpha
+            {
+                // When decoding HEIC on Android, if the alpha channel decoding fails, simply
+                // ignore it and return the rest of the image.
+            } else {
+                return next_image_result;
+            }
+        }
+        if !grid_image_helper.is_grid_complete()? {
+            return Err(AvifError::UnknownError(
+                "codec did not decode all cells".into(),
+            ));
+        }
+        checked_incr!(
+            self.tile_info[category.usize()].decoded_tile_count,
+            u32_from_usize(payloads.len())?
+        );
+        Ok(())
+    }
+
     fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
         let mut decoded_something = false;
         for category in self.settings.image_content_to_decode.categories() {
-            let previous_decoded_tile_count =
-                self.tile_info[category.usize()].decoded_tile_count as usize;
-            let tile_count = self.tiles[category.usize()].len();
-            for tile_index in previous_decoded_tile_count..tile_count {
-                self.decode_tile(image_index, category, tile_index)?;
+            if cfg!(feature = "android_mediacodec")
+                && !self.settings.allow_incremental
+                && self.tile_info[category.usize()].is_grid()
+            {
+                self.decode_grid(image_index, category)?;
                 decoded_something = true;
+            } else {
+                let previous_decoded_tile_count =
+                    self.tile_info[category.usize()].decoded_tile_count as usize;
+                let tile_count = self.tiles[category.usize()].len();
+                for tile_index in previous_decoded_tile_count..tile_count {
+                    self.decode_tile(image_index, category, tile_index)?;
+                    decoded_something = true;
+                }
             }
         }
         if decoded_something {

@@ -14,6 +14,7 @@
 
 use crate::codecs::Decoder;
 use crate::codecs::DecoderConfig;
+use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::image::YuvRange;
 use crate::internal_utils::pixels::*;
@@ -381,6 +382,7 @@ pub struct MediaCodec {
 impl MediaCodec {
     const AV1_MIME: &str = "video/av01";
     const HEVC_MIME: &str = "video/hevc";
+    const MAX_RETRIES: u32 = 100;
 
     fn initialize_impl(&mut self, low_latency: bool) -> AvifResult<()> {
         let config = self.config.unwrap_ref();
@@ -598,7 +600,7 @@ impl MediaCodec {
         }
         let mut retry_count = 0;
         unsafe {
-            while retry_count < 100 {
+            while retry_count < Self::MAX_RETRIES {
                 retry_count += 1;
                 let input_index = AMediaCodec_dequeueInputBuffer(codec, 10000);
                 if input_index >= 0 {
@@ -617,7 +619,7 @@ impl MediaCodec {
         let mut buffer_size: usize = 0;
         let mut buffer_info = AMediaCodecBufferInfo::default();
         retry_count = 0;
-        while retry_count < 100 {
+        while retry_count < Self::MAX_RETRIES {
             retry_count += 1;
             unsafe {
                 let output_index =
@@ -658,6 +660,91 @@ impl MediaCodec {
             ));
         }
         self.output_buffer_to_image(buffer.unwrap(), image, category)?;
+        Ok(())
+    }
+
+    fn get_next_image_grid_impl(
+        &mut self,
+        payloads: &[Vec<u8>],
+        grid_image_helper: &mut GridImageHelper,
+    ) -> AvifResult<()> {
+        if self.codec.is_none() {
+            self.initialize_impl(/*low_latency=*/ false)?;
+        }
+        let codec = self.codec.unwrap();
+        let mut retry_count = 0;
+        let mut payloads_iter = payloads.iter().peekable();
+        unsafe {
+            while !grid_image_helper.is_grid_complete()? {
+                // Queue as many inputs as we possibly can, then block on dequeuing outputs. After
+                // getting each output, come back and queue the inputs again to keep the decoder as
+                // busy as possible.
+                while payloads_iter.peek().is_some() {
+                    let input_index = AMediaCodec_dequeueInputBuffer(codec, 0);
+                    if input_index < 0 {
+                        if retry_count >= Self::MAX_RETRIES {
+                            return Err(AvifError::UnknownError("max retries exceeded".into()));
+                        }
+                        break;
+                    }
+                    let payload = payloads_iter.next().unwrap();
+                    self.enqueue_payload(
+                        input_index,
+                        payload,
+                        if payloads_iter.peek().is_some() {
+                            0
+                        } else {
+                            AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM as u32
+                        },
+                    )?;
+                }
+                loop {
+                    let mut buffer_info = AMediaCodecBufferInfo::default();
+                    let output_index =
+                        AMediaCodec_dequeueOutputBuffer(codec, &mut buffer_info as *mut _, 10000);
+                    if output_index == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED as isize {
+                        continue;
+                    } else if output_index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED as isize {
+                        let format = AMediaCodec_getOutputFormat(codec);
+                        if format.is_null() {
+                            return Err(AvifError::UnknownError("output format was null".into()));
+                        }
+                        self.format = Some(MediaFormat { format });
+                        continue;
+                    } else if output_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
+                        retry_count += 1;
+                        if retry_count >= Self::MAX_RETRIES {
+                            return Err(AvifError::UnknownError("max retries exceeded".into()));
+                        }
+                        break;
+                    } else if output_index < 0 {
+                        return Err(AvifError::UnknownError("".into()));
+                    } else {
+                        let mut buffer_size: usize = 0;
+                        let output_buffer = AMediaCodec_getOutputBuffer(
+                            codec,
+                            usize_from_isize(output_index)?,
+                            &mut buffer_size as *mut _,
+                        );
+                        if output_buffer.is_null() {
+                            return Err(AvifError::UnknownError("output buffer is null".into()));
+                        }
+                        let mut cell_image = Image::default();
+                        self.output_buffer_to_image(
+                            output_buffer,
+                            &mut cell_image,
+                            grid_image_helper.category,
+                        )?;
+                        grid_image_helper.copy_from_cell_image(&cell_image)?;
+                        if !grid_image_helper.is_grid_complete()? {
+                            // The last output buffer will be released when the codec is dropped.
+                            AMediaCodec_releaseOutputBuffer(codec, output_index as _, false);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -715,13 +802,22 @@ impl Decoder for MediaCodec {
 
     fn get_next_image_grid(
         &mut self,
-        _payloads: &[Vec<u8>],
+        payloads: &[Vec<u8>],
         _spatial_id: u8,
-        _images: &mut Image,
-        _grid: &Grid,
-        _category: Category,
+        grid_image_helper: &mut GridImageHelper,
     ) -> AvifResult<()> {
-        Err(AvifError::NotImplemented)
+        while self.codec_index < self.codec_initializers.len() {
+            let res = self.get_next_image_grid_impl(payloads, grid_image_helper);
+            if res.is_ok() {
+                return Ok(());
+            }
+            // Drop the current codec and try the next one.
+            self.drop_impl();
+            self.codec_index += 1;
+        }
+        Err(AvifError::UnknownError(
+            "all the codecs failed to extract an image".into(),
+        ))
     }
 }
 
