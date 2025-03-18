@@ -14,6 +14,7 @@
 
 use crate::codecs::Decoder;
 use crate::codecs::DecoderConfig;
+use crate::decoder::CodecChoice;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::image::YuvRange;
@@ -778,6 +779,10 @@ impl MediaCodec {
 }
 
 impl Decoder for MediaCodec {
+    fn codec(&self) -> CodecChoice {
+        CodecChoice::MediaCodec
+    }
+
     fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
         self.codec_initializers = get_codec_initializers(config);
         self.config = Some(config.clone());

@@ -21,6 +21,7 @@ pub mod libgav1;
 #[cfg(feature = "android_mediacodec")]
 pub mod android_mediacodec;
 
+use crate::decoder::CodecChoice;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::parser::mp4box::CodecConfiguration;
@@ -46,6 +47,7 @@ pub struct DecoderConfig {
 }
 
 pub trait Decoder {
+    fn codec(&self) -> CodecChoice;
     fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()>;
     // Decode a single image and write the output into |image|.
     fn get_next_image(

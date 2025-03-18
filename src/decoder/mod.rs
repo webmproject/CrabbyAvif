@@ -66,7 +66,7 @@ impl dyn IO {
 pub type GenericIO = Box<dyn IO>;
 pub type Codec = Box<dyn crate::codecs::Decoder>;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub enum CodecChoice {
     #[default]
     Auto,
@@ -1591,7 +1591,13 @@ impl Decoder {
     fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
         let mut decoded_something = false;
         for category in self.settings.image_content_to_decode.categories() {
-            if cfg!(feature = "android_mediacodec")
+            let tile_count = self.tiles[category.usize()].len();
+            if tile_count == 0 {
+                continue;
+            }
+            let first_tile = &self.tiles[category.usize()][0];
+            let codec = self.codecs[first_tile.codec_index].codec();
+            if codec == CodecChoice::MediaCodec
                 && !self.settings.allow_incremental
                 && self.tile_info[category.usize()].is_grid()
             {
@@ -1600,7 +1606,6 @@ impl Decoder {
             } else {
                 let previous_decoded_tile_count =
                     self.tile_info[category.usize()].decoded_tile_count as usize;
-                let tile_count = self.tiles[category.usize()].len();
                 for tile_index in previous_decoded_tile_count..tile_count {
                     self.decode_tile(image_index, category, tile_index)?;
                     decoded_something = true;

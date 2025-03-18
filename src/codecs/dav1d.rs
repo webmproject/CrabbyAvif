@@ -14,6 +14,7 @@
 
 use crate::codecs::Decoder;
 use crate::codecs::DecoderConfig;
+use crate::decoder::CodecChoice;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::image::YuvRange;
@@ -85,6 +86,10 @@ impl Dav1d {
 // So allow clippy to ignore unnecessary cast warnings.
 #[allow(clippy::unnecessary_cast)]
 impl Decoder for Dav1d {
+    fn codec(&self) -> CodecChoice {
+        CodecChoice::Dav1d
+    }
+
     fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
         self.config = Some(config.clone());
         Ok(())

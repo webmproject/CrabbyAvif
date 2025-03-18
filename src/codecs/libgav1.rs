@@ -14,6 +14,7 @@
 
 use crate::codecs::Decoder;
 use crate::codecs::DecoderConfig;
+use crate::decoder::CodecChoice;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::image::YuvRange;
@@ -36,6 +37,10 @@ pub struct Libgav1 {
 // unnecessary cast warnings.
 #[allow(clippy::unnecessary_cast)]
 impl Decoder for Libgav1 {
+    fn codec(&self) -> CodecChoice {
+        CodecChoice::Libgav1
+    }
+
     fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
         if self.decoder.is_some() {
             return Ok(()); // Already initialized.
