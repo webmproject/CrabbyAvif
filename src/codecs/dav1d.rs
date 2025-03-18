@@ -43,7 +43,7 @@ unsafe extern "C" fn avif_dav1d_free_callback(
 const DAV1D_EAGAIN: i32 = if libc::EPERM > 0 { -libc::EAGAIN } else { libc::EAGAIN };
 
 impl Dav1d {
-    fn initialize_impl(&mut self) -> AvifResult<()> {
+    fn initialize_impl(&mut self, low_latency: bool) -> AvifResult<()> {
         if self.context.is_some() {
             return Ok(());
         }
@@ -51,7 +51,9 @@ impl Dav1d {
         let mut settings_uninit: MaybeUninit<Dav1dSettings> = MaybeUninit::uninit();
         unsafe { dav1d_default_settings(settings_uninit.as_mut_ptr()) };
         let mut settings = unsafe { settings_uninit.assume_init() };
-        settings.max_frame_delay = 1;
+        if low_latency {
+            settings.max_frame_delay = 1;
+        }
         settings.n_threads = i32::try_from(config.max_threads).unwrap_or(1);
         settings.operating_point = config.operating_point as i32;
         settings.all_layers = if config.all_layers { 1 } else { 0 };
@@ -103,7 +105,7 @@ impl Decoder for Dav1d {
         category: Category,
     ) -> AvifResult<()> {
         if self.context.is_none() {
-            self.initialize_impl()?;
+            self.initialize_impl(true)?;
         }
         unsafe {
             let mut data: Dav1dData = std::mem::zeroed();
