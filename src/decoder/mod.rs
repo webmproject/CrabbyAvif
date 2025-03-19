@@ -324,6 +324,8 @@ pub struct GridImageHelper<'a> {
     cell_index: usize,
     codec_config: &'a CodecConfiguration,
     first_cell_image: Option<Image>,
+    tile_width: u32,
+    tile_height: u32,
 }
 
 // These functions are not used in all configurations.
@@ -333,10 +335,14 @@ impl GridImageHelper<'_> {
         Ok(self.cell_index as u32 == checked_mul!(self.grid.rows, self.grid.columns)?)
     }
 
-    pub(crate) fn copy_from_cell_image(&mut self, cell_image: &Image) -> AvifResult<()> {
+    pub(crate) fn copy_from_cell_image(&mut self, cell_image: &mut Image) -> AvifResult<()> {
         if self.is_grid_complete()? {
             return Ok(());
         }
+        if self.category == Category::Alpha && cell_image.yuv_range == YuvRange::Limited {
+            cell_image.alpha_to_full_range()?;
+        }
+        cell_image.scale(self.tile_width, self.tile_height, self.category)?;
         if self.cell_index == 0 {
             validate_grid_image_dimensions(cell_image, self.grid)?;
             if self.category != Category::Alpha {
@@ -1557,6 +1563,8 @@ impl Decoder {
             cell_index: 0,
             codec_config: &first_tile.codec_config,
             first_cell_image: None,
+            tile_width: first_tile.width,
+            tile_height: first_tile.height,
         };
         let codec = &mut self.codecs[first_tile.codec_index];
         let next_image_result = codec.get_next_image_grid(

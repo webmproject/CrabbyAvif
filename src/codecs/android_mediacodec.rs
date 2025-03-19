@@ -743,7 +743,7 @@ impl MediaCodec {
                             &mut cell_image,
                             grid_image_helper.category,
                         )?;
-                        grid_image_helper.copy_from_cell_image(&cell_image)?;
+                        grid_image_helper.copy_from_cell_image(&mut cell_image)?;
                         if !grid_image_helper.is_grid_complete()? {
                             // The last output buffer will be released when the codec is dropped.
                             AMediaCodec_releaseOutputBuffer(codec, output_index as _, false);
