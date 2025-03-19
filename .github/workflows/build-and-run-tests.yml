@@ -99,3 +99,6 @@ jobs:
 
     - name: Build and run the heic tests with heic feature enabled
       run: cargo test --no-default-features --features heic heic
+
+    - name: Build and run the encoder test with encoder feature enabled
+      run: cargo test --no-default-features --features encoder write

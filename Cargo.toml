@@ -46,7 +46,8 @@ libyuv = ["dep:libyuv-sys"]
 android_mediacodec = ["dep:ndk-sys"]
 heic = []
 disable_cfi = []
-aom = ["dep:aom-sys"]
+aom = ["dep:aom-sys", "encoder"]
+encoder = []
 
 [package.metadata.capi.header]
 name = "avif"
