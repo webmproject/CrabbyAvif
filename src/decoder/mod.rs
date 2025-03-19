@@ -64,7 +64,7 @@ impl dyn IO {
 }
 
 pub type GenericIO = Box<dyn IO>;
-pub type Codec = Box<dyn crate::codecs::Decoder>;
+pub(crate) type Codec = Box<dyn crate::codecs::Decoder>;
 
 #[derive(Debug, Default, PartialEq)]
 pub enum CodecChoice {
@@ -317,10 +317,10 @@ pub enum CompressionFormat {
     Heic = 1,
 }
 
-pub struct GridImageHelper<'a> {
+pub(crate) struct GridImageHelper<'a> {
     grid: &'a Grid,
     image: &'a mut Image,
-    pub(crate) category: Category,
+    pub category: Category,
     cell_index: usize,
     codec_config: &'a CodecConfiguration,
     first_cell_image: Option<Image>,

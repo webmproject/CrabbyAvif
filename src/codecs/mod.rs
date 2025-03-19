@@ -31,8 +31,10 @@ use crate::Category;
 
 use std::num::NonZero;
 
+// Not all fields of this struct are used in all the configurations.
+#[allow(unused)]
 #[derive(Clone, Default)]
-pub struct DecoderConfig {
+pub(crate) struct DecoderConfig {
     pub operating_point: u8,
     pub all_layers: bool,
     pub width: u32,
@@ -46,7 +48,7 @@ pub struct DecoderConfig {
     pub android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat,
 }
 
-pub trait Decoder {
+pub(crate) trait Decoder {
     fn codec(&self) -> CodecChoice;
     fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()>;
     // Decode a single image and write the output into |image|.
