@@ -287,11 +287,66 @@ impl Decoder for Dav1d {
 
     fn get_next_image_grid(
         &mut self,
-        _payloads: &[Vec<u8>],
-        _spatial_id: u8,
-        _grid_image_helper: &mut GridImageHelper,
+        payloads: &[Vec<u8>],
+        spatial_id: u8,
+        grid_image_helper: &mut GridImageHelper,
     ) -> AvifResult<()> {
-        Err(AvifError::NotImplemented)
+        if self.context.is_none() {
+            self.initialize_impl(false)?;
+        }
+        let mut res;
+        let context = self.context.unwrap();
+        let mut payloads_iter = payloads.iter().peekable();
+        unsafe {
+            let mut data: Dav1dData = std::mem::zeroed();
+            while !grid_image_helper.is_grid_complete()? {
+                if data.sz == 0 && payloads_iter.peek().is_some() {
+                    let payload = payloads_iter.next().unwrap();
+                    res = dav1d_data_wrap(
+                        (&mut data) as *mut _,
+                        payload.as_ptr(),
+                        payload.len(),
+                        Some(avif_dav1d_free_callback),
+                        /*cookie=*/ std::ptr::null_mut(),
+                    );
+                    if res != 0 {
+                        return Err(AvifError::UnknownError(format!(
+                            "dav1d_data_wrap returned {res}"
+                        )));
+                    }
+                }
+                if data.sz > 0 {
+                    res = dav1d_send_data(context, (&mut data) as *mut _);
+                    if res != 0 && res != DAV1D_EAGAIN {
+                        dav1d_data_unref((&mut data) as *mut _);
+                        return Err(AvifError::UnknownError(format!(
+                            "dav1d_send_data returned {res}"
+                        )));
+                    }
+                }
+                let mut picture: Dav1dPicture = std::mem::zeroed();
+                res = dav1d_get_picture(context, (&mut picture) as *mut _);
+                if res != 0 && res != DAV1D_EAGAIN {
+                    return Err(AvifError::UnknownError(format!(
+                        "dav1d_get_picture returned {res}"
+                    )));
+                } else if res == 0 {
+                    let frame_spatial_id = (*picture.frame_hdr).spatial_id as u8;
+                    if spatial_id == 0xFF || spatial_id == frame_spatial_id {
+                        let mut cell_image = Image::default();
+                        self.picture_to_image(
+                            &picture,
+                            &mut cell_image,
+                            grid_image_helper.category,
+                        )?;
+                        grid_image_helper.copy_from_cell_image(&mut cell_image)?;
+                    }
+                    dav1d_picture_unref((&mut picture) as *mut _);
+                }
+            }
+            self.flush()?;
+        }
+        Ok(())
     }
 }
 

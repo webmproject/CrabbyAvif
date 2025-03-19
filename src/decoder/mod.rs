@@ -1605,7 +1605,7 @@ impl Decoder {
             }
             let first_tile = &self.tiles[category.usize()][0];
             let codec = self.codecs[first_tile.codec_index].codec();
-            if codec == CodecChoice::MediaCodec
+            if matches!(codec, CodecChoice::MediaCodec | CodecChoice::Dav1d)
                 && !self.settings.allow_incremental
                 && self.tile_info[category.usize()].is_grid()
             {
