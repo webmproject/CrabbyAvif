@@ -42,6 +42,36 @@ unsafe extern "C" fn avif_dav1d_free_callback(
 // See https://code.videolan.org/videolan/dav1d/-/blob/9849ede1304da1443cfb4a86f197765081034205/include/dav1d/common.h#L55-59
 const DAV1D_EAGAIN: i32 = if libc::EPERM > 0 { -libc::EAGAIN } else { libc::EAGAIN };
 
+struct Dav1dPictureWrapper {
+    picture: Dav1dPicture,
+}
+
+impl Default for Dav1dPictureWrapper {
+    fn default() -> Self {
+        Self {
+            picture: unsafe { std::mem::zeroed() },
+        }
+    }
+}
+
+impl Dav1dPictureWrapper {
+    pub(crate) fn mut_ptr(&mut self) -> *mut Dav1dPicture {
+        (&mut self.picture) as *mut _
+    }
+
+    pub(crate) fn get(&self) -> &Dav1dPicture {
+        &self.picture
+    }
+}
+
+impl Drop for Dav1dPictureWrapper {
+    fn drop(&mut self) {
+        unsafe {
+            dav1d_picture_unref((&mut self.picture) as *mut _);
+        }
+    }
+}
+
 // The type of the fields from dav1d_sys::bindings::* are dependent on the
 // compiler that is used to generate the bindings, version of dav1d, etc.
 // So allow clippy to ignore unnecessary cast warnings.
@@ -161,17 +191,13 @@ impl Dav1d {
 
     fn flush(&mut self) -> AvifResult<()> {
         unsafe {
-            let mut buffered_frame: Dav1dPicture = std::mem::zeroed();
             loop {
-                let res = dav1d_get_picture(self.context.unwrap(), (&mut buffered_frame) as *mut _);
-                if res < 0 {
-                    if res != DAV1D_EAGAIN {
-                        return Err(AvifError::UnknownError(format!(
-                            "error draining buffered frames {res}"
-                        )));
-                    }
-                } else {
-                    dav1d_picture_unref((&mut buffered_frame) as *mut _);
+                let mut picture = Dav1dPictureWrapper::default();
+                let res = dav1d_get_picture(self.context.unwrap(), picture.mut_ptr());
+                if res < 0 && res != DAV1D_EAGAIN {
+                    return Err(AvifError::UnknownError(format!(
+                        "error draining buffered frames {res}"
+                    )));
                 }
                 if res != 0 {
                     break;
@@ -324,24 +350,23 @@ impl Decoder for Dav1d {
                         )));
                     }
                 }
-                let mut picture: Dav1dPicture = std::mem::zeroed();
-                res = dav1d_get_picture(context, (&mut picture) as *mut _);
+                let mut picture = Dav1dPictureWrapper::default();
+                res = dav1d_get_picture(context, picture.mut_ptr());
                 if res != 0 && res != DAV1D_EAGAIN {
                     return Err(AvifError::UnknownError(format!(
                         "dav1d_get_picture returned {res}"
                     )));
                 } else if res == 0 {
-                    let frame_spatial_id = (*picture.frame_hdr).spatial_id as u8;
+                    let frame_spatial_id = (*picture.get().frame_hdr).spatial_id as u8;
                     if spatial_id == 0xFF || spatial_id == frame_spatial_id {
                         let mut cell_image = Image::default();
                         self.picture_to_image(
-                            &picture,
+                            picture.get(),
                             &mut cell_image,
                             grid_image_helper.category,
                         )?;
                         grid_image_helper.copy_from_cell_image(&mut cell_image)?;
                     }
-                    dav1d_picture_unref((&mut picture) as *mut _);
                 }
             }
             self.flush()?;
