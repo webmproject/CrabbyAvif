@@ -28,7 +28,7 @@ use std::mem::MaybeUninit;
 #[derive(Default)]
 pub struct Dav1d {
     context: Option<*mut Dav1dContext>,
-    picture: Option<Dav1dPicture>,
+    picture: Option<Dav1dPictureWrapper>,
     config: Option<DecoderConfig>,
 }
 
@@ -246,8 +246,7 @@ impl Decoder for Dav1d {
                     "dav1d_data_wrap returned {res}"
                 )));
             }
-            let mut next_frame: Dav1dPicture = std::mem::zeroed();
-            let got_picture;
+            let next_picture: Option<Dav1dPictureWrapper>;
             loop {
                 if !data.data.is_null() {
                     let res = dav1d_send_data(self.context.unwrap(), (&mut data) as *mut _);
@@ -259,7 +258,8 @@ impl Decoder for Dav1d {
                     }
                 }
 
-                let res = dav1d_get_picture(self.context.unwrap(), (&mut next_frame) as *mut _);
+                let mut picture = Dav1dPictureWrapper::default();
+                let res = dav1d_get_picture(self.context.unwrap(), picture.mut_ptr());
                 if res == DAV1D_EAGAIN {
                     // send more data.
                     if !data.data.is_null() {
@@ -275,12 +275,9 @@ impl Decoder for Dav1d {
                     )));
                 } else {
                     // Got a picture.
-                    let frame_spatial_id = (*next_frame.frame_hdr).spatial_id as u8;
-                    if spatial_id != 0xFF && spatial_id != frame_spatial_id {
-                        // layer selection: skip this unwanted layer.
-                        dav1d_picture_unref((&mut next_frame) as *mut _);
-                    } else {
-                        got_picture = true;
+                    let frame_spatial_id = (*picture.get().frame_hdr).spatial_id as u8;
+                    if spatial_id == 0xFF || spatial_id == frame_spatial_id {
+                        next_picture = Some(picture);
                         break;
                     }
                 }
@@ -288,26 +285,16 @@ impl Decoder for Dav1d {
             if !data.data.is_null() {
                 dav1d_data_unref((&mut data) as *mut _);
             }
-            if let Err(err) = self.flush() {
-                if got_picture {
-                    dav1d_picture_unref((&mut next_frame) as *mut _);
-                }
-                return Err(err);
-            }
-            if got_picture {
-                // unref previous frame.
-                if self.picture.is_some() {
-                    let mut previous_picture = self.picture.unwrap();
-                    dav1d_picture_unref((&mut previous_picture) as *mut _);
-                }
-                self.picture = Some(next_frame);
+            self.flush()?;
+            if next_picture.is_some() {
+                self.picture = Some(next_picture.unwrap());
             } else if category == Category::Alpha && self.picture.is_some() {
                 // Special case for alpha, re-use last frame.
             } else {
                 return Err(AvifError::UnknownError("".into()));
             }
         }
-        self.picture_to_image(self.picture.unwrap_ref(), image, category)?;
+        self.picture_to_image(self.picture.unwrap_ref().get(), image, category)?;
         Ok(())
     }
 
@@ -377,9 +364,7 @@ impl Decoder for Dav1d {
 
 impl Drop for Dav1d {
     fn drop(&mut self) {
-        if self.picture.is_some() {
-            unsafe { dav1d_picture_unref(self.picture.unwrap_mut() as *mut _) };
-        }
+        self.picture = None;
         if self.context.is_some() {
             unsafe { dav1d_close(&mut self.context.unwrap()) };
         }
