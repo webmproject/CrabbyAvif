@@ -19,6 +19,8 @@
 mod internal_utils;
 
 pub mod decoder;
+#[cfg(feature = "encoder")]
+pub mod encoder;
 pub mod image;
 pub mod reformat;
 pub mod utils;
@@ -447,6 +449,16 @@ impl Category {
             Category::Alpha => &A_PLANE,
             _ => &YUV_PLANES,
         }
+    }
+
+    #[cfg(feature = "encoder")]
+    pub(crate) fn infe_name(&self) -> String {
+        match self {
+            Self::Color => "Color",
+            Self::Alpha => "Alpha",
+            Self::Gainmap => "GMap",
+        }
+        .into()
     }
 }
 

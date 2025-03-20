@@ -37,7 +37,7 @@ pub struct Av1SequenceHeader {
     pub transfer_characteristics: TransferCharacteristics,
     pub matrix_coefficients: MatrixCoefficients,
     pub yuv_range: YuvRange,
-    config: Av1CodecConfiguration,
+    pub config: Av1CodecConfiguration,
 }
 
 impl Av1SequenceHeader {

@@ -64,3 +64,7 @@ pub const HAS_DECODER: bool = if cfg!(any(
 } else {
     false
 };
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub const HAS_ENCODER: bool = cfg!(feature = "aom");

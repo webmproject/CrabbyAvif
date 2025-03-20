@@ -21,6 +21,9 @@ pub mod libgav1;
 #[cfg(feature = "android_mediacodec")]
 pub mod android_mediacodec;
 
+#[cfg(feature = "aom")]
+pub mod aom;
+
 use crate::decoder::CodecChoice;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
@@ -66,5 +69,33 @@ pub(crate) trait Decoder {
         spatial_id: u8,
         grid_image_helper: &mut GridImageHelper,
     ) -> AvifResult<()>;
+    // Destruction must be implemented using Drop.
+}
+
+// Not all fields of this struct are used in all the configurations.
+#[allow(unused)]
+#[cfg(feature = "encoder")]
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(crate) struct EncoderConfig {
+    pub tile_rows_log2: i32,
+    pub tile_columns_log2: i32,
+    pub quantizer: i32,
+    pub disable_lagged_output: bool,
+    pub is_single_image: bool,
+    pub speed: Option<u32>,
+    pub extra_layer_count: u32,
+    pub threads: u32,
+}
+
+#[cfg(feature = "encoder")]
+pub(crate) trait Encoder {
+    fn encode_image(
+        &mut self,
+        image: &Image,
+        category: Category,
+        config: &EncoderConfig,
+        output_samples: &mut Vec<crate::encoder::Sample>,
+    ) -> AvifResult<()>;
+    fn finish(&mut self, output_samples: &mut Vec<crate::encoder::Sample>) -> AvifResult<()>;
     // Destruction must be implemented using Drop.
 }

@@ -175,7 +175,9 @@ impl Image {
         self.width == other.width && self.height == other.height && self.depth == other.depth
     }
 
-    fn has_same_cicp(&self, other: &Image) -> bool {
+    // TODO: b/392112497 - remove this annotation once encoder feature is enabled by default.
+    #[allow(unused)]
+    pub(crate) fn has_same_cicp(&self, other: &Image) -> bool {
         self.depth == other.depth
             && self.yuv_format == other.yuv_format
             && self.yuv_range == other.yuv_range
@@ -331,7 +333,7 @@ impl Image {
         Ok(())
     }
 
-    pub(crate) fn allocate_planes(&mut self, category: Category) -> AvifResult<()> {
+    pub fn allocate_planes(&mut self, category: Category) -> AvifResult<()> {
         self.allocate_planes_with_default_values(category, [0, 0, 0, self.max_channel()])
     }
 

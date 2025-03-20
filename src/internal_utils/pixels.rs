@@ -192,6 +192,16 @@ impl Pixels {
         }
     }
 
+    #[cfg(feature = "encoder")]
+    pub fn ptr_generic(&self) -> *const u8 {
+        match self {
+            Pixels::Pointer(ptr) => ptr.ptr(),
+            Pixels::Pointer16(ptr) => ptr.ptr() as *const u8,
+            Pixels::Buffer(buffer) => buffer.as_ptr(),
+            Pixels::Buffer16(buffer) => buffer.as_ptr() as *const u8,
+        }
+    }
+
     pub(crate) fn try_clone(&self) -> AvifResult<Pixels> {
         match self {
             Pixels::Pointer(ptr) => Ok(Pixels::Pointer(*ptr)),
