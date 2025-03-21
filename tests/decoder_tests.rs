@@ -253,6 +253,17 @@ fn color_grid_alpha_no_grid() {
     assert!(alpha_plane.unwrap().row_bytes > 0);
 }
 
+#[test_case::test_case("paris_icc_exif_xmp.avif")]
+#[test_case::test_case("sofa_grid1x5_420.avif")]
+#[test_case::test_case("color_grid_alpha_nogrid.avif")]
+#[test_case::test_case("seine_sdr_gainmap_srgb.avif")]
+fn image_content_to_decode_none(filename: &str) {
+    let mut decoder = get_decoder(filename);
+    decoder.settings.image_content_to_decode = ImageContentType::None;
+    assert!(decoder.parse().is_ok());
+    assert!(decoder.next_image().is_err());
+}
+
 // From avifprogressivetest.cc
 #[test_case::test_case("progressive_dimension_change.avif", 2, 256, 256; "progressive_dimension_change")]
 #[test_case::test_case("progressive_layered_grid.avif", 2, 512, 256; "progressive_layered_grid")]
