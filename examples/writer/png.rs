@@ -22,8 +22,6 @@ use std::fs::File;
 
 use super::Writer;
 
-use png;
-
 #[derive(Default)]
 pub(crate) struct PngWriter {
     pub depth: Option<u8>,
