@@ -17,10 +17,21 @@ use clap::Parser;
 
 use crabby_avif::decoder::track::RepetitionCount;
 use crabby_avif::decoder::*;
+#[cfg(feature = "encoder")]
+use crabby_avif::encoder::*;
+use crabby_avif::image::*;
+use crabby_avif::utils::clap::CleanAperture;
 use crabby_avif::utils::clap::CropRect;
+use crabby_avif::utils::UFraction;
 use crabby_avif::*;
 
+mod reader;
 mod writer;
+
+#[cfg(feature = "encoder")]
+use reader::y4m::Y4MReader;
+#[cfg(feature = "encoder")]
+use reader::Reader;
 
 use writer::jpeg::JpegWriter;
 use writer::png::PngWriter;
@@ -28,45 +39,120 @@ use writer::y4m::Y4MWriter;
 use writer::Writer;
 
 use std::fs::File;
+#[cfg(feature = "encoder")]
+use std::io;
+#[cfg(feature = "encoder")]
+use std::io::Read;
+#[cfg(feature = "encoder")]
+use std::io::Write;
 use std::num::NonZero;
 
 fn depth_parser(s: &str) -> Result<u8, String> {
     match s.parse::<u8>() {
         Ok(8) => Ok(8),
+        Ok(10) => Ok(10),
+        Ok(12) => Ok(12),
         Ok(16) => Ok(16),
-        _ => Err("Value must be either 8 or 16".into()),
+        _ => Err("Value must be one of 8, 10, 12 or 16".into()),
     }
+}
+
+macro_rules! split_and_check_count {
+    ($parameter: literal, $input:ident, $delimiter:literal, $count:literal, $type:ty) => {{
+        let values: Result<Vec<_>, _> = $input
+            .split($delimiter)
+            .map(|x| x.parse::<$type>())
+            .collect();
+        if values.is_err() {
+            return Err(format!("Invalid {} string", $parameter));
+        }
+        let values = values.unwrap();
+        if values.len() != $count {
+            return Err(format!(
+                "Invalid {} string. Expecting exactly {} values separated with a \"{}\"",
+                $parameter, $count, $delimiter
+            ));
+        }
+        values
+    }};
+}
+
+fn clap_parser(s: &str) -> Result<CleanAperture, String> {
+    let values = split_and_check_count!("clap", s, ",", 8, i32);
+    let values: Vec<_> = values.into_iter().map(|x| x as u32).collect();
+    Ok(CleanAperture {
+        width: UFraction(values[0], values[1]),
+        height: UFraction(values[2], values[3]),
+        horiz_off: UFraction(values[4], values[5]),
+        vert_off: UFraction(values[6], values[7]),
+    })
+}
+
+fn clli_parser(s: &str) -> Result<ContentLightLevelInformation, String> {
+    let values = split_and_check_count!("clli", s, ",", 2, u16);
+    Ok(ContentLightLevelInformation {
+        max_cll: values[0],
+        max_pall: values[1],
+    })
+}
+
+fn pasp_parser(s: &str) -> Result<PixelAspectRatio, String> {
+    let values = split_and_check_count!("pasp", s, ",", 2, u32);
+    Ok(PixelAspectRatio {
+        h_spacing: values[0],
+        v_spacing: values[1],
+    })
+}
+
+fn cicp_parser(s: &str) -> Result<Nclx, String> {
+    let values = split_and_check_count!("cicp", s, "/", 3, u16);
+    Ok(Nclx {
+        color_primaries: values[0].into(),
+        transfer_characteristics: values[1].into(),
+        matrix_coefficients: values[2].into(),
+        ..Default::default()
+    })
 }
 
 #[derive(Parser)]
 struct CommandLineArgs {
-    /// Disable strict decoding, which disables strict validation checks and errors
+    /// AVIF Decode only: Disable strict decoding, which disables strict validation checks and
+    /// errors
     #[arg(long, default_value = "false")]
     no_strict: bool,
 
-    /// Decode all frames and display all image information instead of saving to disk
+    /// AVIF Decode only: Decode all frames and display all image information instead of saving to
+    /// disk
     #[arg(short = 'i', long, default_value = "false")]
     info: bool,
 
+    /// Number of threads to use for AVIF encoding/decoding
     #[arg(long)]
     jobs: Option<u32>,
 
-    /// When decoding an image sequence or progressive image, specify which frame index to decode
-    /// (Default: 0)
+    /// AVIF Decode only:  When decoding an image sequence or progressive image, specify which
+    /// frame index to decode (Default: 0)
     #[arg(long, short = 'I')]
     index: Option<u32>,
 
-    /// Output depth, either 8 or 16. (PNG only; For y4m/yuv, source depth is retained; JPEG is
-    /// always 8bit)
+    /// Output depth, either 8 or 16. (AVIF/PNG only; For y4m/yuv, source depth is retained; JPEG
+    /// is always 8bit)
     #[arg(long, short = 'd', value_parser = depth_parser)]
     depth: Option<u8>,
 
-    /// Output quality in 0..100. (JPEG only, default: 90)
+    /// Output quality in 0..100. (JPEG/AVIF only, default: 90).
     #[arg(long, short = 'q', value_parser = value_parser!(u8).range(0..=100))]
     quality: Option<u8>,
 
-    /// Enable progressive AVIF processing. If a progressive image is encountered and --progressive
-    /// is passed, --index will be used to choose which layer to decode (in progressive order).
+    /// AVIF Encode only: Speed used for encoding.
+    #[arg(long, short = 's', value_parser = value_parser!(u32).range(0..=10))]
+    speed: Option<u32>,
+
+    /// When decoding AVIF: Enable progressive AVIF processing. If a progressive image is
+    /// encountered and --progressive is passed, --index will be used to choose which layer to
+    /// decode (in progressive order).
+    /// When encoding AVIF: Auto set parameters to encode a simple layered image supporting
+    /// progressive rendering from a single input frame.
     #[arg(long, default_value = "false")]
     progressive: bool,
 
@@ -78,13 +164,52 @@ struct CommandLineArgs {
     #[arg(long)]
     dimension_limit: Option<u32>,
 
-    /// If the input file contains embedded Exif metadata, ignore it (no-op if absent)
+    /// AVIF Decode only: If the input file contains embedded Exif metadata, ignore it (no-op if absent)
     #[arg(long, default_value = "false")]
     ignore_exif: bool,
 
-    /// If the input file contains embedded XMP metadata, ignore it (no-op if absent)
+    /// AVIF Decode only: If the input file contains embedded XMP metadata, ignore it (no-op if absent)
     #[arg(long, default_value = "false")]
     ignore_xmp: bool,
+
+    /// AVIF Encode only: Add irot property (rotation), in 0..3. Makes (90 * ANGLE) degree rotation
+    /// anti-clockwise
+    #[arg(long = "irot", value_parser = value_parser!(u8).range(0..=3))]
+    irot_angle: Option<u8>,
+
+    /// AVIF Encode only: Add imir property (mirroring). 0=top-to-bottom, 1=left-to-right
+    #[arg(long = "imir", value_parser = value_parser!(u8).range(0..=1))]
+    imir_axis: Option<u8>,
+
+    /// AVIF Encode only: Add clap property (clean aperture). Width, Height, HOffset, VOffset (in
+    /// numerator/denominator pairs)
+    #[arg(long, value_parser = clap_parser)]
+    clap: Option<CleanAperture>,
+
+    /// AVIF Encode only: Add pasp property (aspect ratio). Horizontal spacing, Vertical spacing
+    #[arg(long, value_parser = pasp_parser)]
+    pasp: Option<PixelAspectRatio>,
+
+    /// AVIF Encode only: Add clli property (content light level information). MaxCLL, MaxPALL
+    #[arg(long, value_parser = clli_parser)]
+    clli: Option<ContentLightLevelInformation>,
+
+    /// AVIF Encode only: Set CICP values (nclx colr box) (P/T/M 3 raw numbers, use -r to set range
+    /// flag)
+    #[arg(long, value_parser = cicp_parser)]
+    cicp: Option<Nclx>,
+
+    /// AVIF Encode only: Provide an ICC profile payload to be associated with the primary item
+    #[arg(long)]
+    icc: Option<String>,
+
+    /// AVIF Encode only: Provide an XMP metadata payload to be associated with the primary item
+    #[arg(long)]
+    xmp: Option<String>,
+
+    /// AVIF Encode only: Provide an Exif metadata payload to be associated with the primary item
+    #[arg(long)]
+    exif: Option<String>,
 
     /// Input AVIF file
     #[arg(allow_hyphen_values = false)]
@@ -302,14 +427,14 @@ fn max_threads(jobs: &Option<u32>) -> u32 {
 }
 
 fn create_decoder_and_parse(args: &CommandLineArgs) -> AvifResult<Decoder> {
-    let mut settings = Settings {
+    let mut settings = decoder::Settings {
         strictness: if args.no_strict { Strictness::None } else { Strictness::All },
         image_content_to_decode: ImageContentType::All,
         max_threads: max_threads(&args.jobs),
         allow_progressive: args.progressive,
         ignore_exif: args.ignore_exif,
         ignore_xmp: args.ignore_xmp,
-        ..Settings::default()
+        ..Default::default()
     };
     // These values cannot be initialized in the list above since we need the default values to be
     // retain unless they are explicitly specified.
@@ -432,33 +557,112 @@ fn decode(args: &CommandLineArgs) -> AvifResult<()> {
     Ok(())
 }
 
-fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
-    if args.info {
-        if args.output_file.is_some()
-            || args.quality.is_some()
-            || args.depth.is_some()
-            || args.index.is_some()
-        {
-            return Err(AvifError::UnknownError(
-                "--info contains unsupported extra arguments".into(),
-            ));
+#[cfg(feature = "encoder")]
+fn read_file(filepath: &String) -> io::Result<Vec<u8>> {
+    let mut file = File::open(filepath)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+    Ok(buffer)
+}
+
+#[cfg(feature = "encoder")]
+fn encode(args: &CommandLineArgs) -> AvifResult<()> {
+    let extension = get_extension(&args.input_file);
+    let mut reader: Box<dyn Reader> = match extension {
+        "y4m" => Box::new(Y4MReader::create(&args.input_file)?),
+        _ => {
+            return Err(AvifError::UnknownError(format!(
+                "Unknown input file extension ({extension})"
+            )));
+        }
+    };
+    let mut image = reader.read_frame()?;
+    image.irot_angle = args.irot_angle;
+    image.imir_axis = args.imir_axis;
+    image.clap = args.clap;
+    image.pasp = args.pasp;
+    image.clli = args.clli;
+    if let Some(nclx) = &args.cicp {
+        image.color_primaries = nclx.color_primaries;
+        image.transfer_characteristics = nclx.transfer_characteristics;
+        image.matrix_coefficients = nclx.matrix_coefficients;
+    }
+    if let Some(icc) = &args.icc {
+        image.icc = read_file(icc).expect("failed to read icc file");
+    }
+    if let Some(exif) = &args.exif {
+        image.xmp = read_file(exif).expect("failed to read exif file");
+    }
+    if let Some(xmp) = &args.xmp {
+        image.xmp = read_file(xmp).expect("failed to read xmp file");
+    }
+    let settings = encoder::Settings {
+        extra_layer_count: if args.progressive { 1 } else { 0 },
+        speed: args.speed,
+        mutable: MutableSettings {
+            quality: args.quality.unwrap_or(60) as i32,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut encoder = Encoder::create_with_settings(&settings)?;
+    if reader.has_more_frames() {
+        loop {
+            // TODO: b/403090413 - Use a proper timestamp here.
+            encoder.add_image_for_sequence(&image, 1000)?;
+            if !reader.has_more_frames() {
+                break;
+            }
+            image = reader.read_frame()?;
         }
     } else {
-        if args.output_file.is_none() {
-            return Err(AvifError::UnknownError("output_file is required".into()));
+        encoder.add_image(&image)?;
+    }
+
+    let encoded_data = encoder.finish()?;
+    let output_file = args.output_file.as_ref().unwrap();
+    let mut file = File::create(output_file).expect("file creation failed");
+    file.write_all(&encoded_data).expect("file writing failed");
+    println!("Write output AVIF: {output_file}");
+    Ok(())
+}
+
+#[cfg(not(feature = "encoder"))]
+fn encode(_args: &CommandLineArgs) -> AvifResult<()> {
+    Err(AvifError::InvalidArgument)
+}
+
+fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
+    if get_extension(&args.input_file) == "avif" {
+        if args.info {
+            if args.output_file.is_some()
+                || args.quality.is_some()
+                || args.depth.is_some()
+                || args.index.is_some()
+            {
+                return Err(AvifError::UnknownError(
+                    "--info contains unsupported extra arguments".into(),
+                ));
+            }
+        } else {
+            if args.output_file.is_none() {
+                return Err(AvifError::UnknownError("output_file is required".into()));
+            }
+            let output_filename = &args.output_file.as_ref().unwrap().as_str();
+            let extension = get_extension(output_filename);
+            if args.quality.is_some() && extension != "jpg" && extension != "jpeg" {
+                return Err(AvifError::UnknownError(
+                    "quality is only supported for jpeg output".into(),
+                ));
+            }
+            if args.depth.is_some() && extension != "png" {
+                return Err(AvifError::UnknownError(
+                    "depth is only supported for png output".into(),
+                ));
+            }
         }
-        let output_filename = &args.output_file.as_ref().unwrap().as_str();
-        let extension = get_extension(output_filename);
-        if args.quality.is_some() && extension != "jpg" && extension != "jpeg" {
-            return Err(AvifError::UnknownError(
-                "quality is only supported for jpeg output".into(),
-            ));
-        }
-        if args.depth.is_some() && extension != "png" {
-            return Err(AvifError::UnknownError(
-                "depth is only supported for png output".into(),
-            ));
-        }
+    } else {
+        // TODO: b/403090413 - validate encoding args.
     }
     Ok(())
 }
@@ -469,7 +673,15 @@ fn main() {
         eprintln!("ERROR: {:#?}", err);
         std::process::exit(1);
     }
-    let res = if args.info { info(&args) } else { decode(&args) };
+    let res = if get_extension(&args.input_file) == "avif" {
+        if args.info {
+            info(&args)
+        } else {
+            decode(&args)
+        }
+    } else {
+        encode(&args)
+    };
     match res {
         Ok(_) => std::process::exit(0),
         Err(err) => {
