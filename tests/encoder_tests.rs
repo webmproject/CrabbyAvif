@@ -211,6 +211,32 @@ fn encode_decode_sequence(
     Ok(())
 }
 
+#[test_case::test_matrix([0, 1, 65535], [0, 1, 65535])]
+fn clli(max_cll: u16, max_pall: u16) -> AvifResult<()> {
+    if !HAS_ENCODER || !HAS_DECODER {
+        return Ok(());
+    }
+    let mut image = generate_random_image(8, 8, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    image.clli = Some(ContentLightLevelInformation { max_cll, max_pall });
+
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image(&image)?;
+    let edata = encoder.finish()?;
+    assert!(!edata.is_empty());
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    assert!(decoder.parse().is_ok());
+    let decoded_image = decoder.image().unwrap();
+    assert_eq!(decoded_image.clli, image.clli);
+
+    Ok(())
+}
+
 fn test_progressive_decode(
     edata: Vec<u8>,
     width: u32,
