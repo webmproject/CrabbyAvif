@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// The type of the fields from dav1d_sys::bindings::* are dependent on the
+// compiler that is used to generate the bindings, version of dav1d, etc.
+// So allow clippy to ignore unnecessary cast warnings.
+#![allow(clippy::unnecessary_cast)]
+
 use crate::codecs::Decoder;
 use crate::codecs::DecoderConfig;
 use crate::decoder::CodecChoice;
@@ -55,12 +60,16 @@ impl Default for Dav1dPictureWrapper {
 }
 
 impl Dav1dPictureWrapper {
-    pub(crate) fn mut_ptr(&mut self) -> *mut Dav1dPicture {
+    fn mut_ptr(&mut self) -> *mut Dav1dPicture {
         (&mut self.picture) as *mut _
     }
 
-    pub(crate) fn get(&self) -> &Dav1dPicture {
+    fn get(&self) -> &Dav1dPicture {
         &self.picture
+    }
+
+    fn use_layer(&self, spatial_id: u8) -> bool {
+        spatial_id == 0xFF || spatial_id == unsafe { (*self.get().frame_hdr).spatial_id as u8 }
     }
 }
 
@@ -72,10 +81,6 @@ impl Drop for Dav1dPictureWrapper {
     }
 }
 
-// The type of the fields from dav1d_sys::bindings::* are dependent on the
-// compiler that is used to generate the bindings, version of dav1d, etc.
-// So allow clippy to ignore unnecessary cast warnings.
-#[allow(clippy::unnecessary_cast)]
 impl Dav1d {
     fn initialize_impl(&mut self, low_latency: bool) -> AvifResult<()> {
         if self.context.is_some() {
@@ -208,10 +213,6 @@ impl Dav1d {
     }
 }
 
-// The type of the fields from dav1d_sys::bindings::* are dependent on the
-// compiler that is used to generate the bindings, version of dav1d, etc.
-// So allow clippy to ignore unnecessary cast warnings.
-#[allow(clippy::unnecessary_cast)]
 impl Decoder for Dav1d {
     fn codec(&self) -> CodecChoice {
         CodecChoice::Dav1d
@@ -273,13 +274,10 @@ impl Decoder for Dav1d {
                     return Err(AvifError::UnknownError(format!(
                         "dav1d_send_picture returned {res}"
                     )));
-                } else {
+                } else if picture.use_layer(spatial_id) {
                     // Got a picture.
-                    let frame_spatial_id = (*picture.get().frame_hdr).spatial_id as u8;
-                    if spatial_id == 0xFF || spatial_id == frame_spatial_id {
-                        next_picture = Some(picture);
-                        break;
-                    }
+                    next_picture = Some(picture);
+                    break;
                 }
             }
             if !data.data.is_null() {
@@ -343,17 +341,14 @@ impl Decoder for Dav1d {
                     return Err(AvifError::UnknownError(format!(
                         "dav1d_get_picture returned {res}"
                     )));
-                } else if res == 0 {
-                    let frame_spatial_id = (*picture.get().frame_hdr).spatial_id as u8;
-                    if spatial_id == 0xFF || spatial_id == frame_spatial_id {
-                        let mut cell_image = Image::default();
-                        self.picture_to_image(
-                            picture.get(),
-                            &mut cell_image,
-                            grid_image_helper.category,
-                        )?;
-                        grid_image_helper.copy_from_cell_image(&mut cell_image)?;
-                    }
+                } else if res == 0 && picture.use_layer(spatial_id) {
+                    let mut cell_image = Image::default();
+                    self.picture_to_image(
+                        picture.get(),
+                        &mut cell_image,
+                        grid_image_helper.category,
+                    )?;
+                    grid_image_helper.copy_from_cell_image(&mut cell_image)?;
                 }
             }
             self.flush()?;
