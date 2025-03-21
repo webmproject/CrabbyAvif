@@ -76,7 +76,56 @@ impl Dav1dPictureWrapper {
 impl Drop for Dav1dPictureWrapper {
     fn drop(&mut self) {
         unsafe {
-            dav1d_picture_unref((&mut self.picture) as *mut _);
+            dav1d_picture_unref(self.mut_ptr());
+        }
+    }
+}
+
+struct Dav1dDataWrapper {
+    data: Dav1dData,
+}
+
+impl Default for Dav1dDataWrapper {
+    fn default() -> Self {
+        Self {
+            data: unsafe { std::mem::zeroed() },
+        }
+    }
+}
+
+impl Dav1dDataWrapper {
+    fn mut_ptr(&mut self) -> *mut Dav1dData {
+        (&mut self.data) as *mut _
+    }
+
+    fn has_data(&self) -> bool {
+        self.data.sz > 0 && !self.data.data.is_null()
+    }
+
+    fn wrap(&mut self, payload: &[u8]) -> AvifResult<()> {
+        match unsafe {
+            dav1d_data_wrap(
+                self.mut_ptr(),
+                payload.as_ptr(),
+                payload.len(),
+                Some(avif_dav1d_free_callback),
+                /*cookie=*/ std::ptr::null_mut(),
+            )
+        } {
+            0 => Ok(()),
+            res => Err(AvifError::UnknownError(format!(
+                "dav1d_data_wrap returned {res}"
+            ))),
+        }
+    }
+}
+
+impl Drop for Dav1dDataWrapper {
+    fn drop(&mut self) {
+        if self.has_data() {
+            unsafe {
+                dav1d_data_unref(self.mut_ptr());
+            }
         }
     }
 }
@@ -234,25 +283,13 @@ impl Decoder for Dav1d {
             self.initialize_impl(true)?;
         }
         unsafe {
-            let mut data: Dav1dData = std::mem::zeroed();
-            let res = dav1d_data_wrap(
-                (&mut data) as *mut _,
-                av1_payload.as_ptr(),
-                av1_payload.len(),
-                Some(avif_dav1d_free_callback),
-                /*cookie=*/ std::ptr::null_mut(),
-            );
-            if res != 0 {
-                return Err(AvifError::UnknownError(format!(
-                    "dav1d_data_wrap returned {res}"
-                )));
-            }
+            let mut data = Dav1dDataWrapper::default();
+            data.wrap(av1_payload)?;
             let next_picture: Option<Dav1dPictureWrapper>;
             loop {
-                if !data.data.is_null() {
-                    let res = dav1d_send_data(self.context.unwrap(), (&mut data) as *mut _);
+                if data.has_data() {
+                    let res = dav1d_send_data(self.context.unwrap(), data.mut_ptr());
                     if res < 0 && res != DAV1D_EAGAIN {
-                        dav1d_data_unref((&mut data) as *mut _);
                         return Err(AvifError::UnknownError(format!(
                             "dav1d_send_data returned {res}"
                         )));
@@ -262,15 +299,11 @@ impl Decoder for Dav1d {
                 let mut picture = Dav1dPictureWrapper::default();
                 let res = dav1d_get_picture(self.context.unwrap(), picture.mut_ptr());
                 if res == DAV1D_EAGAIN {
-                    // send more data.
-                    if !data.data.is_null() {
+                    if data.has_data() {
                         continue;
                     }
                     return Err(AvifError::UnknownError("".into()));
                 } else if res < 0 {
-                    if !data.data.is_null() {
-                        dav1d_data_unref((&mut data) as *mut _);
-                    }
                     return Err(AvifError::UnknownError(format!(
                         "dav1d_send_picture returned {res}"
                     )));
@@ -279,9 +312,6 @@ impl Decoder for Dav1d {
                     next_picture = Some(picture);
                     break;
                 }
-            }
-            if !data.data.is_null() {
-                dav1d_data_unref((&mut data) as *mut _);
             }
             self.flush()?;
             if next_picture.is_some() {
@@ -309,27 +339,14 @@ impl Decoder for Dav1d {
         let context = self.context.unwrap();
         let mut payloads_iter = payloads.iter().peekable();
         unsafe {
-            let mut data: Dav1dData = std::mem::zeroed();
+            let mut data = Dav1dDataWrapper::default();
             while !grid_image_helper.is_grid_complete()? {
-                if data.sz == 0 && payloads_iter.peek().is_some() {
-                    let payload = payloads_iter.next().unwrap();
-                    res = dav1d_data_wrap(
-                        (&mut data) as *mut _,
-                        payload.as_ptr(),
-                        payload.len(),
-                        Some(avif_dav1d_free_callback),
-                        /*cookie=*/ std::ptr::null_mut(),
-                    );
-                    if res != 0 {
-                        return Err(AvifError::UnknownError(format!(
-                            "dav1d_data_wrap returned {res}"
-                        )));
-                    }
+                if !data.has_data() && payloads_iter.peek().is_some() {
+                    data.wrap(payloads_iter.next().unwrap())?;
                 }
-                if data.sz > 0 {
-                    res = dav1d_send_data(context, (&mut data) as *mut _);
+                if data.has_data() {
+                    res = dav1d_send_data(context, data.mut_ptr());
                     if res != 0 && res != DAV1D_EAGAIN {
-                        dav1d_data_unref((&mut data) as *mut _);
                         return Err(AvifError::UnknownError(format!(
                             "dav1d_send_data returned {res}"
                         )));
