@@ -443,6 +443,7 @@ mod tests {
         Ok(rgb)
     }
 
+    #[allow(clippy::zero_prefixed_literal)]
     #[test_matrix(20, 10, [8, 10, 12, 16], 0..4, [true, false])]
     fn fill_alpha(
         width: u32,
@@ -519,6 +520,7 @@ mod tests {
         assert_eq!(rgb::Image::rescale_alpha_value(4095, 4095.0, 1023), 1023);
     }
 
+    #[allow(clippy::zero_prefixed_literal)]
     #[test_matrix(20, 10, [8, 10, 12, 16], 0..4, [8, 10, 12], [true, false])]
     fn reformat_alpha(
         width: u32,
@@ -535,10 +537,12 @@ mod tests {
         let mut buffer: Vec<u8> = vec![];
         let mut rgb = rgb_image(width, height, rgb_depth, format, use_pointer, &mut buffer)?;
 
-        let mut image = image::Image::default();
-        image.width = width;
-        image.height = height;
-        image.depth = yuv_depth;
+        let mut image = image::Image {
+            width,
+            height,
+            depth: yuv_depth,
+            ..Default::default()
+        };
         image.allocate_planes(Category::Alpha)?;
 
         let mut rng = rand::thread_rng();
@@ -547,7 +551,7 @@ mod tests {
         if yuv_depth == 8 {
             for y in 0..height {
                 let row = image.row_mut(Plane::A, y)?;
-                for x in 0..width as usize {
+                for pixel in row.iter_mut().take(width as usize) {
                     let value = rng.gen_range(0..256) as u8;
                     if rgb.depth == 8 {
                         expected_values.push(value as u16);
@@ -558,13 +562,13 @@ mod tests {
                             rgb.max_channel(),
                         ));
                     }
-                    row[x] = value;
+                    *pixel = value;
                 }
             }
         } else {
             for y in 0..height {
                 let row = image.row16_mut(Plane::A, y)?;
-                for x in 0..width as usize {
+                for pixel in row.iter_mut().take(width as usize) {
                     let value = rng.gen_range(0..(1i32 << yuv_depth)) as u16;
                     if rgb.depth == yuv_depth {
                         expected_values.push(value);
@@ -575,7 +579,7 @@ mod tests {
                             rgb.max_channel(),
                         ));
                     }
-                    row[x] = value;
+                    *pixel = value;
                 }
             }
         }
@@ -630,10 +634,12 @@ mod tests {
             &mut buffer,
         )?;
 
-        let mut image = image::Image::default();
-        image.width = width;
-        image.height = height;
-        image.depth = yuv_depth;
+        let mut image = image::Image {
+            width,
+            height,
+            depth: yuv_depth,
+            ..Default::default()
+        };
         image.allocate_planes(Category::Alpha)?;
 
         let mut rng = rand::thread_rng();
@@ -641,19 +647,19 @@ mod tests {
         if yuv_depth == 8 {
             for y in 0..height {
                 let row = image.row_mut(Plane::A, y)?;
-                for x in 0..width as usize {
+                for pixel in row.iter_mut().take(width as usize) {
                     let value = rng.gen_range(0..256) as u8;
                     expected_values.push((value >> 6) as u16);
-                    row[x] = value;
+                    *pixel = value;
                 }
             }
         } else {
             for y in 0..height {
                 let row = image.row16_mut(Plane::A, y)?;
-                for x in 0..width as usize {
+                for pixel in row.iter_mut().take(width as usize) {
                     let value = rng.gen_range(0..(1i32 << yuv_depth)) as u16;
                     expected_values.push(value >> (yuv_depth - 2));
-                    row[x] = value;
+                    *pixel = value;
                 }
             }
         }
