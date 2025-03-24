@@ -567,6 +567,7 @@ fn read_file(filepath: &String) -> io::Result<Vec<u8>> {
 
 #[cfg(feature = "encoder")]
 fn encode(args: &CommandLineArgs) -> AvifResult<()> {
+    const DEFAULT_ENCODE_QUALITY: u8 = 90;
     let extension = get_extension(&args.input_file);
     let mut reader: Box<dyn Reader> = match extension {
         "y4m" => Box::new(Y4MReader::create(&args.input_file)?),
@@ -596,17 +597,21 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
     if let Some(xmp) = &args.xmp {
         image.xmp = read_file(xmp).expect("failed to read xmp file");
     }
-    let settings = encoder::Settings {
+    let mut settings = encoder::Settings {
         extra_layer_count: if args.progressive { 1 } else { 0 },
         speed: args.speed,
         mutable: MutableSettings {
-            quality: args.quality.unwrap_or(60) as i32,
+            quality: args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY) as i32,
             ..Default::default()
         },
         ..Default::default()
     };
     let mut encoder = Encoder::create_with_settings(&settings)?;
     if reader.has_more_frames() {
+        if args.progressive {
+            println!("Automatic progressive encoding can only have one input image.");
+            return Err(AvifError::InvalidArgument);
+        }
         loop {
             // TODO: b/403090413 - Use a proper timestamp here.
             encoder.add_image_for_sequence(&image, 1000)?;
@@ -615,6 +620,15 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
             }
             image = reader.read_frame()?;
         }
+    } else if args.progressive {
+        // Encode the base layer with very low quality.
+        settings.mutable.quality = 2;
+        encoder.update_settings(&settings.mutable)?;
+        encoder.add_image(&image)?;
+        // Encode the second layer with the requested quality.
+        settings.mutable.quality = args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY) as i32;
+        encoder.update_settings(&settings.mutable)?;
+        encoder.add_image(&image)?;
     } else {
         encoder.add_image(&image)?;
     }
