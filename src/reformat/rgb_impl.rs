@@ -759,7 +759,7 @@ mod tests {
                 assert_eq!(dst.width, g[y as usize].len() as u32);
                 assert_eq!(dst.width, b[y as usize].len() as u32);
                 for x in 0..dst.width {
-                    let i = (x * dst.pixel_size() + 0) as usize;
+                    let i = (x * dst.pixel_size()) as usize;
                     let pixel = &dst.row(y).unwrap()[i..i + 3];
                     assert_eq!(pixel[0], r[y as usize][x as usize]);
                     assert_eq!(pixel[1], g[y as usize][x as usize]);

@@ -612,11 +612,11 @@ fn raw_io() {
     let data =
         std::fs::read(get_test_file("colors-animated-8bpc.avif")).expect("Unable to read file");
     let mut decoder = decoder::Decoder::default();
-    let _ = unsafe {
+    unsafe {
         decoder
             .set_io_raw(data.as_ptr(), data.len())
-            .expect("Failed to set IO")
-    };
+            .expect("Failed to set IO");
+    }
     assert!(decoder.parse().is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
     assert_eq!(decoder.image_count(), 5);
@@ -689,7 +689,7 @@ fn expected_min_decoded_row_count(
     cell_columns: u32,
     available_size: usize,
     size: usize,
-    grid_cell_offsets: &Vec<usize>,
+    grid_cell_offsets: &[usize],
 ) -> u32 {
     if available_size >= size {
         return height;
@@ -720,7 +720,7 @@ fn expected_min_decoded_row_count_computation() {
         expected_min_decoded_row_count(770, cell_height, 1, 1000, 30000, &grid_cell_offsets)
     );
     assert_eq!(
-        1 * cell_height,
+        cell_height,
         expected_min_decoded_row_count(770, cell_height, 1, 4000, 30000, &grid_cell_offsets)
     );
     assert_eq!(
@@ -732,7 +732,7 @@ fn expected_min_decoded_row_count_computation() {
         expected_min_decoded_row_count(770, cell_height, 1, 17846, 30000, &grid_cell_offsets)
     );
     assert_eq!(
-        1 * cell_height,
+        cell_height,
         expected_min_decoded_row_count(462, cell_height, 2, 17846, 30000, &grid_cell_offsets)
     );
     assert_eq!(
@@ -740,7 +740,7 @@ fn expected_min_decoded_row_count_computation() {
         expected_min_decoded_row_count(462, cell_height, 2, 23000, 30000, &grid_cell_offsets)
     );
     assert_eq!(
-        1 * cell_height,
+        cell_height,
         expected_min_decoded_row_count(308, cell_height, 3, 23000, 30000, &grid_cell_offsets)
     );
     assert_eq!(
@@ -781,8 +781,7 @@ fn incremental_decode() {
         {
             let mut available_size = available_size_rc.borrow_mut();
             if *available_size >= len {
-                println!("parse returned waiting on io after full file.");
-                assert!(false);
+                panic!("parse returned waiting on io after full file.");
             }
             *available_size = std::cmp::min(*available_size + step, len);
         }
@@ -805,8 +804,7 @@ fn incremental_decode() {
         {
             let mut available_size = available_size_rc.borrow_mut();
             if *available_size >= len {
-                println!("next_image returned waiting on io after full file.");
-                assert!(false);
+                panic!("next_image returned waiting on io after full file.");
             }
             let decoded_row_count = decoder.decoded_row_count();
             assert!(decoded_row_count >= previous_decoded_row_count);
@@ -1174,6 +1172,7 @@ macro_rules! pixel_eq {
     };
 }
 
+#[allow(clippy::zero_prefixed_literal)]
 #[test_case::test_matrix(0usize..4)]
 fn overlay(index: usize) {
     let info = &EXPECTED_OVERLAY_IMAGE_INFOS[index];

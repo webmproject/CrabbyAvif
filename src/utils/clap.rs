@@ -175,6 +175,7 @@ mod tests {
         invalid!(99, 99, Yuv420, 99, 1, 99, 1, -1i32 as u32, 2, -1i32 as u32, 2),
     ];
 
+    #[allow(clippy::zero_prefixed_literal)]
     #[test_case::test_matrix(0usize..20)]
     fn valid_clap_to_rect(index: usize) {
         let param = &TEST_PARAMS[index];

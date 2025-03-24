@@ -569,7 +569,7 @@ mod tests {
         assert_eq!(stream.data[stream.data.len() - 8..], u64value.to_be_bytes());
 
         let strvalue = "hello";
-        assert!(stream.write_str(&strvalue).is_ok());
+        assert!(stream.write_str(strvalue).is_ok());
         assert_eq!(stream.offset(), 23);
         assert_eq!(&stream.data[stream.data.len() - 5..], strvalue.as_bytes());
 
@@ -589,7 +589,7 @@ mod tests {
         );
         assert_eq!(*stream.data.last().unwrap(), 0);
 
-        let data = vec![100, 200, 50, 25];
+        let data = [100, 200, 50, 25];
         assert!(stream.write_slice(&data[..]).is_ok());
         assert_eq!(stream.offset(), 38);
         assert_eq!(&stream.data[stream.data.len() - 4..], &data[..]);

@@ -280,7 +280,7 @@ pub(crate) fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
 pub(crate) fn assert_eq_f32_array(a: &[f32], b: &[f32]) {
     assert_eq!(a.len(), b.len());
     for i in 0..a.len() {
-        assert!((a[i] - b[i]).abs() <= std::f32::EPSILON);
+        assert!((a[i] - b[i]).abs() <= f32::EPSILON);
     }
 }
 
