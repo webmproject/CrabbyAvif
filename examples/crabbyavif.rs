@@ -22,6 +22,7 @@ use crabby_avif::encoder::*;
 use crabby_avif::image::*;
 use crabby_avif::utils::clap::CleanAperture;
 use crabby_avif::utils::clap::CropRect;
+use crabby_avif::utils::IFraction;
 use crabby_avif::utils::UFraction;
 use crabby_avif::*;
 
@@ -112,6 +113,11 @@ fn cicp_parser(s: &str) -> Result<Nclx, String> {
         matrix_coefficients: values[2].into(),
         ..Default::default()
     })
+}
+
+fn scaling_mode_parser(s: &str) -> Result<IFraction, String> {
+    let values = split_and_check_count!("scaling_mode", s, "/", 2, i32);
+    Ok(IFraction(values[0], values[1]))
 }
 
 #[derive(Parser)]
@@ -210,6 +216,10 @@ struct CommandLineArgs {
     /// AVIF Encode only: Provide an Exif metadata payload to be associated with the primary item
     #[arg(long)]
     exif: Option<String>,
+
+    /// AVIF Encode only: Set frame scaling mode as given fraction
+    #[arg(long, value_parser = scaling_mode_parser)]
+    scaling_mode: Option<IFraction>,
 
     /// Input AVIF file
     #[arg(allow_hyphen_values = false)]
@@ -606,6 +616,12 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
         },
         ..Default::default()
     };
+    if let Some(scaling_mode) = args.scaling_mode {
+        settings.mutable.scaling_mode = ScalingMode {
+            horizontal: scaling_mode,
+            vertical: scaling_mode,
+        };
+    }
     let mut encoder = Encoder::create_with_settings(&settings)?;
     if reader.has_more_frames() {
         if args.progressive {
