@@ -963,6 +963,21 @@ fn white_1x1_ftyp_size0() -> AvifResult<()> {
 }
 
 #[test]
+fn white_1x1_unknown_top_level_box_size0() -> AvifResult<()> {
+    // Edit the file to insert an unknown top level box with size 0 after ftyp (invalid).
+    let mut file_bytes = std::fs::read(get_test_file("white_1x1.avif")).unwrap();
+    // Insert a top level box after ftyp (box type and size all 0s).
+    for _ in 0..8 {
+        file_bytes.insert(32, 0);
+    }
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(file_bytes);
+    assert!(decoder.parse().is_err());
+    Ok(())
+}
+
+#[test]
 fn dimg_repetition() {
     let mut decoder = get_decoder("sofa_grid1x5_420_dimg_repeat.avif");
     assert_eq!(
