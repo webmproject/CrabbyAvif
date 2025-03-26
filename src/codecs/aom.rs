@@ -17,9 +17,11 @@
 
 use crate::codecs::*;
 use crate::encoder::Sample;
+use crate::encoder::ScalingMode;
 use crate::image::Image;
 use crate::image::YuvRange;
 use crate::internal_utils::pixels::*;
+use crate::utils::IFraction;
 use crate::*;
 
 use aom_sys::bindings::*;
@@ -77,6 +79,30 @@ fn aom_seq_profile(image: &Image, category: Category) -> AvifResult<u32> {
         PixelFormat::Yuv444 => Ok(1),
         _ => Err(AvifError::InvalidArgument),
     }
+}
+
+fn get_aom_scaling_mode_1d(mut fraction: IFraction) -> AvifResult<aom_scaling_mode_1d> {
+    fraction.is_valid()?;
+    fraction.simplify();
+    Ok(match fraction {
+        IFraction(1, 1) => aom_scaling_mode_1d_AOME_NORMAL,
+        IFraction(1, 2) => aom_scaling_mode_1d_AOME_ONETWO,
+        IFraction(1, 3) => aom_scaling_mode_1d_AOME_ONETHREE,
+        IFraction(1, 4) => aom_scaling_mode_1d_AOME_ONEFOUR,
+        IFraction(1, 8) => aom_scaling_mode_1d_AOME_ONEEIGHT,
+        IFraction(2, 3) => aom_scaling_mode_1d_AOME_TWOTHREE,
+        IFraction(3, 4) => aom_scaling_mode_1d_AOME_THREEFOUR,
+        IFraction(3, 5) => aom_scaling_mode_1d_AOME_THREEFIVE,
+        IFraction(4, 5) => aom_scaling_mode_1d_AOME_FOURFIVE,
+        _ => return Err(AvifError::NotImplemented),
+    })
+}
+
+fn aom_scaling_mode(scaling_mode: &ScalingMode) -> AvifResult<aom_scaling_mode_t> {
+    Ok(aom_scaling_mode_t {
+        h_scaling_mode: get_aom_scaling_mode_1d(scaling_mode.horizontal)?,
+        v_scaling_mode: get_aom_scaling_mode_1d(scaling_mode.vertical)?,
+    })
 }
 
 macro_rules! codec_control {
@@ -318,6 +344,16 @@ impl Encoder for Aom {
                 self,
                 aome_enc_control_id_AOME_SET_SPATIAL_LAYER_ID,
                 self.current_layer
+            );
+        }
+        let scaling_mode = aom_scaling_mode(&self.config.unwrap_ref().scaling_mode)?;
+        if scaling_mode.h_scaling_mode != aom_scaling_mode_1d_AOME_NORMAL
+            || scaling_mode.v_scaling_mode != aom_scaling_mode_1d_AOME_NORMAL
+        {
+            codec_control!(
+                self,
+                aome_enc_control_id_AOME_SET_SCALEMODE,
+                &scaling_mode as *const _
             );
         }
         let mut aom_image: aom_image_t = unsafe { std::mem::zeroed() };

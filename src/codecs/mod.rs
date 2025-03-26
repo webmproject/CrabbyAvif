@@ -32,6 +32,9 @@ use crate::AndroidMediaCodecOutputColorFormat;
 use crate::AvifResult;
 use crate::Category;
 
+#[cfg(feature = "encoder")]
+use crate::encoder::*;
+
 use std::num::NonZero;
 
 // Not all fields of this struct are used in all the configurations.
@@ -85,6 +88,7 @@ pub(crate) struct EncoderConfig {
     pub speed: Option<u32>,
     pub extra_layer_count: u32,
     pub threads: u32,
+    pub scaling_mode: ScalingMode,
 }
 
 #[cfg(feature = "encoder")]

@@ -26,6 +26,7 @@ use crate::internal_utils::stream::OStream;
 use crate::internal_utils::*;
 use crate::parser::mp4box::*;
 use crate::parser::obu::Av1SequenceHeader;
+use crate::utils::IFraction;
 use crate::*;
 
 #[cfg(feature = "aom")]
@@ -35,12 +36,28 @@ use std::fmt;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScalingMode {
+    pub horizontal: IFraction,
+    pub vertical: IFraction,
+}
+
+impl Default for ScalingMode {
+    fn default() -> Self {
+        Self {
+            horizontal: IFraction(1, 1),
+            vertical: IFraction(1, 1),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MutableSettings {
     pub quality: i32,
     pub tile_rows_log2: i32,
     pub tile_columns_log2: i32,
     pub auto_tiling: bool,
+    pub scaling_mode: ScalingMode,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -270,6 +287,7 @@ impl Encoder {
                 speed: self.settings.speed,
                 extra_layer_count: self.settings.extra_layer_count,
                 threads: self.settings.threads,
+                scaling_mode: self.settings.mutable.scaling_mode,
             };
             item.codec.unwrap_mut().encode_image(
                 image,

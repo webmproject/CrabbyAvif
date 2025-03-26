@@ -16,7 +16,9 @@
 
 use crabby_avif::decoder::CompressionFormat;
 use crabby_avif::decoder::ProgressiveState;
+use crabby_avif::encoder::ScalingMode;
 use crabby_avif::image::*;
+use crabby_avif::utils::IFraction;
 use crabby_avif::*;
 
 use rand::rngs::StdRng;
@@ -288,6 +290,50 @@ fn progressive_quality_change(use_grid: bool) -> AvifResult<()> {
         encoder.add_image(&image)?;
     }
     settings.mutable.quality = 90;
+    encoder.update_settings(&settings.mutable)?;
+    if use_grid {
+        encoder.add_image_grid(2, 1, &images)?;
+    } else {
+        encoder.add_image(&image)?;
+    }
+    let edata = encoder.finish()?;
+    assert!(!edata.is_empty());
+    test_progressive_decode(
+        edata,
+        if use_grid { 512 } else { 256 },
+        256,
+        settings.extra_layer_count,
+    )?;
+    Ok(())
+}
+
+#[test_case::test_matrix([IFraction(1,2), IFraction(2, 6), IFraction(4, 32)], [true, false])]
+fn progressive_dimension_change(scaling_fraction: IFraction, use_grid: bool) -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let image = generate_random_image(256, 256, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    let mut settings = encoder::Settings {
+        speed: Some(10),
+        extra_layer_count: 1,
+        mutable: encoder::MutableSettings {
+            quality: 100,
+            scaling_mode: ScalingMode {
+                horizontal: scaling_fraction,
+                vertical: scaling_fraction,
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    let images = [&image, &image];
+    if use_grid {
+        encoder.add_image_grid(2, 1, &images)?;
+    } else {
+        encoder.add_image(&image)?;
+    }
+    settings.mutable.scaling_mode = ScalingMode::default();
     encoder.update_settings(&settings.mutable)?;
     if use_grid {
         encoder.add_image_grid(2, 1, &images)?;

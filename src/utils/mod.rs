@@ -57,7 +57,7 @@ impl UFraction {
 // are used as i32, but they are signalled as u32 according to the specification
 // as of 2024. This may be fixed in later versions of the specification, see
 // https://github.com/AOMediaCodec/libavif/pull/1749#discussion_r1391612932.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct IFraction(pub i32, pub i32);
 
 impl TryFrom<UFraction> for IFraction {
@@ -69,6 +69,14 @@ impl TryFrom<UFraction> for IFraction {
 }
 
 impl IFraction {
+    #[cfg(feature = "encoder")]
+    pub(crate) fn is_valid(&self) -> AvifResult<()> {
+        match self.1 {
+            0 => Err(AvifError::InvalidArgument),
+            _ => Ok(()),
+        }
+    }
+
     fn gcd(a: i32, b: i32) -> i32 {
         let mut a = if a < 0 { -a as i64 } else { a as i64 };
         let mut b = if b < 0 { -b as i64 } else { b as i64 };
