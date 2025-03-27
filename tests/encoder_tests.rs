@@ -575,3 +575,32 @@ fn gainmap_oriented_invalid(transformation_index: u8) -> AvifResult<()> {
     assert!(encoder.finish().is_err());
     Ok(())
 }
+
+#[test]
+fn gainmap_all_channels_identical() -> AvifResult<()> {
+    let (image, mut gainmap) = generate_gainmap_image(true)?;
+    for c in 0..3 {
+        gainmap.metadata.base_offset[c] = Fraction(1, 2);
+        gainmap.metadata.alternate_offset[c] = Fraction(3, 4);
+        gainmap.metadata.gamma[c] = UFraction(5, 6);
+        gainmap.metadata.min[c] = Fraction(7, 8);
+        gainmap.metadata.max[c] = Fraction(9, 10);
+    }
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_gainmap(&image, &gainmap)?;
+    let edata = encoder.finish()?;
+    assert!(!edata.is_empty());
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.settings.image_content_to_decode = ImageContentType::All;
+    assert!(decoder.parse().is_ok());
+    assert!(decoder.gainmap_present());
+    let decoded_gainmap = decoder.gainmap();
+    assert_eq!(decoded_gainmap.metadata, gainmap.metadata);
+    Ok(())
+}

@@ -85,3 +85,47 @@ pub struct GainMap {
 
     pub alt_clli: ContentLightLevelInformation,
 }
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "encoder")]
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "encoder")]
+    fn identical_channels() {
+        let mut metadata = GainMapMetadata::default();
+        assert!(metadata.identical_channels());
+        assert_eq!(metadata.channel_count(), 1);
+        for i in 0..3 {
+            metadata = GainMapMetadata::default();
+            metadata.min[i] = Fraction(1, 2);
+            assert!(!metadata.identical_channels());
+            assert_eq!(metadata.channel_count(), 3);
+        }
+        for i in 0..3 {
+            metadata = GainMapMetadata::default();
+            metadata.max[i] = Fraction(1, 2);
+            assert!(!metadata.identical_channels());
+            assert_eq!(metadata.channel_count(), 3);
+        }
+        for i in 0..3 {
+            metadata = GainMapMetadata::default();
+            metadata.gamma[i] = UFraction(1, 2);
+            assert!(!metadata.identical_channels());
+            assert_eq!(metadata.channel_count(), 3);
+        }
+        for i in 0..3 {
+            metadata = GainMapMetadata::default();
+            metadata.base_offset[i] = Fraction(1, 2);
+            assert!(!metadata.identical_channels());
+            assert_eq!(metadata.channel_count(), 3);
+        }
+        for i in 0..3 {
+            metadata = GainMapMetadata::default();
+            metadata.alternate_offset[i] = Fraction(1, 2);
+            assert!(!metadata.identical_channels());
+            assert_eq!(metadata.channel_count(), 3);
+        }
+    }
+}
