@@ -14,6 +14,7 @@
 
 use crate::encoder::*;
 
+use crate::gainmap::GainMapMetadata;
 use crate::image::*;
 use crate::internal_utils::stream::OStream;
 use crate::internal_utils::*;
@@ -87,6 +88,49 @@ pub(crate) fn write_grid(stream: &mut OStream, grid: &Grid) -> AvifResult<()> {
     Ok(())
 }
 
+pub(crate) fn write_tmap(metadata: &GainMapMetadata) -> AvifResult<Vec<u8>> {
+    let mut stream = OStream::default();
+    // ToneMapImage syntax as per section 6.6.2.4.2 of ISO/IEC 23008-12:2024
+    // amendment "Support for tone map derived image items and other improvements".
+    // unsigned int(8) version = 0;
+    stream.write_u8(0)?;
+    // GainMapMetadata syntax as per clause C.2.2 of ISO 21496-1
+    // unsigned int(16) minimum_version;
+    stream.write_u16(0)?;
+    // unsigned int(16) writer_version;
+    stream.write_u16(0)?;
+    // unsigned int(1) is_multichannel;
+    stream.write_bool(metadata.channel_count() == 3)?;
+    // unsigned int(1) use_base_colour_space;
+    stream.write_bool(metadata.use_base_color_space)?;
+    // unsigned int(6) reserved;
+    stream.write_bits(0, 6)?;
+    // unsigned int(32) base_hdr_headroom_numerator;
+    // unsigned int(32) base_hdr_headroom_denominator;
+    stream.write_ufraction(metadata.base_hdr_headroom)?;
+    // unsigned int(32) alternate_hdr_headroom_numerator;
+    // unsigned int(32) alternate_hdr_headroom_denominator;
+    stream.write_ufraction(metadata.alternate_hdr_headroom)?;
+    for i in 0..metadata.channel_count() as usize {
+        // int(32) gain_map_min_numerator;
+        // unsigned int(32) gain_map_min_denominator
+        stream.write_fraction(metadata.min[i])?;
+        // int(32) gain_map_max_numerator;
+        // unsigned int(32) gain_map_max_denominator;
+        stream.write_fraction(metadata.max[i])?;
+        // unsigned int(32) gamma_numerator;
+        // unsigned int(32) gamma_denominator;
+        stream.write_ufraction(metadata.gamma[i])?;
+        // int(32) base_offset_numerator;
+        // unsigned int(32) base_offset_denominator;
+        stream.write_fraction(metadata.base_offset[i])?;
+        // int(32) alternate_offset_numerator;
+        // unsigned int(32) alternate_offset_denominator;
+        stream.write_fraction(metadata.alternate_offset[i])?;
+    }
+    Ok(stream.data)
+}
+
 impl Encoder {
     pub(crate) fn write_ftyp(&self, stream: &mut OStream) -> AvifResult<()> {
         let mut compatible_brands = vec![
@@ -94,13 +138,16 @@ impl Encoder {
             String::from("mif1"),
             String::from("miaf"),
         ];
-        // TODO: check if avio and tmap brands are necessary.
+        // TODO: check if avio brand is necessary.
         if self.is_sequence() {
             compatible_brands.extend_from_slice(&[
                 String::from("avis"),
                 String::from("msf1"),
                 String::from("iso8"),
             ]);
+        }
+        if self.items.iter().any(|x| x.is_tmap()) {
+            compatible_brands.push(String::from("tmap"));
         }
         match self.image_metadata.depth {
             8 | 10 => match self.image_metadata.yuv_format {
@@ -261,7 +308,17 @@ impl Encoder {
         stream.start_box("ipco")?;
         let mut property_streams = Vec::new();
         for item in &mut self.items {
-            item.get_property_streams(&self.image_metadata, &mut property_streams)?;
+            item.get_property_streams(
+                &self.image_metadata,
+                if item.is_tmap() {
+                    &self.alt_image_metadata
+                } else if item.category == Category::Gainmap {
+                    &self.gainmap_image_metadata
+                } else {
+                    &self.image_metadata
+                },
+                &mut property_streams,
+            )?;
         }
         // Deduplicate the property streams.
         let mut property_index_map = Vec::new();

@@ -21,7 +21,7 @@ pub mod clap;
 // The denominator is always unsigned.
 
 /// cbindgen:field-names=[n,d]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[repr(C)]
 pub struct Fraction(pub i32, pub u32);
 

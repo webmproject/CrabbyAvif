@@ -16,7 +16,7 @@ use crate::image::YuvRange;
 use crate::utils::*;
 use crate::*;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct GainMapMetadata {
     pub min: [Fraction; 3],
     pub max: [Fraction; 3],
@@ -43,6 +43,29 @@ impl GainMapMetadata {
         self.base_hdr_headroom.is_valid()?;
         self.alternate_hdr_headroom.is_valid()?;
         Ok(())
+    }
+
+    #[cfg(feature = "encoder")]
+    fn identical_channels(&self) -> bool {
+        self.min[0] == self.min[1]
+            && self.min[0] == self.min[2]
+            && self.max[0] == self.max[1]
+            && self.max[0] == self.max[2]
+            && self.gamma[0] == self.gamma[1]
+            && self.gamma[0] == self.gamma[2]
+            && self.base_offset[0] == self.base_offset[1]
+            && self.base_offset[0] == self.base_offset[2]
+            && self.alternate_offset[0] == self.alternate_offset[1]
+            && self.alternate_offset[0] == self.alternate_offset[2]
+    }
+
+    #[cfg(feature = "encoder")]
+    pub(crate) fn channel_count(&self) -> u8 {
+        if self.identical_channels() {
+            1
+        } else {
+            3
+        }
     }
 }
 

@@ -15,10 +15,12 @@
 #![cfg(feature = "encoder")]
 
 use crabby_avif::decoder::CompressionFormat;
+use crabby_avif::decoder::ImageContentType;
 use crabby_avif::decoder::ProgressiveState;
 use crabby_avif::encoder::ScalingMode;
+use crabby_avif::gainmap::*;
 use crabby_avif::image::*;
-use crabby_avif::utils::IFraction;
+use crabby_avif::utils::*;
 use crabby_avif::*;
 
 use rand::rngs::StdRng;
@@ -402,5 +404,138 @@ fn progressive_incorrect_number_of_layers() -> AvifResult<()> {
     encoder = encoder::Encoder::create_with_settings(&settings)?;
     assert!(encoder.add_image(&image).is_ok());
     assert!(encoder.finish().is_err());
+    Ok(())
+}
+
+fn generate_gainmap_image(base_is_hdr: bool) -> AvifResult<(Image, GainMap)> {
+    let mut image = generate_random_image(12, 34, 10, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    image.transfer_characteristics = if base_is_hdr {
+        TransferCharacteristics::Pq
+    } else {
+        TransferCharacteristics::Srgb
+    };
+    let mut gainmap = GainMap {
+        image: generate_random_image(6, 17, 8, PixelFormat::Yuv420, YuvRange::Full, false)?,
+        metadata: GainMapMetadata {
+            use_base_color_space: true,
+            base_hdr_headroom: if base_is_hdr { UFraction(6, 2) } else { UFraction(0, 1) },
+            alternate_hdr_headroom: if base_is_hdr { UFraction(0, 1) } else { UFraction(6, 2) },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    for c in 0..3u32 {
+        gainmap.metadata.base_offset[c as usize] = Fraction(c as i32 * 10, 1000);
+        gainmap.metadata.alternate_offset[c as usize] = Fraction(c as i32 * 20, 1000);
+        gainmap.metadata.gamma[c as usize] = UFraction(1, c + 1);
+        gainmap.metadata.min[c as usize] = Fraction(-1, c + 1);
+        gainmap.metadata.max[c as usize] = Fraction(c as i32 + 11, c + 1);
+    }
+    gainmap.alt_plane_count = 3;
+    gainmap.alt_matrix_coefficients = MatrixCoefficients::Smpte2085;
+    let clli = ContentLightLevelInformation {
+        max_cll: 10,
+        max_pall: 5,
+    };
+    if base_is_hdr {
+        image.clli = Some(clli);
+        gainmap.alt_plane_depth = 8;
+        gainmap.alt_color_primaries = ColorPrimaries::Bt601;
+        gainmap.alt_transfer_characteristics = TransferCharacteristics::Srgb;
+    } else {
+        gainmap.alt_clli = clli;
+        gainmap.alt_plane_depth = 10;
+        gainmap.alt_color_primaries = ColorPrimaries::Bt2020;
+        gainmap.alt_transfer_characteristics = TransferCharacteristics::Pq;
+    }
+    Ok((image, gainmap))
+}
+
+#[test]
+fn gainmap_base_image_sdr() -> AvifResult<()> {
+    let (image, gainmap) = generate_gainmap_image(false)?;
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_gainmap(&image, &gainmap)?;
+    let edata = encoder.finish()?;
+    assert!(!edata.is_empty());
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.settings.image_content_to_decode = ImageContentType::All;
+    assert!(decoder.parse().is_ok());
+    assert!(decoder.gainmap_present());
+    let decoded_gainmap = decoder.gainmap();
+    assert_eq!(
+        decoded_gainmap.image.matrix_coefficients,
+        gainmap.image.matrix_coefficients
+    );
+    assert_eq!(decoded_gainmap.alt_clli, gainmap.alt_clli);
+    assert_eq!(decoded_gainmap.alt_plane_depth, 10);
+    assert_eq!(decoded_gainmap.alt_plane_count, 3);
+    assert_eq!(decoded_gainmap.alt_color_primaries, ColorPrimaries::Bt2020);
+    assert_eq!(
+        decoded_gainmap.alt_transfer_characteristics,
+        TransferCharacteristics::Pq
+    );
+    assert_eq!(
+        decoded_gainmap.alt_matrix_coefficients,
+        MatrixCoefficients::Smpte2085
+    );
+    assert_eq!(decoded_gainmap.image.width, gainmap.image.width);
+    assert_eq!(decoded_gainmap.image.height, gainmap.image.height);
+    assert_eq!(decoded_gainmap.image.depth, gainmap.image.depth);
+    assert_eq!(decoded_gainmap.metadata, gainmap.metadata);
+    assert!(decoder.next_image().is_ok());
+    Ok(())
+}
+
+#[test]
+fn gainmap_base_image_hdr() -> AvifResult<()> {
+    let (image, gainmap) = generate_gainmap_image(true)?;
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_gainmap(&image, &gainmap)?;
+    let edata = encoder.finish()?;
+    assert!(!edata.is_empty());
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.settings.image_content_to_decode = ImageContentType::All;
+    assert!(decoder.parse().is_ok());
+    assert!(decoder.gainmap_present());
+    let decoded_gainmap = decoder.gainmap();
+    let decoded_image = decoder.image().expect("failed to get decoded image");
+    assert_eq!(
+        decoded_gainmap.image.matrix_coefficients,
+        gainmap.image.matrix_coefficients
+    );
+    assert_eq!(decoded_image.clli, image.clli);
+    assert_eq!(
+        decoded_gainmap.alt_clli,
+        ContentLightLevelInformation::default()
+    );
+    assert_eq!(decoded_gainmap.alt_plane_depth, 8);
+    assert_eq!(decoded_gainmap.alt_plane_count, 3);
+    assert_eq!(decoded_gainmap.alt_color_primaries, ColorPrimaries::Bt601);
+    assert_eq!(
+        decoded_gainmap.alt_transfer_characteristics,
+        TransferCharacteristics::Srgb
+    );
+    assert_eq!(
+        decoded_gainmap.alt_matrix_coefficients,
+        MatrixCoefficients::Smpte2085
+    );
+    assert_eq!(decoded_gainmap.image.width, gainmap.image.width);
+    assert_eq!(decoded_gainmap.image.height, gainmap.image.height);
+    assert_eq!(decoded_gainmap.image.depth, gainmap.image.depth);
+    assert_eq!(decoded_gainmap.metadata, gainmap.metadata);
+    assert!(decoder.next_image().is_ok());
     Ok(())
 }

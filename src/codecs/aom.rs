@@ -238,7 +238,7 @@ impl Encoder for Aom {
                         aom_color_range_AOM_CR_FULL_RANGE
                     );
                 },
-                Category::Color => unsafe {
+                _ => unsafe {
                     if image.color_primaries != ColorPrimaries::Unspecified {
                         codec_control!(
                             self,
@@ -268,7 +268,6 @@ impl Encoder for Aom {
                         );
                     }
                 },
-                _ => todo!("not implemented"),
             }
             if aom_config.g_usage == AOM_USAGE_ALL_INTRA {
                 codec_control!(
@@ -367,7 +366,15 @@ impl Encoder for Aom {
         aom_image.x_chroma_shift = image.yuv_format.chroma_shift_x().0;
         aom_image.y_chroma_shift = image.yuv_format.chroma_shift_y();
         match category {
-            Category::Color => {
+            Category::Alpha => {
+                aom_image.range = aom_color_range_AOM_CR_FULL_RANGE;
+                aom_image.monochrome = 1;
+                aom_image.x_chroma_shift = 1;
+                aom_image.y_chroma_shift = 1;
+                aom_image.planes[0] = image.planes[3].unwrap_ref().ptr_generic() as *mut _;
+                aom_image.stride[0] = image.row_bytes[3] as i32;
+            }
+            _ => {
                 aom_image.range = image.yuv_range as u32;
                 if image.yuv_format == PixelFormat::Yuv400 {
                     aom_image.monochrome = 1;
@@ -383,15 +390,6 @@ impl Encoder for Aom {
                     }
                 }
             }
-            Category::Alpha => {
-                aom_image.range = aom_color_range_AOM_CR_FULL_RANGE;
-                aom_image.monochrome = 1;
-                aom_image.x_chroma_shift = 1;
-                aom_image.y_chroma_shift = 1;
-                aom_image.planes[0] = image.planes[3].unwrap_ref().ptr_generic() as *mut _;
-                aom_image.stride[0] = image.row_bytes[3] as i32;
-            }
-            _ => return Err(AvifError::NotImplemented),
         }
         aom_image.cp = image.color_primaries as u32;
         aom_image.tc = image.transfer_characteristics as u32;

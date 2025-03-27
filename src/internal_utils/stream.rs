@@ -318,6 +318,10 @@ impl OStream {
         Ok(())
     }
 
+    pub(crate) fn write_bool(&mut self, value: bool) -> AvifResult<()> {
+        self.write_bits(if value { 1 } else { 0 }, 1)
+    }
+
     pub(crate) fn write_u8(&mut self, value: u8) -> AvifResult<()> {
         assert!(self.partial.is_none());
         self.try_reserve(1)?;
@@ -396,6 +400,15 @@ impl OStream {
 
     pub(crate) fn write_ufraction(&mut self, value: UFraction) -> AvifResult<()> {
         self.write_u32(value.0)?;
+        self.write_u32(value.1)
+    }
+
+    fn write_i32(&mut self, value: i32) -> AvifResult<()> {
+        self.write_u32(value as u32)
+    }
+
+    pub(crate) fn write_fraction(&mut self, value: Fraction) -> AvifResult<()> {
+        self.write_i32(value.0)?;
         self.write_u32(value.1)
     }
 

@@ -21,6 +21,7 @@ use crate::encoder::item::*;
 use crate::encoder::mp4box::*;
 
 use crate::codecs::EncoderConfig;
+use crate::gainmap::GainMap;
 use crate::image::*;
 use crate::internal_utils::stream::OStream;
 use crate::internal_utils::*;
@@ -102,11 +103,13 @@ pub struct Encoder {
     settings: Settings,
     items: Vec<Item>,
     image_metadata: Image,
+    gainmap_image_metadata: Image,
+    alt_image_metadata: Image,
     quantizer: i32,
     tile_rows_log2: i32,
     tile_columns_log2: i32,
     primary_item_id: u16,
-    // alternative_item_ids.
+    alternative_item_ids: Vec<u16>,
     single_image: bool,
     alpha_present: bool,
     image_item_type: String,
@@ -134,6 +137,20 @@ impl Encoder {
         self.settings.extra_layer_count == 0 && self.duration_in_timescales.len() > 1
     }
 
+    fn add_tmap_item(&mut self, gainmap: &GainMap) -> AvifResult<u16> {
+        let item = Item {
+            id: u16_from_usize(self.items.len() + 1)?,
+            item_type: "tmap".into(),
+            infe_name: Category::Gainmap.infe_name(),
+            category: Category::Color,
+            metadata_payload: write_tmap(&gainmap.metadata)?,
+            ..Default::default()
+        };
+        let item_id = item.id;
+        self.items.push(item);
+        Ok(item_id)
+    }
+
     fn add_items(&mut self, grid: &Grid, category: Category) -> AvifResult<u16> {
         let cell_count = usize_from_u32(grid.rows * grid.columns)?;
         let mut top_level_item_id = 0;
@@ -147,6 +164,7 @@ impl Encoder {
                 category,
                 grid: Some(*grid),
                 metadata_payload: stream.data,
+                hidden_image: category == Category::Gainmap,
                 ..Default::default()
             };
             top_level_item_id = item.id;
@@ -208,6 +226,27 @@ impl Encoder {
         Ok(())
     }
 
+    fn copy_alt_image_metadata(&mut self, gainmap: &GainMap) {
+        self.alt_image_metadata.width = self.image_metadata.width;
+        self.alt_image_metadata.height = self.image_metadata.height;
+        self.alt_image_metadata.icc = gainmap.alt_icc.clone();
+        self.alt_image_metadata.color_primaries = gainmap.alt_color_primaries;
+        self.alt_image_metadata.transfer_characteristics = gainmap.alt_transfer_characteristics;
+        self.alt_image_metadata.matrix_coefficients = gainmap.alt_matrix_coefficients;
+        self.alt_image_metadata.yuv_range = gainmap.alt_yuv_range;
+        self.alt_image_metadata.depth = if gainmap.alt_plane_depth > 0 {
+            gainmap.alt_plane_depth
+        } else {
+            std::cmp::max(self.image_metadata.depth, gainmap.image.depth)
+        };
+        self.alt_image_metadata.yuv_format = if gainmap.alt_plane_count == 1 {
+            PixelFormat::Yuv400
+        } else {
+            PixelFormat::Yuv444
+        };
+        self.alt_image_metadata.clli = Some(gainmap.alt_clli);
+    }
+
     fn add_image_impl(
         &mut self,
         grid_columns: u32,
@@ -215,14 +254,20 @@ impl Encoder {
         cell_images: &[&Image],
         mut duration: u32,
         is_single_image: bool,
+        gainmaps: Option<&[&GainMap]>,
     ) -> AvifResult<()> {
         let cell_count: usize = usize_from_u32(grid_rows * grid_columns)?;
-        if cell_count == 0 || cell_images.len() != cell_count {
+        if cell_count == 0
+            || cell_images.len() != cell_count
+            || (gainmaps.is_some() && cell_images.len() != gainmaps.unwrap().len())
+        {
             return Err(AvifError::InvalidArgument);
         }
         if duration == 0 {
             duration = 1;
         }
+        // TODO: validate gainmap cells to check if they have same metadata.
+        // TODO: validate bitdepth of all images.
 
         if self.items.is_empty() {
             // TODO: validate clap.
@@ -235,6 +280,10 @@ impl Encoder {
                 height: (grid_rows - 1) * first_image.height + last_image.height,
             };
             self.image_metadata = first_image.shallow_clone();
+            if gainmaps.is_some() {
+                self.gainmap_image_metadata = gainmaps.unwrap()[0].image.shallow_clone();
+                self.copy_alt_image_metadata(gainmaps.unwrap()[0]);
+            }
             let color_item_id = self.add_items(&grid, Category::Color)?;
             self.primary_item_id = color_item_id;
             self.alpha_present = first_image.has_plane(Plane::A);
@@ -254,10 +303,24 @@ impl Encoder {
                     color_item.iref_to_id = Some(alpha_item_id);
                 }
             }
-            // TODO: gainmap.
+            if let Some(gainmaps) = gainmaps {
+                let tonemap_item_id = self.add_tmap_item(gainmaps[0])?;
+                if !self.alternative_item_ids.is_empty() {
+                    return Err(AvifError::UnknownError("".into()));
+                }
+                self.alternative_item_ids.push(tonemap_item_id);
+                self.alternative_item_ids.push(color_item_id);
+                let gainmap_item_id = self.add_items(&grid, Category::Gainmap)?;
+                for item_id in [color_item_id, gainmap_item_id] {
+                    self.items[item_id as usize - 1].dimg_from_id = Some(tonemap_item_id);
+                }
+            }
             self.add_exif_item()?;
             self.add_xmp_item()?;
         } else {
+            if gainmaps.is_some() {
+                return Err(AvifError::NotImplemented);
+            }
             // Another frame in an image sequence, or layer in a layered image.
             let first_image = cell_images[0];
             if !first_image.has_same_cicp(&self.image_metadata)
@@ -273,8 +336,14 @@ impl Encoder {
             if item.codec.is_none() {
                 continue;
             }
-            let image = cell_images[item.cell_index];
-            let first_image = cell_images[0];
+            let image = match item.category {
+                Category::Gainmap => &gainmaps.unwrap()[item.cell_index].image,
+                _ => cell_images[item.cell_index],
+            };
+            let first_image = match item.category {
+                Category::Gainmap => &gainmaps.unwrap()[0].image,
+                _ => cell_images[0],
+            };
             if image.width != first_image.width || image.height != first_image.height {
                 // TODO: pad the image so that the dimensions of all cells are equal.
             }
@@ -301,12 +370,19 @@ impl Encoder {
     }
 
     pub fn add_image(&mut self, image: &Image) -> AvifResult<()> {
-        self.add_image_impl(1, 1, &[image], 0, self.settings.extra_layer_count == 0)
+        self.add_image_impl(
+            1,
+            1,
+            &[image],
+            0,
+            self.settings.extra_layer_count == 0,
+            None,
+        )
     }
 
     pub fn add_image_for_sequence(&mut self, image: &Image, duration: u32) -> AvifResult<()> {
         // TODO: this and add_image cannot be used on the same instance.
-        self.add_image_impl(1, 1, &[image], duration, false)
+        self.add_image_impl(1, 1, &[image], duration, false, None)
     }
 
     pub fn add_image_grid(
@@ -324,7 +400,15 @@ impl Encoder {
             images,
             0,
             self.settings.extra_layer_count == 0,
+            None,
         )
+    }
+
+    pub fn add_image_gainmap(&mut self, image: &Image, gainmap: &GainMap) -> AvifResult<()> {
+        if self.settings.extra_layer_count != 0 {
+            return Err(AvifError::NotImplemented);
+        }
+        self.add_image_impl(1, 1, &[image], 0, true, Some(&[gainmap]))
     }
 
     pub fn finish(&mut self) -> AvifResult<Vec<u8>> {

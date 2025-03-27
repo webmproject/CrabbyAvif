@@ -56,12 +56,15 @@ impl fmt::Debug for Item {
 
 impl Item {
     pub(crate) fn has_ipma(&self) -> bool {
-        // TODO: also include tonemap item.
-        self.grid.is_some() || self.codec.is_some()
+        self.grid.is_some() || self.codec.is_some() || self.is_tmap()
     }
 
     pub(crate) fn is_metadata(&self) -> bool {
         self.item_type != "av01"
+    }
+
+    pub(crate) fn is_tmap(&self) -> bool {
+        self.item_type == "tmap"
     }
 
     pub(crate) fn write_ispe(
@@ -262,6 +265,7 @@ impl Item {
     pub(crate) fn get_property_streams(
         &mut self,
         image_metadata: &Image,
+        item_metadata: &Image,
         streams: &mut Vec<OStream>,
     ) -> AvifResult<()> {
         if !self.has_ipma() {
@@ -269,12 +273,13 @@ impl Item {
         }
 
         streams.push(OStream::default());
-        self.write_ispe(streams.last_mut().unwrap(), image_metadata)?;
+        self.write_ispe(streams.last_mut().unwrap(), item_metadata)?;
         self.associations
             .push((u8_from_usize(streams.len())?, false));
 
+        // TODO: check for is_tmap and alt_plane_depth.
         streams.push(OStream::default());
-        self.write_pixi(streams.last_mut().unwrap(), image_metadata)?;
+        self.write_pixi(streams.last_mut().unwrap(), item_metadata)?;
         self.associations
             .push((u8_from_usize(streams.len())?, false));
 
@@ -288,43 +293,45 @@ impl Item {
         match self.category {
             Category::Color => {
                 // Color properties.
-                if !image_metadata.icc.is_empty() {
+                // Note the 'tmap' item when a gain map is present also has category set to
+                // Category::Color.
+                if !item_metadata.icc.is_empty() {
                     streams.push(OStream::default());
-                    self.write_icc(streams.last_mut().unwrap(), image_metadata)?;
+                    self.write_icc(streams.last_mut().unwrap(), item_metadata)?;
                     self.associations
                         .push((u8_from_usize(streams.len())?, false));
                 }
                 streams.push(OStream::default());
-                self.write_nclx(streams.last_mut().unwrap(), image_metadata)?;
+                self.write_nclx(streams.last_mut().unwrap(), item_metadata)?;
                 self.associations
                     .push((u8_from_usize(streams.len())?, false));
-                if let Some(pasp) = image_metadata.pasp {
+                if let Some(pasp) = item_metadata.pasp {
                     streams.push(OStream::default());
                     self.write_pasp(streams.last_mut().unwrap(), &pasp)?;
                     self.associations
                         .push((u8_from_usize(streams.len())?, false));
                 }
                 // HDR properties.
-                if let Some(clli) = image_metadata.clli {
+                if let Some(clli) = item_metadata.clli {
                     streams.push(OStream::default());
                     self.write_clli(streams.last_mut().unwrap(), &clli)?;
                     self.associations
                         .push((u8_from_usize(streams.len())?, false));
                 }
                 // Transformative properties.
-                if let Some(clap) = image_metadata.clap {
+                if let Some(clap) = item_metadata.clap {
                     streams.push(OStream::default());
                     self.write_clap(streams.last_mut().unwrap(), &clap)?;
                     self.associations
                         .push((u8_from_usize(streams.len())?, true));
                 }
-                if let Some(angle) = image_metadata.irot_angle {
+                if let Some(angle) = item_metadata.irot_angle {
                     streams.push(OStream::default());
                     self.write_irot(streams.last_mut().unwrap(), angle)?;
                     self.associations
                         .push((u8_from_usize(streams.len())?, true));
                 }
-                if let Some(axis) = image_metadata.imir_axis {
+                if let Some(axis) = item_metadata.imir_axis {
                     streams.push(OStream::default());
                     self.write_imir(streams.last_mut().unwrap(), axis)?;
                     self.associations
@@ -337,7 +344,19 @@ impl Item {
                 self.associations
                     .push((u8_from_usize(streams.len())?, false));
             }
-            _ => {}
+            Category::Gainmap => {
+                streams.push(OStream::default());
+                self.write_nclx(streams.last_mut().unwrap(), item_metadata)?;
+                self.associations
+                    .push((u8_from_usize(streams.len())?, false));
+                if let Some(pasp) = image_metadata.pasp {
+                    streams.push(OStream::default());
+                    self.write_pasp(streams.last_mut().unwrap(), &pasp)?;
+                    self.associations
+                        .push((u8_from_usize(streams.len())?, false));
+                }
+                // TODO: Write gainmap transformative properties.
+            }
         }
         if self.extra_layer_count > 0 {
             streams.push(OStream::default());
