@@ -262,6 +262,32 @@ impl Item {
         stream.finish_box()
     }
 
+    fn write_transformative_properties(
+        &mut self,
+        streams: &mut Vec<OStream>,
+        metadata: &Image,
+    ) -> AvifResult<()> {
+        if let Some(clap) = metadata.clap {
+            streams.push(OStream::default());
+            self.write_clap(streams.last_mut().unwrap(), &clap)?;
+            self.associations
+                .push((u8_from_usize(streams.len())?, true));
+        }
+        if let Some(angle) = metadata.irot_angle {
+            streams.push(OStream::default());
+            self.write_irot(streams.last_mut().unwrap(), angle)?;
+            self.associations
+                .push((u8_from_usize(streams.len())?, true));
+        }
+        if let Some(axis) = metadata.imir_axis {
+            streams.push(OStream::default());
+            self.write_imir(streams.last_mut().unwrap(), axis)?;
+            self.associations
+                .push((u8_from_usize(streams.len())?, true));
+        }
+        Ok(())
+    }
+
     pub(crate) fn get_property_streams(
         &mut self,
         image_metadata: &Image,
@@ -318,25 +344,7 @@ impl Item {
                     self.associations
                         .push((u8_from_usize(streams.len())?, false));
                 }
-                // Transformative properties.
-                if let Some(clap) = item_metadata.clap {
-                    streams.push(OStream::default());
-                    self.write_clap(streams.last_mut().unwrap(), &clap)?;
-                    self.associations
-                        .push((u8_from_usize(streams.len())?, true));
-                }
-                if let Some(angle) = item_metadata.irot_angle {
-                    streams.push(OStream::default());
-                    self.write_irot(streams.last_mut().unwrap(), angle)?;
-                    self.associations
-                        .push((u8_from_usize(streams.len())?, true));
-                }
-                if let Some(axis) = item_metadata.imir_axis {
-                    streams.push(OStream::default());
-                    self.write_imir(streams.last_mut().unwrap(), axis)?;
-                    self.associations
-                        .push((u8_from_usize(streams.len())?, true));
-                }
+                self.write_transformative_properties(streams, item_metadata)?;
             }
             Category::Alpha => {
                 streams.push(OStream::default());
@@ -355,7 +363,16 @@ impl Item {
                     self.associations
                         .push((u8_from_usize(streams.len())?, false));
                 }
-                // TODO: Write gainmap transformative properties.
+                if item_metadata.clap.is_some()
+                    || item_metadata.irot_angle.is_some()
+                    || item_metadata.imir_axis.is_some()
+                    || item_metadata.pasp.is_some()
+                {
+                    return Err(AvifError::UnknownError(
+                        "transformative properties must be associated with the base image".into(),
+                    ));
+                }
+                self.write_transformative_properties(streams, image_metadata)?;
             }
         }
         if self.extra_layer_count > 0 {

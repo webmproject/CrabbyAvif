@@ -75,18 +75,6 @@ fn generate_random_image(
             }
         }
     }
-    if rng.gen() {
-        image.pasp = Some(PixelAspectRatio {
-            h_spacing: rng.gen(),
-            v_spacing: rng.gen(),
-        });
-    }
-    if rng.gen() {
-        image.clli = Some(ContentLightLevelInformation {
-            max_cll: rng.gen(),
-            max_pall: rng.gen(),
-        });
-    }
     Ok(image)
 }
 
@@ -537,5 +525,53 @@ fn gainmap_base_image_hdr() -> AvifResult<()> {
     assert_eq!(decoded_gainmap.image.depth, gainmap.image.depth);
     assert_eq!(decoded_gainmap.metadata, gainmap.metadata);
     assert!(decoder.next_image().is_ok());
+    Ok(())
+}
+
+#[test]
+fn gainmap_oriented() -> AvifResult<()> {
+    let (mut image, gainmap) = generate_gainmap_image(false)?;
+    image.irot_angle = Some(1);
+    image.imir_axis = Some(0);
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_gainmap(&image, &gainmap)?;
+    let edata = encoder.finish()?;
+    assert!(!edata.is_empty());
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.settings.image_content_to_decode = ImageContentType::All;
+    assert!(decoder.parse().is_ok());
+    assert!(decoder.gainmap_present());
+    let decoded_image = decoder.image().expect("failed to get decoded image");
+    assert_eq!(decoded_image.irot_angle, image.irot_angle);
+    assert_eq!(decoded_image.imir_axis, image.imir_axis);
+    let decoded_gainmap = decoder.gainmap();
+    assert!(decoded_gainmap.image.irot_angle.is_none());
+    assert!(decoded_gainmap.image.imir_axis.is_none());
+    Ok(())
+}
+
+#[test_case::test_matrix([0, 1, 2])]
+fn gainmap_oriented_invalid(transformation_index: u8) -> AvifResult<()> {
+    let (image, mut gainmap) = generate_gainmap_image(false)?;
+    // Gainmap image should not have a transformative property. Expect a failure.
+    match transformation_index {
+        0 => gainmap.image.irot_angle = Some(1),
+        1 => gainmap.image.imir_axis = Some(0),
+        2 => gainmap.image.pasp = Some(PixelAspectRatio::default()),
+        _ => {} // not reached.
+    }
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_gainmap(&image, &gainmap)?;
+    assert!(encoder.finish().is_err());
     Ok(())
 }
