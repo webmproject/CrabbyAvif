@@ -21,6 +21,7 @@ mod internal_utils;
 pub mod decoder;
 #[cfg(feature = "encoder")]
 pub mod encoder;
+pub mod gainmap;
 pub mod image;
 pub mod reformat;
 pub mod utils;

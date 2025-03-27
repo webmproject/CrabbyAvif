@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod gainmap;
 pub mod item;
 pub mod tile;
 pub mod track;
 
-use crate::decoder::gainmap::*;
 use crate::decoder::item::*;
 use crate::decoder::tile::*;
 use crate::decoder::track::*;
@@ -32,6 +30,7 @@ use crate::codecs::libgav1::Libgav1;
 use crate::codecs::android_mediacodec::MediaCodec;
 
 use crate::codecs::DecoderConfig;
+use crate::gainmap::*;
 use crate::image::*;
 use crate::internal_utils::io::*;
 use crate::internal_utils::*;

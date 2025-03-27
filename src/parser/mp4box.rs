@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::decoder::gainmap::GainMapMetadata;
 use crate::decoder::track::*;
 use crate::decoder::Extent;
 use crate::decoder::GenericIO;
+use crate::gainmap::GainMapMetadata;
 use crate::image::YuvRange;
 use crate::image::MAX_PLANE_COUNT;
 use crate::internal_utils::stream::*;
