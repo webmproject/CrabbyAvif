@@ -332,6 +332,12 @@ pub struct ItemReference {
     pub index: u32, // 0-based index of the reference within the iref type.
 }
 
+#[derive(Debug)]
+pub struct EntityGroup {
+    pub grouping_type: String,
+    pub entity_ids: Vec<u32>,
+}
+
 #[derive(Debug, Default)]
 pub struct MetaBox {
     pub iinf: Vec<ItemInfo>,
@@ -340,6 +346,7 @@ pub struct MetaBox {
     pub iprp: ItemPropertyBox,
     pub iref: Vec<ItemReference>,
     pub idat: Vec<u8>,
+    pub grpl: Vec<EntityGroup>,
 }
 
 #[derive(Debug)]
@@ -1194,6 +1201,27 @@ fn parse_idat(stream: &mut IStream) -> AvifResult<Vec<u8>> {
     Ok(idat)
 }
 
+fn parse_grpl(stream: &mut IStream) -> AvifResult<Vec<EntityGroup>> {
+    let mut grpl: Vec<EntityGroup> = Vec::new();
+    while stream.has_bytes_left()? {
+        let header = parse_header(stream, /*top_level=*/ false)?;
+        let (_version, _flags) = stream.read_version_and_flags()?;
+        // unsigned int(32) group_id;
+        stream.skip_u32()?;
+        let num_entities_in_group = stream.read_u32()?;
+        let mut entity_ids: Vec<u32> = create_vec_exact(usize_from_u32(num_entities_in_group)?)?;
+        for _ in 0..num_entities_in_group {
+            let entity_id = stream.read_u32()?;
+            entity_ids.push(entity_id);
+        }
+        grpl.push(EntityGroup {
+            grouping_type: header.box_type.clone(),
+            entity_ids,
+        })
+    }
+    Ok(grpl)
+}
+
 fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
     // Section 8.11.1.2 of ISO/IEC 14496-12.
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
@@ -1225,7 +1253,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
         match header.box_type.as_str() {
-            "hdlr" | "iloc" | "pitm" | "iprp" | "iinf" | "iref" | "idat" => {
+            "hdlr" | "iloc" | "pitm" | "iprp" | "iinf" | "iref" | "idat" | "grpl" => {
                 if boxes_seen.contains(&header.box_type) {
                     return Err(AvifError::BmffParseFailed(format!(
                         "duplicate {} box in meta.",
@@ -1244,6 +1272,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
             "iinf" => meta.iinf = parse_iinf(&mut sub_stream)?,
             "iref" => meta.iref = parse_iref(&mut sub_stream)?,
             "idat" => meta.idat = parse_idat(&mut sub_stream)?,
+            "grpl" => meta.grpl = parse_grpl(&mut sub_stream)?,
             _ => {}
         }
     }

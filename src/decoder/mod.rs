@@ -490,6 +490,21 @@ impl Decoder {
         Ok(Some(alpha_item_id))
     }
 
+    /// Returns true if the two entity ids (usually item ids) are part of an
+    /// 'altr' group (representing entities that are alternatives of each other)
+    /// with 'id1' appearing before 'id2', meaning that 'id1' should be preferred.
+    fn is_preferred_alternative_to(grpl: &[EntityGroup], id1: u32, id2: u32) -> bool {
+        for group in grpl.iter().filter(|x| x.grouping_type == "altr") {
+            // Assume id2 is only present in one altr group, as per ISO/IEC 14496-12:2022
+            // Section 8.15.3.1:
+            // Any entity_id value shall be mapped to only one grouping of type 'altr'.
+            if let Some(id2_position) = group.entity_ids.iter().position(|x| *x == id2) {
+                return group.entity_ids[..id2_position].iter().any(|x| *x == id1);
+            }
+        }
+        false
+    }
+
     // returns (tone_mapped_image_item_id, gain_map_item_id) if found
     fn find_tone_mapped_image_item(&self, color_item_id: u32) -> AvifResult<Option<(u32, u32)>> {
         let tmap_items: Vec<_> = self.items.values().filter(|x| x.is_tmap()).collect();
@@ -515,7 +530,11 @@ impl Decoder {
     }
 
     // returns (tone_mapped_image_item_id, gain_map_item_id) if found
-    fn find_gainmap_item(&self, color_item_id: u32) -> AvifResult<Option<(u32, u32)>> {
+    fn find_gainmap_item(
+        &self,
+        color_item_id: u32,
+        grpl: &[EntityGroup],
+    ) -> AvifResult<Option<(u32, u32)>> {
         if let Some((tonemap_id, gainmap_id)) = self.find_tone_mapped_image_item(color_item_id)? {
             let gainmap_item = self
                 .items
@@ -523,6 +542,9 @@ impl Decoder {
                 .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
             if gainmap_item.should_skip() {
                 return Err(AvifError::InvalidToneMappedImage("".into()));
+            }
+            if !Self::is_preferred_alternative_to(grpl, tonemap_id, color_item_id) {
+                return Ok(None);
             }
             Ok(Some((tonemap_id, gainmap_id)))
         } else {
@@ -957,9 +979,10 @@ impl Decoder {
 
                 // Optional gainmap item
                 if avif_boxes.ftyp.has_tmap() {
-                    if let Some((tonemap_id, gainmap_id)) =
-                        self.find_gainmap_item(item_ids[Category::Color.usize()])?
-                    {
+                    if let Some((tonemap_id, gainmap_id)) = self.find_gainmap_item(
+                        item_ids[Category::Color.usize()],
+                        &avif_boxes.meta.grpl,
+                    )? {
                         self.validate_gainmap_item(gainmap_id, tonemap_id)?;
                         self.read_and_parse_item(gainmap_id, Category::Gainmap)?;
                         let tonemap_item = self
@@ -1867,5 +1890,37 @@ mod tests {
         assert!(e1.merge(&e2).is_ok());
         assert_eq!(e1.offset, expected_offset);
         assert_eq!(e1.size, expected_size);
+    }
+
+    #[test]
+    fn preferred_alternative_to() {
+        let grpl = vec![
+            EntityGroup {
+                grouping_type: "altr".into(),
+                entity_ids: vec![1, 2, 3],
+            },
+            EntityGroup {
+                grouping_type: "altr".into(),
+                entity_ids: vec![4, 5],
+            },
+            EntityGroup {
+                grouping_type: "ster".into(),
+                entity_ids: vec![6, 7],
+            },
+        ];
+        assert!(Decoder::is_preferred_alternative_to(&grpl, 1, 2));
+        assert!(Decoder::is_preferred_alternative_to(&grpl, 1, 3));
+        assert!(Decoder::is_preferred_alternative_to(&grpl, 2, 3));
+        assert!(Decoder::is_preferred_alternative_to(&grpl, 4, 5));
+
+        assert!(!Decoder::is_preferred_alternative_to(&grpl, 2, 1));
+        assert!(!Decoder::is_preferred_alternative_to(&grpl, 2, 2));
+        assert!(!Decoder::is_preferred_alternative_to(&grpl, 3, 1));
+        assert!(!Decoder::is_preferred_alternative_to(&grpl, 3, 2));
+        assert!(!Decoder::is_preferred_alternative_to(&grpl, 1, 4));
+        assert!(!Decoder::is_preferred_alternative_to(&grpl, 1, 10));
+        assert!(!Decoder::is_preferred_alternative_to(&grpl, 5, 4));
+        assert!(!Decoder::is_preferred_alternative_to(&grpl, 6, 7));
+        assert!(!Decoder::is_preferred_alternative_to(&grpl, 7, 6));
     }
 }

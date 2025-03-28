@@ -452,30 +452,36 @@ fn gainmap_oriented() {
     assert_eq!(decoder.gainmap().image.imir_axis, None);
 }
 
-// The two test files should produce the same results:
-// One has an unsupported 'version' field, the other an unsupported
-// 'minimum_version' field, but the behavior of these two files is the same.
 // From avifgainmaptest.cc
+// Tests files with gain maps that should be ignored by the decoder for various
+// reasons.
+// File with unsupported version field.
 #[test_case::test_case("unsupported_gainmap_version.avif")]
+// File with unsupported minimum version field.
 #[test_case::test_case("unsupported_gainmap_minimum_version.avif")]
+// Missing 'tmap' brand in ftyp box.
+#[test_case::test_case("seine_sdr_gainmap_notmapbrand.avif")]
+// Gain map not present before the base image in 'altr' box.
+#[test_case::test_case("seine_hdr_gainmap_wrongaltr.avif")]
 fn decode_unsupported_version(filename: &str) {
     // Parse with various settings.
     let mut decoder = get_decoder(filename);
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
-    // Gain map marked as not present because the metadata is not supported.
+    // Gain map marked as not present.
     assert!(!decoder.gainmap_present());
     assert_eq!(decoder.gainmap().image.width, 0);
     assert_eq!(decoder.gainmap().metadata.base_hdr_headroom.0, 0);
     assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.0, 0);
 
+    // Decode again with image_content_to_decode = ImageContentType::All.
     decoder = get_decoder(filename);
     decoder.settings.image_content_to_decode = ImageContentType::All;
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
-    // Gainmap not found: its metadata is not supported.
+    // Gain map marked as not present.
     assert!(!decoder.gainmap_present());
     assert_eq!(decoder.gainmap().image.width, 0);
     assert_eq!(decoder.gainmap().metadata.base_hdr_headroom.0, 0);

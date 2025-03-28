@@ -302,6 +302,30 @@ impl Encoder {
         Ok(())
     }
 
+    pub(crate) fn write_grpl(&mut self, stream: &mut OStream) -> AvifResult<()> {
+        if self.alternative_item_ids.is_empty() {
+            return Ok(());
+        }
+        stream.start_box("grpl")?;
+
+        stream.start_full_box("altr", (0, 0))?;
+        // Section 8.18.3.3 of ISO 14496-12 (ISOBMFF) says:
+        //   group_id is a non-negative integer assigned to the particular grouping that shall not
+        //   be equal to any group_id value of any other EntityToGroupBox, any item_ID value of the
+        //   hierarchy level (file, movie. or track) that contains the GroupsListBox, or any
+        //   track_ID value (when theGroupsListBox is contained in the file level).
+        let group_id = (self.items.iter().map(|item| item.id).max().unwrap_or(0) as u32) + 1;
+        stream.write_u32(group_id)?;
+        stream.write_u32(u32_from_usize(self.alternative_item_ids.len())?)?;
+        for item_id in self.alternative_item_ids.iter() {
+            stream.write_u32((*item_id).into())?;
+        }
+        stream.finish_box()?;
+        // end of altr
+
+        stream.finish_box()
+    }
+
     pub(crate) fn write_iprp(&mut self, stream: &mut OStream) -> AvifResult<()> {
         stream.start_box("iprp")?;
         // ipco
@@ -595,6 +619,7 @@ impl Encoder {
         Self::write_iinf(stream, &items_ref)?;
         self.write_iref(stream)?;
         self.write_iprp(stream)?;
+        self.write_grpl(stream)?;
         stream.finish_box()
     }
 
