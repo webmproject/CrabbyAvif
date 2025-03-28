@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused)]
-
 pub mod item;
 pub mod mp4box;
 
@@ -99,6 +97,7 @@ impl Sample {
 pub(crate) type Codec = Box<dyn crate::codecs::Encoder>;
 
 #[derive(Default)]
+#[allow(unused)]
 pub struct Encoder {
     settings: Settings,
     items: Vec<Item>,
@@ -157,7 +156,7 @@ impl Encoder {
         if cell_count > 1 {
             let mut stream = OStream::default();
             write_grid(&mut stream, grid)?;
-            let mut item = Item {
+            let item = Item {
                 id: u16_from_usize(self.items.len() + 1)?,
                 item_type: "grid".into(),
                 infe_name: category.infe_name(),
@@ -171,7 +170,7 @@ impl Encoder {
             self.items.push(item);
         }
         for cell_index in 0..cell_count {
-            let mut item = Item {
+            let item = Item {
                 id: u16_from_usize(self.items.len() + 1)?,
                 item_type: "av01".into(),
                 infe_name: category.infe_name(),

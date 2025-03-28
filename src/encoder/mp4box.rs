@@ -15,11 +15,8 @@
 use crate::encoder::*;
 
 use crate::gainmap::GainMapMetadata;
-use crate::image::*;
 use crate::internal_utils::stream::OStream;
 use crate::internal_utils::*;
-use crate::parser::mp4box::*;
-use crate::parser::obu::Av1SequenceHeader;
 use crate::*;
 
 pub(crate) const UNITY_MATRIX: [u8; 9 * 4] = [

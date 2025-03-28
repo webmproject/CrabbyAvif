@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused)]
 #![allow(non_upper_case_globals)]
 
 use crate::codecs::*;
@@ -20,7 +19,6 @@ use crate::encoder::Sample;
 use crate::encoder::ScalingMode;
 use crate::image::Image;
 use crate::image::YuvRange;
-use crate::internal_utils::pixels::*;
 use crate::utils::IFraction;
 use crate::*;
 
@@ -36,8 +34,6 @@ pub struct Aom {
     config: Option<EncoderConfig>,
     current_layer: u32,
 }
-
-const AOM_CODEC_OK: u32 = 0;
 
 fn aom_format(image: &Image, category: Category) -> AvifResult<aom_img_fmt_t> {
     let format = match category {
@@ -231,14 +227,12 @@ impl Encoder for Aom {
                 );
             }
             match category {
-                Category::Alpha => unsafe {
-                    codec_control!(
-                        self,
-                        aome_enc_control_id_AV1E_SET_COLOR_RANGE,
-                        aom_color_range_AOM_CR_FULL_RANGE
-                    );
-                },
-                _ => unsafe {
+                Category::Alpha => codec_control!(
+                    self,
+                    aome_enc_control_id_AV1E_SET_COLOR_RANGE,
+                    aom_color_range_AOM_CR_FULL_RANGE
+                ),
+                _ => {
                     if image.color_primaries != ColorPrimaries::Unspecified {
                         codec_control!(
                             self,
@@ -267,7 +261,7 @@ impl Encoder for Aom {
                             aom_color_range_AOM_CR_FULL_RANGE
                         );
                     }
-                },
+                }
             }
             if aom_config.g_usage == AOM_USAGE_ALL_INTRA {
                 codec_control!(

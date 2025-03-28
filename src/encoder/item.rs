@@ -258,7 +258,7 @@ impl Item {
         stream.start_box("colr")?;
         // unsigned int(32) colour_type;
         stream.write_str("prof")?;
-        stream.write_slice(&image_metadata.icc);
+        stream.write_slice(&image_metadata.icc)?;
         stream.finish_box()
     }
 
