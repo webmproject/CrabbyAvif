@@ -665,3 +665,72 @@ fn gainmap_grid() -> AvifResult<()> {
     assert!(decoder.next_image().is_ok());
     Ok(())
 }
+
+#[test_case::test_matrix([0, 1, 2, 3, 4])]
+fn invalid_grid(test_case_index: u8) -> AvifResult<()> {
+    let grid_columns = 2;
+    let grid_rows = 2;
+    let cell_width = 128;
+    let cell_height = 200;
+    let mut cells = Vec::new();
+    for _ in 0..grid_rows * grid_columns {
+        let mut image = generate_random_image(
+            cell_width,
+            cell_height,
+            10,
+            PixelFormat::Yuv444,
+            YuvRange::Full,
+            false,
+        )?;
+        image.transfer_characteristics = TransferCharacteristics::Pq;
+        let gainmap = GainMap {
+            image: generate_random_image(
+                cell_width / 2,
+                cell_height / 2,
+                8,
+                PixelFormat::Yuv420,
+                YuvRange::Full,
+                false,
+            )?,
+            metadata: gainmap_metadata(true),
+            ..Default::default()
+        };
+        cells.push((image, gainmap));
+    }
+
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+
+    match test_case_index {
+        0 => {
+            // Invalid: one gainmap cell has the wrong size.
+            cells[1].1.image.height = 90;
+        }
+        1 => {
+            // Invalid: one gainmap cell has a different depth.
+            cells[1].1.image.depth = 12;
+        }
+        2 => {
+            // Invalid: one gainmap cell has different gainmap metadata.
+            cells[1].1.metadata.gamma[0] = UFraction(42, 1);
+        }
+        3 => {
+            // Invalid: one image cell has the wrong size.
+            cells[1].0.height = 90;
+        }
+        4 => {
+            // Invalid: one gainmap cell has a different depth.
+            cells[1].0.depth = 12;
+        }
+        _ => unreachable!(),
+    }
+    let images: Vec<_> = cells.iter().map(|x| &x.0).collect();
+    let gainmaps: Vec<_> = cells.iter().map(|x| &x.1).collect();
+    assert!(encoder
+        .add_image_gainmap_grid(grid_columns, grid_rows, &images, &gainmaps)
+        .is_err());
+    Ok(())
+}

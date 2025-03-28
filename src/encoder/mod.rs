@@ -247,6 +247,71 @@ impl Encoder {
         self.alt_image_metadata.clli = Some(gainmap.alt_clli);
     }
 
+    fn validate_image_grid(grid: &Grid, images: &[&Image]) -> AvifResult<()> {
+        let first_image = images[0];
+        let last_image = images.last().unwrap();
+        for (index, image) in images.iter().enumerate() {
+            if image.depth != 8 && image.depth != 10 && image.depth != 12 {
+                return Err(AvifError::InvalidArgument);
+            }
+            let expected_width = if grid.is_last_column(index as u32) {
+                first_image.width
+            } else {
+                last_image.width
+            };
+            let expected_height = if grid.is_last_row(index as u32) {
+                first_image.height
+            } else {
+                last_image.height
+            };
+            if image.width != expected_width
+                || image.height != expected_height
+                || !image.has_same_cicp(first_image)
+                || image.has_alpha() != first_image.has_alpha()
+                || image.alpha_premultiplied != first_image.alpha_premultiplied
+            {
+                return Err(AvifError::InvalidImageGrid(
+                    "all cells do not have the same properties".into(),
+                ));
+            }
+            if image.matrix_coefficients == MatrixCoefficients::Identity
+                && image.yuv_format != PixelFormat::Yuv444
+            {
+                return Err(AvifError::InvalidArgument);
+            }
+            if !image.has_plane(Plane::Y) {
+                return Err(AvifError::NoContent);
+            }
+        }
+        if last_image.width > first_image.width || last_image.height > first_image.height {
+            return Err(AvifError::InvalidImageGrid(
+                "last cell was larger than the first cell".into(),
+            ));
+        }
+        if images.len() > 1 {
+            validate_grid_image_dimensions(first_image, grid)?;
+        }
+        Ok(())
+    }
+
+    fn validate_gainmap_grid(grid: &Grid, gainmaps: &[&GainMap]) -> AvifResult<()> {
+        for gainmap in &gainmaps[1..] {
+            if gainmaps[0] != *gainmap {
+                return Err(AvifError::InvalidImageGrid(
+                    "all cells should have the same gain map metadata".into(),
+                ));
+            }
+        }
+        if gainmaps[0].image.color_primaries != ColorPrimaries::Unspecified
+            || gainmaps[0].image.transfer_characteristics != TransferCharacteristics::Unspecified
+        {
+            return Err(AvifError::InvalidArgument);
+        }
+        let gainmap_images: Vec<_> = gainmaps.iter().map(|x| &x.image).collect();
+        Self::validate_image_grid(grid, &gainmap_images)?;
+        Ok(())
+    }
+
     fn add_image_impl(
         &mut self,
         grid_columns: u32,
@@ -257,18 +322,12 @@ impl Encoder {
         gainmaps: Option<&[&GainMap]>,
     ) -> AvifResult<()> {
         let cell_count: usize = usize_from_u32(grid_rows * grid_columns)?;
-        if cell_count == 0
-            || cell_images.len() != cell_count
-            || (gainmaps.is_some() && cell_images.len() != gainmaps.unwrap().len())
-        {
+        if cell_count == 0 || cell_images.len() != cell_count {
             return Err(AvifError::InvalidArgument);
         }
         if duration == 0 {
             duration = 1;
         }
-        // TODO: validate gainmap cells to check if they have same metadata.
-        // TODO: validate bitdepth of all images.
-
         if self.items.is_empty() {
             // TODO: validate clap.
             let first_image = cell_images[0];
@@ -279,6 +338,7 @@ impl Encoder {
                 width: (grid_columns - 1) * first_image.width + last_image.width,
                 height: (grid_rows - 1) * first_image.height + last_image.height,
             };
+            Self::validate_image_grid(&grid, cell_images)?;
             self.image_metadata = first_image.shallow_clone();
             if gainmaps.is_some() {
                 self.gainmap_image_metadata = gainmaps.unwrap()[0].image.shallow_clone();
@@ -304,12 +364,11 @@ impl Encoder {
                 }
             }
             if let Some(gainmaps) = gainmaps {
-                let tonemap_item_id = self.add_tmap_item(gainmaps[0])?;
-                if !self.alternative_item_ids.is_empty() {
-                    return Err(AvifError::UnknownError("".into()));
+                if gainmaps.len() != cell_images.len() {
+                    return Err(AvifError::InvalidImageGrid(
+                        "invalid number of gainmap images".into(),
+                    ));
                 }
-                self.alternative_item_ids.push(tonemap_item_id);
-                self.alternative_item_ids.push(color_item_id);
                 let first_gainmap_image = &gainmaps[0].image;
                 let last_gainmap_image = &gainmaps.last().unwrap().image;
                 let gainmap_grid = Grid {
@@ -320,6 +379,13 @@ impl Encoder {
                     height: (grid_rows - 1) * first_gainmap_image.height
                         + last_gainmap_image.height,
                 };
+                Self::validate_gainmap_grid(&gainmap_grid, gainmaps)?;
+                let tonemap_item_id = self.add_tmap_item(gainmaps[0])?;
+                if !self.alternative_item_ids.is_empty() {
+                    return Err(AvifError::UnknownError("".into()));
+                }
+                self.alternative_item_ids.push(tonemap_item_id);
+                self.alternative_item_ids.push(color_item_id);
                 let gainmap_item_id = self.add_items(&gainmap_grid, Category::Gainmap)?;
                 for item_id in [color_item_id, gainmap_item_id] {
                     self.items[item_id as usize - 1].dimg_from_id = Some(tonemap_item_id);

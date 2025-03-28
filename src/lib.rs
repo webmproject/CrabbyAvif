@@ -424,6 +424,17 @@ pub(crate) struct Grid {
     pub height: u32,
 }
 
+#[cfg(feature = "encoder")]
+impl Grid {
+    pub(crate) fn is_last_column(&self, index: u32) -> bool {
+        (index + 1) % self.columns == 0
+    }
+
+    pub(crate) fn is_last_row(&self, index: u32) -> bool {
+        index >= (self.columns * (self.rows - 1))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Category {
     #[default]

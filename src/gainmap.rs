@@ -86,6 +86,20 @@ pub struct GainMap {
     pub alt_clli: ContentLightLevelInformation,
 }
 
+impl PartialEq for GainMap {
+    fn eq(&self, other: &Self) -> bool {
+        self.metadata == other.metadata
+            && self.alt_icc == other.alt_icc
+            && self.alt_color_primaries == other.alt_color_primaries
+            && self.alt_transfer_characteristics == other.alt_transfer_characteristics
+            && self.alt_matrix_coefficients == other.alt_matrix_coefficients
+            && self.alt_yuv_range == other.alt_yuv_range
+            && self.alt_plane_count == other.alt_plane_count
+            && self.alt_plane_depth == other.alt_plane_depth
+            && self.alt_clli == other.alt_clli
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "encoder")]
