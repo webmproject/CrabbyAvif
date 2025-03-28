@@ -310,7 +310,17 @@ impl Encoder {
                 }
                 self.alternative_item_ids.push(tonemap_item_id);
                 self.alternative_item_ids.push(color_item_id);
-                let gainmap_item_id = self.add_items(&grid, Category::Gainmap)?;
+                let first_gainmap_image = &gainmaps[0].image;
+                let last_gainmap_image = &gainmaps.last().unwrap().image;
+                let gainmap_grid = Grid {
+                    rows: grid_rows,
+                    columns: grid_columns,
+                    width: (grid_columns - 1) * first_gainmap_image.width
+                        + last_gainmap_image.width,
+                    height: (grid_rows - 1) * first_gainmap_image.height
+                        + last_gainmap_image.height,
+                };
+                let gainmap_item_id = self.add_items(&gainmap_grid, Category::Gainmap)?;
                 for item_id in [color_item_id, gainmap_item_id] {
                     self.items[item_id as usize - 1].dimg_from_id = Some(tonemap_item_id);
                 }
@@ -409,6 +419,22 @@ impl Encoder {
             return Err(AvifError::NotImplemented);
         }
         self.add_image_impl(1, 1, &[image], 0, true, Some(&[gainmap]))
+    }
+
+    pub fn add_image_gainmap_grid(
+        &mut self,
+        grid_columns: u32,
+        grid_rows: u32,
+        images: &[&Image],
+        gainmaps: &[&GainMap],
+    ) -> AvifResult<()> {
+        if grid_columns == 0 || grid_columns > 256 || grid_rows == 0 || grid_rows > 256 {
+            return Err(AvifError::InvalidImageGrid("".into()));
+        }
+        if self.settings.extra_layer_count != 0 {
+            return Err(AvifError::NotImplemented);
+        }
+        self.add_image_impl(grid_columns, grid_rows, images, 0, true, Some(gainmaps))
     }
 
     pub fn finish(&mut self) -> AvifResult<Vec<u8>> {

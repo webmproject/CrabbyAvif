@@ -395,6 +395,23 @@ fn progressive_incorrect_number_of_layers() -> AvifResult<()> {
     Ok(())
 }
 
+fn gainmap_metadata(base_is_hdr: bool) -> GainMapMetadata {
+    let mut metadata = GainMapMetadata {
+        use_base_color_space: true,
+        base_hdr_headroom: if base_is_hdr { UFraction(6, 2) } else { UFraction(0, 1) },
+        alternate_hdr_headroom: if base_is_hdr { UFraction(0, 1) } else { UFraction(6, 2) },
+        ..Default::default()
+    };
+    for c in 0..3u32 {
+        metadata.base_offset[c as usize] = Fraction(c as i32 * 10, 1000);
+        metadata.alternate_offset[c as usize] = Fraction(c as i32 * 20, 1000);
+        metadata.gamma[c as usize] = UFraction(1, c + 1);
+        metadata.min[c as usize] = Fraction(-1, c + 1);
+        metadata.max[c as usize] = Fraction(c as i32 + 11, c + 1);
+    }
+    metadata
+}
+
 fn generate_gainmap_image(base_is_hdr: bool) -> AvifResult<(Image, GainMap)> {
     let mut image = generate_random_image(12, 34, 10, PixelFormat::Yuv420, YuvRange::Full, false)?;
     image.transfer_characteristics = if base_is_hdr {
@@ -404,21 +421,9 @@ fn generate_gainmap_image(base_is_hdr: bool) -> AvifResult<(Image, GainMap)> {
     };
     let mut gainmap = GainMap {
         image: generate_random_image(6, 17, 8, PixelFormat::Yuv420, YuvRange::Full, false)?,
-        metadata: GainMapMetadata {
-            use_base_color_space: true,
-            base_hdr_headroom: if base_is_hdr { UFraction(6, 2) } else { UFraction(0, 1) },
-            alternate_hdr_headroom: if base_is_hdr { UFraction(0, 1) } else { UFraction(6, 2) },
-            ..Default::default()
-        },
+        metadata: gainmap_metadata(base_is_hdr),
         ..Default::default()
     };
-    for c in 0..3u32 {
-        gainmap.metadata.base_offset[c as usize] = Fraction(c as i32 * 10, 1000);
-        gainmap.metadata.alternate_offset[c as usize] = Fraction(c as i32 * 20, 1000);
-        gainmap.metadata.gamma[c as usize] = UFraction(1, c + 1);
-        gainmap.metadata.min[c as usize] = Fraction(-1, c + 1);
-        gainmap.metadata.max[c as usize] = Fraction(c as i32 + 11, c + 1);
-    }
     gainmap.alt_plane_count = 3;
     gainmap.alt_matrix_coefficients = MatrixCoefficients::Smpte2085;
     let clli = ContentLightLevelInformation {
@@ -602,5 +607,61 @@ fn gainmap_all_channels_identical() -> AvifResult<()> {
     assert!(decoder.gainmap_present());
     let decoded_gainmap = decoder.gainmap();
     assert_eq!(decoded_gainmap.metadata, gainmap.metadata);
+    Ok(())
+}
+
+#[test]
+fn gainmap_grid() -> AvifResult<()> {
+    let grid_columns = 2;
+    let grid_rows = 2;
+    let cell_width = 128;
+    let cell_height = 200;
+    let mut cells = Vec::new();
+    for _ in 0..grid_rows * grid_columns {
+        let mut image = generate_random_image(
+            cell_width,
+            cell_height,
+            10,
+            PixelFormat::Yuv444,
+            YuvRange::Full,
+            false,
+        )?;
+        image.transfer_characteristics = TransferCharacteristics::Pq;
+        let gainmap = GainMap {
+            image: generate_random_image(
+                cell_width / 2,
+                cell_height / 2,
+                8,
+                PixelFormat::Yuv420,
+                YuvRange::Full,
+                false,
+            )?,
+            metadata: gainmap_metadata(true),
+            ..Default::default()
+        };
+        cells.push((image, gainmap));
+    }
+    let mut images = Vec::new();
+    let mut gainmaps = Vec::new();
+    for cell in &cells {
+        images.push(&cell.0);
+        gainmaps.push(&cell.1);
+    }
+
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_gainmap_grid(grid_columns, grid_rows, &images, &gainmaps)?;
+    let edata = encoder.finish()?;
+    assert!(!edata.is_empty());
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.settings.image_content_to_decode = ImageContentType::All;
+    assert!(decoder.parse().is_ok());
+    assert!(decoder.gainmap_present());
+    assert!(decoder.next_image().is_ok());
     Ok(())
 }
