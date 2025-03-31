@@ -1618,6 +1618,21 @@ impl Decoder {
         Ok(())
     }
 
+    fn can_use_decode_grid(&self, category: Category) -> bool {
+        let first_tile = &self.tiles[category.usize()][0];
+        let codec = self.codecs[first_tile.codec_index].codec();
+        // Has to be a grid.
+        self.tile_info[category.usize()].is_grid()
+            // Has to be one of the supported codecs.
+            && matches!(codec, CodecChoice::MediaCodec | CodecChoice::Dav1d)
+            // Incremental decoding is not supported by decode_grid.
+            && !self.settings.allow_incremental
+            // All the tiles must use the same codec instance.
+            && self.tiles[category.usize()][1..]
+                .iter()
+                .all(|x| x.codec_index == first_tile.codec_index)
+    }
+
     fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
         let mut decoded_something = false;
         for category in self.settings.image_content_to_decode.categories() {
@@ -1625,12 +1640,7 @@ impl Decoder {
             if tile_count == 0 {
                 continue;
             }
-            let first_tile = &self.tiles[category.usize()][0];
-            let codec = self.codecs[first_tile.codec_index].codec();
-            if matches!(codec, CodecChoice::MediaCodec | CodecChoice::Dav1d)
-                && !self.settings.allow_incremental
-                && self.tile_info[category.usize()].is_grid()
-            {
+            if self.can_use_decode_grid(category) {
                 self.decode_grid(image_index, category)?;
                 decoded_something = true;
             } else {
