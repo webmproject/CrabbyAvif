@@ -187,7 +187,7 @@ impl Image {
             && self.matrix_coefficients == other.matrix_coefficients
     }
 
-    pub(crate) fn has_same_properties_and_cicp(&self, other: &Image) -> bool {
+    pub fn has_same_properties_and_cicp(&self, other: &Image) -> bool {
         self.has_same_properties(other) && self.has_same_cicp(other)
     }
 

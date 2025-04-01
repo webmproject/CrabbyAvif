@@ -477,6 +477,10 @@ fn gainmap_base_image_sdr() -> AvifResult<()> {
     let (image, gainmap) = generate_gainmap_image(false)?;
     let settings = encoder::Settings {
         speed: Some(10),
+        mutable: encoder::MutableSettings {
+            quality: 80,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
@@ -511,6 +515,10 @@ fn gainmap_base_image_sdr() -> AvifResult<()> {
     assert_eq!(decoded_gainmap.image.depth, gainmap.image.depth);
     assert_eq!(decoded_gainmap.metadata, gainmap.metadata);
     assert!(decoder.next_image().is_ok());
+    let decoded_image = decoder.image().expect("failed to get image");
+    assert!(psnr(&image, decoded_image)? >= 40.0);
+    let decoded_gainmap = decoder.gainmap();
+    assert!(psnr(&gainmap.image, &decoded_gainmap.image)? >= 40.0);
     Ok(())
 }
 
@@ -519,6 +527,10 @@ fn gainmap_base_image_hdr() -> AvifResult<()> {
     let (image, gainmap) = generate_gainmap_image(true)?;
     let settings = encoder::Settings {
         speed: Some(10),
+        mutable: encoder::MutableSettings {
+            quality: 80,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
@@ -558,6 +570,10 @@ fn gainmap_base_image_hdr() -> AvifResult<()> {
     assert_eq!(decoded_gainmap.image.depth, gainmap.image.depth);
     assert_eq!(decoded_gainmap.metadata, gainmap.metadata);
     assert!(decoder.next_image().is_ok());
+    let decoded_image = decoder.image().expect("failed to get image");
+    assert!(psnr(&image, decoded_image)? >= 40.0);
+    let decoded_gainmap = decoder.gainmap();
+    assert!(psnr(&gainmap.image, &decoded_gainmap.image)? >= 40.0);
     Ok(())
 }
 
