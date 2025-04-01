@@ -23,16 +23,36 @@ use crabby_avif::image::*;
 use crabby_avif::utils::*;
 use crabby_avif::*;
 
-use rand::rngs::StdRng;
-use rand::Rng;
-use rand::SeedableRng;
-
 #[path = "./mod.rs"]
 mod tests;
 
 use tests::*;
 
-fn generate_random_image(
+fn full_to_limited_pixel(min: i32, max: i32, full: i32, v: u16) -> u16 {
+    let v = v as i32;
+    let v = (((v * (max - min)) + (full / 2)) / full) + min;
+    if v < min {
+        min as u16
+    } else if v > max {
+        max as u16
+    } else {
+        v as u16
+    }
+}
+
+fn full_to_limited(v: u16, plane: Plane, depth: u8) -> u16 {
+    match (plane, depth) {
+        (Plane::Y, 8) => full_to_limited_pixel(16, 235, 255, v),
+        (Plane::Y, 10) => full_to_limited_pixel(64, 940, 1023, v),
+        (Plane::Y, 12) => full_to_limited_pixel(256, 3760, 4095, v),
+        (Plane::U | Plane::V, 8) => full_to_limited_pixel(16, 240, 255, v),
+        (Plane::U | Plane::V, 10) => full_to_limited_pixel(64, 960, 1023, v),
+        (Plane::U | Plane::V, 12) => full_to_limited_pixel(256, 3840, 4095, v),
+        _ => unreachable!(""),
+    }
+}
+
+fn generate_gradient_image(
     width: u32,
     height: u32,
     depth: u8,
@@ -52,25 +72,32 @@ fn generate_random_image(
     if alpha {
         image.allocate_planes(Category::Alpha)?;
     }
-    let mut rng: StdRng = SeedableRng::seed_from_u64(0xABCDEF);
     for plane in ALL_PLANES {
         if !image.has_plane(plane) {
             continue;
         }
         let plane_data = image.plane_data(plane).unwrap();
+        let max_xy_sum = plane_data.width + plane_data.height - 2;
         for y in 0..plane_data.height {
             if image.depth == 8 {
                 let row = image.row_mut(plane, y)?;
-                let row_slice = &mut row[..plane_data.width as usize];
-                for pixel in row_slice {
-                    *pixel = rng.gen_range(0..=255);
+                for x in 0..plane_data.width {
+                    let value = (x + y) % (max_xy_sum + 1);
+                    row[x as usize] = (value * 255 / std::cmp::max(1, max_xy_sum)) as u8;
+                    if yuv_range == YuvRange::Limited && plane != Plane::A {
+                        row[x as usize] =
+                            full_to_limited(row[x as usize] as u16, plane, depth) as u8;
+                    }
                 }
             } else {
-                let max_channel = image.max_channel();
+                let max_channel = image.max_channel() as u32;
                 let row = image.row16_mut(plane, y)?;
-                let row_slice = &mut row[..plane_data.width as usize];
-                for pixel in row_slice {
-                    *pixel = rng.gen_range(0..=max_channel);
+                for x in 0..plane_data.width {
+                    let value = (x + y) % (max_xy_sum + 1);
+                    row[x as usize] = (value * max_channel / std::cmp::max(1, max_xy_sum)) as u16;
+                    if yuv_range == YuvRange::Limited && plane != Plane::A {
+                        row[x as usize] = full_to_limited(row[x as usize], plane, depth);
+                    }
                 }
             }
         }
@@ -97,7 +124,7 @@ fn encode_decode(
     if !HAS_ENCODER {
         return Ok(());
     }
-    let input_image = generate_random_image(width, height, depth, yuv_format, yuv_range, alpha)?;
+    let input_image = generate_gradient_image(width, height, depth, yuv_format, yuv_range, alpha)?;
     let settings = encoder::Settings {
         speed: Some(10),
         mutable: encoder::MutableSettings {
@@ -158,7 +185,7 @@ fn encode_decode_sequence(
     let mut input_images = Vec::new();
     let frame_count = 10;
     for _ in 0..frame_count {
-        input_images.push(generate_random_image(
+        input_images.push(generate_gradient_image(
             width, height, depth, yuv_format, yuv_range, alpha,
         )?);
     }
@@ -208,7 +235,7 @@ fn clli(max_cll: u16, max_pall: u16) -> AvifResult<()> {
     if !HAS_ENCODER || !HAS_DECODER {
         return Ok(());
     }
-    let mut image = generate_random_image(8, 8, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    let mut image = generate_gradient_image(8, 8, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
     image.clli = Some(ContentLightLevelInformation { max_cll, max_pall });
 
     let settings = encoder::Settings {
@@ -262,7 +289,7 @@ fn progressive_quality_change(use_grid: bool) -> AvifResult<()> {
     if !HAS_ENCODER {
         return Ok(());
     }
-    let image = generate_random_image(256, 256, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    let image = generate_gradient_image(256, 256, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
     let mut settings = encoder::Settings {
         speed: Some(10),
         extra_layer_count: 1,
@@ -302,7 +329,7 @@ fn progressive_dimension_change(scaling_fraction: IFraction, use_grid: bool) -> 
     if !HAS_ENCODER {
         return Ok(());
     }
-    let image = generate_random_image(256, 256, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    let image = generate_gradient_image(256, 256, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
     let mut settings = encoder::Settings {
         speed: Some(10),
         extra_layer_count: 1,
@@ -346,7 +373,7 @@ fn progressive_same_layers() -> AvifResult<()> {
     if !HAS_ENCODER {
         return Ok(());
     }
-    let image = generate_random_image(256, 256, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    let image = generate_gradient_image(256, 256, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
     let settings = encoder::Settings {
         extra_layer_count: 3,
         speed: Some(10),
@@ -371,7 +398,7 @@ fn progressive_incorrect_number_of_layers() -> AvifResult<()> {
     if !HAS_ENCODER {
         return Ok(());
     }
-    let image = generate_random_image(256, 256, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    let image = generate_gradient_image(256, 256, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
     let settings = encoder::Settings {
         speed: Some(10),
         extra_layer_count: 1,
@@ -413,14 +440,15 @@ fn gainmap_metadata(base_is_hdr: bool) -> GainMapMetadata {
 }
 
 fn generate_gainmap_image(base_is_hdr: bool) -> AvifResult<(Image, GainMap)> {
-    let mut image = generate_random_image(12, 34, 10, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    let mut image =
+        generate_gradient_image(12, 34, 10, PixelFormat::Yuv420, YuvRange::Full, false)?;
     image.transfer_characteristics = if base_is_hdr {
         TransferCharacteristics::Pq
     } else {
         TransferCharacteristics::Srgb
     };
     let mut gainmap = GainMap {
-        image: generate_random_image(6, 17, 8, PixelFormat::Yuv420, YuvRange::Full, false)?,
+        image: generate_gradient_image(6, 17, 8, PixelFormat::Yuv420, YuvRange::Full, false)?,
         metadata: gainmap_metadata(base_is_hdr),
         ..Default::default()
     };
@@ -618,7 +646,7 @@ fn gainmap_grid() -> AvifResult<()> {
     let cell_height = 200;
     let mut cells = Vec::new();
     for _ in 0..grid_rows * grid_columns {
-        let mut image = generate_random_image(
+        let mut image = generate_gradient_image(
             cell_width,
             cell_height,
             10,
@@ -628,7 +656,7 @@ fn gainmap_grid() -> AvifResult<()> {
         )?;
         image.transfer_characteristics = TransferCharacteristics::Pq;
         let gainmap = GainMap {
-            image: generate_random_image(
+            image: generate_gradient_image(
                 cell_width / 2,
                 cell_height / 2,
                 8,
@@ -674,7 +702,7 @@ fn invalid_grid(test_case_index: u8) -> AvifResult<()> {
     let cell_height = 200;
     let mut cells = Vec::new();
     for _ in 0..grid_rows * grid_columns {
-        let mut image = generate_random_image(
+        let mut image = generate_gradient_image(
             cell_width,
             cell_height,
             10,
@@ -684,7 +712,7 @@ fn invalid_grid(test_case_index: u8) -> AvifResult<()> {
         )?;
         image.transfer_characteristics = TransferCharacteristics::Pq;
         let gainmap = GainMap {
-            image: generate_random_image(
+            image: generate_gradient_image(
                 cell_width / 2,
                 cell_height / 2,
                 8,
