@@ -440,8 +440,7 @@ fn gainmap_metadata(base_is_hdr: bool) -> GainMapMetadata {
 }
 
 fn generate_gainmap_image(base_is_hdr: bool) -> AvifResult<(Image, GainMap)> {
-    let mut image =
-        generate_gradient_image(12, 34, 10, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    let mut image = generate_gradient_image(12, 34, 10, PixelFormat::Yuv420, YuvRange::Full, true)?;
     image.transfer_characteristics = if base_is_hdr {
         TransferCharacteristics::Pq
     } else {
@@ -492,6 +491,7 @@ fn gainmap_base_image_sdr() -> AvifResult<()> {
     decoder.set_io_vec(edata);
     decoder.settings.image_content_to_decode = ImageContentType::All;
     assert!(decoder.parse().is_ok());
+    assert!(decoder.image().unwrap().alpha_present);
     assert!(decoder.gainmap_present());
     let decoded_gainmap = decoder.gainmap();
     assert_eq!(
@@ -516,6 +516,7 @@ fn gainmap_base_image_sdr() -> AvifResult<()> {
     assert_eq!(decoded_gainmap.metadata, gainmap.metadata);
     assert!(decoder.next_image().is_ok());
     let decoded_image = decoder.image().expect("failed to get image");
+    assert!(decoded_image.has_plane(Plane::A));
     assert!(psnr(&image, decoded_image)? >= 40.0);
     let decoded_gainmap = decoder.gainmap();
     assert!(psnr(&gainmap.image, &decoded_gainmap.image)? >= 40.0);
@@ -602,6 +603,20 @@ fn gainmap_oriented() -> AvifResult<()> {
     let decoded_gainmap = decoder.gainmap();
     assert!(decoded_gainmap.image.irot_angle.is_none());
     assert!(decoded_gainmap.image.imir_axis.is_none());
+    Ok(())
+}
+
+#[test]
+fn gainmap_image_alpha_invalid() -> AvifResult<()> {
+    let (image, mut gainmap) = generate_gainmap_image(false)?;
+    // Invalid: gainmap.image must not have alpha plane.
+    gainmap.image = generate_gradient_image(6, 17, 8, PixelFormat::Yuv420, YuvRange::Full, true)?;
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    assert!(encoder.add_image_gainmap(&image, &gainmap).is_err());
     Ok(())
 }
 
