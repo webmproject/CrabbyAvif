@@ -169,6 +169,9 @@ fn find_conversion_function(
             // What Android considers to be NV21 is actually NV12 in libyuv.
             Some(ConversionFunction::NVToARGBMatrix(NV12ToARGBMatrix))
         }
+        (_, 8, Format::Rgb565, PixelFormat::AndroidNv12) => {
+            Some(ConversionFunction::NVToARGBMatrix(NV12ToRGB565Matrix))
+        }
         (_, 16, Format::Rgba1010102, PixelFormat::AndroidP010) => Some(
             ConversionFunction::P010ToRGBMatrix(P010ToAR30Matrix, AR30ToAB30),
         ),

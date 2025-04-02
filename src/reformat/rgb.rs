@@ -338,11 +338,7 @@ impl Image {
                 }
             }
         }
-        if matches!(
-            image.yuv_format,
-            PixelFormat::AndroidNv12 | PixelFormat::AndroidNv21
-        ) | matches!(self.format, Format::Rgba1010102)
-        {
+        if image.yuv_format == PixelFormat::AndroidNv21 || self.format == Format::Rgba1010102 {
             // These conversions are only supported via libyuv.
             if converted_with_libyuv {
                 if image.has_alpha() && matches!(self.format, Format::Rgba1010102) {
