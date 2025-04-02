@@ -439,6 +439,10 @@ impl MediaCodec {
                     codec_specific_data.len(),
                 );
             }
+            // For video codecs, 0 is the highest importance (higher the number lesser the
+            // importance). To make codec for images less important, give it a value more than 0.
+            c_str!(importance, importance_tmp, "importance");
+            AMediaFormat_setInt32(format, importance, 1);
         }
 
         let codec = match &self.codec_initializers[self.codec_index] {
