@@ -15,7 +15,7 @@
 // Not all functions are used from all test targets. So allow unused functions in this module.
 #![allow(unused)]
 
-use crabby_avif::image::Image;
+use crabby_avif::image::*;
 use crabby_avif::*;
 use std::fs::File;
 
@@ -51,6 +51,114 @@ pub fn decode_png(filename: &str) -> Vec<u8> {
     let mut pixels = vec![0; reader.output_buffer_size()];
     let info = reader.next_frame(&mut pixels).unwrap();
     pixels
+}
+
+#[cfg(test)]
+fn full_to_limited_pixel(min: i32, max: i32, full: i32, v: u16) -> u16 {
+    let v = v as i32;
+    let v = (((v * (max - min)) + (full / 2)) / full) + min;
+    if v < min {
+        min as u16
+    } else if v > max {
+        max as u16
+    } else {
+        v as u16
+    }
+}
+
+#[cfg(test)]
+fn full_to_limited(v: u16, plane: Plane, depth: u8) -> u16 {
+    match (plane, depth) {
+        (Plane::Y, 8) => full_to_limited_pixel(16, 235, 255, v),
+        (Plane::Y, 10) => full_to_limited_pixel(64, 940, 1023, v),
+        (Plane::Y, 12) => full_to_limited_pixel(256, 3760, 4095, v),
+        (Plane::U | Plane::V, 8) => full_to_limited_pixel(16, 240, 255, v),
+        (Plane::U | Plane::V, 10) => full_to_limited_pixel(64, 960, 1023, v),
+        (Plane::U | Plane::V, 12) => full_to_limited_pixel(256, 3840, 4095, v),
+        _ => unreachable!(""),
+    }
+}
+
+#[cfg(test)]
+pub fn generate_gradient_image(
+    width: u32,
+    height: u32,
+    depth: u8,
+    yuv_format: PixelFormat,
+    yuv_range: YuvRange,
+    alpha: bool,
+) -> AvifResult<Image> {
+    let mut image = image::Image {
+        width,
+        height,
+        depth,
+        yuv_format,
+        yuv_range,
+        ..Default::default()
+    };
+    image.allocate_planes(Category::Color)?;
+    if alpha {
+        image.allocate_planes(Category::Alpha)?;
+        image.alpha_present = true;
+    }
+    for plane in ALL_PLANES {
+        if !image.has_plane(plane) {
+            continue;
+        }
+        let plane_data = image.plane_data(plane).unwrap();
+        let max_xy_sum = plane_data.width + plane_data.height - 2;
+        for y in 0..plane_data.height {
+            if image.depth == 8 {
+                let row = image.row_mut(plane, y)?;
+                for x in 0..plane_data.width {
+                    let value = (x + y) % (max_xy_sum + 1);
+                    row[x as usize] = (value * 255 / std::cmp::max(1, max_xy_sum)) as u8;
+                    if yuv_range == YuvRange::Limited && plane != Plane::A {
+                        row[x as usize] =
+                            full_to_limited(row[x as usize] as u16, plane, depth) as u8;
+                    }
+                }
+            } else {
+                let max_channel = image.max_channel() as u32;
+                let row = image.row16_mut(plane, y)?;
+                for x in 0..plane_data.width {
+                    let value = (x + y) % (max_xy_sum + 1);
+                    row[x as usize] = (value * max_channel / std::cmp::max(1, max_xy_sum)) as u16;
+                    if yuv_range == YuvRange::Limited && plane != Plane::A {
+                        row[x as usize] = full_to_limited(row[x as usize], plane, depth);
+                    }
+                }
+            }
+        }
+    }
+    Ok(image)
+}
+
+#[cfg(test)]
+pub fn are_images_equal(image1: &Image, image2: &Image) -> AvifResult<()> {
+    assert!(image1.has_same_properties_and_cicp(image2));
+    for plane in image::ALL_PLANES {
+        assert_eq!(image1.has_plane(plane), image2.has_plane(plane));
+        if !image1.has_plane(plane) {
+            continue;
+        }
+        let width = image1.width(plane);
+        let height = image1.height(plane);
+        for y in 0..height as u32 {
+            if image1.depth > 8 {
+                assert_eq!(
+                    image1.row16(plane, y)?[..width],
+                    image2.row16(plane, y)?[..width]
+                );
+            } else {
+                assert_eq!(
+                    image1.row(plane, y)?[..width],
+                    image2.row(plane, y)?[..width]
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
