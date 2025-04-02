@@ -412,9 +412,11 @@ impl MediaCodec {
                 format,
                 AMEDIAFORMAT_KEY_COLOR_FORMAT,
                 if config.depth == 8 {
+                    // For 8-bit images, always use Yuv420Flexible.
                     AndroidMediaCodecOutputColorFormat::Yuv420Flexible
                 } else {
-                    AndroidMediaCodecOutputColorFormat::P010
+                    // For all other images, use whatever format is requested.
+                    config.android_mediacodec_output_color_format
                 } as i32,
             );
             if low_latency {
