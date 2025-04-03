@@ -246,7 +246,16 @@ impl Reader for Y4MReader {
                         .read_exact(row_slice)
                         .or(Err(AvifError::UnknownError("".into())))?;
                 } else {
-                    todo!("handle >8 bit input");
+                    let row = image.row16_mut(plane, y)?;
+                    let row_slice = &mut row[..plane_data.width as usize];
+                    let mut pixel_bytes: [u8; 2] = [0, 0];
+                    for pixel in row_slice {
+                        reader
+                            .read_exact(&mut pixel_bytes)
+                            .or(Err(AvifError::UnknownError("".into())))?;
+                        // y4m is always little endian.
+                        *pixel = u16::from_le_bytes(pixel_bytes);
+                    }
                 }
             }
         }
