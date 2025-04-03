@@ -264,6 +264,20 @@ fn image_content_to_decode_none(filename: &str) {
     assert!(decoder.next_image().is_err());
 }
 
+#[test_case::test_case("draw_points_idat.avif")]
+#[test_case::test_case("draw_points_idat_metasize0.avif")]
+#[test_case::test_case("draw_points_idat_progressive.avif")]
+#[test_case::test_case("draw_points_idat_progressive_metasize0.avif")]
+fn idat(filename: &str) {
+    let mut decoder = get_decoder(filename);
+    assert!(decoder.parse().is_ok());
+    if !HAS_DECODER {
+        return;
+    }
+    let res = decoder.next_image();
+    assert_eq!(res, Ok(()));
+}
+
 // From avifprogressivetest.cc
 #[test_case::test_case("progressive_dimension_change.avif", 2, 256, 256; "progressive_dimension_change")]
 #[test_case::test_case("progressive_layered_grid.avif", 2, 512, 256; "progressive_layered_grid")]

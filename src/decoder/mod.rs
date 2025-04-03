@@ -1313,7 +1313,9 @@ impl Decoder {
             .get_mut(&sample.item_id)
             .ok_or(AvifError::BmffParseFailed("".into()))?;
         if item.extents.len() == 1 {
-            // Item has only one extent. Nothing to prepare.
+            if !item.idat.is_empty() {
+                item.data_buffer = Some(item.idat.clone());
+            }
             return Ok(());
         }
         if let Some(data) = &item.data_buffer {
@@ -1335,8 +1337,16 @@ impl Decoder {
                 checked_decr!(bytes_to_skip, extent.size);
                 continue;
             }
-            let io = self.io.unwrap_mut();
-            data.extend_from_slice(io.read_exact(extent.offset, extent.size)?);
+            if item.idat.is_empty() {
+                let io = self.io.unwrap_mut();
+                data.extend_from_slice(io.read_exact(extent.offset, extent.size)?);
+            } else {
+                let offset = usize_from_u64(extent.offset)?;
+                let end_offset = checked_add!(offset, extent.size)?;
+                let range = offset..end_offset;
+                check_slice_range(item.idat.len(), &range)?;
+                data.extend_from_slice(&item.idat[range]);
+            }
             if max_num_bytes.is_some_and(|max_num_bytes| data.len() >= max_num_bytes) {
                 return Ok(()); // There are enough merged extents to satisfy max_num_bytes.
             }
