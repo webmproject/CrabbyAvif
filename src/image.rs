@@ -199,12 +199,12 @@ impl Image {
                 | PixelFormat::AndroidP010
                 | PixelFormat::AndroidNv12
                 | PixelFormat::AndroidNv21 => self.width as usize,
-                PixelFormat::Yuv420 | PixelFormat::Yuv422 => (self.width as usize + 1) / 2,
+                PixelFormat::Yuv420 | PixelFormat::Yuv422 => (self.width as usize).div_ceil(2),
                 PixelFormat::None | PixelFormat::Yuv400 => 0,
             },
             Plane::V => match self.yuv_format {
                 PixelFormat::Yuv444 => self.width as usize,
-                PixelFormat::Yuv420 | PixelFormat::Yuv422 => (self.width as usize + 1) / 2,
+                PixelFormat::Yuv420 | PixelFormat::Yuv422 => (self.width as usize).div_ceil(2),
                 PixelFormat::None
                 | PixelFormat::Yuv400
                 | PixelFormat::AndroidP010
@@ -222,12 +222,12 @@ impl Image {
                 PixelFormat::Yuv420
                 | PixelFormat::AndroidP010
                 | PixelFormat::AndroidNv12
-                | PixelFormat::AndroidNv21 => (self.height as usize + 1) / 2,
+                | PixelFormat::AndroidNv21 => (self.height as usize).div_ceil(2),
                 PixelFormat::None | PixelFormat::Yuv400 => 0,
             },
             Plane::V => match self.yuv_format {
                 PixelFormat::Yuv444 | PixelFormat::Yuv422 => self.height as usize,
-                PixelFormat::Yuv420 => (self.height as usize + 1) / 2,
+                PixelFormat::Yuv420 => (self.height as usize).div_ceil(2),
                 PixelFormat::None
                 | PixelFormat::Yuv400
                 | PixelFormat::AndroidP010
