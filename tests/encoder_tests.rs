@@ -721,3 +721,137 @@ fn invalid_grid(test_case_index: u8) -> AvifResult<()> {
         .is_err());
     Ok(())
 }
+
+#[test_case::test_matrix([8, 10, 12], [false, true])]
+fn opaque_alpha(depth: u8, is_sequence: bool) -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let width = 2;
+    let height = 2;
+    let mut input_image = generate_gradient_image(
+        width,
+        height,
+        depth,
+        PixelFormat::Yuv420,
+        YuvRange::Full,
+        /*alpha=*/ true,
+    )?;
+    let opaque_value = input_image.max_channel();
+    fill_plane(&mut input_image, Plane::A, opaque_value)?;
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    if is_sequence {
+        for i in 0..2 {
+            encoder.add_image_for_sequence(&input_image, i)?;
+        }
+    } else {
+        encoder.add_image(&input_image)?;
+    }
+    let edata = encoder.finish()?;
+    assert!(!edata.is_empty());
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    assert!(decoder.parse().is_ok());
+    let image = decoder.image().expect("image was none");
+
+    if is_sequence {
+        assert_eq!(decoder.image_count(), 2);
+        assert!(image.alpha_present);
+        if !HAS_DECODER {
+            return Ok(());
+        }
+        for _ in 0..2 {
+            let res = decoder.next_image();
+            assert!(res.is_ok());
+            let image = decoder.image().expect("image was none");
+            assert!(image.alpha_present);
+            let alpha_plane = image.plane_data(Plane::A);
+            assert!(alpha_plane.is_some());
+            assert!(alpha_plane.unwrap().row_bytes > 0);
+        }
+    } else {
+        assert_eq!(decoder.image_count(), 1);
+        assert!(!image.alpha_present);
+        if !HAS_DECODER {
+            return Ok(());
+        }
+        let res = decoder.next_image();
+        assert!(res.is_ok());
+        let image = decoder.image().expect("image was none");
+        assert!(!image.alpha_present);
+        assert!(image.plane_data(Plane::A).is_none());
+    }
+    Ok(())
+}
+
+#[test_case::test_matrix([8, 10, 12], [true, false])]
+fn opaque_alpha_grid(depth: u8, all_cells_opaque: bool) -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let width = 100;
+    let height = 100;
+    let mut image1 = generate_gradient_image(
+        width,
+        height,
+        depth,
+        PixelFormat::Yuv420,
+        YuvRange::Full,
+        /*alpha=*/ true,
+    )?;
+    let mut image2 = generate_gradient_image(
+        width,
+        height,
+        depth,
+        PixelFormat::Yuv420,
+        YuvRange::Full,
+        /*alpha=*/ true,
+    )?;
+    let opaque_value = image1.max_channel();
+    fill_plane(&mut image1, Plane::A, opaque_value)?;
+    fill_plane(&mut image2, Plane::A, opaque_value)?;
+    if !all_cells_opaque {
+        // Set some alpha pixels as not opaque in one of the cells.
+        if depth == 8 {
+            image2.row_mut(Plane::A, 0)?[0] = 10;
+        } else {
+            image2.row16_mut(Plane::A, 0)?[0] = 10;
+        }
+    }
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_grid(1, 2, &[&image1, &image2])?;
+    let edata = encoder.finish()?;
+    assert!(!edata.is_empty());
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    assert!(decoder.parse().is_ok());
+    let image = decoder.image().expect("image was none");
+    assert_eq!(decoder.image_count(), 1);
+    assert_eq!(image.alpha_present, !all_cells_opaque);
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    let res = decoder.next_image();
+    assert!(res.is_ok());
+    let image = decoder.image().expect("image was none");
+    if all_cells_opaque {
+        assert!(!image.alpha_present);
+        assert!(image.plane_data(Plane::A).is_none());
+    } else {
+        assert!(image.alpha_present);
+        let alpha_plane = image.plane_data(Plane::A);
+        assert!(alpha_plane.is_some());
+        assert!(alpha_plane.unwrap().row_bytes > 0);
+    }
+    Ok(())
+}

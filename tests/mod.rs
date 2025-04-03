@@ -212,6 +212,23 @@ pub fn psnr(image1: &Image, image2: &Image) -> AvifResult<f64> {
 }
 
 #[cfg(test)]
+pub fn fill_plane(image: &mut Image, plane: Plane, value: u16) -> AvifResult<()> {
+    let plane_data = image.plane_data(plane).ok_or(AvifError::NoContent)?;
+    for y in 0..plane_data.height {
+        if image.depth == 8 {
+            for pixel in &mut image.row_mut(Plane::A, y)?[..plane_data.width as usize] {
+                *pixel = value as u8;
+            }
+        } else {
+            for pixel in &mut image.row16_mut(Plane::A, y)?[..plane_data.width as usize] {
+                *pixel = value;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 #[allow(dead_code)]
 pub const HAS_DECODER: bool = cfg!(any(
     feature = "dav1d",

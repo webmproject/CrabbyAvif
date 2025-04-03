@@ -383,11 +383,15 @@ impl Encoder {
             }
             let color_item_id = self.add_items(&grid, Category::Color)?;
             self.primary_item_id = color_item_id;
-            self.alpha_present = first_image.has_plane(Plane::A);
-
-            if self.alpha_present && self.single_image {
-                // TODO: Handle opaque alpha.
-            }
+            self.alpha_present = first_image.has_plane(Plane::A)
+                && if is_single_image {
+                    // When encoding a single image in which the alpha plane exists but is entirely
+                    // opaque, skip writing an alpha AV1 payload. This does not apply to image
+                    // sequences since subsequent frames may have a non-opaque alpha channel.
+                    !cell_images.iter().all(|image| image.is_opaque())
+                } else {
+                    true
+                };
 
             if self.alpha_present {
                 let alpha_item_id = self.add_items(&grid, Category::Alpha)?;

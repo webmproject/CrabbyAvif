@@ -557,4 +557,27 @@ impl Image {
             ((rgba[3] as f32) / 65535.0 * max_channel).round() as u16,
         ]
     }
+
+    #[cfg(feature = "encoder")]
+    pub(crate) fn is_opaque(&self) -> bool {
+        if let Some(plane_data) = self.plane_data(Plane::A) {
+            let opaque_value = self.max_channel();
+            if self.depth == 8 {
+                for y in 0..plane_data.height {
+                    let row = &self.row(Plane::A, y).unwrap()[..plane_data.width as usize];
+                    if !row.iter().all(|pixel| *pixel == opaque_value as u8) {
+                        return false;
+                    }
+                }
+            } else {
+                for y in 0..plane_data.height {
+                    let row = &self.row16(Plane::A, y).unwrap()[..plane_data.width as usize];
+                    if !row.iter().all(|pixel| *pixel == opaque_value) {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
 }
