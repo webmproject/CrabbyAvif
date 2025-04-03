@@ -250,3 +250,12 @@ pub(crate) fn validate_grid_image_dimensions(image: &Image, grid: &Grid) -> Avif
     }
     Ok(())
 }
+
+#[cfg(feature = "encoder")]
+pub(crate) fn floor_log2(n: u32) -> u32 {
+    if n == 0 {
+        0
+    } else {
+        31 - n.leading_zeros()
+    }
+}

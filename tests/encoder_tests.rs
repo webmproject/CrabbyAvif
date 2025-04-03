@@ -17,7 +17,7 @@
 use crabby_avif::decoder::CompressionFormat;
 use crabby_avif::decoder::ImageContentType;
 use crabby_avif::decoder::ProgressiveState;
-use crabby_avif::encoder::ScalingMode;
+use crabby_avif::encoder::*;
 use crabby_avif::gainmap::*;
 use crabby_avif::image::*;
 use crabby_avif::utils::*;
@@ -34,7 +34,8 @@ use tests::*;
     [8, 10, 12],
     [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444, PixelFormat::Yuv400],
     [YuvRange::Limited, YuvRange::Full],
-    [false, true]
+    [false, true],
+    [TilingMode::Manual(0, 0), TilingMode::Manual(1, 0)]
 )]
 fn encode_decode(
     width: u32,
@@ -43,6 +44,7 @@ fn encode_decode(
     yuv_format: PixelFormat,
     yuv_range: YuvRange,
     alpha: bool,
+    tiling_mode: TilingMode,
 ) -> AvifResult<()> {
     if !HAS_ENCODER {
         return Ok(());
@@ -52,6 +54,7 @@ fn encode_decode(
         speed: Some(10),
         mutable: encoder::MutableSettings {
             quality: 90,
+            tiling_mode,
             ..Default::default()
         },
         ..Default::default()
@@ -83,6 +86,8 @@ fn encode_decode(
         return Ok(());
     }
     assert!(decoder.next_image().is_ok());
+    let image = decoder.image().expect("image was none");
+    assert!(psnr(image, &input_image)? >= 50.0);
     Ok(())
 }
 

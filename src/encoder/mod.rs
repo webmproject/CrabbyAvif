@@ -50,12 +50,46 @@ impl Default for ScalingMode {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum TilingMode {
+    Auto,
+    Manual(i32, i32), // tile_rows_log2, tile_columns_log2
+}
+
+impl Default for TilingMode {
+    fn default() -> Self {
+        Self::Manual(0, 0)
+    }
+}
+
+#[allow(unused)]
+impl TilingMode {
+    fn log2(&self, width: u32, height: u32) -> (i32, i32) {
+        match *self {
+            Self::Auto => {
+                let image_area = width * height;
+                let tiles_log2 =
+                    floor_log2(std::cmp::min(image_area.div_ceil(512 * 512), 8)) as i32;
+                let (dim1, dim2) = if width >= height { (width, height) } else { (height, width) };
+                let diff_log2 = floor_log2(dim1 / dim2) as i32;
+                let diff = std::cmp::max(0, tiles_log2 - diff_log2);
+                let dim2_log2 = diff / 2;
+                let dim1_log2 = tiles_log2 - dim2_log2;
+                if width >= height {
+                    (dim2_log2, dim1_log2)
+                } else {
+                    (dim1_log2, dim2_log2)
+                }
+            }
+            Self::Manual(rows_log2, columns_log2) => (rows_log2, columns_log2),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MutableSettings {
     pub quality: i32,
-    pub tile_rows_log2: i32,
-    pub tile_columns_log2: i32,
-    pub auto_tiling: bool,
+    pub tiling_mode: TilingMode,
     pub scaling_mode: ScalingMode,
 }
 
@@ -105,8 +139,6 @@ pub struct Encoder {
     gainmap_image_metadata: Image,
     alt_image_metadata: Image,
     quantizer: i32,
-    tile_rows_log2: i32,
-    tile_columns_log2: i32,
     primary_item_id: u16,
     alternative_item_ids: Vec<u16>,
     single_image: bool,
@@ -412,6 +444,11 @@ impl Encoder {
             }
         }
 
+        let (tile_rows_log2, tile_columns_log2) = self
+            .settings
+            .mutable
+            .tiling_mode
+            .log2(cell_images[0].width, cell_images[0].height);
         // Encode the AV1 OBUs.
         for item in &mut self.items {
             if item.codec.is_none() {
@@ -429,8 +466,8 @@ impl Encoder {
                 // TODO: pad the image so that the dimensions of all cells are equal.
             }
             let encoder_config = EncoderConfig {
-                tile_rows_log2: self.settings.mutable.tile_rows_log2,
-                tile_columns_log2: self.settings.mutable.tile_columns_log2,
+                tile_rows_log2,
+                tile_columns_log2,
                 quantizer: self.settings.quantizer(),
                 disable_lagged_output: self.alpha_present,
                 is_single_image,
@@ -537,5 +574,39 @@ impl Encoder {
         self.write_moov(&mut stream)?;
         self.write_mdat(&mut stream)?;
         Ok(stream.data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_case::test_case;
+
+    #[test_case(256, 144, 0, 0 ; "144p")]
+    #[test_case(426, 240, 0, 0 ; "240p")]
+    #[test_case(640, 360, 0, 0 ; "360p")]
+    #[test_case(854, 480, 0, 1 ; "480p")]
+    #[test_case(1280, 720, 1, 1 ; "720p")]
+    #[test_case(1920, 1080, 1, 2 ; "1080p")]
+    #[test_case(2560, 1440, 1, 2 ; "2k")]
+    #[test_case(3840, 2160, 1, 2 ; "4k")]
+    #[test_case(7680, 4320, 1, 2 ; "8k")]
+    #[test_case(768, 512, 0, 1 ; "case 1")]
+    #[test_case(16384, 64, 0, 2 ; "case 2")]
+    fn auto_tiling(
+        width: u32,
+        height: u32,
+        expected_tile_rows_log2: i32,
+        expected_tile_columns_log2: i32,
+    ) {
+        let tiling_mode = TilingMode::Auto;
+        assert_eq!(
+            tiling_mode.log2(width, height),
+            (expected_tile_rows_log2, expected_tile_columns_log2)
+        );
+        assert_eq!(
+            tiling_mode.log2(height, width),
+            (expected_tile_columns_log2, expected_tile_rows_log2)
+        );
     }
 }
