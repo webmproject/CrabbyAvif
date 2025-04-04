@@ -201,6 +201,15 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
                 dst_slice.copy_from_slice(src_slice);
             }
         } else {
+            // When scaling a P010 image, the scaling code converts the image into Yuv420 with
+            // an explicit V plane. So if the V plane is missing in |dst|, we will have to allocate
+            // it here. It is safe to do so since it will be free'd with the other plane buffers
+            // when the image object is destroyed.
+            if plane == Plane::V && dst.yuvPlanes[2].is_null() {
+                let plane_size = usize_from_u32(plane_data.width * plane_data.height * 2)?;
+                dst.yuvPlanes[2] = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
+                dst.yuvRowBytes[2] = plane_data.width * 2;
+            }
             let dst_planes = [
                 dst.yuvPlanes[0] as *mut u16,
                 dst.yuvPlanes[1] as *mut u16,
@@ -259,5 +268,7 @@ pub unsafe extern "C" fn crabby_avifImageScale(
 
     dst_image.width = rust_image.width;
     dst_image.height = rust_image.height;
+    dst_image.depth = rust_image.depth as _;
+    dst_image.yuvFormat = rust_image.yuv_format;
     to_avifResult(&CopyPlanes(dst_image, &rust_image))
 }
