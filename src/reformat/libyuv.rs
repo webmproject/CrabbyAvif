@@ -139,6 +139,7 @@ enum ConversionFunction {
     YUVToRGBMatrixHighBitDepth(YUVToRGBMatrixHighBitDepth),
     YUVAToRGBMatrixHighBitDepth(YUVAToRGBMatrixHighBitDepth),
     P010ToRGBMatrix(P010ToRGBMatrix, ARGBToABGR),
+    YUVToAB30Matrix(YUVToRGBMatrixHighBitDepth, ARGBToABGR),
     NVToARGBMatrix(NVToARGBMatrix),
 }
 
@@ -174,6 +175,9 @@ fn find_conversion_function(
         }
         (_, 16, Format::Rgba1010102, PixelFormat::AndroidP010) => Some(
             ConversionFunction::P010ToRGBMatrix(P010ToAR30Matrix, AR30ToAB30),
+        ),
+        (_, 10, Format::Rgba1010102, PixelFormat::Yuv420) => Some(
+            ConversionFunction::YUVToAB30Matrix(I010ToAR30Matrix, AR30ToAB30),
         ),
         (_, 16, Format::Rgba, PixelFormat::AndroidP010) => Some(
             ConversionFunction::P010ToRGBMatrix(P010ToARGBMatrix, ARGBToABGR),
@@ -369,7 +373,10 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
         return Err(AvifError::NotImplemented);
     }
     if rgb.depth == 10
-        && (image.yuv_format != PixelFormat::AndroidP010 || rgb.format != Format::Rgba1010102)
+        && (!matches!(
+            image.yuv_format,
+            PixelFormat::AndroidP010 | PixelFormat::Yuv420
+        ) || rgb.format != Format::Rgba1010102)
     {
         return Err(AvifError::NotImplemented);
     }
@@ -438,6 +445,35 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
                     plane_row_bytes[0] / 2,
                     plane_u16[1],
                     plane_row_bytes[1] / 2,
+                    rgb.pixels(),
+                    rgb_row_bytes,
+                    matrix,
+                    width,
+                    height,
+                );
+                if result == 0 {
+                    // It is okay to use the same pointer as source and destination for this
+                    // conversion.
+                    func2(
+                        rgb.pixels(),
+                        rgb_row_bytes,
+                        rgb.pixels(),
+                        rgb_row_bytes,
+                        width,
+                        height,
+                    )
+                } else {
+                    result
+                }
+            }
+            ConversionFunction::YUVToAB30Matrix(func1, func2) => {
+                let result = func1(
+                    plane_u16[0],
+                    plane_row_bytes[0] / 2,
+                    plane_u16[1],
+                    plane_row_bytes[1] / 2,
+                    plane_u16[2],
+                    plane_row_bytes[2] / 2,
                     rgb.pixels(),
                     rgb_row_bytes,
                     matrix,
