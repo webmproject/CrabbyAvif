@@ -100,6 +100,7 @@ fn main() {
         "ARGBUnattenuate",
         "Convert16To8Plane",
         "HalfFloatPlane",
+        "NV12Scale",
         "ScalePlane_12",
         "ScalePlane",
         "FilterMode_kFilterBilinear",

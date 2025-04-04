@@ -68,6 +68,45 @@ impl Image {
                 self.allocate_planes(Category::Alpha)?;
             }
         }
+
+        if category != Category::Alpha
+            && (self.yuv_format == PixelFormat::AndroidNv12
+                || self.yuv_format == PixelFormat::AndroidNv21)
+        {
+            let src_y_pd = src.plane_data(Plane::Y).unwrap();
+            let src_uv_pd = src.plane_data(Plane::U).unwrap();
+            let src_y = src.planes[Plane::Y.as_usize()].unwrap_ref().ptr();
+            let src_uv = src.planes[Plane::U.as_usize()].unwrap_ref().ptr();
+            let dst_y_pd = self.plane_data(Plane::Y).unwrap();
+            let dst_uv_pd = self.plane_data(Plane::U).unwrap();
+            let dst_y = self.planes[Plane::Y.as_usize()].unwrap_mut().ptr_mut();
+            let dst_uv = self.planes[Plane::U.as_usize()].unwrap_mut().ptr_mut();
+            // SAFETY: This function calls into libyuv which is a C++ library. We pass in pointers
+            // and strides to rust slices that are guaranteed to be valid.
+            let ret = unsafe {
+                NV12Scale(
+                    src_y,
+                    i32_from_u32(src_y_pd.row_bytes)?,
+                    src_uv,
+                    i32_from_u32(src_uv_pd.row_bytes)?,
+                    i32_from_u32(src_y_pd.width)?,
+                    i32_from_u32(src_y_pd.height)?,
+                    dst_y,
+                    i32_from_u32(dst_y_pd.row_bytes)?,
+                    dst_uv,
+                    i32_from_u32(dst_uv_pd.row_bytes)?,
+                    i32_from_u32(dst_y_pd.width)?,
+                    i32_from_u32(dst_y_pd.height)?,
+                    FilterMode_kFilterBox,
+                )
+            };
+            if ret != 0 {
+                return Err(AvifError::ReformatFailed);
+            } else {
+                return Ok(());
+            }
+        }
+
         for plane in planes {
             if !src.has_plane(*plane) || !self.has_plane(*plane) {
                 continue;
