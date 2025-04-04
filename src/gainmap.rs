@@ -16,7 +16,7 @@ use crate::image::YuvRange;
 use crate::utils::*;
 use crate::*;
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct GainMapMetadata {
     pub min: [Fraction; 3],
     pub max: [Fraction; 3],

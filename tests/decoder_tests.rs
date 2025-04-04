@@ -366,6 +366,34 @@ fn decoder_parse_icc_exif_xmp() {
     assert_eq!(image.xmp[3], 112);
 }
 
+#[test]
+fn decode_gainmap() {
+    let filename = "tmap_primary_item.avif";
+    let mut decoder = get_decoder(filename);
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    // Gain map found but not decoded.
+    assert!(decoder.gainmap_present());
+    assert!(
+        decoder.gainmap().metadata.base_hdr_headroom.0 != 0
+            || decoder.gainmap().metadata.alternate_hdr_headroom.0 != 0
+    );
+    assert_eq!(decoder.gainmap().image.width, 0);
+
+    // Decode again with image_content_to_decode = ImageContentType::All.
+    decoder = get_decoder(filename);
+    decoder.settings.image_content_to_decode = ImageContentType::All;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    // Gain map found and decoded.
+    assert!(decoder.gainmap_present());
+    assert!(
+        decoder.gainmap().metadata.base_hdr_headroom.0 != 0
+            || decoder.gainmap().metadata.alternate_hdr_headroom.0 != 0
+    );
+    assert_ne!(decoder.gainmap().image.width, 0);
+}
+
 // From avifgainmaptest.cc
 #[test]
 fn color_grid_gainmap_different_grid() {

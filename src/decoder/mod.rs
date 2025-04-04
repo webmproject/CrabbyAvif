@@ -490,68 +490,6 @@ impl Decoder {
         Ok(Some(alpha_item_id))
     }
 
-    /// Returns true if the two entity ids (usually item ids) are part of an
-    /// 'altr' group (representing entities that are alternatives of each other)
-    /// with 'id1' appearing before 'id2', meaning that 'id1' should be preferred.
-    fn is_preferred_alternative_to(grpl: &[EntityGroup], id1: u32, id2: u32) -> bool {
-        for group in grpl.iter().filter(|x| x.grouping_type == "altr") {
-            // Assume id2 is only present in one altr group, as per ISO/IEC 14496-12:2022
-            // Section 8.15.3.1:
-            // Any entity_id value shall be mapped to only one grouping of type 'altr'.
-            if let Some(id2_position) = group.entity_ids.iter().position(|x| *x == id2) {
-                return group.entity_ids[..id2_position].iter().any(|x| *x == id1);
-            }
-        }
-        false
-    }
-
-    // returns (tone_mapped_image_item_id, gain_map_item_id) if found
-    fn find_tone_mapped_image_item(&self, color_item_id: u32) -> AvifResult<Option<(u32, u32)>> {
-        let tmap_items: Vec<_> = self.items.values().filter(|x| x.is_tmap()).collect();
-        for item in tmap_items {
-            let dimg_items: Vec<_> = self
-                .items
-                .values()
-                .filter(|x| x.dimg_for_id == item.id)
-                .collect();
-            if dimg_items.len() != 2 {
-                return Err(AvifError::InvalidToneMappedImage(
-                    "Expected tmap to have 2 dimg items".into(),
-                ));
-            }
-            let item0 = if dimg_items[0].dimg_index == 0 { dimg_items[0] } else { dimg_items[1] };
-            if item0.id != color_item_id {
-                continue;
-            }
-            let item1 = if dimg_items[0].dimg_index == 0 { dimg_items[1] } else { dimg_items[0] };
-            return Ok(Some((item.id, item1.id)));
-        }
-        Ok(None)
-    }
-
-    // returns (tone_mapped_image_item_id, gain_map_item_id) if found
-    fn find_gainmap_item(
-        &self,
-        color_item_id: u32,
-        grpl: &[EntityGroup],
-    ) -> AvifResult<Option<(u32, u32)>> {
-        if let Some((tonemap_id, gainmap_id)) = self.find_tone_mapped_image_item(color_item_id)? {
-            let gainmap_item = self
-                .items
-                .get(&gainmap_id)
-                .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
-            if gainmap_item.should_skip() {
-                return Err(AvifError::InvalidToneMappedImage("".into()));
-            }
-            if !Self::is_preferred_alternative_to(grpl, tonemap_id, color_item_id) {
-                return Ok(None);
-            }
-            Ok(Some((tonemap_id, gainmap_id)))
-        } else {
-            Ok(None)
-        }
-    }
-
     fn validate_gainmap_item(&mut self, gainmap_id: u32, tonemap_id: u32) -> AvifResult<()> {
         let gainmap_item = self
             .items
@@ -740,14 +678,12 @@ impl Decoder {
             if dimg_item.dimg_for_id != item_id {
                 continue;
             }
-            if !dimg_item.is_image_codec_item() || dimg_item.has_unsupported_essential_property {
+            if dimg_item.should_skip() {
                 return Err(AvifError::InvalidImageGrid(
                     "invalid input item in dimg".into(),
                 ));
             }
-            if first_codec_config.is_none() {
-                // Adopt the configuration property of the first tile.
-                // validate_properties() makes sure they are all equal.
+            if dimg_item.is_image_codec_item() && first_codec_config.is_none() {
                 first_codec_config = Some(
                     dimg_item
                         .codec_config()
@@ -759,40 +695,96 @@ impl Decoder {
             }
             source_item_ids.push(*dimg_item_id);
         }
-        if first_codec_config.is_none() {
-            // No derived images were found.
+        if source_item_ids.is_empty() {
             return Ok(());
         }
         // The order of derived item ids matters: sort them by dimg_index, which is the order that
         // items appear in the 'iref' box.
         source_item_ids.sort_by_key(|k| self.items.get(k).unwrap().dimg_index);
         let item = self.items.get_mut(&item_id).unwrap();
-        item.properties.push(ItemProperty::CodecConfiguration(
-            first_codec_config.unwrap(),
-        ));
         item.source_item_ids = source_item_ids;
+        if let Some(first_codec_config) = first_codec_config {
+            // Adopt the configuration property of the first tile.
+            // validate_properties() later makes sure they are all equal.
+            item.properties
+                .push(ItemProperty::CodecConfiguration(first_codec_config));
+        }
         Ok(())
     }
 
-    fn validate_source_item_counts(&self, item_id: u32, tile_info: &TileInfo) -> AvifResult<()> {
+    fn validate_source_items(&self, item_id: u32, tile_info: &TileInfo) -> AvifResult<()> {
         let item = self.items.get(&item_id).unwrap();
+        let source_items: Vec<_> = item
+            .source_item_ids
+            .iter()
+            .map(|id| self.items.get(id).unwrap())
+            .collect();
         if item.is_grid_item() {
             let tile_count = tile_info.grid_tile_count()? as usize;
-            if item.source_item_ids.len() != tile_count {
+            if source_items.len() != tile_count {
                 return Err(AvifError::InvalidImageGrid(
-                    "Expected number of tiles not found".into(),
+                    "expected number of tiles not found".into(),
                 ));
             }
-        } else if item.is_overlay_item() && item.source_item_ids.is_empty() {
-            return Err(AvifError::BmffParseFailed(
-                "No dimg items found for iovl".into(),
-            ));
-        } else if item.is_tmap() && item.source_item_ids.len() != 2 {
-            return Err(AvifError::InvalidToneMappedImage(
-                "Expected tmap to have 2 dimg items".into(),
-            ));
+            if !source_items.iter().all(|item| item.is_image_codec_item()) {
+                return Err(AvifError::InvalidImageGrid("invalid grid items".into()));
+            }
+        } else if item.is_overlay_item() {
+            if source_items.is_empty() {
+                return Err(AvifError::BmffParseFailed(
+                    "no dimg items found for iovl".into(),
+                ));
+            }
+            // MIAF allows overlays of grid but we don't support them.
+            // See ISO/IEC 23000-12:2025, section 7.3.11.1.
+            if source_items.iter().any(|item| item.is_grid_item()) {
+                return Err(AvifError::NotImplemented);
+            }
+            if !source_items.iter().all(|item| item.is_image_codec_item()) {
+                return Err(AvifError::InvalidImageGrid("invalid overlay items".into()));
+            }
+        } else if item.is_tone_mapped_item() {
+            if source_items.len() != 2 {
+                return Err(AvifError::InvalidToneMappedImage(
+                    "expected tmap to have 2 dimg items".into(),
+                ));
+            }
+            if !source_items
+                .iter()
+                .all(|item| item.is_image_codec_item() || item.is_grid_item())
+            {
+                return Err(AvifError::InvalidImageGrid("invalid tmap items".into()));
+            }
         }
         Ok(())
+    }
+
+    fn find_primary_item_id(&self, ftyp: &FileTypeBox, meta: &MetaBox) -> AvifResult<u32> {
+        let primary_item_altr_group = meta
+            .grpl
+            .iter()
+            .find(|g| g.grouping_type == "altr" && g.entity_ids.contains(&meta.primary_item_id));
+        if let Some(altr_group) = primary_item_altr_group {
+            altr_group
+                .entity_ids
+                .iter()
+                .find(|id| match self.items.get(id) {
+                    Some(item) => {
+                        !item.should_skip()
+                            && item.is_image_item()
+                            && (ftyp.has_tmap() || !item.is_tone_mapped_item())
+                    }
+                    None => false,
+                })
+                .cloned()
+                .ok_or(AvifError::NoContent)
+        } else {
+            self.items
+                .iter()
+                .find(|x| !x.1.should_skip() && x.1.id != 0 && x.1.id == meta.primary_item_id)
+                .map(|it| *it.0)
+                .ok_or(AvifError::NoContent)
+        }
     }
 
     fn reset(&mut self) {
@@ -945,18 +937,38 @@ impl Decoder {
                 let mut item_ids: [u32; Category::COUNT] = [0; Category::COUNT];
 
                 // Mandatory color item (primary item).
-                let color_item_id = self
-                    .items
-                    .iter()
-                    .find(|x| {
-                        !x.1.should_skip()
-                            && x.1.id != 0
-                            && x.1.id == avif_boxes.meta.primary_item_id
-                    })
-                    .map(|it| *it.0);
+                let primary_item_id =
+                    self.find_primary_item_id(&avif_boxes.ftyp, &avif_boxes.meta)?;
 
-                item_ids[Category::Color.usize()] = color_item_id.ok_or(AvifError::NoContent)?;
+                item_ids[Category::Color.usize()] = primary_item_id;
                 self.read_and_parse_item(item_ids[Category::Color.usize()], Category::Color)?;
+
+                let primary_item = self.items.get(&primary_item_id).unwrap();
+                if primary_item.is_tone_mapped_item() {
+                    // validate_source_items() guarantees that tmap has two source item ids.
+                    let base_item_id = primary_item.source_item_ids[0];
+                    let gainmap_id = primary_item.source_item_ids[1];
+
+                    // Set the color item it to the base image and reparse it.
+                    item_ids[Category::Color.usize()] = base_item_id;
+                    self.read_and_parse_item(base_item_id, Category::Color)?;
+
+                    // Parse the gainmap making sure its valid.
+                    self.read_and_parse_item(gainmap_id, Category::Gainmap)?;
+
+                    let gainmap_metadata = self.tile_info[Category::Color.usize()]
+                        .gainmap_metadata
+                        .clone();
+                    if let Some(metadata) = gainmap_metadata {
+                        self.validate_gainmap_item(gainmap_id, primary_item_id)?;
+                        self.gainmap.metadata = metadata;
+                        self.gainmap_present = true;
+
+                        if self.settings.image_content_to_decode.gainmap() {
+                            item_ids[Category::Gainmap.usize()] = gainmap_id;
+                        }
+                    }
+                }
 
                 // Find exif/xmp from meta if any.
                 Self::search_exif_or_xmp_metadata(
@@ -975,29 +987,6 @@ impl Decoder {
                         self.read_and_parse_item(alpha_item_id, Category::Alpha)?;
                     }
                     item_ids[Category::Alpha.usize()] = alpha_item_id;
-                }
-
-                // Optional gainmap item
-                if avif_boxes.ftyp.has_tmap() {
-                    if let Some((tonemap_id, gainmap_id)) = self.find_gainmap_item(
-                        item_ids[Category::Color.usize()],
-                        &avif_boxes.meta.grpl,
-                    )? {
-                        self.validate_gainmap_item(gainmap_id, tonemap_id)?;
-                        self.read_and_parse_item(gainmap_id, Category::Gainmap)?;
-                        let tonemap_item = self
-                            .items
-                            .get_mut(&tonemap_id)
-                            .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
-                        let mut stream = tonemap_item.stream(self.io.unwrap_mut())?;
-                        if let Some(metadata) = mp4box::parse_tmap(&mut stream)? {
-                            self.gainmap.metadata = metadata;
-                            self.gainmap_present = true;
-                            if self.settings.image_content_to_decode.gainmap() {
-                                item_ids[Category::Gainmap.usize()] = gainmap_id;
-                            }
-                        }
-                    }
                 }
 
                 self.image_index = -1;
@@ -1182,10 +1171,11 @@ impl Decoder {
             self.io.unwrap_mut(),
             &mut self.tile_info[category.usize()].grid,
             &mut self.tile_info[category.usize()].overlay,
+            &mut self.tile_info[category.usize()].gainmap_metadata,
             self.settings.image_size_limit,
             self.settings.image_dimension_limit,
         )?;
-        self.validate_source_item_counts(item_id, &self.tile_info[category.usize()])
+        self.validate_source_items(item_id, &self.tile_info[category.usize()])
     }
 
     fn can_use_single_codec(&self) -> AvifResult<bool> {
@@ -1910,37 +1900,5 @@ mod tests {
         assert!(e1.merge(&e2).is_ok());
         assert_eq!(e1.offset, expected_offset);
         assert_eq!(e1.size, expected_size);
-    }
-
-    #[test]
-    fn preferred_alternative_to() {
-        let grpl = vec![
-            EntityGroup {
-                grouping_type: "altr".into(),
-                entity_ids: vec![1, 2, 3],
-            },
-            EntityGroup {
-                grouping_type: "altr".into(),
-                entity_ids: vec![4, 5],
-            },
-            EntityGroup {
-                grouping_type: "ster".into(),
-                entity_ids: vec![6, 7],
-            },
-        ];
-        assert!(Decoder::is_preferred_alternative_to(&grpl, 1, 2));
-        assert!(Decoder::is_preferred_alternative_to(&grpl, 1, 3));
-        assert!(Decoder::is_preferred_alternative_to(&grpl, 2, 3));
-        assert!(Decoder::is_preferred_alternative_to(&grpl, 4, 5));
-
-        assert!(!Decoder::is_preferred_alternative_to(&grpl, 2, 1));
-        assert!(!Decoder::is_preferred_alternative_to(&grpl, 2, 2));
-        assert!(!Decoder::is_preferred_alternative_to(&grpl, 3, 1));
-        assert!(!Decoder::is_preferred_alternative_to(&grpl, 3, 2));
-        assert!(!Decoder::is_preferred_alternative_to(&grpl, 1, 4));
-        assert!(!Decoder::is_preferred_alternative_to(&grpl, 1, 10));
-        assert!(!Decoder::is_preferred_alternative_to(&grpl, 5, 4));
-        assert!(!Decoder::is_preferred_alternative_to(&grpl, 6, 7));
-        assert!(!Decoder::is_preferred_alternative_to(&grpl, 7, 6));
     }
 }

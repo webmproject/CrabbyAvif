@@ -83,6 +83,7 @@ pub(crate) struct TileInfo {
     pub decoded_tile_count: u32,
     pub grid: Grid,
     pub overlay: Overlay,
+    pub gainmap_metadata: Option<GainMapMetadata>,
 }
 
 impl TileInfo {

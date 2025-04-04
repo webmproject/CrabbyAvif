@@ -114,6 +114,7 @@ impl Item {
         io: &mut GenericIO,
         grid: &mut Grid,
         overlay: &mut Overlay,
+        gainmap_metadata: &mut Option<GainMapMetadata>,
         size_limit: Option<NonZero<u32>>,
         dimension_limit: Option<NonZero<u32>>,
     ) -> AvifResult<()> {
@@ -205,6 +206,9 @@ impl Item {
                     "found unknown extra bytes in the iovl box".into(),
                 ));
             }
+        } else if self.is_tone_mapped_item() {
+            let mut stream = self.stream(io)?;
+            *gainmap_metadata = mp4box::parse_tmap(&mut stream)?;
         }
         Ok(())
     }
@@ -345,13 +349,19 @@ impl Item {
         self.item_type == "iovl"
     }
 
+    pub(crate) fn is_tone_mapped_item(&self) -> bool {
+        self.item_type == "tmap"
+    }
+
     pub(crate) fn is_derived_image_item(&self) -> bool {
-        self.is_grid_item() || self.is_overlay_item() || self.is_tmap()
+        self.is_grid_item() || self.is_overlay_item() || self.is_tone_mapped_item()
     }
 
     pub(crate) fn is_image_item(&self) -> bool {
-        // Adding || self.is_tmap() here would cause differences with libavif.
-        self.is_image_codec_item() || self.is_grid_item() || self.is_overlay_item()
+        self.is_image_codec_item()
+            || self.is_grid_item()
+            || self.is_overlay_item()
+            || self.is_tone_mapped_item()
     }
 
     pub(crate) fn should_skip(&self) -> bool {
@@ -379,10 +389,6 @@ impl Item {
 
     pub(crate) fn is_xmp(&self, color_id: Option<u32>) -> bool {
         self.is_metadata("mime", color_id) && self.content_type == "application/rdf+xml"
-    }
-
-    pub(crate) fn is_tmap(&self) -> bool {
-        self.is_metadata("tmap", None) && self.thumbnail_for_id == 0
     }
 
     pub(crate) fn max_extent(&self, sample: &DecodeSample) -> AvifResult<Extent> {
