@@ -139,6 +139,7 @@ fn main() {
         "NV12ToARGBMatrix",
         "NV12ToRGB565Matrix",
         "NV21ToARGBMatrix",
+        "I010ToAR30Matrix",
         "P010ToAR30Matrix",
         "P010ToARGBMatrix",
         "AR30ToAB30",
