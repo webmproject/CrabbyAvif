@@ -142,6 +142,7 @@ fn main() {
         "I010ToAR30Matrix",
         "P010ToAR30Matrix",
         "P010ToARGBMatrix",
+        "P010ToI010",
         "AR30ToAB30",
         "kYuv2020Constants",
         "kYuvF709Constants",

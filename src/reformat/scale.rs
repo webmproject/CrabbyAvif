@@ -30,33 +30,80 @@ impl Image {
             Category::Color | Category::Gainmap => &YUV_PLANES,
             Category::Alpha => &A_PLANE,
         };
-        let src = image::Image {
-            width: self.width,
-            height: self.height,
-            depth: self.depth,
-            yuv_format: self.yuv_format,
-            planes: self
-                .planes
-                .as_ref()
-                .iter()
-                .map(
-                    |plane| {
-                        if plane.is_some() {
-                            plane.unwrap_ref().try_clone().ok()
-                        } else {
-                            None
-                        }
-                    },
-                )
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-            row_bytes: self.row_bytes,
-            ..image::Image::default()
-        };
+        let src =
+            if category != Category::Alpha && self.yuv_format == PixelFormat::AndroidP010 {
+                // P010 images cannot be scaled using ScalePlane_12 since the U and V planes are
+                // interleaved. Convert them into I010 and then scale each plane using
+                // ScalePlane_12.
+                let mut i010 = image::Image {
+                    width: self.width,
+                    height: self.height,
+                    depth: 10,
+                    yuv_format: PixelFormat::Yuv420,
+                    ..image::Image::default()
+                };
+                i010.allocate_planes(Category::Color)?;
+                let src_y_pd = self.plane_data(Plane::Y).unwrap();
+                let src_uv_pd = self.plane_data(Plane::U).unwrap();
+                let src_y = self.planes[Plane::Y.as_usize()].unwrap_ref().ptr16();
+                let src_uv = self.planes[Plane::U.as_usize()].unwrap_ref().ptr16();
+                let dst_y_pd = i010.plane_data(Plane::Y).unwrap();
+                let dst_u_pd = i010.plane_data(Plane::U).unwrap();
+                let dst_v_pd = i010.plane_data(Plane::V).unwrap();
+                let dst_y = i010.planes[Plane::Y.as_usize()].unwrap_mut().ptr16_mut();
+                let dst_u = i010.planes[Plane::U.as_usize()].unwrap_mut().ptr16_mut();
+                let dst_v = i010.planes[Plane::V.as_usize()].unwrap_mut().ptr16_mut();
+                // SAFETY: This function calls into libyuv which is a C++ library. We pass in
+                // pointers and strides to rust slices that are guaranteed to be valid.
+                let ret = unsafe {
+                    P010ToI010(
+                        src_y,
+                        i32_from_u32(src_y_pd.row_bytes / 2)?,
+                        src_uv,
+                        i32_from_u32(src_uv_pd.row_bytes / 2)?,
+                        dst_y,
+                        i32_from_u32(dst_y_pd.row_bytes / 2)?,
+                        dst_u,
+                        i32_from_u32(dst_u_pd.row_bytes / 2)?,
+                        dst_v,
+                        i32_from_u32(dst_v_pd.row_bytes / 2)?,
+                        i32_from_u32(self.width)?,
+                        i32_from_u32(self.height)?,
+                    )
+                };
+                if ret != 0 {
+                    return Err(AvifError::ReformatFailed);
+                }
+                i010
+            } else {
+                image::Image {
+                    width: self.width,
+                    height: self.height,
+                    depth: self.depth,
+                    yuv_format: self.yuv_format,
+                    planes: self
+                        .planes
+                        .as_ref()
+                        .iter()
+                        .map(|plane| {
+                            if plane.is_some() {
+                                plane.unwrap_ref().try_clone().ok()
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .try_into()
+                        .unwrap(),
+                    row_bytes: self.row_bytes,
+                    ..image::Image::default()
+                }
+            };
 
         self.width = width;
         self.height = height;
+        self.depth = src.depth;
+        self.yuv_format = src.yuv_format;
         if src.has_plane(Plane::Y) || src.has_plane(Plane::A) {
             if src.width > 16384 || src.height > 16384 {
                 return Err(AvifError::NotImplemented);

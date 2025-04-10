@@ -738,6 +738,33 @@ INSTANTIATE_TEST_SUITE_P(ScaleTestInstance, ScaleTest,
                          testing::ValuesIn({"paris_10bpc.avif",
                                             "paris_icc_exif_xmp.avif"}));
 
+TEST(ScaleTest, ScaleP010) {
+  const int width = 100;
+  const int height = 50;
+  ImagePtr image(
+      avifImageCreate(width, height, 10, AVIF_PIXEL_FORMAT_ANDROID_P010));
+  ASSERT_EQ(avifImageAllocatePlanes(image.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+
+  const uint32_t scaled_width = static_cast<uint32_t>(width * 0.8);
+  const uint32_t scaled_height = static_cast<uint32_t>(height * 0.6);
+
+  ASSERT_EQ(avifImageScale(image.get(), scaled_width, scaled_height, nullptr),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(image->width, scaled_width);
+  EXPECT_EQ(image->height, scaled_height);
+  EXPECT_EQ(image->depth, 10);
+  // When scaling a P010 image, crabbyavif converts it into an I010 (Yuv420)
+  // image.
+  EXPECT_EQ(image->yuvFormat, AVIF_PIXEL_FORMAT_YUV420);
+  for (int c = 0; c < 3; ++c) {
+    EXPECT_NE(image->yuvPlanes[c], nullptr);
+    EXPECT_GT(image->yuvRowBytes[c], 0);
+  }
+  EXPECT_NE(image->alphaPlane, nullptr);
+  EXPECT_NE(image->alphaRowBytes, 0);
+}
+
 struct InvalidClapPropertyParam {
   uint32_t width;
   uint32_t height;
