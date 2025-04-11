@@ -257,9 +257,9 @@ impl Encoder {
         Ok(())
     }
 
-    fn copy_alt_image_metadata(&mut self, gainmap: &GainMap) {
-        self.alt_image_metadata.width = self.image_metadata.width;
-        self.alt_image_metadata.height = self.image_metadata.height;
+    fn copy_alt_image_metadata(&mut self, gainmap: &GainMap, grid: &Grid) {
+        self.alt_image_metadata.width = grid.width;
+        self.alt_image_metadata.height = grid.height;
         self.alt_image_metadata.icc = gainmap.alt_icc.clone();
         self.alt_image_metadata.color_primaries = gainmap.alt_color_primaries;
         self.alt_image_metadata.transfer_characteristics = gainmap.alt_transfer_characteristics;
@@ -379,7 +379,7 @@ impl Encoder {
             self.image_metadata = first_image.shallow_clone();
             if gainmaps.is_some() {
                 self.gainmap_image_metadata = gainmaps.unwrap()[0].image.shallow_clone();
-                self.copy_alt_image_metadata(gainmaps.unwrap()[0]);
+                self.copy_alt_image_metadata(gainmaps.unwrap()[0], &grid);
             }
             let color_item_id = self.add_items(&grid, Category::Color)?;
             self.primary_item_id = color_item_id;

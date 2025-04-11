@@ -490,7 +490,12 @@ impl Decoder {
         Ok(Some(alpha_item_id))
     }
 
-    fn validate_gainmap_item(&mut self, gainmap_id: u32, tonemap_id: u32) -> AvifResult<()> {
+    fn validate_gainmap_item(
+        &mut self,
+        gainmap_id: u32,
+        tonemap_id: u32,
+        #[allow(unused)] color_item_id: u32, // This parameter is unused in some configurations.
+    ) -> AvifResult<()> {
         let gainmap_item = self
             .items
             .get(&gainmap_id)
@@ -533,12 +538,29 @@ impl Decoder {
         // HEIC files created by Apple have some of these properties set in the Tonemap item. So do
         // not perform this validation when HEIC is enabled.
         #[cfg(not(feature = "heic"))]
-        if find_property!(tonemap_item.properties, PixelAspectRatio).is_some()
-            || find_property!(tonemap_item.properties, CleanAperture).is_some()
-            || find_property!(tonemap_item.properties, ImageRotation).is_some()
-            || find_property!(tonemap_item.properties, ImageMirror).is_some()
         {
-            return Err(AvifError::InvalidToneMappedImage("".into()));
+            if let Some(ispe) = find_property!(tonemap_item.properties, ImageSpatialExtents) {
+                let color_item = self
+                    .items
+                    .get(&color_item_id)
+                    .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
+                if ispe.width != color_item.width || ispe.height != color_item.height {
+                    return Err(AvifError::InvalidToneMappedImage(
+                        "Box[tmap] ispe property width/height does not match base image".into(),
+                    ));
+                }
+            } else {
+                return Err(AvifError::InvalidToneMappedImage(
+                    "Box[tmap] missing mandatory ispe property".into(),
+                ));
+            }
+            if find_property!(tonemap_item.properties, PixelAspectRatio).is_some()
+                || find_property!(tonemap_item.properties, CleanAperture).is_some()
+                || find_property!(tonemap_item.properties, ImageRotation).is_some()
+                || find_property!(tonemap_item.properties, ImageMirror).is_some()
+            {
+                return Err(AvifError::InvalidToneMappedImage("".into()));
+            }
         }
         Ok(())
     }
@@ -960,7 +982,11 @@ impl Decoder {
                         .gainmap_metadata
                         .clone();
                     if let Some(metadata) = gainmap_metadata {
-                        self.validate_gainmap_item(gainmap_id, primary_item_id)?;
+                        self.validate_gainmap_item(
+                            gainmap_id,
+                            primary_item_id,
+                            item_ids[Category::Color.usize()],
+                        )?;
                         self.gainmap.metadata = metadata;
                         self.gainmap_present = true;
 
