@@ -321,6 +321,7 @@ pub(crate) struct GridImageHelper<'a> {
     image: &'a mut Image,
     pub category: Category,
     cell_index: usize,
+    expected_cell_count: usize,
     codec_config: &'a CodecConfiguration,
     first_cell_image: Option<Image>,
     tile_width: u32,
@@ -331,7 +332,7 @@ pub(crate) struct GridImageHelper<'a> {
 #[allow(unused)]
 impl GridImageHelper<'_> {
     pub(crate) fn is_grid_complete(&self) -> AvifResult<bool> {
-        Ok(self.cell_index as u32 == checked_mul!(self.grid.rows, self.grid.columns)?)
+        Ok(self.cell_index == self.expected_cell_count)
     }
 
     pub(crate) fn copy_from_cell_image(&mut self, cell_image: &mut Image) -> AvifResult<()> {
@@ -351,7 +352,9 @@ impl GridImageHelper<'_> {
                     .copy_properties_from(cell_image, self.codec_config);
             }
             self.image.allocate_planes(self.category)?;
-        } else if !cell_image.has_same_properties_and_cicp(self.first_cell_image.unwrap_ref()) {
+        } else if self.first_cell_image.is_some()
+            && !cell_image.has_same_properties_and_cicp(self.first_cell_image.unwrap_ref())
+        {
             return Err(AvifError::InvalidImageGrid(
                 "grid image contains mismatched tiles".into(),
             ));
@@ -1583,6 +1586,7 @@ impl Decoder {
         let previous_decoded_tile_count =
             self.tile_info[category.usize()].decoded_tile_count as usize;
         let mut payloads = vec![];
+        let mut pending_read = false;
         for tile_index in previous_decoded_tile_count..tile_count {
             let tile = &self.tiles[category.usize()][tile_index];
             let sample = &tile.input.samples[image_index];
@@ -1592,11 +1596,31 @@ impl Decoder {
                 &self.items.get(&sample.item_id).unwrap().data_buffer
             };
             let io = &mut self.io.unwrap_mut();
-            let data = sample.data(io, item_data_buffer)?;
+            let data = match sample.data(io, item_data_buffer) {
+                Ok(data) => data,
+                Err(AvifError::WaitingOnIo) => {
+                    if self.settings.allow_incremental {
+                        if payloads.is_empty() {
+                            // No cells have been read. Nothing to decode.
+                            return Err(AvifError::WaitingOnIo);
+                        } else {
+                            // One or more cells have been read. Decode them.
+                            pending_read = true;
+                            break;
+                        }
+                    } else {
+                        return Err(AvifError::WaitingOnIo);
+                    }
+                }
+                Err(err) => return Err(err),
+            };
             payloads.push(data.to_vec());
         }
         let grid = &self.tile_info[category.usize()].grid;
-        if checked_mul!(grid.rows, grid.columns)? != payloads.len() as u32 {
+        // If we are not doing incremental decode, all the cells must have been read.
+        if !self.settings.allow_incremental
+            && checked_mul!(grid.rows, grid.columns)? != payloads.len() as u32
+        {
             return Err(AvifError::InvalidArgument);
         }
         let first_tile = &self.tiles[category.usize()][previous_decoded_tile_count];
@@ -1608,7 +1632,8 @@ impl Decoder {
                 &mut self.image
             },
             category,
-            cell_index: 0,
+            cell_index: previous_decoded_tile_count,
+            expected_cell_count: previous_decoded_tile_count + payloads.len(),
             codec_config: &first_tile.codec_config,
             first_cell_image: None,
             tile_width: first_tile.width,
@@ -1641,7 +1666,11 @@ impl Decoder {
             self.tile_info[category.usize()].decoded_tile_count,
             u32_from_usize(payloads.len())?
         );
-        Ok(())
+        if pending_read {
+            Err(AvifError::WaitingOnIo)
+        } else {
+            Ok(())
+        }
     }
 
     fn can_use_decode_grid(&self, category: Category) -> bool {
@@ -1651,8 +1680,6 @@ impl Decoder {
         self.tile_info[category.usize()].is_grid()
             // Has to be one of the supported codecs.
             && matches!(codec, CodecChoice::MediaCodec | CodecChoice::Dav1d)
-            // Incremental decoding is not supported by decode_grid.
-            && !self.settings.allow_incremental
             // All the tiles must use the same codec instance.
             && self.tiles[category.usize()][1..]
                 .iter()
