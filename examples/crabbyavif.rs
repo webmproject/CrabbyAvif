@@ -236,6 +236,19 @@ struct CommandLineArgs {
     #[arg(long, value_parser = scaling_mode_parser)]
     scaling_mode: Option<IFraction>,
 
+    /// AVIF Encode only: log2 of number of tile rows
+    #[arg(long, value_parser = value_parser!(i32).range(0..=6))]
+    tilerowslog2: Option<i32>,
+
+    /// AVIF Encode only: log2 of number of tile columns
+    #[arg(long, value_parser = value_parser!(i32).range(0..=6))]
+    tilecolslog2: Option<i32>,
+
+    /// AVIF Encode only: Set tile rows and columns automatically. If specified, tilesrowslog2 and
+    /// tilecolslog2 will be ignored
+    #[arg(long, default_value = "false")]
+    autotiling: bool,
+
     /// Input AVIF file
     #[arg(allow_hyphen_values = false)]
     input_file: String,
@@ -637,6 +650,14 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
         speed: args.speed,
         mutable: MutableSettings {
             quality: args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY) as i32,
+            tiling_mode: if args.autotiling {
+                TilingMode::Auto
+            } else {
+                TilingMode::Manual(
+                    args.tilerowslog2.unwrap_or(0),
+                    args.tilecolslog2.unwrap_or(0),
+                )
+            },
             ..Default::default()
         },
         ..Default::default()
