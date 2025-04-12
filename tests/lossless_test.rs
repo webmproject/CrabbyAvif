@@ -14,12 +14,14 @@
 
 #[path = "./mod.rs"]
 mod tests;
-
-use crabby_avif::reformat::rgb::*;
 use tests::*;
 
-#[test_case::test_case("paris_identity.avif", "paris_icc_exif_xmp.png"; "lossless_identity")]
-#[test_case::test_case("paris_ycgco_re.avif", "paris_icc_exif_xmp.png"; "lossless_ycgco_re")]
+use crabby_avif::reformat::rgb::*;
+
+use test_case::test_case;
+
+#[test_case("paris_identity.avif", "paris_icc_exif_xmp.png"; "lossless_identity")]
+#[test_case("paris_ycgco_re.avif", "paris_icc_exif_xmp.png"; "lossless_ycgco_re")]
 fn lossless(avif_file: &str, png_file: &str) {
     let mut decoder = get_decoder(avif_file);
     assert!(decoder.parse().is_ok());

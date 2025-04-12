@@ -25,10 +25,11 @@ use crabby_avif::*;
 
 #[path = "./mod.rs"]
 mod tests;
-
 use tests::*;
 
-#[test_case::test_matrix(
+use test_case::test_matrix;
+
+#[test_matrix(
     [100, 121],
     [200, 107],
     [8, 10, 12],
@@ -91,7 +92,7 @@ fn encode_decode(
     Ok(())
 }
 
-#[test_case::test_matrix(
+#[test_matrix(
     [100, 121],
     [200, 107],
     [8, 10, 12],
@@ -158,7 +159,7 @@ fn encode_decode_sequence(
     Ok(())
 }
 
-#[test_case::test_matrix([0, 1, 65535], [0, 1, 65535])]
+#[test_matrix([0, 1, 65535], [0, 1, 65535])]
 fn clli(max_cll: u16, max_pall: u16) -> AvifResult<()> {
     if !HAS_ENCODER || !HAS_DECODER {
         return Ok(());
@@ -212,7 +213,7 @@ fn test_progressive_decode(
     Ok(())
 }
 
-#[test_case::test_matrix([true, false])]
+#[test_matrix([true, false])]
 fn progressive_quality_change(use_grid: bool) -> AvifResult<()> {
     if !HAS_ENCODER {
         return Ok(());
@@ -252,7 +253,7 @@ fn progressive_quality_change(use_grid: bool) -> AvifResult<()> {
     Ok(())
 }
 
-#[test_case::test_matrix([IFraction(1,2), IFraction(2, 6), IFraction(4, 32)], [true, false])]
+#[test_matrix([IFraction(1,2), IFraction(2, 6), IFraction(4, 32)], [true, false])]
 fn progressive_dimension_change(scaling_fraction: IFraction, use_grid: bool) -> AvifResult<()> {
     if !HAS_ENCODER {
         return Ok(());
@@ -548,7 +549,7 @@ fn gainmap_image_alpha_invalid() -> AvifResult<()> {
     Ok(())
 }
 
-#[test_case::test_matrix([0, 1, 2])]
+#[test_matrix([0, 1, 2])]
 fn gainmap_oriented_invalid(transformation_index: u8) -> AvifResult<()> {
     let (image, mut gainmap) = generate_gainmap_image(false)?;
     // Gainmap image should not have a transformative property. Expect a failure.
@@ -653,7 +654,7 @@ fn gainmap_grid() -> AvifResult<()> {
     Ok(())
 }
 
-#[test_case::test_matrix([0, 1, 2, 3, 4])]
+#[test_matrix([0, 1, 2, 3, 4])]
 fn invalid_grid(test_case_index: u8) -> AvifResult<()> {
     let grid_columns = 2;
     let grid_rows = 2;
@@ -722,7 +723,7 @@ fn invalid_grid(test_case_index: u8) -> AvifResult<()> {
     Ok(())
 }
 
-#[test_case::test_matrix([8, 10, 12], [false, true])]
+#[test_matrix([8, 10, 12], [false, true])]
 fn opaque_alpha(depth: u8, is_sequence: bool) -> AvifResult<()> {
     if !HAS_ENCODER {
         return Ok(());
@@ -789,7 +790,7 @@ fn opaque_alpha(depth: u8, is_sequence: bool) -> AvifResult<()> {
     Ok(())
 }
 
-#[test_case::test_matrix([8, 10, 12], [true, false])]
+#[test_matrix([8, 10, 12], [true, false])]
 fn opaque_alpha_grid(depth: u8, all_cells_opaque: bool) -> AvifResult<()> {
     if !HAS_ENCODER {
         return Ok(());
