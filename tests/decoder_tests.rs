@@ -1273,3 +1273,23 @@ fn overlay(index: usize) {
         pixel_eq!(a, expected_pixel.2[3]);
     }
 }
+
+#[test_case::test_case("mismatch_colr_0_0.avif", YuvRange::Limited ; "mismatch case 0")]
+#[test_case::test_case("mismatch_colr_0_1.avif", YuvRange::Limited ; "mismatch case 1")]
+#[test_case::test_case("mismatch_colr_0_2.avif", YuvRange::Limited ; "mismatch case 2")]
+#[test_case::test_case("mismatch_colr_1_0.avif", YuvRange::Full ; "mismatch case 3")]
+#[test_case::test_case("mismatch_colr_1_1.avif", YuvRange::Full ; "mismatch case 4")]
+#[test_case::test_case("mismatch_colr_1_2.avif", YuvRange::Full ; "mismatch case 5")]
+#[test_case::test_case("missing_colr_0_0.avif", YuvRange::Limited ; "missing colr case 0")]
+#[test_case::test_case("missing_colr_0_1.avif", YuvRange::Limited ; "missing colr case 1")]
+#[test_case::test_case("missing_colr_0_2.avif", YuvRange::Limited ; "missing colr case 2")]
+#[test_case::test_case("missing_colr_1_0.avif", YuvRange::Full ; "missing colr case 3")]
+#[test_case::test_case("missing_colr_1_1.avif", YuvRange::Full ; "missing colr case 4")]
+#[test_case::test_case("missing_colr_1_2.avif", YuvRange::Full ; "missing colr case 5")]
+fn yuv_range(filename: &str, expected_yuv_range: YuvRange) {
+    let mut decoder = get_decoder(filename);
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    let image = decoder.image().expect("image was none");
+    assert_eq!(image.yuv_range, expected_yuv_range);
+}
