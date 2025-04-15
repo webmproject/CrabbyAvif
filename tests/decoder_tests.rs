@@ -21,10 +21,12 @@ use crabby_avif::*;
 
 #[path = "./mod.rs"]
 mod tests;
+use tests::*;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use tests::*;
+use test_case::test_case;
+use test_case::test_matrix;
 
 // From avifalphanoispetest.cc
 #[test]
@@ -79,8 +81,8 @@ fn alpha_premultiplied() {
 }
 
 // From avifanimationtest.cc
-#[test_case::test_case("colors-animated-8bpc.avif")]
-#[test_case::test_case("colors-animated-8bpc-audio.avif")]
+#[test_case("colors-animated-8bpc.avif")]
+#[test_case("colors-animated-8bpc-audio.avif")]
 fn animated_image(filename: &str) {
     let mut decoder = get_decoder(filename);
     let res = decoder.parse();
@@ -103,8 +105,8 @@ fn animated_image(filename: &str) {
 }
 
 // From avifanimationtest.cc
-#[test_case::test_case("colors-animated-8bpc.avif")]
-#[test_case::test_case("colors-animated-8bpc-audio.avif")]
+#[test_case("colors-animated-8bpc.avif")]
+#[test_case("colors-animated-8bpc-audio.avif")]
 fn animated_image_with_source_set_to_primary_item(filename: &str) {
     let mut decoder = get_decoder(filename);
     decoder.settings.source = decoder::Source::PrimaryItem;
@@ -253,10 +255,10 @@ fn color_grid_alpha_no_grid() {
     assert!(alpha_plane.unwrap().row_bytes > 0);
 }
 
-#[test_case::test_case("paris_icc_exif_xmp.avif")]
-#[test_case::test_case("sofa_grid1x5_420.avif")]
-#[test_case::test_case("color_grid_alpha_nogrid.avif")]
-#[test_case::test_case("seine_sdr_gainmap_srgb.avif")]
+#[test_case("paris_icc_exif_xmp.avif")]
+#[test_case("sofa_grid1x5_420.avif")]
+#[test_case("color_grid_alpha_nogrid.avif")]
+#[test_case("seine_sdr_gainmap_srgb.avif")]
 fn image_content_to_decode_none(filename: &str) {
     let mut decoder = get_decoder(filename);
     decoder.settings.image_content_to_decode = ImageContentType::None;
@@ -264,10 +266,10 @@ fn image_content_to_decode_none(filename: &str) {
     assert!(decoder.next_image().is_err());
 }
 
-#[test_case::test_case("draw_points_idat.avif")]
-#[test_case::test_case("draw_points_idat_metasize0.avif")]
-#[test_case::test_case("draw_points_idat_progressive.avif")]
-#[test_case::test_case("draw_points_idat_progressive_metasize0.avif")]
+#[test_case("draw_points_idat.avif")]
+#[test_case("draw_points_idat_metasize0.avif")]
+#[test_case("draw_points_idat_progressive.avif")]
+#[test_case("draw_points_idat_progressive_metasize0.avif")]
 fn idat(filename: &str) {
     let mut decoder = get_decoder(filename);
     assert!(decoder.parse().is_ok());
@@ -279,12 +281,12 @@ fn idat(filename: &str) {
 }
 
 // From avifprogressivetest.cc
-#[test_case::test_case("progressive_dimension_change.avif", 2, 256, 256; "progressive_dimension_change")]
-#[test_case::test_case("progressive_layered_grid.avif", 2, 512, 256; "progressive_layered_grid")]
-#[test_case::test_case("progressive_quality_change.avif", 2, 256, 256; "progressive_quality_change")]
-#[test_case::test_case("progressive_same_layers.avif", 4, 256, 256; "progressive_same_layers")]
-#[test_case::test_case("tiger_3layer_1res.avif", 3, 1216, 832; "tiger_3layer_1res")]
-#[test_case::test_case("tiger_3layer_3res.avif", 3, 1216, 832; "tiger_3layer_3res")]
+#[test_case("progressive_dimension_change.avif", 2, 256, 256; "progressive_dimension_change")]
+#[test_case("progressive_layered_grid.avif", 2, 512, 256; "progressive_layered_grid")]
+#[test_case("progressive_quality_change.avif", 2, 256, 256; "progressive_quality_change")]
+#[test_case("progressive_same_layers.avif", 4, 256, 256; "progressive_same_layers")]
+#[test_case("tiger_3layer_1res.avif", 3, 1216, 832; "tiger_3layer_1res")]
+#[test_case("tiger_3layer_3res.avif", 3, 1216, 832; "tiger_3layer_3res")]
 fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     let mut filename_with_prefix = String::from("progressive/");
     filename_with_prefix.push_str(filename);
@@ -498,13 +500,13 @@ fn gainmap_oriented() {
 // Tests files with gain maps that should be ignored by the decoder for various
 // reasons.
 // File with unsupported version field.
-#[test_case::test_case("unsupported_gainmap_version.avif")]
+#[test_case("unsupported_gainmap_version.avif")]
 // File with unsupported minimum version field.
-#[test_case::test_case("unsupported_gainmap_minimum_version.avif")]
+#[test_case("unsupported_gainmap_minimum_version.avif")]
 // Missing 'tmap' brand in ftyp box.
-#[test_case::test_case("seine_sdr_gainmap_notmapbrand.avif")]
+#[test_case("seine_sdr_gainmap_notmapbrand.avif")]
 // Gain map not present before the base image in 'altr' box.
-#[test_case::test_case("seine_hdr_gainmap_wrongaltr.avif")]
+#[test_case("seine_hdr_gainmap_wrongaltr.avif")]
 fn decode_unsupported_version(filename: &str) {
     // Parse with various settings.
     let mut decoder = get_decoder(filename);
@@ -605,10 +607,10 @@ fn decode_ignore_color_and_alpha() {
 }
 
 // From avifgainmaptest.cc
-#[test_case::test_case("paris_icc_exif_xmp.avif")]
-#[test_case::test_case("sofa_grid1x5_420.avif")]
-#[test_case::test_case("color_grid_alpha_nogrid.avif")]
-#[test_case::test_case("seine_sdr_gainmap_srgb.avif")]
+#[test_case("paris_icc_exif_xmp.avif")]
+#[test_case("sofa_grid1x5_420.avif")]
+#[test_case("color_grid_alpha_nogrid.avif")]
+#[test_case("seine_sdr_gainmap_srgb.avif")]
 fn decode_ignore_all(filename: &str) {
     let mut decoder = get_decoder(filename);
     // Ignore both the main image and the gain map.
@@ -628,15 +630,15 @@ fn decode_ignore_all(filename: &str) {
 }
 
 // From avifcllitest.cc
-#[test_case::test_case("clli_0_0.avif", 0, 0; "clli_0_0")]
-#[test_case::test_case("clli_0_1.avif", 0, 1; "clli_0_1")]
-#[test_case::test_case("clli_0_65535.avif", 0, 65535; "clli_0_65535")]
-#[test_case::test_case("clli_1_0.avif", 1, 0; "clli_1_0")]
-#[test_case::test_case("clli_1_1.avif", 1, 1; "clli_1_1")]
-#[test_case::test_case("clli_1_65535.avif", 1, 65535; "clli_1_65535")]
-#[test_case::test_case("clli_65535_0.avif", 65535, 0; "clli_65535_0")]
-#[test_case::test_case("clli_65535_1.avif", 65535, 1; "clli_65535_1")]
-#[test_case::test_case("clli_65535_65535.avif", 65535, 65535; "clli_65535_65535")]
+#[test_case("clli_0_0.avif", 0, 0; "clli_0_0")]
+#[test_case("clli_0_1.avif", 0, 1; "clli_0_1")]
+#[test_case("clli_0_65535.avif", 0, 65535; "clli_0_65535")]
+#[test_case("clli_1_0.avif", 1, 0; "clli_1_0")]
+#[test_case("clli_1_1.avif", 1, 1; "clli_1_1")]
+#[test_case("clli_1_65535.avif", 1, 65535; "clli_1_65535")]
+#[test_case("clli_65535_0.avif", 65535, 0; "clli_65535_0")]
+#[test_case("clli_65535_1.avif", 65535, 1; "clli_65535_1")]
+#[test_case("clli_65535_65535.avif", 65535, 65535; "clli_65535_65535")]
 fn clli(filename: &str, max_cll: u16, max_pall: u16) {
     let mut filename_with_prefix = String::from("clli/");
     filename_with_prefix.push_str(filename);
@@ -1236,7 +1238,7 @@ macro_rules! pixel_eq {
 }
 
 #[allow(clippy::zero_prefixed_literal)]
-#[test_case::test_matrix(0usize..4)]
+#[test_matrix(0usize..4)]
 fn overlay(index: usize) {
     let info = &EXPECTED_OVERLAY_IMAGE_INFOS[index];
     let mut decoder = get_decoder(info.filename);
@@ -1274,18 +1276,18 @@ fn overlay(index: usize) {
     }
 }
 
-#[test_case::test_case("mismatch_colr_0_0.avif", YuvRange::Limited ; "mismatch case 0")]
-#[test_case::test_case("mismatch_colr_0_1.avif", YuvRange::Limited ; "mismatch case 1")]
-#[test_case::test_case("mismatch_colr_0_2.avif", YuvRange::Limited ; "mismatch case 2")]
-#[test_case::test_case("mismatch_colr_1_0.avif", YuvRange::Full ; "mismatch case 3")]
-#[test_case::test_case("mismatch_colr_1_1.avif", YuvRange::Full ; "mismatch case 4")]
-#[test_case::test_case("mismatch_colr_1_2.avif", YuvRange::Full ; "mismatch case 5")]
-#[test_case::test_case("missing_colr_0_0.avif", YuvRange::Limited ; "missing colr case 0")]
-#[test_case::test_case("missing_colr_0_1.avif", YuvRange::Limited ; "missing colr case 1")]
-#[test_case::test_case("missing_colr_0_2.avif", YuvRange::Limited ; "missing colr case 2")]
-#[test_case::test_case("missing_colr_1_0.avif", YuvRange::Full ; "missing colr case 3")]
-#[test_case::test_case("missing_colr_1_1.avif", YuvRange::Full ; "missing colr case 4")]
-#[test_case::test_case("missing_colr_1_2.avif", YuvRange::Full ; "missing colr case 5")]
+#[test_case("mismatch_colr_0_0.avif", YuvRange::Limited ; "mismatch case 0")]
+#[test_case("mismatch_colr_0_1.avif", YuvRange::Limited ; "mismatch case 1")]
+#[test_case("mismatch_colr_0_2.avif", YuvRange::Limited ; "mismatch case 2")]
+#[test_case("mismatch_colr_1_0.avif", YuvRange::Full ; "mismatch case 3")]
+#[test_case("mismatch_colr_1_1.avif", YuvRange::Full ; "mismatch case 4")]
+#[test_case("mismatch_colr_1_2.avif", YuvRange::Full ; "mismatch case 5")]
+#[test_case("missing_colr_0_0.avif", YuvRange::Limited ; "missing colr case 0")]
+#[test_case("missing_colr_0_1.avif", YuvRange::Limited ; "missing colr case 1")]
+#[test_case("missing_colr_0_2.avif", YuvRange::Limited ; "missing colr case 2")]
+#[test_case("missing_colr_1_0.avif", YuvRange::Full ; "missing colr case 3")]
+#[test_case("missing_colr_1_1.avif", YuvRange::Full ; "missing colr case 4")]
+#[test_case("missing_colr_1_2.avif", YuvRange::Full ; "missing colr case 5")]
 fn yuv_range(filename: &str, expected_yuv_range: YuvRange) {
     let mut decoder = get_decoder(filename);
     let res = decoder.parse();
