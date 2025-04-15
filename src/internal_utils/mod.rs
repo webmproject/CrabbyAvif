@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod io;
-pub mod pixels;
 pub mod stream;
 
 use crate::parser::mp4box::*;
@@ -258,5 +257,64 @@ pub(crate) fn floor_log2(n: u32) -> u32 {
         0
     } else {
         31 - n.leading_zeros()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PointerSlice<T> {
+    ptr: *mut [T],
+}
+
+impl<T> PointerSlice<T> {
+    /// # Safety
+    /// `ptr` must live at least as long as the struct, and not be accessed other than through this
+    /// struct. It must point to a memory region of at least `size` elements.
+    pub unsafe fn create(ptr: *mut T, size: usize) -> AvifResult<Self> {
+        if ptr.is_null() || size == 0 {
+            return Err(AvifError::NoContent);
+        }
+        // Ensure that size does not exceed isize::MAX.
+        let _ = isize_from_usize(size)?;
+        Ok(Self {
+            ptr: unsafe { std::slice::from_raw_parts_mut(ptr, size) },
+        })
+    }
+
+    fn slice_impl(&self) -> &[T] {
+        // SAFETY: We only construct this with `ptr` which is valid at least as long as this struct
+        // is alive, and ro/mut borrows of the whole struct to access the inner slice, which makes
+        // our access appropriately exclusive.
+        unsafe { &(*self.ptr) }
+    }
+
+    fn slice_impl_mut(&mut self) -> &mut [T] {
+        // SAFETY: We only construct this with `ptr` which is valid at least as long as this struct
+        // is alive, and ro/mut borrows of the whole struct to access the inner slice, which makes
+        // our access appropriately exclusive.
+        unsafe { &mut (*self.ptr) }
+    }
+
+    pub fn slice(&self, range: Range<usize>) -> AvifResult<&[T]> {
+        let data = self.slice_impl();
+        check_slice_range(data.len(), &range)?;
+        Ok(&data[range])
+    }
+
+    pub fn slice_mut(&mut self, range: Range<usize>) -> AvifResult<&mut [T]> {
+        let data = self.slice_impl_mut();
+        check_slice_range(data.len(), &range)?;
+        Ok(&mut data[range])
+    }
+
+    pub fn ptr(&self) -> *const T {
+        self.slice_impl().as_ptr()
+    }
+
+    pub fn ptr_mut(&mut self) -> *mut T {
+        self.slice_impl_mut().as_mut_ptr()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.slice_impl().is_empty()
     }
 }

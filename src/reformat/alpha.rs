@@ -397,7 +397,7 @@ impl image::Image {
 mod tests {
     use super::*;
 
-    use crate::internal_utils::pixels::*;
+    use crate::utils::pixels::*;
 
     use rand::Rng;
     use test_case::test_matrix;

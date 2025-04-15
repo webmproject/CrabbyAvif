@@ -17,8 +17,8 @@ use super::rgb_impl;
 
 use crate::image::Plane;
 use crate::image::YuvRange;
-use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
+use crate::utils::pixels::*;
 use crate::*;
 
 #[repr(C)]

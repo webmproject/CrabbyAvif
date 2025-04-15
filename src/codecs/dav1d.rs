@@ -23,7 +23,7 @@ use crate::decoder::CodecChoice;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::image::YuvRange;
-use crate::internal_utils::pixels::*;
+use crate::utils::pixels::*;
 use crate::*;
 
 use dav1d_sys::bindings::*;

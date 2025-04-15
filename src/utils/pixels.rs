@@ -15,65 +15,6 @@
 use crate::internal_utils::*;
 use crate::*;
 
-#[derive(Clone, Copy, Debug)]
-pub struct PointerSlice<T> {
-    ptr: *mut [T],
-}
-
-impl<T> PointerSlice<T> {
-    /// # Safety
-    /// `ptr` must live at least as long as the struct, and not be accessed other than through this
-    /// struct. It must point to a memory region of at least `size` elements.
-    pub unsafe fn create(ptr: *mut T, size: usize) -> AvifResult<Self> {
-        if ptr.is_null() || size == 0 {
-            return Err(AvifError::NoContent);
-        }
-        // Ensure that size does not exceed isize::MAX.
-        let _ = isize_from_usize(size)?;
-        Ok(Self {
-            ptr: unsafe { std::slice::from_raw_parts_mut(ptr, size) },
-        })
-    }
-
-    fn slice_impl(&self) -> &[T] {
-        // SAFETY: We only construct this with `ptr` which is valid at least as long as this struct
-        // is alive, and ro/mut borrows of the whole struct to access the inner slice, which makes
-        // our access appropriately exclusive.
-        unsafe { &(*self.ptr) }
-    }
-
-    fn slice_impl_mut(&mut self) -> &mut [T] {
-        // SAFETY: We only construct this with `ptr` which is valid at least as long as this struct
-        // is alive, and ro/mut borrows of the whole struct to access the inner slice, which makes
-        // our access appropriately exclusive.
-        unsafe { &mut (*self.ptr) }
-    }
-
-    pub fn slice(&self, range: Range<usize>) -> AvifResult<&[T]> {
-        let data = self.slice_impl();
-        check_slice_range(data.len(), &range)?;
-        Ok(&data[range])
-    }
-
-    pub fn slice_mut(&mut self, range: Range<usize>) -> AvifResult<&mut [T]> {
-        let data = self.slice_impl_mut();
-        check_slice_range(data.len(), &range)?;
-        Ok(&mut data[range])
-    }
-
-    pub fn ptr(&self) -> *const T {
-        self.slice_impl().as_ptr()
-    }
-
-    pub fn ptr_mut(&mut self) -> *mut T {
-        self.slice_impl_mut().as_mut_ptr()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.slice_impl().is_empty()
-    }
-}
-
 // This struct must not be derived from the default `Clone` trait as it has to be cloned with error
 // checking using the `try_clone` function.
 #[derive(Debug)]
@@ -90,7 +31,9 @@ pub enum Pixels {
 }
 
 impl Pixels {
-    pub fn from_raw_pointer(
+    // This function may not be used in all configurations.
+    #[allow(unused)]
+    pub(crate) fn from_raw_pointer(
         ptr: *mut u8,
         depth: u32,
         height: u32,
@@ -160,7 +103,9 @@ impl Pixels {
         matches!(self, Pixels::Pointer(_) | Pixels::Pointer16(_))
     }
 
-    pub fn ptr(&self) -> *const u8 {
+    // This function may not be used in all configurations.
+    #[allow(unused)]
+    pub(crate) fn ptr(&self) -> *const u8 {
         match self {
             Pixels::Pointer(ptr) => ptr.ptr(),
             Pixels::Buffer(buffer) => buffer.as_ptr(),
@@ -168,7 +113,9 @@ impl Pixels {
         }
     }
 
-    pub fn ptr16(&self) -> *const u16 {
+    // This function may not be used in all configurations.
+    #[allow(unused)]
+    pub(crate) fn ptr16(&self) -> *const u16 {
         match self {
             Pixels::Pointer16(ptr) => ptr.ptr(),
             Pixels::Buffer16(buffer) => buffer.as_ptr(),
@@ -176,7 +123,9 @@ impl Pixels {
         }
     }
 
-    pub fn ptr_mut(&mut self) -> *mut u8 {
+    // This function may not be used in all configurations.
+    #[allow(unused)]
+    pub(crate) fn ptr_mut(&mut self) -> *mut u8 {
         match self {
             Pixels::Pointer(ptr) => ptr.ptr_mut(),
             Pixels::Buffer(buffer) => buffer.as_mut_ptr(),
@@ -184,7 +133,9 @@ impl Pixels {
         }
     }
 
-    pub fn ptr16_mut(&mut self) -> *mut u16 {
+    // This function may not be used in all configurations.
+    #[allow(unused)]
+    pub(crate) fn ptr16_mut(&mut self) -> *mut u16 {
         match self {
             Pixels::Pointer16(ptr) => ptr.ptr_mut(),
             Pixels::Buffer16(buffer) => buffer.as_mut_ptr(),
@@ -193,7 +144,7 @@ impl Pixels {
     }
 
     #[cfg(feature = "encoder")]
-    pub fn ptr_generic(&self) -> *const u8 {
+    pub(crate) fn ptr_generic(&self) -> *const u8 {
         match self {
             Pixels::Pointer(ptr) => ptr.ptr(),
             Pixels::Pointer16(ptr) => ptr.ptr() as *const u8,
@@ -253,7 +204,7 @@ impl Pixels {
         }
     }
 
-    pub fn slice_mut(&mut self, offset: u32, size: u32) -> AvifResult<&mut [u8]> {
+    pub(crate) fn slice_mut(&mut self, offset: u32, size: u32) -> AvifResult<&mut [u8]> {
         let offset: usize = usize_from_u32(offset)?;
         let size: usize = usize_from_u32(size)?;
         match self {
@@ -291,7 +242,7 @@ impl Pixels {
         }
     }
 
-    pub fn slice16_mut(&mut self, offset: u32, size: u32) -> AvifResult<&mut [u16]> {
+    pub(crate) fn slice16_mut(&mut self, offset: u32, size: u32) -> AvifResult<&mut [u16]> {
         let offset: usize = usize_from_u32(offset)?;
         let size: usize = usize_from_u32(size)?;
         match self {

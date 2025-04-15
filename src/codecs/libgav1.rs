@@ -18,7 +18,7 @@ use crate::decoder::CodecChoice;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::image::YuvRange;
-use crate::internal_utils::pixels::*;
+use crate::utils::pixels::*;
 use crate::*;
 
 use libgav1_sys::bindings::*;

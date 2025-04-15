@@ -16,9 +16,9 @@ use super::image::*;
 use super::types::*;
 
 use crate::image::*;
-use crate::internal_utils::pixels::*;
 use crate::internal_utils::*;
 use crate::reformat::rgb;
+use crate::utils::pixels::*;
 use crate::*;
 
 /// cbindgen:rename-all=CamelCase

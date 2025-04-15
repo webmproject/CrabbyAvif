@@ -205,7 +205,7 @@ impl Image {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::internal_utils::pixels::*;
+    use crate::utils::pixels::*;
     use test_case::test_matrix;
 
     #[test_matrix([PixelFormat::Yuv444, PixelFormat::Yuv422, PixelFormat::Yuv420, PixelFormat::Yuv400], [false, true], [false, true])]

@@ -18,9 +18,9 @@ use crate::decoder::CodecChoice;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::image::YuvRange;
-use crate::internal_utils::pixels::*;
 use crate::internal_utils::stream::IStream;
 use crate::internal_utils::*;
+use crate::utils::pixels::*;
 use crate::*;
 
 use ndk_sys::bindings::*;
