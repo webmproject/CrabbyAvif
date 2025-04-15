@@ -55,7 +55,7 @@ jobs:
         ctest --test-dir c_build_gav1 -E conformance_tests
 
     - name: Build and run the heic tests with heic feature enabled
-      run: cargo test --no-default-features --features heic heic
+      run: cargo test --features heic heic
 
     - name: Build and run all the tests with aom feature enabled
       # TODO: Enable this for windows.
