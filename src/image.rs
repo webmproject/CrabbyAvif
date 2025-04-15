@@ -292,6 +292,39 @@ impl Image {
         })
     }
 
+    #[cfg(feature = "libyuv")]
+    pub(crate) fn plane_ptrs(&self) -> [*const u8; 4] {
+        ALL_PLANES.map(|x| {
+            if self.has_plane(x) {
+                self.planes[x.as_usize()].unwrap_ref().ptr()
+            } else {
+                std::ptr::null()
+            }
+        })
+    }
+
+    #[cfg(feature = "libyuv")]
+    pub(crate) fn plane16_ptrs(&self) -> [*const u16; 4] {
+        ALL_PLANES.map(|x| {
+            if self.has_plane(x) {
+                self.planes[x.as_usize()].unwrap_ref().ptr16()
+            } else {
+                std::ptr::null()
+            }
+        })
+    }
+
+    #[cfg(feature = "libyuv")]
+    pub(crate) fn plane_row_bytes(&self) -> [i32; 4] {
+        ALL_PLANES.map(|x| {
+            if self.has_plane(x) {
+                i32_from_u32(self.plane_data(x).unwrap().row_bytes).unwrap_or_default()
+            } else {
+                0
+            }
+        })
+    }
+
     #[cfg(any(feature = "dav1d", feature = "libgav1"))]
     pub(crate) fn clear_chroma_planes(&mut self) {
         for plane in [Plane::U, Plane::V] {

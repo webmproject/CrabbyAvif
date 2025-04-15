@@ -395,42 +395,9 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
     } else {
         FilterMode_kFilterNone
     };
-    let mut plane_u8: [*const u8; 4] = ALL_PLANES
-        .iter()
-        .map(|x| {
-            if image.has_plane(*x) {
-                image.planes[x.as_usize()].unwrap_ref().ptr()
-            } else {
-                std::ptr::null()
-            }
-        })
-        .collect::<Vec<*const u8>>()
-        .try_into()
-        .unwrap();
-    let plane_u16: [*const u16; 4] = ALL_PLANES
-        .iter()
-        .map(|x| {
-            if image.has_plane(*x) {
-                image.planes[x.as_usize()].unwrap_ref().ptr16()
-            } else {
-                std::ptr::null()
-            }
-        })
-        .collect::<Vec<*const u16>>()
-        .try_into()
-        .unwrap();
-    let mut plane_row_bytes: [i32; 4] = ALL_PLANES
-        .iter()
-        .map(|x| {
-            if image.has_plane(*x) {
-                i32_from_u32(image.plane_data(*x).unwrap().row_bytes).unwrap_or_default()
-            } else {
-                0
-            }
-        })
-        .collect::<Vec<i32>>()
-        .try_into()
-        .unwrap();
+    let mut plane_u8 = image.plane_ptrs();
+    let plane_u16 = image.plane16_ptrs();
+    let mut plane_row_bytes = image.plane_row_bytes();
     let rgb_row_bytes = i32_from_u32(rgb.row_bytes)?;
     let width = i32_from_u32(image.width)?;
     let height = i32_from_u32(image.height)?;
@@ -570,30 +537,8 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
         let mut image8 = image::Image::default();
         if image.depth > 8 {
             downshift_to_8bit(image, &mut image8, conversion_function.is_yuva())?;
-            plane_u8 = ALL_PLANES
-                .iter()
-                .map(|x| {
-                    if image8.has_plane(*x) {
-                        image8.planes[x.as_usize()].unwrap_ref().ptr()
-                    } else {
-                        std::ptr::null()
-                    }
-                })
-                .collect::<Vec<*const u8>>()
-                .try_into()
-                .unwrap();
-            plane_row_bytes = ALL_PLANES
-                .iter()
-                .map(|x| {
-                    if image8.has_plane(*x) {
-                        i32_from_u32(image8.plane_data(*x).unwrap().row_bytes).unwrap_or_default()
-                    } else {
-                        0
-                    }
-                })
-                .collect::<Vec<i32>>()
-                .try_into()
-                .unwrap();
+            plane_u8 = image8.plane_ptrs();
+            plane_row_bytes = image8.plane_row_bytes();
         }
         result = match conversion_function {
             ConversionFunction::NVToARGBMatrix(func) => func(
