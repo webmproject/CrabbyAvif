@@ -202,6 +202,15 @@ impl Pixels {
         }
     }
 
+    pub fn ptr_mut_generic(&mut self) -> *mut u8 {
+        match self {
+            Pixels::Pointer(ptr) => ptr.ptr_mut(),
+            Pixels::Pointer16(ptr) => ptr.ptr_mut() as *mut u8,
+            Pixels::Buffer(buffer) => buffer.as_mut_ptr(),
+            Pixels::Buffer16(buffer) => buffer.as_mut_ptr() as *mut u8,
+        }
+    }
+
     pub(crate) fn try_clone(&self) -> AvifResult<Pixels> {
         match self {
             Pixels::Pointer(ptr) => Ok(Pixels::Pointer(*ptr)),

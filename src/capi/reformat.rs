@@ -51,7 +51,7 @@ impl From<rgb::Image> for avifRGBImage {
             alpha_premultiplied: rgb.premultiply_alpha,
             is_float: rgb.is_float,
             max_threads: rgb.max_threads,
-            pixels: rgb.pixels(),
+            pixels: rgb.pixels_mut(),
             row_bytes: rgb.row_bytes,
         }
     }

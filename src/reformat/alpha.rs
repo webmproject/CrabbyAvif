@@ -50,7 +50,7 @@ macro_rules! alpha_index_in_rgba_1010102 {
 
 impl rgb::Image {
     pub(crate) fn premultiply_alpha(&mut self) -> AvifResult<()> {
-        if self.pixels().is_null() || self.row_bytes == 0 {
+        if self.pixels_mut().is_null() || self.row_bytes == 0 {
             return Err(AvifError::ReformatFailed);
         }
         if !self.has_alpha() {
@@ -124,7 +124,7 @@ impl rgb::Image {
     }
 
     pub(crate) fn unpremultiply_alpha(&mut self) -> AvifResult<()> {
-        if self.pixels().is_null() || self.row_bytes == 0 {
+        if self.pixels_mut().is_null() || self.row_bytes == 0 {
             return Err(AvifError::ReformatFailed);
         }
         if !self.has_alpha() {

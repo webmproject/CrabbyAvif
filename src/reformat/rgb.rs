@@ -151,15 +151,10 @@ impl Image {
         }
     }
 
-    pub(crate) fn pixels(&mut self) -> *mut u8 {
-        if self.pixels.is_none() {
-            return std::ptr::null_mut();
-        }
-        match self.pixels.unwrap_mut() {
-            Pixels::Pointer(ptr) => ptr.ptr_mut(),
-            Pixels::Pointer16(ptr) => ptr.ptr_mut() as *mut u8,
-            Pixels::Buffer(buffer) => buffer.as_mut_ptr(),
-            Pixels::Buffer16(buffer) => buffer.as_mut_ptr() as *mut u8,
+    pub(crate) fn pixels_mut(&mut self) -> *mut u8 {
+        match &mut self.pixels {
+            Some(pixels) => pixels.ptr_mut_generic(),
+            None => std::ptr::null_mut(),
         }
     }
 
