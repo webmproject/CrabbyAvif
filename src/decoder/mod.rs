@@ -691,6 +691,7 @@ impl Decoder {
 
         let mut source_item_ids: Vec<u32> = vec![];
         let mut first_codec_config: Option<CodecConfiguration> = None;
+        let mut first_icc: Option<Vec<u8>> = None;
         // Collect all the dimg items.
         for dimg_item_id in self.items.keys() {
             if *dimg_item_id == item_id {
@@ -718,6 +719,9 @@ impl Decoder {
                         .clone(),
                 );
             }
+            if dimg_item.is_image_codec_item() && first_icc.is_none() {
+                first_icc = find_icc(&dimg_item.properties)?.cloned();
+            }
             source_item_ids.push(*dimg_item_id);
         }
         if source_item_ids.is_empty() {
@@ -733,6 +737,17 @@ impl Decoder {
             // validate_properties() later makes sure they are all equal.
             item.properties
                 .push(ItemProperty::CodecConfiguration(first_codec_config));
+        }
+        if (item.is_grid_item() || item.is_overlay_item())
+            && first_icc.is_some()
+            && find_icc(&item.properties)?.is_none()
+        {
+            // For grid and overlay items, adopt the icc color profile of the first tile if it is
+            // not explicitly specified for the overall grid.
+            item.properties
+                .push(ItemProperty::ColorInformation(ColorInformation::Icc(
+                    first_icc.unwrap().clone(),
+                )));
         }
         Ok(())
     }

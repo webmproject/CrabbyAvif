@@ -1068,6 +1068,14 @@ fn dimg_ordering() {
 }
 
 #[test]
+fn grid_image_icc_associated_with_individual_cells() {
+    let mut decoder = get_decoder("grid_icc_individual_cells.avif");
+    assert!(decoder.parse().is_ok());
+    let image = decoder.image().expect("image was none");
+    assert!(!image.icc.is_empty());
+}
+
+#[test]
 fn heic_peek() {
     let file_data = std::fs::read(get_test_file("blue.heic")).expect("could not read file");
     assert_eq!(
