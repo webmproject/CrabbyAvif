@@ -1076,6 +1076,19 @@ fn grid_image_icc_associated_with_individual_cells() {
 }
 
 #[test]
+fn grid_image_nclx_associated_with_individual_cells() {
+    let mut decoder = get_decoder("grid_nclx_individual_cells.avif");
+    assert!(decoder.parse().is_ok());
+    let image = decoder.image().expect("image was none");
+    assert_eq!(image.color_primaries, ColorPrimaries::Bt470bg);
+    assert_eq!(
+        image.transfer_characteristics,
+        TransferCharacteristics::Bt470bg
+    );
+    assert_eq!(image.matrix_coefficients, MatrixCoefficients::Bt470bg);
+}
+
+#[test]
 fn heic_peek() {
     let file_data = std::fs::read(get_test_file("blue.heic")).expect("could not read file");
     assert_eq!(
