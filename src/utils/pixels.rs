@@ -143,7 +143,6 @@ impl Pixels {
         }
     }
 
-    #[cfg(feature = "encoder")]
     pub(crate) fn ptr_generic(&self) -> *const u8 {
         match self {
             Pixels::Pointer(ptr) => ptr.ptr(),

@@ -151,6 +151,15 @@ impl Image {
         }
     }
 
+    // This function may not be used in some configurations.
+    #[allow(unused)]
+    pub(crate) fn pixels(&self) -> *const u8 {
+        match &self.pixels {
+            Some(pixels) => pixels.ptr_generic(),
+            None => std::ptr::null(),
+        }
+    }
+
     pub(crate) fn pixels_mut(&mut self) -> *mut u8 {
         match &mut self.pixels {
             Some(pixels) => pixels.ptr_mut_generic(),
@@ -383,6 +392,45 @@ impl Image {
         if self.is_float {
             self.convert_to_half_float()?;
         }
+        Ok(())
+    }
+
+    pub fn convert_to_yuv(&self, image: &mut image::Image) -> AvifResult<()> {
+        if self.format == Format::Rgb565 || self.is_float {
+            return Err(AvifError::NotImplemented);
+        }
+        image.allocate_planes(Category::Color)?;
+        // TODO: b/410088660 - add a setting to ignore alpha channel.
+        let has_alpha = self.has_alpha();
+        if has_alpha {
+            image.allocate_planes(Category::Alpha)?;
+        }
+        let alpha_multiply_mode =
+            match (has_alpha, self.premultiply_alpha, image.alpha_premultiplied) {
+                (true, false, true) => AlphaMultiplyMode::Multiply,
+                (true, true, false) => AlphaMultiplyMode::UnMultiply,
+                _ => AlphaMultiplyMode::NoOp,
+            };
+        // TODO: b/410088660 - support gray rgb formats.
+        // TODO: b/410088660 - support sharpyuv conversion.
+        let mut conversion_complete = false;
+        if alpha_multiply_mode == AlphaMultiplyMode::NoOp {
+            match libyuv::rgb_to_yuv(self, image) {
+                Ok(_) => {
+                    conversion_complete = true;
+                }
+                Err(err) => {
+                    if err != AvifError::NotImplemented {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+        if !conversion_complete {
+            // TODO: b/410088660 - implement native conversion.
+            return Err(AvifError::NotImplemented);
+        }
+        // TODO: b/410088660 - process alpha conversion.
         Ok(())
     }
 

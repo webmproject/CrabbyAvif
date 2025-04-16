@@ -304,6 +304,17 @@ impl Image {
     }
 
     #[cfg(feature = "libyuv")]
+    pub(crate) fn plane_ptrs_mut(&mut self) -> [*mut u8; 4] {
+        ALL_PLANES.map(|x| {
+            if self.has_plane(x) {
+                self.planes[x.as_usize()].unwrap_mut().ptr_mut()
+            } else {
+                std::ptr::null_mut()
+            }
+        })
+    }
+
+    #[cfg(feature = "libyuv")]
     pub(crate) fn plane16_ptrs(&self) -> [*const u16; 4] {
         ALL_PLANES.map(|x| {
             if self.has_plane(x) {
