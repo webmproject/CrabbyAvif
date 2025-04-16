@@ -397,7 +397,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
     };
     let mut plane_u8 = image.plane_ptrs();
     let plane_u16 = image.plane16_ptrs();
-    let mut plane_row_bytes = image.plane_row_bytes();
+    let mut plane_row_bytes = image.plane_row_bytes()?;
     let rgb_row_bytes = i32_from_u32(rgb.row_bytes)?;
     let width = i32_from_u32(image.width)?;
     let height = i32_from_u32(image.height)?;
@@ -538,7 +538,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
         if image.depth > 8 {
             downshift_to_8bit(image, &mut image8, conversion_function.is_yuva())?;
             plane_u8 = image8.plane_ptrs();
-            plane_row_bytes = image8.plane_row_bytes();
+            plane_row_bytes = image8.plane_row_bytes()?;
         }
         result = match conversion_function {
             ConversionFunction::NVToARGBMatrix(func) => func(

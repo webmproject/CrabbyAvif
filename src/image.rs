@@ -315,14 +315,14 @@ impl Image {
     }
 
     #[cfg(feature = "libyuv")]
-    pub(crate) fn plane_row_bytes(&self) -> [i32; 4] {
-        ALL_PLANES.map(|x| {
+    pub(crate) fn plane_row_bytes(&self) -> AvifResult<[i32; 4]> {
+        Ok(ALL_PLANES.map(|x| {
             if self.has_plane(x) {
-                i32_from_u32(self.plane_data(x).unwrap().row_bytes).unwrap_or_default()
+                i32_from_u32(self.plane_data(x).unwrap().row_bytes).unwrap()
             } else {
                 0
             }
-        })
+        }))
     }
 
     #[cfg(any(feature = "dav1d", feature = "libgav1"))]
