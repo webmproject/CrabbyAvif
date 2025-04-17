@@ -460,35 +460,44 @@ pub(crate) fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> Avi
     }
 }
 
+fn bias_and_range_y(image: &image::Image) -> (f32, f32) {
+    // Formula specified in ISO/IEC 23091-2.
+    if image.yuv_range == YuvRange::Limited {
+        (
+            (16 << (image.depth - 8)) as f32,
+            (219 << (image.depth - 8)) as f32,
+        )
+    } else {
+        (0.0, image.max_channel_f())
+    }
+}
+
+fn bias_and_range_uv(image: &image::Image) -> (f32, f32) {
+    // Formula specified in ISO/IEC 23091-2.
+    (
+        (1 << (image.depth - 1)) as f32,
+        if image.yuv_range == YuvRange::Limited {
+            (224 << (image.depth - 8)) as f32
+        } else {
+            image.max_channel_f()
+        },
+    )
+}
+
 fn unorm_lookup_tables(
     image: &image::Image,
     mode: Mode,
 ) -> AvifResult<(Vec<f32>, Option<Vec<f32>>)> {
     let count = 1usize << image.depth;
     let mut table_y: Vec<f32> = create_vec_exact(count)?;
-    let bias_y;
-    let range_y;
-    // Formula specified in ISO/IEC 23091-2.
-    if image.yuv_range == YuvRange::Limited {
-        bias_y = (16 << (image.depth - 8)) as f32;
-        range_y = (219 << (image.depth - 8)) as f32;
-    } else {
-        bias_y = 0.0;
-        range_y = image.max_channel_f();
-    }
+    let (bias_y, range_y) = bias_and_range_y(image);
     for cp in 0..count {
         table_y.push(((cp as f32) - bias_y) / range_y);
     }
     if mode == Mode::Identity {
         Ok((table_y, None))
     } else {
-        // Formula specified in ISO/IEC 23091-2.
-        let bias_uv = (1 << (image.depth - 1)) as f32;
-        let range_uv = if image.yuv_range == YuvRange::Limited {
-            (224 << (image.depth - 8)) as f32
-        } else {
-            image.max_channel_f()
-        };
+        let (bias_uv, range_uv) = bias_and_range_uv(image);
         let mut table_uv: Vec<f32> = create_vec_exact(count)?;
         for cp in 0..count {
             table_uv.push(((cp as f32) - bias_uv) / range_uv);
