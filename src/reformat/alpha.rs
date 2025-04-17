@@ -423,8 +423,50 @@ impl image::Image {
             }
             return Ok(());
         }
-        // TODO: b/410088660 - implement alpha copy for differing bit depths.
-        Err(AvifError::NotImplemented)
+        let max_channel = self.max_channel();
+        if self.depth > 8 {
+            if rgb.depth > 8 {
+                // u16 to u16 depth rescaling.
+                for y in 0..self.height {
+                    let dst_row = self.row16_mut(Plane::A, y)?;
+                    let src_row = rgb.row16(y)?;
+                    for x in 0..width {
+                        dst_row[x] = rgb::Image::rescale_alpha_value(
+                            src_row[(x * 4) + src_alpha_offset],
+                            rgb.max_channel_f(),
+                            max_channel,
+                        );
+                    }
+                }
+                return Ok(());
+            }
+            // u8 to u16 depth rescaling.
+            for y in 0..self.height {
+                let dst_row = self.row16_mut(Plane::A, y)?;
+                let src_row = rgb.row(y)?;
+                for x in 0..width {
+                    dst_row[x] = rgb::Image::rescale_alpha_value(
+                        src_row[(x * 4) + src_alpha_offset] as u16,
+                        rgb.max_channel_f(),
+                        max_channel,
+                    );
+                }
+            }
+            return Ok(());
+        }
+        // u16 to u8 depth rescaling.
+        for y in 0..self.height {
+            let dst_row = self.row_mut(Plane::A, y)?;
+            let src_row = rgb.row16(y)?;
+            for x in 0..width {
+                dst_row[x] = rgb::Image::rescale_alpha_value(
+                    src_row[(x * 4) + src_alpha_offset],
+                    rgb.max_channel_f(),
+                    max_channel,
+                ) as u8;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn set_opaque(&mut self) -> AvifResult<()> {
@@ -743,10 +785,6 @@ mod tests {
         format_index: usize,
         yuv_depth: u8,
     ) -> AvifResult<()> {
-        if rgb_depth != yuv_depth {
-            // TODO: b/410088660 - these paths are not yet implemented.
-            return Ok(());
-        }
         let format = ALPHA_RGB_FORMATS[format_index];
         let mut buffer: Vec<u8> = vec![];
         let mut rgb = rgb_image(width, height, rgb_depth, format, false, &mut buffer)?;
