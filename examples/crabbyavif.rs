@@ -30,6 +30,10 @@ mod reader;
 mod writer;
 
 #[cfg(feature = "encoder")]
+use reader::jpeg::JpegReader;
+#[cfg(feature = "encoder")]
+use reader::png::PngReader;
+#[cfg(feature = "encoder")]
 use reader::y4m::Y4MReader;
 #[cfg(feature = "encoder")]
 use reader::Reader;
@@ -609,6 +613,8 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
     let extension = get_extension(&args.input_file);
     let mut reader: Box<dyn Reader> = match extension {
         "y4m" => Box::new(Y4MReader::create(&args.input_file)?),
+        "jpg" | "jpeg" => Box::new(JpegReader::create(&args.input_file)?),
+        "png" => Box::new(PngReader::create(&args.input_file)?),
         _ => {
             return Err(AvifError::UnknownError(format!(
                 "Unknown input file extension ({extension})"
