@@ -282,7 +282,7 @@ fn print_data_as_columns(rows: &[(usize, &str, String)]) {
 
 fn print_vec(data: &[u8]) -> String {
     if data.is_empty() {
-        format!("Absent")
+        "Absent".to_string()
     } else {
         format!("Present ({} bytes)", data.len())
     }
@@ -311,14 +311,11 @@ fn print_image_info(decoder: &Decoder) {
         (
             0,
             "Alpha",
-            format!(
-                "{}",
-                match (image.alpha_present, image.alpha_premultiplied) {
-                    (true, true) => "Premultiplied",
-                    (true, false) => "Not premultiplied",
-                    (false, _) => "Absent",
-                }
-            ),
+            match (image.alpha_present, image.alpha_premultiplied) {
+                (true, true) => "Premultiplied".to_string(),
+                (true, false) => "Not premultiplied".to_string(),
+                (false, _) => "Absent".to_string(),
+            },
         ),
         (0, "Range", format!("{:#?}", image.yuv_range)),
         (
@@ -345,9 +342,9 @@ fn print_image_info(decoder: &Decoder) {
         && image.irot_angle.is_none()
         && image.imir_axis.is_none()
     {
-        image_data.push((0, "Transformations", format!("None")));
+        image_data.push((0, "Transformations", "None".to_string()));
     } else {
-        image_data.push((0, "Transformations", format!("")));
+        image_data.push((0, "Transformations", "".to_string()));
         if let Some(pasp) = image.pasp {
             image_data.push((
                 1,
@@ -356,7 +353,7 @@ fn print_image_info(decoder: &Decoder) {
             ));
         }
         if let Some(clap) = image.clap {
-            image_data.push((1, "clap (Clean Aperture)", format!("")));
+            image_data.push((1, "clap (Clean Aperture)", "".to_string()));
             image_data.push((2, "W", format!("{}/{}", clap.width.0, clap.width.1)));
             image_data.push((2, "H", format!("{}/{}", clap.height.0, clap.height.1)));
             image_data.push((
@@ -371,13 +368,13 @@ fn print_image_info(decoder: &Decoder) {
             ));
             match CropRect::create_from(&clap, image.width, image.height, image.yuv_format) {
                 Ok(rect) => image_data.extend_from_slice(&[
-                    (2, "Valid, derived crop rect", format!("")),
+                    (2, "Valid, derived crop rect", "".to_string()),
                     (3, "X", format!("{}", rect.x)),
                     (3, "Y", format!("{}", rect.y)),
                     (3, "W", format!("{}", rect.width)),
                     (3, "H", format!("{}", rect.height)),
                 ]),
-                Err(_) => image_data.push((2, "Invalid", format!(""))),
+                Err(_) => image_data.push((2, "Invalid", "".to_string())),
             }
         }
         if let Some(angle) = image.irot_angle {
@@ -409,7 +406,7 @@ fn print_image_info(decoder: &Decoder) {
                 if gainmap.metadata.base_hdr_headroom.0 == 0 { "SDR" } else { "HDR" },
             ),
             ),
-            (0, "Alternate image", format!("")),
+            (0, "Alternate image", "".to_string()),
             (
                 1,
                 "Color Primaries",
@@ -436,7 +433,7 @@ fn print_image_info(decoder: &Decoder) {
         ])
     } else {
         // TODO: b/394162563 - check if we need to report the present but ignored case.
-        image_data.push((0, "Gainmap", format!("Absent")));
+        image_data.push((0, "Gainmap", "Absent".to_string()));
     }
     if image.image_sequence_track_present {
         image_data.push((
@@ -444,8 +441,8 @@ fn print_image_info(decoder: &Decoder) {
             "Repeat Count",
             match decoder.repetition_count() {
                 RepetitionCount::Finite(x) => format!("{x}"),
-                RepetitionCount::Infinite => format!("Infinite"),
-                RepetitionCount::Unknown => format!("Unknown"),
+                RepetitionCount::Infinite => "Infinite".to_string(),
+                RepetitionCount::Unknown => "Unknown".to_string(),
             },
         ));
     }
@@ -498,7 +495,7 @@ fn create_decoder_and_parse(args: &CommandLineArgs) -> AvifResult<Decoder> {
 }
 
 fn info(args: &CommandLineArgs) -> AvifResult<()> {
-    let mut decoder = create_decoder_and_parse(&args)?;
+    let mut decoder = create_decoder_and_parse(args)?;
     println!("Image decoded: {}", args.input_file);
     print_image_info(&decoder);
     println!(
@@ -561,7 +558,7 @@ fn decode(args: &CommandLineArgs) -> AvifResult<()> {
         "Decoding with {max_threads} worker thread{}, please wait...",
         if max_threads == 1 { "" } else { "s" }
     );
-    let mut decoder = create_decoder_and_parse(&args)?;
+    let mut decoder = create_decoder_and_parse(args)?;
     decoder.nth_image(args.index.unwrap_or(0))?;
     println!("Image Decoded: {}", args.input_file);
     println!("Image details:");

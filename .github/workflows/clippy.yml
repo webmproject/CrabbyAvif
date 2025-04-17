@@ -25,5 +25,7 @@ jobs:
     - run: cargo clippy --no-default-features --features=capi
     - run: cargo clippy
     - run: cargo clippy --tests
+    - run: cargo clippy --examples
     - run: cargo clippy --features aom
     - run: cargo clippy --features aom --tests
+    - run: cargo clippy --features aom --examples
