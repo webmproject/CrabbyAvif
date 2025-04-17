@@ -430,7 +430,13 @@ impl Image {
             // TODO: b/410088660 - implement native conversion.
             return Err(AvifError::NotImplemented);
         }
-        // TODO: b/410088660 - process alpha conversion.
+        if image.has_plane(Plane::A) {
+            if has_alpha {
+                image.import_alpha_from(self)?;
+            } else {
+                image.set_opaque()?;
+            }
+        }
         Ok(())
     }
 
