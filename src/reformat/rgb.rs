@@ -632,10 +632,11 @@ mod tests {
             if yuva_planes[plane_index].is_empty() {
                 continue;
             }
+            let plane_width = image.width(plane);
             for y in 0..image.height(plane) {
                 let row16 = image.row16_mut(plane, y as u32)?;
-                assert_eq!(row16.len(), yuva_planes[plane_index][y].len());
-                let dst = &mut row16[..];
+                let dst = &mut row16[..plane_width];
+                assert_eq!(dst.len(), yuva_planes[plane_index][y].len());
                 dst.copy_from_slice(yuva_planes[plane_index][y]);
             }
         }

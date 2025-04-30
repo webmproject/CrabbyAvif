@@ -73,6 +73,22 @@ clamp_function!(clamp_u16, u16);
 clamp_function!(clamp_f32, f32);
 clamp_function!(clamp_i32, i32);
 
+macro_rules! round2_function {
+    ($func:ident, $type:ty) => {
+        pub(crate) fn $func(value: $type) -> $type {
+            if value % 2 == 0 {
+                value
+            } else {
+                value + 1
+            }
+        }
+    };
+}
+
+#[cfg(feature = "capi")]
+round2_function!(round2_u32, u32);
+round2_function!(round2_usize, usize);
+
 macro_rules! find_property {
     ($properties:expr, $property_name:ident) => {
         $properties.iter().find_map(|p| match p {

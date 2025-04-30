@@ -275,4 +275,20 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn scale_nv12_odd_dimension() -> AvifResult<()> {
+        let mut image = image::Image {
+            width: 99,
+            height: 49,
+            depth: 8,
+            yuv_format: PixelFormat::AndroidNv12,
+            ..Default::default()
+        };
+        image.allocate_planes(Category::Color)?;
+        assert!(image.scale(49, 24, Category::Color).is_ok());
+        assert_eq!(image.width, 49);
+        assert_eq!(image.height, 24);
+        Ok(())
+    }
 }

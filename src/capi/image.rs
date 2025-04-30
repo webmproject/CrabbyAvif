@@ -320,9 +320,11 @@ pub unsafe extern "C" fn crabby_avifImageCopy(
             let plane_width = usize_from_u32_or_fail!(unsafe {
                 crabby_avifImagePlaneWidth(srcImage, plane as i32)
             });
-            let plane_size = plane_width * plane_height * pixel_size;
+            let alloc_plane_height = round2_usize(plane_height);
+            let alloc_plane_width = round2_usize(plane_width);
+            let plane_size = alloc_plane_width * alloc_plane_height * pixel_size;
             dst.yuvPlanes[plane] = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
-            dst.yuvRowBytes[plane] = (pixel_size * plane_width) as u32;
+            dst.yuvRowBytes[plane] = (pixel_size * alloc_plane_width) as u32;
             copy_plane_helper(
                 src.yuvPlanes[plane],
                 src.yuvRowBytes[plane],
@@ -338,9 +340,11 @@ pub unsafe extern "C" fn crabby_avifImageCopy(
     if (planes & 2) != 0 && !src.alphaPlane.is_null() && src.alphaRowBytes != 0 {
         let plane_height = usize_from_u32_or_fail!(src.height);
         let plane_width = usize_from_u32_or_fail!(src.width);
-        let plane_size = plane_width * plane_height * pixel_size;
+        let alloc_plane_height = round2_usize(plane_height);
+        let alloc_plane_width = round2_usize(plane_width);
+        let plane_size = alloc_plane_width * alloc_plane_height * pixel_size;
         dst.alphaPlane = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
-        dst.alphaRowBytes = (pixel_size * plane_width) as u32;
+        dst.alphaRowBytes = (pixel_size * alloc_plane_width) as u32;
         copy_plane_helper(
             src.alphaPlane,
             src.alphaRowBytes,
@@ -363,9 +367,11 @@ fn avif_image_allocate_planes_helper(
         return Err(AvifError::InvalidArgument);
     }
     let channel_size = if image.depth == 8 { 1 } else { 2 };
-    let y_row_bytes = usize_from_u32(image.width * channel_size)?;
+    let alloc_width = round2_u32(image.width);
+    let y_row_bytes = usize_from_u32(alloc_width * channel_size)?;
+    let alloc_height = round2_u32(image.height);
     let y_size = y_row_bytes
-        .checked_mul(usize_from_u32(image.height)?)
+        .checked_mul(usize_from_u32(alloc_height)?)
         .ok_or(avifResult::InvalidArgument)?;
     if (planes & 1) != 0 && image.yuvFormat != PixelFormat::None {
         image.imageOwnsYUVPlanes = AVIF_TRUE;
@@ -377,11 +383,17 @@ fn avif_image_allocate_planes_helper(
             let csx0 = image.yuvFormat.chroma_shift_x().0 as u64;
             let csx1 = image.yuvFormat.chroma_shift_x().1 as u64;
             let width = (((image.width as u64) + csx0) >> csx0) << csx1;
+            let alloc_width = round2_u32(u32_from_u64(width)?);
             let csy = image.yuvFormat.chroma_shift_y() as u64;
             let height = ((image.height as u64) + csy) >> csy;
-            let uv_row_bytes = usize_from_u64(width * channel_size as u64)?;
-            let uv_size = usize_from_u64(uv_row_bytes as u64 * height)?;
-            for plane in 1usize..=2 {
+            let alloc_height = round2_u32(u32_from_u64(height)?);
+            let uv_row_bytes = usize_from_u32(alloc_width * channel_size)?;
+            let uv_size = usize_from_u32(uv_row_bytes as u32 * alloc_height)?;
+            let plane_end = match image.yuvFormat {
+                PixelFormat::AndroidP010 | PixelFormat::AndroidNv12 | PixelFormat::AndroidNv21 => 1,
+                _ => 2,
+            };
+            for plane in 1usize..=plane_end {
                 if !image.yuvPlanes[plane].is_null() {
                     continue;
                 }
@@ -500,14 +512,23 @@ pub unsafe extern "C" fn crabby_avifImagePlaneWidth(
     unsafe {
         match channel {
             0 => (*image).width,
-            1 | 2 => {
-                if (*image).yuvFormat.is_monochrome() {
-                    0
-                } else {
-                    let shift_x = (*image).yuvFormat.chroma_shift_x();
-                    (((*image).width + shift_x.0) >> shift_x.0) << shift_x.1
-                }
-            }
+            1 => match (*image).yuvFormat {
+                PixelFormat::Yuv444
+                | PixelFormat::AndroidP010
+                | PixelFormat::AndroidNv12
+                | PixelFormat::AndroidNv21 => (*image).width,
+                PixelFormat::Yuv420 | PixelFormat::Yuv422 => ((*image).width).div_ceil(2),
+                PixelFormat::None | PixelFormat::Yuv400 => 0,
+            },
+            2 => match (*image).yuvFormat {
+                PixelFormat::Yuv444 => (*image).width,
+                PixelFormat::Yuv420 | PixelFormat::Yuv422 => ((*image).width).div_ceil(2),
+                PixelFormat::None
+                | PixelFormat::Yuv400
+                | PixelFormat::AndroidP010
+                | PixelFormat::AndroidNv12
+                | PixelFormat::AndroidNv21 => 0,
+            },
             3 => {
                 if !(*image).alphaPlane.is_null() {
                     (*image).width

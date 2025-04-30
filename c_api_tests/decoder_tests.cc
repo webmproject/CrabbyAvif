@@ -765,6 +765,66 @@ TEST(ScaleTest, ScaleP010) {
   EXPECT_NE(image->alphaRowBytes, 0);
 }
 
+TEST(ScaleTest, ScaleNV12OddDimensions) {
+  const int width = 99;
+  const int height = 49;
+  ImagePtr image(
+      avifImageCreate(width, height, 8, AVIF_PIXEL_FORMAT_ANDROID_NV12));
+  ASSERT_EQ(avifImageAllocatePlanes(image.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+
+  const uint32_t scaled_width = 49;
+  const uint32_t scaled_height = 24;
+
+  ASSERT_EQ(avifImageScale(image.get(), scaled_width, scaled_height, nullptr),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(image->width, scaled_width);
+  EXPECT_EQ(image->height, scaled_height);
+  EXPECT_EQ(image->depth, 8);
+  EXPECT_EQ(image->yuvFormat, AVIF_PIXEL_FORMAT_ANDROID_NV12);
+  for (int c = 0; c < 2; ++c) {
+    EXPECT_NE(image->yuvPlanes[c], nullptr);
+    EXPECT_GT(image->yuvRowBytes[c], 0);
+  }
+  EXPECT_EQ(image->yuvPlanes[2], nullptr);
+  EXPECT_EQ(image->yuvRowBytes[2], 0);
+  EXPECT_NE(image->alphaPlane, nullptr);
+  EXPECT_NE(image->alphaRowBytes, 0);
+}
+
+TEST(ScaleTest, ScaleNV12WithCopyOddDimensions) {
+  const int width = 99;
+  const int height = 49;
+  ImagePtr image(
+      avifImageCreate(width, height, 8, AVIF_PIXEL_FORMAT_ANDROID_NV12));
+  ASSERT_EQ(avifImageAllocatePlanes(image.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+
+  // Create a copy of the image and scale the copy (this mimic's skia's
+  // implementation).
+  ImagePtr image2(avifImageCreateEmpty());
+  ASSERT_EQ(avifImageCopy(image2.get(), image.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+
+  const uint32_t scaled_width = 49;
+  const uint32_t scaled_height = 24;
+
+  ASSERT_EQ(avifImageScale(image2.get(), scaled_width, scaled_height, nullptr),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(image2->width, scaled_width);
+  EXPECT_EQ(image2->height, scaled_height);
+  EXPECT_EQ(image2->depth, 8);
+  EXPECT_EQ(image2->yuvFormat, AVIF_PIXEL_FORMAT_ANDROID_NV12);
+  for (int c = 0; c < 2; ++c) {
+    EXPECT_NE(image->yuvPlanes[c], nullptr);
+    EXPECT_GT(image->yuvRowBytes[c], 0);
+  }
+  EXPECT_EQ(image->yuvPlanes[2], nullptr);
+  EXPECT_EQ(image->yuvRowBytes[2], 0);
+  EXPECT_NE(image->alphaPlane, nullptr);
+  EXPECT_NE(image->alphaRowBytes, 0);
+}
+
 struct InvalidClapPropertyParam {
   uint32_t width;
   uint32_t height;
