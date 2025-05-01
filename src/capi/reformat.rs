@@ -167,7 +167,7 @@ pub unsafe extern "C" fn crabby_avifImageYUVToRGB(
     }
     let mut rgb: rgb::Image = unsafe { &(*rgb) }.into();
     let image: image::Image = unsafe { &(*image) }.into();
-    to_avifResult(&rgb.convert_from_yuv(&image))
+    rgb.convert_from_yuv(&image).into()
 }
 
 fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
@@ -260,7 +260,7 @@ pub unsafe extern "C" fn crabby_avifImageScale(
     let mut rust_image: image::Image = unsafe { &(*image) }.into();
     let res = rust_image.scale(dstWidth, dstHeight, Category::Color);
     if res.is_err() {
-        return to_avifResult(&res);
+        return res.into();
     }
     // The scale function is designed to work only for one category at a time.
     // Restore the width and height to the original values before scaling the
@@ -269,12 +269,12 @@ pub unsafe extern "C" fn crabby_avifImageScale(
     rust_image.height = unsafe { (*image).height };
     let res = rust_image.scale(dstWidth, dstHeight, Category::Alpha);
     if res.is_err() {
-        return to_avifResult(&res);
+        return res.into();
     }
 
     dst_image.width = rust_image.width;
     dst_image.height = rust_image.height;
     dst_image.depth = rust_image.depth as _;
     dst_image.yuvFormat = rust_image.yuv_format;
-    to_avifResult(&CopyPlanes(dst_image, &rust_image))
+    CopyPlanes(dst_image, &rust_image).into()
 }

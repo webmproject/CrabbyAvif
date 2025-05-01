@@ -435,7 +435,7 @@ pub unsafe extern "C" fn crabby_avifImageAllocatePlanes(
     planes: avifPlanesFlags,
 ) -> avifResult {
     let image = unsafe { &mut (*image) };
-    to_avifResult(&avif_image_allocate_planes_helper(image, planes))
+    avif_image_allocate_planes_helper(image, planes).into()
 }
 
 #[no_mangle]

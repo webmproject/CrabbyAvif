@@ -128,7 +128,7 @@ pub unsafe extern "C" fn crabby_avifDecoderSetIOFile(
     unsafe {
         let rust_decoder = &mut (*decoder).rust_decoder;
         let filename = String::from(CStr::from_ptr(filename).to_str().unwrap_or(""));
-        to_avifResult(&rust_decoder.set_io_file(&filename))
+        rust_decoder.set_io_file(&filename).into()
     }
 }
 
@@ -139,7 +139,7 @@ pub unsafe extern "C" fn crabby_avifDecoderSetIOMemory(
     size: usize,
 ) -> avifResult {
     let rust_decoder = unsafe { &mut (*decoder).rust_decoder };
-    to_avifResult(unsafe { &rust_decoder.set_io_raw(data, size) })
+    unsafe { rust_decoder.set_io_raw(data, size) }.into()
 }
 
 #[no_mangle]
@@ -246,7 +246,7 @@ pub unsafe extern "C" fn crabby_avifDecoderParse(decoder: *mut avifDecoder) -> a
         let res = rust_decoder.parse();
         (*decoder).diag.set_from_result(&res);
         if res.is_err() {
-            return to_avifResult(&res);
+            return res.into();
         }
         rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
         avifResult::Ok
@@ -273,10 +273,10 @@ pub unsafe extern "C" fn crabby_avifDecoderNextImage(decoder: *mut avifDecoder) 
             }
         }
         if early_return {
-            return to_avifResult(&res);
+            return res.into();
         }
         rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
-        to_avifResult(&res)
+        res.into()
     }
 }
 
@@ -308,10 +308,10 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImage(
             }
         }
         if early_return {
-            return to_avifResult(&res);
+            return res.into();
         }
         rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
-        to_avifResult(&res)
+        res.into()
     }
 }
 
@@ -328,7 +328,7 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImageTiming(
             *outTiming = timing;
         }
     }
-    to_avifResult(&image_timing)
+    image_timing.into()
 }
 
 #[no_mangle]
@@ -349,11 +349,11 @@ pub unsafe extern "C" fn crabby_avifDecoderRead(
 
         let res = rust_decoder.parse();
         if res.is_err() {
-            return to_avifResult(&res);
+            return res.into();
         }
         let res = rust_decoder.next_image();
         if res.is_err() {
-            return to_avifResult(&res);
+            return res.into();
         }
         rust_decoder_to_avifDecoder(rust_decoder, &mut (*decoder));
         *image = (*decoder).image_object.clone();
@@ -428,7 +428,7 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImageMaxExtent(
     let rust_decoder = unsafe { &(*decoder).rust_decoder };
     let res = rust_decoder.nth_image_max_extent(frameIndex);
     if res.is_err() {
-        return to_avifResult(&res);
+        return res.into();
     }
     unsafe {
         *outExtent = res.unwrap();

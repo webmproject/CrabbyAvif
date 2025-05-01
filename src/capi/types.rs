@@ -97,6 +97,18 @@ impl From<&AvifError> for avifResult {
     }
 }
 
+impl<T> From<AvifResult<T>> for avifResult {
+    fn from(res: AvifResult<T>) -> Self {
+        match res {
+            Ok(_) => avifResult::Ok,
+            Err(err) => {
+                let res: avifResult = (&err).into();
+                res
+            }
+        }
+    }
+}
+
 impl From<avifResult> for AvifError {
     fn from(res: avifResult) -> Self {
         match res {
@@ -262,16 +274,6 @@ pub(crate) fn to_avifBool(val: bool) -> avifBool {
         AVIF_TRUE
     } else {
         AVIF_FALSE
-    }
-}
-
-pub(crate) fn to_avifResult<T>(res: &AvifResult<T>) -> avifResult {
-    match res {
-        Ok(_) => avifResult::Ok,
-        Err(err) => {
-            let res: avifResult = err.into();
-            res
-        }
     }
 }
 
