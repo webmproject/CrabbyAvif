@@ -76,7 +76,7 @@ clamp_function!(clamp_i32, i32);
 macro_rules! round2_function {
     ($func:ident, $type:ty) => {
         pub(crate) fn $func(value: $type) -> $type {
-            if value % 2 == 0 {
+            if value % 2 == 0 || value == <$type>::MAX {
                 value
             } else {
                 value + 1
