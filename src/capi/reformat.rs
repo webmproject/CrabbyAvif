@@ -248,10 +248,13 @@ pub unsafe extern "C" fn crabby_avifImageScale(
     dstHeight: u32,
     _diag: *mut avifDiagnostics,
 ) -> avifResult {
-    // To avoid buffer reallocations, we only support scaling to a smaller size.
     let dst_image = unsafe { &mut (*image) };
     if dstWidth > dst_image.width || dstHeight > dst_image.height {
+        // To avoid buffer reallocations, we only support scaling to a smaller size.
         return avifResult::NotImplemented;
+    }
+    if dstWidth == dst_image.width && dstHeight == dst_image.height {
+        return avifResult::Ok;
     }
 
     let mut rust_image: image::Image = unsafe { &(*image) }.into();
