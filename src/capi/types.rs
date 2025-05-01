@@ -443,7 +443,9 @@ pub const AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084: u32 = 16;
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifAlloc(size: usize) -> *mut c_void {
     let mut data: Vec<u8> = Vec::new();
-    data.reserve_exact(size);
+    if data.try_reserve_exact(size).is_err() {
+        return std::ptr::null_mut();
+    }
     data.resize(size, 0);
     let mut boxed_slice = data.into_boxed_slice();
     let ptr = boxed_slice.as_mut_ptr();

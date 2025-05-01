@@ -324,6 +324,9 @@ pub unsafe extern "C" fn crabby_avifImageCopy(
             let alloc_plane_width = round2_usize(plane_width);
             let plane_size = alloc_plane_width * alloc_plane_height * pixel_size;
             dst.yuvPlanes[plane] = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
+            if dst.yuvPlanes[plane].is_null() {
+                return avifResult::OutOfMemory;
+            }
             dst.yuvRowBytes[plane] = (pixel_size * alloc_plane_width) as u32;
             copy_plane_helper(
                 src.yuvPlanes[plane],
@@ -344,6 +347,9 @@ pub unsafe extern "C" fn crabby_avifImageCopy(
         let alloc_plane_width = round2_usize(plane_width);
         let plane_size = alloc_plane_width * alloc_plane_height * pixel_size;
         dst.alphaPlane = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
+        if dst.alphaPlane.is_null() {
+            return avifResult::OutOfMemory;
+        }
         dst.alphaRowBytes = (pixel_size * alloc_plane_width) as u32;
         copy_plane_helper(
             src.alphaPlane,
@@ -378,6 +384,9 @@ fn avif_image_allocate_planes_helper(
         if image.yuvPlanes[0].is_null() {
             image.yuvRowBytes[0] = u32_from_usize(y_row_bytes)?;
             image.yuvPlanes[0] = unsafe { crabby_avifAlloc(y_size) as *mut u8 };
+            if image.yuvPlanes[0].is_null() {
+                return Err(AvifError::OutOfMemory);
+            }
         }
         if !image.yuvFormat.is_monochrome() {
             let csx0 = image.yuvFormat.chroma_shift_x().0 as u64;
@@ -399,6 +408,9 @@ fn avif_image_allocate_planes_helper(
                 }
                 image.yuvRowBytes[plane] = u32_from_usize(uv_row_bytes)?;
                 image.yuvPlanes[plane] = unsafe { crabby_avifAlloc(uv_size) as *mut u8 };
+                if image.yuvPlanes[plane].is_null() {
+                    return Err(AvifError::OutOfMemory);
+                }
             }
         }
     }
@@ -406,6 +418,9 @@ fn avif_image_allocate_planes_helper(
         image.imageOwnsAlphaPlane = AVIF_TRUE;
         image.alphaRowBytes = u32_from_usize(y_row_bytes)?;
         image.alphaPlane = unsafe { crabby_avifAlloc(y_size) as *mut u8 };
+        if image.alphaPlane.is_null() {
+            return Err(AvifError::OutOfMemory);
+        }
     }
     Ok(())
 }

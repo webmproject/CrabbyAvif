@@ -208,6 +208,9 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
             if plane == Plane::V && dst.yuvPlanes[2].is_null() {
                 let plane_size = usize_from_u32(plane_data.width * plane_data.height * 2)?;
                 dst.yuvPlanes[2] = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
+                if dst.yuvPlanes[2].is_null() {
+                    return Err(AvifError::OutOfMemory);
+                }
                 dst.yuvRowBytes[2] = plane_data.width * 2;
             }
             let dst_planes = [
