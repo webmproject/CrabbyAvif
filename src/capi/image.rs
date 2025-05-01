@@ -396,8 +396,8 @@ fn avif_image_allocate_planes_helper(
             let csy = image.yuvFormat.chroma_shift_y() as u64;
             let height = ((image.height as u64) + csy) >> csy;
             let alloc_height = round2_u32(u32_from_u64(height)?);
-            let uv_row_bytes = usize_from_u32(alloc_width * channel_size)?;
-            let uv_size = usize_from_u32(uv_row_bytes as u32 * alloc_height)?;
+            let uv_row_bytes = usize_from_u32(checked_mul!(alloc_width, channel_size)?)?;
+            let uv_size = usize_from_u32(checked_mul!(uv_row_bytes as u32, alloc_height)?)?;
             let plane_end = match image.yuvFormat {
                 PixelFormat::AndroidP010 | PixelFormat::AndroidNv12 | PixelFormat::AndroidNv21 => 1,
                 _ => 2,
