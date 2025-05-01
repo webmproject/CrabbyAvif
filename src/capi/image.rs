@@ -369,7 +369,11 @@ fn avif_image_allocate_planes_helper(
     image: &mut avifImage,
     planes: avifPlanesFlags,
 ) -> AvifResult<()> {
-    if image.width == 0 || image.height == 0 {
+    if image.width == 0
+        || image.height == 0
+        || image.width > decoder::DEFAULT_IMAGE_DIMENSION_LIMIT
+        || image.height > decoder::DEFAULT_IMAGE_DIMENSION_LIMIT
+    {
         return Err(AvifError::InvalidArgument);
     }
     let channel_size = if image.depth == 8 { 1 } else { 2 };
