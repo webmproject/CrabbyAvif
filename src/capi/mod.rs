@@ -25,3 +25,23 @@ mod image;
 mod io;
 mod reformat;
 mod types;
+
+#[macro_export]
+macro_rules! deref_const {
+    ($ptr:expr) => {{
+        // The extra curly braces here is necessary to make this whole macro into a single
+        // expression.
+        assert!(!$ptr.is_null());
+        unsafe { &*($ptr) }
+    }};
+}
+
+#[macro_export]
+macro_rules! deref_mut {
+    ($ptr:expr) => {{
+        // The extra curly braces here is necessary to make this whole macro into a single
+        // expression.
+        assert!(!$ptr.is_null());
+        unsafe { &mut *($ptr) }
+    }};
+}

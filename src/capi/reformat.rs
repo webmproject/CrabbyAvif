@@ -150,9 +150,8 @@ pub unsafe extern "C" fn crabby_avifRGBImageSetDefaults(
     rgb: *mut avifRGBImage,
     image: *const avifImage,
 ) {
-    let rgb = unsafe { &mut (*rgb) };
-    let image: image::Image = unsafe { &(*image) }.into();
-    *rgb = rgb::Image::create_from_yuv(&image).into();
+    let image: image::Image = deref_const!(image).into();
+    *deref_mut!(rgb) = rgb::Image::create_from_yuv(&image).into();
 }
 
 #[no_mangle]
@@ -160,13 +159,11 @@ pub unsafe extern "C" fn crabby_avifImageYUVToRGB(
     image: *const avifImage,
     rgb: *mut avifRGBImage,
 ) -> avifResult {
-    unsafe {
-        if (*image).yuvPlanes[0].is_null() {
-            return avifResult::Ok;
-        }
+    if deref_const!(image).yuvPlanes[0].is_null() {
+        return avifResult::Ok;
     }
-    let mut rgb: rgb::Image = unsafe { &(*rgb) }.into();
-    let image: image::Image = unsafe { &(*image) }.into();
+    let mut rgb: rgb::Image = deref_const!(rgb).into();
+    let image: image::Image = deref_const!(image).into();
     rgb.convert_from_yuv(&image).into()
 }
 
@@ -248,7 +245,7 @@ pub unsafe extern "C" fn crabby_avifImageScale(
     dstHeight: u32,
     _diag: *mut avifDiagnostics,
 ) -> avifResult {
-    let dst_image = unsafe { &mut (*image) };
+    let dst_image = deref_mut!(image);
     if dstWidth > dst_image.width || dstHeight > dst_image.height {
         // To avoid buffer reallocations, we only support scaling to a smaller size.
         return avifResult::NotImplemented;
@@ -257,7 +254,7 @@ pub unsafe extern "C" fn crabby_avifImageScale(
         return avifResult::Ok;
     }
 
-    let mut rust_image: image::Image = unsafe { &(*image) }.into();
+    let mut rust_image: image::Image = deref_const!(image).into();
     let res = rust_image.scale(dstWidth, dstHeight, Category::Color);
     if res.is_err() {
         return res.into();
@@ -265,8 +262,8 @@ pub unsafe extern "C" fn crabby_avifImageScale(
     // The scale function is designed to work only for one category at a time.
     // Restore the width and height to the original values before scaling the
     // alpha plane.
-    rust_image.width = unsafe { (*image).width };
-    rust_image.height = unsafe { (*image).height };
+    rust_image.width = deref_const!(image).width;
+    rust_image.height = deref_const!(image).height;
     let res = rust_image.scale(dstWidth, dstHeight, Category::Alpha);
     if res.is_err() {
         return res.into();

@@ -331,8 +331,8 @@ pub unsafe extern "C" fn crabby_avifCropRectConvertCleanApertureBox(
     yuvFormat: PixelFormat,
     _diag: *mut avifDiagnostics,
 ) -> avifBool {
-    let rust_clap: CleanAperture = unsafe { (&(*clap)).into() };
-    let rect = unsafe { &mut (*cropRect) };
+    let rust_clap: CleanAperture = deref_const!(clap).into();
+    let rect = deref_mut!(cropRect);
     *rect = match CropRect::create_from(&rust_clap, imageW, imageH, yuvFormat) {
         Ok(x) => x,
         Err(_) => return AVIF_FALSE,
@@ -386,7 +386,7 @@ pub unsafe extern "C" fn crabby_avifGetPixelFormatInfo(
     if info.is_null() {
         return;
     }
-    let info = unsafe { &mut (*info) };
+    let info = deref_mut!(info);
     match format {
         PixelFormat::Yuv444 => {
             info.chromaShiftX = 0;
@@ -417,9 +417,7 @@ pub unsafe extern "C" fn crabby_avifDiagnosticsClearError(diag: *mut avifDiagnos
     if diag.is_null() {
         return;
     }
-    unsafe {
-        (*diag).error[0] = 0;
-    }
+    deref_mut!(diag).error[0] = 0;
 }
 
 #[repr(C)]

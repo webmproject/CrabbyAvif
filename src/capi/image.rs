@@ -278,8 +278,8 @@ pub unsafe extern "C" fn crabby_avifImageCopy(
     unsafe {
         crabby_avifImageFreePlanes(dstImage, avifPlanesFlag::AvifPlanesAll as u32);
     }
-    let dst = unsafe { &mut (*dstImage) };
-    let src = unsafe { &(*srcImage) };
+    let dst = deref_mut!(dstImage);
+    let src = deref_const!(srcImage);
     dst.width = src.width;
     dst.height = src.height;
     dst.depth = src.depth;
@@ -434,8 +434,7 @@ pub unsafe extern "C" fn crabby_avifImageAllocatePlanes(
     image: *mut avifImage,
     planes: avifPlanesFlags,
 ) -> avifResult {
-    let image = unsafe { &mut (*image) };
-    avif_image_allocate_planes_helper(image, planes).into()
+    avif_image_allocate_planes_helper(deref_mut!(image), planes).into()
 }
 
 #[no_mangle]
@@ -443,7 +442,7 @@ pub unsafe extern "C" fn crabby_avifImageFreePlanes(
     image: *mut avifImage,
     planes: avifPlanesFlags,
 ) {
-    let image = unsafe { &mut (*image) };
+    let image = deref_mut!(image);
     if (planes & 1) != 0 {
         for plane in 0usize..3 {
             if image.imageOwnsYUVPlanes == AVIF_TRUE {
@@ -478,15 +477,13 @@ pub unsafe extern "C" fn crabby_avifImageDestroy(image: *mut avifImage) {
 
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageUsesU16(image: *const avifImage) -> avifBool {
-    unsafe { to_avifBool(!image.is_null() && (*image).depth > 8) }
+    to_avifBool(!image.is_null() && deref_const!(image).depth > 8)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageIsOpaque(image: *const avifImage) -> avifBool {
-    unsafe {
-        // TODO: Check for pixel level opacity as well.
-        to_avifBool(!image.is_null() && !(*image).alphaPlane.is_null())
-    }
+    // TODO: Check for pixel level opacity as well.
+    to_avifBool(!image.is_null() && deref_const!(image).alphaPlane.is_null())
 }
 
 #[no_mangle]
@@ -494,12 +491,10 @@ pub unsafe extern "C" fn crabby_avifImagePlane(image: *const avifImage, channel:
     if image.is_null() {
         return std::ptr::null_mut();
     }
-    unsafe {
-        match channel {
-            0..=2 => (*image).yuvPlanes[channel as usize],
-            3 => (*image).alphaPlane,
-            _ => std::ptr::null_mut(),
-        }
+    match channel {
+        0..=2 => deref_const!(image).yuvPlanes[channel as usize],
+        3 => deref_const!(image).alphaPlane,
+        _ => std::ptr::null_mut(),
     }
 }
 
@@ -511,12 +506,10 @@ pub unsafe extern "C" fn crabby_avifImagePlaneRowBytes(
     if image.is_null() {
         return 0;
     }
-    unsafe {
-        match channel {
-            0..=2 => (*image).yuvRowBytes[channel as usize],
-            3 => (*image).alphaRowBytes,
-            _ => 0,
-        }
+    match channel {
+        0..=2 => deref_const!(image).yuvRowBytes[channel as usize],
+        3 => deref_const!(image).alphaRowBytes,
+        _ => 0,
     }
 }
 
@@ -528,35 +521,34 @@ pub unsafe extern "C" fn crabby_avifImagePlaneWidth(
     if image.is_null() {
         return 0;
     }
-    unsafe {
-        match channel {
-            0 => (*image).width,
-            1 => match (*image).yuvFormat {
-                PixelFormat::Yuv444
-                | PixelFormat::AndroidP010
-                | PixelFormat::AndroidNv12
-                | PixelFormat::AndroidNv21 => (*image).width,
-                PixelFormat::Yuv420 | PixelFormat::Yuv422 => ((*image).width).div_ceil(2),
-                PixelFormat::None | PixelFormat::Yuv400 => 0,
-            },
-            2 => match (*image).yuvFormat {
-                PixelFormat::Yuv444 => (*image).width,
-                PixelFormat::Yuv420 | PixelFormat::Yuv422 => ((*image).width).div_ceil(2),
-                PixelFormat::None
-                | PixelFormat::Yuv400
-                | PixelFormat::AndroidP010
-                | PixelFormat::AndroidNv12
-                | PixelFormat::AndroidNv21 => 0,
-            },
-            3 => {
-                if !(*image).alphaPlane.is_null() {
-                    (*image).width
-                } else {
-                    0
-                }
+    let image = deref_const!(image);
+    match channel {
+        0 => image.width,
+        1 => match image.yuvFormat {
+            PixelFormat::Yuv444
+            | PixelFormat::AndroidP010
+            | PixelFormat::AndroidNv12
+            | PixelFormat::AndroidNv21 => image.width,
+            PixelFormat::Yuv420 | PixelFormat::Yuv422 => image.width.div_ceil(2),
+            PixelFormat::None | PixelFormat::Yuv400 => 0,
+        },
+        2 => match image.yuvFormat {
+            PixelFormat::Yuv444 => image.width,
+            PixelFormat::Yuv420 | PixelFormat::Yuv422 => image.width.div_ceil(2),
+            PixelFormat::None
+            | PixelFormat::Yuv400
+            | PixelFormat::AndroidP010
+            | PixelFormat::AndroidNv12
+            | PixelFormat::AndroidNv21 => 0,
+        },
+        3 => {
+            if !image.alphaPlane.is_null() {
+                image.width
+            } else {
+                0
             }
-            _ => 0,
         }
+        _ => 0,
     }
 }
 
@@ -568,26 +560,25 @@ pub unsafe extern "C" fn crabby_avifImagePlaneHeight(
     if image.is_null() {
         return 0;
     }
-    unsafe {
-        match channel {
-            0 => (*image).height,
-            1 | 2 => {
-                if (*image).yuvFormat.is_monochrome() {
-                    0
-                } else {
-                    let shift_y = (*image).yuvFormat.chroma_shift_y();
-                    ((*image).height + shift_y) >> shift_y
-                }
+    let image = deref_const!(image);
+    match channel {
+        0 => image.height,
+        1 | 2 => {
+            if image.yuvFormat.is_monochrome() {
+                0
+            } else {
+                let shift_y = image.yuvFormat.chroma_shift_y();
+                (image.height + shift_y) >> shift_y
             }
-            3 => {
-                if !(*image).alphaPlane.is_null() {
-                    (*image).height
-                } else {
-                    0
-                }
-            }
-            _ => 0,
         }
+        3 => {
+            if !image.alphaPlane.is_null() {
+                image.height
+            } else {
+                0
+            }
+        }
+        _ => 0,
     }
 }
 
@@ -597,9 +588,9 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
     srcImage: *const avifImage,
     rect: *const avifCropRect,
 ) -> avifResult {
-    let dst = unsafe { &mut (*dstImage) };
-    let src = unsafe { &(*srcImage) };
-    let rect = unsafe { &(*rect) };
+    let dst = deref_mut!(dstImage);
+    let src = deref_const!(srcImage);
+    let rect = deref_const!(rect);
     if rect.width > src.width
         || rect.height > src.height
         || rect.x > (src.width - rect.width)
