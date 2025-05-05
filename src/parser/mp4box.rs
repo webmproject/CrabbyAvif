@@ -155,6 +155,7 @@ pub struct Av1CodecConfiguration {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HevcCodecConfiguration {
     pub bitdepth: u8,
+    pub pixel_format: PixelFormat,
     pub nal_length_size: u8,
     pub vps: Vec<u8>,
     pub sps: Vec<u8>,
@@ -188,13 +189,7 @@ impl CodecConfiguration {
                     PixelFormat::Yuv444
                 }
             }
-            Self::Hevc(_) => {
-                // It is okay to always return Yuv420 here since that is the only format that
-                // android_mediacodec returns.
-                // TODO: b/370549923 - Identify the correct YUV subsampling type from the codec
-                // configuration data.
-                PixelFormat::Yuv420
-            }
+            Self::Hevc(config) => config.pixel_format,
         }
     }
 
@@ -723,9 +718,18 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // bit(6) reserved = '111111'b;
     // unsigned int(2) parallelismType;
     // bit(6) reserved = '111111'b;
+    bits.skip(2 + 1 + 5 + 32 + 48 + 8 + 4 + 12 + 6 + 2 + 6)?;
     // unsigned int(2) chroma_format_idc;
+    let pixel_format = match bits.read(2)? {
+        // Defined in ISO/IEC 23008-2 Section 6.2.
+        0 => PixelFormat::Yuv400,
+        1 => PixelFormat::Yuv420,
+        2 => PixelFormat::Yuv422,
+        // The only other possible value is 3 since we are reading only 2 bits.
+        _ => PixelFormat::Yuv444,
+    };
     // bit(5) reserved = '11111'b;
-    bits.skip(2 + 1 + 5 + 32 + 48 + 8 + 4 + 12 + 6 + 2 + 6 + 2 + 5)?;
+    bits.skip(5)?;
     // unsigned int(3) bit_depth_luma_minus8;
     let bitdepth = bits.read(3)? as u8 + 8;
     // bit(5) reserved = '11111'b;
@@ -767,6 +771,7 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
     Ok(ItemProperty::CodecConfiguration(CodecConfiguration::Hevc(
         HevcCodecConfiguration {
             bitdepth,
+            pixel_format,
             nal_length_size,
             vps,
             pps,
