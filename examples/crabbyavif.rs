@@ -545,11 +545,12 @@ fn info(args: &CommandLineArgs) -> AvifResult<()> {
     }
 }
 
-fn get_extension(filename: &str) -> &str {
+fn get_extension(filename: &str) -> String {
     std::path::Path::new(filename)
         .extension()
         .and_then(|s| s.to_str())
         .unwrap_or("")
+        .to_lowercase()
 }
 
 fn decode(args: &CommandLineArgs) -> AvifResult<()> {
@@ -567,7 +568,7 @@ fn decode(args: &CommandLineArgs) -> AvifResult<()> {
     let output_filename = &args.output_file.as_ref().unwrap().as_str();
     let image = decoder.image().unwrap();
     let extension = get_extension(output_filename);
-    let mut writer: Box<dyn Writer> = match extension {
+    let mut writer: Box<dyn Writer> = match extension.as_str() {
         "y4m" | "yuv" => {
             if !image.icc.is_empty() || !image.exif.is_empty() || !image.xmp.is_empty() {
                 println!("Warning: metadata dropped when saving to {extension}");
@@ -608,7 +609,7 @@ fn read_file(filepath: &String) -> io::Result<Vec<u8>> {
 fn encode(args: &CommandLineArgs) -> AvifResult<()> {
     const DEFAULT_ENCODE_QUALITY: u8 = 90;
     let extension = get_extension(&args.input_file);
-    let mut reader: Box<dyn Reader> = match extension {
+    let mut reader: Box<dyn Reader> = match extension.as_str() {
         "y4m" => Box::new(Y4MReader::create(&args.input_file)?),
         "jpg" | "jpeg" => Box::new(JpegReader::create(&args.input_file)?),
         "png" => Box::new(PngReader::create(&args.input_file)?),
@@ -711,8 +712,21 @@ fn encode(_args: &CommandLineArgs) -> AvifResult<()> {
     Err(AvifError::InvalidArgument)
 }
 
+fn can_decode(filename: &str) -> bool {
+    match get_extension(filename).as_str() {
+        "avif" => true,
+        #[cfg(feature = "heic")]
+        "heic" | "heif" => true,
+        _ => false,
+    }
+}
+
+fn can_encode(filename: &str) -> bool {
+    get_extension(filename) == "avif"
+}
+
 fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
-    if get_extension(&args.input_file) == "avif" {
+    if can_decode(&args.input_file) {
         if args.info {
             if args.output_file.is_some()
                 || args.quality.is_some()
@@ -752,14 +766,25 @@ fn main() {
         eprintln!("ERROR: {:#?}", err);
         std::process::exit(1);
     }
-    let res = if get_extension(&args.input_file) == "avif" {
+    let res = if can_decode(&args.input_file) {
         if args.info {
             info(&args)
         } else {
             decode(&args)
         }
+    } else if let Some(output_file) = &args.output_file {
+        if can_encode(output_file) {
+            encode(&args)
+        } else {
+            eprintln!("Input/output file extensions not supported");
+            std::process::exit(1);
+        }
     } else {
-        encode(&args)
+        eprintln!(
+            "Input file extension not supported: {}",
+            get_extension(&args.input_file)
+        );
+        std::process::exit(1);
     };
     match res {
         Ok(_) => std::process::exit(0),
