@@ -64,7 +64,7 @@ impl Format {
         self.offsets()[3]
     }
 
-    pub(crate) fn has_alpha(&self) -> bool {
+    pub fn has_alpha(&self) -> bool {
         !matches!(self, Format::Rgb | Format::Bgr | Format::Rgb565)
     }
 }
@@ -127,7 +127,7 @@ pub enum AlphaMultiplyMode {
 }
 
 impl Image {
-    pub(crate) fn max_channel(&self) -> u16 {
+    pub fn max_channel(&self) -> u16 {
         ((1i32 << self.depth) - 1) as u16
     }
 
@@ -235,7 +235,7 @@ impl Image {
         }
     }
 
-    pub(crate) fn channel_count(&self) -> u32 {
+    pub fn channel_count(&self) -> u32 {
         match self.format {
             Format::Rgba | Format::Bgra | Format::Argb | Format::Abgr => 4,
             Format::Rgb | Format::Bgr => 3,
@@ -427,8 +427,7 @@ impl Image {
             }
         }
         if !conversion_complete {
-            // TODO: b/410088660 - implement native conversion.
-            return Err(AvifError::NotImplemented);
+            rgb_impl::rgb_to_yuv(self, image)?;
         }
         if image.has_plane(Plane::A) {
             if has_alpha {

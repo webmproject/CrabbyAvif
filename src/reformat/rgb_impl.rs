@@ -718,6 +718,183 @@ pub(crate) fn yuv_to_rgb_any(
     Ok(())
 }
 
+#[derive(Debug, Default, Copy, Clone)]
+struct YUVBlock(f32, f32, f32);
+
+#[allow(unused)]
+pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> {
+    let r_offset = rgb.format.r_offset();
+    let g_offset = rgb.format.g_offset();
+    let b_offset = rgb.format.b_offset();
+    let rgb_channel_count = rgb.channel_count() as usize;
+    let rgb_max_channel_f = rgb.max_channel_f();
+    let mode = (image as &image::Image).into();
+    let (bias_y, range_y) = bias_and_range_y(image);
+    let (bias_uv, range_uv) = if mode == Mode::Identity {
+        (bias_y, range_y)
+    } else {
+        bias_and_range_uv(image)
+    };
+    let yuv_max_channel = image.max_channel();
+
+    for outer_j in (0..image.height).step_by(2) {
+        let block_h = if (outer_j + 1) >= image.height { 1 } else { 2 };
+        for outer_i in (0..image.width).step_by(2) {
+            let mut yuv_block: [[YUVBlock; 3]; 3] = Default::default();
+            let block_w = if (outer_i + 1) >= image.width { 1 } else { 2 };
+            for block_j in 0..block_h as usize {
+                #[allow(clippy::needless_range_loop)]
+                for block_i in 0..block_w as usize {
+                    let j = outer_j + block_j as u32;
+                    let i = outer_i as usize + block_i;
+
+                    let rgb_pixel = if rgb.depth == 8 {
+                        let src = rgb.row(j)?;
+                        [
+                            src[(i * rgb_channel_count) + r_offset] as f32 / rgb_max_channel_f,
+                            src[(i * rgb_channel_count) + g_offset] as f32 / rgb_max_channel_f,
+                            src[(i * rgb_channel_count) + b_offset] as f32 / rgb_max_channel_f,
+                        ]
+                    } else {
+                        let src = rgb.row16(j)?;
+                        [
+                            src[(i * rgb_channel_count) + r_offset] as f32 / rgb_max_channel_f,
+                            src[(i * rgb_channel_count) + g_offset] as f32 / rgb_max_channel_f,
+                            src[(i * rgb_channel_count) + b_offset] as f32 / rgb_max_channel_f,
+                        ]
+                    };
+                    // TODO: b/410088660 - handle alpha multiply/unmultiply.
+                    yuv_block[block_i][block_j] = match mode {
+                        Mode::YuvCoefficients(kr, kg, kb) => {
+                            let y = (kr * rgb_pixel[0]) + (kg * rgb_pixel[1]) + (kb * rgb_pixel[2]);
+                            YUVBlock(
+                                y,
+                                (rgb_pixel[2] - y) / (2.0 * (1.0 - kb)),
+                                (rgb_pixel[0] - y) / (2.0 * (1.0 - kr)),
+                            )
+                        }
+                        _ => return Err(AvifError::NotImplemented),
+                    };
+                    if image.depth == 8 {
+                        let dst_y = image.row_mut(Plane::Y, j)?;
+                        dst_y[i] = to_unorm(
+                            bias_y,
+                            range_y,
+                            yuv_max_channel,
+                            yuv_block[block_i][block_j].0,
+                        ) as u8;
+                        if image.yuv_format == PixelFormat::Yuv444 {
+                            let dst_u = image.row_mut(Plane::U, j)?;
+                            dst_u[i] = to_unorm(
+                                bias_uv,
+                                range_uv,
+                                yuv_max_channel,
+                                yuv_block[block_i][block_j].1,
+                            ) as u8;
+                            let dst_v = image.row_mut(Plane::V, j)?;
+                            dst_v[i] = to_unorm(
+                                bias_uv,
+                                range_uv,
+                                yuv_max_channel,
+                                yuv_block[block_i][block_j].2,
+                            ) as u8;
+                        }
+                    } else {
+                        let dst_y = image.row16_mut(Plane::Y, j)?;
+                        dst_y[i] = to_unorm(
+                            bias_y,
+                            range_y,
+                            yuv_max_channel,
+                            yuv_block[block_i][block_j].0,
+                        );
+                        if image.yuv_format == PixelFormat::Yuv444 {
+                            let dst_u = image.row16_mut(Plane::U, j)?;
+                            dst_u[i] = to_unorm(
+                                bias_uv,
+                                range_uv,
+                                yuv_max_channel,
+                                yuv_block[block_i][block_j].1,
+                            );
+                            let dst_v = image.row16_mut(Plane::V, j)?;
+                            dst_v[i] = to_unorm(
+                                bias_uv,
+                                range_uv,
+                                yuv_max_channel,
+                                yuv_block[block_i][block_j].2,
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Populate subsampled channels with average values of the 2x2 block.
+            match image.yuv_format {
+                PixelFormat::Yuv420 => {
+                    let (avg_u, avg_v) = average_2x2(&yuv_block, block_w * block_h);
+                    let uv_j = outer_j >> 1;
+                    let uv_i = outer_i as usize >> 1;
+                    if image.depth == 8 {
+                        let dst_u = image.row_mut(Plane::U, uv_j)?;
+                        dst_u[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_u) as u8;
+                        let dst_v = image.row_mut(Plane::V, uv_j)?;
+                        dst_v[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_v) as u8;
+                    } else {
+                        let dst_u = image.row16_mut(Plane::U, uv_j)?;
+                        dst_u[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_u);
+                        let dst_v = image.row16_mut(Plane::V, uv_j)?;
+                        dst_v[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_v);
+                    }
+                }
+                PixelFormat::Yuv422 => {
+                    for block_j in 0..block_h {
+                        let (avg_u, avg_v) = average_1x2(&yuv_block, block_j, block_w);
+                        let uv_j = outer_j + block_j;
+                        let uv_i = outer_i as usize >> 1;
+                        if image.depth == 8 {
+                            let dst_u = image.row_mut(Plane::U, uv_j)?;
+                            dst_u[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_u) as u8;
+                            let dst_v = image.row_mut(Plane::V, uv_j)?;
+                            dst_v[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_v) as u8;
+                        } else {
+                            let dst_u = image.row16_mut(Plane::U, uv_j)?;
+                            dst_u[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_u);
+                            let dst_v = image.row16_mut(Plane::V, uv_j)?;
+                            dst_v[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_v);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+// TODO - b/410088660: this can be a macro since it's per pixel?
+fn to_unorm(bias_y: f32, range_y: f32, max_channel: u16, v: f32) -> u16 {
+    clamp_i32(
+        (0.5 + (v * range_y + bias_y)).floor() as i32,
+        0,
+        max_channel as i32,
+    ) as u16
+}
+
+fn average_2x2(yuv_block: &[[YUVBlock; 3]; 3], sample_count: u32) -> (f32, f32) {
+    let sum_u: f32 = yuv_block.iter().flatten().map(|pixel| pixel.1).sum();
+    let sum_v: f32 = yuv_block.iter().flatten().map(|pixel| pixel.2).sum();
+    (sum_u / sample_count as f32, sum_v / sample_count as f32)
+}
+
+fn average_1x2(yuv_block: &[[YUVBlock; 3]; 3], block_j: u32, block_w: u32) -> (f32, f32) {
+    let mut sum_u = 0.0;
+    let mut sum_v = 0.0;
+    for row in yuv_block.iter().take(block_w as usize) {
+        sum_u += row[block_j as usize].1;
+        sum_v += row[block_j as usize].2;
+    }
+    (sum_u / block_w as f32, sum_v / block_w as f32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
