@@ -143,8 +143,12 @@ impl Image {
         }
     }
 
+    pub(crate) fn is_supported_depth(depth: u8) -> bool {
+        matches!(depth, 8 | 10 | 12 | 16)
+    }
+
     pub(crate) fn depth_valid(&self) -> bool {
-        matches!(self.depth, 8 | 10 | 12 | 16)
+        Self::is_supported_depth(self.depth)
     }
 
     pub fn max_channel(&self) -> u16 {
@@ -251,10 +255,17 @@ impl Image {
 
     pub fn row(&self, plane: Plane, row: u32) -> AvifResult<&[u8]> {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
-        let start = checked_mul!(row, plane_data.row_bytes)?;
+        let row_bytes = plane_data.row_bytes;
+        let start = checked_mul!(row, row_bytes)?;
         self.planes[plane.as_usize()]
             .unwrap_ref()
-            .slice(start, plane_data.row_bytes)
+            .slice(start, row_bytes)
+    }
+
+    // Same as row() but only returns `width` pixels (extra row padding is excluded).
+    pub fn row_exact(&self, plane: Plane, row: u32) -> AvifResult<&[u8]> {
+        let width = self.width(plane);
+        Ok(&self.row(plane, row)?[0..width])
     }
 
     pub fn row_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u8]> {
@@ -266,6 +277,12 @@ impl Image {
             .slice_mut(start, row_bytes)
     }
 
+    // Same as row_mut() but only returns `width` pixels (extra row padding is excluded).
+    pub fn row_exact_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u8]> {
+        let width = self.width(plane);
+        Ok(&mut self.row_mut(plane, row)?[0..width])
+    }
+
     pub fn row16(&self, plane: Plane, row: u32) -> AvifResult<&[u16]> {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let row_bytes = plane_data.row_bytes / 2;
@@ -275,6 +292,12 @@ impl Image {
             .slice16(start, row_bytes)
     }
 
+    // Same as row16() but only returns `width` pixels (extra row padding is excluded).
+    pub fn row16_exact(&self, plane: Plane, row: u32) -> AvifResult<&[u16]> {
+        let width = self.width(plane);
+        Ok(&self.row16(plane, row)?[0..width])
+    }
+
     pub fn row16_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u16]> {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let row_bytes = plane_data.row_bytes / 2;
@@ -282,6 +305,12 @@ impl Image {
         self.planes[plane.as_usize()]
             .unwrap_mut()
             .slice16_mut(start, row_bytes)
+    }
+
+    // Same as row16_mut() but only returns `width` pixels (extra row padding is excluded).
+    pub fn row16_exact_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u16]> {
+        let width = self.width(plane);
+        Ok(&mut self.row16_mut(plane, row)?[0..width])
     }
 
     pub(crate) fn row_generic(&self, plane: Plane, row: u32) -> AvifResult<PlaneRow> {

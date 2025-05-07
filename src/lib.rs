@@ -446,15 +446,6 @@ pub enum Category {
 impl Category {
     const COUNT: usize = 3;
     const ALL: [Category; Category::COUNT] = [Self::Color, Self::Alpha, Self::Gainmap];
-    const ALL_USIZE: [usize; Category::COUNT] = [0, 1, 2];
-
-    pub(crate) fn usize(self) -> usize {
-        match self {
-            Category::Color => 0,
-            Category::Alpha => 1,
-            Category::Gainmap => 2,
-        }
-    }
 
     pub fn planes(&self) -> &[Plane] {
         match self {

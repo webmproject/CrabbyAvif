@@ -13,6 +13,8 @@
 // limitations under the License.
 
 pub mod item;
+#[cfg(feature = "sample_transform")]
+pub mod sampletransform;
 pub mod tile;
 pub mod track;
 
@@ -135,13 +137,14 @@ pub enum ImageContentType {
 }
 
 impl ImageContentType {
-    pub(crate) fn categories(&self) -> Vec<Category> {
-        match self {
+    pub(crate) fn decoding_items(&self) -> Vec<DecodingItem> {
+        let categories = match self {
             Self::None => vec![],
             Self::ColorAndAlpha => vec![Category::Color, Category::Alpha],
             Self::GainMap => vec![Category::Gainmap],
             Self::All => Category::ALL.to_vec(),
-        }
+        };
+        DecodingItem::all_for_categories(&categories)
     }
 
     pub(crate) fn gainmap(&self) -> bool {
@@ -280,6 +283,68 @@ pub struct IOStats {
     pub alpha_obu_size: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct DecodingItem {
+    pub category: Category,
+    // 0 for the main image, 1 to MAX_EXTRA_INPUTS for extra input images.
+    pub item_idx: usize,
+}
+
+impl DecodingItem {
+    const COUNT: usize = 3 + Self::MAX_EXTRA_INPUTS * 2;
+    // Max supported number of inputs for derived image items.
+    const MAX_EXTRA_INPUTS: usize = 3;
+    const ALL: [DecodingItem; Self::COUNT] = [
+        Self::COLOR,
+        Self::color(1),
+        Self::color(2),
+        Self::color(3),
+        Self::ALPHA,
+        Self::alpha(1),
+        Self::alpha(2),
+        Self::alpha(3),
+        Self::GAINMAP,
+    ];
+    const ALL_USIZE: [usize; Self::COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+
+    const COLOR: DecodingItem = Self::color(0);
+    const ALPHA: DecodingItem = Self::alpha(0);
+    const GAINMAP: DecodingItem = DecodingItem {
+        category: Category::Gainmap,
+        item_idx: 0,
+    };
+
+    const fn color(item_idx: usize) -> DecodingItem {
+        DecodingItem {
+            category: Category::Color,
+            item_idx,
+        }
+    }
+
+    const fn alpha(item_idx: usize) -> DecodingItem {
+        DecodingItem {
+            category: Category::Alpha,
+            item_idx,
+        }
+    }
+
+    fn all_for_categories(categories: &[Category]) -> Vec<DecodingItem> {
+        Self::ALL
+            .iter()
+            .filter(|x| categories.contains(&x.category))
+            .cloned()
+            .collect()
+    }
+
+    fn usize(self) -> usize {
+        match self.category {
+            Category::Color => self.item_idx,
+            Category::Alpha => 1 + Self::MAX_EXTRA_INPUTS + self.item_idx,
+            Category::Gainmap => (1 + Self::MAX_EXTRA_INPUTS) * 2,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Decoder {
     pub settings: Settings,
@@ -293,9 +358,10 @@ pub struct Decoder {
     gainmap: GainMap,
     gainmap_present: bool,
     image: Image,
+    extra_inputs: [Image; DecodingItem::MAX_EXTRA_INPUTS],
     source: Source,
-    tile_info: [TileInfo; Category::COUNT],
-    tiles: [Vec<Tile>; Category::COUNT],
+    tile_info: [TileInfo; DecodingItem::COUNT],
+    tiles: [Vec<Tile>; DecodingItem::COUNT],
     items: Items,
     tracks: Vec<Track>,
     // To replicate the C-API, we need to keep this optional. Otherwise this
@@ -488,7 +554,8 @@ impl Decoder {
             is_made_up: true,
             ..Item::default()
         };
-        self.tile_info[Category::Alpha.usize()].grid = self.tile_info[Category::Color.usize()].grid;
+        self.tile_info[DecodingItem::ALPHA.usize()].grid =
+            self.tile_info[DecodingItem::COLOR.usize()].grid;
         self.items.insert(alpha_item_id, alpha_item);
         Ok(Some(alpha_item_id))
     }
@@ -595,12 +662,19 @@ impl Decoder {
         Ok(())
     }
 
-    fn generate_tiles(&mut self, item_id: u32, category: Category) -> AvifResult<Vec<Tile>> {
-        let mut tiles: Vec<Tile> = Vec::new();
+    fn generate_tiles(
+        &mut self,
+        item_id: u32,
+        decoding_item: DecodingItem,
+    ) -> AvifResult<Vec<Tile>> {
         let item = self
             .items
             .get(&item_id)
             .ok_or(AvifError::MissingImageItem)?;
+        let mut tiles: Vec<Tile> = Vec::new();
+        if item.is_sample_transform_item() {
+            return Ok(tiles);
+        }
         if item.source_item_ids.is_empty() {
             if item.size == 0 {
                 return Err(AvifError::MissingImageItem);
@@ -611,10 +685,10 @@ impl Decoder {
                 self.settings.image_count_limit,
                 self.io.unwrap_ref().size_hint(),
             )?;
-            tile.input.category = category;
+            tile.input.decoding_item = decoding_item;
             tiles.push(tile);
         } else {
-            if !self.tile_info[category.usize()].is_derived_image() {
+            if !self.tile_info[decoding_item.usize()].is_derived_image() {
                 return Err(AvifError::InvalidImageGrid(
                     "dimg items were found but image is not a derived image.".into(),
                 ));
@@ -631,23 +705,23 @@ impl Decoder {
                     self.settings.image_count_limit,
                     self.io.unwrap_ref().size_hint(),
                 )?;
-                tile.input.category = category;
+                tile.input.decoding_item = decoding_item;
                 tiles.push(tile);
                 progressive = progressive && derived_item.progressive;
             }
 
-            if category == Category::Color && progressive {
+            if decoding_item == DecodingItem::COLOR && progressive {
                 // Propagate the progressive status to the top-level item.
                 self.items.get_mut(&item_id).unwrap().progressive = true;
             }
         }
-        self.tile_info[category.usize()].tile_count = u32_from_usize(tiles.len())?;
+        self.tile_info[decoding_item.usize()].tile_count = u32_from_usize(tiles.len())?;
         Ok(tiles)
     }
 
     fn harvest_cicp_from_sequence_header(&mut self) -> AvifResult<()> {
-        let category = Category::Color;
-        if self.tiles[category.usize()].is_empty() {
+        let decoding_item = DecodingItem::COLOR;
+        if self.tiles[decoding_item.usize()].is_empty() {
             return Ok(());
         }
         let mut search_size = 64;
@@ -655,12 +729,12 @@ impl Decoder {
             let tile_index = 0;
             self.prepare_sample(
                 /*image_index=*/ 0,
-                category,
+                decoding_item,
                 tile_index,
                 Some(search_size),
             )?;
             let io = &mut self.io.unwrap_mut();
-            let sample = &self.tiles[category.usize()][tile_index].input.samples[0];
+            let sample = &self.tiles[decoding_item.usize()][tile_index].input.samples[0];
             let item_data_buffer = if sample.item_id == 0 {
                 &None
             } else {
@@ -806,6 +880,21 @@ impl Decoder {
             {
                 return Err(AvifError::InvalidImageGrid("invalid tmap items".into()));
             }
+        } else if item.is_sample_transform_item() {
+            if source_items.len() > 32 {
+                return Err(AvifError::InvalidImageGrid(
+                    "expected sato to between 0 and 32 dimg items".into(),
+                ));
+            }
+            if source_items.len() > DecodingItem::MAX_EXTRA_INPUTS {
+                return Err(AvifError::NotImplemented);
+            }
+            if !source_items
+                .iter()
+                .all(|item| item.is_image_codec_item() || item.is_grid_item())
+            {
+                return Err(AvifError::InvalidImageGrid("invalid sato items".into()));
+            }
         }
         Ok(())
     }
@@ -841,7 +930,9 @@ impl Decoder {
     fn reset(&mut self) {
         let decoder = Decoder::default();
         // Reset all fields to default except the following: settings, io, source.
+        /* Do not reset 'settings' */
         self.image_count = decoder.image_count;
+        self.image_index = decoder.image_index;
         self.image_timing = decoder.image_timing;
         self.timescale = decoder.timescale;
         self.duration_in_timescales = decoder.duration_in_timescales;
@@ -850,14 +941,17 @@ impl Decoder {
         self.gainmap = decoder.gainmap;
         self.gainmap_present = decoder.gainmap_present;
         self.image = decoder.image;
+        self.extra_inputs = decoder.extra_inputs;
+        /* Do not reset 'source' */
         self.tile_info = decoder.tile_info;
         self.tiles = decoder.tiles;
-        self.image_index = decoder.image_index;
         self.items = decoder.items;
         self.tracks = decoder.tracks;
+        /* Do not reset 'io' */
         self.codecs = decoder.codecs;
         self.color_track_id = decoder.color_track_id;
         self.parse_state = decoder.parse_state;
+        self.io_stats = decoder.io_stats;
         self.compression_format = decoder.compression_format;
     }
 
@@ -922,6 +1016,7 @@ impl Decoder {
 
             let color_properties: &Vec<ItemProperty>;
             let gainmap_properties: Option<&Vec<ItemProperty>>;
+            let mut is_sample_transform = false;
             if self.source == Source::Tracks {
                 let color_track = self
                     .tracks
@@ -944,33 +1039,35 @@ impl Decoder {
                     .ok_or(AvifError::BmffParseFailed("".into()))?;
                 gainmap_properties = None;
 
-                self.tiles[Category::Color.usize()].push(Tile::create_from_track(
+                self.tiles[DecodingItem::COLOR.usize()].push(Tile::create_from_track(
                     color_track,
                     self.settings.image_count_limit,
                     self.io.unwrap_ref().size_hint(),
-                    Category::Color,
+                    DecodingItem::COLOR,
                 )?);
-                self.tile_info[Category::Color.usize()].tile_count = 1;
+                self.tile_info[DecodingItem::COLOR.usize()].tile_count = 1;
 
                 if let Some(alpha_track) = self
                     .tracks
                     .iter()
                     .find(|x| x.is_aux(color_track.id) && x.is_auxiliary_alpha())
                 {
-                    self.tiles[Category::Alpha.usize()].push(Tile::create_from_track(
+                    self.tiles[DecodingItem::ALPHA.usize()].push(Tile::create_from_track(
                         alpha_track,
                         self.settings.image_count_limit,
                         self.io.unwrap_ref().size_hint(),
-                        Category::Alpha,
+                        DecodingItem::ALPHA,
                     )?);
-                    self.tile_info[Category::Alpha.usize()].tile_count = 1;
+                    self.tile_info[DecodingItem::ALPHA.usize()].tile_count = 1;
                     self.image.alpha_present = true;
                     self.image.alpha_premultiplied = color_track.prem_by_id == Some(alpha_track.id);
                 }
 
                 self.image_index = -1;
-                self.image_count =
-                    self.tiles[Category::Color.usize()][0].input.samples.len() as u32;
+                self.image_count = self.tiles[DecodingItem::COLOR.usize()][0]
+                    .input
+                    .samples
+                    .len() as u32;
                 self.timescale = color_track.media_timescale as u64;
                 self.duration_in_timescales = color_track.media_duration;
                 if self.timescale != 0 {
@@ -985,14 +1082,17 @@ impl Decoder {
                 self.image.height = color_track.height;
             } else {
                 assert_eq!(self.source, Source::PrimaryItem);
-                let mut item_ids: [u32; Category::COUNT] = [0; Category::COUNT];
+                let mut item_ids: [u32; DecodingItem::COUNT] = [0; DecodingItem::COUNT];
 
                 // Mandatory color item (primary item).
                 let primary_item_id =
                     self.find_primary_item_id(&avif_boxes.ftyp, &avif_boxes.meta)?;
 
-                item_ids[Category::Color.usize()] = primary_item_id;
-                self.read_and_parse_item(item_ids[Category::Color.usize()], Category::Color)?;
+                item_ids[DecodingItem::COLOR.usize()] = primary_item_id;
+                self.read_and_parse_item(
+                    item_ids[DecodingItem::COLOR.usize()],
+                    DecodingItem::COLOR,
+                )?;
 
                 let primary_item = self.items.get(&primary_item_id).unwrap();
                 if primary_item.is_tone_mapped_item() {
@@ -1001,34 +1101,78 @@ impl Decoder {
                     let gainmap_id = primary_item.source_item_ids[1];
 
                     // Set the color item it to the base image and reparse it.
-                    item_ids[Category::Color.usize()] = base_item_id;
-                    self.read_and_parse_item(base_item_id, Category::Color)?;
+                    item_ids[DecodingItem::COLOR.usize()] = base_item_id;
+                    self.read_and_parse_item(base_item_id, DecodingItem::COLOR)?;
 
-                    // Parse the gainmap making sure its valid.
-                    self.read_and_parse_item(gainmap_id, Category::Gainmap)?;
+                    // Parse the gainmap making sure it's valid.
+                    self.read_and_parse_item(gainmap_id, DecodingItem::GAINMAP)?;
 
-                    let gainmap_metadata = self.tile_info[Category::Color.usize()]
+                    let gainmap_metadata = self.tile_info[DecodingItem::COLOR.usize()]
                         .gainmap_metadata
                         .clone();
                     if let Some(metadata) = gainmap_metadata {
                         self.validate_gainmap_item(
                             gainmap_id,
                             primary_item_id,
-                            item_ids[Category::Color.usize()],
+                            item_ids[DecodingItem::COLOR.usize()],
                         )?;
                         self.gainmap.metadata = metadata;
                         self.gainmap_present = true;
 
                         if self.settings.image_content_to_decode.gainmap() {
-                            item_ids[Category::Gainmap.usize()] = gainmap_id;
+                            item_ids[DecodingItem::GAINMAP.usize()] = gainmap_id;
                         }
                     }
+                }
+
+                let mut alpha_present = false;
+                let mut alpha_premultiplied = false;
+
+                let primary_item = self.items.get(&primary_item_id).unwrap();
+                if primary_item.is_sample_transform_item() {
+                    let source_item_ids = primary_item.source_item_ids.clone();
+                    for (idx, item_id) in source_item_ids.iter().enumerate() {
+                        let decoding_item = DecodingItem::color(idx + 1);
+                        item_ids[decoding_item.usize()] = *item_id;
+                        self.read_and_parse_item(*item_id, decoding_item)?;
+                        // Optional alpha auxiliary item
+                        if let Some(alpha_item_id) = self.find_alpha_item(*item_id)? {
+                            let alpha_decoding_item = DecodingItem::alpha(idx + 1);
+                            if !self.items.get(&alpha_item_id).unwrap().is_made_up {
+                                self.read_and_parse_item(alpha_item_id, alpha_decoding_item)?;
+                            }
+                            item_ids[alpha_decoding_item.usize()] = alpha_item_id;
+                            let is_premultiplied =
+                                self.items.get(item_id).unwrap().prem_by_id == alpha_item_id;
+                            if idx > 0 && !alpha_present {
+                                return Err(AvifError::InvalidImageGrid("input images for sato derived image item must either all have alpha or all not have alpha".into()));
+                            }
+                            if alpha_present && alpha_premultiplied != is_premultiplied {
+                                return Err(AvifError::InvalidImageGrid("alpha for sato input images must all have the same premultiplication".into()));
+                            }
+                            alpha_present = true;
+                            alpha_premultiplied = is_premultiplied;
+                        } else if alpha_present {
+                            return Err(AvifError::InvalidImageGrid("input images for sato derived image item must either all have alpha or all not have alpha".into()));
+                        }
+                        let item = self.items.get(item_id).unwrap();
+                        self.extra_inputs[idx].width = item.width;
+                        self.extra_inputs[idx].height = item.height;
+                        let codec_config = item
+                            .codec_config()
+                            .ok_or(AvifError::BmffParseFailed("".into()))?;
+                        self.extra_inputs[idx].depth = codec_config.depth();
+                        self.extra_inputs[idx].yuv_format = codec_config.pixel_format();
+                        self.extra_inputs[idx].chroma_sample_position =
+                            codec_config.chroma_sample_position();
+                    }
+                    is_sample_transform = true;
                 }
 
                 // Find exif/xmp from meta if any.
                 Self::search_exif_or_xmp_metadata(
                     &mut self.items,
-                    Some(item_ids[Category::Color.usize()]),
+                    Some(item_ids[DecodingItem::COLOR.usize()]),
                     &self.settings,
                     self.io.unwrap_mut(),
                     &mut self.image,
@@ -1036,12 +1180,19 @@ impl Decoder {
 
                 // Optional alpha auxiliary item
                 if let Some(alpha_item_id) =
-                    self.find_alpha_item(item_ids[Category::Color.usize()])?
+                    self.find_alpha_item(item_ids[DecodingItem::COLOR.usize()])?
                 {
                     if !self.items.get(&alpha_item_id).unwrap().is_made_up {
-                        self.read_and_parse_item(alpha_item_id, Category::Alpha)?;
+                        self.read_and_parse_item(alpha_item_id, DecodingItem::ALPHA)?;
                     }
-                    item_ids[Category::Alpha.usize()] = alpha_item_id;
+                    item_ids[DecodingItem::ALPHA.usize()] = alpha_item_id;
+                    alpha_present = true;
+                    alpha_premultiplied = self
+                        .items
+                        .get(&item_ids[DecodingItem::COLOR.usize()])
+                        .unwrap()
+                        .prem_by_id
+                        == alpha_item_id
                 }
 
                 self.image_index = -1;
@@ -1053,19 +1204,21 @@ impl Decoder {
                 self.image_timing.duration = 1.0;
                 self.image_timing.duration_in_timescales = 1;
 
-                for category in Category::ALL {
-                    let item_id = item_ids[category.usize()];
+                for decoding_item in DecodingItem::ALL {
+                    let item_id = item_ids[decoding_item.usize()];
                     if item_id == 0 {
                         continue;
                     }
 
                     let item = self.items.get(&item_id).unwrap();
-                    if category == Category::Alpha && item.width == 0 && item.height == 0 {
+                    if decoding_item == DecodingItem::ALPHA && item.width == 0 && item.height == 0 {
                         // NON-STANDARD: Alpha subimage does not have an ispe property; adopt
                         // width/height from color item.
                         assert!(!self.settings.strictness.alpha_ispe_required());
-                        let color_item =
-                            self.items.get(&item_ids[Category::Color.usize()]).unwrap();
+                        let color_item = self
+                            .items
+                            .get(&item_ids[DecodingItem::COLOR.usize()])
+                            .unwrap();
                         let width = color_item.width;
                         let height = color_item.height;
                         let alpha_item = self.items.get_mut(&item_id).unwrap();
@@ -1075,36 +1228,44 @@ impl Decoder {
                         alpha_item.height = height;
                     }
 
-                    self.tiles[category.usize()] = self.generate_tiles(item_id, category)?;
+                    self.tiles[decoding_item.usize()] =
+                        self.generate_tiles(item_id, decoding_item)?;
                     let item = self.items.get(&item_id).unwrap();
                     // Made up alpha item does not contain the pixi property. So do not try to
                     // validate it.
-                    let pixi_required =
-                        self.settings.strictness.pixi_required() && !item.is_made_up;
+                    // Sample transforms can modify the bit depth of an item so it must be
+                    // explicitly signalled.
+                    let pixi_required = self.settings.strictness.pixi_required()
+                        && !item.is_made_up
+                        || item.is_sample_transform_item();
                     item.validate_properties(&self.items, pixi_required)?;
                 }
 
-                let color_item = self.items.get(&item_ids[Category::Color.usize()]).unwrap();
+                let color_item = self
+                    .items
+                    .get(&item_ids[DecodingItem::COLOR.usize()])
+                    .unwrap();
                 self.image.width = color_item.width;
                 self.image.height = color_item.height;
-                let alpha_item_id = item_ids[Category::Alpha.usize()];
-                self.image.alpha_present = alpha_item_id != 0;
-                self.image.alpha_premultiplied =
-                    alpha_item_id != 0 && color_item.prem_by_id == alpha_item_id;
+                self.image.alpha_present = alpha_present;
+                self.image.alpha_premultiplied = alpha_premultiplied;
 
                 if color_item.progressive {
                     self.image.progressive_state = ProgressiveState::Available;
-                    let sample_count = self.tiles[Category::Color.usize()][0].input.samples.len();
+                    let sample_count = self.tiles[DecodingItem::COLOR.usize()][0]
+                        .input
+                        .samples
+                        .len();
                     if sample_count > 1 {
                         self.image.progressive_state = ProgressiveState::Active;
                         self.image_count = sample_count as u32;
                     }
                 }
 
-                if item_ids[Category::Gainmap.usize()] != 0 {
+                if item_ids[DecodingItem::GAINMAP.usize()] != 0 {
                     let gainmap_item = self
                         .items
-                        .get(&item_ids[Category::Gainmap.usize()])
+                        .get(&item_ids[DecodingItem::GAINMAP.usize()])
                         .unwrap();
                     self.gainmap.image.width = gainmap_item.width;
                     self.gainmap.image.height = gainmap_item.height;
@@ -1120,14 +1281,14 @@ impl Decoder {
                 // This borrow has to be in the end of this branch.
                 color_properties = &self
                     .items
-                    .get(&item_ids[Category::Color.usize()])
+                    .get(&item_ids[DecodingItem::COLOR.usize()])
                     .unwrap()
                     .properties;
-                gainmap_properties = if item_ids[Category::Gainmap.usize()] != 0 {
+                gainmap_properties = if item_ids[DecodingItem::GAINMAP.usize()] != 0 {
                     Some(
                         &self
                             .items
-                            .get(&item_ids[Category::Gainmap.usize()])
+                            .get(&item_ids[DecodingItem::GAINMAP.usize()])
                             .unwrap()
                             .properties,
                     )
@@ -1145,14 +1306,19 @@ impl Decoder {
                                 "sample has invalid size.".into(),
                             ));
                         }
-                        match tile.input.category {
-                            Category::Color => {
-                                checked_incr!(self.io_stats.color_obu_size, sample.size)
+                        // The item_idx checks is to try to mimic libavif's behavior
+                        // which only takes into account the size of the item whose id
+                        // is in the pitm box.
+                        if tile.input.decoding_item.item_idx <= 1 {
+                            match tile.input.decoding_item.category {
+                                Category::Color => {
+                                    checked_incr!(self.io_stats.color_obu_size, sample.size)
+                                }
+                                Category::Alpha => {
+                                    checked_incr!(self.io_stats.alpha_obu_size, sample.size)
+                                }
+                                _ => {}
                             }
-                            Category::Alpha => {
-                                checked_incr!(self.io_stats.alpha_obu_size, sample.size)
-                            }
-                            _ => {}
                         }
                     }
                 }
@@ -1195,6 +1361,14 @@ impl Decoder {
             let codec_config = find_property!(color_properties, CodecConfiguration)
                 .ok_or(AvifError::BmffParseFailed("".into()))?;
             self.image.depth = codec_config.depth();
+            // A sample transform item can have a depth different from its input images (which is where
+            // the codec config comes from). The depth from the pixi property should be used instead.
+            if is_sample_transform {
+                if let Some(pixi) = find_property!(color_properties, PixelInformation) {
+                    self.image.depth = pixi.plane_depths[0];
+                }
+            }
+
             self.image.yuv_format = codec_config.pixel_format();
             self.image.chroma_sample_position = codec_config.chroma_sample_position();
             self.compression_format = if codec_config.is_avif() {
@@ -1217,27 +1391,25 @@ impl Decoder {
         Ok(())
     }
 
-    fn read_and_parse_item(&mut self, item_id: u32, category: Category) -> AvifResult<()> {
+    fn read_and_parse_item(&mut self, item_id: u32, decoding_item: DecodingItem) -> AvifResult<()> {
         if item_id == 0 {
             return Ok(());
         }
         self.populate_source_item_ids(item_id)?;
         self.items.get_mut(&item_id).unwrap().read_and_parse(
             self.io.unwrap_mut(),
-            &mut self.tile_info[category.usize()].grid,
-            &mut self.tile_info[category.usize()].overlay,
-            &mut self.tile_info[category.usize()].gainmap_metadata,
+            &mut self.tile_info[decoding_item.usize()],
             self.settings.image_size_limit,
             self.settings.image_dimension_limit,
         )?;
-        self.validate_source_items(item_id, &self.tile_info[category.usize()])
+        self.validate_source_items(item_id, &self.tile_info[decoding_item.usize()])
     }
 
     fn can_use_single_codec(&self) -> AvifResult<bool> {
-        let total_tile_count = checked_add!(
-            checked_add!(self.tiles[0].len(), self.tiles[1].len())?,
-            self.tiles[2].len()
-        )?;
+        let mut total_tile_count: usize = 0;
+        for tiles in &self.tiles {
+            total_tile_count = checked_add!(total_tile_count, tiles.len())?;
+        }
         if total_tile_count == 1 {
             return Ok(true);
         }
@@ -1246,11 +1418,11 @@ impl Decoder {
         }
         let mut image_buffers = 0;
         let mut stolen_image_buffers = 0;
-        for category in Category::ALL_USIZE {
-            if self.tile_info[category].tile_count > 0 {
+        for decoding_item in DecodingItem::ALL_USIZE {
+            if self.tile_info[decoding_item].tile_count > 0 {
                 image_buffers += 1;
             }
-            if self.tile_info[category].tile_count == 1 {
+            if self.tile_info[decoding_item].tile_count == 1 {
                 stolen_image_buffers += 1;
             }
         }
@@ -1270,8 +1442,8 @@ impl Decoder {
         Ok(true)
     }
 
-    fn create_codec(&mut self, category: Category, tile_index: usize) -> AvifResult<()> {
-        let tile = &self.tiles[category.usize()][tile_index];
+    fn create_codec(&mut self, decoding_item: DecodingItem, tile_index: usize) -> AvifResult<()> {
+        let tile = &self.tiles[decoding_item.usize()][tile_index];
         let mut codec: Codec = self
             .settings
             .codec_choice
@@ -1286,7 +1458,7 @@ impl Decoder {
             image_size_limit: self.settings.image_size_limit,
             max_input_size: tile.max_sample_size(),
             codec_config: tile.codec_config.clone(),
-            category,
+            category: decoding_item.category,
             android_mediacodec_output_color_format: self
                 .settings
                 .android_mediacodec_output_color_format,
@@ -1307,18 +1479,18 @@ impl Decoder {
             //  2) If android_mediacodec is true, then we will use at most three codec instances
             //     (one for each category).
             self.codecs = create_vec_exact(3)?;
-            for category in self.settings.image_content_to_decode.categories() {
-                if self.tiles[category.usize()].is_empty() {
+            for decoding_item in self.settings.image_content_to_decode.decoding_items() {
+                if self.tiles[decoding_item.usize()].is_empty() {
                     continue;
                 }
-                self.create_codec(category, 0)?;
-                for tile in &mut self.tiles[category.usize()] {
+                self.create_codec(decoding_item, 0)?;
+                for tile in &mut self.tiles[decoding_item.usize()] {
                     tile.codec_index = self.codecs.len() - 1;
                 }
             }
         } else if self.can_use_single_codec()? {
             self.codecs = create_vec_exact(1)?;
-            self.create_codec(Category::Color, 0)?;
+            self.create_codec(DecodingItem::COLOR, 0)?;
             for tiles in &mut self.tiles {
                 for tile in tiles {
                     tile.codec_index = 0;
@@ -1326,10 +1498,11 @@ impl Decoder {
             }
         } else {
             self.codecs = create_vec_exact(self.tiles.iter().map(|tiles| tiles.len()).sum())?;
-            for category in self.settings.image_content_to_decode.categories() {
-                for tile_index in 0..self.tiles[category.usize()].len() {
-                    self.create_codec(category, tile_index)?;
-                    self.tiles[category.usize()][tile_index].codec_index = self.codecs.len() - 1;
+            for decoding_item in self.settings.image_content_to_decode.decoding_items() {
+                for tile_index in 0..self.tiles[decoding_item.usize()].len() {
+                    self.create_codec(decoding_item, tile_index)?;
+                    self.tiles[decoding_item.usize()][tile_index].codec_index =
+                        self.codecs.len() - 1;
                 }
             }
         }
@@ -1339,11 +1512,11 @@ impl Decoder {
     fn prepare_sample(
         &mut self,
         image_index: usize,
-        category: Category,
+        decoding_item: DecodingItem,
         tile_index: usize,
         max_num_bytes: Option<usize>, // Bytes read past that size will be ignored.
     ) -> AvifResult<()> {
-        let tile = &mut self.tiles[category.usize()][tile_index];
+        let tile = &mut self.tiles[decoding_item.usize()][tile_index];
         if tile.input.samples.len() <= image_index {
             return Err(AvifError::NoImagesRemaining);
         }
@@ -1402,9 +1575,9 @@ impl Decoder {
     }
 
     fn prepare_samples(&mut self, image_index: usize) -> AvifResult<()> {
-        for category in self.settings.image_content_to_decode.categories() {
-            for tile_index in 0..self.tiles[category.usize()].len() {
-                self.prepare_sample(image_index, category, tile_index, None)?;
+        for decoding_item in self.settings.image_content_to_decode.decoding_items() {
+            for tile_index in 0..self.tiles[decoding_item.usize()].len() {
+                self.prepare_sample(image_index, decoding_item, tile_index, None)?;
             }
         }
         Ok(())
@@ -1413,15 +1586,17 @@ impl Decoder {
     fn decode_tile(
         &mut self,
         image_index: usize,
-        category: Category,
+        decoding_item: DecodingItem,
         tile_index: usize,
     ) -> AvifResult<()> {
         // Split the tiles array into two mutable arrays so that we can validate the
         // properties of tiles with index > 0 with that of the first tile.
-        let (tiles_slice1, tiles_slice2) = self.tiles[category.usize()].split_at_mut(tile_index);
+        let (tiles_slice1, tiles_slice2) =
+            self.tiles[decoding_item.usize()].split_at_mut(tile_index);
         let tile = &mut tiles_slice2[0];
         let sample = &tile.input.samples[image_index];
         let io = &mut self.io.unwrap_mut();
+        let category = decoding_item.category;
 
         let codec = &mut self.codecs[tile.codec_index];
         let item_data_buffer = if sample.item_id == 0 {
@@ -1440,44 +1615,41 @@ impl Decoder {
             {
                 // When decoding HEIC on Android, if the alpha channel decoding fails, simply
                 // ignore it and return the rest of the image.
-                checked_incr!(self.tile_info[category.usize()].decoded_tile_count, 1);
+                checked_incr!(self.tile_info[decoding_item.usize()].decoded_tile_count, 1);
                 return Ok(());
             } else {
                 return next_image_result;
             }
         }
 
-        checked_incr!(self.tile_info[category.usize()].decoded_tile_count, 1);
+        checked_incr!(self.tile_info[decoding_item.usize()].decoded_tile_count, 1);
 
         if category == Category::Alpha && tile.image.yuv_range == YuvRange::Limited {
             tile.image.alpha_to_full_range()?;
         }
         tile.image.scale(tile.width, tile.height, category)?;
 
-        if self.tile_info[category.usize()].is_grid() {
+        let dst_image = match category {
+            Category::Color | Category::Alpha if (decoding_item.item_idx == 0) => &mut self.image,
+            Category::Color | Category::Alpha => &mut self.extra_inputs[decoding_item.item_idx - 1],
+            Category::Gainmap => &mut self.gainmap.image,
+        };
+
+        if self.tile_info[decoding_item.usize()].is_grid() {
             if tile_index == 0 {
-                let grid = &self.tile_info[category.usize()].grid;
+                let grid = &self.tile_info[decoding_item.usize()].grid;
                 validate_grid_image_dimensions(&tile.image, grid)?;
                 match category {
-                    Category::Color => {
-                        self.image.width = grid.width;
-                        self.image.height = grid.height;
-                        self.image
-                            .copy_properties_from(&tile.image, &tile.codec_config);
-                        self.image.allocate_planes(category)?;
+                    Category::Color | Category::Gainmap => {
+                        dst_image.width = grid.width;
+                        dst_image.height = grid.height;
+                        dst_image.copy_properties_from(&tile.image, &tile.codec_config);
+                        dst_image.allocate_planes(category)?;
                     }
                     Category::Alpha => {
                         // Alpha is always just one plane and the depth has been validated
                         // to be the same as the color planes' depth.
-                        self.image.allocate_planes(category)?;
-                    }
-                    Category::Gainmap => {
-                        self.gainmap.image.width = grid.width;
-                        self.gainmap.image.height = grid.height;
-                        self.gainmap
-                            .image
-                            .copy_properties_from(&tile.image, &tile.codec_config);
-                        self.gainmap.image.allocate_planes(category)?;
+                        dst_image.allocate_planes(category)?;
                     }
                 }
             }
@@ -1490,50 +1662,30 @@ impl Decoder {
                     "grid image contains mismatched tiles".into(),
                 ));
             }
-            match category {
-                Category::Gainmap => self.gainmap.image.copy_from_tile(
-                    &tile.image,
-                    &self.tile_info[category.usize()].grid,
-                    tile_index as u32,
-                    category,
-                )?,
-                _ => {
-                    self.image.copy_from_tile(
-                        &tile.image,
-                        &self.tile_info[category.usize()].grid,
-                        tile_index as u32,
-                        category,
-                    )?;
-                }
-            }
-        } else if self.tile_info[category.usize()].is_overlay() {
+
+            dst_image.copy_from_tile(
+                &tile.image,
+                &self.tile_info[decoding_item.usize()].grid,
+                tile_index as u32,
+                category,
+            )?;
+        } else if self.tile_info[decoding_item.usize()].is_overlay() {
             if tile_index == 0 {
-                let overlay = &self.tile_info[category.usize()].overlay;
+                let overlay = &self.tile_info[decoding_item.usize()].overlay;
                 let canvas_fill_values =
-                    self.image.convert_rgba16_to_yuva(overlay.canvas_fill_value);
+                    dst_image.convert_rgba16_to_yuva(overlay.canvas_fill_value);
                 match category {
-                    Category::Color => {
-                        self.image.width = overlay.width;
-                        self.image.height = overlay.height;
-                        self.image
-                            .copy_properties_from(&tile.image, &tile.codec_config);
-                        self.image
+                    Category::Color | Category::Gainmap => {
+                        dst_image.width = overlay.width;
+                        dst_image.height = overlay.height;
+                        dst_image.copy_properties_from(&tile.image, &tile.codec_config);
+                        dst_image
                             .allocate_planes_with_default_values(category, canvas_fill_values)?;
                     }
                     Category::Alpha => {
                         // Alpha is always just one plane and the depth has been validated
                         // to be the same as the color planes' depth.
-                        self.image
-                            .allocate_planes_with_default_values(category, canvas_fill_values)?;
-                    }
-                    Category::Gainmap => {
-                        self.gainmap.image.width = overlay.width;
-                        self.gainmap.image.height = overlay.height;
-                        self.gainmap
-                            .image
-                            .copy_properties_from(&tile.image, &tile.codec_config);
-                        self.gainmap
-                            .image
+                        dst_image
                             .allocate_planes_with_default_values(category, canvas_fill_values)?;
                     }
                 }
@@ -1555,66 +1707,43 @@ impl Decoder {
                     ));
                 }
             }
-            match category {
-                Category::Gainmap => self.gainmap.image.copy_and_overlay_from_tile(
-                    &tile.image,
-                    &self.tile_info[category.usize()],
-                    tile_index as u32,
-                    category,
-                )?,
-                _ => {
-                    self.image.copy_and_overlay_from_tile(
-                        &tile.image,
-                        &self.tile_info[category.usize()],
-                        tile_index as u32,
-                        category,
-                    )?;
-                }
-            }
+            dst_image.copy_and_overlay_from_tile(
+                &tile.image,
+                &self.tile_info[decoding_item.usize()],
+                tile_index as u32,
+                category,
+            )?;
         } else {
             // Non grid/overlay path, steal or copy planes from the only tile.
             match category {
-                Category::Color => {
-                    self.image.width = tile.image.width;
-                    self.image.height = tile.image.height;
-                    self.image
-                        .copy_properties_from(&tile.image, &tile.codec_config);
-                    self.image
-                        .steal_or_copy_planes_from(&tile.image, category)?;
+                Category::Color | Category::Gainmap => {
+                    dst_image.width = tile.image.width;
+                    dst_image.height = tile.image.height;
+                    dst_image.copy_properties_from(&tile.image, &tile.codec_config);
+                    dst_image.steal_or_copy_planes_from(&tile.image, category)?;
                 }
                 Category::Alpha => {
-                    if !self.image.has_same_properties(&tile.image) {
+                    if !dst_image.has_same_properties(&tile.image) {
                         return Err(AvifError::DecodeAlphaFailed);
                     }
-                    self.image
-                        .steal_or_copy_planes_from(&tile.image, category)?;
-                }
-                Category::Gainmap => {
-                    self.gainmap.image.width = tile.image.width;
-                    self.gainmap.image.height = tile.image.height;
-                    self.gainmap
-                        .image
-                        .copy_properties_from(&tile.image, &tile.codec_config);
-                    self.gainmap
-                        .image
-                        .steal_or_copy_planes_from(&tile.image, category)?;
+                    dst_image.steal_or_copy_planes_from(&tile.image, category)?;
                 }
             }
         }
         Ok(())
     }
 
-    fn decode_grid(&mut self, image_index: usize, category: Category) -> AvifResult<()> {
-        let tile_count = self.tiles[category.usize()].len();
+    fn decode_grid(&mut self, image_index: usize, decoding_item: DecodingItem) -> AvifResult<()> {
+        let tile_count = self.tiles[decoding_item.usize()].len();
         if tile_count == 0 {
             return Ok(());
         }
         let previous_decoded_tile_count =
-            self.tile_info[category.usize()].decoded_tile_count as usize;
+            self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
         let mut payloads = vec![];
         let mut pending_read = false;
         for tile_index in previous_decoded_tile_count..tile_count {
-            let tile = &self.tiles[category.usize()][tile_index];
+            let tile = &self.tiles[decoding_item.usize()][tile_index];
             let sample = &tile.input.samples[image_index];
             let item_data_buffer = if sample.item_id == 0 {
                 &None
@@ -1642,14 +1771,15 @@ impl Decoder {
             };
             payloads.push(data.to_vec());
         }
-        let grid = &self.tile_info[category.usize()].grid;
+        let grid = &self.tile_info[decoding_item.usize()].grid;
         // If we are not doing incremental decode, all the cells must have been read.
         if !self.settings.allow_incremental
             && checked_mul!(grid.rows, grid.columns)? != payloads.len() as u32
         {
             return Err(AvifError::InvalidArgument);
         }
-        let first_tile = &self.tiles[category.usize()][previous_decoded_tile_count];
+        let first_tile = &self.tiles[decoding_item.usize()][previous_decoded_tile_count];
+        let category = decoding_item.category;
         let mut grid_image_helper = GridImageHelper {
             grid,
             image: if category == Category::Gainmap {
@@ -1689,7 +1819,7 @@ impl Decoder {
             ));
         }
         checked_incr!(
-            self.tile_info[category.usize()].decoded_tile_count,
+            self.tile_info[decoding_item.usize()].decoded_tile_count,
             u32_from_usize(payloads.len())?
         );
         if pending_read {
@@ -1699,34 +1829,43 @@ impl Decoder {
         }
     }
 
-    fn can_use_decode_grid(&self, category: Category) -> bool {
-        let first_tile = &self.tiles[category.usize()][0];
+    fn apply_sample_transform(&mut self) -> AvifResult<()> {
+        #[cfg(feature = "sample_transform")]
+        return self.tile_info[DecodingItem::COLOR.usize()]
+            .sample_transform
+            .allocate_planes_and_apply(&self.extra_inputs, &mut self.image);
+        #[cfg(not(feature = "sample_transform"))]
+        return Err(AvifError::NotImplemented);
+    }
+
+    fn can_use_decode_grid(&self, decoding_item: DecodingItem) -> bool {
+        let first_tile = &self.tiles[decoding_item.usize()][0];
         let codec = self.codecs[first_tile.codec_index].codec();
         // Has to be a grid.
-        self.tile_info[category.usize()].is_grid()
+        self.tile_info[decoding_item.usize()].is_grid()
             // Has to be one of the supported codecs.
             && matches!(codec, CodecChoice::MediaCodec | CodecChoice::Dav1d)
             // All the tiles must use the same codec instance.
-            && self.tiles[category.usize()][1..]
+            && self.tiles[decoding_item.usize()][1..]
                 .iter()
                 .all(|x| x.codec_index == first_tile.codec_index)
     }
 
     fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
         let mut decoded_something = false;
-        for category in self.settings.image_content_to_decode.categories() {
-            let tile_count = self.tiles[category.usize()].len();
+        for decoding_item in self.settings.image_content_to_decode.decoding_items() {
+            let tile_count = self.tiles[decoding_item.usize()].len();
             if tile_count == 0 {
                 continue;
             }
-            if self.can_use_decode_grid(category) {
-                self.decode_grid(image_index, category)?;
+            if self.can_use_decode_grid(decoding_item) {
+                self.decode_grid(image_index, decoding_item)?;
                 decoded_something = true;
             } else {
                 let previous_decoded_tile_count =
-                    self.tile_info[category.usize()].decoded_tile_count as usize;
+                    self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
                 for tile_index in previous_decoded_tile_count..tile_count {
-                    self.decode_tile(image_index, category, tile_index)?;
+                    self.decode_tile(image_index, decoding_item, tile_index)?;
                     decoded_something = true;
                 }
             }
@@ -1746,8 +1885,8 @@ impl Decoder {
             return Err(AvifError::NoContent);
         }
         if self.is_current_frame_fully_decoded() {
-            for category in Category::ALL_USIZE {
-                self.tile_info[category].decoded_tile_count = 0;
+            for decoding_item in DecodingItem::ALL_USIZE {
+                self.tile_info[decoding_item].decoded_tile_count = 0;
             }
         }
 
@@ -1755,6 +1894,15 @@ impl Decoder {
         self.create_codecs()?;
         self.prepare_samples(next_image_index as usize)?;
         self.decode_tiles(next_image_index as usize)?;
+
+        if !self.tile_info[DecodingItem::COLOR.usize()]
+            .sample_transform
+            .tokens
+            .is_empty()
+        {
+            self.apply_sample_transform()?;
+        }
+
         self.image_index = next_image_index;
         self.image_timing = self.nth_image_timing(self.image_index as u32)?;
         Ok(())
@@ -1764,8 +1912,8 @@ impl Decoder {
         if !self.parsing_complete() {
             return false;
         }
-        for category in self.settings.image_content_to_decode.categories() {
-            if !self.tile_info[category.usize()].is_fully_decoded() {
+        for decoding_item in self.settings.image_content_to_decode.decoding_items() {
+            if !self.tile_info[decoding_item.usize()].is_fully_decoded() {
                 return false;
             }
         }
@@ -1850,21 +1998,22 @@ impl Decoder {
     // returned AvifResult::Ok. Returns 0 in all other cases.
     pub fn decoded_row_count(&self) -> u32 {
         let mut min_row_count = self.image.height;
-        for category in Category::ALL_USIZE {
-            if self.tiles[category].is_empty() {
+        for decoding_item in DecodingItem::ALL {
+            let decoding_item_usize = decoding_item.usize();
+            if self.tiles[decoding_item_usize].is_empty() {
                 continue;
             }
-            let first_tile_height = self.tiles[category][0].height;
-            let row_count = if category == Category::Gainmap.usize()
+            let first_tile_height = self.tiles[decoding_item_usize][0].height;
+            let row_count = if decoding_item.category == Category::Gainmap
                 && self.gainmap_present()
                 && self.settings.image_content_to_decode.gainmap()
                 && self.gainmap.image.height != 0
                 && self.gainmap.image.height != self.image.height
             {
-                if self.tile_info[category].is_fully_decoded() {
+                if self.tile_info[decoding_item_usize].is_fully_decoded() {
                     self.image.height
                 } else {
-                    let gainmap_row_count = self.tile_info[category]
+                    let gainmap_row_count = self.tile_info[decoding_item_usize]
                         .decoded_row_count(self.gainmap.image.height, first_tile_height);
                     // row_count fits for sure in 32 bits because heights do.
                     let row_count = (gainmap_row_count as u64 * self.image.height as u64
@@ -1881,7 +2030,8 @@ impl Decoder {
                     row_count
                 }
             } else {
-                self.tile_info[category].decoded_row_count(self.image.height, first_tile_height)
+                self.tile_info[decoding_item_usize]
+                    .decoded_row_count(self.image.height, first_tile_height)
             };
             min_row_count = std::cmp::min(min_row_count, row_count);
         }
@@ -1894,8 +2044,8 @@ impl Decoder {
         }
         let index = index as usize;
         // All the tiles for the requested index must be a keyframe.
-        for category in Category::ALL_USIZE {
-            for tile in &self.tiles[category] {
+        for decoding_item in DecodingItem::ALL_USIZE {
+            for tile in &self.tiles[decoding_item] {
                 if index >= tile.input.samples.len() || !tile.input.samples[index].sync {
                     return false;
                 }
@@ -1926,8 +2076,8 @@ impl Decoder {
         let start_index = self.nearest_keyframe(index) as usize;
         let end_index = index as usize;
         for current_index in start_index..=end_index {
-            for category in Category::ALL_USIZE {
-                for tile in &self.tiles[category] {
+            for decoding_item in DecodingItem::ALL_USIZE {
+                for tile in &self.tiles[decoding_item] {
                     if current_index >= tile.input.samples.len() {
                         return Err(AvifError::NoImagesRemaining);
                     }
@@ -1979,5 +2129,13 @@ mod tests {
         assert!(e1.merge(&e2).is_ok());
         assert_eq!(e1.offset, expected_offset);
         assert_eq!(e1.size, expected_size);
+    }
+
+    #[test]
+    fn decoding_item_usize() {
+        assert_eq!(
+            DecodingItem::ALL.map(|c| c.usize()),
+            DecodingItem::ALL_USIZE
+        );
     }
 }

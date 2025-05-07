@@ -112,13 +112,12 @@ impl Item {
     pub(crate) fn read_and_parse(
         &mut self,
         io: &mut GenericIO,
-        grid: &mut Grid,
-        overlay: &mut Overlay,
-        gainmap_metadata: &mut Option<GainMapMetadata>,
+        tile_info: &mut TileInfo,
         size_limit: Option<NonZero<u32>>,
         dimension_limit: Option<NonZero<u32>>,
     ) -> AvifResult<()> {
         if self.is_grid_item() {
+            let grid = &mut tile_info.grid;
             let mut stream = self.stream(io)?;
             // unsigned int(8) version = 0;
             let version = stream.read_u8()?;
@@ -156,6 +155,7 @@ impl Item {
                 ));
             }
         } else if self.is_overlay_item() {
+            let overlay = &mut tile_info.overlay;
             let reference_count = self.source_item_ids.len();
             let mut stream = self.stream(io)?;
             // unsigned int(8) version = 0;
@@ -208,7 +208,10 @@ impl Item {
             }
         } else if self.is_tone_mapped_item() {
             let mut stream = self.stream(io)?;
-            *gainmap_metadata = mp4box::parse_tmap(&mut stream)?;
+            tile_info.gainmap_metadata = mp4box::parse_tmap(&mut stream)?;
+        } else if self.is_sample_transform_item() {
+            let num_inputs = self.source_item_ids.len();
+            tile_info.sample_transform = mp4box::parse_sato(&mut self.stream(io)?, num_inputs)?;
         }
         Ok(())
     }
@@ -274,24 +277,44 @@ impl Item {
             .ok_or(AvifError::BmffParseFailed("missing av1C property".into()))?;
         if self.is_derived_image_item() {
             for derived_item_id in &self.source_item_ids {
-                let derived_item = items.get(derived_item_id).unwrap();
-                let derived_codec_config =
-                    derived_item
+                let source_item = items.get(derived_item_id).unwrap();
+                let source_codec_config =
+                    source_item
                         .codec_config()
                         .ok_or(AvifError::BmffParseFailed(
                             "missing codec config property".into(),
                         ))?;
-                if codec_config != derived_codec_config {
+                // ISO/IEC 23000-22:2019 (MIAF), Section 7.3.11.4.1:
+                // All input image of a grid image item shall use the same coding format, chroma
+                // sampling format, and the same decoder configuration (see 7.3.6.2).
+                // TODO: this is only a requirement for grids, the check for overlays is kept
+                // for now to avoid behavior changes but it should be possible to remove it.
+                if (self.is_grid_item() || self.is_overlay_item())
+                    && codec_config != source_codec_config
+                {
                     return Err(AvifError::BmffParseFailed(
                         "codec config of derived items do not match".into(),
                     ));
+                }
+                if self.is_sample_transform_item()
+                    && (codec_config.pixel_format() != source_codec_config.pixel_format()
+                        || source_item.width != self.width
+                        || source_item.height != self.height)
+                {
+                    return Err(AvifError::BmffParseFailed(
+                            "pixel format or dimensions of input images for sato derived item do not match"
+                                .into(),
+                        ));
                 }
             }
         }
         match self.pixi() {
             Some(pixi) => {
                 for depth in &pixi.plane_depths {
-                    if *depth != codec_config.depth() {
+                    // Check that the depth in pixi matches the codec config.
+                    // For derived image items, the codec config comes from the first source item.
+                    // Sample transform items can have a depth different from their source items.
+                    if *depth != codec_config.depth() && !self.is_sample_transform_item() {
                         return Err(AvifError::BmffParseFailed(
                             "pixi depth does not match codec config depth".into(),
                         ));
@@ -330,6 +353,7 @@ impl Item {
     pub(crate) fn is_auxiliary_alpha(&self) -> bool {
         matches!(find_property!(&self.properties, AuxiliaryType),
                  Some(aux_type) if is_auxiliary_type_alpha(aux_type))
+            && !self.is_sample_transform_item()
     }
 
     pub(crate) fn is_image_codec_item(&self) -> bool {
@@ -353,15 +377,19 @@ impl Item {
         self.item_type == "tmap"
     }
 
+    pub(crate) fn is_sample_transform_item(&self) -> bool {
+        cfg!(feature = "sample_transform") && self.item_type == "sato"
+    }
+
     pub(crate) fn is_derived_image_item(&self) -> bool {
-        self.is_grid_item() || self.is_overlay_item() || self.is_tone_mapped_item()
+        self.is_grid_item()
+            || self.is_overlay_item()
+            || self.is_tone_mapped_item()
+            || self.is_sample_transform_item()
     }
 
     pub(crate) fn is_image_item(&self) -> bool {
-        self.is_image_codec_item()
-            || self.is_grid_item()
-            || self.is_overlay_item()
-            || self.is_tone_mapped_item()
+        self.is_image_codec_item() || self.is_derived_image_item()
     }
 
     pub(crate) fn should_skip(&self) -> bool {
