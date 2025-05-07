@@ -154,7 +154,18 @@ fn rgb_to_yuv_whole_range(p: &RgbToYuvParam) -> AvifResult<()> {
             todo!();
         }
         if p.yuv_format == PixelFormat::Yuv400 {
-            todo!();
+            fill_rgb_image_channel(&mut src_rgb, p.rgb_format.g_offset(), value)?;
+            fill_rgb_image_channel(&mut src_rgb, p.rgb_format.b_offset(), value)?;
+            src_rgb.convert_to_yuv(&mut image)?;
+            dst_rgb.convert_from_yuv(&image)?;
+            compute_diff_sum(
+                &src_rgb,
+                &dst_rgb,
+                &mut abs_diff_sum,
+                &mut sq_diff_sum,
+                &mut max_abs_diff,
+            )?;
+            num_diffs += (src_rgb.width * src_rgb.height * 3) as i64;
         } else {
             for g in (0..max_value + rgb_step).step_by(rgb_step as usize) {
                 let value = std::cmp::min(g, max_value) as u16;
@@ -196,7 +207,7 @@ fn rgb_to_yuv_whole_range(p: &RgbToYuvParam) -> AvifResult<()> {
         rgb::Format::Rgb, rgb::Format::Rgba, rgb::Format::Argb,
         rgb::Format::Bgr, rgb::Format::Bgra, rgb::Format::Abgr,
     ],
-    [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444],
+    [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444, PixelFormat::Yuv400],
     [YuvRange::Full, YuvRange::Limited],
     [
         ChromaDownsampling::Automatic,
@@ -235,7 +246,7 @@ fn exhaustive_settings(
 #[test_matrix(
     [8, 10, 12, 16],
     [8, 10, 12, 16],
-    [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444],
+    [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444, PixelFormat::Yuv400],
     [YuvRange::Full, YuvRange::Limited],
     [ChromaDownsampling::Fastest, ChromaDownsampling::Automatic],
     [
@@ -311,6 +322,28 @@ fn identity(rgb_depth_and_step: (u8, u32), yuv_depth: u8) -> AvifResult<()> {
         chroma_downsampling: ChromaDownsampling::Automatic,
         add_noise: false,
         rgb_step,
+        max_average_abs_diff: 0.0,
+        min_psnr: 99.0,
+    })
+}
+
+#[test_matrix([8, 10, 12, 16])]
+fn monochrome_lossless(depth: u8) -> AvifResult<()> {
+    rgb_to_yuv_whole_range(&RgbToYuvParam {
+        rgb_depth: depth,
+        yuv_depth: depth,
+        rgb_format: rgb::Format::Rgba,
+        yuv_format: PixelFormat::Yuv400,
+        yuv_range: YuvRange::Full,
+        matrix_coefficients: MatrixCoefficients::Bt601,
+        chroma_downsampling: ChromaDownsampling::Automatic,
+        add_noise: false,
+        rgb_step: if depth == 16 {
+            // For depth == 16, running through all the values is too slow, so use a higher step.
+            401
+        } else {
+            1
+        },
         max_average_abs_diff: 0.0,
         min_psnr: 99.0,
     })
