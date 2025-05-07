@@ -773,6 +773,10 @@ pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResu
                                 (rgb_pixel[0] - y) / (2.0 * (1.0 - kr)),
                             )
                         }
+                        Mode::Identity => {
+                            // Formulas 41,42,43 from https://www.itu.int/rec/T-REC-H.273-201612-S.
+                            YUVBlock(rgb_pixel[1], rgb_pixel[2], rgb_pixel[0])
+                        }
                         _ => return Err(AvifError::NotImplemented),
                     };
                     if image.depth == 8 {

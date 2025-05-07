@@ -291,6 +291,31 @@ fn default_8bit_png_to_avif() -> AvifResult<()> {
     })
 }
 
+#[test_matrix(
+    [(8, 31), (10, 101), (12, 401), (16, 6421)],
+    [8, 10, 12, 16]
+)]
+fn identity(rgb_depth_and_step: (u8, u32), yuv_depth: u8) -> AvifResult<()> {
+    let rgb_depth = rgb_depth_and_step.0;
+    if yuv_depth < rgb_depth {
+        return Ok(());
+    }
+    let rgb_step = rgb_depth_and_step.1;
+    rgb_to_yuv_whole_range(&RgbToYuvParam {
+        rgb_depth,
+        yuv_depth,
+        rgb_format: rgb::Format::Rgba,
+        yuv_format: PixelFormat::Yuv444,
+        yuv_range: YuvRange::Full,
+        matrix_coefficients: MatrixCoefficients::Identity,
+        chroma_downsampling: ChromaDownsampling::Automatic,
+        add_noise: false,
+        rgb_step,
+        max_average_abs_diff: 0.0,
+        min_psnr: 99.0,
+    })
+}
+
 #[test_matrix([PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444])]
 fn any_subsampling_8bit(yuv_format: PixelFormat) -> AvifResult<()> {
     rgb_to_yuv_whole_range(&RgbToYuvParam {
