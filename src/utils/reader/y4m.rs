@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused)]
-
-#[allow(unused_imports)]
 use crate::image::*;
 use crate::*;
 
@@ -22,12 +19,9 @@ use std::fs::File;
 use std::io::prelude::*;
 
 use super::Reader;
-use std::num::NonZero;
 
 use std::io::BufReader;
 use std::io::Read;
-use std::io::Write;
-use std::path::Path;
 
 #[derive(Debug, Default)]
 pub struct Y4MReader {

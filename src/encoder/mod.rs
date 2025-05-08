@@ -62,7 +62,6 @@ impl Default for TilingMode {
     }
 }
 
-#[allow(unused)]
 impl TilingMode {
     fn log2(&self, width: u32, height: u32) -> (i32, i32) {
         match *self {

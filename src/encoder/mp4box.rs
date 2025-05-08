@@ -514,10 +514,8 @@ impl Encoder {
         Ok(())
     }
 
-    #[allow(unused)]
     pub(crate) fn write_mdat(&self, stream: &mut OStream) -> AvifResult<()> {
         stream.start_box("mdat")?;
-        let mdat_start_offset = stream.offset();
         let mut layered_item_ids = [Vec::new(), Vec::new()];
         // Use multiple passes to pack the items in the following order:
         //   * Pass 0: metadata (Exif/XMP/gain map metadata)
@@ -558,10 +556,10 @@ impl Encoder {
                 // TODO: alpha, gainmap, dedupe, etc.
                 if !item.samples.is_empty() {
                     for sample in &item.samples {
-                        stream.write_slice(&sample.data);
+                        stream.write_slice(&sample.data)?;
                     }
                 } else if !item.metadata_payload.is_empty() {
-                    stream.write_slice(&item.metadata_payload);
+                    stream.write_slice(&item.metadata_payload)?;
                 } else {
                     // TODO: empty item, ignore or error?
                 }

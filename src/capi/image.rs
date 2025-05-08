@@ -269,7 +269,6 @@ fn copy_plane_helper(
 }
 
 #[no_mangle]
-#[allow(unused)]
 pub unsafe extern "C" fn crabby_avifImageCopy(
     dstImage: *mut avifImage,
     srcImage: *const avifImage,
