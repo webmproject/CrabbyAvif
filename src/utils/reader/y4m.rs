@@ -30,7 +30,7 @@ use std::io::Write;
 use std::path::Path;
 
 #[derive(Debug, Default)]
-pub(crate) struct Y4MReader {
+pub struct Y4MReader {
     width: u32,
     height: u32,
     depth: u8,
@@ -150,7 +150,7 @@ impl Y4MReader {
         Ok(())
     }
 
-    pub(crate) fn create(filename: &str) -> AvifResult<Y4MReader> {
+    pub fn create(filename: &str) -> AvifResult<Y4MReader> {
         let mut reader = BufReader::new(File::open(filename).or(Err(AvifError::UnknownError(
             "error opening input file".into(),
         )))?);

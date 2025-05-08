@@ -27,12 +27,12 @@ use ::image::codecs::jpeg;
 use ::image::ColorType;
 use ::image::ImageDecoder;
 
-pub(crate) struct JpegReader {
+pub struct JpegReader {
     filename: String,
 }
 
 impl JpegReader {
-    pub(crate) fn create(filename: &str) -> AvifResult<Self> {
+    pub fn create(filename: &str) -> AvifResult<Self> {
         Ok(Self {
             filename: filename.into(),
         })

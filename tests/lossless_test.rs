@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "png")]
+
 #[path = "./mod.rs"]
 mod tests;
 use tests::*;

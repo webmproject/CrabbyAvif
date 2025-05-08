@@ -22,12 +22,12 @@ use super::Reader;
 
 use std::fs::File;
 
-pub(crate) struct PngReader {
+pub struct PngReader {
     filename: String,
 }
 
 impl PngReader {
-    pub(crate) fn create(filename: &str) -> AvifResult<Self> {
+    pub fn create(filename: &str) -> AvifResult<Self> {
         Ok(Self {
             filename: filename.into(),
         })

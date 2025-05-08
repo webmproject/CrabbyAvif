@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crabby_avif::image::*;
+use crabby_avif::utils::writer::y4m::Y4MWriter;
+use crabby_avif::utils::writer::Writer;
 use crabby_avif::*;
 
 use std::env;
@@ -22,11 +24,6 @@ use std::io::BufReader;
 use std::io::Read;
 use std::process::Command;
 use tempfile::NamedTempFile;
-
-#[path = "../examples/writer/mod.rs"]
-mod writer;
-
-use writer::Writer;
 
 // See README.md for instructions on how to set up the dependencies for
 // running the conformance tests.
@@ -109,7 +106,7 @@ fn get_tempfile() -> String {
 }
 
 fn write_y4m(image: &Image) -> String {
-    let mut y4m = writer::y4m::Y4MWriter::default();
+    let mut y4m = Y4MWriter::default();
     let filename = get_tempfile();
     let mut file = File::create(&filename).expect("unable to open output file");
     y4m.write_frame(&mut file, image)

@@ -15,14 +15,17 @@
 // Not all sub-modules are used by all targets. Ignore dead code warnings.
 #![allow(dead_code)]
 
-pub(crate) mod jpeg;
-pub(crate) mod png;
-pub(crate) mod y4m;
+#[cfg(feature = "jpeg")]
+pub mod jpeg;
+#[cfg(feature = "png")]
+pub mod png;
+pub mod y4m;
 
-use crabby_avif::image::Image;
-use crabby_avif::AvifResult;
+use crate::image::Image;
+use crate::AvifResult;
 
-pub trait Reader {
-    fn read_frame(&mut self) -> AvifResult<Image>;
-    fn has_more_frames(&mut self) -> bool;
+use std::fs::File;
+
+pub trait Writer {
+    fn write_frame(&mut self, file: &mut File, image: &Image) -> AvifResult<()>;
 }

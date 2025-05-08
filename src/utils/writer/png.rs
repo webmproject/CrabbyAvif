@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crabby_avif::image::*;
-use crabby_avif::reformat::rgb;
-use crabby_avif::AvifError;
-use crabby_avif::AvifResult;
-use crabby_avif::PixelFormat;
+use crate::image::*;
+use crate::reformat::rgb;
+use crate::AvifError;
+use crate::AvifResult;
+use crate::PixelFormat;
 
 use std::fs::File;
 
 use super::Writer;
 
 #[derive(Default)]
-pub(crate) struct PngWriter {
+pub struct PngWriter {
     pub depth: Option<u8>,
 }
 

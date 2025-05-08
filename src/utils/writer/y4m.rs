@@ -22,15 +22,14 @@ use std::io::prelude::*;
 use super::Writer;
 
 #[derive(Default)]
-pub(crate) struct Y4MWriter {
+pub struct Y4MWriter {
     header_written: bool,
     write_alpha: bool,
     skip_headers: bool,
 }
 
 impl Y4MWriter {
-    #[allow(unused)]
-    pub(crate) fn create(skip_headers: bool) -> Self {
+    pub fn create(skip_headers: bool) -> Self {
         Self {
             skip_headers,
             ..Default::default()

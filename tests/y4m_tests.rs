@@ -13,21 +13,15 @@
 // limitations under the License.
 
 use crabby_avif::image::*;
+use crabby_avif::utils::reader::y4m::Y4MReader;
+use crabby_avif::utils::reader::Reader;
+use crabby_avif::utils::writer::y4m::Y4MWriter;
+use crabby_avif::utils::writer::Writer;
 use crabby_avif::*;
 
 #[path = "./mod.rs"]
 mod tests;
 use tests::*;
-
-#[path = "../examples/reader/mod.rs"]
-mod reader;
-use reader::y4m::Y4MReader;
-use reader::Reader;
-
-#[path = "../examples/writer/mod.rs"]
-mod writer;
-use writer::y4m::Y4MWriter;
-use writer::Writer;
 
 use std::fs::File;
 use tempfile::NamedTempFile;

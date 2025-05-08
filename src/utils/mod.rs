@@ -17,6 +17,8 @@ use crate::*;
 
 pub mod clap;
 pub mod pixels;
+pub mod reader;
+pub mod writer;
 
 // Some HEIF fractional fields can be negative, hence Fraction and UFraction.
 // The denominator is always unsigned.

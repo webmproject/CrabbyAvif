@@ -19,29 +19,27 @@ use crabby_avif::decoder::track::RepetitionCount;
 use crabby_avif::decoder::*;
 #[cfg(feature = "encoder")]
 use crabby_avif::encoder::*;
-use crabby_avif::image::*;
 use crabby_avif::utils::clap::CleanAperture;
 use crabby_avif::utils::clap::CropRect;
 use crabby_avif::utils::IFraction;
 use crabby_avif::utils::UFraction;
 use crabby_avif::*;
 
-mod reader;
-mod writer;
+#[cfg(all(feature = "encoder", feature = "jpeg"))]
+use crabby_avif::utils::reader::jpeg::JpegReader;
+#[cfg(all(feature = "encoder", feature = "png"))]
+use crabby_avif::utils::reader::png::PngReader;
+#[cfg(feature = "encoder")]
+use crabby_avif::utils::reader::y4m::Y4MReader;
+#[cfg(feature = "encoder")]
+use crabby_avif::utils::reader::Reader;
 
-#[cfg(feature = "encoder")]
-use reader::jpeg::JpegReader;
-#[cfg(feature = "encoder")]
-use reader::png::PngReader;
-#[cfg(feature = "encoder")]
-use reader::y4m::Y4MReader;
-#[cfg(feature = "encoder")]
-use reader::Reader;
-
-use writer::jpeg::JpegWriter;
-use writer::png::PngWriter;
-use writer::y4m::Y4MWriter;
-use writer::Writer;
+#[cfg(feature = "jpeg")]
+use crabby_avif::utils::writer::jpeg::JpegWriter;
+#[cfg(feature = "png")]
+use crabby_avif::utils::writer::png::PngWriter;
+use crabby_avif::utils::writer::y4m::Y4MWriter;
+use crabby_avif::utils::writer::Writer;
 
 use std::fs::File;
 #[cfg(feature = "encoder")]
@@ -575,7 +573,9 @@ fn decode(args: &CommandLineArgs) -> AvifResult<()> {
             }
             Box::new(Y4MWriter::create(extension == "yuv"))
         }
+        #[cfg(feature = "png")]
         "png" => Box::new(PngWriter { depth: args.depth }),
+        #[cfg(feature = "jpeg")]
         "jpg" | "jpeg" => Box::new(JpegWriter {
             quality: args.quality,
         }),
@@ -611,7 +611,9 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
     let extension = get_extension(&args.input_file);
     let mut reader: Box<dyn Reader> = match extension.as_str() {
         "y4m" => Box::new(Y4MReader::create(&args.input_file)?),
+        #[cfg(feature = "jpeg")]
         "jpg" | "jpeg" => Box::new(JpegReader::create(&args.input_file)?),
+        #[cfg(feature = "png")]
         "png" => Box::new(PngReader::create(&args.input_file)?),
         _ => {
             return Err(AvifError::UnknownError(format!(

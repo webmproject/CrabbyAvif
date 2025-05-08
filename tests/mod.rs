@@ -43,6 +43,7 @@ pub fn get_decoder(filename: &str) -> decoder::Decoder {
 }
 
 #[cfg(test)]
+#[cfg(feature = "png")]
 pub fn decode_png(filename: &str) -> Vec<u8> {
     let decoder = png::Decoder::new(File::open(get_test_file(filename)).unwrap());
     let mut reader = decoder.read_info().unwrap();

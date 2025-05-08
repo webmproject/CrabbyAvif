@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crabby_avif::image::*;
-use crabby_avif::reformat::rgb;
-use crabby_avif::AvifError;
-use crabby_avif::AvifResult;
+use crate::image::*;
+use crate::reformat::rgb;
+use crate::AvifError;
+use crate::AvifResult;
 
 use super::Writer;
 
@@ -23,7 +23,7 @@ use image::codecs::jpeg;
 use std::fs::File;
 
 #[derive(Default)]
-pub(crate) struct JpegWriter {
+pub struct JpegWriter {
     pub quality: Option<u8>,
 }
 
