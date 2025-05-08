@@ -227,33 +227,26 @@ impl Encoder for Aom {
                 );
             }
             match category {
-                Category::Alpha => codec_control!(
-                    self,
-                    aome_enc_control_id_AV1E_SET_COLOR_RANGE,
-                    aom_color_range_AOM_CR_FULL_RANGE
-                ),
+                Category::Alpha => {
+                    // AVIF specification, Section 4 "Auxiliary Image Items and Sequences":
+                    //   The color_range field in the Sequence Header OBU shall be set to 1.
+                    codec_control!(
+                        self,
+                        aome_enc_control_id_AV1E_SET_COLOR_RANGE,
+                        aom_color_range_AOM_CR_FULL_RANGE
+                    )
+                    // Keep the default AOM_CSP_UNKNOWN value.
+
+                    // CICP (CP/TC/MC) does not apply to the alpha auxiliary image.
+                    // Keep default Unspecified (2) colour primaries, transfer characteristics,
+                    // and matrix coefficients.
+                }
                 _ => {
-                    if image.color_primaries != ColorPrimaries::Unspecified {
-                        codec_control!(
-                            self,
-                            aome_enc_control_id_AV1E_SET_COLOR_PRIMARIES,
-                            image.color_primaries
-                        );
-                    }
-                    if image.transfer_characteristics != TransferCharacteristics::Unspecified {
-                        codec_control!(
-                            self,
-                            aome_enc_control_id_AV1E_SET_TRANSFER_CHARACTERISTICS,
-                            image.transfer_characteristics
-                        );
-                    }
-                    if image.matrix_coefficients != MatrixCoefficients::Unspecified {
-                        codec_control!(
-                            self,
-                            aome_enc_control_id_AV1E_SET_MATRIX_COEFFICIENTS,
-                            image.matrix_coefficients
-                        );
-                    }
+                    // libaom's defaults are AOM_CSP_UNKNOWN and 0 (studio/limited range).
+                    // Call aom_codec_control() only if the values are not the defaults.
+                    // AV1-ISOBMFF specification, Section 2.3.4:
+                    //   The value of full_range_flag in the 'colr' box SHALL match the color_range
+                    //   flag in the Sequence Header OBU.
                     if image.yuv_range != YuvRange::Limited {
                         codec_control!(
                             self,
@@ -261,6 +254,12 @@ impl Encoder for Aom {
                             aom_color_range_AOM_CR_FULL_RANGE
                         );
                     }
+                    // Section 2.3.4 of AV1-ISOBMFF says 'colr' with 'nclx' should be present and
+                    // shall match CICP values in the Sequence Header OBU, unless the latter has
+                    // 2/2/2 (Unspecified). So set CICP values to 2/2/2 (Unspecified) in the
+                    // Sequence Header OBU for simplicity. libaom's defaults are
+                    // AOM_CICP_CP_UNSPECIFIED, AOM_CICP_TC_UNSPECIFIED, and
+                    // AOM_CICP_MC_UNSPECIFIED. No need to call aom_codec_control().
                 }
             }
             if aom_config.g_usage == AOM_USAGE_ALL_INTRA {
