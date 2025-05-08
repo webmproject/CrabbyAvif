@@ -32,6 +32,8 @@ use crabby_avif::utils::reader::png::PngReader;
 #[cfg(feature = "encoder")]
 use crabby_avif::utils::reader::y4m::Y4MReader;
 #[cfg(feature = "encoder")]
+use crabby_avif::utils::reader::Config;
+#[cfg(feature = "encoder")]
 use crabby_avif::utils::reader::Reader;
 
 #[cfg(feature = "jpeg")]
@@ -130,6 +132,16 @@ fn cicp_parser(s: &str) -> Result<Nclx, String> {
 fn scaling_mode_parser(s: &str) -> Result<IFraction, String> {
     let values = split_and_check_count!("scaling_mode", s, "/", 2, i32);
     Ok(IFraction(values[0], values[1]))
+}
+
+fn yuv_format_parser(s: &str) -> Result<PixelFormat, String> {
+    match s {
+        "420" => Ok(PixelFormat::Yuv420),
+        "422" => Ok(PixelFormat::Yuv422),
+        "444" => Ok(PixelFormat::Yuv444),
+        "400" => Ok(PixelFormat::Yuv400),
+        _ => Err(format!("Invalid yuv format: {s}")),
+    }
 }
 
 #[derive(Parser)]
@@ -250,6 +262,11 @@ struct CommandLineArgs {
     /// tilecolslog2 will be ignored
     #[arg(long, default_value = "false")]
     autotiling: bool,
+
+    /// AVIF Encode only: Output format, one of 444, 422, 420 or 400. Ignored for y4m. For all
+    /// other cases, auto defaults to 444.
+    #[arg(long = "yuv", value_parser = yuv_format_parser)]
+    yuv_format: Option<PixelFormat>,
 
     /// Input AVIF file
     #[arg(allow_hyphen_values = false)]
@@ -621,7 +638,12 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
             )));
         }
     };
-    let mut image = reader.read_frame()?;
+    let reader_config = Config {
+        yuv_format: args.yuv_format,
+        depth: args.depth,
+        ..Default::default()
+    };
+    let mut image = reader.read_frame(&reader_config)?;
     image.irot_angle = args.irot_angle;
     image.imir_axis = args.imir_axis;
     if let Some(clap) = args.clap {
@@ -686,7 +708,7 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
             if !reader.has_more_frames() {
                 break;
             }
-            image = reader.read_frame()?;
+            image = reader.read_frame(&reader_config)?;
         }
     } else if args.progressive {
         // Encode the base layer with very low quality.

@@ -14,6 +14,7 @@
 
 use crabby_avif::image::*;
 use crabby_avif::utils::reader::y4m::Y4MReader;
+use crabby_avif::utils::reader::Config;
 use crabby_avif::utils::reader::Reader;
 use crabby_avif::utils::writer::y4m::Y4MWriter;
 use crabby_avif::utils::writer::Writer;
@@ -65,7 +66,7 @@ fn roundtrip(
     }
     // Read the image.
     let mut reader = Y4MReader::create(&output_filename)?;
-    let image2 = reader.read_frame()?;
+    let image2 = reader.read_frame(&Config::default())?;
     are_images_equal(&image1, &image2)?;
     Ok(())
 }

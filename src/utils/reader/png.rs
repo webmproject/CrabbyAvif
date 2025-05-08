@@ -18,6 +18,7 @@ use crate::AvifError;
 use crate::AvifResult;
 use crate::*;
 
+use super::Config;
 use super::Reader;
 
 use std::fs::File;
@@ -35,7 +36,7 @@ impl PngReader {
 }
 
 impl Reader for PngReader {
-    fn read_frame(&mut self) -> AvifResult<Image> {
+    fn read_frame(&mut self, config: &Config) -> AvifResult<Image> {
         let file = File::open(self.filename.clone()).or(Err(AvifError::UnknownError(
             "error opening input file".into(),
         )))?;
@@ -95,10 +96,12 @@ impl Reader for PngReader {
         let mut yuv = Image {
             width: info.width,
             height: info.height,
-            depth: std::cmp::min(rgb.depth, 12),
-            yuv_format: PixelFormat::Yuv420,
+            depth: config.depth.unwrap_or(std::cmp::min(rgb.depth, 12)),
+            yuv_format: config.yuv_format.unwrap_or(PixelFormat::Yuv420),
             yuv_range: YuvRange::Full,
-            matrix_coefficients: MatrixCoefficients::Bt601,
+            matrix_coefficients: config
+                .matrix_coefficients
+                .unwrap_or(MatrixCoefficients::Bt601),
             ..Default::default()
         };
         rgb.convert_to_yuv(&mut yuv)?;

@@ -23,8 +23,17 @@ pub mod y4m;
 
 use crate::image::Image;
 use crate::AvifResult;
+use crate::MatrixCoefficients;
+use crate::PixelFormat;
+
+#[derive(Default)]
+pub struct Config {
+    pub yuv_format: Option<PixelFormat>,
+    pub depth: Option<u8>,
+    pub matrix_coefficients: Option<MatrixCoefficients>,
+}
 
 pub trait Reader {
-    fn read_frame(&mut self) -> AvifResult<Image>;
+    fn read_frame(&mut self, config: &Config) -> AvifResult<Image>;
     fn has_more_frames(&mut self) -> bool;
 }

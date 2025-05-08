@@ -18,6 +18,7 @@ use crate::*;
 use std::fs::File;
 use std::io::prelude::*;
 
+use super::Config;
 use super::Reader;
 
 use std::io::BufReader;
@@ -191,7 +192,7 @@ impl Y4MReader {
 }
 
 impl Reader for Y4MReader {
-    fn read_frame(&mut self) -> AvifResult<Image> {
+    fn read_frame(&mut self, _config: &Config) -> AvifResult<Image> {
         const FRAME_MARKER: &str = "FRAME";
         let mut frame_marker = String::new();
         let bytes_read = self
