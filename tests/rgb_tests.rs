@@ -59,6 +59,27 @@ fn fill_rgb_image_channel(
     Ok(())
 }
 
+fn add_noise(rgb: &mut rgb::Image, channel_offset: usize, noise: &[u16]) -> AvifResult<()> {
+    let channel_count = rgb.channel_count() as usize;
+    let pixel_width = channel_count * rgb.width as usize;
+    assert!(channel_offset < channel_count);
+    let mut noise_values = std::iter::repeat(noise).flat_map(|x| x.iter());
+    for y in 0..rgb.height {
+        if rgb.depth == 8 {
+            let row = &mut rgb.row_mut(y)?[..pixel_width];
+            for pixels in row.chunks_exact_mut(channel_count) {
+                pixels[channel_offset] += *noise_values.next().unwrap() as u8;
+            }
+        } else {
+            let row = &mut rgb.row16_mut(y)?[..pixel_width];
+            for pixels in row.chunks_exact_mut(channel_count) {
+                pixels[channel_offset] += noise_values.next().unwrap();
+            }
+        }
+    }
+    Ok(())
+}
+
 fn compute_diff_sum(
     rgb1: &rgb::Image,
     rgb2: &rgb::Image,
@@ -104,6 +125,13 @@ fn psnr(sq_diff_sum: f64, num_diffs: f64, max_abs_diff: f64) -> f64 {
         98.9
     }
 }
+
+// Random permutation of 16 values.
+const RED_NOISE: [u16; 16] = [7, 14, 11, 5, 4, 6, 8, 15, 2, 9, 13, 3, 12, 1, 10, 0];
+// Random permutation of 16 values that is somewhat close to RED_NOISE.
+const GREEN_NOISE: [u16; 16] = [3, 2, 12, 15, 14, 10, 7, 13, 5, 1, 9, 0, 8, 4, 11, 6];
+// Random permutation of 16 values that is somewhat close to GREEN_NOISE.
+const BLUE_NOISE: [u16; 16] = [0, 8, 14, 9, 13, 12, 2, 7, 3, 1, 11, 10, 6, 15, 5, 4];
 
 fn rgb_to_yuv_whole_range(p: &RgbToYuvParam) -> AvifResult<()> {
     let width = 4;
@@ -151,11 +179,15 @@ fn rgb_to_yuv_whole_range(p: &RgbToYuvParam) -> AvifResult<()> {
         let value = std::cmp::min(r, max_value) as u16;
         fill_rgb_image_channel(&mut src_rgb, p.rgb_format.r_offset(), value)?;
         if p.add_noise {
-            todo!();
+            add_noise(&mut src_rgb, p.rgb_format.r_offset(), &RED_NOISE)?;
         }
         if p.yuv_format == PixelFormat::Yuv400 {
             fill_rgb_image_channel(&mut src_rgb, p.rgb_format.g_offset(), value)?;
             fill_rgb_image_channel(&mut src_rgb, p.rgb_format.b_offset(), value)?;
+            if p.add_noise {
+                add_noise(&mut src_rgb, p.rgb_format.g_offset(), &GREEN_NOISE)?;
+                add_noise(&mut src_rgb, p.rgb_format.b_offset(), &BLUE_NOISE)?;
+            }
             src_rgb.convert_to_yuv(&mut image)?;
             dst_rgb.convert_from_yuv(&image)?;
             compute_diff_sum(
@@ -171,13 +203,13 @@ fn rgb_to_yuv_whole_range(p: &RgbToYuvParam) -> AvifResult<()> {
                 let value = std::cmp::min(g, max_value) as u16;
                 fill_rgb_image_channel(&mut src_rgb, p.rgb_format.g_offset(), value)?;
                 if p.add_noise {
-                    todo!();
+                    add_noise(&mut src_rgb, p.rgb_format.g_offset(), &GREEN_NOISE)?;
                 }
                 for b in (0..max_value + rgb_step).step_by(rgb_step as usize) {
                     let value = std::cmp::min(b, max_value) as u16;
                     fill_rgb_image_channel(&mut src_rgb, p.rgb_format.b_offset(), value)?;
                     if p.add_noise {
-                        todo!();
+                        add_noise(&mut src_rgb, p.rgb_format.b_offset(), &BLUE_NOISE)?;
                     }
                     src_rgb.convert_to_yuv(&mut image)?;
                     dst_rgb.convert_from_yuv(&image)?;
@@ -234,7 +266,7 @@ fn exhaustive_settings(
         yuv_range,
         matrix_coefficients,
         chroma_downsampling,
-        add_noise: false,
+        add_noise: true,
         // Only try the minimum and maximum values.
         rgb_step: (1 << rgb_depth) - 1,
         // Barely check the results, just for coverage.
@@ -289,7 +321,7 @@ fn all_matrix_coefficients(
         yuv_range,
         matrix_coefficients,
         chroma_downsampling,
-        add_noise: false,
+        add_noise: true,
         // Only try the minimum and maximum values.
         rgb_step: (1 << rgb_depth) - 1,
         // Barely check the results, just for coverage.
@@ -308,7 +340,7 @@ fn default_8bit_png_to_avif() -> AvifResult<()> {
         yuv_range: YuvRange::Full,
         matrix_coefficients: MatrixCoefficients::Bt601,
         chroma_downsampling: ChromaDownsampling::Automatic,
-        add_noise: false,
+        add_noise: true,
         rgb_step: 3,
         max_average_abs_diff: 2.88,
         min_psnr: 36.0,
@@ -333,7 +365,7 @@ fn identity(rgb_depth_and_step: (u8, u32), yuv_depth: u8) -> AvifResult<()> {
         yuv_range: YuvRange::Full,
         matrix_coefficients: MatrixCoefficients::Identity,
         chroma_downsampling: ChromaDownsampling::Automatic,
-        add_noise: false,
+        add_noise: true,
         rgb_step,
         max_average_abs_diff: 0.0,
         min_psnr: 99.0,
@@ -372,7 +404,7 @@ fn ycgco() -> AvifResult<()> {
         yuv_range: YuvRange::Full,
         matrix_coefficients: MatrixCoefficients::YcgcoRe,
         chroma_downsampling: ChromaDownsampling::Automatic,
-        add_noise: false,
+        add_noise: true,
         rgb_step: 101,
         max_average_abs_diff: 0.0,
         min_psnr: 99.0,
@@ -399,12 +431,14 @@ fn any_subsampling_8bit(yuv_format: PixelFormat) -> AvifResult<()> {
 #[test_matrix(
     [rgb::Format::Rgba, rgb::Format::Bgr],
     [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444],
-    [(8, 61, 2.96, 36.0), (10, 211, 2.83, 47.0), (12, 809, 2.82, 52.0), (16, 16001, 2.82, 80.0)]
+    [(8, 61, 2.96, 36.0), (10, 211, 2.83, 47.0), (12, 809, 2.82, 52.0), (16, 16001, 2.82, 80.0)],
+    [true, false]
 )]
 fn all_same_bitdepths(
     rgb_format: rgb::Format,
     yuv_format: PixelFormat,
     params: (u8, u32, f64, f64),
+    add_noise: bool,
 ) -> AvifResult<()> {
     rgb_to_yuv_whole_range(&RgbToYuvParam {
         rgb_depth: params.0,
@@ -414,7 +448,7 @@ fn all_same_bitdepths(
         yuv_range: YuvRange::Limited,
         matrix_coefficients: MatrixCoefficients::Bt601,
         chroma_downsampling: ChromaDownsampling::Automatic,
-        add_noise: false,
+        add_noise,
         rgb_step: params.1,
         max_average_abs_diff: params.2,
         min_psnr: params.3,
