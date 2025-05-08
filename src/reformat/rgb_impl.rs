@@ -721,7 +721,6 @@ pub(crate) fn yuv_to_rgb_any(
 #[derive(Debug, Default, Copy, Clone)]
 struct YUVBlock(f32, f32, f32);
 
-#[allow(unused)]
 pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> {
     let r_offset = rgb.format.r_offset();
     let g_offset = rgb.format.g_offset();
@@ -777,7 +776,37 @@ pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResu
                             // Formulas 41,42,43 from https://www.itu.int/rec/T-REC-H.273-201612-S.
                             YUVBlock(rgb_pixel[1], rgb_pixel[2], rgb_pixel[0])
                         }
-                        _ => return Err(AvifError::NotImplemented),
+                        Mode::YcgcoRe | Mode::YcgcoRo => {
+                            // Formulas 58,59,60,61 from https://www.itu.int/rec/T-REC-H.273-202407-P.
+                            let r = ((rgb_pixel[0] * rgb_max_channel_f)
+                                .clamp(0.0, rgb_max_channel_f)
+                                + 0.5)
+                                .floor() as i32;
+                            let g = ((rgb_pixel[1] * rgb_max_channel_f)
+                                .clamp(0.0, rgb_max_channel_f)
+                                + 0.5)
+                                .floor() as i32;
+                            let b = ((rgb_pixel[2] * rgb_max_channel_f)
+                                .clamp(0.0, rgb_max_channel_f)
+                                + 0.5)
+                                .floor() as i32;
+                            let co = r - b;
+                            let t = b + (co >> 1);
+                            let cg = g - t;
+                            YUVBlock(
+                                (t + (cg >> 1)) as f32 / range_y,
+                                cg as f32 / range_uv,
+                                co as f32 / range_uv,
+                            )
+                        }
+                        Mode::Ycgco => {
+                            // Formulas 44,45,46 from https://www.itu.int/rec/T-REC-H.273-201612-S.
+                            YUVBlock(
+                                0.5 * rgb_pixel[1] + 0.25 * (rgb_pixel[0] + rgb_pixel[2]),
+                                0.5 * rgb_pixel[1] - 0.25 * (rgb_pixel[0] + rgb_pixel[2]),
+                                0.5 * (rgb_pixel[0] - rgb_pixel[2]),
+                            )
+                        }
                     };
                     if image.depth == 8 {
                         let dst_y = image.row_mut(Plane::Y, j)?;

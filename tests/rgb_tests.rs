@@ -258,6 +258,9 @@ fn exhaustive_settings(
         MatrixCoefficients::Smpte240,
         MatrixCoefficients::Bt2020Ncl,
         MatrixCoefficients::ChromaDerivedNcl,
+        MatrixCoefficients::Ycgco,
+        MatrixCoefficients::YcgcoRe,
+        MatrixCoefficients::YcgcoRo,
     ]
 )]
 fn all_matrix_coefficients(
@@ -268,6 +271,16 @@ fn all_matrix_coefficients(
     chroma_downsampling: ChromaDownsampling,
     matrix_coefficients: MatrixCoefficients,
 ) -> AvifResult<()> {
+    if (matches!(
+        matrix_coefficients,
+        MatrixCoefficients::Ycgco | MatrixCoefficients::YcgcoRe | MatrixCoefficients::YcgcoRo
+    ) && yuv_range == YuvRange::Limited)
+        || (matrix_coefficients == MatrixCoefficients::YcgcoRe && yuv_depth - 2 != rgb_depth)
+        || (matrix_coefficients == MatrixCoefficients::YcgcoRo && yuv_depth - 1 != rgb_depth)
+    {
+        // These combinations are not supported.
+        return Ok(());
+    }
     rgb_to_yuv_whole_range(&RgbToYuvParam {
         rgb_depth,
         yuv_depth,
@@ -344,6 +357,23 @@ fn monochrome_lossless(depth: u8) -> AvifResult<()> {
         } else {
             1
         },
+        max_average_abs_diff: 0.0,
+        min_psnr: 99.0,
+    })
+}
+
+#[test]
+fn ycgco() -> AvifResult<()> {
+    rgb_to_yuv_whole_range(&RgbToYuvParam {
+        rgb_depth: 8,
+        yuv_depth: 10,
+        rgb_format: rgb::Format::Rgba,
+        yuv_format: PixelFormat::Yuv444,
+        yuv_range: YuvRange::Full,
+        matrix_coefficients: MatrixCoefficients::YcgcoRe,
+        chroma_downsampling: ChromaDownsampling::Automatic,
+        add_noise: false,
+        rgb_step: 101,
         max_average_abs_diff: 0.0,
         min_psnr: 99.0,
     })
