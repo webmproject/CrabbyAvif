@@ -14,9 +14,8 @@
 
 #![cfg(feature = "png")]
 
-#[path = "./mod.rs"]
-mod tests;
-use tests::*;
+mod utils;
+use utils::*;
 
 use crabby_avif::reformat::rgb::*;
 

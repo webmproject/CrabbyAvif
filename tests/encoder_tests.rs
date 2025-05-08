@@ -23,9 +23,8 @@ use crabby_avif::image::*;
 use crabby_avif::utils::*;
 use crabby_avif::*;
 
-#[path = "./mod.rs"]
-mod tests;
-use tests::*;
+mod utils;
+use utils::*;
 
 use test_case::test_matrix;
 

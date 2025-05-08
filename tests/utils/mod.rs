@@ -19,7 +19,6 @@ use crabby_avif::image::*;
 use crabby_avif::*;
 use std::fs::File;
 
-#[cfg(test)]
 pub fn get_test_file(filename: &str) -> String {
     let base_path = if cfg!(google3) {
         format!(
@@ -32,7 +31,6 @@ pub fn get_test_file(filename: &str) -> String {
     format!("{base_path}tests/data/{filename}")
 }
 
-#[cfg(test)]
 pub fn get_decoder(filename: &str) -> decoder::Decoder {
     let abs_filename = get_test_file(filename);
     let mut decoder = decoder::Decoder::default();
@@ -42,7 +40,6 @@ pub fn get_decoder(filename: &str) -> decoder::Decoder {
     decoder
 }
 
-#[cfg(test)]
 #[cfg(feature = "png")]
 pub fn decode_png(filename: &str) -> Vec<u8> {
     let decoder = png::Decoder::new(File::open(get_test_file(filename)).unwrap());
@@ -54,7 +51,6 @@ pub fn decode_png(filename: &str) -> Vec<u8> {
     pixels
 }
 
-#[cfg(test)]
 fn full_to_limited_pixel(min: i32, max: i32, full: i32, v: u16) -> u16 {
     let v = v as i32;
     let v = (((v * (max - min)) + (full / 2)) / full) + min;
@@ -67,7 +63,6 @@ fn full_to_limited_pixel(min: i32, max: i32, full: i32, v: u16) -> u16 {
     }
 }
 
-#[cfg(test)]
 fn full_to_limited(v: u16, plane: Plane, depth: u8) -> u16 {
     match (plane, depth) {
         (Plane::Y, 8) => full_to_limited_pixel(16, 235, 255, v),
@@ -80,7 +75,6 @@ fn full_to_limited(v: u16, plane: Plane, depth: u8) -> u16 {
     }
 }
 
-#[cfg(test)]
 pub fn generate_gradient_image(
     width: u32,
     height: u32,
@@ -135,7 +129,6 @@ pub fn generate_gradient_image(
     Ok(image)
 }
 
-#[cfg(test)]
 pub fn are_images_equal(image1: &Image, image2: &Image) -> AvifResult<()> {
     assert!(image1.has_same_properties_and_cicp(image2));
     for plane in image::ALL_PLANES {
@@ -162,13 +155,11 @@ pub fn are_images_equal(image1: &Image, image2: &Image) -> AvifResult<()> {
     Ok(())
 }
 
-#[cfg(test)]
 fn squared_diff_sum(pixel1: u16, pixel2: u16) -> u64 {
     let diff = pixel1 as i32 - pixel2 as i32;
     (diff * diff) as u64
 }
 
-#[cfg(test)]
 pub fn psnr(image1: &Image, image2: &Image) -> AvifResult<f64> {
     assert!(image1.has_same_properties_and_cicp(image2));
     let mut diff_sum = 0u64;
@@ -212,7 +203,6 @@ pub fn psnr(image1: &Image, image2: &Image) -> AvifResult<f64> {
     }
 }
 
-#[cfg(test)]
 pub fn fill_plane(image: &mut Image, plane: Plane, value: u16) -> AvifResult<()> {
     let plane_data = image.plane_data(plane).ok_or(AvifError::NoContent)?;
     for y in 0..plane_data.height {
@@ -229,14 +219,10 @@ pub fn fill_plane(image: &mut Image, plane: Plane, value: u16) -> AvifResult<()>
     Ok(())
 }
 
-#[cfg(test)]
-#[allow(dead_code)]
 pub const HAS_DECODER: bool = cfg!(any(
     feature = "dav1d",
     feature = "libgav1",
     feature = "android_mediacodec"
 ));
 
-#[cfg(test)]
-#[allow(dead_code)]
 pub const HAS_ENCODER: bool = cfg!(feature = "aom");

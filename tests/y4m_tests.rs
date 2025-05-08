@@ -19,9 +19,8 @@ use crabby_avif::utils::writer::y4m::Y4MWriter;
 use crabby_avif::utils::writer::Writer;
 use crabby_avif::*;
 
-#[path = "./mod.rs"]
-mod tests;
-use tests::*;
+mod utils;
+use utils::*;
 
 use std::fs::File;
 use tempfile::NamedTempFile;

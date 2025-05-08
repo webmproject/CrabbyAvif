@@ -19,9 +19,8 @@ use crabby_avif::image::*;
 use crabby_avif::reformat::rgb;
 use crabby_avif::*;
 
-#[path = "./mod.rs"]
-mod tests;
-use tests::*;
+mod utils;
+use utils::*;
 
 use std::cell::RefCell;
 use std::rc::Rc;
