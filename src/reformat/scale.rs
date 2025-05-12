@@ -26,10 +26,7 @@ impl Image {
         if width == 0 || height == 0 {
             return Err(AvifError::InvalidArgument);
         }
-        let planes: &[Plane] = match category {
-            Category::Color | Category::Gainmap => &YUV_PLANES,
-            Category::Alpha => &A_PLANE,
-        };
+        let planes = category.planes();
         let src =
             if category != Category::Alpha && self.yuv_format == PixelFormat::AndroidP010 {
                 // P010 images cannot be scaled using ScalePlane_12 since the U and V planes are

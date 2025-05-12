@@ -49,6 +49,7 @@ aom = ["dep:aom-sys", "encoder"]
 encoder = []
 png = ["dep:png"]
 jpeg = ["dep:image"]
+sample_transform = []
 
 [package.metadata.capi.header]
 name = "avif"
