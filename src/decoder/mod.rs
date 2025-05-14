@@ -780,9 +780,7 @@ impl Decoder {
                 continue;
             }
             if dimg_item.should_skip() {
-                return Err(AvifError::InvalidImageGrid(
-                    "invalid input item in dimg".into(),
-                ));
+                return Err(AvifError::NotImplemented);
             }
             if dimg_item.is_image_codec_item() {
                 if first_codec_config.is_none() {
@@ -899,32 +897,40 @@ impl Decoder {
         Ok(())
     }
 
-    fn find_primary_item_id(&self, ftyp: &FileTypeBox, meta: &MetaBox) -> AvifResult<u32> {
-        let primary_item_altr_group = meta
+    // Finds the best item corresponding to the given item_id using the altr group if present
+    // (finds the first supported alternative in the altr group). Parses the item and returns its
+    // id, which may be different from the passed item_id if an altr group was used.
+    fn find_and_parse_item(
+        &mut self,
+        item_id: u32,
+        decoding_item: DecodingItem,
+        ftyp: &FileTypeBox,
+        meta: &MetaBox,
+    ) -> AvifResult<u32> {
+        let altr_group = meta
             .grpl
             .iter()
-            .find(|g| g.grouping_type == "altr" && g.entity_ids.contains(&meta.primary_item_id));
-        if let Some(altr_group) = primary_item_altr_group {
-            altr_group
-                .entity_ids
-                .iter()
-                .find(|id| match self.items.get(id) {
-                    Some(item) => {
-                        !item.should_skip()
-                            && item.is_image_item()
-                            && (ftyp.has_tmap() || !item.is_tone_mapped_item())
-                    }
-                    None => false,
-                })
-                .cloned()
-                .ok_or(AvifError::NoContent)
-        } else {
-            self.items
-                .iter()
-                .find(|x| !x.1.should_skip() && x.1.id != 0 && x.1.id == meta.primary_item_id)
-                .map(|it| *it.0)
-                .ok_or(AvifError::NoContent)
+            .find(|g| g.grouping_type == "altr" && g.entity_ids.contains(&item_id));
+        let item_ids = match altr_group {
+            Some(altr_group) => &altr_group.entity_ids,
+            None => &vec![item_id],
+        };
+        for item_id in item_ids {
+            if let Some(item) = self.items.get(item_id) {
+                if item.should_skip()
+                    || !item.is_image_item()
+                    || (item.is_tone_mapped_item() && !ftyp.has_tmap())
+                {
+                    continue;
+                }
+                match self.read_and_parse_item(*item_id, decoding_item) {
+                    Ok(()) => return Ok(*item_id),
+                    Err(AvifError::NotImplemented) => continue,
+                    Err(err) => return Err(err),
+                }
+            }
         }
+        Err(AvifError::NoContent)
     }
 
     fn reset(&mut self) {
@@ -1085,14 +1091,13 @@ impl Decoder {
                 let mut item_ids: [u32; DecodingItem::COUNT] = [0; DecodingItem::COUNT];
 
                 // Mandatory color item (primary item).
-                let primary_item_id =
-                    self.find_primary_item_id(&avif_boxes.ftyp, &avif_boxes.meta)?;
-
-                item_ids[DecodingItem::COLOR.usize()] = primary_item_id;
-                self.read_and_parse_item(
-                    item_ids[DecodingItem::COLOR.usize()],
+                let primary_item_id = self.find_and_parse_item(
+                    avif_boxes.meta.primary_item_id,
                     DecodingItem::COLOR,
+                    &avif_boxes.ftyp,
+                    &avif_boxes.meta,
                 )?;
+                item_ids[DecodingItem::COLOR.usize()] = primary_item_id;
 
                 let primary_item = self.items.get(&primary_item_id).unwrap();
                 if primary_item.is_tone_mapped_item() {
@@ -1107,21 +1112,18 @@ impl Decoder {
                     // Parse the gainmap making sure it's valid.
                     self.read_and_parse_item(gainmap_id, DecodingItem::GAINMAP)?;
 
-                    let gainmap_metadata = self.tile_info[DecodingItem::COLOR.usize()]
+                    self.validate_gainmap_item(
+                        gainmap_id,
+                        primary_item_id,
+                        item_ids[DecodingItem::COLOR.usize()],
+                    )?;
+                    self.gainmap.metadata = self.tile_info[DecodingItem::COLOR.usize()]
                         .gainmap_metadata
                         .clone();
-                    if let Some(metadata) = gainmap_metadata {
-                        self.validate_gainmap_item(
-                            gainmap_id,
-                            primary_item_id,
-                            item_ids[DecodingItem::COLOR.usize()],
-                        )?;
-                        self.gainmap.metadata = metadata;
-                        self.gainmap_present = true;
+                    self.gainmap_present = true;
 
-                        if self.settings.image_content_to_decode.gainmap() {
-                            item_ids[DecodingItem::GAINMAP.usize()] = gainmap_id;
-                        }
+                    if self.settings.image_content_to_decode.gainmap() {
+                        item_ids[DecodingItem::GAINMAP.usize()] = gainmap_id;
                     }
                 }
 

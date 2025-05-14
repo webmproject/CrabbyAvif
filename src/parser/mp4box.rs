@@ -1980,19 +1980,19 @@ pub(crate) fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
     Ok(ftyp.is_avif())
 }
 
-pub(crate) fn parse_tmap(stream: &mut IStream) -> AvifResult<Option<GainMapMetadata>> {
+pub(crate) fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
     // Experimental, not yet specified.
 
     // unsigned int(8) version = 0;
     let version = stream.read_u8()?;
     if version != 0 {
-        return Ok(None); // Unsupported version.
+        return Err(AvifError::NotImplemented);
     }
     // unsigned int(16) minimum_version;
     let minimum_version = stream.read_u16()?;
     let supported_version = 0;
     if minimum_version > supported_version {
-        return Ok(None); // Unsupported version.
+        return Err(AvifError::NotImplemented);
     }
     // unsigned int(16) writer_version;
     let writer_version = stream.read_u16()?;
@@ -2045,7 +2045,7 @@ pub(crate) fn parse_tmap(stream: &mut IStream) -> AvifResult<Option<GainMapMetad
         ));
     }
     metadata.is_valid()?;
-    Ok(Some(metadata))
+    Ok(metadata)
 }
 
 #[cfg(feature = "sample_transform")]
@@ -2054,9 +2054,7 @@ pub(crate) fn parse_sato(stream: &mut IStream, num_inputs: usize) -> AvifResult<
     // unsigned int(2) version = 0;
     let version = bits.read(2)?;
     if version != 0 {
-        return Err(AvifError::InvalidImageGrid(
-            "unsupported version for sato".into(),
-        ));
+        return Err(AvifError::NotImplemented);
     }
     // unsigned int(4) flags;
     let _reserved = bits.read(4)?;

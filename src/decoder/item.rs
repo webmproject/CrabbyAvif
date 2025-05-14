@@ -122,9 +122,7 @@ impl Item {
             // unsigned int(8) version = 0;
             let version = stream.read_u8()?;
             if version != 0 {
-                return Err(AvifError::InvalidImageGrid(
-                    "unsupported version for grid".into(),
-                ));
+                return Err(AvifError::NotImplemented);
             }
             // unsigned int(8) flags;
             let flags = stream.read_u8()?;
@@ -161,9 +159,7 @@ impl Item {
             // unsigned int(8) version = 0;
             let version = stream.read_u8()?;
             if version != 0 {
-                return Err(AvifError::InvalidImageGrid(format!(
-                    "unsupported version {version} for iovl"
-                )));
+                return Err(AvifError::NotImplemented);
             }
             // unsigned int(8) flags;
             let flags = stream.read_u8()?;
