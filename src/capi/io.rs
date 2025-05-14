@@ -64,6 +64,16 @@ impl From<&Vec<u8>> for avifRWData {
     }
 }
 
+impl From<&avifRWData> for Vec<u8> {
+    fn from(data: &avifRWData) -> Vec<u8> {
+        if data.size == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(data.data, data.size).to_vec() }
+        }
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRWDataRealloc(
     raw: *mut avifRWData,

@@ -19,6 +19,7 @@ use super::types::*;
 use crate::image::*;
 use crate::internal_utils::*;
 use crate::utils::clap::*;
+use crate::utils::pixels::*;
 use crate::utils::*;
 use crate::*;
 
@@ -216,6 +217,111 @@ impl From<&Image> for avifImage {
             dst_image.alphaRowBytes = image.row_bytes[3];
         }
         dst_image
+    }
+}
+
+impl From<&avifImage> for image::Image {
+    fn from(image: &avifImage) -> image::Image {
+        image::Image {
+            width: image.width,
+            height: image.height,
+            depth: image.depth as u8,
+            yuv_format: image.yuvFormat,
+            yuv_range: image.yuvRange,
+            chroma_sample_position: image.yuvChromaSamplePosition,
+            alpha_present: !image.alphaPlane.is_null(),
+            alpha_premultiplied: image.alphaPremultiplied == AVIF_TRUE,
+            planes: [
+                Pixels::from_raw_pointer(
+                    image.yuvPlanes[0],
+                    image.depth,
+                    image.height,
+                    image.yuvRowBytes[0],
+                )
+                .ok(),
+                Pixels::from_raw_pointer(
+                    image.yuvPlanes[1],
+                    image.depth,
+                    image.height,
+                    image.yuvRowBytes[1],
+                )
+                .ok(),
+                Pixels::from_raw_pointer(
+                    image.yuvPlanes[2],
+                    image.depth,
+                    image.height,
+                    image.yuvRowBytes[2],
+                )
+                .ok(),
+                Pixels::from_raw_pointer(
+                    image.alphaPlane,
+                    image.depth,
+                    image.height,
+                    image.alphaRowBytes,
+                )
+                .ok(),
+            ],
+            row_bytes: [
+                image.yuvRowBytes[0],
+                image.yuvRowBytes[1],
+                image.yuvRowBytes[2],
+                image.alphaRowBytes,
+            ],
+            color_primaries: image.colorPrimaries,
+            transfer_characteristics: image.transferCharacteristics,
+            matrix_coefficients: image.matrixCoefficients,
+            clli: image.clli(),
+            pasp: image.pasp(),
+            clap: image.clap(),
+            irot_angle: image.irot_angle(),
+            imir_axis: image.imir_axis(),
+            exif: (&image.exif).into(),
+            icc: (&image.icc).into(),
+            xmp: (&image.xmp).into(),
+            ..Default::default()
+        }
+    }
+}
+
+impl avifImage {
+    fn clli(&self) -> Option<ContentLightLevelInformation> {
+        if self.clli != ContentLightLevelInformation::default() {
+            Some(self.clli)
+        } else {
+            None
+        }
+    }
+
+    fn pasp(&self) -> Option<PixelAspectRatio> {
+        if (self.transformFlags & AVIF_TRANSFORM_PASP) != 0 {
+            Some(self.pasp)
+        } else {
+            None
+        }
+    }
+
+    fn clap(&self) -> Option<CleanAperture> {
+        if (self.transformFlags & AVIF_TRANSFORM_CLAP) != 0 {
+            Some((&self.clap).into())
+        } else {
+            None
+        }
+    }
+
+    fn irot_angle(&self) -> Option<u8> {
+        if (self.transformFlags & AVIF_TRANSFORM_IROT) != 0 {
+            Some(self.irot.angle)
+        } else {
+            None
+        }
+    }
+
+    fn imir_axis(&self) -> Option<u8> {
+        if (self.transformFlags & AVIF_TRANSFORM_IMIR) != 0 {
+            Some(self.imir.axis)
+        } else {
+            None
+        }
     }
 }
 

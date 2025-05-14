@@ -90,61 +90,6 @@ impl From<&avifRGBImage> for rgb::Image {
     }
 }
 
-impl From<&avifImage> for image::Image {
-    // Only copies fields necessary for reformatting.
-    fn from(image: &avifImage) -> image::Image {
-        image::Image {
-            width: image.width,
-            height: image.height,
-            depth: image.depth as u8,
-            yuv_format: image.yuvFormat,
-            yuv_range: image.yuvRange,
-            alpha_present: !image.alphaPlane.is_null(),
-            alpha_premultiplied: image.alphaPremultiplied == AVIF_TRUE,
-            planes: [
-                Pixels::from_raw_pointer(
-                    image.yuvPlanes[0],
-                    image.depth,
-                    image.height,
-                    image.yuvRowBytes[0],
-                )
-                .ok(),
-                Pixels::from_raw_pointer(
-                    image.yuvPlanes[1],
-                    image.depth,
-                    image.height,
-                    image.yuvRowBytes[1],
-                )
-                .ok(),
-                Pixels::from_raw_pointer(
-                    image.yuvPlanes[2],
-                    image.depth,
-                    image.height,
-                    image.yuvRowBytes[2],
-                )
-                .ok(),
-                Pixels::from_raw_pointer(
-                    image.alphaPlane,
-                    image.depth,
-                    image.height,
-                    image.alphaRowBytes,
-                )
-                .ok(),
-            ],
-            row_bytes: [
-                image.yuvRowBytes[0],
-                image.yuvRowBytes[1],
-                image.yuvRowBytes[2],
-                image.alphaRowBytes,
-            ],
-            color_primaries: image.colorPrimaries,
-            transfer_characteristics: image.transferCharacteristics,
-            matrix_coefficients: image.matrixCoefficients,
-            ..Default::default()
-        }
-    }
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRGBImageSetDefaults(
     rgb: *mut avifRGBImage,
