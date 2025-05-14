@@ -1579,7 +1579,13 @@ impl Decoder {
     fn prepare_samples(&mut self, image_index: usize) -> AvifResult<()> {
         for decoding_item in self.settings.image_content_to_decode.decoding_items() {
             for tile_index in 0..self.tiles[decoding_item.usize()].len() {
-                self.prepare_sample(image_index, decoding_item, tile_index, None)?;
+                match (
+                    self.settings.allow_progressive,
+                    self.prepare_sample(image_index, decoding_item, tile_index, None),
+                ) {
+                    (_, Ok(_)) | (true, Err(AvifError::WaitingOnIo)) => continue,
+                    (_, Err(err)) => return Err(err),
+                }
             }
         }
         Ok(())
@@ -1606,7 +1612,16 @@ impl Decoder {
         } else {
             &self.items.get(&sample.item_id).unwrap().data_buffer
         };
-        let data = sample.data(io, item_data_buffer)?;
+        let data = match (
+            self.settings.allow_progressive,
+            sample.data(io, item_data_buffer),
+        ) {
+            (_, Ok(data)) => data,
+            (true, Err(AvifError::TruncatedData) | Err(AvifError::NoContent)) => {
+                return Err(AvifError::WaitingOnIo)
+            }
+            (_, Err(err)) => return Err(err),
+        };
         let next_image_result =
             codec.get_next_image(data, sample.spatial_id, &mut tile.image, category);
         if next_image_result.is_err() {
@@ -1894,7 +1909,13 @@ impl Decoder {
 
         let next_image_index = checked_add!(self.image_index, 1)?;
         self.create_codecs()?;
-        self.prepare_samples(next_image_index as usize)?;
+        match (
+            self.settings.allow_progressive,
+            self.prepare_samples(next_image_index as usize),
+        ) {
+            (_, Ok(_)) | (true, Err(AvifError::WaitingOnIo)) => {}
+            (_, Err(err)) => return Err(err),
+        }
         self.decode_tiles(next_image_index as usize)?;
 
         if !self.tile_info[DecodingItem::COLOR.usize()]
