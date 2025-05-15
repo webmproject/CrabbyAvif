@@ -58,6 +58,7 @@ TEST(BasicTest, EncodeDecode) {
   testutil::FillImageGradient(image.get(), /*offset=*/0);
 
   EncoderPtr encoder(avifEncoderCreate());
+  encoder->quality = 70;
   encoder->speed = 10;
   ASSERT_NE(encoder, nullptr);
   AvifRwData encoded;
@@ -71,6 +72,8 @@ TEST(BasicTest, EncodeDecode) {
   EXPECT_EQ(decoder->image->width, image->width);
   EXPECT_EQ(decoder->image->height, image->height);
   EXPECT_EQ(decoder->image->depth, image->depth);
+  ASSERT_GT(testutil::GetPsnr(*image, *decoder->image, /*ignore_alpha=*/false),
+            40.0);
 }
 
 TEST(TransformTest, ClapIrotImir) {

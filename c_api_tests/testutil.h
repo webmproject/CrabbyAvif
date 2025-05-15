@@ -77,6 +77,9 @@ avif::ImagePtr CreateImage(int width, int height, int depth,
 
 void FillImageGradient(avifImage* image, int offset);
 
+double GetPsnr(const avifImage& image1, const avifImage& image2,
+               bool ignore_alpha);
+
 bool AreByteSequencesEqual(const uint8_t* data1, size_t data1_length,
                            const uint8_t* data2, size_t data2_length);
 
