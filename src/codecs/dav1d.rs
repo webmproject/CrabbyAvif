@@ -340,6 +340,8 @@ impl Decoder for Dav1d {
         let mut payloads_iter = payloads.iter().peekable();
         unsafe {
             let mut data = Dav1dDataWrapper::default();
+            let max_retries = 500;
+            let mut retries = 0;
             while !grid_image_helper.is_grid_complete()? {
                 if !data.has_data() && payloads_iter.peek().is_some() {
                     data.wrap(payloads_iter.next().unwrap())?;
@@ -366,6 +368,14 @@ impl Decoder for Dav1d {
                         grid_image_helper.category,
                     )?;
                     grid_image_helper.copy_from_cell_image(&mut cell_image)?;
+                    retries = 0;
+                } else {
+                    retries += 1;
+                    if retries > max_retries {
+                        return Err(AvifError::UnknownError(format!(
+                            "dav1d_get_picture never returned a frame after {max_retries} calls"
+                        )));
+                    }
                 }
             }
             self.flush()?;
