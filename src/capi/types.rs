@@ -259,7 +259,9 @@ impl avifDiagnostics {
 }
 
 #[repr(C)]
+#[derive(Default)]
 pub enum avifCodecChoice {
+    #[default]
     Auto = 0,
     Aom = 1,
     Dav1d = 2,
@@ -459,3 +461,8 @@ pub unsafe extern "C" fn crabby_avifFree(p: *mut c_void) {
         let _ = unsafe { Box::from_raw(p as *mut u8) };
     }
 }
+
+pub const AVIF_ADD_IMAGE_FLAG_NONE: u32 = 0;
+pub const AVIF_ADD_IMAGE_FLAG_FORCE_KEYFRAME: u32 = 1 << 0;
+pub const AVIF_ADD_IMAGE_FLAG_SINGLE: u32 = 1 << 1;
+pub type avifAddImageFlags = u32;

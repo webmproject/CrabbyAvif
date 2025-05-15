@@ -35,6 +35,12 @@
 #define avifDecoderSetIOMemory crabby_avifDecoderSetIOMemory
 #define avifDecoderSetSource crabby_avifDecoderSetSource
 #define avifDiagnosticsClearError crabby_avifDiagnosticsClearError
+#define avifEncoderAddImage crabby_avifEncoderAddImage
+#define avifEncoderAddImageGrid crabby_avifEncoderAddImageGrid
+#define avifEncoderCreate crabby_avifEncoderCreate
+#define avifEncoderDestroy crabby_avifEncoderDestroy
+#define avifEncoderFinish crabby_avifEncoderFinish
+#define avifEncoderWrite crabby_avifEncoderWrite
 #define avifFree crabby_avifFree
 #define avifGetPixelFormatInfo crabby_avifGetPixelFormatInfo
 #define avifIOCreateFileReader crabby_avifIOCreateFileReader

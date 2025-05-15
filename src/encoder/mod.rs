@@ -36,6 +36,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
 pub struct ScalingMode {
     pub horizontal: IFraction,
     pub vertical: IFraction,
@@ -117,6 +118,8 @@ pub(crate) struct Sample {
 }
 
 impl Sample {
+    // This function is not used in all configurations.
+    #[allow(unused)]
     pub(crate) fn create_from(data: &[u8], sync: bool) -> AvifResult<Self> {
         let mut copied_data: Vec<u8> = create_vec_exact(data.len())?;
         copied_data.extend_from_slice(data);

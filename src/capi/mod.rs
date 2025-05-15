@@ -20,6 +20,8 @@
 #![allow(dead_code)]
 
 mod decoder;
+#[cfg(feature = "encoder")]
+mod encoder;
 mod gainmap;
 mod image;
 mod io;
