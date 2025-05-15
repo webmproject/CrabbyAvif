@@ -700,6 +700,13 @@ avifBool crabby_avifCropRectConvertCleanApertureBox(avifCropRect *cropRect,
                                                     avifPixelFormat yuvFormat,
                                                     avifDiagnostics *_diag);
 
+avifBool crabby_avifCleanApertureBoxConvertCropRect(avifCleanApertureBox *clap,
+                                                    const avifCropRect *cropRect,
+                                                    uint32_t imageW,
+                                                    uint32_t imageH,
+                                                    avifPixelFormat yuvFormat,
+                                                    avifDiagnostics *_diag);
+
 void crabby_avifGetPixelFormatInfo(avifPixelFormat format, avifPixelFormatInfo *info);
 
 void crabby_avifDiagnosticsClearError(avifDiagnostics *diag);

@@ -342,6 +342,23 @@ pub unsafe extern "C" fn crabby_avifCropRectConvertCleanApertureBox(
     AVIF_TRUE
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifCleanApertureBoxConvertCropRect(
+    clap: *mut avifCleanApertureBox,
+    cropRect: *const avifCropRect,
+    imageW: u32,
+    imageH: u32,
+    yuvFormat: PixelFormat,
+    _diag: *mut avifDiagnostics,
+) -> avifBool {
+    *deref_mut!(clap) =
+        match CleanAperture::create_from(deref_const!(cropRect), imageW, imageH, yuvFormat) {
+            Ok(x) => (&Some(x)).into(),
+            Err(_) => return AVIF_FALSE,
+        };
+    AVIF_TRUE
+}
+
 // Constants and definitions from libavif that are not used in rust.
 
 pub const AVIF_PLANE_COUNT_YUV: usize = 3;

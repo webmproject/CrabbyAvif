@@ -16,6 +16,8 @@
 
 // Functions.
 #define avifAlloc crabby_avifAlloc
+#define avifCleanApertureBoxConvertCropRect \
+  crabby_avifCleanApertureBoxConvertCropRect
 #define avifCropRectConvertCleanApertureBox \
   crabby_avifCropRectConvertCleanApertureBox
 #define avifDecoderCreate crabby_avifDecoderCreate
