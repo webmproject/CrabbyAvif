@@ -325,6 +325,25 @@ fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     }
 }
 
+#[test]
+fn decoder_parse_exif_non_zero_tiff_offset() {
+    let mut decoder = get_decoder("paris_exif_non_zero_tiff_offset.avif");
+
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
+    let image = decoder.image().expect("image was none");
+
+    assert_eq!(image.exif.len(), 1129);
+    assert_eq!(image.exif[0], 0);
+    assert_eq!(image.exif[1], 0);
+    assert_eq!(image.exif[2], 0);
+    assert_eq!(image.exif[3], 73);
+    assert_eq!(image.exif[4], 73);
+    assert_eq!(image.exif[5], 42);
+    assert_eq!(image.exif[6], 0);
+}
+
 // From avifmetadatatest.cc
 #[test]
 fn decoder_parse_icc_exif_xmp() {

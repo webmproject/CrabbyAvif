@@ -491,6 +491,23 @@ TEST(DecoderTest, ParseICC) {
   EXPECT_EQ(decoder->image->xmp.data[3], 112);
 }
 
+TEST(DecoderTest, ParseExifNonZeroTiffOffset) {
+  auto decoder = CreateDecoder(("paris_exif_non_zero_tiff_offset.avif"));
+  ASSERT_NE(decoder, nullptr);
+
+  EXPECT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
+
+  ASSERT_EQ(decoder->image->exif.size, 1129);
+  EXPECT_EQ(decoder->image->exif.data[0], 0);
+  EXPECT_EQ(decoder->image->exif.data[1], 0);
+  EXPECT_EQ(decoder->image->exif.data[2], 0);
+  EXPECT_EQ(decoder->image->exif.data[3], 73);
+  EXPECT_EQ(decoder->image->exif.data[4], 73);
+  EXPECT_EQ(decoder->image->exif.data[5], 42);
+  EXPECT_EQ(decoder->image->exif.data[6], 0);
+}
+
 bool CompareImages(const avifImage& image1, const avifImage image2) {
   EXPECT_EQ(image1.width, image2.width);
   EXPECT_EQ(image1.height, image2.height);

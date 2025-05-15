@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::internal_utils::stream::*;
+use crate::parser::mp4box::BoxSize;
 use crate::*;
 
 fn parse_exif_tiff_header_offset(stream: &mut IStream) -> AvifResult<u32> {
@@ -26,8 +27,9 @@ fn parse_exif_tiff_header_offset(stream: &mut IStream) -> AvifResult<u32> {
             stream.rewind(4)?;
             return Ok(expected_offset);
         }
-        checked_decr!(size, 4);
-        checked_incr!(expected_offset, 4);
+        stream.rewind(3)?;
+        checked_decr!(size, 1);
+        checked_incr!(expected_offset, 1);
     }
     // Could not find the TIFF header.
     Err(AvifError::InvalidExifPayload)
@@ -37,9 +39,12 @@ pub(crate) fn parse(stream: &mut IStream) -> AvifResult<()> {
     // unsigned int(32) exif_tiff_header_offset;
     let offset = stream.read_u32().or(Err(AvifError::InvalidExifPayload))?;
 
-    let expected_offset = parse_exif_tiff_header_offset(stream)?;
+    let bytes_left = stream.bytes_left()?;
+    let mut sub_stream = stream.sub_stream(&BoxSize::FixedSize(bytes_left))?;
+    let expected_offset = parse_exif_tiff_header_offset(&mut sub_stream)?;
     if offset != expected_offset {
         return Err(AvifError::InvalidExifPayload);
     }
+    stream.rewind(bytes_left)?;
     Ok(())
 }
