@@ -37,7 +37,7 @@ jobs:
       # TODO: This step fails on macos. So run it on linux only for now.
       if: runner.os == 'Linux'
       run: |
-        cargo build --features capi --release
+        cargo build --features capi,aom --release
         cmake -S c_api_tests -B c_build
         make -C c_build
         ctest --test-dir c_build -E conformance_tests
@@ -49,7 +49,7 @@ jobs:
       # TODO: This step fails on macos. So run it on linux only for now.
       if: runner.os == 'Linux'
       run: |
-        cargo build --no-default-features --features capi,libgav1,libyuv --release
+        cargo build --no-default-features --features capi,libgav1,libyuv,aom --release
         cmake -S c_api_tests -B c_build_gav1
         make -C c_build_gav1
         ctest --test-dir c_build_gav1 -E conformance_tests

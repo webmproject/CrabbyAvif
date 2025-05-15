@@ -576,6 +576,9 @@ pub unsafe extern "C" fn crabby_avifImageFreePlanes(
 pub unsafe extern "C" fn crabby_avifImageDestroy(image: *mut avifImage) {
     unsafe {
         crabby_avifImageFreePlanes(image, avifPlanesFlag::AvifPlanesAll as u32);
+        crabby_avifRWDataFree(&mut (*image).icc as _);
+        crabby_avifRWDataFree(&mut (*image).exif as _);
+        crabby_avifRWDataFree(&mut (*image).xmp as _);
         let _ = Box::from_raw(image);
     }
 }
