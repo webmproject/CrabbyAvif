@@ -40,6 +40,12 @@ constexpr std::array<uint8_t, 24> kSampleXmp = {
     0x3c, 0x3f, 0x78, 0x70, 0x61, 0x63, 0x6b, 0x65, 0x74, 0x20, 0x62, 0x65,
     0x67, 0x69, 0x6e, 0x3d, 0x22, 0xef, 0xbb, 0xbf, 0x22, 0x20, 0x69, 0x64};
 
+// Exif bytes are partially checked by crabbyavif. This is a truncated
+// widespread Exif metadata chunk.
+constexpr std::array<uint8_t, 24> kSampleExif = {
+    0xff, 0x1,  0x45, 0x78, 0x69, 0x76, 0x32, 0xff, 0xe1, 0x12, 0x5a, 0x45,
+    0x78, 0x69, 0x66, 0x0,  0x0,  0x49, 0x49, 0x2a, 0x0,  0x8,  0x0,  0x0};
+
 DecoderPtr CreateDecoder(const AvifRwData& encoded) {
   DecoderPtr decoder(avifDecoderCreate());
   if (decoder == nullptr ||
@@ -126,7 +132,8 @@ TEST(MetadataTest, IccExifXmp) {
   testutil::FillImageGradient(image.get(), /*offset=*/0);
   ASSERT_EQ(avifRWDataSet(&image->icc, kSampleIcc.data(), kSampleIcc.size()),
             AVIF_RESULT_OK);
-  // TODO: b/416560730 - set exif.
+  ASSERT_EQ(avifRWDataSet(&image->exif, kSampleExif.data(), kSampleExif.size()),
+            AVIF_RESULT_OK);
   ASSERT_EQ(avifRWDataSet(&image->xmp, kSampleXmp.data(), kSampleXmp.size()),
             AVIF_RESULT_OK);
 
