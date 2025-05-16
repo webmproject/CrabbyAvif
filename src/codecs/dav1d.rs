@@ -338,6 +338,7 @@ impl Decoder for Dav1d {
         let mut res;
         let context = self.context.unwrap();
         let mut payloads_iter = payloads.iter().peekable();
+        let mut return_value = Ok(());
         unsafe {
             let mut data = Dav1dDataWrapper::default();
             let max_retries = 500;
@@ -349,17 +350,19 @@ impl Decoder for Dav1d {
                 if data.has_data() {
                     res = dav1d_send_data(context, data.mut_ptr());
                     if res != 0 && res != DAV1D_EAGAIN {
-                        return Err(AvifError::UnknownError(format!(
+                        return_value = Err(AvifError::UnknownError(format!(
                             "dav1d_send_data returned {res}"
                         )));
+                        break;
                     }
                 }
                 let mut picture = Dav1dPictureWrapper::default();
                 res = dav1d_get_picture(context, picture.mut_ptr());
                 if res != 0 && res != DAV1D_EAGAIN {
-                    return Err(AvifError::UnknownError(format!(
+                    return_value = Err(AvifError::UnknownError(format!(
                         "dav1d_get_picture returned {res}"
                     )));
+                    break;
                 } else if res == 0 && picture.use_layer(spatial_id) {
                     let mut cell_image = Image::default();
                     self.picture_to_image(
@@ -372,15 +375,16 @@ impl Decoder for Dav1d {
                 } else {
                     retries += 1;
                     if retries > max_retries {
-                        return Err(AvifError::UnknownError(format!(
+                        return_value = Err(AvifError::UnknownError(format!(
                             "dav1d_get_picture never returned a frame after {max_retries} calls"
                         )));
+                        break;
                     }
                 }
             }
             self.flush()?;
         }
-        Ok(())
+        return_value
     }
 }
 
