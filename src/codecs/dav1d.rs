@@ -170,6 +170,14 @@ impl Dav1d {
         Ok(())
     }
 
+    fn drop_impl(&mut self) {
+        self.picture = None;
+        if self.context.is_some() {
+            unsafe { dav1d_close(&mut self.context.unwrap()) };
+        }
+        self.context = None;
+    }
+
     fn picture_to_image(
         &self,
         dav1d_picture: &Dav1dPicture,
@@ -384,15 +392,15 @@ impl Decoder for Dav1d {
             }
             self.flush()?;
         }
+        if return_value.is_err() {
+            self.drop_impl();
+        }
         return_value
     }
 }
 
 impl Drop for Dav1d {
     fn drop(&mut self) {
-        self.picture = None;
-        if self.context.is_some() {
-            unsafe { dav1d_close(&mut self.context.unwrap()) };
-        }
+        self.drop_impl();
     }
 }
