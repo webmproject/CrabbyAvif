@@ -50,7 +50,20 @@ impl SampleTransformBinaryOp {
             SampleTransformBinaryOp::Or => left | right,
             SampleTransformBinaryOp::Xor => left ^ right,
             SampleTransformBinaryOp::Pow => {
-                if left == 0 {
+                if left == 0 || left == 1 {
+                    left
+                } else if right == 0 {
+                    1
+                } else if right == 1 {
+                    left
+                } else if left == -1 {
+                    if right % 2 == 0 {
+                        1
+                    } else {
+                        -1
+                    }
+                } else if right < 0 {
+                    // L^R is in ]0:1[ here, so truncating it always gives 0.
                     0
                 } else {
                     left.saturating_pow(right.try_into().unwrap_or(u32::MAX))
@@ -699,5 +712,45 @@ mod tests {
             assert_eq!(output.row16(Plane::A, 0), Ok::<&[u16], _>(&[1, 80]));
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_pow() {
+        let pow = SampleTransformBinaryOp::Pow;
+        let clamp = (0, 255);
+        assert_eq!(pow.apply(-2, i32::MIN as i64, clamp), 0);
+        assert_eq!(pow.apply(-2, -3, clamp), 0);
+        assert_eq!(pow.apply(-2, -2, clamp), 0);
+        assert_eq!(pow.apply(-2, -1, clamp), 0);
+        assert_eq!(pow.apply(-2, 0, clamp), 1);
+        assert_eq!(pow.apply(-2, 1, clamp), 0); // -2 clamped
+        assert_eq!(pow.apply(-2, 2, clamp), 4);
+        assert_eq!(pow.apply(-2, 3, clamp), 0); // -8 clamped
+        assert_eq!(pow.apply(-2, i32::MAX as i64 - 1, clamp), 255); // i32::MAX as i64 clamped
+        assert_eq!(pow.apply(-2, i32::MAX as i64, clamp), 0); // i32::MIN as i64 clamped
+
+        assert_eq!(pow.apply(-1, i32::MIN as i64, clamp), 1);
+        assert_eq!(pow.apply(-1, -3, clamp), 0); // -1 clamped
+        assert_eq!(pow.apply(-1, -2, clamp), 1);
+        assert_eq!(pow.apply(-1, -1, clamp), 0); // -1 clamped
+        assert_eq!(pow.apply(-1, 0, clamp), 1);
+        assert_eq!(pow.apply(-1, 1, clamp), 0); // -1 clamped
+        assert_eq!(pow.apply(-1, 2, clamp), 1);
+        assert_eq!(pow.apply(-1, 3, clamp), 0); // -1 clamped
+        assert_eq!(pow.apply(-1, i32::MAX as i64 - 1, clamp), 1);
+        assert_eq!(pow.apply(-1, i32::MAX as i64, clamp), 0); // -1 clamped
+
+        for v in [0, 1] {
+            assert_eq!(pow.apply(v, i32::MIN as i64, clamp), v);
+            assert_eq!(pow.apply(v, -2, clamp), v);
+            assert_eq!(pow.apply(v, -1, clamp), v);
+            assert_eq!(pow.apply(v, 0, clamp), v);
+            assert_eq!(pow.apply(v, 1, clamp), v);
+            assert_eq!(pow.apply(v, 2, clamp), v);
+            assert_eq!(pow.apply(v, i32::MAX as i64, clamp), v);
+        }
+
+        assert_eq!(pow.apply(-(1 << 16), 3, clamp), 0); // i32::MIN as i64 clamped
+        assert_eq!(pow.apply(1 << 16, 3, clamp), 255); // i32::MAX as i64 clamped
     }
 }
