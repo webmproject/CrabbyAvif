@@ -63,7 +63,7 @@ impl SampleTransformBinaryOp {
                         -1
                     }
                 } else if right < 0 {
-                    // L^R is in ]0:1[ here, so truncating it always gives 0.
+                    // L^R is in ]-1:1[ here, so truncating it always gives 0.
                     0
                 } else {
                     left.saturating_pow(right.try_into().unwrap_or(u32::MAX))
