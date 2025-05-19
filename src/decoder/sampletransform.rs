@@ -52,16 +52,16 @@ impl SampleTransformBinaryOp {
             SampleTransformBinaryOp::Pow => {
                 if left == 0 || left == 1 {
                     left
-                } else if right == 0 {
-                    1
-                } else if right == 1 {
-                    left
                 } else if left == -1 {
                     if right % 2 == 0 {
                         1
                     } else {
                         -1
                     }
+                } else if right == 0 {
+                    1
+                } else if right == 1 {
+                    left
                 } else if right < 0 {
                     // L^R is in ]-1:1[ here, so truncating it always gives 0.
                     0
