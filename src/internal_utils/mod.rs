@@ -254,10 +254,13 @@ pub(crate) fn validate_grid_image_dimensions(image: &Image, grid: &Grid) -> Avif
     //   - when the images are in the 4:2:0 chroma sampling format both the horizontal and
     //     vertical tile offsets and widths, and the output width and height, shall be even
     //     numbers.
-    if ((image.yuv_format == PixelFormat::Yuv420 || image.yuv_format == PixelFormat::Yuv422)
-        && (grid.width % 2 != 0 || image.width % 2 != 0))
-        || (image.yuv_format == PixelFormat::Yuv420
-            && (grid.height % 2 != 0 || image.height % 2 != 0))
+    // Do not perform this validation when HEIC is enabled. There are several HEIC files in the
+    // wild which do not conform to this constraint.
+    if !cfg!(feature = "heic")
+        && (((image.yuv_format == PixelFormat::Yuv420 || image.yuv_format == PixelFormat::Yuv422)
+            && (grid.width % 2 != 0 || image.width % 2 != 0))
+            || (image.yuv_format == PixelFormat::Yuv420
+                && (grid.height % 2 != 0 || image.height % 2 != 0)))
     {
         return Err(AvifError::InvalidImageGrid(format!(
             "Grid image width ({}) or height ({}) or tile width ({}) or height ({}) shall be \
