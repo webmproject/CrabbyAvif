@@ -17,6 +17,7 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <tuple>
 
 #include "avif/avif.h"
 #include "gtest/gtest.h"
@@ -159,6 +160,56 @@ TEST(MetadataTest, IccExifXmp) {
       decoder->image->xmp.data, decoder->image->xmp.size, image->xmp.data,
       image->xmp.size));
 }
+
+class LosslessRoundTrip
+    : public testing::TestWithParam<
+          std::tuple<avifMatrixCoefficients, avifPixelFormat>> {};
+
+TEST_P(LosslessRoundTrip, RoundTrip) {
+  const auto matrix_coefficients = std::get<0>(GetParam());
+  const auto pixel_format = std::get<1>(GetParam());
+
+  ImagePtr image = testutil::CreateImage(/*width=*/12, /*height=*/34,
+                                         /*depth=*/8, pixel_format,
+                                         AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+  ASSERT_NE(image, nullptr);
+  image->matrixCoefficients = matrix_coefficients;
+  testutil::FillImageGradient(image.get(), /*offset=*/0);
+
+  // Encode.
+  EncoderPtr encoder(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  encoder->speed = 10;
+  encoder->quality = 100;
+  AvifRwData encoded;
+  avifResult result = avifEncoderWrite(encoder.get(), image.get(), &encoded);
+
+  if (image->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_IDENTITY &&
+      image->yuvFormat != AVIF_PIXEL_FORMAT_YUV444) {
+    // The AV1 spec does not allow identity with subsampling.
+    ASSERT_NE(result, AVIF_RESULT_OK);
+    return;
+  }
+  ASSERT_EQ(result, AVIF_RESULT_OK);
+
+  // Decode.
+  auto decoder = CreateDecoder(encoded);
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+
+  ASSERT_TRUE(testutil::AreImagesEqual(*image, *decoder->image,
+                                       /*ignore_alpha=*/false));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    LosslessRoundTripTests, LosslessRoundTrip,
+    testing::Combine(testing::Values(AVIF_MATRIX_COEFFICIENTS_IDENTITY,
+                                     AVIF_MATRIX_COEFFICIENTS_YCGCO,
+                                     AVIF_MATRIX_COEFFICIENTS_YCGCO_RE),
+                     testing::Values(AVIF_PIXEL_FORMAT_YUV444,
+                                     AVIF_PIXEL_FORMAT_YUV420,
+                                     AVIF_PIXEL_FORMAT_YUV400)));
 
 }  // namespace
 }  // namespace avif

@@ -83,4 +83,9 @@ double GetPsnr(const avifImage& image1, const avifImage& image2,
 bool AreByteSequencesEqual(const uint8_t* data1, size_t data1_length,
                            const uint8_t* data2, size_t data2_length);
 
+bool AreByteSequencesEqual(const avifRWData& data1, const avifRWData& data2);
+
+bool AreImagesEqual(const avifImage& image1, const avifImage& image2,
+                    bool ignore_alpha);
+
 }  // namespace testutil

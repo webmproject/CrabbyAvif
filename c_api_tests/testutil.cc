@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <ios>
 #include <limits>
@@ -190,6 +191,90 @@ bool AreByteSequencesEqual(const uint8_t* data1, size_t data1_length,
                            const uint8_t* data2, size_t data2_length) {
   if (data1_length != data2_length) return false;
   return data1_length == 0 || std::equal(data1, data1 + data1_length, data2);
+}
+
+bool AreByteSequencesEqual(const avifRWData& data1, const avifRWData& data2) {
+  return AreByteSequencesEqual(data1.data, data1.size, data2.data, data2.size);
+}
+
+bool AreImagesEqual(const avifImage& image1, const avifImage& image2,
+                    bool ignore_alpha) {
+  if (image1.width != image2.width || image1.height != image2.height ||
+      image1.depth != image2.depth || image1.yuvFormat != image2.yuvFormat ||
+      image1.yuvRange != image2.yuvRange) {
+    return false;
+  }
+
+  for (avifChannelIndex c :
+       {AVIF_CHAN_Y, AVIF_CHAN_U, AVIF_CHAN_V, AVIF_CHAN_A}) {
+    if (ignore_alpha && c == AVIF_CHAN_A) continue;
+    const uint8_t* row1 = avifImagePlane(&image1, c);
+    const uint8_t* row2 = avifImagePlane(&image2, c);
+    if (!row1 != !row2) {
+      return false;
+    }
+    if (c == AVIF_CHAN_A && row1 != nullptr &&
+        image1.alphaPremultiplied != image2.alphaPremultiplied) {
+      return false;
+    }
+    const uint32_t row_bytes1 = avifImagePlaneRowBytes(&image1, c);
+    const uint32_t row_bytes2 = avifImagePlaneRowBytes(&image2, c);
+    const uint32_t plane_width = avifImagePlaneWidth(&image1, c);
+    const uint32_t plane_height = avifImagePlaneHeight(&image1, c);
+    for (uint32_t y = 0; y < plane_height; ++y) {
+      if (avifImageUsesU16(&image1)) {
+        if (!std::equal(reinterpret_cast<const uint16_t*>(row1),
+                        reinterpret_cast<const uint16_t*>(row1) + plane_width,
+                        reinterpret_cast<const uint16_t*>(row2))) {
+          return false;
+        }
+      } else {
+        if (!std::equal(row1, row1 + plane_width, row2)) {
+          return false;
+        }
+      }
+      row1 += row_bytes1;
+      row2 += row_bytes2;
+    }
+  }
+
+  if (!AreByteSequencesEqual(image1.icc, image2.icc)) return false;
+
+  if (image1.colorPrimaries != image2.colorPrimaries ||
+      image1.transferCharacteristics != image2.transferCharacteristics ||
+      image1.matrixCoefficients != image2.matrixCoefficients) {
+    return false;
+  }
+
+  if (image1.clli.maxCLL != image2.clli.maxCLL ||
+      image1.clli.maxPALL != image2.clli.maxPALL) {
+    return false;
+  }
+  if (image1.transformFlags != image2.transformFlags ||
+      ((image1.transformFlags & AVIF_TRANSFORM_PASP) &&
+       memcmp(&image1.pasp, &image2.pasp, sizeof(image1.pasp))) ||
+      ((image1.transformFlags & AVIF_TRANSFORM_CLAP) &&
+       memcmp(&image1.clap, &image2.clap, sizeof(image1.clap))) ||
+      ((image1.transformFlags & AVIF_TRANSFORM_IROT) &&
+       memcmp(&image1.irot, &image2.irot, sizeof(image1.irot))) ||
+      ((image1.transformFlags & AVIF_TRANSFORM_IMIR) &&
+       memcmp(&image1.imir, &image2.imir, sizeof(image1.imir)))) {
+    return false;
+  }
+
+  if (!AreByteSequencesEqual(image1.exif, image2.exif)) return false;
+  if (!AreByteSequencesEqual(image1.xmp, image2.xmp)) return false;
+
+  if (!image1.gainMap != !image2.gainMap) return false;
+  if (image1.gainMap != nullptr) {
+    if (!image1.gainMap->image != !image2.gainMap->image) return false;
+    if (image1.gainMap->image != nullptr &&
+        !AreImagesEqual(*image1.gainMap->image, *image2.gainMap->image,
+                        false)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace testutil
