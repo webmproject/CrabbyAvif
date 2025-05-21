@@ -219,6 +219,44 @@ pub fn fill_plane(image: &mut Image, plane: Plane, value: u16) -> AvifResult<()>
     Ok(())
 }
 
+pub fn merge_cells_into_grid_image(
+    columns: u32,
+    rows: u32,
+    cell_images: &[&Image],
+) -> AvifResult<Image> {
+    let tile_width = cell_images[0].width;
+    let tile_height = cell_images[0].height;
+    let grid = Grid {
+        rows,
+        columns,
+        width: (columns - 1) * tile_width + cell_images.last().unwrap().width,
+        height: (rows - 1) * tile_height + cell_images.last().unwrap().height,
+    };
+    let image = Image {
+        ..Default::default()
+    };
+    let mut image = image::Image {
+        width: grid.width,
+        height: grid.height,
+        depth: cell_images[0].depth,
+        yuv_format: cell_images[0].yuv_format,
+        yuv_range: cell_images[0].yuv_range,
+        ..Default::default()
+    };
+    image.allocate_planes(Category::Color)?;
+    if cell_images[0].alpha_present {
+        image.allocate_planes(Category::Alpha)?;
+        image.alpha_present = true;
+    }
+    for (tile_index, tile_image) in cell_images.iter().enumerate() {
+        image.copy_from_tile(tile_image, &grid, tile_index as u32, Category::Color)?;
+        if image.alpha_present {
+            image.copy_from_tile(tile_image, &grid, tile_index as u32, Category::Alpha)?;
+        }
+    }
+    Ok(image)
+}
+
 pub const HAS_DECODER: bool = cfg!(any(
     feature = "dav1d",
     feature = "libgav1",

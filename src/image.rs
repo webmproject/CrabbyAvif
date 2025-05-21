@@ -445,7 +445,7 @@ impl Image {
         Ok(())
     }
 
-    pub(crate) fn copy_from_tile(
+    pub fn copy_from_tile(
         &mut self,
         tile: &Image,
         grid: &Grid,
