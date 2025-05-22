@@ -26,6 +26,7 @@ use crabby_avif::*;
 mod utils;
 use utils::*;
 
+use test_case::test_case;
 use test_case::test_matrix;
 
 #[test_matrix(
@@ -89,6 +90,216 @@ fn encode_decode(
     let image = decoder.image().expect("image was none");
     assert!(psnr(image, &input_image)? >= 50.0);
     Ok(())
+}
+
+fn encode_decode_grid_impl(
+    cells_and_expect_success: (Vec<Vec<(u32, u32)>>, bool),
+    yuv_format: PixelFormat,
+    depth: u8,
+) -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let cells = cells_and_expect_success.0;
+    let expect_success = cells_and_expect_success.1;
+    let mut cell_images = Vec::new();
+    for cell_row in &cells {
+        for cell_column in cell_row {
+            cell_images.push(generate_gradient_image(
+                cell_column.0,
+                cell_column.1,
+                depth,
+                yuv_format,
+                YuvRange::Full,
+                /*alpha=*/ true,
+            )?);
+        }
+    }
+    let settings = encoder::Settings {
+        speed: Some(10),
+        mutable: encoder::MutableSettings {
+            // Encode losslessly for easier comparison of outputs.
+            quality: 100,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    let cell_image_refs: Vec<&Image> = cell_images.iter().collect();
+    let columns = cells[0].len() as u32;
+    let rows = cells.len() as u32;
+    let res = encoder.add_image_grid(columns, rows, &cell_image_refs);
+    if !expect_success {
+        assert!(res.is_err());
+        return Ok(());
+    }
+    assert!(res.is_ok());
+    let edata = encoder.finish()?;
+    assert!(!edata.is_empty());
+
+    let reference_image = merge_cells_into_grid_image(columns, rows, &cell_image_refs)?;
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    assert!(decoder.parse().is_ok());
+    assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
+    assert_eq!(decoder.image_count(), 1);
+
+    let image = decoder.image().expect("image was none");
+    assert!(image.alpha_present);
+    assert_eq!(image.width, reference_image.width);
+    assert_eq!(image.height, reference_image.height);
+    assert_eq!(image.depth, reference_image.depth);
+    assert_eq!(image.yuv_format, reference_image.yuv_format);
+
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    assert!(decoder.next_image().is_ok());
+    let decoded_image = decoder.image().expect("image was none");
+    are_images_equal(decoded_image, &reference_image)?;
+    Ok(())
+}
+
+#[test_matrix(
+    [
+        // Single cell.
+        (vec![vec![(1, 1)]], true),
+        (vec![vec![(1, 64)]], true),
+        (vec![vec![(64, 1)]], true),
+        (vec![vec![(64, 64)]], true),
+        (vec![vec![(127, 127)]], true),
+        // Cells of same dimensions.
+        (
+            vec![
+                vec![(64, 64), (64, 64), (64, 64)],
+            ],
+            true,
+        ),
+        (
+            vec![
+                vec![(100, 110)],
+                vec![(100, 110)],
+                vec![(100, 110)],
+            ],
+            true,
+        ),
+        (
+            vec![
+                vec![(64, 64), (64, 64), (64, 64)],
+                vec![(64, 64), (64, 64), (64, 64)],
+                vec![(64, 64), (64, 64), (64, 64)],
+            ],
+            true,
+        ),
+        (
+            vec![
+                vec![(2, 64), (2, 64)],
+            ],
+            false, // The cell image size is too small.
+        ),
+        (
+            vec![
+                vec![(64, 62), (64, 62)],
+            ],
+            false, // The cell image size is too small.
+        ),
+        (
+            vec![
+                vec![(64, 2)],
+                vec![(64, 2)],
+            ],
+            false, // The cell image size is too small.
+        ),
+        (
+            vec![
+                vec![(62, 64)],
+                vec![(62, 64)],
+            ],
+            false, // The cell image size is too small.
+        ),
+        // Right-most cells are narrower.
+        (
+            vec![
+                vec![(100, 100), (100, 100), (66, 100)],
+            ],
+            true,
+        ),
+        // Bottom-most cells are shorter.
+        (
+            vec![
+                vec![(100, 100), (100, 100)],
+                vec![(100, 100), (100, 100)],
+                vec![(100, 66), (100, 66)],
+            ],
+            true,
+        ),
+        // Right-most cells are narrower and bottom-most cells are shorter.
+        (
+            vec![
+                vec![(100, 100), (100, 100), (66, 100)],
+                vec![(100, 100), (100, 100), (66, 100)],
+                vec![(100, 66), (100, 66), (66, 66)],
+            ],
+            true,
+        ),
+        // Right-most cells are wider.
+        (
+            vec![
+                vec![(100, 100), (100, 100), (222, 100)],
+                vec![(100, 100), (100, 100), (222, 100)],
+                vec![(100, 100), (100, 100), (222, 100)],
+            ],
+            false,
+        ),
+        // Bottom-most cells are taller.
+        (
+            vec![
+                vec![(100, 100), (100, 100), (100, 100)],
+                vec![(100, 100), (100, 100), (100, 100)],
+                vec![(100, 222), (100, 222), (100, 222)],
+            ],
+            false,
+        ),
+        // One cell dimension is off - case 1.
+        (
+            vec![
+                vec![(100, 100), (100, 100), (100, 100)],
+                vec![(100, 100), (66, 100), (100, 100)],
+                vec![(100, 100), (100, 100), (100, 100)],
+            ],
+            false,
+        ),
+        // One cell dimension is off - case 2.
+        (
+            vec![
+                vec![(100, 100), (100, 100), (66, 100)],
+                vec![(100, 100), (100, 100), (66, 100)],
+                vec![(100, 66), (100, 66), (66, 100)],
+            ],
+            false,
+        ),
+    ],
+    [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444, PixelFormat::Yuv400],
+    [8, 10, 12]
+)]
+fn encode_decode_grid(
+    cells_and_expect_success: (Vec<Vec<(u32, u32)>>, bool),
+    yuv_format: PixelFormat,
+    depth: u8,
+) -> AvifResult<()> {
+    encode_decode_grid_impl(cells_and_expect_success, yuv_format, depth)
+}
+
+#[test_case(vec![vec![(64, 65), (64, 65)]], PixelFormat::Yuv422, true; "422 valid")]
+#[test_case(vec![vec![(65, 64), (65, 64)]], PixelFormat::Yuv422, false; "422 invalid")]
+#[test_case(vec![vec![(64, 65), (64, 65)]], PixelFormat::Yuv420, false; "420 invalid width")]
+#[test_case(vec![vec![(65, 64), (65, 64)]], PixelFormat::Yuv420, false; "420 invalid height")]
+fn encode_decode_grid_odd_dimensions(
+    cells: Vec<Vec<(u32, u32)>>,
+    yuv_format: PixelFormat,
+    expect_success: bool,
+) -> AvifResult<()> {
+    encode_decode_grid_impl((cells, expect_success), yuv_format, /*depth=*/ 8)
 }
 
 #[test_matrix(

@@ -219,6 +219,103 @@ pub fn fill_plane(image: &mut Image, plane: Plane, value: u16) -> AvifResult<()>
     Ok(())
 }
 
+fn copy_cell_image_into_grid(
+    cell: &Image,
+    columns: u32,
+    first_image_width: u32,
+    first_image_height: u32,
+    cell_index: u32,
+    category: Category,
+    image: &mut Image,
+) -> AvifResult<()> {
+    let row_index = cell_index / columns;
+    let column_index = cell_index % columns;
+    for plane in category.planes() {
+        let plane = *plane;
+        let src_plane = cell.plane_data(plane);
+        if src_plane.is_none() {
+            continue;
+        }
+        let src_plane = src_plane.unwrap();
+        let height_multiplier = if matches!(plane, Plane::U | Plane::V) {
+            cell.yuv_format.apply_chroma_shift_y(first_image_height)
+        } else {
+            first_image_height
+        };
+        let dst_y_start = row_index * height_multiplier;
+        let width_multiplier = if matches!(plane, Plane::U | Plane::V) {
+            cell.yuv_format.apply_chroma_shift_x(first_image_width)
+        } else {
+            first_image_width
+        };
+        let dst_x_offset = (column_index * width_multiplier) as usize;
+        let dst_x_offset_end = dst_x_offset + src_plane.width as usize;
+        if image.depth == 8 {
+            for y in 0..src_plane.height {
+                let src_row = cell.row(plane, y)?;
+                let src_slice = &src_row[0..src_plane.width as usize];
+                let dst_row = image.row_mut(plane, dst_y_start + y)?;
+                let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset_end];
+                dst_slice.copy_from_slice(src_slice);
+            }
+        } else {
+            for y in 0..src_plane.height {
+                let src_row = cell.row16(plane, y)?;
+                let src_slice = &src_row[0..src_plane.width as usize];
+                let dst_row = image.row16_mut(plane, dst_y_start + y)?;
+                let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset_end];
+                dst_slice.copy_from_slice(src_slice);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn merge_cells_into_grid_image(
+    columns: u32,
+    rows: u32,
+    cell_images: &[&Image],
+) -> AvifResult<Image> {
+    let tile_width = cell_images[0].width;
+    let tile_height = cell_images[0].height;
+    let mut image = image::Image {
+        width: (columns - 1) * tile_width + cell_images.last().unwrap().width,
+        height: (rows - 1) * tile_height + cell_images.last().unwrap().height,
+        depth: cell_images[0].depth,
+        yuv_format: cell_images[0].yuv_format,
+        yuv_range: cell_images[0].yuv_range,
+        ..Default::default()
+    };
+    image.allocate_planes(Category::Color)?;
+    if cell_images[0].alpha_present {
+        image.allocate_planes(Category::Alpha)?;
+        image.alpha_present = true;
+    }
+    for (cell_index, cell_image) in cell_images.iter().enumerate() {
+        copy_cell_image_into_grid(
+            cell_image,
+            columns,
+            cell_images[0].width,
+            cell_images[0].height,
+            cell_index as u32,
+            Category::Color,
+            &mut image,
+        )?;
+        if image.alpha_present {
+            copy_cell_image_into_grid(
+                cell_image,
+                columns,
+                cell_images[0].width,
+                cell_images[0].height,
+                cell_index as u32,
+                Category::Alpha,
+                &mut image,
+            )?;
+        }
+    }
+    Ok(image)
+}
+
 pub const HAS_DECODER: bool = cfg!(any(
     feature = "dav1d",
     feature = "libgav1",

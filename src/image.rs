@@ -445,6 +445,43 @@ impl Image {
         Ok(())
     }
 
+    #[cfg(feature = "encoder")]
+    pub(crate) fn copy_and_pad(&mut self, image: &Image) -> AvifResult<()> {
+        if image.width > self.width || image.height > self.height {
+            return Err(AvifError::InvalidArgument);
+        }
+        self.allocate_planes(Category::Color)?;
+        if image.has_alpha() {
+            self.allocate_planes(Category::Alpha)?;
+        }
+        for plane in ALL_PLANES {
+            let src_plane = match image.plane_data(plane) {
+                Some(pd) => pd,
+                None => continue,
+            };
+            if self.depth == 8 {
+                for y in 0..src_plane.height {
+                    let src_row = image.row_exact(plane, y)?;
+                    let dst_row = self.row_mut(plane, y)?;
+                    let dst_slice = &mut dst_row[0..src_row.len()];
+                    dst_slice.copy_from_slice(src_row);
+                    let dst_slice = &mut dst_row[src_row.len()..];
+                    dst_slice.fill(*src_row.last().unwrap());
+                }
+            } else {
+                for y in 0..src_plane.height {
+                    let src_row = image.row16_exact(plane, y)?;
+                    let dst_row = self.row16_mut(plane, y)?;
+                    let dst_slice = &mut dst_row[0..src_row.len()];
+                    dst_slice.copy_from_slice(src_row);
+                    let dst_slice = &mut dst_row[src_row.len()..];
+                    dst_slice.fill(*src_row.last().unwrap());
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn copy_from_tile(
         &mut self,
         tile: &Image,

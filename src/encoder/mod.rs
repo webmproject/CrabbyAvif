@@ -294,14 +294,14 @@ impl Encoder {
                 return Err(AvifError::InvalidArgument);
             }
             let expected_width = if grid.is_last_column(index as u32) {
-                first_image.width
-            } else {
                 last_image.width
+            } else {
+                first_image.width
             };
             let expected_height = if grid.is_last_row(index as u32) {
-                first_image.height
-            } else {
                 last_image.height
+            } else {
+                first_image.height
             };
             if image.width != expected_width
                 || image.height != expected_height
@@ -466,7 +466,7 @@ impl Encoder {
             if item.codec.is_none() {
                 continue;
             }
-            let image = match item.category {
+            let mut image = match item.category {
                 Category::Gainmap => &gainmaps.unwrap()[item.cell_index].image,
                 _ => cell_images[item.cell_index],
             };
@@ -474,8 +474,11 @@ impl Encoder {
                 Category::Gainmap => &gainmaps.unwrap()[0].image,
                 _ => cell_images[0],
             };
+            let mut padded_image;
             if image.width != first_image.width || image.height != first_image.height {
-                // TODO: pad the image so that the dimensions of all cells are equal.
+                padded_image = first_image.shallow_clone();
+                padded_image.copy_and_pad(image)?;
+                image = &padded_image;
             }
             let encoder_config = EncoderConfig {
                 tile_rows_log2,
