@@ -310,9 +310,11 @@ void CopyImageSamples(avifImage* dstImage, const avifImage* srcImage,
   }
 }
 
-avifResult MergeGrid(int grid_cols, int grid_rows,
-                     const std::vector<const avifImage*>& cells,
-                     avifImage* merged) {
+}  // namespace
+
+avifResult MergeGridFromRawPointers(int grid_cols, int grid_rows,
+                                    const std::vector<const avifImage*>& cells,
+                                    avifImage* merged) {
   const uint32_t tile_width = cells[0]->width;
   const uint32_t tile_height = cells[0]->height;
   const uint32_t grid_width =
@@ -344,8 +346,6 @@ avifResult MergeGrid(int grid_cols, int grid_rows,
   return AVIF_RESULT_OK;
 }
 
-}  // namespace
-
 avifResult MergeGrid(int grid_cols, int grid_rows,
                      const std::vector<avif::ImagePtr>& cells,
                      avifImage* merged) {
@@ -353,7 +353,7 @@ avifResult MergeGrid(int grid_cols, int grid_rows,
   for (size_t i = 0; i < cells.size(); ++i) {
     ptrs[i] = cells[i].get();
   }
-  return MergeGrid(grid_cols, grid_rows, ptrs, merged);
+  return MergeGridFromRawPointers(grid_cols, grid_rows, ptrs, merged);
 }
 
 }  // namespace testutil
