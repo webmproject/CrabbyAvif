@@ -121,7 +121,7 @@ pub(crate) struct Sample {
 
 impl Sample {
     // This function is not used in all configurations.
-    #[allow(unused)]
+    #[allow(dead_code)]
     pub(crate) fn create_from(data: &[u8], sync: bool) -> AvifResult<Self> {
         let mut copied_data: Vec<u8> = create_vec_exact(data.len())?;
         copied_data.extend_from_slice(data);
@@ -135,7 +135,7 @@ impl Sample {
 pub(crate) type Codec = Box<dyn crate::codecs::Encoder>;
 
 #[derive(Default)]
-#[allow(unused)]
+#[allow(dead_code)]
 pub struct Encoder {
     settings: Settings,
     items: Vec<Item>,

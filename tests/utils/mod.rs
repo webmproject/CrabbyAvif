@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Not all functions are used from all test targets. So allow unused functions in this module.
-#![allow(unused)]
+// Not all functions are used from all test targets. So allow dead code in this module.
+#![allow(dead_code)]
 
 use crabby_avif::image::*;
 use crabby_avif::*;
-use std::fs::File;
 
 pub fn get_test_file(filename: &str) -> String {
     let base_path = if cfg!(google3) {
@@ -42,12 +41,12 @@ pub fn get_decoder(filename: &str) -> decoder::Decoder {
 
 #[cfg(feature = "png")]
 pub fn decode_png(filename: &str) -> Vec<u8> {
-    let decoder = png::Decoder::new(File::open(get_test_file(filename)).unwrap());
+    let decoder = png::Decoder::new(std::fs::File::open(get_test_file(filename)).unwrap());
     let mut reader = decoder.read_info().unwrap();
     // Indexed colors are not supported.
     assert_ne!(reader.output_color_type().0, png::ColorType::Indexed);
     let mut pixels = vec![0; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut pixels).unwrap();
+    reader.next_frame(&mut pixels).unwrap();
     pixels
 }
 

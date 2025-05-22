@@ -38,7 +38,7 @@ use crate::encoder::*;
 use std::num::NonZero;
 
 // Not all fields of this struct are used in all the configurations.
-#[allow(unused)]
+#[allow(dead_code)]
 #[derive(Clone, Default)]
 pub(crate) struct DecoderConfig {
     pub operating_point: u8,
@@ -76,7 +76,7 @@ pub(crate) trait Decoder {
 }
 
 // Not all fields of this struct are used in all the configurations.
-#[allow(unused)]
+#[allow(dead_code)]
 #[cfg(feature = "encoder")]
 #[derive(Clone, Copy, Default, PartialEq)]
 pub(crate) struct EncoderConfig {

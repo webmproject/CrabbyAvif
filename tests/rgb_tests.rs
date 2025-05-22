@@ -27,7 +27,7 @@ struct RgbToYuvParam {
     yuv_format: PixelFormat,
     yuv_range: YuvRange,
     matrix_coefficients: MatrixCoefficients,
-    #[allow(unused)]
+    #[allow(dead_code)]
     chroma_downsampling: ChromaDownsampling,
     add_noise: bool,
     rgb_step: u32,

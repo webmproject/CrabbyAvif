@@ -180,7 +180,7 @@ impl Image {
     }
 
     // TODO: b/392112497 - remove this annotation once encoder feature is enabled by default.
-    #[allow(unused)]
+    #[allow(dead_code)]
     pub(crate) fn has_same_cicp(&self, other: &Image) -> bool {
         self.depth == other.depth
             && self.yuv_format == other.yuv_format

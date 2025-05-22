@@ -152,7 +152,7 @@ impl Image {
     }
 
     // This function may not be used in some configurations.
-    #[allow(unused)]
+    #[allow(dead_code)]
     pub(crate) fn pixels(&self) -> *const u8 {
         match &self.pixels {
             Some(pixels) => pixels.ptr_generic(),
