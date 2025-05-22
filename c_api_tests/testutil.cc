@@ -277,4 +277,83 @@ bool AreImagesEqual(const avifImage& image1, const avifImage& image2,
   return true;
 }
 
+namespace {
+
+void CopyImageSamples(avifImage* dstImage, const avifImage* srcImage,
+                      avifPlanesFlags planes) {
+  const size_t bytesPerPixel = avifImageUsesU16(srcImage) ? 2 : 1;
+
+  const avifBool skipColor = !(planes & AVIF_PLANES_YUV);
+  const avifBool skipAlpha = !(planes & AVIF_PLANES_A);
+  for (int c = AVIF_CHAN_Y; c <= AVIF_CHAN_A; ++c) {
+    const avifBool alpha = c == AVIF_CHAN_A;
+    if ((skipColor && !alpha) || (skipAlpha && alpha)) {
+      continue;
+    }
+
+    const uint32_t planeWidth = avifImagePlaneWidth(srcImage, c);
+    const uint32_t planeHeight = avifImagePlaneHeight(srcImage, c);
+    const uint8_t* srcRow = avifImagePlane(srcImage, c);
+    uint8_t* dstRow = avifImagePlane(dstImage, c);
+    const uint32_t srcRowBytes = avifImagePlaneRowBytes(srcImage, c);
+    const uint32_t dstRowBytes = avifImagePlaneRowBytes(dstImage, c);
+    if (!srcRow) {
+      continue;
+    }
+
+    const size_t planeWidthBytes = planeWidth * bytesPerPixel;
+    for (uint32_t y = 0; y < planeHeight; ++y) {
+      memcpy(dstRow, srcRow, planeWidthBytes);
+      srcRow += srcRowBytes;
+      dstRow += dstRowBytes;
+    }
+  }
+}
+
+avifResult MergeGrid(int grid_cols, int grid_rows,
+                     const std::vector<const avifImage*>& cells,
+                     avifImage* merged) {
+  const uint32_t tile_width = cells[0]->width;
+  const uint32_t tile_height = cells[0]->height;
+  const uint32_t grid_width =
+      (grid_cols - 1) * tile_width + cells.back()->width;
+  const uint32_t grid_height =
+      (grid_rows - 1) * tile_height + cells.back()->height;
+
+  avif::ImagePtr view(avifImageCreateEmpty());
+  AVIF_CHECKERR(view, AVIF_RESULT_OUT_OF_MEMORY);
+
+  avifCropRect rect = {};
+  for (int j = 0; j < grid_rows; ++j) {
+    rect.x = 0;
+    for (int i = 0; i < grid_cols; ++i) {
+      const avifImage* image = cells[j * grid_cols + i];
+      rect.width = image->width;
+      rect.height = image->height;
+      AVIF_CHECKRES(avifImageSetViewRect(view.get(), merged, &rect));
+      CopyImageSamples(/*dstImage=*/view.get(), image, AVIF_PLANES_ALL);
+      rect.x += rect.width;
+    }
+    rect.y += rect.height;
+  }
+
+  if ((rect.x != grid_width) || (rect.y != grid_height)) {
+    return AVIF_RESULT_UNKNOWN_ERROR;
+  }
+
+  return AVIF_RESULT_OK;
+}
+
+}  // namespace
+
+avifResult MergeGrid(int grid_cols, int grid_rows,
+                     const std::vector<avif::ImagePtr>& cells,
+                     avifImage* merged) {
+  std::vector<const avifImage*> ptrs(cells.size());
+  for (size_t i = 0; i < cells.size(); ++i) {
+    ptrs[i] = cells[i].get();
+  }
+  return MergeGrid(grid_cols, grid_rows, ptrs, merged);
+}
+
 }  // namespace testutil

@@ -24,6 +24,7 @@ use std::num::NonZero;
 use std::os::raw::c_char;
 
 use crate::encoder::*;
+use crate::internal_utils::*;
 use crate::*;
 
 #[repr(C)]
@@ -125,7 +126,38 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
     cellImages: *const *const avifImage,
     addImageFlags: avifAddImageFlags,
 ) -> avifResult {
-    todo!();
+    if cellImages.is_null() || gridCols == 0 || gridRows == 0 {
+        return avifResult::InvalidArgument;
+    }
+    let encoder_ref = deref_mut!(encoder);
+    if !encoder_ref.rust_encoder_initialized {
+        let settings: Settings = (&*encoder_ref).into();
+        match Encoder::create_with_settings(&settings) {
+            Ok(encoder) => encoder_ref.rust_encoder = Box::new(encoder),
+            Err(err) => return (&err).into(),
+        }
+        encoder_ref.rust_encoder_initialized = true;
+    } else {
+        // TODO - b/416560730: Validate the immutable settings and update the mutable settings for
+        // subsequent frames.
+    }
+    let cell_count = match gridCols.checked_mul(gridRows) {
+        Some(value) => value as usize,
+        None => return avifResult::InvalidArgument,
+    };
+    let mut images: Vec<image::Image> = match create_vec_exact(cell_count) {
+        Ok(x) => x,
+        Err(_) => return avifResult::OutOfMemory,
+    };
+    let image_ptrs: &[*const avifImage] =
+        unsafe { std::slice::from_raw_parts(cellImages, cell_count) };
+    for image_ptr in image_ptrs {
+        images.push(deref_const!(*image_ptr).into());
+    }
+    let image_refs: Vec<&Image> = images.iter().collect();
+    rust_encoder(encoder)
+        .add_image_grid(gridCols, gridRows, &image_refs)
+        .into()
 }
 
 #[no_mangle]
