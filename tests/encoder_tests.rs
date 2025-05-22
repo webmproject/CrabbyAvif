@@ -302,6 +302,53 @@ fn encode_decode_grid_odd_dimensions(
     encode_decode_grid_impl((cells, expect_success), yuv_format, /*depth=*/ 8)
 }
 
+#[test_matrix([true, false])]
+fn encode_decode_grid_matrix_coefficients(same_matrix_coefficients: bool) -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let mut cell_images = Vec::new();
+    for _ in 0..2 {
+        cell_images.push(generate_gradient_image(
+            /*width=*/ 64,
+            /*height=*/ 64,
+            /*depth=*/ 8,
+            PixelFormat::Yuv444,
+            YuvRange::Full,
+            /*alpha=*/ true,
+        )?);
+    }
+    cell_images[0].matrix_coefficients = MatrixCoefficients::Bt601;
+    cell_images[1].matrix_coefficients = if same_matrix_coefficients {
+        MatrixCoefficients::Bt601
+    } else {
+        MatrixCoefficients::Unspecified
+    };
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    let cell_image_refs: Vec<&Image> = cell_images.iter().collect();
+    let res = encoder.add_image_grid(/*columns=*/ 2, /*rows=*/ 1, &cell_image_refs);
+    if !same_matrix_coefficients {
+        assert!(res.is_err());
+        return Ok(());
+    }
+    assert!(res.is_ok());
+    let edata = encoder.finish()?;
+    assert!(!edata.is_empty());
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    assert!(decoder.parse().is_ok());
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    assert!(decoder.next_image().is_ok());
+    Ok(())
+}
+
 #[test_matrix(
     [100, 121],
     [200, 107],
