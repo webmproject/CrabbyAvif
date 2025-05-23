@@ -25,6 +25,8 @@ use crabby_avif::utils::IFraction;
 use crabby_avif::utils::UFraction;
 use crabby_avif::*;
 
+#[cfg(all(feature = "encoder", feature = "gif"))]
+use crabby_avif::utils::reader::gif::GifReader;
 #[cfg(all(feature = "encoder", feature = "jpeg"))]
 use crabby_avif::utils::reader::jpeg::JpegReader;
 #[cfg(all(feature = "encoder", feature = "png"))]
@@ -632,6 +634,8 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
         "jpg" | "jpeg" => Box::new(JpegReader::create(&args.input_file)?),
         #[cfg(feature = "png")]
         "png" => Box::new(PngReader::create(&args.input_file)?),
+        #[cfg(feature = "gif")]
+        "gif" => Box::new(GifReader::create(&args.input_file)?),
         _ => {
             return Err(AvifError::UnknownError(format!(
                 "Unknown input file extension ({extension})"
@@ -643,7 +647,7 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
         depth: args.depth,
         ..Default::default()
     };
-    let mut image = reader.read_frame(&reader_config)?;
+    let (mut image, mut duration_ms) = reader.read_frame(&reader_config)?;
     image.irot_angle = args.irot_angle;
     image.imir_axis = args.imir_axis;
     if let Some(clap) = args.clap {
@@ -676,6 +680,7 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
     let mut settings = encoder::Settings {
         extra_layer_count: if args.progressive { 1 } else { 0 },
         speed: args.speed,
+        timescale: 1000, // ms.
         mutable: MutableSettings {
             quality: args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY) as i32,
             tiling_mode: if args.autotiling {
@@ -703,12 +708,11 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
             return Err(AvifError::InvalidArgument);
         }
         loop {
-            // TODO: b/403090413 - Use a proper timestamp here.
-            encoder.add_image_for_sequence(&image, 1000)?;
+            encoder.add_image_for_sequence(&image, duration_ms)?;
             if !reader.has_more_frames() {
                 break;
             }
-            image = reader.read_frame(&reader_config)?;
+            (image, duration_ms) = reader.read_frame(&reader_config)?;
         }
     } else if args.progressive {
         // Encode the base layer with very low quality.
