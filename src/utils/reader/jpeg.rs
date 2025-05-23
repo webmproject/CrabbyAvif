@@ -41,7 +41,7 @@ impl JpegReader {
 }
 
 impl Reader for JpegReader {
-    fn read_frame(&mut self, config: &Config) -> AvifResult<Image> {
+    fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u32)> {
         let mut reader = BufReader::new(File::open(self.filename.clone()).or(Err(
             AvifError::UnknownError("error opening input file".into()),
         ))?);
@@ -84,7 +84,7 @@ impl Reader for JpegReader {
             ..Default::default()
         };
         rgb.convert_to_yuv(&mut yuv)?;
-        Ok(yuv)
+        Ok((yuv, 0))
     }
 
     fn has_more_frames(&mut self) -> bool {
