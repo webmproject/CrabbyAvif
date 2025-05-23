@@ -88,14 +88,24 @@ impl TilingMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct MutableSettings {
     pub quality: i32,
     pub tiling_mode: TilingMode,
     pub scaling_mode: ScalingMode,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+impl Default for MutableSettings {
+    fn default() -> Self {
+        Self {
+            quality: 60,
+            tiling_mode: Default::default(),
+            scaling_mode: Default::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct Settings {
     pub threads: u32,
     pub speed: Option<u32>,
@@ -106,10 +116,28 @@ pub struct Settings {
     pub mutable: MutableSettings,
 }
 
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            threads: 1,
+            speed: None,
+            keyframe_interval: 0,
+            timescale: 1,
+            repetition_count: -1,
+            extra_layer_count: 0,
+            mutable: Default::default(),
+        }
+    }
+}
+
 impl Settings {
     pub(crate) fn quantizer(&self) -> i32 {
         // TODO: account for category here.
         ((100 - self.mutable.quality) * 63 + 50) / 100
+    }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        self.extra_layer_count < MAX_AV1_LAYER_COUNT as u32 && self.timescale > 0
     }
 }
 
@@ -154,7 +182,7 @@ pub struct Encoder {
 
 impl Encoder {
     pub fn create_with_settings(settings: &Settings) -> AvifResult<Self> {
-        if settings.extra_layer_count >= MAX_AV1_LAYER_COUNT as u32 {
+        if !settings.is_valid() {
             return Err(AvifError::InvalidArgument);
         }
         Ok(Self {
@@ -564,7 +592,6 @@ impl Encoder {
         if self.items.is_empty() {
             return Err(AvifError::NoContent);
         }
-        self.settings.timescale = 10000;
         for item in &mut self.items {
             if item.codec.is_none() {
                 continue;
