@@ -15,6 +15,8 @@
 // Not all sub-modules are used by all targets. Ignore dead code warnings.
 #![allow(dead_code)]
 
+#[cfg(feature = "gif")]
+pub mod gif;
 #[cfg(feature = "jpeg")]
 pub mod jpeg;
 #[cfg(feature = "png")]
