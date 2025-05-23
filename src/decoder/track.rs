@@ -19,19 +19,6 @@ use crate::*;
 
 use std::num::NonZero;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum RepetitionCount {
-    Unknown,
-    Infinite,
-    Finite(i32),
-}
-
-impl Default for RepetitionCount {
-    fn default() -> Self {
-        Self::Finite(0)
-    }
-}
-
 #[derive(Debug, Default)]
 pub struct Track {
     pub id: u32,

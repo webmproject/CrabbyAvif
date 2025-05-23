@@ -15,7 +15,6 @@
 use clap::value_parser;
 use clap::Parser;
 
-use crabby_avif::decoder::track::RepetitionCount;
 use crabby_avif::decoder::*;
 #[cfg(feature = "encoder")]
 use crabby_avif::encoder::*;
