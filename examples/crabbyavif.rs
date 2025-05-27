@@ -25,6 +25,8 @@ use crabby_avif::utils::IFraction;
 use crabby_avif::utils::UFraction;
 use crabby_avif::*;
 
+#[cfg(all(feature = "encoder", feature = "gif"))]
+use crabby_avif::utils::reader::gif::GifReader;
 #[cfg(all(feature = "encoder", feature = "jpeg"))]
 use crabby_avif::utils::reader::jpeg::JpegReader;
 #[cfg(all(feature = "encoder", feature = "png"))]
@@ -632,6 +634,8 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
         "jpg" | "jpeg" => Box::new(JpegReader::create(&args.input_file)?),
         #[cfg(feature = "png")]
         "png" => Box::new(PngReader::create(&args.input_file)?),
+        #[cfg(feature = "gif")]
+        "gif" => Box::new(GifReader::create(&args.input_file)?),
         _ => {
             return Err(AvifError::UnknownError(format!(
                 "Unknown input file extension ({extension})"
