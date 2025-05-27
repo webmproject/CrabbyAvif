@@ -355,7 +355,8 @@ fn encode_decode_grid_matrix_coefficients(same_matrix_coefficients: bool) -> Avi
     [8, 10, 12],
     [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444, PixelFormat::Yuv400],
     [YuvRange::Limited, YuvRange::Full],
-    [false, true]
+    [false, true],
+    [RepetitionCount::Infinite, RepetitionCount::Finite(0), RepetitionCount::Finite(5)]
 )]
 fn encode_decode_sequence(
     width: u32,
@@ -364,21 +365,24 @@ fn encode_decode_sequence(
     yuv_format: PixelFormat,
     yuv_range: YuvRange,
     alpha: bool,
+    repetition_count: RepetitionCount,
 ) -> AvifResult<()> {
     if !HAS_ENCODER {
         return Ok(());
     }
     let mut input_images = Vec::new();
-    let frame_count = 10;
-    for _ in 0..frame_count {
+    const FRAME_COUNT: usize = 10;
+    let durations: [u64; FRAME_COUNT] = [1000, 2000, 1500, 1100, 2300, 5000, 10000, 9000, 10, 500];
+    let pts: [u64; FRAME_COUNT] = [0, 1000, 3000, 4500, 5600, 7900, 12900, 22900, 31900, 31910];
+    for _ in 0..FRAME_COUNT {
         input_images.push(generate_gradient_image(
             width, height, depth, yuv_format, yuv_range, alpha,
         )?);
     }
     let images: Vec<&Image> = input_images.iter().collect();
     let settings = encoder::Settings {
-        speed: Some(6),
-        timescale: 10000,
+        speed: Some(10),
+        repetition_count,
         mutable: encoder::MutableSettings {
             quality: 50,
             ..Default::default()
@@ -386,8 +390,8 @@ fn encode_decode_sequence(
         ..Default::default()
     };
     let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
-    for image in images {
-        encoder.add_image_for_sequence(image, 1000)?;
+    for (index, image) in images.iter().enumerate() {
+        encoder.add_image_for_sequence(image, durations[index] as u32)?;
     }
     let edata = encoder.finish()?;
     assert!(!edata.is_empty());
@@ -406,12 +410,16 @@ fn encode_decode_sequence(
     assert_eq!(image.depth, depth);
     assert_eq!(image.yuv_format, yuv_format);
     assert_eq!(image.yuv_range, yuv_range);
+    assert_eq!(decoder.repetition_count(), repetition_count);
 
     if !HAS_DECODER {
         return Ok(());
     }
-    for _ in 0..frame_count {
+    for index in 0..FRAME_COUNT {
         assert!(decoder.next_image().is_ok());
+        let image_timing = decoder.nth_image_timing(index as u32)?;
+        assert_eq!(image_timing.pts_in_timescales, pts[index]);
+        assert_eq!(image_timing.duration_in_timescales, durations[index]);
     }
     Ok(())
 }

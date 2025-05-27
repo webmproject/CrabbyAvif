@@ -455,6 +455,7 @@ impl Encoder {
         &mut self,
         stream: &mut OStream,
         duration: u64,
+        total_duration: u64,
         timestamp: u64,
     ) -> AvifResult<()> {
         for index in 0..self.items.len() {
@@ -463,9 +464,13 @@ impl Encoder {
                 continue;
             }
             stream.start_box("trak")?;
-            item.write_tkhd(stream, &self.image_metadata, duration, timestamp)?;
+            item.write_tkhd(stream, &self.image_metadata, total_duration, timestamp)?;
             item.write_tref(stream)?;
-            // TODO: write edts box.
+            item.write_edts(
+                stream,
+                self.settings.repetition_count.loop_count(),
+                duration,
+            )?;
             if item.category == Category::Color {
                 self.write_track_meta(stream)?;
             }
@@ -631,10 +636,23 @@ impl Encoder {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        // TODO: duration_in_timescales should account for loop count.
+        let total_duration_in_timescales = if self.settings.repetition_count.is_infinite() {
+            u64::MAX
+        } else {
+            let loop_count = self.settings.repetition_count.loop_count();
+            if frames_duration_in_timescales == 0 {
+                return Err(AvifError::InvalidArgument);
+            }
+            checked_mul!(frames_duration_in_timescales, loop_count)?
+        };
         stream.start_box("moov")?;
-        self.write_mvhd(stream, frames_duration_in_timescales, timestamp)?;
-        self.write_tracks(stream, frames_duration_in_timescales, timestamp)?;
+        self.write_mvhd(stream, total_duration_in_timescales, timestamp)?;
+        self.write_tracks(
+            stream,
+            frames_duration_in_timescales,
+            total_duration_in_timescales,
+            timestamp,
+        )?;
         stream.finish_box()
     }
 }

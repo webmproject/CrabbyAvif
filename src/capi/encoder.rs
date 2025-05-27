@@ -57,7 +57,7 @@ impl Default for avifEncoder {
             speed: -1,
             keyframeInterval: settings.keyframe_interval,
             timescale: settings.timescale,
-            repetitionCount: settings.repetition_count,
+            repetitionCount: AVIF_REPETITION_COUNT_INFINITE,
             extraLayerCount: settings.extra_layer_count,
             quality: settings.mutable.quality,
             qualityAlpha: settings.mutable.quality,
@@ -91,7 +91,11 @@ impl From<&avifEncoder> for Settings {
             speed: Some(encoder.speed as u32),
             keyframe_interval: encoder.keyframeInterval,
             timescale: if encoder.timescale == 0 { 1 } else { encoder.timescale },
-            repetition_count: encoder.repetitionCount,
+            repetition_count: if encoder.repetitionCount >= 0 {
+                RepetitionCount::Finite(encoder.repetitionCount)
+            } else {
+                RepetitionCount::Infinite
+            },
             extra_layer_count: encoder.extraLayerCount,
             mutable: encoder.into(),
         }

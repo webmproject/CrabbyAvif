@@ -490,3 +490,31 @@ pub struct Nclx {
 }
 
 pub const MAX_AV1_LAYER_COUNT: usize = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RepetitionCount {
+    Unknown,
+    Infinite,
+    Finite(i32),
+}
+
+impl Default for RepetitionCount {
+    fn default() -> Self {
+        Self::Finite(0)
+    }
+}
+
+impl RepetitionCount {
+    #[cfg(feature = "encoder")]
+    pub(crate) fn is_infinite(&self) -> bool {
+        matches!(self, RepetitionCount::Infinite)
+    }
+
+    #[cfg(feature = "encoder")]
+    pub(crate) fn loop_count(&self) -> u64 {
+        match self {
+            Self::Finite(x) => x.checked_add(1).unwrap_or(i32::MAX) as u64,
+            _ => i32::MAX as u64,
+        }
+    }
+}

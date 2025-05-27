@@ -111,7 +111,7 @@ pub struct Settings {
     pub speed: Option<u32>,
     pub keyframe_interval: i32,
     pub timescale: u64,
-    pub repetition_count: i32,
+    pub repetition_count: RepetitionCount,
     pub extra_layer_count: u32,
     pub mutable: MutableSettings,
 }
@@ -123,7 +123,7 @@ impl Default for Settings {
             speed: None,
             keyframe_interval: 0,
             timescale: 1,
-            repetition_count: -1,
+            repetition_count: RepetitionCount::Infinite,
             extra_layer_count: 0,
             mutable: Default::default(),
         }
