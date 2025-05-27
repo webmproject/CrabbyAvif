@@ -73,6 +73,17 @@ impl Default for avifEncoder {
     }
 }
 
+impl From<&avifEncoder> for MutableSettings {
+    fn from(encoder: &avifEncoder) -> Self {
+        Self {
+            quality: encoder.quality,
+            // TODO - b/416560730: Convert to proper tiling mode.
+            tiling_mode: TilingMode::Auto,
+            scaling_mode: encoder.scalingMode,
+        }
+    }
+}
+
 impl From<&avifEncoder> for Settings {
     fn from(encoder: &avifEncoder) -> Self {
         Self {
@@ -82,12 +93,25 @@ impl From<&avifEncoder> for Settings {
             timescale: if encoder.timescale == 0 { 1 } else { encoder.timescale },
             repetition_count: encoder.repetitionCount,
             extra_layer_count: encoder.extraLayerCount,
-            mutable: MutableSettings {
-                quality: encoder.quality,
-                // TODO - b/416560730: Convert to proper tiling mode.
-                tiling_mode: TilingMode::Auto,
-                scaling_mode: encoder.scalingMode,
-            },
+            mutable: encoder.into(),
+        }
+    }
+}
+
+impl avifEncoder {
+    fn initialize_or_update_rust_encoder(&mut self) -> avifResult {
+        if self.rust_encoder_initialized {
+            // TODO - b/416560730: Validate the immutable settings.
+            let mutable_settings: MutableSettings = (&*self).into();
+            self.rust_encoder.update_settings(&mutable_settings).into()
+        } else {
+            let settings: Settings = (&*self).into();
+            match Encoder::create_with_settings(&settings) {
+                Ok(encoder) => self.rust_encoder = Box::new(encoder),
+                Err(err) => return (&err).into(),
+            }
+            self.rust_encoder_initialized = true;
+            avifResult::Ok
         }
     }
 }
@@ -127,16 +151,9 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImage(
     addImageFlags: avifAddImageFlags,
 ) -> avifResult {
     let encoder_ref = deref_mut!(encoder);
-    if !encoder_ref.rust_encoder_initialized {
-        let settings: Settings = (&*encoder_ref).into();
-        match Encoder::create_with_settings(&settings) {
-            Ok(encoder) => encoder_ref.rust_encoder = Box::new(encoder),
-            Err(err) => return (&err).into(),
-        }
-        encoder_ref.rust_encoder_initialized = true;
-    } else {
-        // TODO - b/416560730: Validate the immutable settings and update the mutable settings for
-        // subsequent frames.
+    let res = encoder_ref.initialize_or_update_rust_encoder();
+    if res != avifResult::Ok {
+        return res;
     }
     let image: image::Image = deref_const!(image).into();
     rust_encoder(encoder).add_image(&image).into()
@@ -154,16 +171,9 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
         return avifResult::InvalidArgument;
     }
     let encoder_ref = deref_mut!(encoder);
-    if !encoder_ref.rust_encoder_initialized {
-        let settings: Settings = (&*encoder_ref).into();
-        match Encoder::create_with_settings(&settings) {
-            Ok(encoder) => encoder_ref.rust_encoder = Box::new(encoder),
-            Err(err) => return (&err).into(),
-        }
-        encoder_ref.rust_encoder_initialized = true;
-    } else {
-        // TODO - b/416560730: Validate the immutable settings and update the mutable settings for
-        // subsequent frames.
+    let res = encoder_ref.initialize_or_update_rust_encoder();
+    if res != avifResult::Ok {
+        return res;
     }
     let cell_count = match gridCols.checked_mul(gridRows) {
         Some(value) => value as usize,

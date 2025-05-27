@@ -446,6 +446,164 @@ TEST(GridApiTest, MatrixCoefficients) {
   }
 }
 
+class ProgressiveTest : public testing::Test {
+ protected:
+  static constexpr uint32_t kImageSize = 256;
+
+  void SetUp() override {
+    ASSERT_NE(encoder_, nullptr);
+    encoder_->codecChoice = AVIF_CODEC_CHOICE_AOM;
+    encoder_->speed = 10;
+
+    ASSERT_NE(decoder_, nullptr);
+    decoder_->allowProgressive = true;
+
+    ASSERT_NE(image_, nullptr);
+    testutil::FillImageGradient(image_.get(), 0);
+  }
+
+  void TestDecode(uint32_t expect_width, uint32_t expect_height, bool is_grid,
+                  bool check_psnr) {
+    ASSERT_EQ(avifDecoderSetIOMemory(decoder_.get(), encoded_avif_.data,
+                                     encoded_avif_.size),
+              AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderParse(decoder_.get()), AVIF_RESULT_OK);
+    EXPECT_EQ(decoder_->progressiveState, AVIF_PROGRESSIVE_STATE_ACTIVE);
+    EXPECT_EQ(static_cast<uint32_t>(decoder_->imageCount),
+              encoder_->extraLayerCount + 1);
+
+    ImagePtr grid;
+    if (is_grid) {
+      grid = testutil::CreateImage(
+          static_cast<int>(expect_width), static_cast<int>(expect_height),
+          image_->depth, image_->yuvFormat, AVIF_PLANES_ALL, image_->yuvRange);
+      ASSERT_EQ(testutil::MergeGridFromRawPointers(
+                    2, 1, {image_.get(), image_.get()}, grid.get()),
+                AVIF_RESULT_OK);
+    };
+
+    std::vector<double> psnr;
+    for (uint32_t layer = 0; layer < encoder_->extraLayerCount + 1; ++layer) {
+      ASSERT_EQ(avifDecoderNextImage(decoder_.get()), AVIF_RESULT_OK);
+      EXPECT_EQ(decoder_->image->width, expect_width);
+      EXPECT_EQ(decoder_->image->height, expect_height);
+      psnr.push_back(testutil::GetPsnr(is_grid ? *grid : *image_,
+                                       *decoder_->image,
+                                       /*ignore_alpha=*/false));
+    }
+    if (check_psnr) {
+      // Ensure that psnr of layers is in non-decreasing order. All the tests
+      // encode layers in non-decreasing order of quality.
+      for (size_t i = 1; i < psnr.size(); ++i) {
+        ASSERT_GE(psnr[i], psnr[i - 1]);
+      }
+    }
+  }
+
+  EncoderPtr encoder_{avifEncoderCreate()};
+  DecoderPtr decoder_{avifDecoderCreate()};
+
+  ImagePtr image_ =
+      testutil::CreateImage(kImageSize, kImageSize, 8, AVIF_PIXEL_FORMAT_YUV444,
+                            AVIF_PLANES_YUV, AVIF_RANGE_FULL);
+
+  AvifRwData encoded_avif_;
+};
+
+TEST_F(ProgressiveTest, QualityChange) {
+  encoder_->extraLayerCount = 1;
+  encoder_->quality = 2;
+
+  ASSERT_EQ(avifEncoderAddImage(encoder_.get(), image_.get(), 1,
+                                AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+
+  encoder_->quality = 80;
+  ASSERT_EQ(avifEncoderAddImage(encoder_.get(), image_.get(), 1,
+                                AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+
+  ASSERT_EQ(avifEncoderFinish(encoder_.get(), &encoded_avif_), AVIF_RESULT_OK);
+
+  TestDecode(kImageSize, kImageSize, /*is_grid=*/false, /*check_psnr=*/true);
+}
+
+TEST_F(ProgressiveTest, DimensionChange) {
+  encoder_->extraLayerCount = 1;
+  encoder_->quality = 80;
+  encoder_->scalingMode = {{1, 2}, {1, 2}};
+
+  ASSERT_EQ(avifEncoderAddImage(encoder_.get(), image_.get(), 1,
+                                AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+
+  encoder_->scalingMode = {{1, 1}, {1, 1}};
+  ASSERT_EQ(avifEncoderAddImage(encoder_.get(), image_.get(), 1,
+                                AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+
+  ASSERT_EQ(avifEncoderFinish(encoder_.get(), &encoded_avif_), AVIF_RESULT_OK);
+
+  // The first layer is scaled to a different dimension internally. So checking
+  // for psnr against the original image is not useful.
+  TestDecode(kImageSize, kImageSize, /*is_grid=*/false, /*check_psnr=*/false);
+}
+
+TEST_F(ProgressiveTest, LayeredGrid) {
+  encoder_->extraLayerCount = 1;
+  encoder_->quality = 2;
+
+  avifImage* image_grid[2] = {image_.get(), image_.get()};
+  ASSERT_EQ(avifEncoderAddImageGrid(encoder_.get(), 2, 1, image_grid,
+                                    AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+
+  encoder_->quality = 100;
+  ASSERT_EQ(avifEncoderAddImageGrid(encoder_.get(), 2, 1, image_grid,
+                                    AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+
+  ASSERT_EQ(avifEncoderFinish(encoder_.get(), &encoded_avif_), AVIF_RESULT_OK);
+
+  TestDecode(2 * kImageSize, kImageSize, /*is_grid=*/true, /*check_psnr=*/true);
+}
+
+TEST_F(ProgressiveTest, SameLayers) {
+  encoder_->extraLayerCount = 3;
+  for (uint32_t layer = 0; layer < encoder_->extraLayerCount + 1; ++layer) {
+    ASSERT_EQ(avifEncoderAddImage(encoder_.get(), image_.get(), 1,
+                                  AVIF_ADD_IMAGE_FLAG_NONE),
+              AVIF_RESULT_OK);
+  }
+  ASSERT_EQ(avifEncoderFinish(encoder_.get(), &encoded_avif_), AVIF_RESULT_OK);
+
+  TestDecode(kImageSize, kImageSize, /*is_grid=*/false, /*check_psnr=*/true);
+}
+
+TEST_F(ProgressiveTest, TooManyLayers) {
+  encoder_->extraLayerCount = 1;
+
+  ASSERT_EQ(avifEncoderAddImage(encoder_.get(), image_.get(), 1,
+                                AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+  ASSERT_EQ(avifEncoderAddImage(encoder_.get(), image_.get(), 1,
+                                AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+  ASSERT_NE(avifEncoderAddImage(encoder_.get(), image_.get(), 1,
+                                AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+}
+
+TEST_F(ProgressiveTest, TooFewLayers) {
+  encoder_->extraLayerCount = 1;
+
+  ASSERT_EQ(avifEncoderAddImage(encoder_.get(), image_.get(), 1,
+                                AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+
+  ASSERT_NE(avifEncoderFinish(encoder_.get(), &encoded_avif_), AVIF_RESULT_OK);
+}
+
 }  // namespace
 }  // namespace avif
 

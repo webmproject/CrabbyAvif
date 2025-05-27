@@ -88,6 +88,10 @@ bool AreByteSequencesEqual(const avifRWData& data1, const avifRWData& data2);
 bool AreImagesEqual(const avifImage& image1, const avifImage& image2,
                     bool ignore_alpha);
 
+avifResult MergeGridFromRawPointers(int grid_cols, int grid_rows,
+                                    const std::vector<const avifImage*>& cells,
+                                    avifImage* merged);
+
 avifResult MergeGrid(int grid_cols, int grid_rows,
                      const std::vector<avif::ImagePtr>& cells,
                      avifImage* merged);
