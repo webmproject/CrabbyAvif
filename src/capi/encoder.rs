@@ -28,7 +28,6 @@ use crate::internal_utils::*;
 use crate::*;
 
 #[repr(C)]
-#[derive(Default)]
 pub struct avifEncoder {
     pub codecChoice: avifCodecChoice,
     pub maxThreads: i32,
@@ -49,13 +48,38 @@ pub struct avifEncoder {
     rust_encoder_initialized: bool,
 }
 
+impl Default for avifEncoder {
+    fn default() -> Self {
+        let settings = Settings::default();
+        Self {
+            codecChoice: avifCodecChoice::Aom,
+            maxThreads: settings.threads as _,
+            speed: -1,
+            keyframeInterval: settings.keyframe_interval,
+            timescale: settings.timescale,
+            repetitionCount: settings.repetition_count,
+            extraLayerCount: settings.extra_layer_count,
+            quality: settings.mutable.quality,
+            qualityAlpha: settings.mutable.quality,
+            tileRowsLog2: 0,
+            tileColsLog2: 0,
+            autoTiling: AVIF_FALSE,
+            scalingMode: settings.mutable.scaling_mode,
+            ioStats: Default::default(),
+            qualityGainMap: settings.mutable.quality,
+            rust_encoder: Default::default(),
+            rust_encoder_initialized: false,
+        }
+    }
+}
+
 impl From<&avifEncoder> for Settings {
     fn from(encoder: &avifEncoder) -> Self {
         Self {
             threads: encoder.maxThreads as u32,
             speed: Some(encoder.speed as u32),
             keyframe_interval: encoder.keyframeInterval,
-            timescale: encoder.timescale,
+            timescale: if encoder.timescale == 0 { 1 } else { encoder.timescale },
             repetition_count: encoder.repetitionCount,
             extra_layer_count: encoder.extraLayerCount,
             mutable: MutableSettings {
