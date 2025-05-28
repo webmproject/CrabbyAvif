@@ -360,10 +360,8 @@ fn encode_decode_grid_matrix_coefficients(same_matrix_coefficients: bool) -> Avi
         RepetitionCount::Infinite,
         RepetitionCount::Finite(0),
         RepetitionCount::Finite(5),
-        RepetitionCount::Finite(i32::MAX - 1),
-        RepetitionCount::Finite(i32::MAX),
-        RepetitionCount::Finite(-1),
-        RepetitionCount::Finite(-20),
+        RepetitionCount::Finite(i32::MAX as u32 - 1),
+        RepetitionCount::Finite(i32::MAX as u32),
     ]
 )]
 fn encode_decode_sequence(
@@ -421,7 +419,7 @@ fn encode_decode_sequence(
     assert_eq!(
         decoder.repetition_count(),
         match repetition_count {
-            RepetitionCount::Finite(x) if (0..i32::MAX).contains(&x) => repetition_count,
+            RepetitionCount::Finite(x) if (0..i32::MAX as u32).contains(&x) => repetition_count,
             _ => RepetitionCount::Infinite,
         }
     );

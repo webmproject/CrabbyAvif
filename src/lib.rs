@@ -495,7 +495,7 @@ pub const MAX_AV1_LAYER_COUNT: usize = 4;
 pub enum RepetitionCount {
     Unknown,
     Infinite,
-    Finite(i32),
+    Finite(u32),
 }
 
 impl Default for RepetitionCount {
@@ -505,10 +505,19 @@ impl Default for RepetitionCount {
 }
 
 impl RepetitionCount {
+    #[cfg(all(feature = "encoder", feature = "capi"))]
+    pub(crate) fn create_from(value: i32) -> Self {
+        if value >= 0 {
+            RepetitionCount::Finite(value as u32)
+        } else {
+            RepetitionCount::Infinite
+        }
+    }
+
     #[cfg(feature = "encoder")]
     pub(crate) fn is_infinite(&self) -> bool {
         match self {
-            Self::Finite(x) if *x < 0 || *x == i32::MAX => true,
+            Self::Finite(x) if *x >= i32::MAX as u32 => true,
             Self::Infinite => true,
             _ => false,
         }
@@ -517,7 +526,7 @@ impl RepetitionCount {
     #[cfg(feature = "encoder")]
     pub(crate) fn loop_count(&self) -> u64 {
         match self {
-            Self::Finite(x) if *x >= 0 && *x < i32::MAX => *x as u64 + 1,
+            Self::Finite(x) if *x < i32::MAX as u32 => *x as u64 + 1,
             _ => i32::MAX as u64,
         }
     }

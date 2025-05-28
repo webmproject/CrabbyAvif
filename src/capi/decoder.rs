@@ -217,7 +217,7 @@ fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
     dst.repetitionCount = match src.repetition_count() {
         RepetitionCount::Unknown => AVIF_REPETITION_COUNT_UNKNOWN,
         RepetitionCount::Infinite => AVIF_REPETITION_COUNT_INFINITE,
-        RepetitionCount::Finite(x) => x,
+        RepetitionCount::Finite(x) => x as i32,
     };
     dst.timescale = src.timescale();
     dst.durationInTimescales = src.duration_in_timescales();

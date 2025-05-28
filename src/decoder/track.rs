@@ -107,7 +107,7 @@ impl Track {
                     ));
                 }
                 let repetition_count: u64 = self.track_duration.div_ceil(self.segment_duration) - 1;
-                return match i32::try_from(repetition_count) {
+                return match u32_from_u64(repetition_count) {
                     Ok(value) => Ok(RepetitionCount::Finite(value)),
                     Err(_) => Ok(RepetitionCount::Infinite),
                 };
