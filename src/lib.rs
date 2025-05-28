@@ -507,13 +507,17 @@ impl Default for RepetitionCount {
 impl RepetitionCount {
     #[cfg(feature = "encoder")]
     pub(crate) fn is_infinite(&self) -> bool {
-        matches!(self, RepetitionCount::Infinite)
+        match self {
+            Self::Finite(x) if *x < 0 || *x == i32::MAX => true,
+            Self::Infinite => true,
+            _ => false,
+        }
     }
 
     #[cfg(feature = "encoder")]
     pub(crate) fn loop_count(&self) -> u64 {
         match self {
-            Self::Finite(x) => x.checked_add(1).unwrap_or(i32::MAX) as u64,
+            Self::Finite(x) if *x >= 0 && *x < i32::MAX => *x as u64 + 1,
             _ => i32::MAX as u64,
         }
     }

@@ -356,7 +356,15 @@ fn encode_decode_grid_matrix_coefficients(same_matrix_coefficients: bool) -> Avi
     [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444, PixelFormat::Yuv400],
     [YuvRange::Limited, YuvRange::Full],
     [false, true],
-    [RepetitionCount::Infinite, RepetitionCount::Finite(0), RepetitionCount::Finite(5)]
+    [
+        RepetitionCount::Infinite,
+        RepetitionCount::Finite(0),
+        RepetitionCount::Finite(5),
+        RepetitionCount::Finite(i32::MAX - 1),
+        RepetitionCount::Finite(i32::MAX),
+        RepetitionCount::Finite(-1),
+        RepetitionCount::Finite(-20),
+    ]
 )]
 fn encode_decode_sequence(
     width: u32,
@@ -410,7 +418,13 @@ fn encode_decode_sequence(
     assert_eq!(image.depth, depth);
     assert_eq!(image.yuv_format, yuv_format);
     assert_eq!(image.yuv_range, yuv_range);
-    assert_eq!(decoder.repetition_count(), repetition_count);
+    assert_eq!(
+        decoder.repetition_count(),
+        match repetition_count {
+            RepetitionCount::Finite(x) if (0..i32::MAX).contains(&x) => repetition_count,
+            _ => RepetitionCount::Infinite,
+        }
+    );
 
     if !HAS_DECODER {
         return Ok(());
