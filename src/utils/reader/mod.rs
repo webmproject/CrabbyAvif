@@ -36,6 +36,6 @@ pub struct Config {
 }
 
 pub trait Reader {
-    fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u32)>;
+    fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64)>;
     fn has_more_frames(&mut self) -> bool;
 }

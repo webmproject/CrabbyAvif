@@ -604,6 +604,84 @@ TEST_F(ProgressiveTest, TooFewLayers) {
   ASSERT_NE(avifEncoderFinish(encoder_.get(), &encoded_avif_), AVIF_RESULT_OK);
 }
 
+class SequenceApiTest
+    : public testing::TestWithParam<
+          std::tuple<uint32_t /*width*/, uint32_t /*height*/,
+                     /*depth*/ int, avifPixelFormat, avifRange, bool /*alpha*/,
+                     int /*repetitionCount*/>> {};
+
+TEST_P(SequenceApiTest, EncodeDecodeSequence) {
+  const auto width = std::get<0>(GetParam());
+  const auto height = std::get<1>(GetParam());
+  const auto depth = std::get<2>(GetParam());
+  const auto yuvFormat = std::get<3>(GetParam());
+  const auto yuvRange = std::get<4>(GetParam());
+  const auto alpha = std::get<5>(GetParam());
+  const auto repetition_count = std::get<6>(GetParam());
+
+  ImagePtr image = testutil::CreateImage(
+      width, height, depth, yuvFormat,
+      alpha ? AVIF_PLANES_ALL : AVIF_PLANES_YUV, yuvRange);
+  ASSERT_NE(image, nullptr);
+  testutil::FillImageGradient(image.get(), /*offset=*/0);
+
+  EncoderPtr encoder(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  encoder->quality = 70;
+  encoder->speed = 10;
+  encoder->repetitionCount = repetition_count;
+
+  static constexpr int kFrameCount = 10;
+  static constexpr uint64_t kDurations[] = {1000, 2000,  1500, 1100, 2300,
+                                            5000, 10000, 9000, 10,   500};
+  static constexpr uint64_t kPts[] = {0,    1000,  3000,  4500,  5600,
+                                      7900, 12900, 22900, 31900, 31910};
+  for (const auto duration : kDurations) {
+    ASSERT_EQ(avifEncoderAddImage(encoder.get(), image.get(), duration,
+                                  AVIF_ADD_IMAGE_FLAG_NONE),
+              AVIF_RESULT_OK);
+  }
+  AvifRwData encoded;
+  ASSERT_EQ(avifEncoderFinish(encoder.get(), &encoded), AVIF_RESULT_OK);
+
+  auto decoder = CreateDecoder(encoded);
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->width, image->width);
+  EXPECT_EQ(decoder->image->height, image->height);
+  EXPECT_EQ(decoder->image->depth, image->depth);
+  EXPECT_TRUE(decoder->imageSequenceTrackPresent);
+  EXPECT_EQ(decoder->repetitionCount,
+            (repetition_count >= 0 && repetition_count < INT32_MAX)
+                ? repetition_count
+                : AVIF_REPETITION_COUNT_INFINITE);
+  EXPECT_EQ(decoder->imageCount, kFrameCount);
+  for (uint32_t i = 0; i < kFrameCount; ++i) {
+    ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+    ASSERT_GT(
+        testutil::GetPsnr(*image, *decoder->image, /*ignore_alpha=*/false),
+        40.0);
+    avifImageTiming timing;
+    ASSERT_EQ(avifDecoderNthImageTiming(decoder.get(), i, &timing),
+              AVIF_RESULT_OK);
+    EXPECT_EQ(timing.ptsInTimescales, kPts[i]);
+    EXPECT_EQ(timing.durationInTimescales, kDurations[i]);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AllSequenceTests, SequenceApiTest,
+    testing::Combine(
+        /*width=*/testing::Values(100, 121),
+        /*height=*/testing::Values(200, 107),
+        /*depth=*/testing::Values(8, 10, 12),
+        testing::Values(AVIF_PIXEL_FORMAT_YUV420, AVIF_PIXEL_FORMAT_YUV422,
+                        AVIF_PIXEL_FORMAT_YUV444, AVIF_PIXEL_FORMAT_YUV400),
+        testing::Values(AVIF_RANGE_LIMITED, AVIF_RANGE_FULL),
+        /*alpha=*/testing::Bool(),
+        /*repetitionCount=*/
+        testing::Values(0, 5, INT32_MAX - 1, INT32_MAX, -20)));
+
 }  // namespace
 }  // namespace avif
 

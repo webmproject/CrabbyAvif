@@ -397,7 +397,7 @@ fn encode_decode_sequence(
     };
     let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
     for (index, image) in images.iter().enumerate() {
-        encoder.add_image_for_sequence(image, durations[index] as u32)?;
+        encoder.add_image_for_sequence(image, durations[index])?;
     }
     let edata = encoder.finish()?;
     assert!(!edata.is_empty());

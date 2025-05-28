@@ -390,7 +390,7 @@ impl Encoder {
         grid_columns: u32,
         grid_rows: u32,
         cell_images: &[&Image],
-        mut duration: u32,
+        mut duration: u64,
         is_single_image: bool,
         gainmaps: Option<&[&GainMap]>,
     ) -> AvifResult<()> {
@@ -526,7 +526,7 @@ impl Encoder {
                 &mut item.samples,
             )?;
         }
-        self.duration_in_timescales.push(duration as u64);
+        self.duration_in_timescales.push(duration);
         Ok(())
     }
 
@@ -541,7 +541,7 @@ impl Encoder {
         )
     }
 
-    pub fn add_image_for_sequence(&mut self, image: &Image, duration: u32) -> AvifResult<()> {
+    pub fn add_image_for_sequence(&mut self, image: &Image, duration: u64) -> AvifResult<()> {
         // TODO: this and add_image cannot be used on the same instance.
         self.add_image_impl(1, 1, &[image], duration, false, None)
     }

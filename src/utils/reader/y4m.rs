@@ -192,7 +192,7 @@ impl Y4MReader {
 }
 
 impl Reader for Y4MReader {
-    fn read_frame(&mut self, _config: &Config) -> AvifResult<(Image, u32)> {
+    fn read_frame(&mut self, _config: &Config) -> AvifResult<(Image, u64)> {
         const FRAME_MARKER: &str = "FRAME";
         let mut frame_marker = String::new();
         let bytes_read = self

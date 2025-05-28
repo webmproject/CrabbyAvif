@@ -47,7 +47,7 @@ impl GifReader {
 }
 
 impl Reader for GifReader {
-    fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u32)> {
+    fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64)> {
         if self.frame.is_none() {
             self.frame = Some(match self.decoder.read_next_frame() {
                 Ok(Some(frame)) => frame.clone(),
@@ -96,7 +96,7 @@ impl Reader for GifReader {
         };
         rgb.convert_to_yuv(&mut yuv)?;
         // GIF delay is in centi-seconds.
-        let duration_ms = self.frame.unwrap_ref().delay as u32 * 10;
+        let duration_ms = self.frame.unwrap_ref().delay as u64 * 10;
         self.frame = None;
         Ok((yuv, duration_ms))
     }

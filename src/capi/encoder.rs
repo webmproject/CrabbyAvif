@@ -156,7 +156,13 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImage(
         return res;
     }
     let image: image::Image = deref_const!(image).into();
-    rust_encoder(encoder).add_image(&image).into()
+    if (addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) != 0 {
+        rust_encoder(encoder).add_image(&image).into()
+    } else {
+        rust_encoder(encoder)
+            .add_image_for_sequence(&image, durationInTimescales)
+            .into()
+    }
 }
 
 #[no_mangle]

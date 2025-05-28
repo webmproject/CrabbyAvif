@@ -36,7 +36,7 @@ impl PngReader {
 }
 
 impl Reader for PngReader {
-    fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u32)> {
+    fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64)> {
         let file = File::open(self.filename.clone()).or(Err(AvifError::UnknownError(
             "error opening input file".into(),
         )))?;
