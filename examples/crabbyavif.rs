@@ -63,6 +63,17 @@ fn depth_parser(s: &str) -> Result<u8, String> {
     }
 }
 
+fn repetition_count_parser(s: &str) -> Result<RepetitionCount, String> {
+    if s == "infinite" {
+        Ok(RepetitionCount::Infinite)
+    } else {
+        match s.parse::<i32>() {
+            Ok(count) => Ok(RepetitionCount::create_from(count)),
+            _ => Err(format!("Invalid value for repetition count: {s}")),
+        }
+    }
+}
+
 macro_rules! split_and_check_count {
     ($parameter: literal, $input:ident, $delimiter:literal, $count:literal, $type:ty) => {{
         let values: Result<Vec<_>, _> = $input
@@ -268,6 +279,11 @@ struct CommandLineArgs {
     /// other cases, auto defaults to 444.
     #[arg(long = "yuv", value_parser = yuv_format_parser)]
     yuv_format: Option<PixelFormat>,
+
+    /// AVIF Encode only: Number of times an animated image sequence will be repeated, or
+    /// 'infinite' for infinite repetitions. (Default: infinite)
+    #[arg(long, default_value = "infinite", value_parser = repetition_count_parser)]
+    repetition_count: RepetitionCount,
 
     /// Input AVIF file
     #[arg(allow_hyphen_values = false)]
@@ -680,6 +696,7 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
         extra_layer_count: if args.progressive { 1 } else { 0 },
         speed: args.speed,
         timescale: 1000, // ms.
+        repetition_count: args.repetition_count,
         mutable: MutableSettings {
             quality: args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY) as i32,
             tiling_mode: if args.autotiling {

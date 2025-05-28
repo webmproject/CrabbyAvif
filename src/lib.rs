@@ -505,8 +505,7 @@ impl Default for RepetitionCount {
 }
 
 impl RepetitionCount {
-    #[cfg(all(feature = "encoder", feature = "capi"))]
-    pub(crate) fn create_from(value: i32) -> Self {
+    pub fn create_from(value: i32) -> Self {
         if value >= 0 {
             RepetitionCount::Finite(value as u32)
         } else {
