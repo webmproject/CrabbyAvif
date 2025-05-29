@@ -24,6 +24,7 @@ use std::num::NonZero;
 use std::os::raw::c_char;
 
 use crate::encoder::*;
+use crate::gainmap::GainMap;
 use crate::internal_utils::*;
 use crate::*;
 
@@ -155,9 +156,15 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImage(
     if res != avifResult::Ok {
         return res;
     }
+    let gainmap = deref_const!(image).gainmap();
     let image: image::Image = deref_const!(image).into();
     if (addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) != 0 {
-        rust_encoder(encoder).add_image(&image).into()
+        match &gainmap {
+            Some(gainmap) => rust_encoder(encoder)
+                .add_image_gainmap(&image, gainmap)
+                .into(),
+            None => rust_encoder(encoder).add_image(&image).into(),
+        }
     } else {
         rust_encoder(encoder)
             .add_image_for_sequence(&image, durationInTimescales)

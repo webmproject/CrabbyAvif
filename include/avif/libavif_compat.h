@@ -45,6 +45,8 @@
 #define avifEncoderFinish crabby_avifEncoderFinish
 #define avifEncoderWrite crabby_avifEncoderWrite
 #define avifFree crabby_avifFree
+#define avifGainMapCreate crabby_avifGainMapCreate
+#define avifGainMapDestroy crabby_avifGainMapDestroy
 #define avifGetPixelFormatInfo crabby_avifGetPixelFormatInfo
 #define avifIOCreateFileReader crabby_avifIOCreateFileReader
 #define avifIOCreateMemoryReader crabby_avifIOCreateMemoryReader

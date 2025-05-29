@@ -16,6 +16,7 @@ use super::gainmap::*;
 use super::io::*;
 use super::types::*;
 
+use crate::gainmap::*;
 use crate::image::*;
 use crate::internal_utils::*;
 use crate::utils::clap::*;
@@ -323,6 +324,14 @@ impl avifImage {
             None
         }
     }
+
+    pub(crate) fn gainmap(&self) -> Option<GainMap> {
+        if self.gainMap.is_null() {
+            None
+        } else {
+            Some(deref_const!(self.gainMap).into())
+        }
+    }
 }
 
 #[no_mangle]
@@ -575,6 +584,9 @@ pub unsafe extern "C" fn crabby_avifImageFreePlanes(
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageDestroy(image: *mut avifImage) {
     unsafe {
+        if !(*image).gainMap.is_null() {
+            crabby_avifGainMapDestroy((*image).gainMap);
+        }
         crabby_avifImageFreePlanes(image, avifPlanesFlag::AvifPlanesAll as u32);
         crabby_avifRWDataFree(&mut (*image).icc as _);
         crabby_avifRWDataFree(&mut (*image).exif as _);

@@ -94,3 +94,44 @@ impl From<&GainMap> for avifGainMap {
         }
     }
 }
+
+impl From<&avifGainMap> for GainMap {
+    fn from(gainmap: &avifGainMap) -> Self {
+        Self {
+            image: deref_const!(gainmap.image).into(),
+            metadata: GainMapMetadata {
+                min: gainmap.gainMapMin,
+                max: gainmap.gainMapMax,
+                gamma: gainmap.gainMapGamma,
+                base_offset: gainmap.baseOffset,
+                alternate_offset: gainmap.alternateOffset,
+                base_hdr_headroom: gainmap.baseHdrHeadroom,
+                alternate_hdr_headroom: gainmap.alternateHdrHeadroom,
+                use_base_color_space: gainmap.useBaseColorSpace != 0,
+            },
+            alt_icc: (&gainmap.altICC).into(),
+            alt_color_primaries: gainmap.altColorPrimaries,
+            alt_transfer_characteristics: gainmap.altTransferCharacteristics,
+            alt_matrix_coefficients: gainmap.altMatrixCoefficients,
+            alt_yuv_range: gainmap.altYUVRange,
+            alt_plane_depth: gainmap.altDepth as u8,
+            alt_plane_count: gainmap.altPlaneCount as u8,
+            alt_clli: gainmap.altCLLI,
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifGainMapCreate() -> *mut avifGainMap {
+    Box::into_raw(Box::<avifGainMap>::default())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifGainMapDestroy(gainmap: *mut avifGainMap) {
+    let gainmap = unsafe { Box::from_raw(gainmap) };
+    if !gainmap.image.is_null() {
+        unsafe {
+            crabby_avifImageDestroy(gainmap.image);
+        }
+    }
+}

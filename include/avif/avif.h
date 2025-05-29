@@ -627,6 +627,10 @@ avifResult crabby_avifEncoderAddImageGrid(avifEncoder *encoder,
 
 avifResult crabby_avifEncoderFinish(avifEncoder *encoder, avifRWData *output);
 
+avifGainMap *crabby_avifGainMapCreate();
+
+void crabby_avifGainMapDestroy(avifGainMap *gainmap);
+
 avifImage *crabby_avifImageCreateEmpty();
 
 avifImage *crabby_avifImageCreate(uint32_t width,
