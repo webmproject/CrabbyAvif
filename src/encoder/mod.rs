@@ -542,6 +542,9 @@ impl Encoder {
     }
 
     pub fn add_image_for_sequence(&mut self, image: &Image, duration: u64) -> AvifResult<()> {
+        if self.settings.extra_layer_count != 0 {
+            return Err(AvifError::InvalidArgument);
+        }
         // TODO: this and add_image cannot be used on the same instance.
         self.add_image_impl(1, 1, &[image], duration, false, None)
     }

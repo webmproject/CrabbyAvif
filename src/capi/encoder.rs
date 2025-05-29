@@ -158,7 +158,7 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImage(
     }
     let gainmap = deref_const!(image).gainmap();
     let image: image::Image = deref_const!(image).into();
-    if (addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) != 0 {
+    if (addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) != 0 || encoder_ref.extraLayerCount != 0 {
         match &gainmap {
             Some(gainmap) => rust_encoder(encoder)
                 .add_image_gainmap(&image, gainmap)
@@ -180,10 +180,16 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
     cellImages: *const *const avifImage,
     addImageFlags: avifAddImageFlags,
 ) -> avifResult {
-    if cellImages.is_null() || gridCols == 0 || gridRows == 0 {
+    let encoder_ref = deref_mut!(encoder);
+    if cellImages.is_null()
+        || gridCols == 0
+        || gridRows == 0
+        // If we are not encoding a grid image with multiple layers, AVIF_ADD_IMAGE_FLAG_SINGLE has
+        // to be set.
+        || ((addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) == 0 && encoder_ref.extraLayerCount == 0)
+    {
         return avifResult::InvalidArgument;
     }
-    let encoder_ref = deref_mut!(encoder);
     let res = encoder_ref.initialize_or_update_rust_encoder();
     if res != avifResult::Ok {
         return res;
