@@ -198,13 +198,25 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
     };
     let image_ptrs: &[*const avifImage] =
         unsafe { std::slice::from_raw_parts(cellImages, cell_count) };
+    let mut gainmaps: Vec<Option<GainMap>> = Vec::new();
     for image_ptr in image_ptrs {
+        gainmaps.push(deref_const!(*image_ptr).gainmap());
         images.push(deref_const!(*image_ptr).into());
     }
     let image_refs: Vec<&Image> = images.iter().collect();
-    rust_encoder(encoder)
-        .add_image_grid(gridCols, gridRows, &image_refs)
-        .into()
+    if gainmaps.iter().all(|x| x.is_some()) {
+        let gainmap_refs: Vec<&GainMap> = gainmaps.iter().map(|x| x.unwrap_ref()).collect();
+        rust_encoder(encoder)
+            .add_image_gainmap_grid(gridCols, gridRows, &image_refs, &gainmap_refs)
+            .into()
+    } else if gainmaps.iter().all(|x| x.is_none()) {
+        rust_encoder(encoder)
+            .add_image_grid(gridCols, gridRows, &image_refs)
+            .into()
+    } else {
+        // Some cells had GainMap and some did not. This is invalid.
+        avifResult::InvalidArgument
+    }
 }
 
 #[no_mangle]

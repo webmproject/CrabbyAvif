@@ -302,6 +302,163 @@ TEST(GainMapTest, EncodeDecodeMetadataAllChannelsIdentical) {
   CheckGainMapMetadataMatches(*decoder->image->gainMap, *image->gainMap);
 }
 
+TEST(GainMapTest, EncodeDecodeGrid) {
+  std::vector<ImagePtr> cells;
+  std::vector<const avifImage*> cell_ptrs;
+  std::vector<const avifImage*> gain_map_ptrs;
+  constexpr int kGridCols = 2;
+  constexpr int kGridRows = 2;
+  constexpr int kCellWidth = 128;
+  constexpr int kCellHeight = 200;
+
+  for (int i = 0; i < kGridCols * kGridRows; ++i) {
+    const int gradient_offset = i * 10;
+    ImagePtr image = testutil::CreateImage(
+        kCellWidth, kCellHeight, /*depth=*/10, AVIF_PIXEL_FORMAT_YUV444,
+        AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+    ASSERT_NE(image, nullptr);
+    image->transferCharacteristics = AVIF_TRANSFER_CHARACTERISTICS_PQ;
+    testutil::FillImageGradient(image.get(), gradient_offset);
+    ImagePtr gain_map = testutil::CreateImage(
+        kCellWidth / 2, kCellHeight / 2, /*depth=*/8, AVIF_PIXEL_FORMAT_YUV420,
+        AVIF_PLANES_YUV, AVIF_RANGE_FULL);
+    ASSERT_NE(gain_map, nullptr);
+    testutil::FillImageGradient(gain_map.get(), gradient_offset);
+    image->gainMap = avifGainMapCreate();
+    ASSERT_NE(image->gainMap, nullptr);
+    image->gainMap->image = gain_map.release();
+    FillTestGainMapMetadata(/*base_rendition_is_hdr=*/true, image->gainMap);
+
+    cell_ptrs.push_back(image.get());
+    gain_map_ptrs.push_back(image->gainMap->image);
+    cells.push_back(std::move(image));
+  }
+
+  EncoderPtr encoder(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  AvifRwData encoded;
+  ASSERT_EQ(
+      avifEncoderAddImageGrid(encoder.get(), kGridCols, kGridRows,
+                              cell_ptrs.data(), AVIF_ADD_IMAGE_FLAG_SINGLE),
+      AVIF_RESULT_OK);
+  ASSERT_EQ(avifEncoderFinish(encoder.get(), &encoded), AVIF_RESULT_OK);
+
+  auto decoder = CreateDecoder(encoded);
+  ASSERT_NE(decoder, nullptr);
+  decoder->imageContentToDecode |= AVIF_IMAGE_CONTENT_GAIN_MAP;
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  const auto* decoded = decoder->image;
+  ASSERT_NE(decoded, nullptr);
+
+  ImagePtr merged = testutil::CreateImage(
+      static_cast<int>(decoded->width), static_cast<int>(decoded->height),
+      decoded->depth, decoded->yuvFormat, AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+  ASSERT_EQ(testutil::MergeGridFromRawPointers(kGridCols, kGridRows, cell_ptrs,
+                                               merged.get()),
+            AVIF_RESULT_OK);
+  ASSERT_GT(testutil::GetPsnr(*merged, *decoded, false), 40.0);
+
+  ASSERT_NE(decoded->gainMap, nullptr);
+  ASSERT_NE(decoded->gainMap->image, nullptr);
+
+  ImagePtr merged_gain_map = testutil::CreateImage(
+      static_cast<int>(decoded->gainMap->image->width),
+      static_cast<int>(decoded->gainMap->image->height),
+      decoded->gainMap->image->depth, decoded->gainMap->image->yuvFormat,
+      AVIF_PLANES_YUV, AVIF_RANGE_FULL);
+  ASSERT_EQ(testutil::MergeGridFromRawPointers(
+                kGridCols, kGridRows, gain_map_ptrs, merged_gain_map.get()),
+            AVIF_RESULT_OK);
+  ASSERT_GT(
+      testutil::GetPsnr(*merged_gain_map, *decoded->gainMap->image, false),
+      40.0);
+  CheckGainMapMetadataMatches(*decoded->gainMap, *cell_ptrs[0]->gainMap);
+}
+
+TEST(GainMapTest, InvalidGrid) {
+  std::vector<ImagePtr> cells;
+  std::vector<const avifImage*> cell_ptrs;
+  constexpr int kGridCols = 2;
+  constexpr int kGridRows = 2;
+
+  for (int i = 0; i < kGridCols * kGridRows; ++i) {
+    ImagePtr image = testutil::CreateImage(
+        /*width=*/64, /*height=*/100, /*depth=*/10, AVIF_PIXEL_FORMAT_YUV444,
+        AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+    ASSERT_NE(image, nullptr);
+    image->transferCharacteristics = AVIF_TRANSFER_CHARACTERISTICS_PQ;
+    testutil::FillImageGradient(image.get(), 0);
+    ImagePtr gain_map = testutil::CreateImage(
+        /*width=*/64, /*height=*/100, /*depth=*/8, AVIF_PIXEL_FORMAT_YUV420,
+        AVIF_PLANES_YUV, AVIF_RANGE_FULL);
+    ASSERT_NE(gain_map, nullptr);
+    testutil::FillImageGradient(gain_map.get(), 0);
+    image->gainMap = avifGainMapCreate();
+    ASSERT_NE(image->gainMap, nullptr);
+    image->gainMap->image = gain_map.release();
+    FillTestGainMapMetadata(/*base_rendition_is_hdr=*/true, image->gainMap);
+
+    cell_ptrs.push_back(image.get());
+    cells.push_back(std::move(image));
+  }
+
+  EncoderPtr encoder(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  AvifRwData encoded;
+
+  // Invalid: one cell has the wrong size.
+  cells[1]->gainMap->image->height = 90;
+  ASSERT_NE(
+      avifEncoderAddImageGrid(encoder.get(), kGridCols, kGridRows,
+                              cell_ptrs.data(), AVIF_ADD_IMAGE_FLAG_SINGLE),
+      AVIF_RESULT_OK);
+  cells[1]->gainMap->image->height =
+      cells[0]->gainMap->image->height;  // Revert.
+
+  // Invalid: one cell has a different depth.
+  cells[1]->gainMap->image->depth = 12;
+  ASSERT_NE(
+      avifEncoderAddImageGrid(encoder.get(), kGridCols, kGridRows,
+                              cell_ptrs.data(), AVIF_ADD_IMAGE_FLAG_SINGLE),
+      AVIF_RESULT_OK);
+  cells[1]->gainMap->image->depth = cells[0]->gainMap->image->depth;  // Revert.
+
+  // Invalid: one cell has different gain map metadata
+  cells[1]->gainMap->gainMapGamma[0].n = 42;
+  ASSERT_NE(
+      avifEncoderAddImageGrid(encoder.get(), kGridCols, kGridRows,
+                              cell_ptrs.data(), AVIF_ADD_IMAGE_FLAG_SINGLE),
+      AVIF_RESULT_OK);
+  cells[1]->gainMap->gainMapGamma[0].n =
+      cells[0]->gainMap->gainMapGamma[0].n;  // Revert.
+}
+
+TEST(GainMapTest, NoGainMap) {
+  ImagePtr image = testutil::CreateImage(/*width=*/12, /*height=*/34,
+                                         /*depth=*/10, AVIF_PIXEL_FORMAT_YUV420,
+                                         AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+  ASSERT_NE(image, nullptr);
+  image->transferCharacteristics = AVIF_TRANSFER_CHARACTERISTICS_SRGB;
+  testutil::FillImageGradient(image.get(), 0);
+  EncoderPtr encoder(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  AvifRwData encoded;
+  ASSERT_EQ(avifEncoderWrite(encoder.get(), image.get(), &encoded),
+            AVIF_RESULT_OK);
+
+  auto decoder = CreateDecoder(encoded);
+  ASSERT_NE(decoder, nullptr);
+  decoder->imageContentToDecode |= AVIF_IMAGE_CONTENT_GAIN_MAP;
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  const auto* decoded = decoder->image;
+  ASSERT_NE(decoded, nullptr);
+
+  EXPECT_GT(testutil::GetPsnr(*image, *decoded, false), 40.0);
+  EXPECT_EQ(decoded->gainMap, nullptr);
+}
+
 }  // namespace
 }  // namespace avif
 
