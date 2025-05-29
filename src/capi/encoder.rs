@@ -121,29 +121,51 @@ fn rust_encoder<'a>(encoder: *mut avifEncoder) -> &'a mut Encoder {
     &mut deref_mut!(encoder).rust_encoder
 }
 
+/// SAFETY:
+/// Used by the C API to create an avifEncoder object with default values.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifEncoderCreate() -> *mut avifEncoder {
     Box::into_raw(Box::<avifEncoder>::default())
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - encoder is not null and points to a valid avifEncoder object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifEncoderDestroy(encoder: *mut avifEncoder) {
+    check_pointer_or_return!(encoder);
+    // SAFETY: encoder is guaranteed to be not null, so this is ok.
     let _ = unsafe { Box::from_raw(encoder) };
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - encoder is not null and points to a valid avifEncoder object.
+/// - image is not null and points to a valid avifImage object.
+/// - output is not null and points to a valid avifRWData object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifEncoderWrite(
     encoder: *mut avifEncoder,
     image: *const avifImage,
     output: *mut avifRWData,
 ) -> avifResult {
+    check_pointer!(encoder);
+    check_pointer!(image);
+    check_pointer!(output);
+
+    // SAFETY: Pre-conditions are met to call this function.
     let res = unsafe { crabby_avifEncoderAddImage(encoder, image, 1, AVIF_ADD_IMAGE_FLAG_SINGLE) };
     if res != avifResult::Ok {
         return res;
     }
+    // SAFETY: Pre-conditions are met to call this function.
     unsafe { crabby_avifEncoderFinish(encoder, output) }
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - encoder is not null and points to a valid avifEncoder object.
+/// - image is not null and points to a valid avifImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifEncoderAddImage(
     encoder: *mut avifEncoder,
@@ -151,6 +173,9 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImage(
     durationInTimescales: u64,
     addImageFlags: avifAddImageFlags,
 ) -> avifResult {
+    check_pointer!(encoder);
+    check_pointer!(image);
+
     let encoder_ref = deref_mut!(encoder);
     let res = encoder_ref.initialize_or_update_rust_encoder();
     if res != avifResult::Ok {
@@ -172,6 +197,11 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImage(
     }
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - encoder is not null and points to a valid avifEncoder object.
+/// - cellImages is not null and points to a valid array of avifImage objects of size
+///   |gridCols * gridRows|.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
     encoder: *mut avifEncoder,
@@ -180,6 +210,9 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
     cellImages: *const *const avifImage,
     addImageFlags: avifAddImageFlags,
 ) -> avifResult {
+    check_pointer!(encoder);
+    check_pointer!(cellImages);
+
     let encoder_ref = deref_mut!(encoder);
     if cellImages.is_null()
         || gridCols == 0
@@ -202,8 +235,13 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
         Ok(x) => x,
         Err(_) => return avifResult::OutOfMemory,
     };
+    // SAFETY: Pre-condition of this function ensures that |cellImages| contains |cell_count|
+    // avifImage objects. So this operation is safe.
     let image_ptrs: &[*const avifImage] =
         unsafe { std::slice::from_raw_parts(cellImages, cell_count) };
+    for image_ptr in image_ptrs {
+        check_pointer!(image_ptr);
+    }
     let mut gainmaps: Vec<Option<GainMap>> = Vec::new();
     for image_ptr in image_ptrs {
         gainmaps.push(deref_const!(*image_ptr).gainmap());
@@ -225,12 +263,20 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
     }
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - encoder is not null and points to a valid avifEncoder object.
+/// - output is not null and points to a valid avifRWData object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifEncoderFinish(
     encoder: *mut avifEncoder,
     output: *mut avifRWData,
 ) -> avifResult {
+    check_pointer!(encoder);
+    check_pointer!(output);
+
     match rust_encoder(encoder).finish() {
+        // SAFETY: Pre-conditions are met to call this function.
         Ok(encoded_data) => unsafe {
             crabby_avifRWDataSet(output, encoded_data.as_ptr(), encoded_data.len())
         },
