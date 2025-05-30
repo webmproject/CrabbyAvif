@@ -12,16 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused)]
-
-use super::gainmap::*;
 use super::image::*;
 use super::io::*;
 use super::types::*;
-
-use std::ffi::CStr;
-use std::num::NonZero;
-use std::os::raw::c_char;
 
 use crate::encoder::*;
 use crate::gainmap::GainMap;
