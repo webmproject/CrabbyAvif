@@ -718,6 +718,14 @@ avifResult crabby_avifImageScale(avifImage *image,
                                  uint32_t dstHeight,
                                  avifDiagnostics *_diag);
 
+uint32_t crabby_avifRGBFormatChannelCount(avifRGBFormat format);
+
+avifBool crabby_avifRGBFormatHasAlpha(avifRGBFormat format);
+
+avifResult crabby_avifRGBImageAllocatePixels(avifRGBImage *rgb);
+
+void crabby_avifRGBImageFreePixels(avifRGBImage *rgb);
+
 const char *crabby_avifResultToString(avifResult res);
 
 avifBool crabby_avifCropRectConvertCleanApertureBox(avifCropRect *cropRect,

@@ -220,3 +220,56 @@ pub unsafe extern "C" fn crabby_avifImageScale(
     dst_image.yuvFormat = rust_image.yuv_format;
     CopyPlanes(dst_image, &rust_image).into()
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifRGBFormatChannelCount(format: rgb::Format) -> u32 {
+    format.channel_count()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifRGBFormatHasAlpha(format: rgb::Format) -> avifBool {
+    format.has_alpha().into()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifRGBImageAllocatePixels(rgb: *mut avifRGBImage) -> avifResult {
+    if rgb.is_null() {
+        return avifResult::InvalidArgument;
+    }
+    unsafe {
+        crabby_avifRGBImageFreePixels(rgb);
+    }
+    let rgb = deref_mut!(rgb);
+    let pixel_size = rgb.format.pixel_size(rgb.depth);
+    let row_bytes = match checked_mul!(rgb.width, pixel_size) {
+        Ok(value) => value,
+        Err(_) => return avifResult::InvalidArgument,
+    };
+    let row_bytes = match usize_from_u32(row_bytes) {
+        Ok(value) => value,
+        Err(_) => return avifResult::InvalidArgument,
+    };
+    let alloc_size = match checked_mul!(row_bytes, rgb.height as usize) {
+        Ok(value) => round2_usize(value),
+        Err(_) => return avifResult::InvalidArgument,
+    };
+    rgb.pixels = unsafe { crabby_avifAlloc(alloc_size) } as *mut _;
+    if rgb.pixels.is_null() {
+        return avifResult::OutOfMemory;
+    }
+    rgb.row_bytes = row_bytes as u32;
+    avifResult::Ok
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifRGBImageFreePixels(rgb: *mut avifRGBImage) {
+    if rgb.is_null() {
+        return;
+    }
+    let rgb = deref_mut!(rgb);
+    unsafe {
+        crabby_avifFree(rgb.pixels as _);
+    }
+    rgb.pixels = std::ptr::null_mut();
+    rgb.row_bytes = 0;
+}

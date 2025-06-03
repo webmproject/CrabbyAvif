@@ -67,6 +67,22 @@ impl Format {
     pub fn has_alpha(&self) -> bool {
         !matches!(self, Format::Rgb | Format::Bgr | Format::Rgb565)
     }
+
+    pub fn channel_count(&self) -> u32 {
+        match self {
+            Format::Rgba | Format::Bgra | Format::Argb | Format::Abgr => 4,
+            Format::Rgb | Format::Bgr => 3,
+            Format::Rgb565 => 2,
+            Format::Rgba1010102 => 0, // This is never used.
+        }
+    }
+
+    pub fn pixel_size(&self, depth: u32) -> u32 {
+        match self {
+            Format::Rgb565 => 2,
+            _ => self.channel_count() * if depth > 8 { 2 } else { 1 },
+        }
+    }
 }
 
 #[repr(C)]
@@ -236,12 +252,7 @@ impl Image {
     }
 
     pub fn channel_count(&self) -> u32 {
-        match self.format {
-            Format::Rgba | Format::Bgra | Format::Argb | Format::Abgr => 4,
-            Format::Rgb | Format::Bgr => 3,
-            Format::Rgb565 => 2,
-            Format::Rgba1010102 => 0, // This is never used.
-        }
+        self.format.channel_count()
     }
 
     pub(crate) fn pixel_size(&self) -> u32 {
