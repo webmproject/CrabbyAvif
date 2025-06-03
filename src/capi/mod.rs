@@ -47,3 +47,21 @@ macro_rules! deref_mut {
         unsafe { &mut *($ptr) }
     }};
 }
+
+#[macro_export]
+macro_rules! check_pointer {
+    ($ptr:expr) => {
+        if $ptr.is_null() {
+            return avifResult::InvalidArgument;
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! check_pointer_or_return {
+    ($ptr:expr) => {
+        if $ptr.is_null() {
+            return;
+        }
+    };
+}

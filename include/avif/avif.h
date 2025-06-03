@@ -606,25 +606,48 @@ avifResult crabby_avifDecoderNthImageMaxExtent(const avifDecoder *decoder,
 
 avifBool crabby_avifPeekCompatibleFileType(const avifROData *input);
 
+/// SAFETY:
+/// Used by the C API to create an avifEncoder object with default values.
 avifEncoder *crabby_avifEncoderCreate();
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if encoder is not null, it has to point to a valid avifEncoder object.
 void crabby_avifEncoderDestroy(avifEncoder *encoder);
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if encoder is not null, it has to point to a valid avifEncoder object.
+/// - if image is not null, it has to point to a valid avifImage object.
+/// - if output is not null, it has to point to a valid avifRWData object.
 avifResult crabby_avifEncoderWrite(avifEncoder *encoder,
                                    const avifImage *image,
                                    avifRWData *output);
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if encoder is not null, it has to point to a valid avifEncoder object.
+/// - if image is not null, it has to point to a valid avifImage object.
 avifResult crabby_avifEncoderAddImage(avifEncoder *encoder,
                                       const avifImage *image,
                                       uint64_t durationInTimescales,
                                       avifAddImageFlags addImageFlags);
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if encoder is not null, it has to point to a valid avifEncoder object.
+/// - if cellImages is not null, it has to point to valid array of avifImage objects of size
+///   |gridCols * gridRows|.
 avifResult crabby_avifEncoderAddImageGrid(avifEncoder *encoder,
                                           uint32_t gridCols,
                                           uint32_t gridRows,
                                           const avifImage *const *cellImages,
                                           avifAddImageFlags addImageFlags);
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if encoder is not null, it has to point to a valid avifEncoder object.
+/// - if output is not null, it has to point to a valid avifRWData object.
 avifResult crabby_avifEncoderFinish(avifEncoder *encoder, avifRWData *output);
 
 avifGainMap *crabby_avifGainMapCreate();
