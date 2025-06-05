@@ -533,6 +533,7 @@ impl Encoder {
         // Exif and XMP are packed first as they're required to be fully available by
         // Decoder::parse() before it returns AVIF_RESULT_OK, unless ignore_xmp and ignore_exif are
         // enabled.
+        let mdat_start_offset = stream.offset();
         for pass in 0..=2 {
             for item in &self.items {
                 if pass == 0
@@ -557,16 +558,23 @@ impl Encoder {
                     continue;
                 }
 
-                let chunk_offset = stream.offset();
-                // TODO: alpha, gainmap, dedupe, etc.
+                let mut chunk_offset = stream.offset();
                 if !item.samples.is_empty() {
-                    for sample in &item.samples {
-                        stream.write_slice(&sample.data)?;
+                    if item.samples.len() > 1 {
+                        // If there is more than 1 sample, then we do not de-duplicate the chunks.
+                        for sample in &item.samples {
+                            stream.write_slice(&sample.data)?;
+                        }
+                    } else {
+                        chunk_offset =
+                            stream.write_slice_dedupe(mdat_start_offset, &item.samples[0].data)?;
                     }
                 } else if !item.metadata_payload.is_empty() {
-                    stream.write_slice(&item.metadata_payload)?;
+                    chunk_offset =
+                        stream.write_slice_dedupe(mdat_start_offset, &item.metadata_payload)?;
                 } else {
-                    // TODO: empty item, ignore or error?
+                    // Empty item, ignore it.
+                    continue;
                 }
                 for mdat_offset_location in &item.mdat_offset_locations {
                     stream.write_u32_at_offset(

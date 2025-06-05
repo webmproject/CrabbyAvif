@@ -401,6 +401,29 @@ impl OStream {
         Ok(())
     }
 
+    // Searches through existing data for the given slice starting at offset |start_offset| and
+    // writes it to the stream if it does not exist already. Returns the offset in which the slice
+    // was found or written to.
+    pub(crate) fn write_slice_dedupe(
+        &mut self,
+        start_offset: usize,
+        data: &[u8],
+    ) -> AvifResult<usize> {
+        Ok(
+            match self.data[start_offset..]
+                .windows(data.len())
+                .position(|window| window == data)
+            {
+                Some(position) => start_offset + position,
+                None => {
+                    let offset = self.offset();
+                    self.write_slice(data)?;
+                    offset
+                }
+            },
+        )
+    }
+
     pub(crate) fn write_slice(&mut self, data: &[u8]) -> AvifResult<()> {
         assert!(self.partial.is_none());
         self.try_reserve(data.len())?;
@@ -628,5 +651,31 @@ mod tests {
             stream.data[stream.data.len() - 4..],
             ufraction.1.to_be_bytes()
         );
+    }
+
+    #[cfg(feature = "encoder")]
+    #[test]
+    fn write_slice_dedupe() {
+        let mut stream = OStream::default();
+
+        assert!(stream.write_slice(&[1, 2, 3, 4, 5, 6]).is_ok());
+        assert_eq!(stream.offset(), 6);
+
+        // Duplicate slice should return an existing offset.
+        assert_eq!(stream.write_slice_dedupe(0, &[3, 4, 5]), Ok(2));
+        assert_eq!(stream.offset(), 6);
+
+        // Non-duplicate slice should extend the stream and return the new offset.
+        assert_eq!(stream.write_slice_dedupe(0, &[10, 11, 12]), Ok(6));
+        assert_eq!(stream.offset(), 9);
+
+        // Duplicate slice should return an existing offset.
+        assert_eq!(stream.write_slice_dedupe(0, &[10, 11, 12]), Ok(6));
+        assert_eq!(stream.offset(), 9);
+
+        // Duplicate slice but outside the start offset should extend the stream and return the new
+        // offset.
+        assert_eq!(stream.write_slice_dedupe(4, &[3, 4, 5]), Ok(9));
+        assert_eq!(stream.offset(), 12);
     }
 }
