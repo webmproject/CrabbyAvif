@@ -14,6 +14,7 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![cfg_attr(feature = "disable_cfi", feature(no_sanitize))]
+#![allow(mismatched_lifetime_syntaxes)]
 
 #[macro_use]
 mod internal_utils;
