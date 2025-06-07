@@ -62,6 +62,7 @@
 #define avifImagePlaneHeight crabby_avifImagePlaneHeight
 #define avifImagePlaneRowBytes crabby_avifImagePlaneRowBytes
 #define avifImagePlaneWidth crabby_avifImagePlaneWidth
+#define avifImageRGBToYUV crabby_avifImageRGBToYUV
 #define avifImageScale crabby_avifImageScale
 #define avifImageSetViewRect crabby_avifImageSetViewRect
 #define avifImageUsesU16 crabby_avifImageUsesU16
