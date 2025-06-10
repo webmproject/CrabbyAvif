@@ -27,6 +27,7 @@ use crate::internal_utils::*;
 use crate::parser::exif;
 use crate::parser::mp4box::*;
 use crate::parser::obu::Av1SequenceHeader;
+use crate::utils::clap::CropRect;
 use crate::utils::IFraction;
 use crate::*;
 
@@ -358,6 +359,13 @@ impl Encoder {
         if images.len() > 1 {
             validate_grid_image_dimensions(first_image, grid)?;
         }
+        if let Some(clap) = &first_image.clap {
+            if !CropRect::create_from(clap, grid.width, grid.height, first_image.yuv_format)?
+                .is_valid(grid.width, grid.height, first_image.yuv_format)
+            {
+                return Err(AvifError::InvalidArgument);
+            }
+        }
         Ok(())
     }
 
@@ -402,7 +410,6 @@ impl Encoder {
             duration = 1;
         }
         if self.items.is_empty() {
-            // TODO: validate clap.
             let first_image = cell_images[0];
             let last_image = cell_images.last().unwrap();
             let grid = Grid {
