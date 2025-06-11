@@ -255,6 +255,12 @@ pub unsafe extern "C" fn crabby_avifRGBFormatChannelCount(format: rgb::Format) -
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn crabby_avifRGBImagePixelSize(rgb: *mut avifRGBImage) -> u32 {
+    let rgb = deref_const!(rgb);
+    rgb.format.pixel_size(rgb.depth)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn crabby_avifRGBFormatHasAlpha(format: rgb::Format) -> avifBool {
     format.has_alpha().into()
 }

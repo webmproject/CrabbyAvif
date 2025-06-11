@@ -723,6 +723,8 @@ avifResult crabby_avifImageScale(avifImage *image,
 
 uint32_t crabby_avifRGBFormatChannelCount(avifRGBFormat format);
 
+uint32_t crabby_avifRGBImagePixelSize(avifRGBImage *rgb);
+
 avifBool crabby_avifRGBFormatHasAlpha(avifRGBFormat format);
 
 avifResult crabby_avifRGBImageAllocatePixels(avifRGBImage *rgb);

@@ -72,6 +72,7 @@
 #define avifRGBFormatHasAlpha crabby_avifRGBFormatHasAlpha
 #define avifRGBImageAllocatePixels crabby_avifRGBImageAllocatePixels
 #define avifRGBImageFreePixels crabby_avifRGBImageFreePixels
+#define avifRGBImagePixelSize crabby_avifRGBImagePixelSize
 #define avifRGBImageSetDefaults crabby_avifRGBImageSetDefaults
 #define avifRWDataFree crabby_avifRWDataFree
 #define avifRWDataRealloc crabby_avifRWDataRealloc
