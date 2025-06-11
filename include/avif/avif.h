@@ -13,6 +13,9 @@ using Box = T*;
 namespace crabbyavif {
 struct avifImage;
 struct avifIO;
+
+// Used to initialize avifROData/avifRWData on the stack.
+#define AVIF_DATA_EMPTY { NULL, 0 }
 }
 
 
@@ -81,6 +84,24 @@ constexpr static const uint32_t AVIF_ADD_IMAGE_FLAG_NONE = 0;
 constexpr static const uint32_t AVIF_ADD_IMAGE_FLAG_FORCE_KEYFRAME = (1 << 0);
 
 constexpr static const uint32_t AVIF_ADD_IMAGE_FLAG_SINGLE = (1 << 1);
+
+constexpr static const uint32_t AVIF_QUALITY_WORST = 0;
+
+constexpr static const uint32_t AVIF_QUALITY_BEST = 100;
+
+constexpr static const uint32_t AVIF_QUALITY_LOSSLESS = 0;
+
+constexpr static const uint32_t AVIF_QUANTIZER_WORST_QUALITY = 63;
+
+constexpr static const uint32_t AVIF_QUANTIZER_BEST_QUALITY = 0;
+
+constexpr static const uint32_t AVIF_QUANTIZER_LOSSLESS = 0;
+
+constexpr static const uint32_t AVIF_SPEED_SLOWEST = 0;
+
+constexpr static const uint32_t AVIF_SPEED_FASTEST = 0;
+
+constexpr static const uint32_t AVIF_SPEED_DEFAULT = 6;
 
 enum AndroidMediaCodecOutputColorFormat : int32_t {
     ANDROID_MEDIA_CODEC_OUTPUT_COLOR_FORMAT_YUV420_FLEXIBLE = 2135033992,

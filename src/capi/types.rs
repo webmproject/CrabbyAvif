@@ -483,3 +483,15 @@ pub const AVIF_ADD_IMAGE_FLAG_NONE: u32 = 0;
 pub const AVIF_ADD_IMAGE_FLAG_FORCE_KEYFRAME: u32 = 1 << 0;
 pub const AVIF_ADD_IMAGE_FLAG_SINGLE: u32 = 1 << 1;
 pub type avifAddImageFlags = u32;
+
+pub const AVIF_QUALITY_WORST: u32 = 0;
+pub const AVIF_QUALITY_BEST: u32 = 100;
+pub const AVIF_QUALITY_LOSSLESS: u32 = 0;
+
+pub const AVIF_QUANTIZER_WORST_QUALITY: u32 = 63;
+pub const AVIF_QUANTIZER_BEST_QUALITY: u32 = 0;
+pub const AVIF_QUANTIZER_LOSSLESS: u32 = 0;
+
+pub const AVIF_SPEED_SLOWEST: u32 = 0;
+pub const AVIF_SPEED_FASTEST: u32 = 0;
+pub const AVIF_SPEED_DEFAULT: u32 = 6;
