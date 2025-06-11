@@ -66,15 +66,15 @@ constexpr static const uint32_t AVIF_TRANSFORM_IROT = (1 << 2);
 
 constexpr static const uint32_t AVIF_TRANSFORM_IMIR = (1 << 3);
 
-constexpr static const uint32_t AVIF_COLOR_PRIMARIES_BT709 = 1;
+constexpr static const uint16_t AVIF_COLOR_PRIMARIES_BT709 = 1;
 
-constexpr static const uint32_t AVIF_COLOR_PRIMARIES_IEC61966_2_4 = 1;
+constexpr static const uint16_t AVIF_COLOR_PRIMARIES_IEC61966_2_4 = 1;
 
-constexpr static const uint32_t AVIF_COLOR_PRIMARIES_BT2100 = 9;
+constexpr static const uint16_t AVIF_COLOR_PRIMARIES_BT2100 = 9;
 
-constexpr static const uint32_t AVIF_COLOR_PRIMARIES_DCI_P3 = 12;
+constexpr static const uint16_t AVIF_COLOR_PRIMARIES_DCI_P3 = 12;
 
-constexpr static const uint32_t AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084 = 16;
+constexpr static const uint16_t AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084 = 16;
 
 constexpr static const uint32_t AVIF_ADD_IMAGE_FLAG_NONE = 0;
 
