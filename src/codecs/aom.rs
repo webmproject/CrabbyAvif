@@ -25,6 +25,7 @@ use crate::*;
 use aom_sys::bindings::*;
 
 use std::cmp;
+use std::ffi::CString;
 use std::mem::MaybeUninit;
 
 #[derive(Default)]
@@ -111,6 +112,13 @@ macro_rules! codec_control {
     };
 }
 
+macro_rules! c_str {
+    ($var: ident, $var_tmp:ident, $str:expr) => {
+        let $var_tmp = CString::new($str).unwrap();
+        let $var = $var_tmp.as_ptr();
+    };
+}
+
 impl Encoder for Aom {
     fn encode_image(
         &mut self,
@@ -165,7 +173,29 @@ impl Encoder for Aom {
 
             aom_config.monochrome =
                 (category == Category::Alpha || image.yuv_format == PixelFormat::Yuv400).into();
-            // TODO: Aom options pre init.
+            // end-usage is the only codec specific option that has to be set before initializing
+            // the libaom encoder
+            if let Some(value) = config.codec_specific_option(category, String::from("end-usage")) {
+                aom_config.rc_end_usage = if let Ok(value) = value.parse() {
+                    if value == aom_rc_mode_AOM_VBR
+                        || value == aom_rc_mode_AOM_CBR
+                        || value == aom_rc_mode_AOM_CQ
+                        || value == aom_rc_mode_AOM_Q
+                    {
+                        value
+                    } else {
+                        return Err(AvifError::InvalidArgument);
+                    }
+                } else {
+                    match value.as_str() {
+                        "vbr" => aom_rc_mode_AOM_VBR,
+                        "cbr" => aom_rc_mode_AOM_CBR,
+                        "cq" => aom_rc_mode_AOM_CQ,
+                        "q" => aom_rc_mode_AOM_Q,
+                        _ => return Err(AvifError::InvalidArgument),
+                    }
+                };
+            }
             aom_config.rc_min_quantizer = config.quantizer as u32;
             aom_config.rc_max_quantizer = config.quantizer as u32;
 
@@ -269,10 +299,25 @@ impl Encoder for Aom {
                     1
                 );
             }
-            // TODO: Aom options post init.
+            for (key, value) in config.codec_specific_options(category) {
+                if key == "end-usage" {
+                    // This key is already processed before initialization of the encoder.
+                    continue;
+                }
+                c_str!(key_str, key_str_tmp, key.clone());
+                c_str!(value_str, value_str_tmp, value.clone());
+                if unsafe {
+                    aom_codec_set_option(self.encoder.unwrap_mut() as *mut _, key_str, value_str)
+                } != aom_codec_err_t_AOM_CODEC_OK
+                {
+                    return Err(AvifError::UnknownError(format!(
+                        "Unable to set codec specific option: {key} to {value}"
+                    )));
+                }
+            }
             // TODO: tuning?
             self.aom_config = Some(aom_config);
-            self.config = Some(*config);
+            self.config = Some(config.clone());
         } else if self.config.unwrap_ref() != config {
             let aom_config = self.aom_config.unwrap_mut();
             if aom_config.g_w != image.width || aom_config.g_h != image.height {
@@ -326,7 +371,7 @@ impl Encoder for Aom {
                     config.tile_columns_log2
                 );
             }
-            self.config = Some(*config);
+            self.config = Some(config.clone());
         }
         if self.current_layer > config.extra_layer_count {
             return Err(AvifError::InvalidArgument);

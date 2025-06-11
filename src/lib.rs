@@ -435,7 +435,7 @@ impl Grid {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum Category {
     #[default]
     Color,

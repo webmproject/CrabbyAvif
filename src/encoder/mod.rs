@@ -34,6 +34,7 @@ use crate::*;
 #[cfg(feature = "aom")]
 use crate::codecs::aom::Aom;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -179,6 +180,9 @@ pub struct Encoder {
     image_item_type: String,
     config_property_name: String,
     duration_in_timescales: Vec<u64>,
+    // If Category is None, the option applies to all categories. If Category is some, it only
+    // applies to that category.
+    codec_specific_options: HashMap<(Option<Category>, String), String>,
 }
 
 impl Encoder {
@@ -195,6 +199,15 @@ impl Encoder {
     pub fn update_settings(&mut self, mutable: &MutableSettings) -> AvifResult<()> {
         self.settings.mutable = *mutable;
         Ok(())
+    }
+
+    pub fn set_codec_specific_option(
+        &mut self,
+        category: Option<Category>,
+        key: String,
+        value: String,
+    ) {
+        self.codec_specific_options.insert((category, key), value);
     }
 
     pub(crate) fn is_sequence(&self) -> bool {
@@ -525,6 +538,7 @@ impl Encoder {
                 extra_layer_count: self.settings.extra_layer_count,
                 threads: self.settings.threads,
                 scaling_mode: self.settings.mutable.scaling_mode,
+                codec_specific_options: self.codec_specific_options.clone(),
             };
             item.codec.unwrap_mut().encode_image(
                 image,
