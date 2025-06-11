@@ -37,6 +37,7 @@ pub struct avifEncoder {
     pub autoTiling: avifBool,
     scalingMode: ScalingMode,
     pub ioStats: crate::decoder::IOStats,
+    pub diag: avifDiagnostics,
     pub qualityGainMap: i32,
     rust_encoder: Box<Encoder>,
     rust_encoder_initialized: bool,
@@ -60,6 +61,7 @@ impl Default for avifEncoder {
             autoTiling: AVIF_FALSE,
             scalingMode: settings.mutable.scaling_mode,
             ioStats: Default::default(),
+            diag: Default::default(),
             qualityGainMap: settings.mutable.quality,
             rust_encoder: Default::default(),
             rust_encoder_initialized: false,
@@ -97,10 +99,14 @@ impl avifEncoder {
         if self.rust_encoder_initialized {
             // TODO - b/416560730: Validate the immutable settings.
             let mutable_settings: MutableSettings = (&*self).into();
-            self.rust_encoder.update_settings(&mutable_settings).into()
+            let res = self.rust_encoder.update_settings(&mutable_settings);
+            self.diag.set_from_result(&res);
+            res.into()
         } else {
             let settings: Settings = (&*self).into();
-            match Encoder::create_with_settings(&settings) {
+            let res = Encoder::create_with_settings(&settings);
+            self.diag.set_from_result(&res);
+            match res {
                 Ok(encoder) => self.rust_encoder = Box::new(encoder),
                 Err(err) => return (&err).into(),
             }
@@ -176,18 +182,17 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImage(
     }
     let gainmap = deref_const!(image).gainmap();
     let image: image::Image = deref_const!(image).into();
-    if (addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) != 0 || encoder_ref.extraLayerCount != 0 {
-        match &gainmap {
-            Some(gainmap) => rust_encoder(encoder)
-                .add_image_gainmap(&image, gainmap)
-                .into(),
-            None => rust_encoder(encoder).add_image(&image).into(),
-        }
-    } else {
-        rust_encoder(encoder)
-            .add_image_for_sequence(&image, durationInTimescales)
-            .into()
-    }
+    let res =
+        if (addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) != 0 || encoder_ref.extraLayerCount != 0 {
+            match &gainmap {
+                Some(gainmap) => rust_encoder(encoder).add_image_gainmap(&image, gainmap),
+                None => rust_encoder(encoder).add_image(&image),
+            }
+        } else {
+            rust_encoder(encoder).add_image_for_sequence(&image, durationInTimescales)
+        };
+    encoder_ref.diag.set_from_result(&res);
+    res.into()
 }
 
 /// SAFETY:
@@ -241,19 +246,17 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
         images.push(deref_const!(*image_ptr).into());
     }
     let image_refs: Vec<&Image> = images.iter().collect();
-    if gainmaps.iter().all(|x| x.is_some()) {
+    let res = if gainmaps.iter().all(|x| x.is_some()) {
         let gainmap_refs: Vec<&GainMap> = gainmaps.iter().map(|x| x.unwrap_ref()).collect();
-        rust_encoder(encoder)
-            .add_image_gainmap_grid(gridCols, gridRows, &image_refs, &gainmap_refs)
-            .into()
+        rust_encoder(encoder).add_image_gainmap_grid(gridCols, gridRows, &image_refs, &gainmap_refs)
     } else if gainmaps.iter().all(|x| x.is_none()) {
-        rust_encoder(encoder)
-            .add_image_grid(gridCols, gridRows, &image_refs)
-            .into()
+        rust_encoder(encoder).add_image_grid(gridCols, gridRows, &image_refs)
     } else {
         // Some cells had GainMap and some did not. This is invalid.
-        avifResult::InvalidArgument
-    }
+        Err(AvifError::InvalidArgument)
+    };
+    encoder_ref.diag.set_from_result(&res);
+    res.into()
 }
 
 /// SAFETY:
@@ -268,7 +271,9 @@ pub unsafe extern "C" fn crabby_avifEncoderFinish(
     check_pointer!(encoder);
     check_pointer!(output);
 
-    match rust_encoder(encoder).finish() {
+    let res = rust_encoder(encoder).finish();
+    deref_mut!(encoder).diag.set_from_result(&res);
+    match res {
         // SAFETY: Pre-conditions are met to call this function.
         Ok(encoded_data) => unsafe {
             crabby_avifRWDataSet(output, encoded_data.as_ptr(), encoded_data.len())

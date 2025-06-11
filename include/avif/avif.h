@@ -510,6 +510,7 @@ struct avifEncoder {
     avifBool autoTiling;
     avifScalingMode scalingMode;
     avifIOStats ioStats;
+    avifDiagnostics diag;
     int32_t qualityGainMap;
     Box<Encoder> rust_encoder;
     bool rust_encoder_initialized;
