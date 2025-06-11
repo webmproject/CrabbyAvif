@@ -682,6 +682,32 @@ INSTANTIATE_TEST_SUITE_P(
         /*repetitionCount=*/
         testing::Values(0, 5, INT32_MAX - 1, INT32_MAX, -20)));
 
+TEST(EncoderApiTest, SetCodecSpecificOption) {
+  EncoderPtr encoder(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  EXPECT_NE(avifEncoderSetCodecSpecificOption(encoder.get(), nullptr, "abcd"),
+            AVIF_RESULT_OK);
+  EXPECT_NE(avifEncoderSetCodecSpecificOption(encoder.get(), "abcd", nullptr),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(avifEncoderSetCodecSpecificOption(encoder.get(), "abcd", "efgh"),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(
+      avifEncoderSetCodecSpecificOption(encoder.get(), "color:abcd", "efgh"),
+      AVIF_RESULT_OK);
+  EXPECT_EQ(avifEncoderSetCodecSpecificOption(encoder.get(), "c:abcd", "efgh"),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(avifEncoderSetCodecSpecificOption(encoder.get(), "g:abcd", "efgh"),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(
+      avifEncoderSetCodecSpecificOption(encoder.get(), "gainmap:abcd", "efgh"),
+      AVIF_RESULT_OK);
+  EXPECT_EQ(
+      avifEncoderSetCodecSpecificOption(encoder.get(), "alpha:abcd", "efgh"),
+      AVIF_RESULT_OK);
+  EXPECT_EQ(avifEncoderSetCodecSpecificOption(encoder.get(), "a:abcd", "efgh"),
+            AVIF_RESULT_OK);
+}
+
 }  // namespace
 }  // namespace avif
 

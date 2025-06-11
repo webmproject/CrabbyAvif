@@ -43,6 +43,8 @@
 #define avifEncoderCreate crabby_avifEncoderCreate
 #define avifEncoderDestroy crabby_avifEncoderDestroy
 #define avifEncoderFinish crabby_avifEncoderFinish
+#define avifEncoderSetCodecSpecificOption \
+  crabby_avifEncoderSetCodecSpecificOption
 #define avifEncoderWrite crabby_avifEncoderWrite
 #define avifFree crabby_avifFree
 #define avifGainMapCreate crabby_avifGainMapCreate

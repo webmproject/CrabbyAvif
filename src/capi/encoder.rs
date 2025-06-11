@@ -21,6 +21,9 @@ use crate::gainmap::GainMap;
 use crate::internal_utils::*;
 use crate::*;
 
+use std::ffi::CStr;
+use std::os::raw::c_char;
+
 #[repr(C)]
 pub struct avifEncoder {
     pub codecChoice: avifCodecChoice,
@@ -280,4 +283,64 @@ pub unsafe extern "C" fn crabby_avifEncoderFinish(
         },
         Err(err) => (&err).into(),
     }
+}
+
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if encoder is not null, it has to point to a valid avifEncoder object.
+/// - if key is not null, it has to point to a valid C-style string.
+/// - if value is not null, it has to point to a valid C-style string.
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifEncoderSetCodecSpecificOption(
+    encoder: *mut avifEncoder,
+    key: *const c_char,
+    value: *const c_char,
+) -> avifResult {
+    check_pointer!(encoder);
+    check_pointer!(key);
+    check_pointer!(value);
+
+    // SAFETY: Pointers are guaranteed to be not-null and contain a valid c-string as per the
+    // pre-conditions of this function.
+    let (key, value) = unsafe { (CStr::from_ptr(key), CStr::from_ptr(value)) };
+    let (key, value) = (key.to_str(), value.to_str());
+    if key.is_err() || value.is_err() {
+        return avifResult::InvalidArgument;
+    }
+    let (key, value) = (key.unwrap().to_owned(), value.unwrap().to_owned());
+    let (key, category) = if key.starts_with("c:") {
+        (
+            key.strip_prefix("c:").unwrap().to_string(),
+            Some(Category::Color),
+        )
+    } else if key.starts_with("color:") {
+        (
+            key.strip_prefix("color:").unwrap().to_string(),
+            Some(Category::Color),
+        )
+    } else if key.starts_with("a:") {
+        (
+            key.strip_prefix("a:").unwrap().to_string(),
+            Some(Category::Alpha),
+        )
+    } else if key.starts_with("alpha:") {
+        (
+            key.strip_prefix("alpha:").unwrap().to_string(),
+            Some(Category::Alpha),
+        )
+    } else if key.starts_with("g:") {
+        (
+            key.strip_prefix("g:").unwrap().to_string(),
+            Some(Category::Gainmap),
+        )
+    } else if key.starts_with("gainmap:") {
+        (
+            key.strip_prefix("gainmap:").unwrap().to_string(),
+            Some(Category::Gainmap),
+        )
+    } else {
+        (key, None)
+    };
+    rust_encoder(encoder).set_codec_specific_option(category, key, value);
+    avifResult::Ok
 }

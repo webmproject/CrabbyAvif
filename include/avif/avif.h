@@ -672,6 +672,15 @@ avifResult crabby_avifEncoderAddImageGrid(avifEncoder *encoder,
 /// - if output is not null, it has to point to a valid avifRWData object.
 avifResult crabby_avifEncoderFinish(avifEncoder *encoder, avifRWData *output);
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if encoder is not null, it has to point to a valid avifEncoder object.
+/// - if key is not null, it has to point to a valid C-style string.
+/// - if value is not null, it has to point to a valid C-style string.
+avifResult crabby_avifEncoderSetCodecSpecificOption(avifEncoder *encoder,
+                                                    const char *key,
+                                                    const char *value);
+
 avifGainMap *crabby_avifGainMapCreate();
 
 void crabby_avifGainMapDestroy(avifGainMap *gainmap);
