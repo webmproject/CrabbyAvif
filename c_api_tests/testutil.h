@@ -63,6 +63,12 @@ class AvifRwData : public avifRWData {
   ~AvifRwData() { avifRWDataFree(this); }
 };
 
+class AvifRgbImage : public avifRGBImage {
+ public:
+  AvifRgbImage(const avifImage* yuv, int rgbDepth, avifRGBFormat rgbFormat);
+  ~AvifRgbImage() { avifRGBImageFreePixels(this); }
+};
+
 }  // namespace avif
 
 namespace testutil {
@@ -95,5 +101,13 @@ avifResult MergeGridFromRawPointers(int grid_cols, int grid_rows,
 avifResult MergeGrid(int grid_cols, int grid_rows,
                      const std::vector<avif::ImagePtr>& cells,
                      avifImage* merged);
+
+void FillImageChannel(avifRGBImage* image, uint32_t channel_offset,
+                      uint32_t value);
+
+constexpr uint32_t kModifierSize = 4 * 4;
+
+void ModifyImageChannel(avifRGBImage* image, uint32_t channel_offset,
+                        const uint8_t modifier[kModifierSize]);
 
 }  // namespace testutil

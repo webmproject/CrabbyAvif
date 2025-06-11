@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <ios>
@@ -30,6 +31,20 @@
 #include "gtest/gtest.h"
 
 using namespace crabbyavif;
+
+namespace avif {
+
+AvifRgbImage::AvifRgbImage(const avifImage* yuv, int rgbDepth,
+                           avifRGBFormat rgbFormat) {
+  avifRGBImageSetDefaults(this, yuv);
+  depth = rgbDepth;
+  format = rgbFormat;
+  if (avifRGBImageAllocatePixels(this) != AVIF_RESULT_OK) {
+    std::abort();
+  }
+}
+
+}  // namespace avif
 
 namespace testutil {
 namespace {
@@ -43,6 +58,35 @@ uint64_t SquaredDiffSum(const Sample* samples1, const Sample* samples2,
     sum += diff * diff;
   }
   return sum;
+}
+
+template <typename PixelType>
+void FillImageChannel(avifRGBImage* image, uint32_t channel_offset,
+                      uint32_t value) {
+  const uint32_t channel_count = avifRGBFormatChannelCount(image->format);
+  for (uint32_t y = 0; y < image->height; ++y) {
+    PixelType* pixel =
+        reinterpret_cast<PixelType*>(image->pixels + image->rowBytes * y);
+    for (uint32_t x = 0; x < image->width; ++x) {
+      pixel[channel_offset] = static_cast<PixelType>(value);
+      pixel += channel_count;
+    }
+  }
+}
+
+// Modifies the pixel values of a channel in image by modifier[] (row-ordered).
+template <typename PixelType>
+void ModifyImageChannel(avifRGBImage* image, uint32_t channel_offset,
+                        const uint8_t modifier[kModifierSize]) {
+  const uint32_t channel_count = avifRGBFormatChannelCount(image->format);
+  for (uint32_t y = 0, i = 0; y < image->height; ++y) {
+    PixelType* pixel =
+        reinterpret_cast<PixelType*>(image->pixels + image->rowBytes * y);
+    for (uint32_t x = 0; x < image->width; ++x, ++i) {
+      pixel[channel_offset] += modifier[i % kModifierSize];
+      pixel += channel_count;
+    }
+  }
 }
 
 }  // namespace
@@ -354,6 +398,22 @@ avifResult MergeGrid(int grid_cols, int grid_rows,
     ptrs[i] = cells[i].get();
   }
   return MergeGridFromRawPointers(grid_cols, grid_rows, ptrs, merged);
+}
+
+void FillImageChannel(avifRGBImage* image, uint32_t channel_offset,
+                      uint32_t value) {
+  (image->depth <= 8)
+      ? FillImageChannel<uint8_t>(image, channel_offset, value)
+      : FillImageChannel<uint16_t>(image, channel_offset, value);
+}
+
+void ModifyImageChannel(avifRGBImage* image, uint32_t channel_offset,
+                        const uint8_t modifier[kModifierSize]) {
+  if (image->depth <= 8) {
+    ModifyImageChannel<uint8_t>(image, channel_offset, modifier);
+  } else {
+    ModifyImageChannel<uint16_t>(image, channel_offset, modifier);
+  }
 }
 
 }  // namespace testutil

@@ -112,6 +112,34 @@ pub unsafe extern "C" fn crabby_avifImageYUVToRGB(
     rgb.convert_from_yuv(&image).into()
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifImageRGBToYUV(
+    image: *mut avifImage,
+    rgb: *const avifRGBImage,
+) -> avifResult {
+    let rgb: rgb::Image = deref_const!(rgb).into();
+    let mut tmp_image: image::Image = deref_const!(image).into();
+    let res = rgb.convert_to_yuv(&mut tmp_image);
+    if res.is_err() {
+        return res.into();
+    }
+    let res = unsafe {
+        crabby_avifImageFreePlanes(image, avifPlanesFlag::AvifPlanesAll as _);
+        crabby_avifImageAllocatePlanes(
+            image,
+            if tmp_image.has_alpha() {
+                avifPlanesFlag::AvifPlanesAll
+            } else {
+                avifPlanesFlag::AvifPlanesYuv
+            } as _,
+        )
+    };
+    if res != avifResult::Ok {
+        return res;
+    }
+    CopyPlanes(deref_mut!(image), &tmp_image).into()
+}
+
 fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
     for plane in ALL_PLANES {
         if !src.has_plane(plane) {
