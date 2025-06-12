@@ -569,13 +569,13 @@ struct avifRGBImage {
     uint32_t rowBytes;
 };
 
+using avifCodecFlags = uint32_t;
+
 struct avifPixelFormatInfo {
     avifBool monochrome;
     int chromaShiftX;
     int chromaShiftY;
 };
-
-using avifCodecFlags = uint32_t;
 
 
 
@@ -770,6 +770,10 @@ avifBool crabby_avifRGBFormatHasAlpha(avifRGBFormat format);
 avifResult crabby_avifRGBImageAllocatePixels(avifRGBImage *rgb);
 
 void crabby_avifRGBImageFreePixels(avifRGBImage *rgb);
+
+avifCodecChoice crabby_avifCodecChoiceFromName(const char *name);
+
+const char *crabby_avifCodecName(avifCodecChoice _choice, avifCodecFlags requiredFlags);
 
 const char *crabby_avifResultToString(avifResult res);
 

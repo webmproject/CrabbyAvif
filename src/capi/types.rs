@@ -14,6 +14,7 @@
 
 use super::image::*;
 
+use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::os::raw::c_int;
 use std::os::raw::c_void;
@@ -259,7 +260,7 @@ impl avifDiagnostics {
 }
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub enum avifCodecChoice {
     #[default]
     Auto = 0,
@@ -269,6 +270,50 @@ pub enum avifCodecChoice {
     Rav1e = 4,
     Svt = 5,
     Avm = 6,
+}
+
+impl avifCodecChoice {
+    fn from_name(name: &str) -> Self {
+        let available_codecs: &[(avifCodecChoice, &str)] = &[
+            #[cfg(feature = "aom")]
+            (Self::Aom, "aom"),
+            #[cfg(feature = "dav1d")]
+            (Self::Dav1d, "dav1d"),
+            #[cfg(feature = "libgav1")]
+            (Self::Libgav1, "libgav1"),
+        ];
+        for available_codec in available_codecs {
+            if name == available_codec.1 {
+                return available_codec.0;
+            }
+        }
+        avifCodecChoice::Auto
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifCodecChoiceFromName(name: *const c_char) -> avifCodecChoice {
+    let name = unsafe { CStr::from_ptr(name) }.to_str();
+    if name.is_err() {
+        return avifCodecChoice::Auto;
+    }
+    avifCodecChoice::from_name(name.unwrap())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifCodecName(
+    _choice: avifCodecChoice,
+    requiredFlags: avifCodecFlags,
+) -> *const c_char {
+    // This function will just return "dav1d" or "aom" based on whether encoder or decoder is being
+    // queried. It simply exists for compatibility with libavif.
+    CStr::from_bytes_with_nul(if (requiredFlags & avifCodecFlag::CanEncode as u32) != 0 {
+        b"aom\0"
+    } else {
+        b"dav1d\0"
+    })
+    .unwrap()
+    .as_ptr()
 }
 
 pub(crate) fn to_avifBool(val: bool) -> avifBool {
