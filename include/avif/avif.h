@@ -526,6 +526,10 @@ struct avifEncoder {
     uint32_t extraLayerCount;
     int32_t quality;
     int32_t qualityAlpha;
+    int32_t minQuantizer;
+    int32_t maxQuantizer;
+    int32_t minQuantizerAlpha;
+    int32_t maxQuantizerAlpha;
     int32_t tileRowsLog2;
     int32_t tileColsLog2;
     avifBool autoTiling;

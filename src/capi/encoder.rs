@@ -35,6 +35,10 @@ pub struct avifEncoder {
     pub extraLayerCount: u32,
     pub quality: i32,
     pub qualityAlpha: i32,
+    pub minQuantizer: i32,
+    pub maxQuantizer: i32,
+    pub minQuantizerAlpha: i32,
+    pub maxQuantizerAlpha: i32,
     pub tileRowsLog2: i32,
     pub tileColsLog2: i32,
     pub autoTiling: avifBool,
@@ -59,6 +63,10 @@ impl Default for avifEncoder {
             extraLayerCount: settings.extra_layer_count,
             quality: settings.mutable.quality,
             qualityAlpha: settings.mutable.quality,
+            minQuantizer: -1,
+            maxQuantizer: -1,
+            minQuantizerAlpha: -1,
+            maxQuantizerAlpha: -1,
             tileRowsLog2: 0,
             tileColsLog2: 0,
             autoTiling: AVIF_FALSE,
@@ -72,10 +80,18 @@ impl Default for avifEncoder {
     }
 }
 
+fn quality_from_quantizers(minQuantizer: i32, maxQuantizer: i32) -> i32 {
+    100 - ((50 * (minQuantizer.clamp(0, 63) + maxQuantizer.clamp(0, 63)) - 50) / 63)
+}
+
 impl From<&avifEncoder> for MutableSettings {
     fn from(encoder: &avifEncoder) -> Self {
         Self {
-            quality: encoder.quality,
+            quality: if encoder.quality == -1 {
+                quality_from_quantizers(encoder.minQuantizer, encoder.maxQuantizer)
+            } else {
+                encoder.quality
+            },
             // TODO - b/416560730: Convert to proper tiling mode.
             tiling_mode: TilingMode::Auto,
             scaling_mode: encoder.scalingMode,
@@ -343,4 +359,26 @@ pub unsafe extern "C" fn crabby_avifEncoderSetCodecSpecificOption(
     };
     rust_encoder(encoder).set_codec_specific_option(category, key, value);
     avifResult::Ok
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn quality_from_quantizers() {
+        // Test the extreme values and middle values.
+        assert_eq!(super::quality_from_quantizers(0, 0), 100);
+        assert_eq!(super::quality_from_quantizers(23, 32), 58);
+        assert_eq!(super::quality_from_quantizers(63, 63), 1);
+        // Invalid values should be clamped.
+        assert_eq!(super::quality_from_quantizers(-1, -20), 100);
+        assert_eq!(super::quality_from_quantizers(100, 200), 1);
+
+        // Test all valid combinations to make sure they return a valid quality value.
+        for min_quantizer in 0..63 {
+            for max_quantizer in 0..63 {
+                let quality = super::quality_from_quantizers(min_quantizer, max_quantizer);
+                assert!(quality >= 0 && quality <= 100);
+            }
+        }
+    }
 }
