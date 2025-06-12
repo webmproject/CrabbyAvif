@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <tuple>
@@ -183,6 +184,39 @@ TEST(EncodingTest, VariousCases) {
                CRABBY_AVIF_DEFAULT_IMAGE_DIMENSION_LIMIT / 2, 8,
                AVIF_RESULT_OK);
 #endif
+}
+
+TEST(ImageTest, MetadataFunctions) {
+  // Fill data with some values.
+  constexpr int kSize = 10;
+  std::vector<uint8_t> data;
+  data.reserve(kSize);
+  for (int i = 0; i < kSize; ++i) {
+    data.push_back(i * 2);
+  }
+
+  ImagePtr image(avifImageCreateEmpty());
+  ASSERT_NE(image, nullptr);
+
+  for (auto* func : {avifImageSetMetadataExif, avifImageSetProfileICC,
+                     avifImageSetMetadataXMP}) {
+    const auto& metadata =
+        (func == avifImageSetMetadataExif)
+            ? image->exif
+            : ((func == avifImageSetProfileICC) ? image->icc : image->xmp);
+    EXPECT_NE(func(nullptr, nullptr, 0), AVIF_RESULT_OK);
+    EXPECT_EQ(func(image.get(), nullptr, 0), AVIF_RESULT_OK);
+    EXPECT_EQ(metadata.data, nullptr);
+    EXPECT_EQ(metadata.size, 0);
+    EXPECT_EQ(func(image.get(), data.data(), 0), AVIF_RESULT_OK);
+    EXPECT_EQ(metadata.data, nullptr);
+    EXPECT_EQ(metadata.size, 0);
+    EXPECT_EQ(func(image.get(), data.data(), kSize), AVIF_RESULT_OK);
+    EXPECT_NE(metadata.data, nullptr);
+    EXPECT_NE(metadata.data, data.data());
+    ASSERT_EQ(metadata.size, kSize);
+    EXPECT_EQ(memcmp(metadata.data, data.data(), kSize), 0);
+  }
 }
 
 }  // namespace

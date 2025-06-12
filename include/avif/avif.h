@@ -718,6 +718,12 @@ avifResult crabby_avifImageSetViewRect(avifImage *dstImage,
                                        const avifImage *srcImage,
                                        const avifCropRect *rect);
 
+avifResult crabby_avifImageSetMetadataExif(avifImage *image, const uint8_t *exif, size_t exifSize);
+
+avifResult crabby_avifImageSetMetadataXMP(avifImage *image, const uint8_t *xmp, size_t xmpSize);
+
+avifResult crabby_avifImageSetProfileICC(avifImage *image, const uint8_t *icc, size_t iccSize);
+
 avifResult crabby_avifRWDataRealloc(avifRWData *raw, size_t newSize);
 
 avifResult crabby_avifRWDataSet(avifRWData *raw, const uint8_t *data, size_t size);

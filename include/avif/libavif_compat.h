@@ -66,6 +66,9 @@
 #define avifImagePlaneWidth crabby_avifImagePlaneWidth
 #define avifImageRGBToYUV crabby_avifImageRGBToYUV
 #define avifImageScale crabby_avifImageScale
+#define avifImageSetMetadataExif crabby_avifImageSetMetadataExif
+#define avifImageSetMetadataXMP crabby_avifImageSetMetadataXMP
+#define avifImageSetProfileICC crabby_avifImageSetProfileICC
 #define avifImageSetViewRect crabby_avifImageSetViewRect
 #define avifImageUsesU16 crabby_avifImageUsesU16
 #define avifImageYUVToRGB crabby_avifImageYUVToRGB

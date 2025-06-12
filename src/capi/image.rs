@@ -770,3 +770,45 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
     }
     avifResult::Ok
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifImageSetMetadataExif(
+    image: *mut avifImage,
+    exif: *const u8,
+    exifSize: usize,
+) -> avifResult {
+    check_pointer!(image);
+    if exif.is_null() || exifSize == 0 {
+        return avifResult::Ok;
+    }
+    let image = deref_mut!(image);
+    unsafe { crabby_avifRWDataSet(&mut image.exif, exif, exifSize) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifImageSetMetadataXMP(
+    image: *mut avifImage,
+    xmp: *const u8,
+    xmpSize: usize,
+) -> avifResult {
+    check_pointer!(image);
+    if xmp.is_null() || xmpSize == 0 {
+        return avifResult::Ok;
+    }
+    let image = deref_mut!(image);
+    unsafe { crabby_avifRWDataSet(&mut image.xmp, xmp, xmpSize) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifImageSetProfileICC(
+    image: *mut avifImage,
+    icc: *const u8,
+    iccSize: usize,
+) -> avifResult {
+    check_pointer!(image);
+    if icc.is_null() || iccSize == 0 {
+        return avifResult::Ok;
+    }
+    let image = deref_mut!(image);
+    unsafe { crabby_avifRWDataSet(&mut image.icc, icc, iccSize) }
+}
