@@ -122,7 +122,7 @@ pub unsafe extern "C" fn crabby_avifDecoderCreate() -> *mut avifDecoder {
 
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifDecoderSetIO(decoder: *mut avifDecoder, io: *mut avifIO) {
-    rust_decoder(decoder).set_io(Box::new(avifIOWrapper::create(*deref_const!(io))));
+    rust_decoder(decoder).set_io(Box::new(avifIOWrapper::create(io)));
 }
 
 #[no_mangle]

@@ -130,7 +130,7 @@ pub unsafe extern "C" fn crabby_avifRWDataFree(raw: *mut avifRWData) {
     let _ = unsafe { Box::from_raw(std::slice::from_raw_parts_mut(raw.data, raw.size)) };
 }
 
-pub type avifIODestroyFunc = unsafe extern "C" fn(io: *mut avifIO);
+pub type avifIODestroyFunc = Option<unsafe extern "C" fn(io: *mut avifIO)>;
 pub type avifIOReadFunc = unsafe extern "C" fn(
     io: *mut avifIO,
     readFlags: u32,
@@ -159,14 +159,26 @@ pub struct avifIO {
 
 pub struct avifIOWrapper {
     data: avifROData,
-    io: avifIO,
+    io: *mut avifIO,
 }
 
 impl avifIOWrapper {
-    pub fn create(io: avifIO) -> Self {
+    pub fn create(io: *mut avifIO) -> Self {
         Self {
             io,
             data: Default::default(),
+        }
+    }
+}
+
+impl Drop for avifIOWrapper {
+    fn drop(&mut self) {
+        if !self.io.is_null() {
+            if let Some(destroy) = deref_const!(self.io).destroy {
+                unsafe {
+                    destroy(self.io);
+                }
+            }
         }
     }
 }
@@ -175,13 +187,7 @@ impl crate::decoder::IO for avifIOWrapper {
     #[cfg_attr(feature = "disable_cfi", no_sanitize(cfi))]
     fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]> {
         let res = unsafe {
-            (self.io.read)(
-                &mut self.io as *mut avifIO,
-                0,
-                offset,
-                size,
-                &mut self.data as *mut avifROData,
-            )
+            ((*self.io).read)(self.io, 0, offset, size, &mut self.data as *mut avifROData)
         };
         if res != avifResult::Ok {
             let err: AvifError = res.into();
@@ -198,10 +204,10 @@ impl crate::decoder::IO for avifIOWrapper {
         }
     }
     fn size_hint(&self) -> u64 {
-        self.io.sizeHint
+        deref_const!(self.io).sizeHint
     }
     fn persistent(&self) -> bool {
-        self.io.persistent != 0
+        deref_const!(self.io).persistent != 0
     }
 }
 
@@ -262,7 +268,7 @@ pub unsafe extern "C" fn crabby_avifIOCreateMemoryReader(
         buf: Vec::new(),
     });
     let io = Box::new(avifIO {
-        destroy: cioDestroy,
+        destroy: Some(cioDestroy),
         read: cioRead,
         write: cioWrite,
         sizeHint: size as u64,
@@ -284,7 +290,7 @@ pub unsafe extern "C" fn crabby_avifIOCreateFileReader(filename: *const c_char) 
         buf: Vec::new(),
     });
     let io = Box::new(avifIO {
-        destroy: cioDestroy,
+        destroy: Some(cioDestroy),
         read: cioRead,
         write: cioWrite,
         sizeHint: cio.io.size_hint(),
