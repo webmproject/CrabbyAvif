@@ -316,6 +316,12 @@ impl Encoder for Aom {
                 }
             }
             // TODO: tuning?
+            if image.depth == 12 {
+                // libaom may produce integer overflows with 12-bit input when loop restoration is
+                // enabled. See crbug.com/aomedia/42302587.
+                codec_control!(self, aome_enc_control_id_AV1E_SET_ENABLE_RESTORATION, 0);
+            }
+
             self.aom_config = Some(aom_config);
             self.config = Some(config.clone());
         } else if self.config.unwrap_ref() != config {
