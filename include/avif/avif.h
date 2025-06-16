@@ -302,6 +302,8 @@ enum avifResult {
     AVIF_RESULT_INVALID_TONE_MAPPED_IMAGE = 31,
 };
 
+struct CodecSpecificOptions;
+
 struct Decoder;
 
 struct Encoder;
@@ -539,6 +541,7 @@ struct avifEncoder {
     int32_t qualityGainMap;
     Box<Encoder> rust_encoder;
     bool rust_encoder_initialized;
+    Box<CodecSpecificOptions> codec_specific_options;
 };
 
 using avifAddImageFlags = uint32_t;

@@ -35,8 +35,6 @@ use crate::Category;
 #[cfg(feature = "encoder")]
 use crate::encoder::*;
 
-#[cfg(feature = "encoder")]
-use std::collections::HashMap;
 use std::num::NonZero;
 
 // Not all fields of this struct are used in all the configurations.
@@ -91,7 +89,7 @@ pub(crate) struct EncoderConfig {
     pub extra_layer_count: u32,
     pub threads: u32,
     pub scaling_mode: ScalingMode,
-    pub codec_specific_options: HashMap<(Option<Category>, String), String>,
+    pub codec_specific_options: CodecSpecificOptions,
 }
 
 #[cfg(feature = "encoder")]
@@ -147,6 +145,7 @@ pub(crate) trait Encoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn codec_specific_options() {

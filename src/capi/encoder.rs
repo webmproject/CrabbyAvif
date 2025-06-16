@@ -48,6 +48,7 @@ pub struct avifEncoder {
     pub qualityGainMap: i32,
     rust_encoder: Box<Encoder>,
     rust_encoder_initialized: bool,
+    codec_specific_options: Box<CodecSpecificOptions>,
 }
 
 impl Default for avifEncoder {
@@ -76,6 +77,7 @@ impl Default for avifEncoder {
             qualityGainMap: settings.mutable.quality,
             rust_encoder: Default::default(),
             rust_encoder_initialized: false,
+            codec_specific_options: Default::default(),
         }
     }
 }
@@ -130,6 +132,15 @@ impl avifEncoder {
                 Err(err) => return (&err).into(),
             }
             self.rust_encoder_initialized = true;
+            // Push any existing codec specific options.
+            for (key, value) in self.codec_specific_options.iter() {
+                self.rust_encoder.set_codec_specific_option(
+                    key.0.clone(),
+                    key.1.to_string(),
+                    value.to_string(),
+                );
+            }
+            self.codec_specific_options.clear();
             avifResult::Ok
         }
     }
@@ -357,7 +368,13 @@ pub unsafe extern "C" fn crabby_avifEncoderSetCodecSpecificOption(
     } else {
         (key, None)
     };
-    rust_encoder(encoder).set_codec_specific_option(category, key, value);
+    if deref_const!(encoder).rust_encoder_initialized {
+        rust_encoder(encoder).set_codec_specific_option(category, key, value);
+    } else {
+        deref_mut!(encoder)
+            .codec_specific_options
+            .insert((category, key), value);
+    }
     avifResult::Ok
 }
 

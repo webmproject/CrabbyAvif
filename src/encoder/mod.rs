@@ -164,6 +164,10 @@ impl Sample {
 
 pub(crate) type Codec = Box<dyn crate::codecs::Encoder>;
 
+// If Category is None, the option applies to all categories. If Category is some, it only
+// applies to that category.
+pub(crate) type CodecSpecificOptions = HashMap<(Option<Category>, String), String>;
+
 #[derive(Default)]
 #[allow(dead_code)]
 pub struct Encoder {
@@ -180,9 +184,7 @@ pub struct Encoder {
     image_item_type: String,
     config_property_name: String,
     duration_in_timescales: Vec<u64>,
-    // If Category is None, the option applies to all categories. If Category is some, it only
-    // applies to that category.
-    codec_specific_options: HashMap<(Option<Category>, String), String>,
+    codec_specific_options: CodecSpecificOptions,
 }
 
 impl Encoder {
