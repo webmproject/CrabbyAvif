@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::coeffs::*;
 use super::libyuv;
 use super::rgb_impl;
 
@@ -140,6 +141,31 @@ pub enum AlphaMultiplyMode {
     NoOp,
     Multiply,
     UnMultiply,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Mode {
+    YuvCoefficients(f32, f32, f32),
+    Identity,
+    Ycgco,
+    YcgcoRe,
+    YcgcoRo,
+}
+
+impl From<&image::Image> for Mode {
+    fn from(image: &image::Image) -> Self {
+        match image.matrix_coefficients {
+            MatrixCoefficients::Identity => Mode::Identity,
+            MatrixCoefficients::Ycgco => Mode::Ycgco,
+            MatrixCoefficients::YcgcoRe => Mode::YcgcoRe,
+            MatrixCoefficients::YcgcoRo => Mode::YcgcoRo,
+            _ => {
+                let coeffs =
+                    calculate_yuv_coefficients(image.color_primaries, image.matrix_coefficients);
+                Mode::YuvCoefficients(coeffs[0], coeffs[1], coeffs[2])
+            }
+        }
+    }
 }
 
 impl Image {
