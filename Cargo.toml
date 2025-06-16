@@ -1,6 +1,7 @@
 workspace = { members = [
   "sys/aom-sys",
   "sys/dav1d-sys",
+  "sys/libsharpyuv-sys",
   "sys/libyuv-sys",
   "sys/libgav1-sys",
   "sys/ndk-sys",
