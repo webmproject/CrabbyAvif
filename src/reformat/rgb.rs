@@ -15,6 +15,7 @@
 use super::coeffs::*;
 use super::libyuv;
 use super::rgb_impl;
+use super::sharpyuv;
 
 use crate::image::Plane;
 use crate::image::YuvRange;
@@ -110,7 +111,7 @@ impl ChromaUpsampling {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub enum ChromaDownsampling {
     #[default]
     Automatic,
@@ -198,6 +199,15 @@ impl Image {
     pub(crate) fn pixels(&self) -> *const u8 {
         match &self.pixels {
             Some(pixels) => pixels.ptr_generic(),
+            None => std::ptr::null(),
+        }
+    }
+
+    // This function may not be used in some configurations.
+    #[allow(dead_code)]
+    pub(crate) fn pixels16(&self) -> *const u16 {
+        match &self.pixels {
+            Some(pixels) => pixels.ptr16(),
             None => std::ptr::null(),
         }
     }
@@ -451,6 +461,12 @@ impl Image {
         // TODO: b/410088660 - support gray rgb formats.
         // TODO: b/410088660 - support sharpyuv conversion.
         let mut conversion_complete = false;
+        if self.chroma_downsampling == ChromaDownsampling::SharpYuv {
+            match sharpyuv::rgb_to_yuv(self, image) {
+                Ok(_) => conversion_complete = true,
+                Err(err) => return Err(err),
+            }
+        }
         if alpha_multiply_mode == AlphaMultiplyMode::NoOp {
             match libyuv::rgb_to_yuv(self, image) {
                 Ok(_) => {

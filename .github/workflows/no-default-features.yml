@@ -31,7 +31,7 @@ jobs:
         target: i686-unknown-linux-gnu
 
     - name: Using stable toolchain build the library and run the tests without default features
-      run: cargo +stable test --no-default-features -- --skip test_conformance
+      run: cargo +stable test --no-default-features -- --skip test_conformance --skip sharpyuv
 
     - name: Using stable toolchain build the library without default features for 32-bit target
       if: runner.os == 'Linux'

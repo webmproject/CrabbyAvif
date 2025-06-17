@@ -239,13 +239,7 @@ void ConvertWholeRange(int rgb_depth, int yuv_depth, avifRGBFormat rgb_format,
             testutil::ModifyImageChannel(&src_rgb, offsets.b, kBlueNoise);
           }
 
-          const avifResult result = avifImageRGBToYUV(yuv.get(), &src_rgb);
-          if (result == AVIF_RESULT_NOT_IMPLEMENTED &&
-              src_rgb.chromaDownsampling ==
-                  AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV) {
-            GTEST_SKIP() << "libsharpyuv unavailable, skip test.";
-          }
-          ASSERT_EQ(result, AVIF_RESULT_OK);
+          ASSERT_EQ(avifImageRGBToYUV(yuv.get(), &src_rgb), AVIF_RESULT_OK);
           ASSERT_EQ(avifImageYUVToRGB(yuv.get(), &dst_rgb), AVIF_RESULT_OK);
           GetDiffSumAndSqDiffSum(src_rgb, dst_rgb, &abs_diff_sum, &sq_diff_sum,
                                  &max_abs_diff);
@@ -310,12 +304,7 @@ void ConvertWholeBuffer(int rgb_depth, int yuv_depth, avifRGBFormat rgb_format,
         testutil::FillImageChannel(&src_rgb, offsets.a, rgb_max);
       }
 
-      const avifResult result = avifImageRGBToYUV(yuv.get(), &src_rgb);
-      if (result == AVIF_RESULT_NOT_IMPLEMENTED &&
-          src_rgb.chromaDownsampling == AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV) {
-        GTEST_SKIP() << "libsharpyuv unavailable, skip test.";
-      }
-      ASSERT_EQ(result, AVIF_RESULT_OK);
+      ASSERT_EQ(avifImageRGBToYUV(yuv.get(), &src_rgb), AVIF_RESULT_OK);
       ASSERT_EQ(avifImageYUVToRGB(yuv.get(), &dst_rgb), AVIF_RESULT_OK);
       GetDiffSumAndSqDiffSum(src_rgb, dst_rgb, &abs_diff_sum, &sq_diff_sum,
                              &max_abs_diff);
@@ -353,8 +342,9 @@ TEST(RGBToYUVTest, ExhaustiveSettings) {
                     AVIF_CHROMA_DOWNSAMPLING_AVERAGE,
                     AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV}) {
                 if (chroma_downsampling == AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV &&
-                    yuv_depth > 12) {
-                  // SharpYuvConvert() only supports YUV bit depths up to 12.
+                    (yuv_depth > 12 ||
+                     yuv_format != AVIF_PIXEL_FORMAT_YUV420)) {
+                  // sharpyuv does not support these combinations.
                   continue;
                 }
                 ConvertWholeRange(
@@ -496,6 +486,8 @@ TEST_P(RGBToYUVTest, ConvertWholeBuffer) {
 // (GTest template "declared using unnamed type, is used but never defined").
 constexpr avifMatrixCoefficients kMatrixCoefficientsBT601 =
     AVIF_MATRIX_COEFFICIENTS_BT601;
+constexpr avifMatrixCoefficients kMatrixCoefficientsBT709 =
+    AVIF_MATRIX_COEFFICIENTS_BT709;
 constexpr avifMatrixCoefficients kMatrixCoefficientsIdentity =
     AVIF_MATRIX_COEFFICIENTS_IDENTITY;
 constexpr avifMatrixCoefficients kMatrixCoefficientsYCgCoRe =
@@ -697,6 +689,93 @@ INSTANTIATE_TEST_SUITE_P(
             /*rgb_step=*/Values(16001),  // High or it would be too slow.
             /*max_average_abs_diff=*/Values(2.82),
             /*min_psnr=*/Values(80.)));
+
+// Coverage for sharpyuv.
+INSTANTIATE_TEST_SUITE_P(
+    SharpYuv8Bit, RGBToYUVTest,
+    Combine(
+        /*rgb_depth=*/Values(8),
+        /*yuv_depth=*/Values(8, 10, 12), Values(AVIF_RGB_FORMAT_RGBA),
+        Values(AVIF_PIXEL_FORMAT_YUV420), Values(AVIF_RANGE_FULL),
+        Values(kMatrixCoefficientsBT601),
+        Values(AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV),
+        /*add_noise=*/Values(true),
+        /*rgb_step=*/Values(17),
+        /*max_average_abs_diff=*/Values(2.97),  // Sharp YUV introduces some
+                                                // color shift.
+        /*min_psnr=*/Values(34.)  // SharpYuv distortion is acceptable.
+        ));
+INSTANTIATE_TEST_SUITE_P(
+    SharpYuv8BitRanges, RGBToYUVTest,
+    Combine(
+        /*rgb_depth=*/Values(8),
+        /*yuv_depth=*/Values(8), Values(AVIF_RGB_FORMAT_RGBA),
+        Values(AVIF_PIXEL_FORMAT_YUV420),
+        Values(AVIF_RANGE_LIMITED, AVIF_RANGE_FULL),
+        Values(kMatrixCoefficientsBT601),
+        Values(AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV),
+        /*add_noise=*/Values(true),
+        /*rgb_step=*/Values(17),
+        /*max_average_abs_diff=*/Values(2.94),  // Sharp YUV introduces some
+                                                // color shift.
+        /*min_psnr=*/Values(34.)  // SharpYuv distortion is acceptable.
+        ));
+INSTANTIATE_TEST_SUITE_P(
+    SharpYuv8BitMatrixCoefficients, RGBToYUVTest,
+    Combine(
+        /*rgb_depth=*/Values(8),
+        /*yuv_depth=*/Values(8), Values(AVIF_RGB_FORMAT_RGBA),
+        Values(AVIF_PIXEL_FORMAT_YUV420), Values(AVIF_RANGE_FULL),
+        Values(kMatrixCoefficientsBT601, kMatrixCoefficientsBT709),
+        Values(AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV),
+        /*add_noise=*/Values(true),
+        /*rgb_step=*/Values(17),
+        /*max_average_abs_diff=*/Values(2.94),  // Sharp YUV introduces some
+                                                // color shift.
+        /*min_psnr=*/Values(34.)  // SharpYuv distortion is acceptable.
+        ));
+INSTANTIATE_TEST_SUITE_P(
+    SharpYuv10Bit, RGBToYUVTest,
+    Combine(
+        /*rgb_depth=*/Values(10),
+        /*yuv_depth=*/Values(10), Values(AVIF_RGB_FORMAT_RGBA),
+        Values(AVIF_PIXEL_FORMAT_YUV420), Values(AVIF_RANGE_FULL),
+        Values(kMatrixCoefficientsBT601),
+        Values(AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV),
+        /*add_noise=*/Values(true),
+        /*rgb_step=*/Values(211),               // High or it would be too slow.
+        /*max_average_abs_diff=*/Values(2.94),  // Sharp YUV introduces some
+                                                // color shift.
+        /*min_psnr=*/Values(34.)  // SharpYuv distortion is acceptable.
+        ));
+INSTANTIATE_TEST_SUITE_P(
+    SharpYuv12Bit, RGBToYUVTest,
+    Combine(
+        /*rgb_depth=*/Values(12),
+        /*yuv_depth=*/Values(8, 10, 12), Values(AVIF_RGB_FORMAT_RGBA),
+        Values(AVIF_PIXEL_FORMAT_YUV420), Values(AVIF_RANGE_FULL),
+        Values(kMatrixCoefficientsBT601),
+        Values(AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV),
+        /*add_noise=*/Values(true),
+        /*rgb_step=*/Values(840),               // High or it would be too slow.
+        /*max_average_abs_diff=*/Values(6.57),  // Sharp YUV introduces some
+                                                // color shift.
+        /*min_psnr=*/Values(34.)  // SharpYuv distortion is acceptable.
+        ));
+INSTANTIATE_TEST_SUITE_P(
+    SharpYuv16Bit, RGBToYUVTest,
+    Combine(
+        /*rgb_depth=*/Values(16),
+        /*yuv_depth=*/Values(8, /*10,*/ 12), Values(AVIF_RGB_FORMAT_RGBA),
+        Values(AVIF_PIXEL_FORMAT_YUV420), Values(AVIF_RANGE_FULL),
+        Values(kMatrixCoefficientsBT601),
+        Values(AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV),
+        /*add_noise=*/Values(true),
+        /*rgb_step=*/Values(4567),  // High or it would be too slow.
+        /*max_average_abs_diff=*/Values(111.7),  // Sharp YUV introduces some
+                                                 // color shift.
+        /*min_psnr=*/Values(49.)  // SharpYuv distortion is acceptable.
+        ));
 
 }  // namespace
 }  // namespace avif

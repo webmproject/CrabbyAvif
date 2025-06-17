@@ -332,11 +332,11 @@ impl Image {
         })
     }
 
-    #[cfg(feature = "libyuv")]
+    #[cfg(any(feature = "libyuv", feature = "sharpyuv"))]
     pub(crate) fn plane_ptrs_mut(&mut self) -> [*mut u8; 4] {
         ALL_PLANES.map(|x| {
             if self.has_plane(x) {
-                self.planes[x.as_usize()].unwrap_mut().ptr_mut()
+                self.planes[x.as_usize()].unwrap_mut().ptr_mut_generic()
             } else {
                 std::ptr::null_mut()
             }
