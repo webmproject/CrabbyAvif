@@ -531,7 +531,7 @@ pub type avifAddImageFlags = u32;
 
 pub const AVIF_QUALITY_WORST: u32 = 0;
 pub const AVIF_QUALITY_BEST: u32 = 100;
-pub const AVIF_QUALITY_LOSSLESS: u32 = 0;
+pub const AVIF_QUALITY_LOSSLESS: u32 = 100;
 
 pub const AVIF_QUANTIZER_WORST_QUALITY: u32 = 63;
 pub const AVIF_QUANTIZER_BEST_QUALITY: u32 = 0;
