@@ -23,6 +23,7 @@ use std::os::raw::c_char;
 
 use crate::decoder::track::*;
 use crate::decoder::*;
+use crate::internal_utils::*;
 use crate::*;
 
 #[repr(C)]
@@ -140,6 +141,9 @@ pub unsafe extern "C" fn crabby_avifDecoderSetIOMemory(
     data: *const u8,
     size: usize,
 ) -> avifResult {
+    if !check_slice_from_raw_parts_safety(data, size) {
+        return avifResult::InvalidArgument;
+    }
     unsafe { rust_decoder(decoder).set_io_raw(data, size) }.into()
 }
 
@@ -413,6 +417,13 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImageMaxExtent(
 
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifPeekCompatibleFileType(input: *const avifROData) -> avifBool {
-    let data = unsafe { std::slice::from_raw_parts((*input).data, (*input).size) };
+    if input.is_null() {
+        return AVIF_FALSE;
+    }
+    let input = deref_const!(input);
+    if !check_slice_from_raw_parts_safety(input.data, input.size) {
+        return AVIF_FALSE;
+    }
+    let data = unsafe { std::slice::from_raw_parts(input.data, input.size) };
     to_avifBool(Decoder::peek_compatible_file_type(data))
 }
