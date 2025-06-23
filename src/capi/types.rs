@@ -538,5 +538,5 @@ pub const AVIF_QUANTIZER_BEST_QUALITY: u32 = 0;
 pub const AVIF_QUANTIZER_LOSSLESS: u32 = 0;
 
 pub const AVIF_SPEED_SLOWEST: u32 = 0;
-pub const AVIF_SPEED_FASTEST: u32 = 0;
+pub const AVIF_SPEED_FASTEST: u32 = 10;
 pub const AVIF_SPEED_DEFAULT: u32 = 6;
