@@ -99,7 +99,7 @@ constexpr static const uint32_t AVIF_QUANTIZER_LOSSLESS = 0;
 
 constexpr static const uint32_t AVIF_SPEED_SLOWEST = 0;
 
-constexpr static const uint32_t AVIF_SPEED_FASTEST = 0;
+constexpr static const uint32_t AVIF_SPEED_FASTEST = 10;
 
 constexpr static const uint32_t AVIF_SPEED_DEFAULT = 6;
 
