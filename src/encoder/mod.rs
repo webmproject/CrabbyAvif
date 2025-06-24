@@ -500,7 +500,10 @@ impl Encoder {
             let first_image = cell_images[0];
             if !first_image.has_same_cicp(&self.image_metadata)
                 || first_image.alpha_premultiplied != self.image_metadata.alpha_premultiplied
-                || first_image.alpha_present != self.image_metadata.alpha_present
+                // If the previously added image had an alpha channel, then this image should have
+                // it too. The reverse need not be true as we will simply ignore the alpha channel
+                // of the current image in that case.
+                || (self.image_metadata.alpha_present && !first_image.alpha_present)
             {
                 return Err(AvifError::InvalidArgument);
             }

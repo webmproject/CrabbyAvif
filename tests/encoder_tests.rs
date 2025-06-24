@@ -436,6 +436,83 @@ fn encode_decode_sequence(
     Ok(())
 }
 
+#[test_matrix([true, false])]
+fn sequence_alpha_combinations(first_image_has_alpha: bool) -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let width = 20;
+    let height = 10;
+    let depth = 8;
+    let yuv_format = PixelFormat::Yuv420;
+    let yuv_range = YuvRange::Full;
+    let image1 = generate_gradient_image(
+        width,
+        height,
+        depth,
+        yuv_format,
+        yuv_range,
+        first_image_has_alpha,
+    )?;
+    let image2 = generate_gradient_image(
+        width,
+        height,
+        depth,
+        yuv_format,
+        yuv_range,
+        !first_image_has_alpha,
+    )?;
+    let settings = encoder::Settings {
+        speed: Some(10),
+        mutable: encoder::MutableSettings {
+            quality: 50,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    // Adding the first image should always succeed.
+    assert!(encoder.add_image_for_sequence(&image1, 0).is_ok());
+    let second_image_res = encoder.add_image_for_sequence(&image2, 0);
+    if first_image_has_alpha {
+        // In this case, adding a second image without an alpha plane should fail.
+        assert!(second_image_res.is_err());
+        return Ok(());
+    } else {
+        // In this case, adding a second image with an alpha plane should succeed, but the
+        // resulting image sequence will not have alpha in any of the frames.
+        assert!(second_image_res.is_ok());
+    }
+
+    let edata = encoder.finish()?;
+    assert!(!edata.is_empty());
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    assert!(decoder.parse().is_ok());
+    assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
+    assert_eq!(decoder.image_count(), 2);
+
+    let image = decoder.image().expect("image was none");
+    assert!(!image.alpha_present);
+    assert!(image.image_sequence_track_present);
+    assert_eq!(image.width, width);
+    assert_eq!(image.height, height);
+    assert_eq!(image.depth, depth);
+    assert_eq!(image.yuv_format, yuv_format);
+    assert_eq!(image.yuv_range, yuv_range);
+
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    for _ in 0..2 {
+        assert!(decoder.next_image().is_ok());
+        let image = decoder.image().expect("image was none");
+        assert!(!image.alpha_present);
+    }
+    Ok(())
+}
+
 #[test_matrix([0, 1, 65535], [0, 1, 65535])]
 fn clli(max_cll: u16, max_pall: u16) -> AvifResult<()> {
     if !HAS_ENCODER || !HAS_DECODER {
