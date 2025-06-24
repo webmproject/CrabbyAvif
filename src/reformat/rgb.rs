@@ -365,14 +365,22 @@ impl Image {
             return Err(AvifError::NotImplemented);
         }
 
-        let mut alpha_multiply_mode = AlphaMultiplyMode::NoOp;
-        if image.has_alpha() && self.has_alpha() {
-            if !image.alpha_premultiplied && self.premultiply_alpha {
-                alpha_multiply_mode = AlphaMultiplyMode::Multiply;
+        let mut alpha_multiply_mode = if image.has_alpha() {
+            if !self.has_alpha() && !image.alpha_premultiplied {
+                // If we are converting an image with alpha into a format without alpha, we should
+                // premultiply the alpha value before discarding the alpha plane. This has the same
+                // effect of rendering this image on a black background.
+                AlphaMultiplyMode::Multiply
+            } else if !image.alpha_premultiplied && self.premultiply_alpha {
+                AlphaMultiplyMode::Multiply
             } else if image.alpha_premultiplied && !self.premultiply_alpha {
-                alpha_multiply_mode = AlphaMultiplyMode::UnMultiply;
+                AlphaMultiplyMode::UnMultiply
+            } else {
+                AlphaMultiplyMode::NoOp
             }
-        }
+        } else {
+            AlphaMultiplyMode::NoOp
+        };
 
         let mut converted_with_libyuv: bool = false;
         let mut alpha_reformatted_with_libyuv = false;
