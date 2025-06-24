@@ -427,3 +427,8 @@ pub unsafe extern "C" fn crabby_avifPeekCompatibleFileType(input: *const avifROD
     let data = unsafe { std::slice::from_raw_parts(input.data, input.size) };
     to_avifBool(Decoder::peek_compatible_file_type(data))
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifDecoderReset(decoder: *mut avifDecoder) -> avifResult {
+    unsafe { crabby_avifDecoderParse(decoder) }
+}

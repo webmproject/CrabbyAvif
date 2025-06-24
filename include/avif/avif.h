@@ -635,6 +635,8 @@ avifResult crabby_avifDecoderNthImageMaxExtent(const avifDecoder *decoder,
 
 avifBool crabby_avifPeekCompatibleFileType(const avifROData *input);
 
+avifResult crabby_avifDecoderReset(avifDecoder *decoder);
+
 /// SAFETY:
 /// Used by the C API to create an avifEncoder object with default values.
 avifEncoder *crabby_avifEncoderCreate();

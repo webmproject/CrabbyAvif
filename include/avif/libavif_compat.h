@@ -35,6 +35,7 @@
 #define avifDecoderRead crabby_avifDecoderRead
 #define avifDecoderReadFile crabby_avifDecoderReadFile
 #define avifDecoderReadMemory crabby_avifDecoderReadMemory
+#define avifDecoderReset crabby_avifDecoderReset
 #define avifDecoderSetIO crabby_avifDecoderSetIO
 #define avifDecoderSetIOFile crabby_avifDecoderSetIOFile
 #define avifDecoderSetIOMemory crabby_avifDecoderSetIOMemory
