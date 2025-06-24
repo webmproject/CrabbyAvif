@@ -780,6 +780,8 @@ avifCodecChoice crabby_avifCodecChoiceFromName(const char *name);
 
 const char *crabby_avifCodecName(avifCodecChoice _choice, avifCodecFlags requiredFlags);
 
+const char *crabby_avifPixelFormatToString(avifPixelFormat format);
+
 const char *crabby_avifResultToString(avifResult res);
 
 avifBool crabby_avifCropRectConvertCleanApertureBox(avifCropRect *cropRect,

@@ -316,6 +316,22 @@ pub unsafe extern "C" fn crabby_avifCodecName(
     .as_ptr()
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifPixelFormatToString(format: PixelFormat) -> *const c_char {
+    CStr::from_bytes_with_nul(match format {
+        PixelFormat::Yuv444 => b"YUV444\0",
+        PixelFormat::Yuv422 => b"YUV422\0",
+        PixelFormat::Yuv420 => b"YUV420\0",
+        PixelFormat::Yuv400 => b"YUV400\0",
+        PixelFormat::AndroidP010 => b"P010\0",
+        PixelFormat::AndroidNv12 => b"NV12\0",
+        PixelFormat::AndroidNv21 => b"NV21\0",
+        _ => b"Unknown\0",
+    })
+    .unwrap()
+    .as_ptr()
+}
+
 pub(crate) fn to_avifBool(val: bool) -> avifBool {
     if val {
         AVIF_TRUE

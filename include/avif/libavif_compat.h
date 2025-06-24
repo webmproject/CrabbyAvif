@@ -76,6 +76,7 @@
 #define avifImageUsesU16 crabby_avifImageUsesU16
 #define avifImageYUVToRGB crabby_avifImageYUVToRGB
 #define avifPeekCompatibleFileType crabby_avifPeekCompatibleFileType
+#define avifPixelFormatToString crabby_avifPixelFormatToString
 #define avifRGBFormatChannelCount crabby_avifRGBFormatChannelCount
 #define avifRGBFormatHasAlpha crabby_avifRGBFormatHasAlpha
 #define avifRGBImageAllocatePixels crabby_avifRGBImageAllocatePixels

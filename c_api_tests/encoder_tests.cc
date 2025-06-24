@@ -708,6 +708,17 @@ TEST(EncoderApiTest, SetCodecSpecificOption) {
             AVIF_RESULT_OK);
 }
 
+TEST(PixelFormatToStringTest, Test) {
+  EXPECT_STREQ(avifPixelFormatToString(AVIF_PIXEL_FORMAT_YUV444), "YUV444");
+  EXPECT_STREQ(avifPixelFormatToString(AVIF_PIXEL_FORMAT_YUV422), "YUV422");
+  EXPECT_STREQ(avifPixelFormatToString(AVIF_PIXEL_FORMAT_YUV420), "YUV420");
+  EXPECT_STREQ(avifPixelFormatToString(AVIF_PIXEL_FORMAT_YUV400), "YUV400");
+  EXPECT_STREQ(avifPixelFormatToString(AVIF_PIXEL_FORMAT_ANDROID_P010), "P010");
+  EXPECT_STREQ(avifPixelFormatToString(AVIF_PIXEL_FORMAT_ANDROID_NV12), "NV12");
+  EXPECT_STREQ(avifPixelFormatToString(AVIF_PIXEL_FORMAT_ANDROID_NV21), "NV21");
+  EXPECT_STREQ(avifPixelFormatToString(AVIF_PIXEL_FORMAT_NONE), "Unknown");
+}
+
 }  // namespace
 }  // namespace avif
 
