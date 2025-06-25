@@ -43,5 +43,6 @@ include = [
   "avifPlanesFlag",
   "avifPlanesFlags",
   "avifStrictFlag",
+  "AVIF_COLOR_PRIMARIES_BT709",
 ]
 exclude = ["Box"]

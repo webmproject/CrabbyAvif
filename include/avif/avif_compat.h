@@ -14,6 +14,16 @@ using Box = T*;
 struct avifImage;
 struct avifIO;
 
+// In the libavif drop-in header, define them as macros to avoid unnecessary cast warnings.
+#define AVIF_COLOR_PRIMARIES_BT709 AVIF_COLOR_PRIMARIES_SRGB
+#define AVIF_COLOR_PRIMARIES_IEC61966_2_4 AVIF_COLOR_PRIMARIES_SRGB
+#define AVIF_COLOR_PRIMARIES_BT2100 AVIF_COLOR_PRIMARIES_BT2020
+#define AVIF_COLOR_PRIMARIES_DCI_P3 AVIF_COLOR_PRIMARIES_SMPTE432
+#define AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084 AVIF_TRANSFER_CHARACTERISTICS_PQ
+
+template <typename T>
+using Box = T*;
+
 // Used to initialize avifROData/avifRWData on the stack.
 #define AVIF_DATA_EMPTY { NULL, 0 }
 #define avifAlloc crabby_avifAlloc
@@ -144,16 +154,6 @@ constexpr static const uint32_t AVIF_TRANSFORM_CLAP = (1 << 1);
 constexpr static const uint32_t AVIF_TRANSFORM_IROT = (1 << 2);
 
 constexpr static const uint32_t AVIF_TRANSFORM_IMIR = (1 << 3);
-
-constexpr static const uint16_t AVIF_COLOR_PRIMARIES_BT709 = 1;
-
-constexpr static const uint16_t AVIF_COLOR_PRIMARIES_IEC61966_2_4 = 1;
-
-constexpr static const uint16_t AVIF_COLOR_PRIMARIES_BT2100 = 9;
-
-constexpr static const uint16_t AVIF_COLOR_PRIMARIES_DCI_P3 = 12;
-
-constexpr static const uint16_t AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084 = 16;
 
 constexpr static const uint32_t AVIF_ADD_IMAGE_FLAG_NONE = 0;
 
