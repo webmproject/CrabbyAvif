@@ -126,6 +126,17 @@ impl EncoderConfig {
             .collect();
         options
     }
+
+    pub(crate) fn min_max_quantizers(&self) -> (u32, u32) {
+        if self.quantizer == 0 {
+            (0, 0)
+        } else {
+            (
+                std::cmp::max(self.quantizer - 4, 0) as u32,
+                std::cmp::min(self.quantizer + 4, 63) as u32,
+            )
+        }
+    }
 }
 
 #[cfg(feature = "encoder")]

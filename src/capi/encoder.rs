@@ -62,12 +62,12 @@ impl Default for avifEncoder {
             timescale: settings.timescale,
             repetitionCount: AVIF_REPETITION_COUNT_INFINITE,
             extraLayerCount: settings.extra_layer_count,
-            quality: settings.mutable.quality,
-            qualityAlpha: settings.mutable.quality,
-            minQuantizer: -1,
-            maxQuantizer: -1,
-            minQuantizerAlpha: -1,
-            maxQuantizerAlpha: -1,
+            quality: AVIF_QUALITY_DEFAULT,
+            qualityAlpha: AVIF_QUALITY_DEFAULT,
+            minQuantizer: AVIF_QUANTIZER_BEST_QUALITY as i32,
+            maxQuantizer: AVIF_QUANTIZER_WORST_QUALITY as i32,
+            minQuantizerAlpha: AVIF_QUANTIZER_BEST_QUALITY as i32,
+            maxQuantizerAlpha: AVIF_QUANTIZER_WORST_QUALITY as i32,
             tileRowsLog2: 0,
             tileColsLog2: 0,
             autoTiling: AVIF_FALSE,
@@ -105,7 +105,11 @@ impl From<&avifEncoder> for Settings {
     fn from(encoder: &avifEncoder) -> Self {
         Self {
             threads: encoder.maxThreads as u32,
-            speed: Some(encoder.speed as u32),
+            speed: if encoder.speed >= 0 && encoder.speed <= 10 {
+                Some(encoder.speed as u32)
+            } else {
+                None
+            },
             keyframe_interval: encoder.keyframeInterval,
             timescale: if encoder.timescale == 0 { 1 } else { encoder.timescale },
             repetition_count: RepetitionCount::create_from(encoder.repetitionCount),

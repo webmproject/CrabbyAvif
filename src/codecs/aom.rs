@@ -196,8 +196,13 @@ impl Encoder for Aom {
                     }
                 };
             }
-            aom_config.rc_min_quantizer = config.quantizer as u32;
-            aom_config.rc_max_quantizer = config.quantizer as u32;
+            if aom_config.rc_end_usage == aom_rc_mode_AOM_VBR
+                || aom_config.rc_end_usage == aom_rc_mode_AOM_CBR
+            {
+                // cq-level is unused in these modes, so set the min and max quantizer instead.
+                (aom_config.rc_min_quantizer, aom_config.rc_max_quantizer) =
+                    config.min_max_quantizers();
+            }
 
             let mut encoder_uninit: MaybeUninit<aom_codec_ctx_t> = MaybeUninit::uninit();
             let err = unsafe {
@@ -335,8 +340,8 @@ impl Encoder for Aom {
                 if aom_config.rc_end_usage == aom_rc_mode_AOM_VBR
                     || aom_config.rc_end_usage == aom_rc_mode_AOM_CBR
                 {
-                    aom_config.rc_min_quantizer = config.quantizer as u32;
-                    aom_config.rc_max_quantizer = config.quantizer as u32;
+                    (aom_config.rc_min_quantizer, aom_config.rc_max_quantizer) =
+                        config.min_max_quantizers();
                     let err = unsafe {
                         aom_codec_enc_config_set(
                             self.encoder.unwrap_mut() as *mut _,

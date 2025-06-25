@@ -91,6 +91,8 @@ constexpr static const uint32_t AVIF_QUALITY_BEST = 100;
 
 constexpr static const uint32_t AVIF_QUALITY_LOSSLESS = 100;
 
+constexpr static const int32_t AVIF_QUALITY_DEFAULT = -1;
+
 constexpr static const uint32_t AVIF_QUANTIZER_WORST_QUALITY = 63;
 
 constexpr static const uint32_t AVIF_QUANTIZER_BEST_QUALITY = 0;
