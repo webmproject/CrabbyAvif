@@ -26,11 +26,8 @@
 #include <limits>
 #include <vector>
 
-#include "avif/avif.h"
-#include "avif/libavif_compat.h"
+#include "avif/avif_compat.h"
 #include "gtest/gtest.h"
-
-using namespace crabbyavif;
 
 namespace avif {
 

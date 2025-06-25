@@ -11,16 +11,91 @@
 template <typename T>
 using Box = T*;
 
-namespace crabbyavif {
 struct avifImage;
 struct avifIO;
-}
 
 // Used to initialize avifROData/avifRWData on the stack.
 #define AVIF_DATA_EMPTY { NULL, 0 }
+#define avifAlloc crabby_avifAlloc
+#define avifCleanApertureBoxConvertCropRect crabby_avifCleanApertureBoxConvertCropRect
+#define avifCodecChoiceFromName crabby_avifCodecChoiceFromName
+#define avifCodecName crabby_avifCodecName
+#define avifCropRectConvertCleanApertureBox crabby_avifCropRectConvertCleanApertureBox
+#define avifDecoderCreate crabby_avifDecoderCreate
+#define avifDecoderDecodedRowCount crabby_avifDecoderDecodedRowCount
+#define avifDecoderDestroy crabby_avifDecoderDestroy
+#define avifDecoderIsKeyframe crabby_avifDecoderIsKeyframe
+#define avifDecoderNearestKeyframe crabby_avifDecoderNearestKeyframe
+#define avifDecoderNextImage crabby_avifDecoderNextImage
+#define avifDecoderNthImage crabby_avifDecoderNthImage
+#define avifDecoderNthImageMaxExtent crabby_avifDecoderNthImageMaxExtent
+#define avifDecoderNthImageTiming crabby_avifDecoderNthImageTiming
+#define avifDecoderParse crabby_avifDecoderParse
+#define avifDecoderRead crabby_avifDecoderRead
+#define avifDecoderReadFile crabby_avifDecoderReadFile
+#define avifDecoderReadMemory crabby_avifDecoderReadMemory
+#define avifDecoderReset crabby_avifDecoderReset
+#define avifDecoderSetIO crabby_avifDecoderSetIO
+#define avifDecoderSetIOFile crabby_avifDecoderSetIOFile
+#define avifDecoderSetIOMemory crabby_avifDecoderSetIOMemory
+#define avifDecoderSetSource crabby_avifDecoderSetSource
+#define avifDiagnosticsClearError crabby_avifDiagnosticsClearError
+#define avifEncoderAddImage crabby_avifEncoderAddImage
+#define avifEncoderAddImageGrid crabby_avifEncoderAddImageGrid
+#define avifEncoderCreate crabby_avifEncoderCreate
+#define avifEncoderDestroy crabby_avifEncoderDestroy
+#define avifEncoderFinish crabby_avifEncoderFinish
+#define avifEncoderSetCodecSpecificOption crabby_avifEncoderSetCodecSpecificOption
+#define avifEncoderWrite crabby_avifEncoderWrite
+#define avifFree crabby_avifFree
+#define avifGainMapCreate crabby_avifGainMapCreate
+#define avifGainMapDestroy crabby_avifGainMapDestroy
+#define avifGetPixelFormatInfo crabby_avifGetPixelFormatInfo
+#define avifIOCreateFileReader crabby_avifIOCreateFileReader
+#define avifIOCreateMemoryReader crabby_avifIOCreateMemoryReader
+#define avifIODestroy crabby_avifIODestroy
+#define avifImageAllocatePlanes crabby_avifImageAllocatePlanes
+#define avifImageCopy crabby_avifImageCopy
+#define avifImageCreate crabby_avifImageCreate
+#define avifImageCreateEmpty crabby_avifImageCreateEmpty
+#define avifImageDestroy crabby_avifImageDestroy
+#define avifImageFreePlanes crabby_avifImageFreePlanes
+#define avifImageIsOpaque crabby_avifImageIsOpaque
+#define avifImagePlane crabby_avifImagePlane
+#define avifImagePlaneHeight crabby_avifImagePlaneHeight
+#define avifImagePlaneRowBytes crabby_avifImagePlaneRowBytes
+#define avifImagePlaneWidth crabby_avifImagePlaneWidth
+#define avifImageRGBToYUV crabby_avifImageRGBToYUV
+#define avifImageScale crabby_avifImageScale
+#define avifImageSetMetadataExif crabby_avifImageSetMetadataExif
+#define avifImageSetMetadataXMP crabby_avifImageSetMetadataXMP
+#define avifImageSetProfileICC crabby_avifImageSetProfileICC
+#define avifImageSetViewRect crabby_avifImageSetViewRect
+#define avifImageUsesU16 crabby_avifImageUsesU16
+#define avifImageYUVToRGB crabby_avifImageYUVToRGB
+#define avifPeekCompatibleFileType crabby_avifPeekCompatibleFileType
+#define avifPixelFormatToString crabby_avifPixelFormatToString
+#define avifRGBFormatChannelCount crabby_avifRGBFormatChannelCount
+#define avifRGBFormatHasAlpha crabby_avifRGBFormatHasAlpha
+#define avifRGBImageAllocatePixels crabby_avifRGBImageAllocatePixels
+#define avifRGBImageFreePixels crabby_avifRGBImageFreePixels
+#define avifRGBImagePixelSize crabby_avifRGBImagePixelSize
+#define avifRGBImageSetDefaults crabby_avifRGBImageSetDefaults
+#define avifRWDataFree crabby_avifRWDataFree
+#define avifRWDataRealloc crabby_avifRWDataRealloc
+#define avifRWDataSet crabby_avifRWDataSet
+#define avifResultToString crabby_avifResultToString
+#define AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE CRABBY_AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE
+#define AVIF_FALSE CRABBY_AVIF_FALSE
+#define AVIF_PLANE_COUNT_YUV CRABBY_AVIF_PLANE_COUNT_YUV
+#define AVIF_REPETITION_COUNT_INFINITE CRABBY_AVIF_REPETITION_COUNT_INFINITE
+#define AVIF_REPETITION_COUNT_UNKNOWN CRABBY_AVIF_REPETITION_COUNT_UNKNOWN
+#define AVIF_TRUE CRABBY_AVIF_TRUE
+#define AVIF_DEFAULT_IMAGE_COUNT_LIMIT CRABBY_AVIF_DEFAULT_IMAGE_COUNT_LIMIT
+#define AVIF_DEFAULT_IMAGE_DIMENSION_LIMIT CRABBY_AVIF_DEFAULT_IMAGE_DIMENSION_LIMIT
+#define AVIF_DEFAULT_IMAGE_SIZE_LIMIT CRABBY_AVIF_DEFAULT_IMAGE_SIZE_LIMIT
+#define AVIF_MAX_AV1_LAYER_COUNT CRABBY_AVIF_MAX_AV1_LAYER_COUNT
 
-
-namespace crabbyavif {
 
 constexpr static const size_t CRABBY_AVIF_MAX_AV1_LAYER_COUNT = 4;
 
@@ -810,7 +885,5 @@ void *crabby_avifAlloc(size_t size);
 void crabby_avifFree(void *p);
 
 } // extern "C"
-
-} // namespace crabbyavif
 
 #endif // AVIF_H

@@ -8,7 +8,7 @@
 #include <tuple>
 #include <vector>
 
-#include "avif/avif.h"
+#include "avif/avif_compat.h"
 #include "gtest/gtest.h"
 #include "testutil.h"
 

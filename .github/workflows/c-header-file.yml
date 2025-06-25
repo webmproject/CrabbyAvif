@@ -30,3 +30,6 @@ jobs:
 
     - name: Ensure that there is no diff in the header file.
       run: git diff --exit-code include/avif/avif.h
+
+    - name: Ensure that there is no diff in the libavif compatible header file.
+      run: git diff --exit-code include/avif/avif_compat.h
