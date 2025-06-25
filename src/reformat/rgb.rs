@@ -467,15 +467,13 @@ impl Image {
                 _ => AlphaMultiplyMode::NoOp,
             };
         // TODO: b/410088660 - support gray rgb formats.
-        // TODO: b/410088660 - support sharpyuv conversion.
         let mut conversion_complete = false;
         if self.chroma_downsampling == ChromaDownsampling::SharpYuv {
             match sharpyuv::rgb_to_yuv(self, image) {
                 Ok(_) => conversion_complete = true,
                 Err(err) => return Err(err),
             }
-        }
-        if alpha_multiply_mode == AlphaMultiplyMode::NoOp {
+        } else if alpha_multiply_mode == AlphaMultiplyMode::NoOp {
             match libyuv::rgb_to_yuv(self, image) {
                 Ok(_) => {
                     conversion_complete = true;
