@@ -807,7 +807,7 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
 fn main() {
     let args = CommandLineArgs::parse();
     if let Err(err) = validate_args(&args) {
-        eprintln!("ERROR: {:#?}", err);
+        eprintln!("ERROR: {err:#?}");
         std::process::exit(1);
     }
     let res = if can_decode(&args.input_file) {
@@ -833,7 +833,7 @@ fn main() {
     match res {
         Ok(_) => std::process::exit(0),
         Err(err) => {
-            eprintln!("ERROR: {:#?}", err);
+            eprintln!("ERROR: {err:#?}");
             std::process::exit(1);
         }
     }

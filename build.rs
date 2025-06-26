@@ -172,7 +172,7 @@ fn main() {
 
         let function_redefinitions: String = LIBAVIF_COMPAT_FUNCTIONS
             .iter()
-            .map(|s| format!("#define {} crabby_{}\n", s, s))
+            .map(|s| format!("#define {s} crabby_{s}\n"))
             .collect::<Vec<String>>()
             .join("");
         config
@@ -183,7 +183,7 @@ fn main() {
 
         let constant_redefinitions: String = LIBAVIF_COMPAT_CONSTANTS
             .iter()
-            .map(|s| format!("#define {} CRABBY_{}\n", s, s))
+            .map(|s| format!("#define {s} CRABBY_{s}\n"))
             .collect::<Vec<String>>()
             .join("");
         config

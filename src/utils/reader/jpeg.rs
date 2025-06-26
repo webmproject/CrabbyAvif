@@ -51,8 +51,7 @@ impl Reader for JpegReader {
         let color_type = decoder.color_type();
         if color_type != ColorType::Rgb8 {
             return Err(AvifError::UnknownError(format!(
-                "jpeg color type was something other than rgb8: {:#?}",
-                color_type
+                "jpeg color type was something other than rgb8: {color_type:#?}"
             )));
         }
         let (width, height) = decoder.dimensions();
