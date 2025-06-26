@@ -8,9 +8,6 @@
 #include <ostream>
 #include <new>
 
-template <typename T>
-using Box = T*;
-
 struct avifImage;
 struct avifIO;
 
@@ -887,3 +884,35 @@ void crabby_avifFree(void *p);
 } // extern "C"
 
 #endif // AVIF_H
+
+
+#ifndef AVIF_H_CXX
+#define AVIF_H_CXX
+
+#if !defined(__cplusplus)
+#error "This a C++ only header."
+#endif
+
+#include <memory>
+
+namespace avif
+{
+
+// Struct to call the destroy functions in a unique_ptr.
+struct UniquePtrDeleter
+{
+    void operator()(avifEncoder * encoder) const { avifEncoderDestroy(encoder); }
+    void operator()(avifDecoder * decoder) const { avifDecoderDestroy(decoder); }
+    void operator()(avifImage * image) const { avifImageDestroy(image); }
+    void operator()(avifGainMap * gainMap) const { avifGainMapDestroy(gainMap); }
+};
+
+// Use these unique_ptr to ensure the structs are automatically destroyed.
+using EncoderPtr = std::unique_ptr<avifEncoder, UniquePtrDeleter>;
+using DecoderPtr = std::unique_ptr<avifDecoder, UniquePtrDeleter>;
+using ImagePtr = std::unique_ptr<avifImage, UniquePtrDeleter>;
+using GainMapPtr = std::unique_ptr<avifGainMap, UniquePtrDeleter>;
+
+}
+
+#endif // AVIF_H_CXX

@@ -41,17 +41,6 @@
 
 namespace avif {
 
-// Use these unique_ptr wrappers/class wrappers for automatic memory management.
-struct UniquePtrDeleter {
-  void operator()(avifDecoder* decoder) const { avifDecoderDestroy(decoder); }
-  void operator()(avifEncoder* encoder) const { avifEncoderDestroy(encoder); }
-  void operator()(avifImage* image) const { avifImageDestroy(image); }
-};
-
-using DecoderPtr = std::unique_ptr<avifDecoder, UniquePtrDeleter>;
-using EncoderPtr = std::unique_ptr<avifEncoder, UniquePtrDeleter>;
-using ImagePtr = std::unique_ptr<avifImage, UniquePtrDeleter>;
-
 class AvifRwData : public avifRWData {
  public:
   AvifRwData() : avifRWData{nullptr, 0} {}

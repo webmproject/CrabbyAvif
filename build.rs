@@ -107,7 +107,6 @@ const LIBAVIF_COMPAT_CONSTANTS: &[&str] = &[
 // have a circular dependency.
 #[cfg(feature = "capi")]
 const FORWARD_DECLS: &str = r#"
-
 namespace crabbyavif {
 struct avifImage;
 struct avifIO;
@@ -122,9 +121,6 @@ constexpr static uint16_t AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084 = 16;
 
 #[cfg(feature = "capi")]
 const FORWARD_DECLS_NO_NAMESPACE: &str = r#"
-template <typename T>
-using Box = T*;
-
 struct avifImage;
 struct avifIO;
 
@@ -146,6 +142,42 @@ using Box = T*;
 
 // Used to initialize avifROData/avifRWData on the stack.
 #define AVIF_DATA_EMPTY { NULL, 0 }
+"#;
+
+// cbindgen puts the trailer after the include guard, so we need to re-include the include guard
+// here.
+#[cfg(feature = "capi")]
+const CXX_WRAPPERS: &str = r#"
+#ifndef AVIF_H_CXX
+#define AVIF_H_CXX
+
+#if !defined(__cplusplus)
+#error "This a C++ only header."
+#endif
+
+#include <memory>
+
+namespace avif
+{
+
+// Struct to call the destroy functions in a unique_ptr.
+struct UniquePtrDeleter
+{
+    void operator()(avifEncoder * encoder) const { avifEncoderDestroy(encoder); }
+    void operator()(avifDecoder * decoder) const { avifDecoderDestroy(decoder); }
+    void operator()(avifImage * image) const { avifImageDestroy(image); }
+    void operator()(avifGainMap * gainMap) const { avifGainMapDestroy(gainMap); }
+};
+
+// Use these unique_ptr to ensure the structs are automatically destroyed.
+using EncoderPtr = std::unique_ptr<avifEncoder, UniquePtrDeleter>;
+using DecoderPtr = std::unique_ptr<avifDecoder, UniquePtrDeleter>;
+using ImagePtr = std::unique_ptr<avifImage, UniquePtrDeleter>;
+using GainMapPtr = std::unique_ptr<avifGainMap, UniquePtrDeleter>;
+
+}
+
+#endif // AVIF_H_CXX
 "#;
 
 fn main() {
@@ -180,6 +212,7 @@ fn main() {
         // * No namespace.
         // * All functions are #define'd without the "crabby_" prefix.
         // * All constants are #define'd without the "CRABBY_" prefix.
+        // * C++ unique_ptr wrappers (to provide compatibility for avif_cxx.h).
         config.namespace = None;
         config.after_includes = Some(FORWARD_DECLS_NO_NAMESPACE.to_string() + AFTER_INCLUDES);
 
@@ -204,6 +237,8 @@ fn main() {
             .as_mut()
             .unwrap()
             .push_str(&constant_redefinitions);
+
+        config.trailer = Some(CXX_WRAPPERS.to_string());
 
         let header_file = PathBuf::from(crate_path).join("include/avif/avif_compat.h");
         cbindgen::Builder::new()

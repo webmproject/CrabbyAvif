@@ -8,7 +8,6 @@
 #include <ostream>
 #include <new>
 
-
 namespace crabbyavif {
 struct avifImage;
 struct avifIO;
