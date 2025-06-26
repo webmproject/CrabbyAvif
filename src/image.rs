@@ -313,7 +313,7 @@ impl Image {
         Ok(&mut self.row16_mut(plane, row)?[0..width])
     }
 
-    pub(crate) fn row_generic(&self, plane: Plane, row: u32) -> AvifResult<PlaneRow> {
+    pub(crate) fn row_generic<'a>(&'a self, plane: Plane, row: u32) -> AvifResult<PlaneRow<'a>> {
         Ok(if self.depth == 8 {
             PlaneRow::Depth8(self.row(plane, row)?)
         } else {
