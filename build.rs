@@ -102,47 +102,34 @@ const LIBAVIF_COMPAT_CONSTANTS: &[&str] = &[
     "AVIF_MAX_AV1_LAYER_COUNT",
 ];
 
-// In C++ mode, cbindgen does not use the struct prefix for structs. We need this so that we can
-// have circular struct dependencies that use a pointer. So forward declare those structs which
-// have a circular dependency.
-#[cfg(feature = "capi")]
-const FORWARD_DECLS: &str = r#"
-
-namespace crabbyavif {
-struct avifImage;
-struct avifIO;
-
-constexpr static uint16_t AVIF_COLOR_PRIMARIES_BT709 = 1;
-constexpr static uint16_t AVIF_COLOR_PRIMARIES_IEC61966_2_4 = 1;
-constexpr static uint16_t AVIF_COLOR_PRIMARIES_BT2100 = 9;
-constexpr static uint16_t AVIF_COLOR_PRIMARIES_DCI_P3 = 12;
-constexpr static uint16_t AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084 = 16;
-}
-"#;
-
-#[cfg(feature = "capi")]
-const FORWARD_DECLS_NO_NAMESPACE: &str = r#"
-template <typename T>
-using Box = T*;
-
-struct avifImage;
-struct avifIO;
-
-// In the libavif drop-in header, define them as macros to avoid unnecessary cast warnings.
-#define AVIF_COLOR_PRIMARIES_BT709 AVIF_COLOR_PRIMARIES_SRGB
-#define AVIF_COLOR_PRIMARIES_IEC61966_2_4 AVIF_COLOR_PRIMARIES_SRGB
-#define AVIF_COLOR_PRIMARIES_BT2100 AVIF_COLOR_PRIMARIES_BT2020
-#define AVIF_COLOR_PRIMARIES_DCI_P3 AVIF_COLOR_PRIMARIES_SMPTE432
-#define AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084 AVIF_TRANSFER_CHARACTERISTICS_PQ
-"#;
-
-// In C++ mode, cbindgen balks on use of "Box" objects without this. This workaround of aliasing
-// Box to T* comes from
-// https://github.com/mozilla/cbindgen/blob/f1d5801d3b299fa2e87d176f03b605532f931cb6/tests/rust/box.toml.
+// Some workarounds for cbindgen's potential limitations/bugs:
+// 1) In C++ mode, cbindgen balks on use of "Box" objects without this. This
+//    workaround of aliasing Box to T* comes from
+//    https://github.com/mozilla/cbindgen/blob/f1d5801d3b299fa2e87d176f03b605532f931cb6/tests/rust/box.toml.
+// 2) In C++ mode, cbindgen does not use the struct prefix for structs.  We need
+//    this so that we can have circular struct dependencies that use a pointer.
+//    So forward declare those structs which have a circular dependency.
 #[cfg(feature = "capi")]
 const AFTER_INCLUDES: &str = r#"
 template <typename T>
 using Box = T*;
+
+namespace crabbyavif {
+struct avifImage;
+struct avifIO;
+}
+
+// Used to initialize avifROData/avifRWData on the stack.
+#define AVIF_DATA_EMPTY { NULL, 0 }
+"#;
+
+#[cfg(feature = "capi")]
+const AFTER_INCLUDES_NO_NAMESPACE: &str = r#"
+template <typename T>
+using Box = T*;
+
+struct avifImage;
+struct avifIO;
 
 // Used to initialize avifROData/avifRWData on the stack.
 #define AVIF_DATA_EMPTY { NULL, 0 }
@@ -166,7 +153,7 @@ fn main() {
 
         // Generate the C header.
         let mut config = cbindgen::Config::from_root_or_default(crate_path);
-        config.after_includes = Some(FORWARD_DECLS.to_string() + AFTER_INCLUDES);
+        config.after_includes = Some(AFTER_INCLUDES.to_string());
         let header_file = PathBuf::from(crate_path).join("include/avif/avif.h");
         cbindgen::Builder::new()
             .with_crate(crate_path)
@@ -181,7 +168,7 @@ fn main() {
         // * All functions are #define'd without the "crabby_" prefix.
         // * All constants are #define'd without the "CRABBY_" prefix.
         config.namespace = None;
-        config.after_includes = Some(FORWARD_DECLS_NO_NAMESPACE.to_string() + AFTER_INCLUDES);
+        config.after_includes = Some(AFTER_INCLUDES_NO_NAMESPACE.to_string());
 
         let function_redefinitions: String = LIBAVIF_COMPAT_FUNCTIONS
             .iter()

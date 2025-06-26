@@ -514,6 +514,12 @@ pub const AVIF_TRANSFORM_IROT: u32 = 1 << 2;
 pub const AVIF_TRANSFORM_IMIR: u32 = 1 << 3;
 pub type avifTransformFlags = u32;
 
+pub const AVIF_COLOR_PRIMARIES_BT709: u16 = 1;
+pub const AVIF_COLOR_PRIMARIES_IEC61966_2_4: u16 = 1;
+pub const AVIF_COLOR_PRIMARIES_BT2100: u16 = 9;
+pub const AVIF_COLOR_PRIMARIES_DCI_P3: u16 = 12;
+pub const AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084: u16 = 16;
+
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifAlloc(size: usize) -> *mut c_void {
     let mut data: Vec<u8> = Vec::new();
