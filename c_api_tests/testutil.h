@@ -19,7 +19,10 @@
 #include <memory>
 #include <vector>
 
-#include "avif/avif_compat.h"
+#include "avif/avif.h"
+#include "avif/libavif_compat.h"
+
+using namespace crabbyavif;
 
 // Used instead of CHECK if needing to return a specific error on failure,
 // instead of AVIF_FALSE

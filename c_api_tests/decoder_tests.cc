@@ -11,7 +11,7 @@
 #include <tuple>
 #include <vector>
 
-#include "avif/avif_compat.h"
+#include "avif/avif.h"
 #include "gtest/gtest.h"
 #include "testutil.h"
 
