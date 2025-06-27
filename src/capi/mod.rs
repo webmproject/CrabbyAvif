@@ -34,6 +34,7 @@ macro_rules! deref_const {
         // The extra curly braces here is necessary to make this whole macro into a single
         // expression.
         assert!(!$ptr.is_null());
+        // SAFETY: The pointer is guaranteed to be valid and non-null.
         unsafe { &*($ptr) }
     }};
 }
@@ -44,6 +45,7 @@ macro_rules! deref_mut {
         // The extra curly braces here is necessary to make this whole macro into a single
         // expression.
         assert!(!$ptr.is_null());
+        // SAFETY: The pointer is guaranteed to be valid and non-null.
         unsafe { &mut *($ptr) }
     }};
 }
