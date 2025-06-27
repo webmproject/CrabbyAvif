@@ -104,10 +104,10 @@ std::vector<uint8_t> read_file(const char* file_name) {
   return data;
 }
 
-avif::ImagePtr CreateImage(int width, int height, int depth,
-                           avifPixelFormat yuv_format, avifPlanesFlags planes,
-                           avifRange yuv_range) {
-  avif::ImagePtr image(avifImageCreate(width, height, depth, yuv_format));
+crabbyavif::ImagePtr CreateImage(int width, int height, int depth,
+                                 avifPixelFormat yuv_format,
+                                 avifPlanesFlags planes, avifRange yuv_range) {
+  crabbyavif::ImagePtr image(avifImageCreate(width, height, depth, yuv_format));
   if (!image) {
     return nullptr;
   }
@@ -366,7 +366,7 @@ avifResult MergeGridFromRawPointers(int grid_cols, int grid_rows,
   const uint32_t grid_height =
       (grid_rows - 1) * tile_height + cells.back()->height;
 
-  avif::ImagePtr view(avifImageCreateEmpty());
+  crabbyavif::ImagePtr view(avifImageCreateEmpty());
   AVIF_CHECKERR(view, AVIF_RESULT_OUT_OF_MEMORY);
 
   avifCropRect rect = {};
@@ -391,7 +391,7 @@ avifResult MergeGridFromRawPointers(int grid_cols, int grid_rows,
 }
 
 avifResult MergeGrid(int grid_cols, int grid_rows,
-                     const std::vector<avif::ImagePtr>& cells,
+                     const std::vector<crabbyavif::ImagePtr>& cells,
                      avifImage* merged) {
   std::vector<const avifImage*> ptrs(cells.size());
   for (size_t i = 0; i < cells.size(); ++i) {

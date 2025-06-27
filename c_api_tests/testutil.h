@@ -16,7 +16,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <vector>
 
 #include "avif/avif.h"
@@ -44,17 +43,6 @@ using namespace crabbyavif;
 
 namespace avif {
 
-// Use these unique_ptr wrappers/class wrappers for automatic memory management.
-struct UniquePtrDeleter {
-  void operator()(avifDecoder* decoder) const { avifDecoderDestroy(decoder); }
-  void operator()(avifEncoder* encoder) const { avifEncoderDestroy(encoder); }
-  void operator()(avifImage* image) const { avifImageDestroy(image); }
-};
-
-using DecoderPtr = std::unique_ptr<avifDecoder, UniquePtrDeleter>;
-using EncoderPtr = std::unique_ptr<avifEncoder, UniquePtrDeleter>;
-using ImagePtr = std::unique_ptr<avifImage, UniquePtrDeleter>;
-
 class AvifRwData : public avifRWData {
  public:
   AvifRwData() : avifRWData{nullptr, 0} {}
@@ -77,9 +65,9 @@ inline bool Av1DecoderAvailable() { return true; }
 
 std::vector<uint8_t> read_file(const char* file_name);
 
-avif::ImagePtr CreateImage(int width, int height, int depth,
-                           avifPixelFormat yuv_format, avifPlanesFlags planes,
-                           avifRange yuv_range);
+crabbyavif::ImagePtr CreateImage(int width, int height, int depth,
+                                 avifPixelFormat yuv_format,
+                                 avifPlanesFlags planes, avifRange yuv_range);
 
 void FillImageGradient(avifImage* image, int offset);
 
@@ -99,7 +87,7 @@ avifResult MergeGridFromRawPointers(int grid_cols, int grid_rows,
                                     avifImage* merged);
 
 avifResult MergeGrid(int grid_cols, int grid_rows,
-                     const std::vector<avif::ImagePtr>& cells,
+                     const std::vector<crabbyavif::ImagePtr>& cells,
                      avifImage* merged);
 
 void FillImageChannel(avifRGBImage* image, uint32_t channel_offset,
