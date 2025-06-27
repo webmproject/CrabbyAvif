@@ -334,11 +334,15 @@ impl avifImage {
     }
 }
 
+/// SAFETY:
+/// Used by the C API to create an avifImage object with default values.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageCreateEmpty() -> *mut avifImage {
     Box::into_raw(Box::<avifImage>::default())
 }
 
+/// SAFETY:
+/// Used by the C API to create an avifImage object with the given parameters.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageCreate(
     width: u32,
@@ -383,12 +387,19 @@ fn copy_plane_helper(
     }
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if dstImage is not null, it has to point to a valid avifImage object.
+/// - if srcImage is not null, it has to point to a valid avifImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageCopy(
     dstImage: *mut avifImage,
     srcImage: *const avifImage,
     planes: avifPlanesFlags,
 ) -> avifResult {
+    check_pointer!(dstImage);
+    check_pointer!(srcImage);
+    // SAFETY: Pre-conditions are met to call this function.
     unsafe {
         crabby_avifImageFreePlanes(dstImage, avifPlanesFlag::AvifPlanesAll as u32);
     }
@@ -410,14 +421,17 @@ pub unsafe extern "C" fn crabby_avifImageCopy(
     dst.clap = src.clap;
     dst.irot = src.irot;
     dst.imir = src.imir;
+    // SAFETY: Pre-conditions are met to call this function.
     let res = unsafe { crabby_avifRWDataSet(&mut dst.icc, src.icc.data, src.icc.size) };
     if res != avifResult::Ok {
         return res;
     }
+    // SAFETY: Pre-conditions are met to call this function.
     let res = unsafe { crabby_avifRWDataSet(&mut dst.exif, src.exif.data, src.exif.size) };
     if res != avifResult::Ok {
         return res;
     }
+    // SAFETY: Pre-conditions are met to call this function.
     let res = unsafe { crabby_avifRWDataSet(&mut dst.xmp, src.xmp.data, src.xmp.size) };
     if res != avifResult::Ok {
         return res;
@@ -428,15 +442,18 @@ pub unsafe extern "C" fn crabby_avifImageCopy(
             if src.yuvPlanes[plane].is_null() || src.yuvRowBytes[plane] == 0 {
                 continue;
             }
+            // SAFETY: Pre-conditions are met to call this function.
             let plane_height = usize_from_u32_or_fail!(unsafe {
                 crabby_avifImagePlaneHeight(srcImage, plane as i32)
             });
+            // SAFETY: Pre-conditions are met to call this function.
             let plane_width = usize_from_u32_or_fail!(unsafe {
                 crabby_avifImagePlaneWidth(srcImage, plane as i32)
             });
             let alloc_plane_height = round2_usize(plane_height);
             let alloc_plane_width = round2_usize(plane_width);
             let plane_size = alloc_plane_width * alloc_plane_height * pixel_size;
+            // SAFETY: Pre-conditions are met to call this function.
             dst.yuvPlanes[plane] = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
             if dst.yuvPlanes[plane].is_null() {
                 return avifResult::OutOfMemory;
@@ -460,6 +477,7 @@ pub unsafe extern "C" fn crabby_avifImageCopy(
         let alloc_plane_height = round2_usize(plane_height);
         let alloc_plane_width = round2_usize(plane_width);
         let plane_size = alloc_plane_width * alloc_plane_height * pixel_size;
+        // SAFETY: Pre-conditions are met to call this function.
         dst.alphaPlane = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
         if dst.alphaPlane.is_null() {
             return avifResult::OutOfMemory;
@@ -501,6 +519,7 @@ fn avif_image_allocate_planes_helper(
         image.imageOwnsYUVPlanes = AVIF_TRUE;
         if image.yuvPlanes[0].is_null() {
             image.yuvRowBytes[0] = u32_from_usize(y_row_bytes)?;
+            // SAFETY: Pre-conditions are met to call this function.
             image.yuvPlanes[0] = unsafe { crabby_avifAlloc(y_size) as *mut u8 };
             if image.yuvPlanes[0].is_null() {
                 return Err(AvifError::OutOfMemory);
@@ -525,6 +544,7 @@ fn avif_image_allocate_planes_helper(
                     continue;
                 }
                 image.yuvRowBytes[plane] = u32_from_usize(uv_row_bytes)?;
+                // SAFETY: Pre-conditions are met to call this function.
                 image.yuvPlanes[plane] = unsafe { crabby_avifAlloc(uv_size) as *mut u8 };
                 if image.yuvPlanes[plane].is_null() {
                     return Err(AvifError::OutOfMemory);
@@ -535,6 +555,7 @@ fn avif_image_allocate_planes_helper(
     if (planes & 2) != 0 {
         image.imageOwnsAlphaPlane = AVIF_TRUE;
         image.alphaRowBytes = u32_from_usize(y_row_bytes)?;
+        // SAFETY: Pre-conditions are met to call this function.
         image.alphaPlane = unsafe { crabby_avifAlloc(y_size) as *mut u8 };
         if image.alphaPlane.is_null() {
             return Err(AvifError::OutOfMemory);
@@ -543,23 +564,32 @@ fn avif_image_allocate_planes_helper(
     Ok(())
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageAllocatePlanes(
     image: *mut avifImage,
     planes: avifPlanesFlags,
 ) -> avifResult {
+    check_pointer!(image);
     avif_image_allocate_planes_helper(deref_mut!(image), planes).into()
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageFreePlanes(
     image: *mut avifImage,
     planes: avifPlanesFlags,
 ) {
+    check_pointer_or_return!(image);
     let image = deref_mut!(image);
     if (planes & 1) != 0 {
         for plane in 0usize..3 {
             if image.imageOwnsYUVPlanes == AVIF_TRUE {
+                // SAFETY: Pre-conditions are met to call this function.
                 unsafe {
                     crabby_avifFree(image.yuvPlanes[plane] as *mut c_void);
                 }
@@ -571,6 +601,7 @@ pub unsafe extern "C" fn crabby_avifImageFreePlanes(
     }
     if (planes & 2) != 0 {
         if image.imageOwnsAlphaPlane == AVIF_TRUE {
+            // SAFETY: Pre-conditions are met to call this function.
             unsafe {
                 crabby_avifFree(image.alphaPlane as *mut c_void);
             }
@@ -581,8 +612,15 @@ pub unsafe extern "C" fn crabby_avifImageFreePlanes(
     }
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageDestroy(image: *mut avifImage) {
+    check_pointer_or_return!(image);
+    // SAFETY: The image dereferences are valid because of the function precondition. The pointer
+    // is also guaranteed to be not null. All the other unsafe function calls meet the
+    // pre-conditions.
     unsafe {
         if !(*image).gainMap.is_null() {
             crabby_avifGainMapDestroy((*image).gainMap);
@@ -595,17 +633,26 @@ pub unsafe extern "C" fn crabby_avifImageDestroy(image: *mut avifImage) {
     }
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageUsesU16(image: *const avifImage) -> avifBool {
     to_avifBool(!image.is_null() && deref_const!(image).depth > 8)
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageIsOpaque(image: *const avifImage) -> avifBool {
     // TODO: Check for pixel level opacity as well.
     to_avifBool(!image.is_null() && deref_const!(image).alphaPlane.is_null())
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImagePlane(image: *const avifImage, channel: c_int) -> *mut u8 {
     if image.is_null() {
@@ -618,6 +665,9 @@ pub unsafe extern "C" fn crabby_avifImagePlane(image: *const avifImage, channel:
     }
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImagePlaneRowBytes(
     image: *const avifImage,
@@ -633,6 +683,9 @@ pub unsafe extern "C" fn crabby_avifImagePlaneRowBytes(
     }
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImagePlaneWidth(
     image: *const avifImage,
@@ -672,6 +725,9 @@ pub unsafe extern "C" fn crabby_avifImagePlaneWidth(
     }
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImagePlaneHeight(
     image: *const avifImage,
@@ -702,12 +758,20 @@ pub unsafe extern "C" fn crabby_avifImagePlaneHeight(
     }
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if dstImage is not null, it has to point to a valid avifImage object.
+/// - if srcImage is not null, it has to point to a valid avifImage object.
+/// - if rect is not null, it has to point to a valid avifCropRect object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageSetViewRect(
     dstImage: *mut avifImage,
     srcImage: *const avifImage,
     rect: *const avifCropRect,
 ) -> avifResult {
+    check_pointer!(dstImage);
+    check_pointer!(srcImage);
+    check_pointer!(rect);
     let dst = deref_mut!(dstImage);
     let src = deref_const!(srcImage);
     let rect = deref_const!(rect);
@@ -757,6 +821,8 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
             Ok(x) => x,
             _ => return avifResult::InvalidArgument,
         };
+        // SAFETY: Based on the offset computation above, it is guaranteed to be a valid pointer
+        // that is within the plane buffer.
         dst.yuvPlanes[plane] = unsafe { src.yuvPlanes[plane].offset(offset) };
         dst.yuvRowBytes[plane] = src.yuvRowBytes[plane];
     }
@@ -765,12 +831,18 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
             Ok(x) => x,
             _ => return avifResult::InvalidArgument,
         };
+        // SAFETY: Based on the offset computation above, it is guaranteed to be a valid pointer
+        // that is within the plane buffer.
         dst.alphaPlane = unsafe { src.alphaPlane.offset(offset) };
         dst.alphaRowBytes = src.alphaRowBytes;
     }
     avifResult::Ok
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
+/// - if exif is not null, it has to point to a valid buffer of size exifSize bytes.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageSetMetadataExif(
     image: *mut avifImage,
@@ -782,9 +854,14 @@ pub unsafe extern "C" fn crabby_avifImageSetMetadataExif(
         return avifResult::Ok;
     }
     let image = deref_mut!(image);
+    // SAFETY: Pre-conditions are met to call this function.
     unsafe { crabby_avifRWDataSet(&mut image.exif, exif, exifSize) }
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
+/// - if xmp is not null, it has to point to a valid buffer of size xmpSize bytes.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageSetMetadataXMP(
     image: *mut avifImage,
@@ -796,9 +873,14 @@ pub unsafe extern "C" fn crabby_avifImageSetMetadataXMP(
         return avifResult::Ok;
     }
     let image = deref_mut!(image);
+    // SAFETY: Pre-conditions are met to call this function.
     unsafe { crabby_avifRWDataSet(&mut image.xmp, xmp, xmpSize) }
 }
 
+/// SAFETY:
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
+/// - if icc is not null, it has to point to a valid buffer of size iccSize bytes.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageSetProfileICC(
     image: *mut avifImage,
@@ -810,5 +892,6 @@ pub unsafe extern "C" fn crabby_avifImageSetProfileICC(
         return avifResult::Ok;
     }
     let image = deref_mut!(image);
+    // SAFETY: Pre-conditions are met to call this function.
     unsafe { crabby_avifRWDataSet(&mut image.icc, icc, iccSize) }
 }
