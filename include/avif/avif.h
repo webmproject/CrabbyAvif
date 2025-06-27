@@ -10,14 +10,13 @@
 
 template <typename T>
 using Box = T*;
-
 namespace crabbyavif {
 struct avifImage;
 struct avifIO;
-}
 
 // Used to initialize avifROData/avifRWData on the stack.
 #define AVIF_DATA_EMPTY { NULL, 0 }
+}
 
 
 namespace crabbyavif {
