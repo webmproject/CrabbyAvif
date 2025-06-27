@@ -235,16 +235,14 @@ impl Reader for Y4MReader {
             let plane_data = image.plane_data(plane).unwrap();
             for y in 0..plane_data.height {
                 if self.depth == 8 {
-                    let row = image.row_mut(plane, y)?;
-                    let row_slice = &mut row[..plane_data.width as usize];
+                    let row = image.row_exact_mut(plane, y)?;
                     reader
-                        .read_exact(row_slice)
+                        .read_exact(row)
                         .or(Err(AvifError::UnknownError("".into())))?;
                 } else {
-                    let row = image.row16_mut(plane, y)?;
-                    let row_slice = &mut row[..plane_data.width as usize];
+                    let row = image.row16_exact_mut(plane, y)?;
                     let mut pixel_bytes: [u8; 2] = [0, 0];
-                    for pixel in row_slice {
+                    for pixel in row {
                         reader
                             .read_exact(&mut pixel_bytes)
                             .or(Err(AvifError::UnknownError("".into())))?;

@@ -103,7 +103,7 @@ pub fn generate_gradient_image(
         let max_xy_sum = plane_data.width + plane_data.height - 2;
         for y in 0..plane_data.height {
             if image.depth == 8 {
-                let row = image.row_mut(plane, y)?;
+                let row = image.row_exact_mut(plane, y)?;
                 for x in 0..plane_data.width {
                     let value = (x + y) % (max_xy_sum + 1);
                     row[x as usize] = (value * 255 / std::cmp::max(1, max_xy_sum)) as u8;
@@ -114,7 +114,7 @@ pub fn generate_gradient_image(
                 }
             } else {
                 let max_channel = image.max_channel() as u32;
-                let row = image.row16_mut(plane, y)?;
+                let row = image.row16_exact_mut(plane, y)?;
                 for x in 0..plane_data.width {
                     let value = (x + y) % (max_xy_sum + 1);
                     row[x as usize] = (value * max_channel / std::cmp::max(1, max_xy_sum)) as u16;
@@ -206,11 +206,11 @@ pub fn fill_plane(image: &mut Image, plane: Plane, value: u16) -> AvifResult<()>
     let plane_data = image.plane_data(plane).ok_or(AvifError::NoContent)?;
     for y in 0..plane_data.height {
         if image.depth == 8 {
-            for pixel in &mut image.row_mut(Plane::A, y)?[..plane_data.width as usize] {
+            for pixel in image.row_exact_mut(Plane::A, y)? {
                 *pixel = value as u8;
             }
         } else {
-            for pixel in &mut image.row16_mut(Plane::A, y)?[..plane_data.width as usize] {
+            for pixel in image.row16_exact_mut(Plane::A, y)? {
                 *pixel = value;
             }
         }

@@ -674,14 +674,14 @@ impl Image {
             let opaque_value = self.max_channel();
             if self.depth == 8 {
                 for y in 0..plane_data.height {
-                    let row = &self.row(Plane::A, y).unwrap()[..plane_data.width as usize];
+                    let row = self.row_exact(Plane::A, y).unwrap();
                     if !row.iter().all(|pixel| *pixel == opaque_value as u8) {
                         return false;
                     }
                 }
             } else {
                 for y in 0..plane_data.height {
-                    let row = &self.row16(Plane::A, y).unwrap()[..plane_data.width as usize];
+                    let row = self.row16_exact(Plane::A, y).unwrap();
                     if !row.iter().all(|pixel| *pixel == opaque_value) {
                         return false;
                     }
