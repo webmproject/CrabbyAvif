@@ -139,7 +139,7 @@ impl avifEncoder {
             // Push any existing codec specific options.
             for (key, value) in self.codec_specific_options.iter() {
                 self.rust_encoder.set_codec_specific_option(
-                    key.0.clone(),
+                    key.0,
                     key.1.to_string(),
                     value.to_string(),
                 );
