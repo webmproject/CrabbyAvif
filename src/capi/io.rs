@@ -74,7 +74,7 @@ impl From<&avifRWData> for Vec<u8> {
     }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if raw is not null, it has to point to a valid avifRWData object.
 #[no_mangle]
@@ -107,7 +107,7 @@ pub unsafe extern "C" fn crabby_avifRWDataRealloc(
     avifResult::Ok
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if raw is not null, it has to point to a valid avifRWData object.
 /// - if data is not null, it has to point to a valid buffer of size bytes.
@@ -138,7 +138,7 @@ pub unsafe extern "C" fn crabby_avifRWDataSet(
     avifResult::Ok
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if raw is not null, it has to point to a valid avifRWData object.
 #[no_mangle]
@@ -241,11 +241,12 @@ pub struct avifCIOWrapper {
     buf: Vec<u8>,
 }
 
-/// SAFETY: Unused C API function.
+/// # Safety
+/// Unused C API function.
 #[no_mangle]
 unsafe extern "C" fn cioDestroy(_io: *mut avifIO) {}
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if io is not null, it has to point to a valid avifIO object.
 /// - if out is not null, it has to point to a valid avifROData object.
@@ -280,7 +281,8 @@ unsafe extern "C" fn cioRead(
     avifResult::Ok
 }
 
-/// SAFETY: Unused C API function.
+/// # Safety
+/// Unused C API function.
 #[no_mangle]
 unsafe extern "C" fn cioWrite(
     _io: *mut avifIO,
@@ -292,7 +294,7 @@ unsafe extern "C" fn cioWrite(
     avifResult::Ok
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if data is not null, it has to be a valid buffer of size bytes.
 #[no_mangle]
@@ -319,7 +321,7 @@ pub unsafe extern "C" fn crabby_avifIOCreateMemoryReader(
     Box::into_raw(io)
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if filename is not null, it has to be a valid C-style string.
 #[no_mangle]
@@ -348,7 +350,7 @@ pub unsafe extern "C" fn crabby_avifIOCreateFileReader(filename: *const c_char) 
     Box::into_raw(io)
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if io is not null, it has to point to a valid avifIO object.
 #[no_mangle]

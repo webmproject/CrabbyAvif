@@ -291,7 +291,7 @@ impl avifCodecChoice {
     }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if name is not null, it has to be a valid C-style string.
 #[no_mangle]
@@ -307,7 +307,8 @@ pub unsafe extern "C" fn crabby_avifCodecChoiceFromName(name: *const c_char) -> 
     avifCodecChoice::from_name(name.unwrap())
 }
 
-/// SAFETY: C API function that does not do any unsafe operations.
+/// # Safety
+/// C API function that does not do any unsafe operations.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifCodecName(
     _choice: avifCodecChoice,
@@ -324,7 +325,8 @@ pub unsafe extern "C" fn crabby_avifCodecName(
     .as_ptr()
 }
 
-/// SAFETY: C API function that does not do any unsafe operations.
+/// # Safety
+/// C API function that does not do any unsafe operations.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifPixelFormatToString(format: PixelFormat) -> *const c_char {
     CStr::from_bytes_with_nul(match format {
@@ -384,7 +386,8 @@ const RESULT_TO_STRING: &[&str] = &[
     "Invalid tone mapped image item\0",
 ];
 
-/// SAFETY: C API function.
+/// # Safety
+/// C API function.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifResultToString(res: avifResult) -> *const c_char {
     // SAFETY: Constructs a CStr from a static list of strings above.
@@ -396,7 +399,7 @@ pub unsafe extern "C" fn crabby_avifResultToString(res: avifResult) -> *const c_
 
 pub type avifCropRect = CropRect;
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if cropRect is not null, it has to point to a valid avifCropRect object.
 /// - if clap is not null, it has to point to a valid avifCleanApertureBox object.
@@ -422,7 +425,7 @@ pub unsafe extern "C" fn crabby_avifCropRectConvertCleanApertureBox(
     AVIF_TRUE
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if cropRect is not null, it has to point to a valid avifCropRect object.
 /// - if clap is not null, it has to point to a valid avifCleanApertureBox object.
@@ -485,7 +488,7 @@ pub struct avifPixelFormatInfo {
     chromaShiftY: c_int,
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if info is not null, it has to point to a valid avifPixelFormatInfo object.
 #[no_mangle]
@@ -520,7 +523,7 @@ pub unsafe extern "C" fn crabby_avifGetPixelFormatInfo(
     }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if diag is not null, it has to point to a valid avifDiagnostics object.
 #[no_mangle]
@@ -549,7 +552,8 @@ pub const AVIF_COLOR_PRIMARIES_BT2100: u16 = 9;
 pub const AVIF_COLOR_PRIMARIES_DCI_P3: u16 = 12;
 pub const AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084: u16 = 16;
 
-/// SAFETY: C API function that does not perform any unsafe operation.
+/// # Safety
+/// C API function that does not perform any unsafe operation.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifAlloc(size: usize) -> *mut c_void {
     let mut data: Vec<u8> = Vec::new();
@@ -563,6 +567,7 @@ pub unsafe extern "C" fn crabby_avifAlloc(size: usize) -> *mut c_void {
     ptr as *mut c_void
 }
 
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if p is not null, it has to point to a buffer allocated by crabby_avifAlloc.
 #[no_mangle]

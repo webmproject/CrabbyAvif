@@ -121,12 +121,14 @@ impl From<&avifGainMap> for GainMap {
     }
 }
 
-/// SAFETY: C API function that does not perform any unsafe operation.
+/// # Safety
+/// C API function that does not perform any unsafe operation.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifGainMapCreate() -> *mut avifGainMap {
     Box::into_raw(Box::<avifGainMap>::default())
 }
 
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if gainmap is not null, it has to point to a buffer allocated by crabby_avifGainMapCreate.
 #[no_mangle]

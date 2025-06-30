@@ -154,14 +154,14 @@ fn rust_encoder<'a>(encoder: *mut avifEncoder) -> &'a mut Encoder {
     &mut deref_mut!(encoder).rust_encoder
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API to create an avifEncoder object with default values.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifEncoderCreate() -> *mut avifEncoder {
     Box::into_raw(Box::<avifEncoder>::default())
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if encoder is not null, it has to point to a valid avifEncoder object.
 #[no_mangle]
@@ -171,7 +171,7 @@ pub unsafe extern "C" fn crabby_avifEncoderDestroy(encoder: *mut avifEncoder) {
     let _ = unsafe { Box::from_raw(encoder) };
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if encoder is not null, it has to point to a valid avifEncoder object.
 /// - if image is not null, it has to point to a valid avifImage object.
@@ -195,7 +195,7 @@ pub unsafe extern "C" fn crabby_avifEncoderWrite(
     unsafe { crabby_avifEncoderFinish(encoder, output) }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if encoder is not null, it has to point to a valid avifEncoder object.
 /// - if image is not null, it has to point to a valid avifImage object.
@@ -229,7 +229,7 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImage(
     res.into()
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if encoder is not null, it has to point to a valid avifEncoder object.
 /// - if cellImages is not null, it has to point to valid array of avifImage objects of size
@@ -293,7 +293,7 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
     res.into()
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if encoder is not null, it has to point to a valid avifEncoder object.
 /// - if output is not null, it has to point to a valid avifRWData object.
@@ -316,7 +316,7 @@ pub unsafe extern "C" fn crabby_avifEncoderFinish(
     }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if encoder is not null, it has to point to a valid avifEncoder object.
 /// - if key is not null, it has to point to a valid C-style string.

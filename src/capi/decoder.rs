@@ -116,14 +116,14 @@ fn rust_decoder_const<'a>(decoder: *const avifDecoder) -> &'a Decoder {
     &deref_const!(decoder).rust_decoder
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API to create an avifDecoder object with default values.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifDecoderCreate() -> *mut avifDecoder {
     Box::into_raw(Box::<avifDecoder>::default())
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 /// - if io is not null, it has to point to a valid avifIO object.
@@ -134,7 +134,7 @@ pub unsafe extern "C" fn crabby_avifDecoderSetIO(decoder: *mut avifDecoder, io: 
     rust_decoder(decoder).set_io(Box::new(avifIOWrapper::create(io)));
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 /// - if filename is not null, it has to point to a valid C-style string.
@@ -151,7 +151,7 @@ pub unsafe extern "C" fn crabby_avifDecoderSetIOFile(
     rust_decoder(decoder).set_io_file(&filename).into()
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 /// - if data is not null, it has to be a valid buffer of size bytes.
@@ -169,7 +169,7 @@ pub unsafe extern "C" fn crabby_avifDecoderSetIOMemory(
     unsafe { rust_decoder(decoder).set_io_raw(data, size) }.into()
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 #[no_mangle]
@@ -266,7 +266,7 @@ fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
     dst.image = (&mut dst.image_object) as *mut avifImage;
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 #[no_mangle]
@@ -283,7 +283,7 @@ pub unsafe extern "C" fn crabby_avifDecoderParse(decoder: *mut avifDecoder) -> a
     avifResult::Ok
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 #[no_mangle]
@@ -312,7 +312,7 @@ pub unsafe extern "C" fn crabby_avifDecoderNextImage(decoder: *mut avifDecoder) 
     res.into()
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 #[no_mangle]
@@ -349,7 +349,7 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImage(
     res.into()
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 /// - if outTiming is not null, it has to point to a valid ImageTiming object.
@@ -368,7 +368,7 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImageTiming(
     image_timing.into()
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 #[no_mangle]
@@ -378,7 +378,7 @@ pub unsafe extern "C" fn crabby_avifDecoderDestroy(decoder: *mut avifDecoder) {
     let _ = unsafe { Box::from_raw(decoder) };
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 /// - if image is not null, it has to point to a valid avifImage object.
@@ -405,7 +405,7 @@ pub unsafe extern "C" fn crabby_avifDecoderRead(
     avifResult::Ok
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 /// - if image is not null, it has to point to a valid avifImage object.
@@ -426,7 +426,7 @@ pub unsafe extern "C" fn crabby_avifDecoderReadMemory(
     unsafe { crabby_avifDecoderRead(decoder, image) }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 /// - if image is not null, it has to point to a valid avifImage object.
@@ -446,7 +446,7 @@ pub unsafe extern "C" fn crabby_avifDecoderReadFile(
     unsafe { crabby_avifDecoderRead(decoder, image) }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 #[no_mangle]
@@ -460,7 +460,7 @@ pub unsafe extern "C" fn crabby_avifDecoderIsKeyframe(
     to_avifBool(rust_decoder_const(decoder).is_keyframe(frameIndex))
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 #[no_mangle]
@@ -474,7 +474,7 @@ pub unsafe extern "C" fn crabby_avifDecoderNearestKeyframe(
     rust_decoder_const(decoder).nearest_keyframe(frameIndex)
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 #[no_mangle]
@@ -488,7 +488,7 @@ pub unsafe extern "C" fn crabby_avifDecoderDecodedRowCount(decoder: *const avifD
 #[allow(non_camel_case_types)]
 pub type avifExtent = Extent;
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 /// - if outExtent is not null, it has to point to a valid avifExtent object.
@@ -508,7 +508,7 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImageMaxExtent(
     avifResult::Ok
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if input is not null, it has to point to a valid avifROData object.
 #[no_mangle]
@@ -526,7 +526,7 @@ pub unsafe extern "C" fn crabby_avifPeekCompatibleFileType(input: *const avifROD
     to_avifBool(Decoder::peek_compatible_file_type(data))
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 #[no_mangle]

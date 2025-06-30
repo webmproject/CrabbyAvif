@@ -334,14 +334,14 @@ impl avifImage {
     }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API to create an avifImage object with default values.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageCreateEmpty() -> *mut avifImage {
     Box::into_raw(Box::<avifImage>::default())
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API to create an avifImage object with the given parameters.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageCreate(
@@ -387,7 +387,7 @@ fn copy_plane_helper(
     }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if dstImage is not null, it has to point to a valid avifImage object.
 /// - if srcImage is not null, it has to point to a valid avifImage object.
@@ -564,7 +564,7 @@ fn avif_image_allocate_planes_helper(
     Ok(())
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
@@ -576,7 +576,7 @@ pub unsafe extern "C" fn crabby_avifImageAllocatePlanes(
     avif_image_allocate_planes_helper(deref_mut!(image), planes).into()
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
@@ -612,7 +612,7 @@ pub unsafe extern "C" fn crabby_avifImageFreePlanes(
     }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
@@ -633,7 +633,7 @@ pub unsafe extern "C" fn crabby_avifImageDestroy(image: *mut avifImage) {
     }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
@@ -641,7 +641,7 @@ pub unsafe extern "C" fn crabby_avifImageUsesU16(image: *const avifImage) -> avi
     to_avifBool(!image.is_null() && deref_const!(image).depth > 8)
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
@@ -650,7 +650,7 @@ pub unsafe extern "C" fn crabby_avifImageIsOpaque(image: *const avifImage) -> av
     to_avifBool(!image.is_null() && deref_const!(image).alphaPlane.is_null())
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
@@ -665,7 +665,7 @@ pub unsafe extern "C" fn crabby_avifImagePlane(image: *const avifImage, channel:
     }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
@@ -683,7 +683,7 @@ pub unsafe extern "C" fn crabby_avifImagePlaneRowBytes(
     }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
@@ -725,7 +725,7 @@ pub unsafe extern "C" fn crabby_avifImagePlaneWidth(
     }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
@@ -758,7 +758,7 @@ pub unsafe extern "C" fn crabby_avifImagePlaneHeight(
     }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if dstImage is not null, it has to point to a valid avifImage object.
 /// - if srcImage is not null, it has to point to a valid avifImage object.
@@ -839,7 +839,7 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
     avifResult::Ok
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if image is not null, it has to point to a valid avifImage object.
 /// - if exif is not null, it has to point to a valid buffer of size exifSize bytes.
@@ -858,7 +858,7 @@ pub unsafe extern "C" fn crabby_avifImageSetMetadataExif(
     unsafe { crabby_avifRWDataSet(&mut image.exif, exif, exifSize) }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if image is not null, it has to point to a valid avifImage object.
 /// - if xmp is not null, it has to point to a valid buffer of size xmpSize bytes.
@@ -877,7 +877,7 @@ pub unsafe extern "C" fn crabby_avifImageSetMetadataXMP(
     unsafe { crabby_avifRWDataSet(&mut image.xmp, xmp, xmpSize) }
 }
 
-/// SAFETY:
+/// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if image is not null, it has to point to a valid avifImage object.
 /// - if icc is not null, it has to point to a valid buffer of size iccSize bytes.
