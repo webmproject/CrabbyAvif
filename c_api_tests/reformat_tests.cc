@@ -777,6 +777,33 @@ INSTANTIATE_TEST_SUITE_P(
         /*min_psnr=*/Values(49.)  // SharpYuv distortion is acceptable.
         ));
 
+TEST(ReformatTest, NullCases) {
+  ImagePtr image(avifImageCreate(kWidth, kHeight, 8, AVIF_PIXEL_FORMAT_YUV444));
+  avifRGBImage rgb;
+
+  avifRGBImageSetDefaults(nullptr, nullptr);
+  avifRGBImageSetDefaults(nullptr, image.get());
+  avifRGBImageSetDefaults(&rgb, nullptr);
+
+  EXPECT_NE(avifImageYUVToRGB(nullptr, nullptr), AVIF_RESULT_OK);
+  EXPECT_NE(avifImageYUVToRGB(image.get(), nullptr), AVIF_RESULT_OK);
+  EXPECT_NE(avifImageYUVToRGB(nullptr, &rgb), AVIF_RESULT_OK);
+
+  EXPECT_NE(avifImageRGBToYUV(nullptr, nullptr), AVIF_RESULT_OK);
+  EXPECT_NE(avifImageRGBToYUV(image.get(), nullptr), AVIF_RESULT_OK);
+  EXPECT_NE(avifImageRGBToYUV(nullptr, &rgb), AVIF_RESULT_OK);
+
+  avifDiagnostics diag;
+  EXPECT_NE(avifImageScale(nullptr, 8, 8, nullptr), AVIF_RESULT_OK);
+  EXPECT_NE(avifImageScale(nullptr, 8, 8, &diag), AVIF_RESULT_OK);
+
+  EXPECT_EQ(avifRGBImagePixelSize(nullptr), 0);
+
+  EXPECT_NE(avifRGBImageAllocatePixels(nullptr), AVIF_RESULT_OK);
+
+  avifRGBImageFreePixels(nullptr);
+}
+
 }  // namespace
 }  // namespace avif
 

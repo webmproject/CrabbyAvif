@@ -907,25 +907,54 @@ avifIO *crabby_avifIOCreateFileReader(const char *filename);
 /// - if io is not null, it has to point to a valid avifIO object.
 void crabby_avifIODestroy(avifIO *io);
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if rgb is not null, it has to point to a valid avifRGBImage object.
+/// - if image is not null, it has to point to a valid avifImage object.
 void crabby_avifRGBImageSetDefaults(avifRGBImage *rgb, const avifImage *image);
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
+/// - if rgb is not null, it has to point to a valid avifRGBImage object.
 avifResult crabby_avifImageYUVToRGB(const avifImage *image, avifRGBImage *rgb);
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
+/// - if rgb is not null, it has to point to a valid avifRGBImage object.
 avifResult crabby_avifImageRGBToYUV(avifImage *image, const avifRGBImage *rgb);
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
+/// - if diag is not null, it has to point to a valid avifDiagnostics object.
 avifResult crabby_avifImageScale(avifImage *image,
                                  uint32_t dstWidth,
                                  uint32_t dstHeight,
                                  avifDiagnostics *_diag);
 
+/// # Safety
+/// C API function that does not do any unsafe operations.
 uint32_t crabby_avifRGBFormatChannelCount(avifRGBFormat format);
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if rgb is not null, it has to point to a valid avifRGBImage object.
 uint32_t crabby_avifRGBImagePixelSize(avifRGBImage *rgb);
 
+/// # Safety
+/// C API function that does not do any unsafe operations.
 avifBool crabby_avifRGBFormatHasAlpha(avifRGBFormat format);
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if rgb is not null, it has to point to a valid avifRGBImage object.
 avifResult crabby_avifRGBImageAllocatePixels(avifRGBImage *rgb);
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if rgb is not null, it has to point to a valid avifRGBImage object.
 void crabby_avifRGBImageFreePixels(avifRGBImage *rgb);
 
 /// # Safety

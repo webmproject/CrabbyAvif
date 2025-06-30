@@ -90,20 +90,32 @@ impl From<&avifRGBImage> for rgb::Image {
     }
 }
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if rgb is not null, it has to point to a valid avifRGBImage object.
+/// - if image is not null, it has to point to a valid avifImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRGBImageSetDefaults(
     rgb: *mut avifRGBImage,
     image: *const avifImage,
 ) {
+    check_pointer_or_return!(rgb);
+    check_pointer_or_return!(image);
     let image: image::Image = deref_const!(image).into();
     *deref_mut!(rgb) = rgb::Image::create_from_yuv(&image).into();
 }
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
+/// - if rgb is not null, it has to point to a valid avifRGBImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageYUVToRGB(
     image: *const avifImage,
     rgb: *mut avifRGBImage,
 ) -> avifResult {
+    check_pointer!(image);
+    check_pointer!(rgb);
     if deref_const!(image).yuvPlanes[0].is_null() {
         return avifResult::Ok;
     }
@@ -112,17 +124,24 @@ pub unsafe extern "C" fn crabby_avifImageYUVToRGB(
     rgb.convert_from_yuv(&image).into()
 }
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
+/// - if rgb is not null, it has to point to a valid avifRGBImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageRGBToYUV(
     image: *mut avifImage,
     rgb: *const avifRGBImage,
 ) -> avifResult {
+    check_pointer!(image);
+    check_pointer!(rgb);
     let rgb: rgb::Image = deref_const!(rgb).into();
     let mut tmp_image: image::Image = deref_const!(image).into();
     let res = rgb.convert_to_yuv(&mut tmp_image);
     if res.is_err() {
         return res.into();
     }
+    // SAFETY: Pre-conditions are met to call these two functions.
     let res = unsafe {
         crabby_avifImageFreePlanes(image, avifPlanesFlag::AvifPlanesAll as _);
         crabby_avifImageAllocatePlanes(
@@ -177,6 +196,7 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
             // when the image object is destroyed.
             if plane == Plane::V && dst.yuvPlanes[2].is_null() {
                 let plane_size = usize_from_u32(plane_data.width * plane_data.height * 2)?;
+                // SAFETY: Pre-conditions are met to call these two functions.
                 dst.yuvPlanes[2] = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
                 if dst.yuvPlanes[2].is_null() {
                     return Err(AvifError::OutOfMemory);
@@ -211,6 +231,10 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
     Ok(())
 }
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if image is not null, it has to point to a valid avifImage object.
+/// - if diag is not null, it has to point to a valid avifDiagnostics object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageScale(
     image: *mut avifImage,
@@ -218,6 +242,7 @@ pub unsafe extern "C" fn crabby_avifImageScale(
     dstHeight: u32,
     _diag: *mut avifDiagnostics,
 ) -> avifResult {
+    check_pointer!(image);
     let dst_image = deref_mut!(image);
     if dstWidth > dst_image.width || dstHeight > dst_image.height {
         // To avoid buffer reallocations, we only support scaling to a smaller size.
@@ -249,27 +274,41 @@ pub unsafe extern "C" fn crabby_avifImageScale(
     CopyPlanes(dst_image, &rust_image).into()
 }
 
+/// # Safety
+/// C API function that does not do any unsafe operations.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRGBFormatChannelCount(format: rgb::Format) -> u32 {
     format.channel_count()
 }
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if rgb is not null, it has to point to a valid avifRGBImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRGBImagePixelSize(rgb: *mut avifRGBImage) -> u32 {
+    if rgb.is_null() {
+        return 0;
+    }
     let rgb = deref_const!(rgb);
     rgb.format.pixel_size(rgb.depth)
 }
 
+/// # Safety
+/// C API function that does not do any unsafe operations.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRGBFormatHasAlpha(format: rgb::Format) -> avifBool {
     format.has_alpha().into()
 }
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if rgb is not null, it has to point to a valid avifRGBImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRGBImageAllocatePixels(rgb: *mut avifRGBImage) -> avifResult {
     if rgb.is_null() {
         return avifResult::InvalidArgument;
     }
+    // SAFETY: Pre-conditions are met to call this function.
     unsafe {
         crabby_avifRGBImageFreePixels(rgb);
     }
@@ -287,6 +326,7 @@ pub unsafe extern "C" fn crabby_avifRGBImageAllocatePixels(rgb: *mut avifRGBImag
         Ok(value) => round2_usize(value),
         Err(_) => return avifResult::InvalidArgument,
     };
+    // SAFETY: Pre-conditions are met to call this function.
     rgb.pixels = unsafe { crabby_avifAlloc(alloc_size) } as *mut _;
     if rgb.pixels.is_null() {
         return avifResult::OutOfMemory;
@@ -295,12 +335,16 @@ pub unsafe extern "C" fn crabby_avifRGBImageAllocatePixels(rgb: *mut avifRGBImag
     avifResult::Ok
 }
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if rgb is not null, it has to point to a valid avifRGBImage object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRGBImageFreePixels(rgb: *mut avifRGBImage) {
     if rgb.is_null() {
         return;
     }
     let rgb = deref_mut!(rgb);
+    // SAFETY: Pre-conditions are met to call this function.
     unsafe {
         crabby_avifFree(rgb.pixels as _);
     }
