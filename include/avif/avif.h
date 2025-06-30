@@ -1,5 +1,5 @@
-#ifndef AVIF_H
-#define AVIF_H
+#ifndef CRABBYAVIF_AVIF_H
+#define CRABBYAVIF_AVIF_H
 
 #include <cstdarg>
 #include <cstddef>
@@ -812,4 +812,27 @@ void crabby_avifFree(void *p);
 
 } // namespace crabbyavif
 
-#endif // AVIF_H
+#endif // CRABBYAVIF_AVIF_H
+
+#ifndef CRABBYAVIF_AVIF_CXX_H
+#define CRABBYAVIF_AVIF_CXX_H
+
+#include <memory>
+
+namespace crabbyavif {
+
+struct UniquePtrDeleter {
+    void operator()(avifEncoder * encoder) const { crabby_avifEncoderDestroy(encoder); }
+    void operator()(avifDecoder * decoder) const { crabby_avifDecoderDestroy(decoder); }
+    void operator()(avifImage * image) const { crabby_avifImageDestroy(image); }
+    void operator()(avifGainMap * gainMap) const { crabby_avifGainMapDestroy(gainMap); }
+};
+
+using EncoderPtr = std::unique_ptr<avifEncoder, UniquePtrDeleter>;
+using DecoderPtr = std::unique_ptr<avifDecoder, UniquePtrDeleter>;
+using ImagePtr = std::unique_ptr<avifImage, UniquePtrDeleter>;
+using GainMapPtr = std::unique_ptr<avifGainMap, UniquePtrDeleter>;
+
+} // namespace crabbyavif
+
+#endif // CRABBYAVIF_AVIF_CXX_H
