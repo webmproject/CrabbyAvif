@@ -219,6 +219,52 @@ TEST(ImageTest, MetadataFunctions) {
   }
 }
 
+TEST(ImageTest, NullCases) {
+  ImagePtr src(avifImageCreateEmpty());
+  ImagePtr dst(avifImageCreateEmpty());
+  // Both dst and src are nullptr.
+  EXPECT_NE(avifImageCopy(nullptr, nullptr, AVIF_PLANES_ALL), AVIF_RESULT_OK);
+  // src is nullptr.
+  EXPECT_NE(avifImageCopy(dst.get(), nullptr, AVIF_PLANES_ALL), AVIF_RESULT_OK);
+  // dst is nullptr.
+  EXPECT_NE(avifImageCopy(nullptr, src.get(), AVIF_PLANES_ALL), AVIF_RESULT_OK);
+
+  EXPECT_NE(avifImageAllocatePlanes(nullptr, AVIF_PLANES_ALL), AVIF_RESULT_OK);
+
+  // This should not crash.
+  avifImageFreePlanes(nullptr, AVIF_PLANES_ALL);
+
+  // This should not crash.
+  avifImageDestroy(nullptr);
+
+  EXPECT_FALSE(avifImageUsesU16(nullptr));
+  EXPECT_FALSE(avifImageIsOpaque(nullptr));
+  EXPECT_EQ(avifImagePlane(nullptr, 0), nullptr);
+  EXPECT_EQ(avifImagePlaneRowBytes(nullptr, 0), 0);
+  EXPECT_EQ(avifImagePlaneWidth(nullptr, 0), 0);
+  EXPECT_EQ(avifImagePlaneHeight(nullptr, 0), 0);
+
+  // Various nullptr combinations for avifImageSetViewRect.
+  EXPECT_NE(avifImageSetViewRect(nullptr, nullptr, nullptr), AVIF_RESULT_OK);
+
+  EXPECT_NE(avifRWDataRealloc(nullptr, 10), AVIF_RESULT_OK);
+
+  avifRWData rw_data;
+  uint8_t raw_data[10] = {0};
+  EXPECT_NE(avifRWDataSet(nullptr, nullptr, 10), AVIF_RESULT_OK);
+  EXPECT_NE(avifRWDataSet(&rw_data, nullptr, 10), AVIF_RESULT_OK);
+  EXPECT_NE(avifRWDataSet(nullptr, raw_data, 10), AVIF_RESULT_OK);
+
+  // This should not crash.
+  avifRWDataFree(nullptr);
+
+  EXPECT_EQ(avifIOCreateMemoryReader(nullptr, 10), nullptr);
+  EXPECT_EQ(avifIOCreateFileReader(nullptr), nullptr);
+
+  // This should not crash.
+  avifIODestroy(nullptr);
+}
+
 }  // namespace
 }  // namespace avif
 

@@ -1063,6 +1063,73 @@ TEST(DecoderTest, PeekCompatibleFileType) {
   EXPECT_EQ(avifPeekCompatibleFileType(&input), AVIF_FALSE);
 }
 
+TEST(DecoderTest, NullCases) {
+  avifIO io;
+  auto decoder = CreateDecoder("clap_irot_imir_non_essential.avif");
+  avifDecoderSetIO(nullptr, &io);
+  avifDecoderSetIO(decoder.get(), nullptr);
+  avifDecoderSetIO(nullptr, nullptr);
+
+  EXPECT_NE(avifDecoderSetIOFile(nullptr, "something.avif"), AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderSetIOFile(decoder.get(), nullptr), AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderSetIOFile(nullptr, nullptr), AVIF_RESULT_OK);
+
+  uint8_t raw_data[10] = {0};
+  EXPECT_NE(avifDecoderSetIOMemory(nullptr, nullptr, 0), AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderSetIOMemory(nullptr, raw_data, 10), AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderSetIOMemory(decoder.get(), nullptr, 0), AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderSetIOMemory(decoder.get(), nullptr, 10), AVIF_RESULT_OK);
+
+  EXPECT_NE(avifDecoderSetSource(nullptr, AVIF_DECODER_SOURCE_AUTO),
+            AVIF_RESULT_OK);
+
+  EXPECT_NE(avifDecoderParse(nullptr), AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderNextImage(nullptr), AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderNthImage(nullptr, 0), AVIF_RESULT_OK);
+
+  avifImageTiming timing;
+  EXPECT_NE(avifDecoderNthImageTiming(nullptr, 0, &timing), AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderNthImageTiming(decoder.get(), 0, nullptr),
+            AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderNthImageTiming(nullptr, 0, nullptr), AVIF_RESULT_OK);
+
+  avifDecoderDestroy(nullptr);
+
+  ImagePtr image(avifImageCreateEmpty());
+  EXPECT_NE(avifDecoderRead(nullptr, nullptr), AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderRead(decoder.get(), nullptr), AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderRead(nullptr, image.get()), AVIF_RESULT_OK);
+
+  EXPECT_NE(avifDecoderReadMemory(nullptr, nullptr, nullptr, 0),
+            AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderReadMemory(decoder.get(), nullptr, nullptr, 0),
+            AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderReadMemory(decoder.get(), image.get(), nullptr, 0),
+            AVIF_RESULT_OK);
+
+  EXPECT_NE(avifDecoderReadFile(nullptr, nullptr, nullptr), AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderReadFile(nullptr, nullptr, "something.avif"),
+            AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderReadFile(decoder.get(), nullptr, nullptr),
+            AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderReadFile(decoder.get(), image.get(), nullptr),
+            AVIF_RESULT_OK);
+
+  EXPECT_NE(avifDecoderIsKeyframe(nullptr, 0), AVIF_TRUE);
+  // The return value does not matter.
+  avifDecoderNearestKeyframe(nullptr, 0);
+  // The return value does not matter.
+  avifDecoderDecodedRowCount(nullptr);
+
+  EXPECT_NE(avifDecoderNthImageMaxExtent(nullptr, 0, nullptr), AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderNthImageMaxExtent(decoder.get(), 0, nullptr),
+            AVIF_RESULT_OK);
+  avifExtent extent;
+  EXPECT_NE(avifDecoderNthImageMaxExtent(nullptr, 0, &extent), AVIF_RESULT_OK);
+
+  EXPECT_NE(avifDecoderReset(nullptr), AVIF_RESULT_OK);
+}
+
 }  // namespace
 }  // namespace avif
 
