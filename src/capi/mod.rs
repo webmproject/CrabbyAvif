@@ -16,17 +16,15 @@
 
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
-#![allow(clippy::missing_safety_doc)]
-#![allow(dead_code)]
 
-mod decoder;
+pub mod decoder;
 #[cfg(feature = "encoder")]
-mod encoder;
-mod gainmap;
-mod image;
-mod io;
-mod reformat;
-mod types;
+pub mod encoder;
+pub mod gainmap;
+pub mod image;
+pub mod io;
+pub mod reformat;
+pub mod types;
 
 #[macro_export]
 macro_rules! deref_const {

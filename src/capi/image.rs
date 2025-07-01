@@ -325,6 +325,8 @@ impl avifImage {
         }
     }
 
+    // This function is not used in all configurations.
+    #[allow(dead_code)]
     pub(crate) fn gainmap(&self) -> Option<GainMap> {
         if self.gainMap.is_null() {
             None
