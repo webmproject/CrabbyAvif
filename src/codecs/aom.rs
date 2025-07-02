@@ -104,6 +104,7 @@ fn aom_scaling_mode(scaling_mode: &ScalingMode) -> AvifResult<aom_scaling_mode_t
 
 macro_rules! codec_control {
     ($self: expr, $key: expr, $value: expr) => {
+        // # Safety: Calling a C function with valid parameters.
         if unsafe { aom_codec_control($self.encoder.unwrap_mut() as *mut _, $key as _, $value) }
             != aom_codec_err_t_AOM_CODEC_OK
         {
@@ -119,6 +120,25 @@ macro_rules! c_str {
     };
 }
 
+fn add_aom_pkt_to_output_samples(
+    pkt: &aom_codec_cx_pkt,
+    output_samples: &mut Vec<Sample>,
+) -> AvifResult<bool> {
+    if pkt.kind != aom_codec_cx_pkt_kind_AOM_CODEC_CX_FRAME_PKT {
+        return Ok(false);
+    }
+    // # Safety: buf and sz are guaranteed to be valid as per libaom API contract. So
+    // it is safe to construct a slice from it.
+    let encoded_data =
+        unsafe { std::slice::from_raw_parts(pkt.data.frame.buf as *const u8, pkt.data.frame.sz) };
+    // # Safety: pkt.data is a union. pkt.kind == AOM_CODEC_CX_FRAME_PKT guarantees
+    // that pkt.data.frame is the active field of the union (per libaom API contract).
+    // So this access is safe.
+    let sync = (unsafe { pkt.data.frame.flags } & AOM_FRAME_IS_KEY) != 0;
+    output_samples.push(Sample::create_from(encoded_data, sync)?);
+    Ok(true)
+}
+
 impl Encoder for Aom {
     fn encode_image(
         &mut self,
@@ -128,6 +148,7 @@ impl Encoder for Aom {
         output_samples: &mut Vec<Sample>,
     ) -> AvifResult<()> {
         if self.encoder.is_none() {
+            // # Safety: Calling a C function.
             let encoder_iface = unsafe { aom_codec_av1_cx() };
             let aom_usage = if config.is_single_image {
                 AOM_USAGE_ALL_INTRA
@@ -137,12 +158,14 @@ impl Encoder for Aom {
                 AOM_USAGE_GOOD_QUALITY
             };
             let mut cfg_uninit: MaybeUninit<aom_codec_enc_cfg> = MaybeUninit::uninit();
+            // # Safety: Calling a C function with valid parameters.
             let err = unsafe {
                 aom_codec_enc_config_default(encoder_iface, cfg_uninit.as_mut_ptr(), aom_usage)
             };
             if err != aom_codec_err_t_AOM_CODEC_OK {
                 return Err(AvifError::UnknownError("".into()));
             }
+            // # Safety: cfg_uninit was initialized in the C function call above.
             let mut aom_config = unsafe { cfg_uninit.assume_init() };
             aom_config.rc_end_usage = match aom_usage {
                 AOM_USAGE_REALTIME => aom_rc_mode_AOM_CBR,
@@ -205,6 +228,7 @@ impl Encoder for Aom {
             }
 
             let mut encoder_uninit: MaybeUninit<aom_codec_ctx_t> = MaybeUninit::uninit();
+            // # Safety: Calling a C function with valid parameters.
             let err = unsafe {
                 aom_codec_enc_init_ver(
                     encoder_uninit.as_mut_ptr(),
@@ -219,6 +243,7 @@ impl Encoder for Aom {
                     "aom_codec_enc_init failed. err: {err}"
                 )));
             }
+            // # Safety: encoder_uninit was initialized in the C function call above.
             self.encoder = Some(unsafe { encoder_uninit.assume_init() });
 
             if aom_config.rc_end_usage == aom_rc_mode_AOM_CQ
@@ -311,6 +336,7 @@ impl Encoder for Aom {
                 }
                 c_str!(key_str, key_str_tmp, key.clone());
                 c_str!(value_str, value_str_tmp, value.clone());
+                // # Safety: Calling a C function with valid parameters.
                 if unsafe {
                     aom_codec_set_option(self.encoder.unwrap_mut() as *mut _, key_str, value_str)
                 } != aom_codec_err_t_AOM_CODEC_OK
@@ -342,6 +368,7 @@ impl Encoder for Aom {
                 {
                     (aom_config.rc_min_quantizer, aom_config.rc_max_quantizer) =
                         config.min_max_quantizers();
+                    // # Safety: Calling a C function with valid parameters.
                     let err = unsafe {
                         aom_codec_enc_config_set(
                             self.encoder.unwrap_mut() as *mut _,
@@ -404,6 +431,8 @@ impl Encoder for Aom {
                 &scaling_mode as *const _
             );
         }
+        // # Safety: Zero initializing a C-struct. This is safe because this is the same usage
+        // pattern as the equivalent C-code. The relevant fields are populated in the lines below.
         let mut aom_image: aom_image_t = unsafe { std::mem::zeroed() };
         aom_image.fmt = aom_format(image, category)?;
         aom_image.bit_depth = if image.depth > 8 { 16 } else { 8 };
@@ -453,6 +482,7 @@ impl Encoder for Aom {
                 | AOM_EFLAG_NO_UPD_GF as i64
                 | AOM_EFLAG_NO_UPD_ARF as i64;
         }
+        // # Safety: Calling a C function with valid parameters.
         let err = unsafe {
             aom_codec_encode(
                 self.encoder.unwrap_mut() as *mut _,
@@ -467,28 +497,22 @@ impl Encoder for Aom {
         }
         let mut iter: aom_codec_iter_t = std::ptr::null_mut();
         loop {
+            // # Safety: Calling a C function with valid parameters.
             let pkt = unsafe {
                 aom_codec_get_cx_data(self.encoder.unwrap_mut() as *mut _, &mut iter as *mut _)
             };
             if pkt.is_null() {
                 break;
             }
+            // # Safety: pkt is guaranteed to be valid and not null (libaom API contract).
             let pkt = unsafe { *pkt };
-            if pkt.kind == aom_codec_cx_pkt_kind_AOM_CODEC_CX_FRAME_PKT {
-                unsafe {
-                    let encoded_data = std::slice::from_raw_parts(
-                        pkt.data.frame.buf as *const u8,
-                        pkt.data.frame.sz,
-                    );
-                    let sync = (pkt.data.frame.flags & AOM_FRAME_IS_KEY) != 0;
-                    output_samples.push(Sample::create_from(encoded_data, sync)?);
-                }
-            }
+            add_aom_pkt_to_output_samples(&pkt, output_samples)?;
         }
         if config.is_single_image
             || (config.extra_layer_count > 0 && config.extra_layer_count == self.current_layer)
         {
             self.finish(output_samples)?;
+            // # Safety: Calling a C function with valid parameters.
             unsafe {
                 aom_codec_destroy(self.encoder.unwrap_mut() as *mut _);
             }
@@ -506,6 +530,7 @@ impl Encoder for Aom {
         }
         loop {
             // Flush the encoder.
+            // # Safety: Calling a C function with valid parameters.
             let err = unsafe {
                 aom_codec_encode(
                     self.encoder.unwrap_mut() as *mut _,
@@ -521,24 +546,16 @@ impl Encoder for Aom {
             let mut got_packet = false;
             let mut iter: aom_codec_iter_t = std::ptr::null_mut();
             loop {
+                // # Safety: Calling a C function with valid parameters.
                 let pkt = unsafe {
                     aom_codec_get_cx_data(self.encoder.unwrap_mut() as *mut _, &mut iter as *mut _)
                 };
                 if pkt.is_null() {
                     break;
                 }
+                // # Safety: pkt is guaranteed to be valid and not null (libaom API contract).
                 let pkt = unsafe { *pkt };
-                if pkt.kind == aom_codec_cx_pkt_kind_AOM_CODEC_CX_FRAME_PKT {
-                    got_packet = true;
-                    unsafe {
-                        let encoded_data = std::slice::from_raw_parts(
-                            pkt.data.frame.buf as *const u8,
-                            pkt.data.frame.sz,
-                        );
-                        let sync = (pkt.data.frame.flags & AOM_FRAME_IS_KEY) != 0;
-                        output_samples.push(Sample::create_from(encoded_data, sync)?);
-                    }
-                }
+                got_packet = add_aom_pkt_to_output_samples(&pkt, output_samples)?;
             }
             if !got_packet {
                 break;
@@ -551,6 +568,7 @@ impl Encoder for Aom {
 impl Drop for Aom {
     fn drop(&mut self) {
         if self.encoder.is_some() {
+            // # Safety: Calling a C function with valid parameters.
             unsafe {
                 aom_codec_destroy(self.encoder.unwrap_mut() as *mut _);
             }
