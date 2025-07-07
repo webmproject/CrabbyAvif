@@ -37,6 +37,8 @@ pub struct Dav1d {
     config: Option<DecoderConfig>,
 }
 
+/// # Safety
+/// C-callback function that does not perform any unsafe operations.
 unsafe extern "C" fn avif_dav1d_free_callback(
     _buf: *const u8,
     _cookie: *mut ::std::os::raw::c_void,
