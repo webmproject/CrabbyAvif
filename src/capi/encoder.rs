@@ -94,8 +94,11 @@ impl From<&avifEncoder> for MutableSettings {
             } else {
                 encoder.quality
             },
-            // TODO - b/416560730: Convert to proper tiling mode.
-            tiling_mode: TilingMode::Auto,
+            tiling_mode: if encoder.autoTiling == AVIF_TRUE {
+                TilingMode::Auto
+            } else {
+                TilingMode::Manual(encoder.tileRowsLog2, encoder.tileColsLog2)
+            },
             scaling_mode: encoder.scalingMode,
         }
     }
