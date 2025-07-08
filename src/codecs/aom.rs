@@ -329,7 +329,8 @@ impl Encoder for Aom {
                     1
                 );
             }
-            for (key, value) in config.codec_specific_options(category) {
+            let codec_specific_options = config.codec_specific_options(category);
+            for (key, value) in &codec_specific_options {
                 if key == "end-usage" {
                     // This key is already processed before initialization of the encoder.
                     continue;
@@ -346,7 +347,13 @@ impl Encoder for Aom {
                     )));
                 }
             }
-            // TODO: tuning?
+            if !codec_specific_options.iter().any(|(key, _)| key == "tune") {
+                codec_control!(
+                    self,
+                    aome_enc_control_id_AOME_SET_TUNING,
+                    aom_tune_metric_AOM_TUNE_SSIM
+                );
+            }
             if image.depth == 12 {
                 // libaom may produce integer overflows with 12-bit input when loop restoration is
                 // enabled. See crbug.com/aomedia/42302587.
