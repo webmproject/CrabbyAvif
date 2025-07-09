@@ -93,6 +93,8 @@ impl TilingMode {
 #[derive(Clone, Copy, Debug)]
 pub struct MutableSettings {
     pub quality: i32,
+    pub quality_alpha: i32,
+    pub quality_gainmap: i32,
     pub tiling_mode: TilingMode,
     pub scaling_mode: ScalingMode,
 }
@@ -101,6 +103,8 @@ impl Default for MutableSettings {
     fn default() -> Self {
         Self {
             quality: 60,
+            quality_alpha: 60,
+            quality_gainmap: 60,
             tiling_mode: Default::default(),
             scaling_mode: Default::default(),
         }
@@ -133,9 +137,13 @@ impl Default for Settings {
 }
 
 impl Settings {
-    pub(crate) fn quantizer(&self) -> i32 {
-        // TODO: account for category here.
-        ((100 - self.mutable.quality) * 63 + 50) / 100
+    pub(crate) fn quantizer(&self, category: Category) -> i32 {
+        let quality = match category {
+            Category::Color => self.mutable.quality,
+            Category::Alpha => self.mutable.quality_alpha,
+            Category::Gainmap => self.mutable.quality_gainmap,
+        };
+        ((100 - quality) * 63 + 50) / 100
     }
 
     pub(crate) fn is_valid(&self) -> bool {
@@ -536,7 +544,7 @@ impl Encoder {
             let encoder_config = EncoderConfig {
                 tile_rows_log2,
                 tile_columns_log2,
-                quantizer: self.settings.quantizer(),
+                quantizer: self.settings.quantizer(item.category),
                 disable_lagged_output: self.alpha_present,
                 is_single_image,
                 speed: self.settings.speed,

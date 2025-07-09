@@ -74,7 +74,7 @@ impl Default for avifEncoder {
             scalingMode: settings.mutable.scaling_mode,
             ioStats: Default::default(),
             diag: Default::default(),
-            qualityGainMap: settings.mutable.quality,
+            qualityGainMap: AVIF_QUALITY_DEFAULT,
             rust_encoder: Default::default(),
             rust_encoder_initialized: false,
             codec_specific_options: Default::default(),
@@ -93,6 +93,16 @@ impl From<&avifEncoder> for MutableSettings {
                 quality_from_quantizers(encoder.minQuantizer, encoder.maxQuantizer)
             } else {
                 encoder.quality
+            },
+            quality_alpha: if encoder.qualityAlpha == -1 {
+                quality_from_quantizers(encoder.minQuantizerAlpha, encoder.maxQuantizerAlpha)
+            } else {
+                encoder.qualityAlpha
+            },
+            quality_gainmap: if encoder.qualityGainMap == -1 {
+                quality_from_quantizers(encoder.minQuantizer, encoder.maxQuantizer)
+            } else {
+                encoder.qualityGainMap
             },
             tiling_mode: if encoder.autoTiling == AVIF_TRUE {
                 TilingMode::Auto
