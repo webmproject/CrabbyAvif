@@ -112,6 +112,16 @@ impl CodecChoice {
             }
         }
     }
+
+    #[allow(unused_mut)]
+    pub(crate) fn versions() -> String {
+        let mut versions: Vec<String> = vec![];
+        #[cfg(feature = "dav1d")]
+        {
+            versions.push(Dav1d::version());
+        }
+        versions.join(", ")
+    }
 }
 
 #[repr(C)]
