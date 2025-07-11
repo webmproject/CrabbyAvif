@@ -25,6 +25,7 @@ use crate::*;
 use aom_sys::bindings::*;
 
 use std::cmp;
+use std::ffi::CStr;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
 
@@ -580,5 +581,15 @@ impl Drop for Aom {
                 aom_codec_destroy(self.encoder.unwrap_mut() as *mut _);
             }
         }
+    }
+}
+
+impl Aom {
+    pub(crate) fn version() -> String {
+        let version = match unsafe { CStr::from_ptr(aom_codec_version_str()) }.to_str() {
+            Ok(s) => s.to_owned(),
+            Err(_) => String::new(),
+        };
+        format!("aom: {version}")
     }
 }

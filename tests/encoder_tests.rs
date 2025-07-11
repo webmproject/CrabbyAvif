@@ -1260,3 +1260,9 @@ fn quality_categories() -> AvifResult<()> {
 
     Ok(())
 }
+
+#[test]
+fn codec_versions() {
+    assert!(crabby_avif::codec_versions().contains("dav1d"));
+    assert!(crabby_avif::codec_versions().contains("aom"));
+}
