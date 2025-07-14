@@ -95,6 +95,7 @@ fn main() {
         "dav1d_open",
         "dav1d_picture_unref",
         "dav1d_send_data",
+        "dav1d_version",
     ];
     for allowlist_item in allowlist_items {
         bindings = bindings.allowlist_item(allowlist_item);

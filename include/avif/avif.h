@@ -1017,6 +1017,15 @@ void *crabby_avifAlloc(size_t size);
 /// - if p is not null, it has to point to a buffer allocated by crabby_avifAlloc.
 void crabby_avifFree(void *p);
 
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if outBuffer is not null, it has to be point a valid char buffer of size at least 256.
+void crabby_avifCodecVersions(char *outBuffer);
+
+/// # Safety
+/// C API function that does not perform any unsafe operations.
+unsigned int crabby_avifLibYUVVersion();
+
 } // extern "C"
 
 } // namespace crabbyavif

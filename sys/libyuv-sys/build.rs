@@ -146,6 +146,7 @@ fn main() {
         "I444AlphaToARGBMatrix",
         "I444ToARGBMatrix",
         "I444ToRGB24Matrix",
+        "LIBYUV_VERSION",
         "NV12Scale",
         "NV12ToARGBMatrix",
         "NV12ToRGB565Matrix",

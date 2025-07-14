@@ -17,6 +17,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <tuple>
 #include <vector>
@@ -750,6 +751,14 @@ TEST(PixelFormatToStringTest, Test) {
   EXPECT_STREQ(avifPixelFormatToString(AVIF_PIXEL_FORMAT_ANDROID_NV12), "NV12");
   EXPECT_STREQ(avifPixelFormatToString(AVIF_PIXEL_FORMAT_ANDROID_NV21), "NV21");
   EXPECT_STREQ(avifPixelFormatToString(AVIF_PIXEL_FORMAT_NONE), "Unknown");
+}
+
+TEST(CodecVersions, Test) {
+  char versions[256];
+  avifCodecVersions(nullptr);
+  avifCodecVersions(versions);
+  EXPECT_NE(strstr(versions, "aom"), nullptr);
+  EXPECT_GT(avifLibYUVVersion(), 0);
 }
 
 }  // namespace

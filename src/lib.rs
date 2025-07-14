@@ -530,3 +530,12 @@ impl RepetitionCount {
         }
     }
 }
+
+pub fn codec_versions() -> String {
+    let versions = &[
+        decoder::CodecChoice::versions(),
+        #[cfg(feature = "aom")]
+        codecs::aom::Aom::version(),
+    ];
+    versions.join(", ")
+}

@@ -28,6 +28,7 @@ use crate::*;
 
 use dav1d_sys::bindings::*;
 
+use std::ffi::CStr;
 use std::mem::MaybeUninit;
 
 #[derive(Default)]
@@ -338,6 +339,14 @@ impl Dav1d {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn version() -> String {
+        let version = match unsafe { CStr::from_ptr(dav1d_version()) }.to_str() {
+            Ok(s) => s.to_owned(),
+            Err(_) => String::new(),
+        };
+        format!("dav1d: {version}")
     }
 }
 
