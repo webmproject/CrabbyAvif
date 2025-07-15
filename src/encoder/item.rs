@@ -505,6 +505,13 @@ impl Item {
         stream.finish_box()
     }
 
+    pub(crate) fn write_auxi(&self, stream: &mut OStream) -> AvifResult<()> {
+        stream.start_full_box("auxi", (0, 0))?;
+        //  string aux_track_type;
+        stream.write_str_with_nul(AUXI_ALPHA_URN)?;
+        stream.finish_box()
+    }
+
     pub(crate) fn write_stsd(
         &self,
         stream: &mut OStream,
@@ -558,6 +565,9 @@ impl Item {
                 // not.
             }
             self.write_ccst(stream)?;
+            if self.category == Category::Alpha {
+                self.write_auxi(stream)?;
+            }
 
             stream.finish_box()?;
         }

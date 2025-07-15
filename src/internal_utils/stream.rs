@@ -386,6 +386,13 @@ impl OStream {
         Ok(())
     }
 
+    pub(crate) fn write_str_with_nul(&mut self, value: &str) -> AvifResult<()> {
+        assert!(self.partial.is_none());
+        self.write_str(value)?;
+        self.write_u8(0)?;
+        Ok(())
+    }
+
     pub(crate) fn write_string(&mut self, value: &String) -> AvifResult<()> {
         assert!(self.partial.is_none());
         let bytes = value.as_bytes();

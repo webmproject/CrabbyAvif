@@ -205,9 +205,10 @@ pub(crate) fn check_slice_range(len: usize, range: &Range<usize>) -> AvifResult<
     Ok(())
 }
 
+pub(crate) const AUXI_ALPHA_URN: &str = "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha";
+
 pub(crate) fn is_auxiliary_type_alpha(aux_type: &str) -> bool {
-    aux_type == "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha"
-        || aux_type == "urn:mpeg:hevc:2015:auxid:1"
+    aux_type == AUXI_ALPHA_URN || aux_type == "urn:mpeg:hevc:2015:auxid:1"
 }
 
 pub(crate) fn validate_grid_image_dimensions(image: &Image, grid: &Grid) -> AvifResult<()> {
