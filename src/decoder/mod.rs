@@ -396,7 +396,7 @@ pub(crate) struct GridImageHelper<'a> {
     grid: &'a Grid,
     image: &'a mut Image,
     pub category: Category,
-    cell_index: usize,
+    pub cell_index: usize,
     expected_cell_count: usize,
     codec_config: &'a CodecConfiguration,
     first_cell_image: Option<Image>,

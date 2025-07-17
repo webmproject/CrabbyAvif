@@ -831,6 +831,7 @@ impl Decoder for MediaCodec {
         _spatial_id: u8,
         grid_image_helper: &mut GridImageHelper,
     ) -> AvifResult<()> {
+        let starting_cell_index = grid_image_helper.cell_index;
         while self.codec_index < self.codec_initializers.len() {
             let res = self.get_next_image_grid_impl(payloads, grid_image_helper);
             if res.is_ok() {
@@ -839,6 +840,10 @@ impl Decoder for MediaCodec {
             // Drop the current codec and try the next one.
             self.drop_impl();
             self.codec_index += 1;
+            // Reset the cell_index so that each codec starts from the first cell. Mixing cells
+            // between codecs could result in different color formats for each cell which is not
+            // supported.
+            grid_image_helper.cell_index = starting_cell_index;
         }
         Err(AvifError::UnknownError(
             "all the codecs failed to extract an image".into(),
