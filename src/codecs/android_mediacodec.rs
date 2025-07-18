@@ -302,10 +302,13 @@ fn prefer_hardware_decoder(config: &DecoderConfig) -> bool {
         //    hardware for that is unreliable.
         // 3) profile is 0. As of Sep 2024, there are no AV1 hardware decoders that support
         //    anything other than profile 0.
+        // 4) depth is 8. Since we query for decoder simply by mime type, there is no way to know
+        //    if an AV1 hardware decoder supports 10-bit or not.
         prefer_hw
             && config.category != Category::Alpha
             && config.category != Category::Gainmap
             && config.codec_config.profile() == 0
+            && config.codec_config.depth() == 8
     } else {
         // We will return true when one of the following conditions are true:
         // 1) prefer_hw is true.
