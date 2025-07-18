@@ -519,33 +519,62 @@ impl MediaCodec {
                     _ => MatrixCoefficients::Unspecified,
                 };
 
-                for i in 0usize..3 {
-                    if i == 2
-                        && matches!(
-                            image.yuv_format,
-                            PixelFormat::AndroidP010
-                                | PixelFormat::AndroidNv12
-                                | PixelFormat::AndroidNv21
-                        )
+                if image.yuv_format == PixelFormat::AndroidNv21 {
+                    #[cfg(feature = "libyuv")]
                     {
-                        // V plane is not needed for these formats.
-                        break;
+                        // Convert Nv21 images into Nv12 for the following reasons:
+                        // * Many of the yuv -> rgb conversions are optimized for Nv12 (Nv21 is also
+                        //   missing several cases).
+                        // * In Nv21 mode, some hardware decoders (e.g. c2.mtk.av1.decoder) will output
+                        //   Nv21 for the first few frames and then switch to Nv12. crabbyavif does not
+                        //   support cells within a same image to be of different pixel formats.
+                        image.yuv_format = PixelFormat::AndroidNv12;
+                        image.allocate_planes(category)?;
+                        let planes = image.plane_ptrs_mut();
+                        let row_bytes = image.plane_row_bytes()?;
+                        if unsafe {
+                            libyuv_sys::bindings::NV21ToNV12(
+                                buffer.offset(plane_info.offset[0]),
+                                i32_from_u32(plane_info.row_stride[0])?,
+                                buffer.offset(plane_info.offset[2]),
+                                i32_from_u32(plane_info.row_stride[2])?,
+                                planes[0],
+                                row_bytes[0],
+                                planes[1],
+                                row_bytes[1],
+                                i32_from_u32(image.width)?,
+                                i32_from_u32(image.height)?,
+                            )
+                        } != 0
+                        {
+                            return Err(AvifError::ReformatFailed);
+                        }
                     }
-                    image.row_bytes[i] = plane_info.row_stride[i];
-                    let plane_height = if i == 0 { image.height } else { (image.height + 1) / 2 };
-                    let offset_index = if i == 1 && image.yuv_format == PixelFormat::AndroidNv21 {
-                        // For Nv21, V plane comes before the U plane, so the UV plane offset
-                        // should point to the V plane.
-                        2
-                    } else {
-                        i
-                    };
-                    image.planes[i] = Some(Pixels::from_raw_pointer(
-                        unsafe { buffer.offset(plane_info.offset[offset_index]) },
-                        image.depth as u32,
-                        plane_height,
-                        image.row_bytes[i],
-                    )?);
+                    #[cfg(not(feature = "libyuv"))]
+                    {
+                        return Err(AvifError::NotImplemented);
+                    }
+                } else {
+                    for i in 0usize..3 {
+                        if i == 2
+                            && matches!(
+                                image.yuv_format,
+                                PixelFormat::AndroidP010 | PixelFormat::AndroidNv12
+                            )
+                        {
+                            // V plane is not needed for these formats.
+                            break;
+                        }
+                        image.row_bytes[i] = plane_info.row_stride[i];
+                        let plane_height =
+                            if i == 0 { image.height } else { (image.height + 1) / 2 };
+                        image.planes[i] = Some(Pixels::from_raw_pointer(
+                            unsafe { buffer.offset(plane_info.offset[i]) },
+                            image.depth as u32,
+                            plane_height,
+                            image.row_bytes[i],
+                        )?);
+                    }
                 }
             }
         }
