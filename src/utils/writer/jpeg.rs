@@ -42,7 +42,7 @@ impl Writer for JpegWriter {
                 rgba_pixels.slice(0, rgba_pixels.size() as u32)?,
                 image.width,
                 image.height,
-                image::ColorType::Rgb8,
+                image::ExtendedColorType::Rgb8,
             )
             .or(Err(AvifError::UnknownError("Jpeg encoding failed".into())))?;
         Ok(())
