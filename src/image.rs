@@ -489,7 +489,6 @@ impl Image {
         tile_index: u32,
         category: Category,
     ) -> AvifResult<()> {
-        // This function is used only when |tile| contains pointers and self contains buffers.
         let row_index = tile_index / grid.columns;
         let column_index = tile_index % grid.columns;
         for plane in category.planes() {
