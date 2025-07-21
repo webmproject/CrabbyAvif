@@ -497,7 +497,7 @@ impl Encoder for Aom {
                 &aom_image as *const _,
                 0,
                 1,
-                encode_flags,
+                encode_flags as _,
             )
         };
         if err != aom_codec_err_t_AOM_CODEC_OK {
