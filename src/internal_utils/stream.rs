@@ -80,7 +80,7 @@ pub struct IStream<'a> {
 }
 
 impl IStream<'_> {
-    pub(crate) fn create<'a>(data: &'a [u8]) -> IStream<'a> {
+    pub(crate) fn create(data: &[u8]) -> IStream<'_> {
         IStream { data, offset: 0 }
     }
 
@@ -109,7 +109,7 @@ impl IStream<'_> {
         })
     }
 
-    pub(crate) fn sub_bit_stream<'a>(&'a mut self, size: usize) -> AvifResult<IBitStream<'a>> {
+    pub(crate) fn sub_bit_stream(&mut self, size: usize) -> AvifResult<IBitStream<'_>> {
         self.check(size)?;
         let offset = self.offset;
         checked_incr!(self.offset, size);
