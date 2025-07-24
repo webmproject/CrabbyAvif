@@ -119,5 +119,5 @@ fn main() -> Result<(), String> {
         outfile.display()
     );
     println!("cargo:rustc-link-lib=mediandk");
-    return Ok(());
+    Ok(())
 }

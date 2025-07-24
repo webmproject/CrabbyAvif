@@ -204,5 +204,5 @@ fn main() -> Result<(), String> {
     bindings
         .write_to_file(outfile.as_path())
         .map_err(|err| err.to_string())?;
-    return Ok(());
+    Ok(())
 }

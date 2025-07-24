@@ -117,5 +117,5 @@ fn main() -> Result<(), String> {
     bindings
         .write_to_file(outfile.as_path())
         .unwrap_or_else(|_| panic!("Couldn't write bindings for dav1d"));
-    return Ok(());
+    Ok(())
 }

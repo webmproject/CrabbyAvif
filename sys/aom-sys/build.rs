@@ -103,5 +103,5 @@ fn main() -> Result<(), String> {
         "cargo:rustc-env=CRABBYAVIF_AOM_BINDINGS_RS={}",
         outfile.display()
     );
-    return Ok(());
+    Ok(())
 }
