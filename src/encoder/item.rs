@@ -344,7 +344,6 @@ impl Item {
                     self.associations
                         .push((u8_from_usize(streams.len())?, false));
                 }
-                self.write_transformative_properties(streams, item_metadata)?;
             }
             Category::Alpha => {
                 streams.push(OStream::default());
@@ -363,16 +362,11 @@ impl Item {
                     self.associations
                         .push((u8_from_usize(streams.len())?, false));
                 }
-                if item_metadata.clap.is_some()
-                    || item_metadata.irot_angle.is_some()
-                    || item_metadata.imir_axis.is_some()
-                    || item_metadata.pasp.is_some()
-                {
+                if item_metadata.pasp.is_some() {
                     return Err(AvifError::UnknownError(
-                        "transformative properties must be associated with the base image".into(),
+                        "pixel aspect ratio property must be associated with the base image".into(),
                     ));
                 }
-                self.write_transformative_properties(streams, image_metadata)?;
             }
         }
         if self.extra_layer_count > 0 {
@@ -382,6 +376,28 @@ impl Item {
                 .push((u8_from_usize(streams.len())?, false));
             // We don't write 'lsel' property since many decoders do not support it and will reject
             // the image, see https://github.com/AOMediaCodec/libavif/pull/2429
+        }
+        // ISO/IEC 23008-12 (HEIF), Section 6.5.1:
+        //   Readers shall allow and ignore descriptive properties following the first
+        //   transformative or unrecognized property, whichever is earlier, in the sequence
+        //   associating properties with an item.
+        //   Writers should arrange the descriptive properties specified in 6.5 prior to
+        //   any other properties in the sequence associating properties with an item.
+        match self.category {
+            Category::Color | Category::Alpha => {
+                self.write_transformative_properties(streams, item_metadata)?;
+            }
+            Category::Gainmap => {
+                if item_metadata.clap.is_some()
+                    || item_metadata.irot_angle.is_some()
+                    || item_metadata.imir_axis.is_some()
+                {
+                    return Err(AvifError::UnknownError(
+                        "transformative properties must be associated with the base image".into(),
+                    ));
+                }
+                self.write_transformative_properties(streams, image_metadata)?;
+            }
         }
         Ok(())
     }

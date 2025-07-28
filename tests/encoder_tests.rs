@@ -862,6 +862,54 @@ fn gainmap_base_image_hdr() -> AvifResult<()> {
     Ok(())
 }
 
+// From aviftransformtest.cc
+#[test]
+#[cfg(feature = "png")]
+fn alpha_transformative_properties() -> AvifResult<()> {
+    let mut reference = get_decoder("abc_color_irot_alpha_irot.avif");
+    reference.parse()?;
+    reference.next_image()?;
+    let reference = reference.image().unwrap();
+
+    let (mut image, _) = reader::Reader::read_frame(
+        &mut reader::png::PngReader::create(&get_test_file("abc.png"))?,
+        &reader::Config {
+            yuv_format: Some(PixelFormat::Yuv444),
+            matrix_coefficients: Some(reference.matrix_coefficients),
+            ..Default::default()
+        },
+    )?;
+    image.color_primaries = reference.color_primaries;
+    image.transfer_characteristics = reference.transfer_characteristics;
+    let mut encoder = encoder::Encoder::create_with_settings(&encoder::Settings {
+        speed: Some(10),
+        mutable: MutableSettings {
+            quality: 100,
+            quality_alpha: 100,
+            quality_gainmap: 100,
+            ..Default::default()
+        },
+        ..Default::default()
+    })?;
+    encoder.add_image(&image)?;
+    let encoded = encoder.finish()?;
+    assert!(!encoded.is_empty());
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(encoded);
+    decoder.settings.image_content_to_decode = ImageContentType::All;
+    decoder.parse()?;
+    decoder.next_image()?;
+    let decoded = decoder.image().unwrap();
+
+    // Check with existing correct AVIF file.
+    assert!(are_images_equal(decoded, reference)?);
+
+    // The rendering of the images should be compared but that is outside the
+    // scope of CrabbyAvif.
+    Ok(())
+}
+
 #[test]
 fn gainmap_oriented() -> AvifResult<()> {
     let (mut image, gainmap) = generate_gainmap_image(false)?;
