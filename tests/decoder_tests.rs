@@ -497,6 +497,18 @@ fn color_nogrid_alpha_nogrid_gainmap_grid() {
     assert!(decoder.gainmap().image.row_bytes[0] > 0);
 }
 
+// From aviftransformtest.cc
+#[test]
+fn lenient_missing_alpha_transformative_properties() {
+    let mut decoder_ref = get_decoder("abc_color_irot_alpha_irot.avif");
+    assert!(decoder_ref.parse().is_ok());
+    assert!(decoder_ref.next_image().is_ok());
+    let mut decoder = get_decoder("abc_color_irot_alpha_NOirot.avif");
+    assert!(decoder.parse().is_ok());
+    assert!(decoder.next_image().is_ok());
+    assert!(are_images_equal(decoder_ref.image().unwrap(), decoder.image().unwrap()).unwrap());
+}
+
 // From avifgainmaptest.cc
 #[test]
 fn gainmap_oriented() {

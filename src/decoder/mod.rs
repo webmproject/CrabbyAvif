@@ -1033,6 +1033,7 @@ impl Decoder {
             };
 
             let color_properties: &Vec<ItemProperty>;
+            let alpha_properties: Option<&Vec<ItemProperty>>;
             let gainmap_properties: Option<&Vec<ItemProperty>>;
             let mut is_sample_transform = false;
             if self.source == Source::Tracks {
@@ -1079,6 +1080,13 @@ impl Decoder {
                     self.tile_info[DecodingItem::ALPHA.usize()].tile_count = 1;
                     self.image.alpha_present = true;
                     self.image.alpha_premultiplied = color_track.prem_by_id == Some(alpha_track.id);
+                    alpha_properties = Some(
+                        alpha_track
+                            .get_properties()
+                            .ok_or(AvifError::BmffParseFailed("".into()))?,
+                    );
+                } else {
+                    alpha_properties = None;
                 }
 
                 self.image_index = -1;
@@ -1298,6 +1306,17 @@ impl Decoder {
                     .get(&item_ids[DecodingItem::COLOR.usize()])
                     .unwrap()
                     .properties;
+                alpha_properties = if item_ids[DecodingItem::ALPHA.usize()] != 0 {
+                    Some(
+                        &self
+                            .items
+                            .get(&item_ids[DecodingItem::ALPHA.usize()])
+                            .unwrap()
+                            .properties,
+                    )
+                } else {
+                    None
+                };
                 gainmap_properties = if item_ids[DecodingItem::GAINMAP.usize()] != 0 {
                     Some(
                         &self
@@ -1359,6 +1378,28 @@ impl Decoder {
             self.image.clap = find_property!(color_properties, CleanAperture);
             self.image.irot_angle = find_property!(color_properties, ImageRotation);
             self.image.imir_axis = find_property!(color_properties, ImageMirror);
+
+            if let Some(alpha_properties) = alpha_properties {
+                // The 'clap', 'irot' and 'imir' transformative properties should be applied to the
+                // alpha auxiliary image item before considering it a plane of the color image item.
+                // Alternatively, inequality with the transformative properties attached to the
+                // color image item should be treated as AVIF_RESULT_NOT_IMPLEMENTED.
+                // The latter is easier and is the behavior of libavif and CrabbyAvif.
+
+                let alpha_clap = find_property!(alpha_properties, CleanAperture);
+                let alpha_irot = find_property!(alpha_properties, ImageRotation);
+                let alpha_imir = find_property!(alpha_properties, ImageMirror);
+                if alpha_clap.is_none() && alpha_irot.is_none() && alpha_imir.is_none() {
+                    // However, libavif up to version 1.3.0 generated images lacking transformative
+                    // property associations with alpha auxiliary image items, so be lenient on
+                    // their absence for backward compatibility with previously generated images.
+                } else if self.image.clap != alpha_clap
+                    || self.image.irot_angle != alpha_irot
+                    || self.image.imir_axis != alpha_imir
+                {
+                    return Err(AvifError::NotImplemented);
+                }
+            }
 
             if let Some(gainmap_properties) = gainmap_properties {
                 // Ensure that the bitstream contains the same 'pasp', 'clap', 'irot and 'imir'

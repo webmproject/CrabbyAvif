@@ -344,7 +344,6 @@ impl Item {
                     self.associations
                         .push((u8_from_usize(streams.len())?, false));
                 }
-                self.write_transformative_properties(streams, item_metadata)?;
             }
             Category::Alpha => {
                 streams.push(OStream::default());
@@ -372,7 +371,6 @@ impl Item {
                         "transformative properties must be associated with the base image".into(),
                     ));
                 }
-                self.write_transformative_properties(streams, image_metadata)?;
             }
         }
         if self.extra_layer_count > 0 {
@@ -383,6 +381,10 @@ impl Item {
             // We don't write 'lsel' property since many decoders do not support it and will reject
             // the image, see https://github.com/AOMediaCodec/libavif/pull/2429
         }
+        // ISO/IEC 23008-12 (HEIF), Section 6.5.1:
+        //   Writers should arrange the descriptive properties specified in 6.5 prior to
+        //   any other properties in the sequence associating properties with an item.
+        self.write_transformative_properties(streams, item_metadata)?;
         Ok(())
     }
 
