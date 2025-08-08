@@ -443,9 +443,9 @@ impl Encoder {
             };
             Self::validate_image_grid(&grid, cell_images)?;
             self.image_metadata = first_image.shallow_clone();
-            if gainmaps.is_some() {
-                self.gainmap_image_metadata = gainmaps.unwrap()[0].image.shallow_clone();
-                self.copy_alt_image_metadata(gainmaps.unwrap()[0], &grid);
+            if let Some(gainmaps) = gainmaps {
+                self.gainmap_image_metadata = gainmaps[0].image.shallow_clone();
+                self.copy_alt_image_metadata(gainmaps[0], &grid);
             }
             let color_item_id = self.add_items(&grid, Category::Color)?;
             self.primary_item_id = color_item_id;
