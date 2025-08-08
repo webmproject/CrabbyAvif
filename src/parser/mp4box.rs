@@ -49,8 +49,9 @@ impl BoxHeader {
 #[derive(Debug, Default)]
 pub struct FileTypeBox {
     pub major_brand: String,
-    // minor_version "is informative only" (section 4.3.1 of ISO/IEC 14496-12)
-    compatible_brands: Vec<String>,
+    #[cfg_attr(not(feature = "mini"), allow(dead_code))]
+    pub minor_version: String,
+    pub compatible_brands: Vec<String>,
 }
 
 impl FileTypeBox {
@@ -70,6 +71,11 @@ impl FileTypeBox {
     }
 
     pub(crate) fn is_avif(&self) -> bool {
+        #[cfg(feature = "mini")]
+        if self.needs_mini() {
+            return true;
+        }
+
         // "avio" also exists but does not identify the file as AVIF on its own. See
         // https://aomediacodec.github.io/av1-avif/v1.1.0.html#image-and-image-collection-brand
         self.has_brand_any(&[
@@ -104,6 +110,11 @@ impl FileTypeBox {
             #[cfg(feature = "heic")]
             "msf1",
         ])
+    }
+
+    #[cfg(feature = "mini")]
+    pub(crate) fn needs_mini(&self) -> bool {
+        self.major_brand.as_str() == "mif3" && self.minor_version == "avif"
     }
 
     pub(crate) fn has_tmap(&self) -> bool {
@@ -292,6 +303,7 @@ pub enum ItemProperty {
     AV1LayeredImageIndexing([usize; 3]),
     ContentLightLevelInformation(ContentLightLevelInformation),
     Unknown(String),
+    Unused, // Such as a FreeBox 'free'.
 }
 
 // Section 8.11.14 of ISO/IEC 14496-12.
@@ -307,9 +319,9 @@ pub struct ItemPropertyAssociation {
 #[derive(Debug, Default)]
 pub struct ItemInfo {
     pub item_id: u32,
-    item_protection_index: u16,
+    pub item_protection_index: u16,
     pub item_type: String,
-    item_name: String,
+    pub item_name: String,
     pub content_type: String,
 }
 
@@ -400,6 +412,15 @@ fn parse_truncated_ftyp(stream: &mut IStream) -> FileTypeBox {
         Ok(major_brand) => major_brand,
         Err(_) => return FileTypeBox::default(),
     };
+    let minor_version = match stream.read_string(4) {
+        Ok(minor_version) => minor_version,
+        Err(_) => {
+            return FileTypeBox {
+                major_brand,
+                ..Default::default()
+            }
+        }
+    };
     let mut compatible_brands: Vec<String> = Vec::new();
     // unsigned int(32) compatible_brands[];  // to end of the box
     while stream.has_bytes_left().unwrap_or_default() {
@@ -410,6 +431,7 @@ fn parse_truncated_ftyp(stream: &mut IStream) -> FileTypeBox {
     }
     FileTypeBox {
         major_brand,
+        minor_version,
         compatible_brands,
     }
 }
@@ -419,7 +441,7 @@ fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
     // unsigned int(32) major_brand;
     let major_brand = stream.read_string(4)?;
     // unsigned int(4) minor_version;
-    stream.skip_u32()?;
+    let minor_version = stream.read_string(4)?;
     if stream.bytes_left()? % 4 != 0 {
         return AvifError::bmff_parse_failed(format!(
             "Box[ftyp] contains a compatible brands section that isn't divisible by 4 {}",
@@ -433,6 +455,7 @@ fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
     }
     Ok(FileTypeBox {
         major_brand,
+        minor_version,
         compatible_brands,
     })
 }
@@ -613,73 +636,80 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
 
 #[allow(non_snake_case)]
 fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
-    let raw_data = stream.get_immutable_vec(stream.bytes_left()?)?;
-    // See https://aomediacodec.github.io/av1-isobmff/v1.2.0.html#av1codecconfigurationbox-syntax.
-    // unsigned int (1) marker = 1;
-    let marker = stream.read_bits(1)?;
-    if marker != 1 {
-        return AvifError::bmff_parse_failed(format!("Invalid marker ({marker}) in av1C"));
-    }
-    // unsigned int (7) version = 1;
-    let version = stream.read_bits(7)?;
-    if version != 1 {
-        return AvifError::bmff_parse_failed(format!("Invalid version ({version}) in av1C"));
-    }
-    let av1C = Av1CodecConfiguration {
-        // unsigned int(3) seq_profile;
-        // unsigned int(5) seq_level_idx_0;
-        seq_profile: stream.read_bits(3)? as u8,
-        seq_level_idx0: stream.read_bits(5)? as u8,
-        // unsigned int(1) seq_tier_0;
-        // unsigned int(1) high_bitdepth;
-        // unsigned int(1) twelve_bit;
-        // unsigned int(1) monochrome;
-        // unsigned int(1) chroma_subsampling_x;
-        // unsigned int(1) chroma_subsampling_y;
-        // unsigned int(2) chroma_sample_position;
-        seq_tier0: stream.read_bits(1)? as u8,
-        high_bitdepth: stream.read_bool()?,
-        twelve_bit: stream.read_bool()?,
-        monochrome: stream.read_bool()?,
-        chroma_subsampling_x: stream.read_bits(1)? as u8,
-        chroma_subsampling_y: stream.read_bits(1)? as u8,
-        chroma_sample_position: stream.read_bits(2)?.into(),
-        raw_data,
-    };
+    Ok(ItemProperty::CodecConfiguration(CodecConfiguration::Av1(
+        Av1CodecConfiguration::parse(stream)?,
+    )))
+}
 
-    // unsigned int(3) reserved = 0;
-    if stream.read_bits(3)? != 0 {
-        return AvifError::bmff_parse_failed("Invalid reserved bits in av1C");
-    }
-    // unsigned int(1) initial_presentation_delay_present;
-    if stream.read_bits(1)? == 1 {
-        // unsigned int(4) initial_presentation_delay_minus_one;
-        stream.read_bits(4)?;
-    } else {
-        // unsigned int(4) reserved = 0;
-        if stream.read_bits(4)? != 0 {
+impl Av1CodecConfiguration {
+    #[allow(non_snake_case)]
+    pub(crate) fn parse(stream: &mut IStream) -> AvifResult<Av1CodecConfiguration> {
+        let raw_data = stream.get_immutable_vec(stream.bytes_left()?)?;
+        // See https://aomediacodec.github.io/av1-isobmff/v1.2.0.html#av1codecconfigurationbox-syntax.
+        // unsigned int (1) marker = 1;
+        let marker = stream.read_bits(1)?;
+        if marker != 1 {
+            return AvifError::bmff_parse_failed(format!("Invalid marker ({marker}) in av1C"));
+        }
+        // unsigned int (7) version = 1;
+        let version = stream.read_bits(7)?;
+        if version != 1 {
+            return AvifError::bmff_parse_failed(format!("Invalid version ({version}) in av1C"));
+        }
+        let av1C = Av1CodecConfiguration {
+            // unsigned int(3) seq_profile;
+            // unsigned int(5) seq_level_idx_0;
+            seq_profile: stream.read_bits(3)? as u8,
+            seq_level_idx0: stream.read_bits(5)? as u8,
+            // unsigned int(1) seq_tier_0;
+            // unsigned int(1) high_bitdepth;
+            // unsigned int(1) twelve_bit;
+            // unsigned int(1) monochrome;
+            // unsigned int(1) chroma_subsampling_x;
+            // unsigned int(1) chroma_subsampling_y;
+            // unsigned int(2) chroma_sample_position;
+            seq_tier0: stream.read_bits(1)? as u8,
+            high_bitdepth: stream.read_bool()?,
+            twelve_bit: stream.read_bool()?,
+            monochrome: stream.read_bool()?,
+            chroma_subsampling_x: stream.read_bits(1)? as u8,
+            chroma_subsampling_y: stream.read_bits(1)? as u8,
+            chroma_sample_position: stream.read_bits(2)?.into(),
+            raw_data,
+        };
+
+        // unsigned int(3) reserved = 0;
+        if stream.read_bits(3)? != 0 {
             return AvifError::bmff_parse_failed("Invalid reserved bits in av1C");
         }
+        // unsigned int(1) initial_presentation_delay_present;
+        if stream.read_bits(1)? == 1 {
+            // unsigned int(4) initial_presentation_delay_minus_one;
+            stream.read_bits(4)?;
+        } else {
+            // unsigned int(4) reserved = 0;
+            if stream.read_bits(4)? != 0 {
+                return AvifError::bmff_parse_failed("Invalid reserved bits in av1C");
+            }
+        }
+
+        // https://aomediacodec.github.io/av1-avif/v1.1.0.html#av1-configuration-item-property:
+        //   - Sequence Header OBUs should not be present in the AV1CodecConfigurationBox.
+        // This is ignored.
+        //   - If a Sequence Header OBU is present in the AV1CodecConfigurationBox, it shall match the
+        //     Sequence Header OBU in the AV1 Image Item Data.
+        // This is not enforced.
+        //   - The values of the fields in the AV1CodecConfigurationBox shall match those of the
+        //     Sequence Header OBU in the AV1 Image Item Data.
+        // This is not enforced (?).
+        //   - Metadata OBUs, if present, shall match the values given in other item properties, such as
+        //     the PixelInformationProperty or ColourInformationBox.
+        // This is not enforced.
+
+        // unsigned int(8) configOBUs[];
+
+        Ok(av1C)
     }
-
-    // https://aomediacodec.github.io/av1-avif/v1.1.0.html#av1-configuration-item-property:
-    //   - Sequence Header OBUs should not be present in the AV1CodecConfigurationBox.
-    // This is ignored.
-    //   - If a Sequence Header OBU is present in the AV1CodecConfigurationBox, it shall match the
-    //     Sequence Header OBU in the AV1 Image Item Data.
-    // This is not enforced.
-    //   - The values of the fields in the AV1CodecConfigurationBox shall match those of the
-    //     Sequence Header OBU in the AV1 Image Item Data.
-    // This is not enforced (?).
-    //   - Metadata OBUs, if present, shall match the values given in other item properties, such as
-    //     the PixelInformationProperty or ColourInformationBox.
-    // This is not enforced.
-
-    // unsigned int(8) configOBUs[];
-
-    Ok(ItemProperty::CodecConfiguration(CodecConfiguration::Av1(
-        av1C,
-    )))
 }
 
 #[allow(non_snake_case)]
@@ -916,14 +946,21 @@ fn parse_a1lx(stream: &mut IStream) -> AvifResult<ItemProperty> {
 }
 
 fn parse_clli(stream: &mut IStream) -> AvifResult<ItemProperty> {
-    // Section 12.1.6.2 of ISO/IEC 14496-12.
-    let clli = ContentLightLevelInformation {
-        // unsigned int(16) max_content_light_level
-        max_cll: stream.read_u16()?,
-        // unsigned int(16) max_pic_average_light_level
-        max_pall: stream.read_u16()?,
-    };
-    Ok(ItemProperty::ContentLightLevelInformation(clli))
+    Ok(ItemProperty::ContentLightLevelInformation(
+        ContentLightLevelInformation::parse(stream)?,
+    ))
+}
+
+impl ContentLightLevelInformation {
+    pub(crate) fn parse(stream: &mut IStream) -> AvifResult<ContentLightLevelInformation> {
+        // Section 12.1.6.2 of ISO/IEC 14496-12.
+        Ok(ContentLightLevelInformation {
+            // unsigned int(16) max_content_light_level
+            max_cll: stream.read_bits(16)? as u16,
+            // unsigned int(16) max_pic_average_light_level
+            max_pall: stream.read_bits(16)? as u16,
+        })
+    }
 }
 
 fn parse_ipco(stream: &mut IStream, is_track: bool) -> AvifResult<Vec<ItemProperty>> {
@@ -1774,6 +1811,8 @@ fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
 pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
     let mut ftyp: Option<FileTypeBox> = None;
     let mut meta: Option<MetaBox> = None;
+    #[cfg(feature = "mini")]
+    let mut seen_mini = false;
     let mut tracks: Option<Vec<Track>> = None;
     let mut parse_offset: u64 = 0;
     loop {
@@ -1791,7 +1830,7 @@ pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
 
         // Read the rest of the box if necessary.
         match header.box_type.as_str() {
-            "ftyp" | "meta" | "moov" => {
+            "ftyp" | "meta" | "moov" | "mini" => {
                 if ftyp.is_none() && header.box_type != "ftyp" {
                     // Section 6.3.4 of ISO/IEC 14496-12:
                     //   The FileTypeBox shall occur before any variable-length box. Only a
@@ -1815,13 +1854,37 @@ pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
                     }
                     "meta" => meta = Some(parse_meta(&mut box_stream)?),
                     "moov" => tracks = Some(parse_moov(&mut box_stream)?),
+                    "mini" => {
+                        #[cfg(feature = "mini")]
+                        {
+                            seen_mini = true;
+                            // The MinimizedImageBox is mapped to a virtually
+                            // reconstructed MetaBox.
+                            let offset = parse_offset as usize;
+                            meta = Some(parser::mini::parse_mini(&mut box_stream, offset)?);
+                            if meta.unwrap_ref().iinf.iter().any(|i| i.item_type == "tmap") {
+                                // Decoder::parse() requires the 'tmap' brand to
+                                // be registered for the tone mapping derived
+                                // image item to be parsed.
+                                ftyp.unwrap_mut().compatible_brands.push("tmap".into());
+                            }
+                        }
+                    }
                     _ => {} // Not reached.
                 }
                 if ftyp.is_some() {
                     let ftyp = ftyp.unwrap_ref();
-                    if (!ftyp.needs_meta() || meta.is_some())
-                        && (!ftyp.needs_moov() || tracks.is_some())
+                    let mut enough_information = true;
+                    #[cfg(feature = "mini")]
+                    if ftyp.needs_mini() && !seen_mini {
+                        enough_information = false;
+                    }
+                    if (ftyp.needs_meta() && meta.is_none())
+                        || (ftyp.needs_moov() && tracks.is_none())
                     {
+                        enough_information = false;
+                    }
+                    if enough_information {
                         // Enough information has been parsed to consider parse a success.
                         break;
                     }
@@ -1843,6 +1906,15 @@ pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
     let ftyp = ftyp.unwrap();
     if (ftyp.needs_meta() && meta.is_none()) || (ftyp.needs_moov() && tracks.is_none()) {
         return AvifError::truncated_data();
+    }
+    #[cfg(feature = "mini")]
+    {
+        if ftyp.needs_mini() && (ftyp.needs_meta() || ftyp.needs_moov()) {
+            return AvifError::invalid_ftyp();
+        }
+        if ftyp.needs_mini() && !seen_mini {
+            return AvifError::truncated_data();
+        }
     }
     Ok(AvifBoxes {
         ftyp,

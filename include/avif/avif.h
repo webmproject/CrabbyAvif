@@ -261,11 +261,6 @@ enum avifCodecFlag {
     AVIF_CODEC_FLAG_CAN_ENCODE = (1 << 1),
 };
 
-enum avifHeaderFormat {
-    AVIF_HEADER_FULL,
-    AVIF_HEADER_REDUCED,
-};
-
 enum avifPlanesFlag {
     AVIF_PLANES_YUV = (1 << 0),
     AVIF_PLANES_A = (1 << 1),

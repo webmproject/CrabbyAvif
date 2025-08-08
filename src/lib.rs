@@ -50,6 +50,19 @@ impl std::hash::BuildHasher for NonRandomHasherState {
 pub type HashMap<K, V> = std::collections::HashMap<K, V, NonRandomHasherState>;
 pub type HashSet<K> = std::collections::HashSet<K, NonRandomHasherState>;
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum HeaderFormat {
+    #[default]
+    Default,
+    // AVIF file with a "mif3" brand and a MinimizedImageBox to reduce the encoded file size.
+    // This is based on the w24144 "Low-overhead image file format" MPEG proposal for HEIF.
+    // WARNING: Experimental feature. Produces files that are incompatible with older decoders.
+    // If this flag is omitted or if MinimizedImageBox cannot be used at encoding, falls back to an
+    // AVIF file with an "avif" brand, a MetaBox and all its required boxes for maximum compatibility.
+    Mini,
+}
+
 /// cbindgen:enum-trailing-values=[Count]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

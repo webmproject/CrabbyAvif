@@ -13,6 +13,8 @@
 // limitations under the License.
 
 pub mod item;
+#[cfg(feature = "mini")]
+pub mod mini;
 pub mod mp4box;
 
 use crate::encoder::item::*;
@@ -115,6 +117,7 @@ impl Default for MutableSettings {
 pub struct Settings {
     pub threads: u32,
     pub speed: Option<u32>,
+    pub header_format: HeaderFormat,
     pub keyframe_interval: i32,
     pub timescale: u64,
     pub repetition_count: RepetitionCount,
@@ -127,6 +130,7 @@ impl Default for Settings {
         Settings {
             threads: 1,
             speed: None,
+            header_format: HeaderFormat::default(),
             keyframe_interval: 0,
             timescale: 1,
             repetition_count: RepetitionCount::Infinite,
@@ -642,6 +646,17 @@ impl Encoder {
             }
         }
         let mut stream = OStream::default();
+
+        #[cfg(feature = "mini")]
+        if self.settings.header_format == HeaderFormat::Mini && mini::is_mini_compatible(self) {
+            self.write_ftyp_and_mini(&mut stream)?;
+            return Ok(stream.data);
+        }
+        #[cfg(not(feature = "mini"))]
+        if self.settings.header_format == HeaderFormat::Mini {
+            return AvifError::not_implemented();
+        }
+
         self.write_ftyp(&mut stream)?;
         self.write_meta(&mut stream)?;
         self.write_moov(&mut stream)?;

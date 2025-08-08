@@ -33,3 +33,5 @@ jobs:
     - run: cargo clippy --features aom --examples
     - run: cargo clippy --features sample_transform
     - run: cargo clippy --features sample_transform --tests
+    - run: cargo clippy --features mini
+    - run: cargo clippy --features mini --tests

@@ -13,5 +13,7 @@
 // limitations under the License.
 
 pub mod exif;
+#[cfg(feature = "mini")]
+pub mod mini;
 pub mod mp4box;
 pub mod obu;
