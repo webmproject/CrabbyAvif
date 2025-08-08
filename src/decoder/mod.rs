@@ -831,17 +831,21 @@ impl Decoder {
         if item.is_grid_item() || item.is_overlay_item() {
             // For grid and overlay items, adopt the icc color profile and the nclx of the first
             // tile if it is not explicitly specified for the overall grid.
-            if first_icc.is_some() && find_icc(&item.properties)?.is_none() {
-                item.properties
-                    .push(ItemProperty::ColorInformation(ColorInformation::Icc(
-                        first_icc.unwrap(),
-                    )));
+            if let Some(first_icc) = first_icc {
+                if find_icc(&item.properties)?.is_none() {
+                    item.properties
+                        .push(ItemProperty::ColorInformation(ColorInformation::Icc(
+                            first_icc,
+                        )));
+                }
             }
-            if first_nclx.is_some() && find_nclx(&item.properties)?.is_none() {
-                item.properties
-                    .push(ItemProperty::ColorInformation(ColorInformation::Nclx(
-                        first_nclx.unwrap(),
-                    )));
+            if let Some(first_nclx) = first_nclx {
+                if find_nclx(&item.properties)?.is_none() {
+                    item.properties
+                        .push(ItemProperty::ColorInformation(ColorInformation::Nclx(
+                            first_nclx,
+                        )));
+                }
             }
         }
         Ok(())

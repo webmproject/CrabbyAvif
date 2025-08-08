@@ -404,7 +404,7 @@ impl Decoder for Dav1d {
         }
         self.flush()?;
         if next_picture.is_some() {
-            self.picture = Some(next_picture.unwrap());
+            self.picture = next_picture;
         } else if category == Category::Alpha && self.picture.is_some() {
             // Special case for alpha, re-use last frame.
         } else {
