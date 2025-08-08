@@ -50,8 +50,9 @@ impl BoxHeader {
 #[derive(Debug, Default)]
 pub struct FileTypeBox {
     pub major_brand: String,
-    // minor_version "is informative only" (section 4.3.1 of ISO/IEC 14496-12)
-    compatible_brands: Vec<String>,
+    #[cfg_attr(not(feature = "mini"), allow(dead_code))]
+    pub minor_version: String,
+    pub compatible_brands: Vec<String>,
 }
 
 impl FileTypeBox {
@@ -71,6 +72,11 @@ impl FileTypeBox {
     }
 
     pub(crate) fn is_avif(&self) -> bool {
+        #[cfg(feature = "mini")]
+        if self.needs_mini() {
+            return true;
+        }
+
         // "avio" also exists but does not identify the file as AVIF on its own. See
         // https://aomediacodec.github.io/av1-avif/v1.1.0.html#image-and-image-collection-brand
         self.has_brand_any(&[
@@ -105,6 +111,11 @@ impl FileTypeBox {
             #[cfg(feature = "heic")]
             "msf1",
         ])
+    }
+
+    #[cfg(feature = "mini")]
+    pub(crate) fn needs_mini(&self) -> bool {
+        self.major_brand.as_str() == "mif3" && self.minor_version == "avif"
     }
 
     pub(crate) fn has_tmap(&self) -> bool {
@@ -293,6 +304,7 @@ pub enum ItemProperty {
     AV1LayeredImageIndexing([usize; 3]),
     ContentLightLevelInformation(ContentLightLevelInformation),
     Unknown(String),
+    Unused, // Such as a FreeBox 'free'.
 }
 
 // Section 8.11.14 of ISO/IEC 14496-12.
@@ -308,9 +320,9 @@ pub struct ItemPropertyAssociation {
 #[derive(Debug, Default)]
 pub struct ItemInfo {
     pub item_id: u32,
-    item_protection_index: u16,
+    pub item_protection_index: u16,
     pub item_type: String,
-    item_name: String,
+    pub item_name: String,
     pub content_type: String,
 }
 
@@ -403,6 +415,15 @@ fn parse_truncated_ftyp(stream: &mut IStream) -> FileTypeBox {
         Ok(major_brand) => major_brand,
         Err(_) => return FileTypeBox::default(),
     };
+    let minor_version = match stream.read_string(4) {
+        Ok(major_brand) => major_brand,
+        Err(_) => {
+            return FileTypeBox {
+                major_brand,
+                ..Default::default()
+            }
+        }
+    };
     let mut compatible_brands: Vec<String> = Vec::new();
     // unsigned int(32) compatible_brands[];  // to end of the box
     while stream.has_bytes_left().unwrap_or_default() {
@@ -413,6 +434,7 @@ fn parse_truncated_ftyp(stream: &mut IStream) -> FileTypeBox {
     }
     FileTypeBox {
         major_brand,
+        minor_version,
         compatible_brands,
     }
 }
@@ -422,7 +444,7 @@ fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
     // unsigned int(32) major_brand;
     let major_brand = stream.read_string(4)?;
     // unsigned int(4) minor_version;
-    stream.skip_u32()?;
+    let minor_version = stream.read_string(4)?;
     if stream.bytes_left()? % 4 != 0 {
         return Err(AvifError::BmffParseFailed(format!(
             "Box[ftyp] contains a compatible brands section that isn't divisible by 4 {}",
@@ -436,6 +458,7 @@ fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
     }
     Ok(FileTypeBox {
         major_brand,
+        minor_version,
         compatible_brands,
     })
 }
@@ -623,9 +646,28 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
 
 #[allow(non_snake_case)]
 fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
-    let raw_data = stream.get_immutable_vec(stream.bytes_left()?)?;
+    Ok(ItemProperty::CodecConfiguration(CodecConfiguration::Av1(
+        parse_av1_codec_configuration(&mut stream.sub_bit_stream(4)?)?,
+    )))
+}
+
+#[allow(non_snake_case)]
+pub(crate) fn parse_av1_codec_configuration(
+    bits: &mut IBitStream,
+) -> AvifResult<Av1CodecConfiguration> {
+    let raw_data = {
+        let bit_offset = bits.bit_offset;
+        let raw_data = [
+            bits.read(8)? as u8,
+            bits.read(8)? as u8,
+            bits.read(8)? as u8,
+            bits.read(8)? as u8,
+        ];
+        bits.bit_offset = bit_offset; // Rewind.
+        raw_data.to_vec()
+    };
+
     // See https://aomediacodec.github.io/av1-isobmff/v1.2.0.html#av1codecconfigurationbox-syntax.
-    let mut bits = stream.sub_bit_stream(4)?;
     // unsigned int (1) marker = 1;
     let marker = bits.read(1)?;
     if marker != 1 {
@@ -697,9 +739,7 @@ fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
 
     // unsigned int(8) configOBUs[];
 
-    Ok(ItemProperty::CodecConfiguration(CodecConfiguration::Av1(
-        av1C,
-    )))
+    Ok(av1C)
 }
 
 #[allow(non_snake_case)]
@@ -953,15 +993,22 @@ fn parse_a1lx(stream: &mut IStream) -> AvifResult<ItemProperty> {
     Ok(ItemProperty::AV1LayeredImageIndexing(layer_sizes))
 }
 
+impl ContentLightLevelInformation {
+    pub(crate) fn parse(stream: &mut IBitStream) -> AvifResult<ContentLightLevelInformation> {
+        // Section 12.1.6.2 of ISO/IEC 14496-12.
+        Ok(ContentLightLevelInformation {
+            // unsigned int(16) max_content_light_level
+            max_cll: stream.read(16)? as u16,
+            // unsigned int(16) max_pic_average_light_level
+            max_pall: stream.read(16)? as u16,
+        })
+    }
+}
+
 fn parse_clli(stream: &mut IStream) -> AvifResult<ItemProperty> {
-    // Section 12.1.6.2 of ISO/IEC 14496-12.
-    let clli = ContentLightLevelInformation {
-        // unsigned int(16) max_content_light_level
-        max_cll: stream.read_u16()?,
-        // unsigned int(16) max_pic_average_light_level
-        max_pall: stream.read_u16()?,
-    };
-    Ok(ItemProperty::ContentLightLevelInformation(clli))
+    Ok(ItemProperty::ContentLightLevelInformation(
+        ContentLightLevelInformation::parse(&mut stream.sub_bit_stream(2 + 2)?)?,
+    ))
 }
 
 fn parse_ipco(stream: &mut IStream, is_track: bool) -> AvifResult<Vec<ItemProperty>> {
@@ -1872,6 +1919,8 @@ fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
 pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
     let mut ftyp: Option<FileTypeBox> = None;
     let mut meta: Option<MetaBox> = None;
+    #[cfg(feature = "mini")]
+    let mut mini: Option<()> = None;
     let mut tracks: Option<Vec<Track>> = None;
     let mut parse_offset: u64 = 0;
     loop {
@@ -1889,7 +1938,7 @@ pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
 
         // Read the rest of the box if necessary.
         match header.box_type.as_str() {
-            "ftyp" | "meta" | "moov" => {
+            "ftyp" | "meta" | "moov" | "mini" => {
                 if ftyp.is_none() && header.box_type != "ftyp" {
                     // Section 6.3.4 of ISO/IEC 14496-12:
                     //   The FileTypeBox shall occur before any variable-length box. Only a
@@ -1913,13 +1962,37 @@ pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
                     }
                     "meta" => meta = Some(parse_meta(&mut box_stream)?),
                     "moov" => tracks = Some(parse_moov(&mut box_stream)?),
+                    "mini" => {
+                        #[cfg(feature = "mini")]
+                        {
+                            mini = Some(());
+                            // The MinimizedImageBox is mapped to a virtually
+                            // reconstructed MetaBox.
+                            let offset = parse_offset as usize;
+                            meta = Some(parser::mini::parse_mini(&mut box_stream, offset)?);
+                            if meta.unwrap_ref().iinf.iter().any(|i| i.item_type == "tmap") {
+                                // Decoder::parse() requires the 'tmap' brand to
+                                // be registered for the tone mapping derived
+                                // image item to be parsed.
+                                ftyp.unwrap_mut().compatible_brands.push("tmap".into());
+                            }
+                        }
+                    }
                     _ => {} // Not reached.
                 }
                 if ftyp.is_some() {
                     let ftyp = ftyp.unwrap_ref();
-                    if (!ftyp.needs_meta() || meta.is_some())
-                        && (!ftyp.needs_moov() || tracks.is_some())
+                    let mut enough_information = true;
+                    #[cfg(feature = "mini")]
+                    if ftyp.needs_mini() && mini.is_none() {
+                        enough_information = false;
+                    }
+                    if (ftyp.needs_meta() && meta.is_none())
+                        || (ftyp.needs_moov() && tracks.is_none())
                     {
+                        enough_information = false;
+                    }
+                    if enough_information {
                         // Enough information has been parsed to consider parse a success.
                         break;
                     }
@@ -1941,6 +2014,15 @@ pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
     let ftyp = ftyp.unwrap();
     if (ftyp.needs_meta() && meta.is_none()) || (ftyp.needs_moov() && tracks.is_none()) {
         return Err(AvifError::TruncatedData);
+    }
+    #[cfg(feature = "mini")]
+    {
+        if ftyp.needs_mini() && (ftyp.needs_meta() || ftyp.needs_moov()) {
+            return Err(AvifError::InvalidFtyp);
+        }
+        if ftyp.needs_mini() && mini.is_none() {
+            return Err(AvifError::TruncatedData);
+        }
     }
     Ok(AvifBoxes {
         ftyp,

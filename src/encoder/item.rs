@@ -108,37 +108,45 @@ impl Item {
         stream.finish_box()
     }
 
-    pub(crate) fn write_codec_config(&self, stream: &mut OStream) -> AvifResult<()> {
+    pub(crate) fn write_codec_config_box(&self, stream: &mut OStream) -> AvifResult<()> {
         if let CodecConfiguration::Av1(config) = &self.codec_configuration {
             stream.start_box("av1C")?;
-            // unsigned int (1) marker = 1;
-            stream.write_bits(1, 1)?;
-            // unsigned int (7) version = 1;
-            stream.write_bits(1, 7)?;
-            // unsigned int(3) seq_profile;
-            stream.write_bits(config.seq_profile, 3)?;
-            // unsigned int(5) seq_level_idx_0;
-            stream.write_bits(config.seq_level_idx0, 5)?;
-            // unsigned int(1) seq_tier_0;
-            stream.write_bits(config.seq_tier0, 1)?;
-            // unsigned int(1) high_bitdepth;
-            stream.write_bits(config.high_bitdepth as u8, 1)?;
-            // unsigned int(1) twelve_bit;
-            stream.write_bits(config.twelve_bit as u8, 1)?;
-            // unsigned int(1) monochrome;
-            stream.write_bits(config.monochrome as u8, 1)?;
-            // unsigned int(1) chroma_subsampling_x;
-            stream.write_bits(config.chroma_subsampling_x, 1)?;
-            // unsigned int(1) chroma_subsampling_y;
-            stream.write_bits(config.chroma_subsampling_y, 1)?;
-            // unsigned int(2) chroma_sample_position;
-            stream.write_bits(config.chroma_sample_position as u8, 2)?;
-            // unsigned int (3) reserved = 0;
-            // unsigned int (1) initial_presentation_delay_present;
-            // unsigned int (4) reserved = 0;
-            stream.write_u8(0)?;
+            Self::write_codec_config(config, stream)?;
             stream.finish_box()?;
         }
+        Ok(())
+    }
+
+    pub(crate) fn write_codec_config(
+        config: &Av1CodecConfiguration,
+        stream: &mut OStream,
+    ) -> AvifResult<()> {
+        // unsigned int (1) marker = 1;
+        stream.write_bits(1, 1)?;
+        // unsigned int (7) version = 1;
+        stream.write_bits(1, 7)?;
+        // unsigned int(3) seq_profile;
+        stream.write_bits(config.seq_profile.into(), 3)?;
+        // unsigned int(5) seq_level_idx_0;
+        stream.write_bits(config.seq_level_idx0.into(), 5)?;
+        // unsigned int(1) seq_tier_0;
+        stream.write_bits(config.seq_tier0.into(), 1)?;
+        // unsigned int(1) high_bitdepth;
+        stream.write_bool(config.high_bitdepth)?;
+        // unsigned int(1) twelve_bit;
+        stream.write_bool(config.twelve_bit)?;
+        // unsigned int(1) monochrome;
+        stream.write_bool(config.monochrome)?;
+        // unsigned int(1) chroma_subsampling_x;
+        stream.write_bits(config.chroma_subsampling_x.into(), 1)?;
+        // unsigned int(1) chroma_subsampling_y;
+        stream.write_bits(config.chroma_subsampling_y.into(), 1)?;
+        // unsigned int(2) chroma_sample_position;
+        stream.write_bits(config.chroma_sample_position as u32, 2)?;
+        // unsigned int (3) reserved = 0;
+        // unsigned int (1) initial_presentation_delay_present;
+        // unsigned int (4) reserved = 0;
+        stream.write_u8(0)?;
         Ok(())
     }
 
@@ -160,7 +168,7 @@ impl Item {
         // unsigned int(7) reserved = 0;
         stream.write_bits(0, 7)?;
         // unsigned int(1) large_size;
-        stream.write_bits(has_large_size as u8, 1)?;
+        stream.write_bool(has_large_size)?;
         // FieldLength = (large_size + 1) * 16;
         // unsigned int(FieldLength) layer_size[3];
         for i in 0..3 {
@@ -238,7 +246,7 @@ impl Item {
         // unsigned int(6) reserved = 0;
         stream.write_bits(0, 6)?;
         // unsigned int(2) angle;
-        stream.write_bits(angle & 0x03, 2)?;
+        stream.write_bits((angle & 0x03).into(), 2)?;
         stream.finish_box()
     }
 
@@ -247,7 +255,7 @@ impl Item {
         // unsigned int(7) reserved = 0;
         stream.write_bits(0, 7)?;
         // unsigned int(1) axis;
-        stream.write_bits(axis & 0x01, 1)?;
+        stream.write_bits((axis & 0x01).into(), 1)?;
         stream.finish_box()
     }
 
@@ -311,7 +319,7 @@ impl Item {
 
         if self.codec.is_some() {
             streams.push(OStream::default());
-            self.write_codec_config(streams.last_mut().unwrap())?;
+            self.write_codec_config_box(streams.last_mut().unwrap())?;
             self.associations
                 .push((u8_from_usize(streams.len())?, true));
         }
@@ -573,7 +581,7 @@ impl Item {
             // int(16) pre_defined = -1
             stream.write_u16(0xffff)?;
 
-            self.write_codec_config(stream)?;
+            self.write_codec_config_box(stream)?;
             if self.category == Category::Color {
                 self.write_icc(stream, image_metadata)?;
                 self.write_nclx(stream, image_metadata)?;
