@@ -479,8 +479,8 @@ pub enum avifChannelIndex {
 /// cbindgen:rename-all=ScreamingSnakeCase
 #[repr(C)]
 pub enum avifHeaderFormat {
-    AvifHeaderFull,
-    AvifHeaderReduced,
+    AvifHeaderDefault,
+    AvifHeaderMini,
 }
 
 #[repr(C)]
