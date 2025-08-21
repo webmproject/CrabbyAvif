@@ -35,6 +35,9 @@ pub enum Format {
     Abgr,
     Rgb565,
     Rgba1010102, // https://developer.android.com/reference/android/graphics/Bitmap.Config#RGBA_1010102
+    Gray,
+    GrayA,
+    AGray,
 }
 
 impl Format {
@@ -46,7 +49,9 @@ impl Format {
             Format::Bgr => [2, 1, 0, 0],
             Format::Bgra => [2, 1, 0, 3],
             Format::Abgr => [3, 2, 1, 0],
-            Format::Rgb565 | Format::Rgba1010102 => [0; 4],
+            Format::Rgb565 | Format::Rgba1010102 | Format::Gray => [0; 4],
+            Format::GrayA => [0, 0, 0, 1],
+            Format::AGray => [1, 0, 0, 0],
         }
     }
 
@@ -67,15 +72,19 @@ impl Format {
     }
 
     pub fn has_alpha(&self) -> bool {
-        !matches!(self, Format::Rgb | Format::Bgr | Format::Rgb565)
+        !matches!(
+            self,
+            Format::Rgb | Format::Bgr | Format::Rgb565 | Format::Gray
+        )
     }
 
     pub fn channel_count(&self) -> u32 {
         match self {
             Format::Rgba | Format::Bgra | Format::Argb | Format::Abgr => 4,
             Format::Rgb | Format::Bgr => 3,
-            Format::Rgb565 => 2,
+            Format::Rgb565 | Format::GrayA | Format::AGray => 2,
             Format::Rgba1010102 => 0, // This is never used.
+            Format::Gray => 1,
         }
     }
 
@@ -84,6 +93,10 @@ impl Format {
             Format::Rgb565 => 2,
             _ => self.channel_count() * if depth > 8 { 2 } else { 1 },
         }
+    }
+
+    pub(crate) fn is_gray(&self) -> bool {
+        matches!(self, Format::Gray | Format::GrayA | Format::AGray)
     }
 }
 
@@ -274,8 +287,14 @@ impl Image {
 
     pub fn has_alpha(&self) -> bool {
         match self.format {
-            Format::Rgba | Format::Bgra | Format::Argb | Format::Abgr | Format::Rgba1010102 => true,
-            Format::Rgb | Format::Bgr | Format::Rgb565 => false,
+            Format::Rgba
+            | Format::Bgra
+            | Format::Argb
+            | Format::Abgr
+            | Format::Rgba1010102
+            | Format::GrayA
+            | Format::AGray => true,
+            Format::Rgb | Format::Bgr | Format::Rgb565 | Format::Gray => false,
         }
     }
 
@@ -297,6 +316,8 @@ impl Image {
             Format::Rgb | Format::Bgr => self.channel_size() * 3,
             Format::Rgb565 => 2,
             Format::Rgba1010102 => 4,
+            Format::Gray => self.channel_size(),
+            Format::GrayA | Format::AGray => self.channel_size() * 2,
         }
     }
 
@@ -419,10 +440,11 @@ impl Image {
         }
         if !converted_with_libyuv {
             let mut converted_by_fast_path = false;
-            if (matches!(
-                self.chroma_upsampling,
-                ChromaUpsampling::Nearest | ChromaUpsampling::Fastest
-            ) || matches!(image.yuv_format, PixelFormat::Yuv444 | PixelFormat::Yuv400))
+            if !self.format.is_gray()
+                && (matches!(
+                    self.chroma_upsampling,
+                    ChromaUpsampling::Nearest | ChromaUpsampling::Fastest
+                ) || matches!(image.yuv_format, PixelFormat::Yuv444 | PixelFormat::Yuv400))
                 && (alpha_multiply_mode == AlphaMultiplyMode::NoOp || self.format.has_alpha())
             {
                 match rgb_impl::yuv_to_rgb_fast(image, self) {
@@ -466,27 +488,30 @@ impl Image {
                 (true, true, false) => AlphaMultiplyMode::UnMultiply,
                 _ => AlphaMultiplyMode::NoOp,
             };
-        // TODO: b/410088660 - support gray rgb formats.
-        let mut conversion_complete = false;
-        if self.chroma_downsampling == ChromaDownsampling::SharpYuv {
-            match sharpyuv::rgb_to_yuv(self, image) {
-                Ok(_) => conversion_complete = true,
-                Err(err) => return Err(err),
-            }
-        } else if alpha_multiply_mode == AlphaMultiplyMode::NoOp {
-            match libyuv::rgb_to_yuv(self, image) {
-                Ok(_) => {
-                    conversion_complete = true;
+        if self.format.is_gray() {
+            rgb_impl::rgb_gray_to_yuv(self, image)?;
+        } else {
+            let mut conversion_complete = false;
+            if self.chroma_downsampling == ChromaDownsampling::SharpYuv {
+                match sharpyuv::rgb_to_yuv(self, image) {
+                    Ok(_) => conversion_complete = true,
+                    Err(err) => return Err(err),
                 }
-                Err(err) => {
-                    if err != AvifError::NotImplemented {
-                        return Err(err);
+            } else if alpha_multiply_mode == AlphaMultiplyMode::NoOp {
+                match libyuv::rgb_to_yuv(self, image) {
+                    Ok(_) => {
+                        conversion_complete = true;
+                    }
+                    Err(err) => {
+                        if err != AvifError::NotImplemented {
+                            return Err(err);
+                        }
                     }
                 }
             }
-        }
-        if !conversion_complete {
-            rgb_impl::rgb_to_yuv(self, image)?;
+            if !conversion_complete {
+                rgb_impl::rgb_to_yuv(self, image)?;
+            }
         }
         if image.has_plane(Plane::A) {
             if has_alpha {

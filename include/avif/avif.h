@@ -163,6 +163,9 @@ enum avifRGBFormat {
     AVIF_RGB_FORMAT_ABGR,
     AVIF_RGB_FORMAT_RGB565,
     AVIF_RGB_FORMAT_RGBA1010102,
+    AVIF_RGB_FORMAT_GRAY,
+    AVIF_RGB_FORMAT_GRAY_A,
+    AVIF_RGB_FORMAT_A_GRAY,
 };
 
 enum avifMatrixCoefficients : uint16_t {

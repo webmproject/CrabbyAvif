@@ -689,4 +689,23 @@ impl Image {
         }
         true
     }
+
+    pub(crate) fn fill_plane_with_value(&mut self, plane: Plane, value: u16) -> AvifResult<()> {
+        if let Some(plane_data) = self.plane_data(plane) {
+            if self.depth == 8 {
+                for y in 0..plane_data.height {
+                    let row =
+                        &mut self.row_exact_mut(plane, y).unwrap()[..plane_data.width as usize];
+                    row.fill(value as u8);
+                }
+            } else {
+                for y in 0..plane_data.height {
+                    let row =
+                        &mut self.row16_exact_mut(plane, y).unwrap()[..plane_data.width as usize];
+                    row.fill(value);
+                }
+            }
+        }
+        Ok(())
+    }
 }
