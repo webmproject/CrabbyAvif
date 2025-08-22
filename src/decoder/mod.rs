@@ -177,6 +177,7 @@ pub struct Settings {
     pub image_count_limit: Option<NonZero<u32>>,
     pub max_threads: u32,
     pub android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat,
+    pub allow_sample_transform: bool,
 }
 
 impl Default for Settings {
@@ -195,6 +196,7 @@ impl Default for Settings {
             image_count_limit: NonZero::new(DEFAULT_IMAGE_COUNT_LIMIT),
             max_threads: 1,
             android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat::default(),
+            allow_sample_transform: false,
         }
     }
 }
@@ -936,6 +938,7 @@ impl Decoder {
                 if item.should_skip()
                     || !item.is_image_item()
                     || (item.is_tone_mapped_item() && !ftyp.has_tmap())
+                    || (item.is_sample_transform_item() && !self.settings.allow_sample_transform)
                 {
                     continue;
                 }

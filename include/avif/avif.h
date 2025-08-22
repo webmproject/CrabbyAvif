@@ -472,6 +472,7 @@ struct avifDecoder {
     avifBool imageSequenceTrackPresent;
     AndroidMediaCodecOutputColorFormat androidMediaCodecOutputColorFormat;
     CompressionFormat compressionFormat;
+    avifBool allowSampleTransform;
     Box<Decoder> rust_decoder;
     avifImage image_object;
     avifGainMap gainmap_object;

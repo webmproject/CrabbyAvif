@@ -1436,6 +1436,7 @@ fn yuv_range(filename: &str, expected_yuv_range: YuvRange) {
 #[test_case("weld_sato_12plus4bit.avif", false)]
 fn sato_16bit(filename: &str, has_alpha: bool) {
     let mut decoder = get_decoder(filename);
+    decoder.settings.allow_sample_transform = true;
     assert!(decoder.parse().is_ok());
     assert_eq!(has_alpha, decoder.image().unwrap().alpha_present);
     if !HAS_DECODER {
@@ -1450,4 +1451,17 @@ fn sato_16bit(filename: &str, has_alpha: bool) {
     } else {
         assert!(decoder.image().unwrap().depth < 16);
     }
+}
+
+#[test]
+fn sato_disabled() {
+    let mut decoder = get_decoder("weld_sato_8plus8bit.avif");
+    decoder.settings.allow_sample_transform = false;
+    assert!(decoder.parse().is_ok());
+    if !HAS_DECODER {
+        return;
+    }
+    let res = decoder.next_image();
+    assert_eq!(res, Ok(()));
+    assert_eq!(decoder.image().unwrap().depth, 8);
 }
