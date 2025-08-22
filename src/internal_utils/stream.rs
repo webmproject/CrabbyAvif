@@ -21,7 +21,19 @@ pub struct IBitStream<'a> {
     pub bit_offset: usize,
 }
 
+#[allow(dead_code)]
 impl IBitStream<'_> {
+    pub(crate) fn sub_stream(&mut self, num_bits: usize) -> AvifResult<IBitStream<'_>> {
+        let start_byte_offset = self.bit_offset / 8;
+        let start_bit_offset = self.bit_offset % 8;
+        checked_incr!(self.bit_offset, num_bits);
+        let end_byte_offset = self.bit_offset.div_ceil(8);
+        Ok(IBitStream {
+            data: &self.data[start_byte_offset..end_byte_offset],
+            bit_offset: start_bit_offset,
+        })
+    }
+
     fn read_bit(&mut self) -> AvifResult<u8> {
         let byte_offset = self.bit_offset / 8;
         if byte_offset >= self.data.len() {
@@ -46,6 +58,14 @@ impl IBitStream<'_> {
     pub(crate) fn read_bool(&mut self) -> AvifResult<bool> {
         let bit = self.read_bit()?;
         Ok(bit == 1)
+    }
+
+    pub(crate) fn pad(&mut self) -> AvifResult<()> {
+        let unaligned_bits = self.bit_offset % 8;
+        if unaligned_bits != 0 && self.read(8 - unaligned_bits)? != 0 {
+            return Err(AvifError::BmffParseFailed("Padding not set to 0".into()));
+        }
+        Ok(())
     }
 
     pub(crate) fn skip(&mut self, n: usize) -> AvifResult<()> {
@@ -75,7 +95,9 @@ impl IBitStream<'_> {
 
 #[derive(Debug)]
 pub struct IStream<'a> {
+    // The bytes to parse.
     pub data: &'a [u8],
+    // The number of bytes read so far within self.data.
     pub offset: usize,
 }
 
@@ -109,10 +131,10 @@ impl IStream<'_> {
         })
     }
 
-    pub(crate) fn sub_bit_stream(&mut self, size: usize) -> AvifResult<IBitStream<'_>> {
-        self.check(size)?;
+    pub(crate) fn sub_bit_stream(&mut self, num_bytes: usize) -> AvifResult<IBitStream<'_>> {
+        self.check(num_bytes)?;
         let offset = self.offset;
-        checked_incr!(self.offset, size);
+        checked_incr!(self.offset, num_bytes);
         Ok(IBitStream {
             data: &self.data[offset..self.offset],
             bit_offset: 0,
@@ -291,8 +313,13 @@ impl IStream<'_> {
 #[cfg(feature = "encoder")]
 #[derive(Default)]
 pub struct OStream {
+    // The bytes written so far.
     pub data: Vec<u8>,
-    partial: Option<(u8, u8)>,
+    // If not zero, number of most significant bits already written in the last
+    // byte of self.data.
+    num_bits: u8,
+    // The positions in self.data where are written the 4-byte sizes of the
+    // boxes that were started but not yet finished.
     box_marker_offsets: Vec<usize>,
 }
 
@@ -300,7 +327,7 @@ pub struct OStream {
 #[allow(dead_code)]
 impl OStream {
     pub(crate) fn offset(&self) -> usize {
-        assert!(self.partial.is_none());
+        assert_eq!(self.num_bits, 0);
         self.data.len()
     }
 
@@ -308,22 +335,35 @@ impl OStream {
         self.data.try_reserve(size).or(Err(AvifError::OutOfMemory))
     }
 
-    pub(crate) fn write_bits(&mut self, value: u8, num_bits: u8) -> AvifResult<()> {
-        if num_bits == 0 || num_bits >= 8 {
+    pub(crate) fn write_bits(&mut self, value: u32, num_bits: u8) -> AvifResult<()> {
+        if num_bits == 0 || num_bits > 31 {
             return Err(AvifError::UnknownError("".into()));
         }
-        let (bits, offset) = self.partial.unwrap_or((0, 0));
-        if offset + num_bits > 8 {
-            // write_bits cannot overlap multiple bytes.
+        if value >= (1 << num_bits) {
             return Err(AvifError::UnknownError("".into()));
         }
-        let value_at_offset = (value & ((1 << num_bits) - 1)) << (8 - offset - num_bits);
-        let bits = bits | value_at_offset;
-        if offset + num_bits == 8 {
-            self.partial = None;
-            self.write_u8(bits)?;
-        } else {
-            self.partial = Some((bits, offset + num_bits));
+        let mut num_remaining_bits = num_bits;
+        while num_remaining_bits != 0 {
+            if self.num_bits == 0 {
+                self.write_u8(0)?;
+            }
+            let byte = self.data.last_mut().unwrap();
+            // Number of bits among num_bits that can be written in the last byte of self.data.
+            let num_written_bits = std::cmp::min(8 - self.num_bits, num_remaining_bits);
+            // Write the most significant bits first (somewhat big endian).
+            let written_bits = (value >> (num_remaining_bits - num_written_bits))
+                & ((1u32 << num_written_bits) - 1);
+            *byte |= (written_bits as u8) << (8 - self.num_bits - num_written_bits);
+            num_remaining_bits -= num_written_bits;
+            self.num_bits = (self.num_bits + num_written_bits) % 8;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn pad(&mut self) -> AvifResult<()> {
+        if self.num_bits != 0 {
+            self.write_bits(0, 8 - self.num_bits)?;
+            assert_eq!(self.num_bits, 0);
         }
         Ok(())
     }
@@ -333,21 +373,21 @@ impl OStream {
     }
 
     pub(crate) fn write_u8(&mut self, value: u8) -> AvifResult<()> {
-        assert!(self.partial.is_none());
+        assert_eq!(self.num_bits, 0);
         self.try_reserve(1)?;
         self.data.push(value);
         Ok(())
     }
 
     pub(crate) fn write_u16(&mut self, value: u16) -> AvifResult<()> {
-        assert!(self.partial.is_none());
+        assert_eq!(self.num_bits, 0);
         self.try_reserve(2)?;
         self.data.extend_from_slice(&value.to_be_bytes());
         Ok(())
     }
 
     pub(crate) fn write_u24(&mut self, value: u32) -> AvifResult<()> {
-        assert!(self.partial.is_none());
+        assert_eq!(self.num_bits, 0);
         if value > 0xFFFFFF {
             return Err(AvifError::InvalidArgument);
         }
@@ -357,14 +397,14 @@ impl OStream {
     }
 
     pub(crate) fn write_u32(&mut self, value: u32) -> AvifResult<()> {
-        assert!(self.partial.is_none());
+        assert_eq!(self.num_bits, 0);
         self.try_reserve(4)?;
         self.data.extend_from_slice(&value.to_be_bytes());
         Ok(())
     }
 
     pub(crate) fn write_u32_at_offset(&mut self, value: u32, offset: usize) -> AvifResult<()> {
-        assert!(self.partial.is_none());
+        assert_eq!(self.num_bits, 0);
         let range = offset..offset + 4;
         check_slice_range(self.data.len(), &range)?;
         self.data[range].copy_from_slice(&value.to_be_bytes());
@@ -372,14 +412,14 @@ impl OStream {
     }
 
     pub(crate) fn write_u64(&mut self, value: u64) -> AvifResult<()> {
-        assert!(self.partial.is_none());
+        assert_eq!(self.num_bits, 0);
         self.try_reserve(8)?;
         self.data.extend_from_slice(&value.to_be_bytes());
         Ok(())
     }
 
     pub(crate) fn write_str(&mut self, value: &str) -> AvifResult<()> {
-        assert!(self.partial.is_none());
+        assert_eq!(self.num_bits, 0);
         let bytes = value.as_bytes();
         self.try_reserve(bytes.len())?;
         self.data.extend_from_slice(bytes);
@@ -387,14 +427,14 @@ impl OStream {
     }
 
     pub(crate) fn write_str_with_nul(&mut self, value: &str) -> AvifResult<()> {
-        assert!(self.partial.is_none());
+        assert_eq!(self.num_bits, 0);
         self.write_str(value)?;
         self.write_u8(0)?;
         Ok(())
     }
 
     pub(crate) fn write_string(&mut self, value: &String) -> AvifResult<()> {
-        assert!(self.partial.is_none());
+        assert_eq!(self.num_bits, 0);
         let bytes = value.as_bytes();
         self.try_reserve(bytes.len())?;
         self.data.extend_from_slice(bytes);
@@ -402,7 +442,7 @@ impl OStream {
     }
 
     pub(crate) fn write_string_with_nul(&mut self, value: &String) -> AvifResult<()> {
-        assert!(self.partial.is_none());
+        assert_eq!(self.num_bits, 0);
         self.write_string(value)?;
         self.write_u8(0)?;
         Ok(())
@@ -432,7 +472,7 @@ impl OStream {
     }
 
     pub(crate) fn write_slice(&mut self, data: &[u8]) -> AvifResult<()> {
-        assert!(self.partial.is_none());
+        assert_eq!(self.num_bits, 0);
         self.try_reserve(data.len())?;
         self.data.extend_from_slice(data);
         Ok(())
@@ -457,7 +497,7 @@ impl OStream {
         box_type: &str,
         version_and_flags: Option<(u8, u32)>,
     ) -> AvifResult<()> {
-        assert!(self.partial.is_none());
+        assert_eq!(self.num_bits, 0);
         self.box_marker_offsets.push(self.offset());
         // 4 bytes for size to be filled out later.
         self.write_u32(0)?;
@@ -482,7 +522,7 @@ impl OStream {
     }
 
     pub(crate) fn finish_box(&mut self) -> AvifResult<()> {
-        assert!(self.partial.is_none());
+        assert_eq!(self.num_bits, 0);
         let offset = self
             .box_marker_offsets
             .pop()
@@ -543,29 +583,54 @@ mod tests {
         assert_eq!(IStream::create(bytes).read_c_string(), Ok("abcd".into()));
     }
 
+    #[test]
+    fn read_bits() {
+        let bytes = "abcd\0e\0".as_bytes();
+        let mut stream = IStream::create(bytes);
+        let mut bits = stream.sub_bit_stream(7).unwrap();
+        assert_eq!(bits.read(8), Ok('a'.into()));
+        // Read most significant bits first.
+        assert_eq!(bits.read(1), Ok(0));
+        assert_eq!(bits.read(7), Ok('b'.into()));
+        // Read across bytes and most significant bytes first.
+        assert_eq!(bits.read(1), Ok(0));
+        assert_eq!(bits.read(15), Ok(('c' as u32) << 8 | 'd' as u32));
+        // Sub bit stream.
+        let mut bits = bits.sub_stream(3 * 8).unwrap();
+        assert_eq!(bits.read(8), Ok('\0'.into()));
+        assert_eq!(bits.read(8), Ok('e'.into()));
+        assert_eq!(bits.read(1), Ok(0));
+        assert_eq!(bits.pad(), Ok(()));
+        assert!(bits.read(1).is_err());
+    }
+
     #[cfg(feature = "encoder")]
     #[test]
     fn write_bits() {
         let mut stream = OStream::default();
         assert_eq!(stream.write_bits(1, 1), Ok(()));
-        assert_eq!(stream.data.len(), 0);
+        assert_eq!(stream.data.len(), 1);
         assert_eq!(stream.write_bits(2, 3), Ok(()));
-        assert_eq!(stream.data.len(), 0);
-        assert_eq!(stream.write_bits(1, 4), Ok(()));
         assert_eq!(stream.data.len(), 1);
         assert_eq!(stream.write_bits(1, 4), Ok(()));
         assert_eq!(stream.data.len(), 1);
+        assert_eq!(stream.write_bits(1, 4), Ok(()));
+        assert_eq!(stream.data.len(), 2);
         assert_eq!(stream.write_bits(4, 4), Ok(()));
         assert_eq!(stream.data.len(), 2);
         assert_eq!(stream.write_u8(0xCC), Ok(()));
         assert_eq!(stream.data.len(), 3);
         assert_eq!(stream.data, vec![0xA1, 0x14, 0xCC]);
-        assert!(stream.write_bits(1, 10).is_err());
 
-        // Write 5 bits.
+        // Supports from 1 to 31 bits.
+        assert!(stream.write_bits(0, 0).is_err());
+        assert_eq!(stream.write_bits(0, 1), Ok(()));
+        assert_eq!(stream.write_bits(0, 31), Ok(()));
+        assert!(stream.write_bits(0, 32).is_err());
+
+        // Supports bits overlapping multiple bytes.
         assert_eq!(stream.write_bits(5, 5), Ok(()));
-        // Now, trying to write 4 bits should fail since it overlaps more than 1 byte.
-        assert!(stream.write_bits(5, 4).is_err());
+        assert_eq!(stream.write_bits(5, 4), Ok(()));
     }
 
     #[cfg(feature = "encoder")]

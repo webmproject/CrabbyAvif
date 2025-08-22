@@ -386,7 +386,7 @@ impl Encoder {
             stream.write_u8(u8_from_usize(item.associations.len())?)?;
             for (property_index, essential) in &item.associations {
                 // bit(1) essential;
-                stream.write_bits(*essential as u8, 1)?;
+                stream.write_bool(*essential)?;
                 // property_index_map is 0-indexed whereas the index stored in item.associations is
                 // 1-indexed.
                 let index = property_index_map[*property_index as usize - 1];
@@ -394,7 +394,7 @@ impl Encoder {
                     return Err(AvifError::UnknownError("".into()));
                 }
                 // unsigned int(7) property_index;
-                stream.write_bits(index, 7)?;
+                stream.write_bits(index.into(), 7)?;
             }
         }
         stream.finish_box()?;
