@@ -262,8 +262,8 @@ enum avifCodecFlag {
 };
 
 enum avifHeaderFormat {
-    AVIF_HEADER_FULL,
-    AVIF_HEADER_REDUCED,
+    AVIF_HEADER_DEFAULT,
+    AVIF_HEADER_MINI,
 };
 
 enum avifPlanesFlag {
