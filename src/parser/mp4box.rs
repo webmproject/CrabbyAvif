@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::decoder::tile::SampleTransform;
-#[cfg(feature = "sample_transform")]
 use crate::decoder::tile::*;
 use crate::decoder::track::*;
 use crate::decoder::Extent;
@@ -2042,7 +2041,6 @@ pub(crate) fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
     Ok(metadata)
 }
 
-#[cfg(feature = "sample_transform")]
 pub(crate) fn parse_sato(stream: &mut IStream, num_inputs: usize) -> AvifResult<SampleTransform> {
     let mut bits = stream.sub_bit_stream(1)?;
     // unsigned int(2) version = 0;
@@ -2107,11 +2105,6 @@ pub(crate) fn parse_sato(stream: &mut IStream, num_inputs: usize) -> AvifResult<
     }
 
     SampleTransform::create_from(bit_depth, num_inputs, tokens)
-}
-
-#[cfg(not(feature = "sample_transform"))]
-pub(crate) fn parse_sato(_stream: &mut IStream, _num_inputs: usize) -> AvifResult<SampleTransform> {
-    Ok(SampleTransform::default())
 }
 
 #[cfg(test)]
