@@ -367,7 +367,7 @@ fn find_conversion_function(
     }
 }
 
-#[cfg_attr(feature = "disable_cfi", no_sanitize(cfi))]
+#[cfg_attr(feature = "disable_cfi", sanitize(cfi = "off"))]
 pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool> {
     if (rgb.depth != 8 && rgb.depth != 10) || !image.depth_valid() {
         return Err(AvifError::NotImplemented);
