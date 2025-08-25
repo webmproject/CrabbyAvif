@@ -220,9 +220,7 @@ impl crate::decoder::IO for avifIOWrapper {
         if self.data.size == 0 {
             Ok(&[])
         } else if self.data.data.is_null() {
-            Err(AvifError::UnknownError(
-                "data pointer was null but size was not zero".into(),
-            ))
+            AvifError::unknown_error("data pointer was null but size was not zero")
         } else {
             // SAFETY: The pointers are guaranteed to be valid based on the checks above.
             Ok(unsafe { std::slice::from_raw_parts(self.data.data, self.data.size) })

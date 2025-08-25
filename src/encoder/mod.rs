@@ -198,7 +198,7 @@ pub struct Encoder {
 impl Encoder {
     pub fn create_with_settings(settings: &Settings) -> AvifResult<Self> {
         if !settings.is_valid() {
-            return Err(AvifError::InvalidArgument);
+            return AvifError::invalid_argument();
         }
         Ok(Self {
             settings: *settings,
@@ -343,7 +343,7 @@ impl Encoder {
         let last_image = images.last().unwrap();
         for (index, image) in images.iter().enumerate() {
             if image.depth != 8 && image.depth != 10 && image.depth != 12 {
-                return Err(AvifError::InvalidArgument);
+                return AvifError::invalid_argument();
             }
             let expected_width = if grid.is_last_column(index as u32) {
                 last_image.width
@@ -361,23 +361,19 @@ impl Encoder {
                 || image.has_alpha() != first_image.has_alpha()
                 || image.alpha_premultiplied != first_image.alpha_premultiplied
             {
-                return Err(AvifError::InvalidImageGrid(
-                    "all cells do not have the same properties".into(),
-                ));
+                return AvifError::invalid_image_grid("all cells do not have the same properties");
             }
             if image.matrix_coefficients == MatrixCoefficients::Identity
                 && image.yuv_format != PixelFormat::Yuv444
             {
-                return Err(AvifError::InvalidArgument);
+                return AvifError::invalid_argument();
             }
             if !image.has_plane(Plane::Y) {
-                return Err(AvifError::NoContent);
+                return AvifError::no_content();
             }
         }
         if last_image.width > first_image.width || last_image.height > first_image.height {
-            return Err(AvifError::InvalidImageGrid(
-                "last cell was larger than the first cell".into(),
-            ));
+            return AvifError::invalid_image_grid("last cell was larger than the first cell");
         }
         if images.len() > 1 {
             validate_grid_image_dimensions(first_image, grid)?;
@@ -386,7 +382,7 @@ impl Encoder {
             if !CropRect::create_from(clap, grid.width, grid.height, first_image.yuv_format)?
                 .is_valid(grid.width, grid.height, first_image.yuv_format)
             {
-                return Err(AvifError::InvalidArgument);
+                return AvifError::invalid_argument();
             }
         }
         Ok(())
@@ -395,15 +391,15 @@ impl Encoder {
     fn validate_gainmap_grid(grid: &Grid, gainmaps: &[&GainMap]) -> AvifResult<()> {
         for gainmap in &gainmaps[1..] {
             if gainmaps[0] != *gainmap {
-                return Err(AvifError::InvalidImageGrid(
-                    "all cells should have the same gain map metadata".into(),
-                ));
+                return AvifError::invalid_image_grid(
+                    "all cells should have the same gain map metadata",
+                );
             }
         }
         if gainmaps[0].image.color_primaries != ColorPrimaries::Unspecified
             || gainmaps[0].image.transfer_characteristics != TransferCharacteristics::Unspecified
         {
-            return Err(AvifError::InvalidArgument);
+            return AvifError::invalid_argument();
         }
         let gainmap_images: Vec<_> = gainmaps.iter().map(|x| &x.image).collect();
         Self::validate_image_grid(grid, &gainmap_images)?;
@@ -411,7 +407,7 @@ impl Encoder {
         // either all the cell images have alpha or all of them don't. So it is sufficient to check
         // if the first cell image does not have alpha.
         if gainmap_images[0].has_alpha() {
-            return Err(AvifError::InvalidArgument);
+            return AvifError::invalid_argument();
         }
         Ok(())
     }
@@ -427,7 +423,7 @@ impl Encoder {
     ) -> AvifResult<()> {
         let cell_count: usize = usize_from_u32(grid_rows * grid_columns)?;
         if cell_count == 0 || cell_images.len() != cell_count {
-            return Err(AvifError::InvalidArgument);
+            return AvifError::invalid_argument();
         }
         if duration == 0 {
             duration = 1;
@@ -472,9 +468,7 @@ impl Encoder {
             }
             if let Some(gainmaps) = gainmaps {
                 if gainmaps.len() != cell_images.len() {
-                    return Err(AvifError::InvalidImageGrid(
-                        "invalid number of gainmap images".into(),
-                    ));
+                    return AvifError::invalid_image_grid("invalid number of gainmap images");
                 }
                 let first_gainmap_image = &gainmaps[0].image;
                 let last_gainmap_image = &gainmaps.last().unwrap().image;
@@ -489,7 +483,7 @@ impl Encoder {
                 Self::validate_gainmap_grid(&gainmap_grid, gainmaps)?;
                 let tonemap_item_id = self.add_tmap_item(gainmaps[0])?;
                 if !self.alternative_item_ids.is_empty() {
-                    return Err(AvifError::UnknownError("".into()));
+                    return AvifError::unknown_error("");
                 }
                 self.alternative_item_ids.push(tonemap_item_id);
                 self.alternative_item_ids.push(color_item_id);
@@ -502,7 +496,7 @@ impl Encoder {
             self.add_xmp_item()?;
         } else {
             if gainmaps.is_some() {
-                return Err(AvifError::NotImplemented);
+                return AvifError::not_implemented();
             }
             // Another frame in an image sequence, or layer in a layered image.
             let first_image = cell_images[0];
@@ -513,7 +507,7 @@ impl Encoder {
                 // of the current image in that case.
                 || (self.image_metadata.alpha_present && !first_image.alpha_present)
             {
-                return Err(AvifError::InvalidArgument);
+                return AvifError::invalid_argument();
             }
         }
 
@@ -577,7 +571,7 @@ impl Encoder {
 
     pub fn add_image_for_sequence(&mut self, image: &Image, duration: u64) -> AvifResult<()> {
         if self.settings.extra_layer_count != 0 {
-            return Err(AvifError::InvalidArgument);
+            return AvifError::invalid_argument();
         }
         // TODO: this and add_image cannot be used on the same instance.
         self.add_image_impl(1, 1, &[image], duration, false, None)
@@ -590,7 +584,7 @@ impl Encoder {
         images: &[&Image],
     ) -> AvifResult<()> {
         if grid_columns == 0 || grid_columns > 256 || grid_rows == 0 || grid_rows > 256 {
-            return Err(AvifError::InvalidImageGrid("".into()));
+            return AvifError::invalid_image_grid("");
         }
         self.add_image_impl(
             grid_columns,
@@ -604,7 +598,7 @@ impl Encoder {
 
     pub fn add_image_gainmap(&mut self, image: &Image, gainmap: &GainMap) -> AvifResult<()> {
         if self.settings.extra_layer_count != 0 {
-            return Err(AvifError::NotImplemented);
+            return AvifError::not_implemented();
         }
         self.add_image_impl(1, 1, &[image], 0, true, Some(&[gainmap]))
     }
@@ -617,17 +611,17 @@ impl Encoder {
         gainmaps: &[&GainMap],
     ) -> AvifResult<()> {
         if grid_columns == 0 || grid_columns > 256 || grid_rows == 0 || grid_rows > 256 {
-            return Err(AvifError::InvalidImageGrid("".into()));
+            return AvifError::invalid_image_grid("");
         }
         if self.settings.extra_layer_count != 0 {
-            return Err(AvifError::NotImplemented);
+            return AvifError::not_implemented();
         }
         self.add_image_impl(grid_columns, grid_rows, images, 0, true, Some(gainmaps))
     }
 
     pub fn finish(&mut self) -> AvifResult<Vec<u8>> {
         if self.items.is_empty() {
-            return Err(AvifError::NoContent);
+            return AvifError::no_content();
         }
         for item in &mut self.items {
             if item.codec.is_none() {
@@ -637,7 +631,7 @@ impl Encoder {
             if item.extra_layer_count > 0
                 && item.samples.len() != 1 + item.extra_layer_count as usize
             {
-                return Err(AvifError::InvalidArgument);
+                return AvifError::invalid_argument();
             }
             // TODO: check if sample count == duration count.
 

@@ -346,7 +346,7 @@ impl Image {
 
     pub fn convert_from_yuv(&mut self, image: &image::Image) -> AvifResult<()> {
         if !image.has_plane(Plane::Y) || !image.depth_valid() || !self.depth_valid() {
-            return Err(AvifError::ReformatFailed);
+            return AvifError::reformat_failed();
         }
         if matches!(
             image.matrix_coefficients,
@@ -356,24 +356,24 @@ impl Image {
                 | MatrixCoefficients::ChromaDerivedCl
                 | MatrixCoefficients::Ictcp
         ) {
-            return Err(AvifError::NotImplemented);
+            return AvifError::not_implemented();
         }
         if image.matrix_coefficients == MatrixCoefficients::Ycgco
             && image.yuv_range == YuvRange::Limited
         {
-            return Err(AvifError::NotImplemented);
+            return AvifError::not_implemented();
         }
         if matches!(
             image.matrix_coefficients,
             MatrixCoefficients::YcgcoRe | MatrixCoefficients::YcgcoRo
         ) {
             if image.yuv_range == YuvRange::Limited {
-                return Err(AvifError::NotImplemented);
+                return AvifError::not_implemented();
             }
             let bit_offset =
                 if image.matrix_coefficients == MatrixCoefficients::YcgcoRe { 2 } else { 1 };
             if image.depth - bit_offset != self.depth {
-                return Err(AvifError::NotImplemented);
+                return AvifError::not_implemented();
             }
         }
         // Android MediaCodec maps all underlying YUV formats to PixelFormat::Yuv420. So do not
@@ -383,7 +383,7 @@ impl Image {
         if image.matrix_coefficients == MatrixCoefficients::Identity
             && !matches!(image.yuv_format, PixelFormat::Yuv444 | PixelFormat::Yuv400)
         {
-            return Err(AvifError::NotImplemented);
+            return AvifError::not_implemented();
         }
 
         let mut alpha_multiply_mode = if image.has_alpha() {
@@ -428,7 +428,7 @@ impl Image {
                 }
                 return Ok(());
             } else {
-                return Err(AvifError::NotImplemented);
+                return AvifError::not_implemented();
             }
         }
         if self.has_alpha() && !alpha_reformatted_with_libyuv {
@@ -474,7 +474,7 @@ impl Image {
 
     pub fn convert_to_yuv(&self, image: &mut image::Image) -> AvifResult<()> {
         if self.format == Format::Rgb565 || self.is_float {
-            return Err(AvifError::NotImplemented);
+            return AvifError::not_implemented();
         }
         image.allocate_planes(Category::Color)?;
         // TODO: b/410088660 - add a setting to ignore alpha channel.
@@ -528,7 +528,7 @@ impl Image {
             return Ok(self);
         }
         if self.format == Format::Rgb565 || format == Format::Rgb565 {
-            return Err(AvifError::NotImplemented);
+            return AvifError::not_implemented();
         }
 
         let mut dst = Image {
