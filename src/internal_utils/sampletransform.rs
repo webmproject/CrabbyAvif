@@ -12,16 +12,54 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::decoder::*;
+use crate::internal_utils::*;
 use crate::*;
 
+#[derive(Clone, Copy, Debug)]
+pub enum SampleTransformUnaryOp {
+    // Unary operators. L is the operand.
+    Negation, // S = -L
+    Absolute, // S = |L|
+    Not,      // S = ~L
+    Bsr,      // S = L<=0 ? 0 : truncate(log2(L)) (Bit Scan Reverse)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum SampleTransformBinaryOp {
+    Sum,        // S = L + R
+    Difference, // S = L - R
+    Product,    // S = L * R
+    Quotient,   // S = R==0 ? L : truncate(L / R)
+    And,        // S = L & R
+    Or,         // S = L | R
+    Xor,        // S = L ^ R
+    Pow,        // S = L==0 ? 0 : truncate(pow(L, R))
+    Min,        // S = L<=R ? L : R
+    Max,        // S = L<=R ? R : L
+}
+
+#[derive(Debug)]
+pub enum SampleTransformToken {
+    Constant(i64),
+    ImageItem(usize), // 0-based item_idx in source items
+    UnaryOp(SampleTransformUnaryOp),
+    BinaryOp(SampleTransformBinaryOp),
+}
+
+#[derive(Debug, Default)]
+pub struct SampleTransform {
+    pub bit_depth: u8,
+    pub num_inputs: usize, // Number of input images.
+    pub tokens: Vec<SampleTransformToken>,
+}
+
 impl SampleTransformUnaryOp {
-    fn apply(self, value: i64, bounds: (i64, i64)) -> i64 {
+    pub(crate) fn apply(self, value: i64, bounds: (i64, i64)) -> i64 {
         let v = match self {
             SampleTransformUnaryOp::Negation => value.saturating_neg(),
             SampleTransformUnaryOp::Absolute => value.saturating_abs(),
             SampleTransformUnaryOp::Not => !value,
-            SampleTransformUnaryOp::BSR => {
+            SampleTransformUnaryOp::Bsr => {
                 if value <= 0 {
                     0
                 } else {
@@ -34,7 +72,7 @@ impl SampleTransformUnaryOp {
 }
 
 impl SampleTransformBinaryOp {
-    fn apply(self, left: i64, right: i64, bounds: (i64, i64)) -> i64 {
+    pub(crate) fn apply(self, left: i64, right: i64, bounds: (i64, i64)) -> i64 {
         let v = match self {
             SampleTransformBinaryOp::Sum => left.saturating_add(right),
             SampleTransformBinaryOp::Difference => left.saturating_sub(right),
@@ -76,14 +114,14 @@ impl SampleTransformBinaryOp {
     }
 }
 
-enum StackItem {
+pub(crate) enum StackItem {
     Values(Vec<i64>),
     Constant(i64),
     ImageItem(usize),
 }
 
 impl SampleTransformToken {
-    fn apply(
+    pub(crate) fn apply(
         &self,
         stack: &mut Vec<StackItem>,
         extra_inputs: &[Image],
@@ -255,7 +293,38 @@ impl SampleTransform {
     pub(crate) fn apply(&self, extra_inputs: &[Image], output: &mut Image) -> AvifResult<()> {
         let max_stack_size = self.tokens.len().div_ceil(2);
         let mut stack: Vec<StackItem> = create_vec_exact(max_stack_size)?;
+        for plane in if output.has_alpha() { ALL_PLANES.as_slice() } else { YUV_PLANES.as_slice() }
+        {
+            self.apply_internal(*plane, extra_inputs, output, &mut stack)?;
+        }
+        Ok(())
+    }
 
+    #[allow(dead_code)]
+    pub(crate) fn apply_to_planes(
+        &self,
+        category: Category,
+        extra_inputs: &[Image],
+        output: &mut Image,
+    ) -> AvifResult<()> {
+        let max_stack_size = self.tokens.len().div_ceil(2);
+        let mut stack: Vec<StackItem> = create_vec_exact(max_stack_size)?;
+        for plane in match category {
+            Category::Color | Category::Gainmap => YUV_PLANES.as_slice(),
+            Category::Alpha => &[Plane::A],
+        } {
+            self.apply_internal(*plane, extra_inputs, output, &mut stack)?;
+        }
+        Ok(())
+    }
+
+    fn apply_internal(
+        &self,
+        plane: Plane,
+        extra_inputs: &[Image],
+        output: &mut Image,
+        stack: &mut Vec<StackItem>,
+    ) -> AvifResult<()> {
         // AVIF specification Draft, 8 January 2025, Section 4.2.3.3.:
         // The result of any computation underflowing or overflowing the intermediate
         // bit depth is replaced by -^(2num_bits-1) and 2^(num_bits-1)-1, respectively.
@@ -271,88 +340,83 @@ impl SampleTransform {
             _ => unreachable!(),
         };
 
-        let planes: Vec<Plane> =
-            if output.has_alpha() { ALL_PLANES.to_vec() } else { YUV_PLANES.to_vec() };
+        let width = output.width(plane);
 
-        for plane in planes {
-            let width = output.width(plane);
+        // Process the image row by row.
+        for y in 0..u32_from_usize(output.height(plane))? {
+            for token in &self.tokens {
+                token.apply(stack, extra_inputs, plane, y, width, bounds)?;
+            }
 
-            // Process the image row by row.
-            for y in 0..u32_from_usize(output.height(plane))? {
-                for token in &self.tokens {
-                    token.apply(&mut stack, extra_inputs, plane, y, width, bounds)?;
-                }
+            assert_eq!(stack.len(), 1);
+            let result: StackItem = stack.pop().unwrap();
 
-                assert!(stack.len() == 1);
-                let result: StackItem = stack.pop().unwrap();
-
-                let mut output_min: u16 = 0;
-                let mut output_max: u16 = output.max_channel();
-                if output.yuv_range == YuvRange::Limited && output.depth >= 8 {
-                    output_min = 16u16 << (output.depth - 8);
-                    output_max = 235u16 << (output.depth - 8);
-                }
-                match result {
-                    StackItem::Values(values) => {
-                        if output.depth == 8 {
-                            let output_row8 = output.row_mut(plane, y)?;
-                            for x in 0..width {
-                                let v = values[x].clamp(output_min as i64, output_max as i64);
-                                output_row8[x] = v as u8;
-                            }
-                        } else {
-                            let output_row16 = output.row16_mut(plane, y)?;
-                            for x in 0..width {
-                                let v = values[x].clamp(output_min as i64, output_max as i64);
-                                output_row16[x] = v as u16;
-                            }
+            let mut output_min: u16 = 0;
+            let mut output_max: u16 = output.max_channel();
+            if output.yuv_range == YuvRange::Limited && output.depth >= 8 {
+                output_min = 16u16 << (output.depth - 8);
+                output_max = 235u16 << (output.depth - 8);
+            }
+            match result {
+                StackItem::Values(values) => {
+                    if output.depth == 8 {
+                        let output_row8 = output.row_mut(plane, y)?;
+                        for x in 0..width {
+                            let v = values[x].clamp(output_min as i64, output_max as i64);
+                            output_row8[x] = v as u8;
+                        }
+                    } else {
+                        let output_row16 = output.row16_mut(plane, y)?;
+                        for x in 0..width {
+                            let v = values[x].clamp(output_min as i64, output_max as i64);
+                            output_row16[x] = v as u16;
                         }
                     }
-                    StackItem::Constant(c) => {
-                        if output.depth == 8 {
-                            let output_row8 = output.row_exact_mut(plane, y)?;
-                            let c8 = c.clamp(output_min as i64, output_max as i64) as u8;
-                            for v in output_row8.iter_mut() {
-                                *v = c8;
-                            }
-                        } else {
-                            let output_row16 = output.row16_exact_mut(plane, y)?;
-                            let c16 = c.clamp(output_min as i64, output_max as i64) as u16;
-                            for v in output_row16.iter_mut() {
-                                *v = c16;
-                            }
+                }
+                StackItem::Constant(c) => {
+                    if output.depth == 8 {
+                        let output_row8 = output.row_exact_mut(plane, y)?;
+                        let c8 = c.clamp(output_min as i64, output_max as i64) as u8;
+                        for v in output_row8.iter_mut() {
+                            *v = c8;
+                        }
+                    } else {
+                        let output_row16 = output.row16_exact_mut(plane, y)?;
+                        let c16 = c.clamp(output_min as i64, output_max as i64) as u16;
+                        for v in output_row16.iter_mut() {
+                            *v = c16;
                         }
                     }
-                    StackItem::ImageItem(item_idx) => {
-                        if output.depth == extra_inputs[item_idx].depth {
-                            if output.depth == 8 {
-                                output
-                                    .row_exact_mut(plane, y)?
-                                    .copy_from_slice(extra_inputs[item_idx].row_exact(plane, y)?);
-                            } else {
-                                output
-                                    .row16_exact_mut(plane, y)?
-                                    .copy_from_slice(extra_inputs[item_idx].row16_exact(plane, y)?);
-                            }
-                        } else if output.depth == 8 && extra_inputs[item_idx].depth > 8 {
-                            let input_row16 = extra_inputs[item_idx].row16(plane, y)?;
-                            let output_row8 = output.row_mut(plane, y)?;
-                            for x in 0..width {
-                                output_row8[x] = input_row16[x].clamp(output_min, output_max) as u8;
-                            }
-                        } else if output.depth > 8 && extra_inputs[item_idx].depth == 8 {
-                            let input_row8 = extra_inputs[item_idx].row(plane, y)?;
-                            let output_row16 = output.row16_mut(plane, y)?;
-                            for x in 0..width {
-                                output_row16[x] = input_row8[x] as u16;
-                            }
+                }
+                StackItem::ImageItem(item_idx) => {
+                    if output.depth == extra_inputs[item_idx].depth {
+                        if output.depth == 8 {
+                            output
+                                .row_exact_mut(plane, y)?
+                                .copy_from_slice(extra_inputs[item_idx].row_exact(plane, y)?);
                         } else {
-                            // Both are high bit depth.
-                            let input_row16 = extra_inputs[item_idx].row16(plane, y)?;
-                            let output_row16 = output.row16_mut(plane, y)?;
-                            for x in 0..width {
-                                output_row16[x] = input_row16[x].clamp(output_min, output_max);
-                            }
+                            output
+                                .row16_exact_mut(plane, y)?
+                                .copy_from_slice(extra_inputs[item_idx].row16_exact(plane, y)?);
+                        }
+                    } else if output.depth == 8 && extra_inputs[item_idx].depth > 8 {
+                        let input_row16 = extra_inputs[item_idx].row16(plane, y)?;
+                        let output_row8 = output.row_mut(plane, y)?;
+                        for x in 0..width {
+                            output_row8[x] = input_row16[x].clamp(output_min, output_max) as u8;
+                        }
+                    } else if output.depth > 8 && extra_inputs[item_idx].depth == 8 {
+                        let input_row8 = extra_inputs[item_idx].row(plane, y)?;
+                        let output_row16 = output.row16_mut(plane, y)?;
+                        for x in 0..width {
+                            output_row16[x] = input_row8[x] as u16;
+                        }
+                    } else {
+                        // Both are high bit depth.
+                        let input_row16 = extra_inputs[item_idx].row16(plane, y)?;
+                        let output_row16 = output.row16_mut(plane, y)?;
+                        for x in 0..width {
+                            output_row16[x] = input_row16[x].clamp(output_min, output_max);
                         }
                     }
                 }

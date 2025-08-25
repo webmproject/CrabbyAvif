@@ -22,6 +22,9 @@ pub(crate) struct Item {
     pub id: u16,
     pub item_type: String,
     pub category: Category,
+    // True if Sample Transforms derived image item input used as the least
+    // significant bits of the bit depth extension.
+    pub is_sato_least_significant_input: bool,
     pub codec: Option<Codec>,
     pub samples: Vec<Sample>,
     pub codec_configuration: CodecConfiguration,
@@ -56,7 +59,7 @@ impl fmt::Debug for Item {
 
 impl Item {
     pub(crate) fn has_ipma(&self) -> bool {
-        self.grid.is_some() || self.codec.is_some() || self.is_tmap()
+        self.grid.is_some() || self.codec.is_some() || self.is_tmap() || self.is_sato()
     }
 
     pub(crate) fn is_metadata(&self) -> bool {
@@ -65,6 +68,10 @@ impl Item {
 
     pub(crate) fn is_tmap(&self) -> bool {
         self.item_type == "tmap"
+    }
+
+    pub(crate) fn is_sato(&self) -> bool {
+        self.item_type == "sato"
     }
 
     pub(crate) fn write_ispe(
@@ -329,6 +336,7 @@ impl Item {
                 // Color properties.
                 // Note the 'tmap' item when a gain map is present also has category set to
                 // Category::Color.
+                // Note a derived 'grid' or 'sato' item can have any category.
                 if !item_metadata.icc.is_empty() {
                     streams.push(OStream::default());
                     self.write_icc(streams.last_mut().unwrap(), item_metadata)?;

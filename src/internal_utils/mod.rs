@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod io;
+pub mod sampletransform;
 pub mod stream;
 
 use crate::parser::mp4box::*;

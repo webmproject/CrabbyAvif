@@ -544,6 +544,19 @@ impl RepetitionCount {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SampleTransformRecipe {
+    None,
+    // Encode the 8 most significant bits of each input image sample losslessly
+    // into a base image. The remaining 8 least significant bits are encoded in
+    // a separate hidden image item. The two are combined at decoding into one
+    // image with the same bit depth as the original image. It is backward
+    // compatible in the sense that it is possible to decode only the base image
+    // (ignoring the hidden image item), leading to a valid image but with
+    // precision loss (16-bit samples truncated to the 8 most significant bits).
+    BitDepthExtension8b8b,
+}
+
 pub fn codec_versions() -> String {
     let versions = &[
         decoder::CodecChoice::versions(),

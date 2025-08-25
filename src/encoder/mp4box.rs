@@ -329,17 +329,26 @@ impl Encoder {
         stream.start_box("ipco")?;
         let mut property_streams = Vec::new();
         for item in &mut self.items {
-            item.get_property_streams(
-                &self.image_metadata,
-                if item.is_tmap() {
-                    &self.alt_image_metadata
-                } else if item.category == Category::Gainmap {
-                    &self.gainmap_image_metadata
-                } else {
-                    &self.image_metadata
-                },
-                &mut property_streams,
-            )?;
+            let mut bit_depth_extension_metadata;
+            let item_metadata = if item.is_tmap() {
+                &self.alt_image_metadata
+            } else if item.category == Category::Gainmap {
+                &self.gainmap_image_metadata
+            } else {
+                match self.settings.sample_transform_recipe {
+                    SampleTransformRecipe::None => &self.image_metadata,
+                    SampleTransformRecipe::BitDepthExtension8b8b => {
+                        if item.is_sato() {
+                            &self.image_metadata
+                        } else {
+                            bit_depth_extension_metadata = self.image_metadata.shallow_clone();
+                            bit_depth_extension_metadata.depth = 8;
+                            &bit_depth_extension_metadata
+                        }
+                    }
+                }
+            };
+            item.get_property_streams(&self.image_metadata, item_metadata, &mut property_streams)?;
         }
         // Deduplicate the property streams.
         let mut property_index_map = Vec::new();

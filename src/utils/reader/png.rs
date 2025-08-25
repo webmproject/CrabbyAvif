@@ -90,7 +90,7 @@ impl Reader for PngReader {
         let mut yuv = Image {
             width: info.width,
             height: info.height,
-            depth: config.depth.unwrap_or(std::cmp::min(rgb.depth, 12)),
+            depth: config.depth.unwrap_or(std::cmp::min(rgb.depth, 16)),
             yuv_format: config.yuv_format.unwrap_or(PixelFormat::Yuv420),
             yuv_range: YuvRange::Full,
             matrix_coefficients: config
