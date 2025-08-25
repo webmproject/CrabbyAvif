@@ -55,7 +55,7 @@ impl dyn IO {
     pub(crate) fn read_exact(&mut self, offset: u64, read_size: usize) -> AvifResult<&[u8]> {
         let result = self.read(offset, read_size)?;
         if result.len() < read_size {
-            Err(AvifError::TruncatedData)
+            AvifError::truncated_data()
         } else {
             assert!(result.len() == read_size);
             Ok(result)
@@ -87,27 +87,27 @@ impl CodecChoice {
             }
             CodecChoice::Dav1d => {
                 if !is_avif {
-                    return Err(AvifError::NoCodecAvailable);
+                    return AvifError::no_codec_available();
                 }
                 #[cfg(feature = "dav1d")]
                 return Ok(Box::<Dav1d>::default());
                 #[cfg(not(feature = "dav1d"))]
-                return Err(AvifError::NoCodecAvailable);
+                return AvifError::no_codec_available();
             }
             CodecChoice::Libgav1 => {
                 if !is_avif {
-                    return Err(AvifError::NoCodecAvailable);
+                    return AvifError::no_codec_available();
                 }
                 #[cfg(feature = "libgav1")]
                 return Ok(Box::<Libgav1>::default());
                 #[cfg(not(feature = "libgav1"))]
-                return Err(AvifError::NoCodecAvailable);
+                return AvifError::no_codec_available();
             }
             CodecChoice::MediaCodec => {
                 #[cfg(feature = "android_mediacodec")]
                 return Ok(Box::<MediaCodec>::default());
                 #[cfg(not(feature = "android_mediacodec"))]
-                return Err(AvifError::NoCodecAvailable);
+                return AvifError::no_codec_available();
             }
         }
     }
@@ -432,9 +432,7 @@ impl GridImageHelper<'_> {
         } else if self.first_cell_image.is_some()
             && !cell_image.has_same_properties_and_cicp(self.first_cell_image.unwrap_ref())
         {
-            return Err(AvifError::InvalidImageGrid(
-                "grid image contains mismatched tiles".into(),
-            ));
+            return AvifError::invalid_image_grid("grid image contains mismatched tiles");
         }
         self.image
             .copy_from_tile(cell_image, self.grid, self.cell_index as u32, self.category)?;
@@ -535,9 +533,9 @@ impl Decoder {
                     if alpha_item_indices.is_empty() {
                         return Ok(None);
                     } else {
-                        return Err(AvifError::BmffParseFailed(
-                            "Some tiles but not all have an alpha auxiliary image item".into(),
-                        ));
+                        return AvifError::bmff_parse_failed(
+                            "Some tiles but not all have an alpha auxiliary image item",
+                        );
                     }
                 }
             }
@@ -626,14 +624,14 @@ impl Decoder {
                     .get(&color_item_id)
                     .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
                 if ispe.width != color_item.width || ispe.height != color_item.height {
-                    return Err(AvifError::InvalidToneMappedImage(
-                        "Box[tmap] ispe property width/height does not match base image".into(),
-                    ));
+                    return AvifError::invalid_tone_mapped_image(
+                        "Box[tmap] ispe property width/height does not match base image",
+                    );
                 }
             } else {
-                return Err(AvifError::InvalidToneMappedImage(
-                    "Box[tmap] missing mandatory ispe property".into(),
-                ));
+                return AvifError::invalid_tone_mapped_image(
+                    "Box[tmap] missing mandatory ispe property",
+                );
             }
             // HEIC files created by Apple have some of these properties set in the Tonemap item.
             // So these checks are skipped when HEIC is enabled.
@@ -642,7 +640,7 @@ impl Decoder {
                 || find_property!(tonemap_item.properties, ImageRotation).is_some()
                 || find_property!(tonemap_item.properties, ImageMirror).is_some()
             {
-                return Err(AvifError::InvalidToneMappedImage("".into()));
+                return AvifError::invalid_tone_mapped_image("");
             }
         }
         Ok(())
@@ -690,7 +688,7 @@ impl Decoder {
         }
         if item.source_item_ids.is_empty() {
             if item.size == 0 {
-                return Err(AvifError::MissingImageItem);
+                return AvifError::missing_image_item();
             }
             let mut tile = Tile::create_from_item(
                 self.items.get_mut(&item_id).unwrap(),
@@ -702,9 +700,9 @@ impl Decoder {
             tiles.push(tile);
         } else {
             if !self.tile_info[decoding_item.usize()].is_derived_image() {
-                return Err(AvifError::InvalidImageGrid(
-                    "dimg items were found but image is not a derived image.".into(),
-                ));
+                return AvifError::invalid_image_grid(
+                    "dimg items were found but image is not a derived image.",
+                );
             }
             let mut progressive = true;
             for derived_item_id in item.source_item_ids.clone() {
@@ -793,7 +791,7 @@ impl Decoder {
                 continue;
             }
             if dimg_item.should_skip() {
-                return Err(AvifError::NotImplemented);
+                return AvifError::not_implemented();
             }
             if dimg_item.is_image_codec_item() {
                 if first_codec_config.is_none() {
@@ -862,53 +860,47 @@ impl Decoder {
         if item.is_grid_item() {
             let tile_count = tile_info.grid_tile_count()? as usize;
             if source_items.len() != tile_count {
-                return Err(AvifError::InvalidImageGrid(
-                    "expected number of tiles not found".into(),
-                ));
+                return AvifError::invalid_image_grid("expected number of tiles not found");
             }
             if !source_items.iter().all(|item| item.is_image_codec_item()) {
-                return Err(AvifError::InvalidImageGrid("invalid grid items".into()));
+                return AvifError::invalid_image_grid("invalid grid items");
             }
         } else if item.is_overlay_item() {
             if source_items.is_empty() {
-                return Err(AvifError::BmffParseFailed(
-                    "no dimg items found for iovl".into(),
-                ));
+                return AvifError::bmff_parse_failed("no dimg items found for iovl");
             }
             // MIAF allows overlays of grid but we don't support them.
             // See ISO/IEC 23000-12:2025, section 7.3.11.1.
             if source_items.iter().any(|item| item.is_grid_item()) {
-                return Err(AvifError::NotImplemented);
+                return AvifError::not_implemented();
             }
             if !source_items.iter().all(|item| item.is_image_codec_item()) {
-                return Err(AvifError::InvalidImageGrid("invalid overlay items".into()));
+                return AvifError::invalid_image_grid("invalid overlay items");
             }
         } else if item.is_tone_mapped_item() {
             if source_items.len() != 2 {
-                return Err(AvifError::InvalidToneMappedImage(
-                    "expected tmap to have 2 dimg items".into(),
-                ));
+                return AvifError::invalid_tone_mapped_image("expected tmap to have 2 dimg items");
             }
             if !source_items
                 .iter()
                 .all(|item| item.is_image_codec_item() || item.is_grid_item())
             {
-                return Err(AvifError::InvalidImageGrid("invalid tmap items".into()));
+                return AvifError::invalid_image_grid("invalid tmap items");
             }
         } else if item.is_sample_transform_item() {
             if source_items.len() > 32 {
-                return Err(AvifError::InvalidImageGrid(
-                    "expected sato to between 0 and 32 dimg items".into(),
-                ));
+                return AvifError::invalid_image_grid(
+                    "expected sato to between 0 and 32 dimg items",
+                );
             }
             if source_items.len() > DecodingItem::MAX_EXTRA_INPUTS {
-                return Err(AvifError::NotImplemented);
+                return AvifError::not_implemented();
             }
             if !source_items
                 .iter()
                 .all(|item| item.is_image_codec_item() || item.is_grid_item())
             {
-                return Err(AvifError::InvalidImageGrid("invalid sato items".into()));
+                return AvifError::invalid_image_grid("invalid sato items");
             }
         }
         Ok(())
@@ -948,7 +940,7 @@ impl Decoder {
                 }
             }
         }
-        Err(AvifError::NoContent)
+        AvifError::no_content()
     }
 
     fn reset(&mut self) {
@@ -985,7 +977,7 @@ impl Decoder {
             self.parse_state = ParseState::None;
         }
         if self.io.is_none() {
-            return Err(AvifError::IoNotSet);
+            return AvifError::io_not_set();
         }
 
         if self.parse_state == ParseState::None {
@@ -1001,17 +993,13 @@ impl Decoder {
                             self.settings.image_dimension_limit,
                         )
                     {
-                        return Err(AvifError::BmffParseFailed(
-                            "track dimension too large".into(),
-                        ));
+                        return AvifError::bmff_parse_failed("track dimension too large");
                     }
                 }
             }
             self.items = construct_items(&avif_boxes.meta)?;
             if avif_boxes.ftyp.has_tmap() && !self.items.values().any(|x| x.item_type == "tmap") {
-                return Err(AvifError::BmffParseFailed(
-                    "tmap was required but not found".into(),
-                ));
+                return AvifError::bmff_parse_failed("tmap was required but not found");
             }
             for item in self.items.values_mut() {
                 item.harvest_ispe(
@@ -1173,15 +1161,15 @@ impl Decoder {
                             let is_premultiplied =
                                 self.items.get(item_id).unwrap().prem_by_id == alpha_item_id;
                             if idx > 0 && !alpha_present {
-                                return Err(AvifError::InvalidImageGrid("input images for sato derived image item must either all have alpha or all not have alpha".into()));
+                                return AvifError::invalid_image_grid("input images for sato derived image item must either all have alpha or all not have alpha");
                             }
                             if alpha_present && alpha_premultiplied != is_premultiplied {
-                                return Err(AvifError::InvalidImageGrid("alpha for sato input images must all have the same premultiplication".into()));
+                                return AvifError::invalid_image_grid("alpha for sato input images must all have the same premultiplication");
                             }
                             alpha_present = true;
                             alpha_premultiplied = is_premultiplied;
                         } else if alpha_present {
-                            return Err(AvifError::InvalidImageGrid("input images for sato derived image item must either all have alpha or all not have alpha".into()));
+                            return AvifError::invalid_image_grid("input images for sato derived image item must either all have alpha or all not have alpha");
                         }
                         let item = self.items.get(item_id).unwrap();
                         self.extra_inputs[idx].width = item.width;
@@ -1341,9 +1329,7 @@ impl Decoder {
                 for tile in tiles {
                     for sample in &tile.input.samples {
                         if sample.size == 0 {
-                            return Err(AvifError::BmffParseFailed(
-                                "sample has invalid size.".into(),
-                            ));
+                            return AvifError::bmff_parse_failed("sample has invalid size.");
                         }
                         // The item_idx checks is to try to mimic libavif's behavior
                         // which only takes into account the size of the item whose id
@@ -1403,7 +1389,7 @@ impl Decoder {
                     || self.image.irot_angle != alpha_irot
                     || self.image.imir_axis != alpha_imir
                 {
-                    return Err(AvifError::NotImplemented);
+                    return AvifError::not_implemented();
                 }
             }
 
@@ -1415,7 +1401,7 @@ impl Decoder {
                     || self.image.irot_angle != find_property!(gainmap_properties, ImageRotation)
                     || self.image.imir_axis != find_property!(gainmap_properties, ImageMirror)
                 {
-                    return Err(AvifError::DecodeGainMapFailed);
+                    return AvifError::decode_gain_map_failed();
                 }
             }
 
@@ -1579,7 +1565,7 @@ impl Decoder {
     ) -> AvifResult<()> {
         let tile = &mut self.tiles[decoding_item.usize()][tile_index];
         if tile.input.samples.len() <= image_index {
-            return Err(AvifError::NoImagesRemaining);
+            return AvifError::no_images_remaining();
         }
         let sample = &tile.input.samples[image_index];
         if sample.item_id == 0 {
@@ -1677,7 +1663,7 @@ impl Decoder {
         ) {
             (_, Ok(data)) => data,
             (true, Err(AvifError::TruncatedData) | Err(AvifError::NoContent)) => {
-                return Err(AvifError::WaitingOnIo)
+                return AvifError::waiting_on_io()
             }
             (_, Err(err)) => return Err(err),
         };
@@ -1734,9 +1720,7 @@ impl Decoder {
                     .image
                     .has_same_properties_and_cicp(&tiles_slice1[0].image)
             {
-                return Err(AvifError::InvalidImageGrid(
-                    "grid image contains mismatched tiles".into(),
-                ));
+                return AvifError::invalid_image_grid("grid image contains mismatched tiles");
             }
 
             dst_image.copy_from_tile(
@@ -1800,7 +1784,7 @@ impl Decoder {
                 }
                 Category::Alpha => {
                     if !dst_image.has_same_properties(&tile.image) {
-                        return Err(AvifError::DecodeAlphaFailed);
+                        return AvifError::decode_alpha_failed();
                     }
                     dst_image.steal_or_copy_planes_from(&tile.image, category)?;
                 }
@@ -1833,14 +1817,14 @@ impl Decoder {
                     if self.settings.allow_incremental {
                         if payloads.is_empty() {
                             // No cells have been read. Nothing to decode.
-                            return Err(AvifError::WaitingOnIo);
+                            return AvifError::waiting_on_io();
                         } else {
                             // One or more cells have been read. Decode them.
                             pending_read = true;
                             break;
                         }
                     } else {
-                        return Err(AvifError::WaitingOnIo);
+                        return AvifError::waiting_on_io();
                     }
                 }
                 Err(err) => return Err(err),
@@ -1852,7 +1836,7 @@ impl Decoder {
         if !self.settings.allow_incremental
             && checked_mul!(grid.rows, grid.columns)? != payloads.len() as u32
         {
-            return Err(AvifError::InvalidArgument);
+            return AvifError::invalid_argument();
         }
         let first_tile = &self.tiles[decoding_item.usize()][previous_decoded_tile_count];
         let category = decoding_item.category;
@@ -1890,16 +1874,14 @@ impl Decoder {
             }
         }
         if !grid_image_helper.is_grid_complete()? {
-            return Err(AvifError::UnknownError(
-                "codec did not decode all cells".into(),
-            ));
+            return AvifError::unknown_error("codec did not decode all cells");
         }
         checked_incr!(
             self.tile_info[decoding_item.usize()].decoded_tile_count,
             u32_from_usize(payloads.len())?
         );
         if pending_read {
-            Err(AvifError::WaitingOnIo)
+            AvifError::waiting_on_io()
         } else {
             Ok(())
         }
@@ -1911,7 +1893,7 @@ impl Decoder {
                 .sample_transform
                 .allocate_planes_and_apply(&self.extra_inputs, &mut self.image)
         } else {
-            Err(AvifError::NoContent)
+            AvifError::not_implemented()
         }
     }
 
@@ -1950,16 +1932,16 @@ impl Decoder {
         if decoded_something {
             Ok(())
         } else {
-            Err(AvifError::NoContent)
+            AvifError::no_content()
         }
     }
 
     pub fn next_image(&mut self) -> AvifResult<()> {
         if self.io.is_none() {
-            return Err(AvifError::IoNotSet);
+            return AvifError::io_not_set();
         }
         if !self.parsing_complete() {
-            return Err(AvifError::NoContent);
+            return AvifError::no_content();
         }
         if self.is_current_frame_fully_decoded() {
             for decoding_item in DecodingItem::ALL_USIZE {
@@ -2005,10 +1987,10 @@ impl Decoder {
 
     pub fn nth_image(&mut self, index: u32) -> AvifResult<()> {
         if !self.parsing_complete() {
-            return Err(AvifError::NoContent);
+            return AvifError::no_content();
         }
         if index >= self.image_count {
-            return Err(AvifError::NoImagesRemaining);
+            return AvifError::no_images_remaining();
         }
         let requested_index = i32_from_u32(index)?;
         if requested_index == checked_add!(self.image_index, 1)? {
@@ -2044,11 +2026,11 @@ impl Decoder {
 
     pub fn nth_image_timing(&self, n: u32) -> AvifResult<ImageTiming> {
         if !self.parsing_complete() {
-            return Err(AvifError::NoContent);
+            return AvifError::no_content();
         }
         if let Some(limit) = self.settings.image_count_limit {
             if n > limit.get() {
-                return Err(AvifError::NoImagesRemaining);
+                return AvifError::no_images_remaining();
             }
         }
         if self.color_track_id.is_none() {
@@ -2153,7 +2135,7 @@ impl Decoder {
 
     pub fn nth_image_max_extent(&self, index: u32) -> AvifResult<Extent> {
         if !self.parsing_complete() {
-            return Err(AvifError::NoContent);
+            return AvifError::no_content();
         }
         let mut extent = Extent::default();
         let start_index = self.nearest_keyframe(index) as usize;
@@ -2162,7 +2144,7 @@ impl Decoder {
             for decoding_item in DecodingItem::ALL_USIZE {
                 for tile in &self.tiles[decoding_item] {
                     if current_index >= tile.input.samples.len() {
-                        return Err(AvifError::NoImagesRemaining);
+                        return AvifError::no_images_remaining();
                     }
                     let sample = &tile.input.samples[current_index];
                     let sample_extent = if sample.item_id != 0 {

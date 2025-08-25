@@ -374,9 +374,7 @@ fn parse_header(stream: &mut IStream, top_level: bool) -> AvifResult<BoxHeader> 
         //   box), and be the last box in its 'file', and its payload extends to the end of that
         //   enclosing 'file'. This is normally only used for a MediaDataBox.
         if !top_level {
-            return Err(AvifError::BmffParseFailed(
-                "non-top-level box with size 0".into(),
-            ));
+            return AvifError::bmff_parse_failed("non-top-level box with size 0");
         }
         return Ok(BoxHeader {
             box_type,
@@ -386,7 +384,7 @@ fn parse_header(stream: &mut IStream, top_level: bool) -> AvifResult<BoxHeader> 
     checked_decr!(size, u64_from_usize(stream.offset - start_offset)?);
     let size = usize_from_u64(size)?;
     if !top_level && size > stream.bytes_left()? {
-        return Err(AvifError::BmffParseFailed("possibly truncated box".into()));
+        return AvifError::bmff_parse_failed("possibly truncated box");
     }
     Ok(BoxHeader {
         box_type,
@@ -423,10 +421,10 @@ fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
     // unsigned int(4) minor_version;
     stream.skip_u32()?;
     if stream.bytes_left()? % 4 != 0 {
-        return Err(AvifError::BmffParseFailed(format!(
+        return AvifError::bmff_parse_failed(format!(
             "Box[ftyp] contains a compatible brands section that isn't divisible by 4 {}",
             stream.bytes_left()?
-        )));
+        ));
     }
     let mut compatible_brands: Vec<String> = create_vec_exact(stream.bytes_left()? / 4)?;
     // unsigned int(32) compatible_brands[];  // to end of the box
@@ -445,17 +443,15 @@ fn parse_hdlr(stream: &mut IStream) -> AvifResult<String> {
     // unsigned int(32) pre_defined = 0;
     let predefined = stream.read_u32()?;
     if predefined != 0 {
-        return Err(AvifError::BmffParseFailed(
-            "Box[hdlr] contains a pre_defined value that is nonzero".into(),
-        ));
+        return AvifError::bmff_parse_failed(
+            "Box[hdlr] contains a pre_defined value that is nonzero",
+        );
     }
     // unsigned int(32) handler_type;
     let handler_type = stream.read_string(4)?;
     // const unsigned int(32)[3] reserved = 0;
     if stream.read_u32()? != 0 || stream.read_u32()? != 0 || stream.read_u32()? != 0 {
-        return Err(AvifError::BmffParseFailed(
-            "Box[hdlr] contains invalid reserved bits".into(),
-        ));
+        return AvifError::bmff_parse_failed("Box[hdlr] contains invalid reserved bits");
     }
     // string name;
     // Verify that a valid string is here, but don't bother to store it:
@@ -469,9 +465,9 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
     // Section 8.11.3.2 of ISO/IEC 14496-12.
     let (version, _flags) = stream.read_version_and_flags()?;
     if version > 2 {
-        return Err(AvifError::BmffParseFailed(format!(
+        return AvifError::bmff_parse_failed(format!(
             "Box[iloc] has an unsupported version: {version}"
-        )));
+        ));
     }
     let mut iloc = ItemLocationBox {
         // unsigned int(4) offset_size;
@@ -499,9 +495,7 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
         iloc.index_size,
     ] {
         if ![0u8, 4, 8].contains(&size) {
-            return Err(AvifError::BmffParseFailed(format!(
-                "Box[iloc] has invalid size: {size}"
-            )));
+            return AvifError::bmff_parse_failed(format!("Box[iloc] has invalid size: {size}"));
         }
     }
 
@@ -524,26 +518,24 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
             ..ItemLocationEntry::default()
         };
         if entry.item_id == 0 {
-            return Err(AvifError::BmffParseFailed(format!(
+            return AvifError::bmff_parse_failed(format!(
                 "Box[iloc] has invalid item id: {}",
                 entry.item_id
-            )));
+            ));
         }
         if version == 1 || version == 2 {
             // unsigned int(12) reserved = 0;
             if stream.read_bits(12)? != 0 {
-                return Err(AvifError::BmffParseFailed(
-                    "Box[iloc] has invalid reserved bits".into(),
-                ));
+                return AvifError::bmff_parse_failed("Box[iloc] has invalid reserved bits");
             }
             // unsigned int(4) construction_method;
             entry.construction_method = stream.read_bits(4)? as u8;
             // 0: file offset, 1: idat offset, 2: item offset.
             if entry.construction_method != 0 && entry.construction_method != 1 {
-                return Err(AvifError::BmffParseFailed(format!(
+                return AvifError::bmff_parse_failed(format!(
                     "Box[iloc] has unknown construction_method: {}",
                     entry.construction_method
-                )));
+                ));
             }
         }
         // unsigned int(16) data_reference_index;
@@ -599,9 +591,9 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // unsigned int (8) num_channels;
     let num_channels = stream.read_u8()? as usize;
     if num_channels == 0 || num_channels > MAX_PLANE_COUNT {
-        return Err(AvifError::BmffParseFailed(format!(
+        return AvifError::bmff_parse_failed(format!(
             "Invalid plane count {num_channels} in pixi box"
-        )));
+        ));
     }
     let mut pixi = PixelInformation {
         plane_depths: create_vec_exact(num_channels)?,
@@ -610,11 +602,11 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
         // unsigned int (8) bits_per_channel;
         pixi.plane_depths.push(stream.read_u8()?);
         if pixi.plane_depths.last().unwrap() != pixi.plane_depths.first().unwrap() {
-            return Err(AvifError::UnsupportedDepth);
+            return AvifError::unsupported_depth();
         }
     }
     if !Image::is_supported_depth(*pixi.plane_depths.last().unwrap()) {
-        return Err(AvifError::UnsupportedDepth);
+        return AvifError::unsupported_depth();
     }
     Ok(ItemProperty::PixelInformation(pixi))
 }
@@ -626,16 +618,12 @@ fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // unsigned int (1) marker = 1;
     let marker = stream.read_bits(1)?;
     if marker != 1 {
-        return Err(AvifError::BmffParseFailed(format!(
-            "Invalid marker ({marker}) in av1C"
-        )));
+        return AvifError::bmff_parse_failed(format!("Invalid marker ({marker}) in av1C"));
     }
     // unsigned int (7) version = 1;
     let version = stream.read_bits(7)?;
     if version != 1 {
-        return Err(AvifError::BmffParseFailed(format!(
-            "Invalid version ({version}) in av1C"
-        )));
+        return AvifError::bmff_parse_failed(format!("Invalid version ({version}) in av1C"));
     }
     let av1C = Av1CodecConfiguration {
         // unsigned int(3) seq_profile;
@@ -661,9 +649,7 @@ fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
 
     // unsigned int(3) reserved = 0;
     if stream.read_bits(3)? != 0 {
-        return Err(AvifError::BmffParseFailed(
-            "Invalid reserved bits in av1C".into(),
-        ));
+        return AvifError::bmff_parse_failed("Invalid reserved bits in av1C");
     }
     // unsigned int(1) initial_presentation_delay_present;
     if stream.read_bits(1)? == 1 {
@@ -672,9 +658,7 @@ fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
     } else {
         // unsigned int(4) reserved = 0;
         if stream.read_bits(4)? != 0 {
-            return Err(AvifError::BmffParseFailed(
-                "Invalid reserved bits in av1C".into(),
-            ));
+            return AvifError::bmff_parse_failed("Invalid reserved bits in av1C");
         }
     }
 
@@ -704,9 +688,9 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // unsigned int(8) configurationVersion;
     let configuration_version = stream.read_u8()?;
     if configuration_version != 0 && configuration_version != 1 {
-        return Err(AvifError::BmffParseFailed(format!(
+        return AvifError::bmff_parse_failed(format!(
             "Unknown configurationVersion({configuration_version}) in hvcC. Expected 0 or 1."
-        )));
+        ));
     }
     // unsigned int(2) general_profile_space;
     // unsigned int(1) general_tier_flag;
@@ -792,9 +776,9 @@ fn parse_colr(stream: &mut IStream) -> AvifResult<ItemProperty> {
             // Section 7.2.1 of ICC.1:2010:
             //   The profile header is 128 bytes in length and contains 18 fields.
             // So an empty ICC profile is invalid.
-            return Err(AvifError::BmffParseFailed(format!(
+            return AvifError::bmff_parse_failed(format!(
                 "colr box contains 0 bytes of {color_type}"
-            )));
+            ));
         }
         // ICC_profile; // restricted ("rICC") or unrestricted ("prof") ICC profile
         return Ok(ItemProperty::ColorInformation(ColorInformation::Icc(
@@ -815,9 +799,7 @@ fn parse_colr(stream: &mut IStream) -> AvifResult<ItemProperty> {
         nclx.yuv_range = if stream.read_bool()? { YuvRange::Full } else { YuvRange::Limited };
         // unsigned int(7) reserved = 0;
         if stream.read_bits(7)? != 0 {
-            return Err(AvifError::BmffParseFailed(
-                "colr box contains invalid reserved bits".into(),
-            ));
+            return AvifError::bmff_parse_failed("colr box contains invalid reserved bits");
         }
         return Ok(ItemProperty::ColorInformation(ColorInformation::Nclx(nclx)));
     }
@@ -869,9 +851,7 @@ fn parse_irot(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // Section 6.5.10.2 of ISO/IEC 23008-12.
     // unsigned int (6) reserved = 0;
     if stream.read_bits(6)? != 0 {
-        return Err(AvifError::BmffParseFailed(
-            "invalid reserved bits in irot".into(),
-        ));
+        return AvifError::bmff_parse_failed("invalid reserved bits in irot");
     }
     // unsigned int (2) angle;
     let angle = stream.read_bits(2)? as u8;
@@ -882,9 +862,7 @@ fn parse_imir(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // Section 6.5.12.1 of ISO/IEC 23008-12.
     // unsigned int(7) reserved = 0;
     if stream.read_bits(7)? != 0 {
-        return Err(AvifError::BmffParseFailed(
-            "invalid reserved bits in imir".into(),
-        ));
+        return AvifError::bmff_parse_failed("invalid reserved bits in imir");
     }
     // unsigned int(1) axis;
     let axis = stream.read_bits(1)? as u8;
@@ -898,9 +876,7 @@ fn parse_a1op(stream: &mut IStream) -> AvifResult<ItemProperty> {
     let op_index = stream.read_u8()?;
     if op_index > 31 {
         // 31 is AV1's maximum operating point value (operating_points_cnt_minus_1).
-        return Err(AvifError::BmffParseFailed(format!(
-            "Invalid op_index ({op_index}) in a1op"
-        )));
+        return AvifError::bmff_parse_failed(format!("Invalid op_index ({op_index}) in a1op"));
     }
     Ok(ItemProperty::OperatingPointSelector(op_index))
 }
@@ -915,9 +891,7 @@ fn parse_lsel(stream: &mut IStream) -> AvifResult<ItemProperty> {
     //   The layer_id indicates the value of the spatial_id to render. The value shall be between 0
     //   and 3, or the special value 0xFFFF.
     if layer_id != 0xFFFF && layer_id >= 4 {
-        return Err(AvifError::BmffParseFailed(format!(
-            "Invalid layer_id ({layer_id}) in lsel"
-        )));
+        return AvifError::bmff_parse_failed(format!("Invalid layer_id ({layer_id}) in lsel"));
     }
     Ok(ItemProperty::LayerSelector(layer_id))
 }
@@ -926,9 +900,7 @@ fn parse_a1lx(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // https://aomediacodec.github.io/av1-avif/v1.1.0.html#layered-image-indexing-property-syntax
     // unsigned int(7) reserved = 0;
     if stream.read_bits(7)? != 0 {
-        return Err(AvifError::BmffParseFailed(
-            "Invalid reserved bits in a1lx".into(),
-        ));
+        return AvifError::bmff_parse_failed("Invalid reserved bits in a1lx");
     }
     // unsigned int(1) large_size;
     let large_size = stream.read_bool()?;
@@ -999,10 +971,10 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
             entry.item_id = stream.read_u32()?;
         }
         if entry.item_id == 0 {
-            return Err(AvifError::BmffParseFailed(format!(
+            return AvifError::bmff_parse_failed(format!(
                 "invalid item id ({}) in ipma",
                 entry.item_id
-            )));
+            ));
         }
         if !ipma.is_empty() {
             // ISO/IEC 23008-12, First edition, 2017-12, Section 9.3.1:
@@ -1011,9 +983,9 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
             //   ItemPropertyAssociation box.
             let previous_item_id = ipma.last().unwrap().item_id;
             if entry.item_id <= previous_item_id {
-                return Err(AvifError::BmffParseFailed(
-                    "ipma item ids are not ordered by increasing id".into(),
-                ));
+                return AvifError::bmff_parse_failed(
+                    "ipma item ids are not ordered by increasing id",
+                );
             }
         }
         // unsigned int(8) association_count;
@@ -1042,9 +1014,7 @@ fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
     // Section 8.11.14.2 of ISO/IEC 14496-12.
     let header = parse_header(stream, /*top_level=*/ false)?;
     if header.box_type != "ipco" {
-        return Err(AvifError::BmffParseFailed(
-            "First box in iprp is not ipco".into(),
-        ));
+        return AvifError::bmff_parse_failed("First box in iprp is not ipco");
     }
     let mut iprp = ItemPropertyBox::default();
     // Parse ipco box.
@@ -1056,9 +1026,7 @@ fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
         if header.box_type != "ipma" {
-            return Err(AvifError::BmffParseFailed(
-                "Found non ipma box in iprp".into(),
-            ));
+            return AvifError::bmff_parse_failed("Found non ipma box in iprp");
         }
         let mut sub_stream = stream.sub_stream(&header.size)?;
         iprp.associations.append(&mut parse_ipma(&mut sub_stream)?);
@@ -1070,9 +1038,7 @@ fn parse_infe(stream: &mut IStream) -> AvifResult<ItemInfo> {
     // Section 8.11.6.2 of ISO/IEC 14496-12.
     let (version, _flags) = stream.read_version_and_flags()?;
     if version != 2 && version != 3 {
-        return Err(AvifError::BmffParseFailed(
-            "infe box version 2 or 3 expected.".into(),
-        ));
+        return AvifError::bmff_parse_failed("infe box version 2 or 3 expected.");
     }
 
     // TODO: check flags. ISO/IEC 23008-12:2017, Section 9.2 says:
@@ -1093,10 +1059,10 @@ fn parse_infe(stream: &mut IStream) -> AvifResult<ItemInfo> {
         entry.item_id = stream.read_u32()?;
     }
     if entry.item_id == 0 {
-        return Err(AvifError::BmffParseFailed(format!(
+        return AvifError::bmff_parse_failed(format!(
             "Invalid item id ({}) found in infe",
             entry.item_id
-        )));
+        ));
     }
     // unsigned int(16) item_protection_index;
     entry.item_protection_index = stream.read_u16()?;
@@ -1131,9 +1097,7 @@ fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
     for _i in 0..entry_count {
         let header = parse_header(stream, /*top_level=*/ false)?;
         if header.box_type != "infe" {
-            return Err(AvifError::BmffParseFailed(
-                "Found non infe box in iinf".into(),
-            ));
+            return AvifError::bmff_parse_failed("Found non infe box in iinf");
         }
         let mut sub_stream = stream.sub_stream(&header.size)?;
         iinf.push(parse_infe(&mut sub_stream)?);
@@ -1159,9 +1123,7 @@ fn parse_iref(stream: &mut IStream) -> AvifResult<Vec<ItemReference>> {
             stream.read_u32()?
         };
         if from_item_id == 0 {
-            return Err(AvifError::BmffParseFailed(
-                "invalid from_item_id (0) in iref".into(),
-            ));
+            return AvifError::bmff_parse_failed("invalid from_item_id (0) in iref");
         }
         // unsigned int(16) reference_count;
         let reference_count = stream.read_u16()?;
@@ -1174,9 +1136,7 @@ fn parse_iref(stream: &mut IStream) -> AvifResult<Vec<ItemReference>> {
                 stream.read_u32()?
             };
             if to_item_id == 0 {
-                return Err(AvifError::BmffParseFailed(
-                    "invalid to_item_id (0) in iref".into(),
-                ));
+                return AvifError::bmff_parse_failed("invalid to_item_id (0) in iref");
             }
             iref.push(ItemReference {
                 from_item_id,
@@ -1192,7 +1152,7 @@ fn parse_iref(stream: &mut IStream) -> AvifResult<Vec<ItemReference>> {
 fn parse_idat(stream: &mut IStream) -> AvifResult<Vec<u8>> {
     // Section 8.11.11.2 of ISO/IEC 14496-12.
     if !stream.has_bytes_left()? {
-        return Err(AvifError::BmffParseFailed("Invalid idat size (0)".into()));
+        return AvifError::bmff_parse_failed("Invalid idat size (0)");
     }
     let mut idat: Vec<u8> = Vec::with_capacity(stream.bytes_left()?);
     idat.extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
@@ -1229,9 +1189,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
     {
         let header = parse_header(stream, /*top_level=*/ false)?;
         if header.box_type != "hdlr" {
-            return Err(AvifError::BmffParseFailed(
-                "first box in meta is not hdlr".into(),
-            ));
+            return AvifError::bmff_parse_failed("first box in meta is not hdlr");
         }
         let handler_type = parse_hdlr(&mut stream.sub_stream(&header.size)?)?;
         if handler_type != "pict" {
@@ -1240,9 +1198,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
             // https://aomediacodec.github.io/av1-avif/v1.1.0.html#image-sequences does not apply
             // because this function is only called for the MetaBox but it would work too:
             //   The track handler for an AV1 Image Sequence shall be pict.
-            return Err(AvifError::BmffParseFailed(
-                "Box[hdlr] handler_type is not 'pict'".into(),
-            ));
+            return AvifError::bmff_parse_failed("Box[hdlr] handler_type is not 'pict'");
         }
     }
 
@@ -1253,10 +1209,10 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
         match header.box_type.as_str() {
             "hdlr" | "iloc" | "pitm" | "iprp" | "iinf" | "iref" | "idat" | "grpl" => {
                 if boxes_seen.contains(&header.box_type) {
-                    return Err(AvifError::BmffParseFailed(format!(
+                    return AvifError::bmff_parse_failed(format!(
                         "duplicate {} box in meta.",
                         header.box_type
-                    )));
+                    ));
                 }
                 boxes_seen.insert(header.box_type.clone());
             }
@@ -1289,9 +1245,7 @@ fn parse_tkhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         track.id = stream.read_u32()?;
         // const unsigned int(32) reserved = 0;
         if stream.read_u32()? != 0 {
-            return Err(AvifError::BmffParseFailed(
-                "Invalid reserved bits in tkhd".into(),
-            ));
+            return AvifError::bmff_parse_failed("Invalid reserved bits in tkhd");
         }
         // unsigned int(64) duration;
         track.track_duration = stream.read_u64()?;
@@ -1304,23 +1258,17 @@ fn parse_tkhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         track.id = stream.read_u32()?;
         // const unsigned int(32) reserved = 0;
         if stream.read_u32()? != 0 {
-            return Err(AvifError::BmffParseFailed(
-                "Invalid reserved bits in tkhd".into(),
-            ));
+            return AvifError::bmff_parse_failed("Invalid reserved bits in tkhd");
         }
         // unsigned int(32) duration;
         track.track_duration = stream.read_u32()? as u64;
     } else {
-        return Err(AvifError::BmffParseFailed(format!(
-            "unsupported version ({version}) in trak"
-        )));
+        return AvifError::bmff_parse_failed(format!("unsupported version ({version}) in trak"));
     }
 
     // const unsigned int(32)[2] reserved = 0;
     if stream.read_u32()? != 0 || stream.read_u32()? != 0 {
-        return Err(AvifError::BmffParseFailed(
-            "Invalid reserved bits in tkhd".into(),
-        ));
+        return AvifError::bmff_parse_failed("Invalid reserved bits in tkhd");
     }
     // The following fields should be 0 but are ignored instead.
     // template int(16) layer = 0;
@@ -1331,9 +1279,7 @@ fn parse_tkhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     stream.skip(2)?;
     // const unsigned int(16) reserved = 0;
     if stream.read_u16()? != 0 {
-        return Err(AvifError::BmffParseFailed(
-            "Invalid reserved bits in tkhd".into(),
-        ));
+        return AvifError::bmff_parse_failed("Invalid reserved bits in tkhd");
     }
     // template int(32)[9] matrix= { 0x00010000,0,0,0,0x00010000,0,0,0,0x40000000 }; // unity matrix
     stream.skip(4 * 9)?;
@@ -1368,16 +1314,12 @@ fn parse_mdhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         // unsigned int(32) duration;
         track.media_duration = stream.read_u32()? as u64;
     } else {
-        return Err(AvifError::BmffParseFailed(format!(
-            "unsupported version ({version}) in mdhd"
-        )));
+        return AvifError::bmff_parse_failed(format!("unsupported version ({version}) in mdhd"));
     }
 
     // bit(1) pad = 0;
     if stream.read_bits(1)? != 0 {
-        return Err(AvifError::BmffParseFailed(
-            "Invalid reserved bits in mdhd".into(),
-        ));
+        return AvifError::bmff_parse_failed("Invalid reserved bits in mdhd");
     }
     // unsigned int(5)[3] language; // ISO-639-2/T language code
     stream.skip_bits(5 * 3)?;
@@ -1426,20 +1368,16 @@ fn parse_stsc(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
         };
         if i == 0 {
             if stsc.first_chunk != 1 {
-                return Err(AvifError::BmffParseFailed(
-                    "stsc does not begin with chunk 1.".into(),
-                ));
+                return AvifError::bmff_parse_failed("stsc does not begin with chunk 1.");
             }
         } else if stsc.first_chunk <= sample_table.sample_to_chunk.last().unwrap().first_chunk {
-            return Err(AvifError::BmffParseFailed(
-                "stsc chunks are not strictly increasing.".into(),
-            ));
+            return AvifError::bmff_parse_failed("stsc chunks are not strictly increasing.");
         }
         if stsc.sample_description_index == 0 {
-            return Err(AvifError::BmffParseFailed(format!(
+            return AvifError::bmff_parse_failed(format!(
                 "sample_description_index is {} in stsc chunk.",
                 stsc.sample_description_index
-            )));
+            ));
         }
         sample_table.sample_to_chunk.push(stsc);
     }
@@ -1512,9 +1450,7 @@ fn parse_sample_entry(stream: &mut IStream, format: String) -> AvifResult<Sample
         || stream.read_u8()? != 0
         || stream.read_u8()? != 0
     {
-        return Err(AvifError::BmffParseFailed(
-            "Invalid reserved bits in SampleEntry of stsd".into(),
-        ));
+        return AvifError::bmff_parse_failed("Invalid reserved bits in SampleEntry of stsd");
     }
     // unsigned int(16) data_reference_index;
     stream.skip(2)?;
@@ -1536,9 +1472,9 @@ fn parse_sample_entry(stream: &mut IStream, format: String) -> AvifResult<Sample
         stream.skip(2)?;
         // const unsigned int(16) reserved = 0;
         if stream.read_u16()? != 0 {
-            return Err(AvifError::BmffParseFailed(
-                "Invalid reserved bits in VisualSampleEntry of stsd".into(),
-            ));
+            return AvifError::bmff_parse_failed(
+                "Invalid reserved bits in VisualSampleEntry of stsd",
+            );
         }
         // unsigned int(32) pre_defined[3] = 0;
         stream.skip(4 * 3)?;
@@ -1552,9 +1488,9 @@ fn parse_sample_entry(stream: &mut IStream, format: String) -> AvifResult<Sample
         stream.skip_u32()?;
         // const unsigned int(32) reserved = 0;
         if stream.read_u32()? != 0 {
-            return Err(AvifError::BmffParseFailed(
-                "Invalid reserved bits in VisualSampleEntry of stsd".into(),
-            ));
+            return AvifError::bmff_parse_failed(
+                "Invalid reserved bits in VisualSampleEntry of stsd",
+            );
         }
         // template unsigned int(16) frame_count;
         stream.skip(2)?;
@@ -1562,9 +1498,7 @@ fn parse_sample_entry(stream: &mut IStream, format: String) -> AvifResult<Sample
         stream.skip(32)?;
         // template unsigned int(16) depth = 0x0018;
         if stream.read_u16()? != 0x0018 {
-            return Err(AvifError::BmffParseFailed(
-                "Invalid depth in VisualSampleEntry of stsd".into(),
-            ));
+            return AvifError::bmff_parse_failed("Invalid depth in VisualSampleEntry of stsd");
         }
         // unsigned int(16) pre_defined = 0; ("Readers should expect any value")
         stream.skip(2)?;
@@ -1584,9 +1518,9 @@ fn parse_sample_entry(stream: &mut IStream, format: String) -> AvifResult<Sample
             .iter()
             .any(|p| matches!(p, ItemProperty::CodecConfiguration(_)))
         {
-            return Err(AvifError::BmffParseFailed(
-                "AV1SampleEntry must contain an AV1CodecConfigurationRecord".into(),
-            ));
+            return AvifError::bmff_parse_failed(
+                "AV1SampleEntry must contain an AV1CodecConfigurationRecord",
+            );
         }
     }
     Ok(sample_entry)
@@ -1598,9 +1532,7 @@ fn parse_stsd(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
     if version != 0 && version != 1 {
         // Section 8.5.2.3 of ISO/IEC 14496-12:
         //   version is set to zero. A version number of 1 shall be treated as a version of 0.
-        return Err(AvifError::BmffParseFailed(
-            "stsd box version 0 or 1 expected.".into(),
-        ));
+        return AvifError::bmff_parse_failed("stsd box version 0 or 1 expected.");
     }
     // unsigned int(32) entry_count;
     let entry_count = usize_from_u32(stream.read_u32()?)?;
@@ -1618,36 +1550,34 @@ fn parse_stsd(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
 fn parse_stbl(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     // Section 8.5.1.2 of ISO/IEC 14496-12.
     if track.sample_table.is_some() {
-        return Err(AvifError::BmffParseFailed(
-            "duplicate stbl for track.".into(),
-        ));
+        return AvifError::bmff_parse_failed("duplicate stbl for track.");
     }
     let mut sample_table = SampleTable::default();
     let mut boxes_seen: HashSet<String> = HashSet::with_hasher(NonRandomHasherState);
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
         if boxes_seen.contains(&header.box_type) {
-            return Err(AvifError::BmffParseFailed(format!(
+            return AvifError::bmff_parse_failed(format!(
                 "duplicate box in stbl: {}",
                 header.box_type
-            )));
+            ));
         }
         let mut skipped_box = false;
         let mut sub_stream = stream.sub_stream(&header.size)?;
         match header.box_type.as_str() {
             "stco" => {
                 if boxes_seen.contains("co64") {
-                    return Err(AvifError::BmffParseFailed(
-                        "exactly one of co64 or stco is allowed in stbl".into(),
-                    ));
+                    return AvifError::bmff_parse_failed(
+                        "exactly one of co64 or stco is allowed in stbl",
+                    );
                 }
                 parse_stco(&mut sub_stream, &mut sample_table, false)?;
             }
             "co64" => {
                 if boxes_seen.contains("stco") {
-                    return Err(AvifError::BmffParseFailed(
-                        "exactly one of co64 or stco is allowed in stbl".into(),
-                    ));
+                    return AvifError::bmff_parse_failed(
+                        "exactly one of co64 or stco is allowed in stbl",
+                    );
                 }
                 parse_stco(&mut sub_stream, &mut sample_table, true)?;
             }
@@ -1722,9 +1652,7 @@ fn parse_tref(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
 
 fn parse_elst(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     if track.elst_seen {
-        return Err(AvifError::BmffParseFailed(
-            "more than one elst box was found for track".into(),
-        ));
+        return AvifError::bmff_parse_failed("more than one elst box was found for track");
     }
     track.elst_seen = true;
 
@@ -1746,9 +1674,7 @@ fn parse_elst(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     // unsigned int(32) entry_count;
     let entry_count = stream.read_u32()?;
     if entry_count != 1 {
-        return Err(AvifError::BmffParseFailed(format!(
-            "elst has entry_count ({entry_count}) != 1"
-        )));
+        return AvifError::bmff_parse_failed(format!("elst has entry_count ({entry_count}) != 1"));
     }
 
     if version == 1 {
@@ -1762,9 +1688,7 @@ fn parse_elst(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         // int(32) media_time;
         stream.skip(4)?;
     } else {
-        return Err(AvifError::BmffParseFailed(
-            "unsupported version in elst".into(),
-        ));
+        return AvifError::bmff_parse_failed("unsupported version in elst");
     }
     // int(16) media_rate_integer;
     stream.skip(2)?;
@@ -1772,9 +1696,7 @@ fn parse_elst(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     stream.skip(2)?;
 
     if track.segment_duration == 0 {
-        return Err(AvifError::BmffParseFailed(
-            "invalid value for segment_duration (0)".into(),
-        ));
+        return AvifError::bmff_parse_failed("invalid value for segment_duration (0)");
     }
     Ok(())
 }
@@ -1783,9 +1705,7 @@ fn parse_edts(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     if track.elst_seen {
         // This function always exits with track.elst_seen set to true. So it is sufficient to
         // check track.elst_seen to verify the uniqueness of the edts box.
-        return Err(AvifError::BmffParseFailed(
-            "multiple edts boxes found for track.".into(),
-        ));
+        return AvifError::bmff_parse_failed("multiple edts boxes found for track.");
     }
 
     // Section 8.6.5.2 of ISO/IEC 14496-12.
@@ -1798,9 +1718,7 @@ fn parse_edts(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     }
 
     if !track.elst_seen {
-        return Err(AvifError::BmffParseFailed(
-            "elst box was not found in edts".into(),
-        ));
+        return AvifError::bmff_parse_failed("elst box was not found in edts");
     }
     Ok(())
 }
@@ -1815,9 +1733,7 @@ fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
         match header.box_type.as_str() {
             "tkhd" => {
                 if tkhd_seen {
-                    return Err(AvifError::BmffParseFailed(
-                        "trak box contains multiple tkhd boxes".into(),
-                    ));
+                    return AvifError::bmff_parse_failed("trak box contains multiple tkhd boxes");
                 }
                 parse_tkhd(&mut sub_stream, &mut track)?;
                 tkhd_seen = true;
@@ -1830,9 +1746,7 @@ fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
         }
     }
     if !tkhd_seen {
-        return Err(AvifError::BmffParseFailed(
-            "trak box did not contain a tkhd box".into(),
-        ));
+        return AvifError::bmff_parse_failed("trak box did not contain a tkhd box");
     }
     Ok(track)
 }
@@ -1846,17 +1760,13 @@ fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
         if header.box_type == "trak" {
             let track = parse_trak(&mut sub_stream)?;
             if track.is_video_handler() && (track.width == 0 || track.height == 0) {
-                return Err(AvifError::BmffParseFailed(
-                    "invalid track dimensions".into(),
-                ));
+                return AvifError::bmff_parse_failed("invalid track dimensions");
             }
             tracks.push(track);
         }
     }
     if tracks.is_empty() {
-        return Err(AvifError::BmffParseFailed(
-            "moov box does not contain any tracks".into(),
-        ));
+        return AvifError::bmff_parse_failed("moov box does not contain any tracks");
     }
     Ok(tracks)
 }
@@ -1886,10 +1796,10 @@ pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
                     // Section 6.3.4 of ISO/IEC 14496-12:
                     //   The FileTypeBox shall occur before any variable-length box. Only a
                     //   fixed-size box such as a file signature, if required, may precede it.
-                    return Err(AvifError::BmffParseFailed(format!(
+                    return AvifError::bmff_parse_failed(format!(
                         "expected ftyp box. found {}.",
                         header.box_type,
-                    )));
+                    ));
                 }
                 let box_data = match header.size {
                     BoxSize::UntilEndOfStream => io.read(parse_offset, usize::MAX)?,
@@ -1900,7 +1810,7 @@ pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
                     "ftyp" => {
                         ftyp = Some(parse_ftyp(&mut box_stream)?);
                         if !ftyp.unwrap_ref().is_avif() {
-                            return Err(AvifError::InvalidFtyp);
+                            return AvifError::invalid_ftyp();
                         }
                     }
                     "meta" => meta = Some(parse_meta(&mut box_stream)?),
@@ -1928,11 +1838,11 @@ pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
             .ok_or(AvifError::BmffParseFailed("invalid parse offset".into()))?;
     }
     if ftyp.is_none() {
-        return Err(AvifError::InvalidFtyp);
+        return AvifError::invalid_ftyp();
     }
     let ftyp = ftyp.unwrap();
     if (ftyp.needs_meta() && meta.is_none()) || (ftyp.needs_moov() && tracks.is_none()) {
-        return Err(AvifError::TruncatedData);
+        return AvifError::truncated_data();
     }
     Ok(AvifBoxes {
         ftyp,
@@ -1972,13 +1882,13 @@ pub(crate) fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
     // unsigned int(8) version = 0;
     let version = stream.read_u8()?;
     if version != 0 {
-        return Err(AvifError::NotImplemented);
+        return AvifError::not_implemented();
     }
     // unsigned int(16) minimum_version;
     let minimum_version = stream.read_u16()?;
     let supported_version = 0;
     if minimum_version > supported_version {
-        return Err(AvifError::NotImplemented);
+        return AvifError::not_implemented();
     }
     // unsigned int(16) writer_version;
     let writer_version = stream.read_u16()?;
@@ -2025,9 +1935,7 @@ pub(crate) fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
         metadata.alternate_offset[i] = metadata.alternate_offset[0];
     }
     if writer_version <= supported_version && stream.has_bytes_left()? {
-        return Err(AvifError::InvalidToneMappedImage(
-            "invalid trailing bytes in tmap box".into(),
-        ));
+        return AvifError::invalid_tone_mapped_image("invalid trailing bytes in tmap box");
     }
     metadata.is_valid()?;
     Ok(metadata)
@@ -2037,7 +1945,7 @@ pub(crate) fn parse_sato(stream: &mut IStream, num_inputs: usize) -> AvifResult<
     // unsigned int(2) version = 0;
     let version = stream.read_bits(2)?;
     if version != 0 {
-        return Err(AvifError::NotImplemented);
+        return AvifError::not_implemented();
     }
     // unsigned int(4) flags;
     let _reserved = stream.read_bits(4)?;
@@ -2064,9 +1972,7 @@ pub(crate) fn parse_sato(stream: &mut IStream, num_inputs: usize) -> AvifResult<
             1..=32 => {
                 let source_item_idx = usize_from_u8(token - 1)?;
                 if source_item_idx >= num_inputs {
-                    return Err(AvifError::InvalidImageGrid(
-                        "invalid item reference in sato".into(),
-                    ));
+                    return AvifError::invalid_image_grid("invalid item reference in sato");
                 }
                 SampleTransformToken::ImageItem(source_item_idx)
             }
@@ -2084,15 +1990,13 @@ pub(crate) fn parse_sato(stream: &mut IStream, num_inputs: usize) -> AvifResult<
             135 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Pow),
             136 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Min),
             137 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Max),
-            _ => return Err(AvifError::InvalidImageGrid("invalid token in sato".into())),
+            _ => return AvifError::invalid_image_grid("invalid token in sato"),
         };
         tokens.push(sato_token);
     }
 
     if stream.has_bytes_left()? {
-        return Err(AvifError::InvalidImageGrid(
-            "found unknown extra bytes in the sato box".into(),
-        ));
+        return AvifError::invalid_image_grid("found unknown extra bytes in the sato box");
     }
 
     SampleTransform::create_from(bit_depth, num_inputs, tokens)

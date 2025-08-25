@@ -243,7 +243,7 @@ impl Encoder {
                 }
                 "uri " => {
                     // utf8string item_uri_type;
-                    return Err(AvifError::NotImplemented);
+                    return AvifError::not_implemented();
                 }
                 _ => {}
             }
@@ -391,7 +391,7 @@ impl Encoder {
                 // 1-indexed.
                 let index = property_index_map[*property_index as usize - 1];
                 if index >= (1 << 7) {
-                    return Err(AvifError::UnknownError("".into()));
+                    return AvifError::unknown_error("");
                 }
                 // unsigned int(7) property_index;
                 stream.write_bits(index.into(), 7)?;
@@ -649,7 +649,7 @@ impl Encoder {
         } else {
             let loop_count = self.settings.repetition_count.loop_count();
             if frames_duration_in_timescales == 0 {
-                return Err(AvifError::InvalidArgument);
+                return AvifError::invalid_argument();
             }
             checked_mul!(frames_duration_in_timescales, loop_count)?
         };
