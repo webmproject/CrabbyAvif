@@ -25,7 +25,7 @@ use std::cmp::min;
 
 fn identity_yuv8_to_rgb8_full_range(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
     if image.yuv_format != PixelFormat::Yuv444 || rgb.format == Format::Rgb565 {
-        return Err(AvifError::NotImplemented);
+        return AvifError::not_implemented();
     }
 
     let r_offset = rgb.format.r_offset();
@@ -414,7 +414,7 @@ pub(crate) fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> Avi
                 identity_yuv8_to_rgb8_full_range(image, rgb)
             } else {
                 // TODO: Add more fast paths for identity.
-                Err(AvifError::NotImplemented)
+                AvifError::not_implemented()
             }
         }
         Mode::YuvCoefficients(kr, kg, kb) => {
@@ -430,7 +430,7 @@ pub(crate) fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> Avi
                 (true, false, false) => yuv8_to_rgb16_monochrome(image, rgb, kr, kg, kb),
             }
         }
-        Mode::Ycgco | Mode::YcgcoRe | Mode::YcgcoRo => Err(AvifError::NotImplemented),
+        Mode::Ycgco | Mode::YcgcoRe | Mode::YcgcoRo => AvifError::not_implemented(),
     }
 }
 
@@ -598,7 +598,7 @@ pub(crate) fn yuv_to_rgb_any(
                     cr = unorm_value(v_row, uv_i, yuv_max_channel, table_uv);
                 } else {
                     if image.chroma_sample_position != ChromaSamplePosition::CENTER {
-                        return Err(AvifError::NotImplemented);
+                        return AvifError::not_implemented();
                     }
 
                     // Bilinear filtering with weights. See

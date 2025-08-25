@@ -32,15 +32,15 @@ pub mod libyuv {
     use crate::*;
 
     pub(crate) fn yuv_to_rgb(_image: &image::Image, _rgb: &mut rgb::Image) -> AvifResult<bool> {
-        Err(AvifError::NotImplemented)
+        AvifError::not_implemented()
     }
 
     pub(crate) fn rgb_to_yuv(_rgb: &rgb::Image, _image: &mut image::Image) -> AvifResult<bool> {
-        Err(AvifError::NotImplemented)
+        AvifError::not_implemented()
     }
 
     pub(crate) fn convert_to_half_float(_rgb: &mut rgb::Image, _scale: f32) -> AvifResult<()> {
-        Err(AvifError::NotImplemented)
+        AvifError::not_implemented()
     }
 
     impl image::Image {
@@ -53,7 +53,7 @@ pub mod libyuv {
             if self.width == width && self.height == height {
                 return Ok(());
             }
-            Err(AvifError::NotImplemented)
+            AvifError::not_implemented()
         }
     }
 }
@@ -66,6 +66,6 @@ pub mod sharpyuv {
     use crate::*;
 
     pub(crate) fn rgb_to_yuv(_rgb: &rgb::Image, _image: &mut image::Image) -> AvifResult<bool> {
-        Err(AvifError::NotImplemented)
+        AvifError::not_implemented()
     }
 }

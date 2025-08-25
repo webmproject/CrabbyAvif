@@ -363,9 +363,9 @@ impl Item {
                         .push((u8_from_usize(streams.len())?, false));
                 }
                 if item_metadata.pasp.is_some() {
-                    return Err(AvifError::UnknownError(
-                        "pixel aspect ratio property must be associated with the base image".into(),
-                    ));
+                    return AvifError::unknown_error(
+                        "pixel aspect ratio property must be associated with the base image",
+                    );
                 }
             }
         }
@@ -392,9 +392,9 @@ impl Item {
                     || item_metadata.irot_angle.is_some()
                     || item_metadata.imir_axis.is_some()
                 {
-                    return Err(AvifError::UnknownError(
-                        "transformative properties must be associated with the base image".into(),
-                    ));
+                    return AvifError::unknown_error(
+                        "transformative properties must be associated with the base image",
+                    );
                 }
                 self.write_transformative_properties(streams, image_metadata)?;
             }

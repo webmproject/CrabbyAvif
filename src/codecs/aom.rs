@@ -44,7 +44,7 @@ fn aom_format(image: &Image, category: Category) -> AvifResult<aom_img_fmt_t> {
             PixelFormat::Yuv420 | PixelFormat::Yuv400 => aom_img_fmt_AOM_IMG_FMT_I420,
             PixelFormat::Yuv422 => aom_img_fmt_AOM_IMG_FMT_I422,
             PixelFormat::Yuv444 => aom_img_fmt_AOM_IMG_FMT_I444,
-            _ => return Err(AvifError::InvalidArgument),
+            _ => return AvifError::invalid_argument(),
         },
     };
     Ok(if image.depth > 8 { format | AOM_IMG_FMT_HIGHBITDEPTH } else { format })
@@ -75,7 +75,7 @@ fn aom_seq_profile(image: &Image, category: Category) -> AvifResult<u32> {
         PixelFormat::Yuv420 | PixelFormat::Yuv400 => Ok(0),
         PixelFormat::Yuv422 => Ok(2),
         PixelFormat::Yuv444 => Ok(1),
-        _ => Err(AvifError::InvalidArgument),
+        _ => AvifError::invalid_argument(),
     }
 }
 
@@ -92,7 +92,7 @@ fn get_aom_scaling_mode_1d(mut fraction: IFraction) -> AvifResult<aom_scaling_mo
         IFraction(3, 4) => aom_scaling_mode_1d_AOME_THREEFOUR,
         IFraction(3, 5) => aom_scaling_mode_1d_AOME_THREEFIVE,
         IFraction(4, 5) => aom_scaling_mode_1d_AOME_FOURFIVE,
-        _ => return Err(AvifError::NotImplemented),
+        _ => return AvifError::not_implemented(),
     })
 }
 
@@ -109,7 +109,7 @@ macro_rules! codec_control {
         if unsafe { aom_codec_control($self.encoder.unwrap_mut() as *mut _, $key as _, $value) }
             != aom_codec_err_t_AOM_CODEC_OK
         {
-            return Err(AvifError::UnknownError("".into()));
+            return AvifError::unknown_error("");
         }
     };
 }
@@ -164,7 +164,7 @@ impl Encoder for Aom {
                 aom_codec_enc_config_default(encoder_iface, cfg_uninit.as_mut_ptr(), aom_usage)
             };
             if err != aom_codec_err_t_AOM_CODEC_OK {
-                return Err(AvifError::UnknownError("".into()));
+                return AvifError::unknown_error("");
             }
             // # Safety: cfg_uninit was initialized in the C function call above.
             let mut aom_config = unsafe { cfg_uninit.assume_init() };
@@ -208,7 +208,7 @@ impl Encoder for Aom {
                     {
                         value
                     } else {
-                        return Err(AvifError::InvalidArgument);
+                        return AvifError::invalid_argument();
                     }
                 } else {
                     match value.as_str() {
@@ -216,7 +216,7 @@ impl Encoder for Aom {
                         "cbr" => aom_rc_mode_AOM_CBR,
                         "cq" => aom_rc_mode_AOM_CQ,
                         "q" => aom_rc_mode_AOM_Q,
-                        _ => return Err(AvifError::InvalidArgument),
+                        _ => return AvifError::invalid_argument(),
                     }
                 };
             }
@@ -240,9 +240,7 @@ impl Encoder for Aom {
                 )
             };
             if err != aom_codec_err_t_AOM_CODEC_OK {
-                return Err(AvifError::UnknownError(format!(
-                    "aom_codec_enc_init failed. err: {err}"
-                )));
+                return AvifError::unknown_error(format!("aom_codec_enc_init failed. err: {err}"));
             }
             // # Safety: encoder_uninit was initialized in the C function call above.
             self.encoder = Some(unsafe { encoder_uninit.assume_init() });
@@ -343,9 +341,9 @@ impl Encoder for Aom {
                     aom_codec_set_option(self.encoder.unwrap_mut() as *mut _, key_str, value_str)
                 } != aom_codec_err_t_AOM_CODEC_OK
                 {
-                    return Err(AvifError::UnknownError(format!(
+                    return AvifError::unknown_error(format!(
                         "Unable to set codec specific option: {key} to {value}"
-                    )));
+                    ));
                 }
             }
             if !codec_specific_options.iter().any(|(key, _)| key == "tune") {
@@ -367,7 +365,7 @@ impl Encoder for Aom {
             let aom_config = self.aom_config.unwrap_mut();
             if aom_config.g_w != image.width || aom_config.g_h != image.height {
                 // Dimension changes aren't allowed.
-                return Err(AvifError::NotImplemented);
+                return AvifError::not_implemented();
             }
             let last_config = self.config.unwrap_ref();
             if last_config.quantizer != config.quantizer {
@@ -384,9 +382,9 @@ impl Encoder for Aom {
                         )
                     };
                     if err != aom_codec_err_t_AOM_CODEC_OK {
-                        return Err(AvifError::UnknownError(format!(
+                        return AvifError::unknown_error(format!(
                             "aom_codec_enc_config_set failed. err: {err}"
-                        )));
+                        ));
                     }
                 } else if aom_config.rc_end_usage == aom_rc_mode_AOM_CQ
                     || aom_config.rc_end_usage == aom_rc_mode_AOM_Q
@@ -420,7 +418,7 @@ impl Encoder for Aom {
             self.config = Some(config.clone());
         }
         if self.current_layer > config.extra_layer_count {
-            return Err(AvifError::InvalidArgument);
+            return AvifError::invalid_argument();
         }
         if config.extra_layer_count > 0 {
             codec_control!(
@@ -501,7 +499,7 @@ impl Encoder for Aom {
             )
         };
         if err != aom_codec_err_t_AOM_CODEC_OK {
-            return Err(AvifError::UnknownError(format!("err: {err}")));
+            return AvifError::unknown_error(format!("err: {err}"));
         }
         let mut iter: aom_codec_iter_t = std::ptr::null_mut();
         loop {
@@ -549,7 +547,7 @@ impl Encoder for Aom {
                 )
             };
             if err != aom_codec_err_t_AOM_CODEC_OK {
-                return Err(AvifError::UnknownError("".into()));
+                return AvifError::unknown_error("");
             }
             let mut got_packet = false;
             let mut iter: aom_codec_iter_t = std::ptr::null_mut();

@@ -42,14 +42,12 @@ impl Av1SequenceHeader {
     fn parse_profile(&mut self, bits: &mut IBitStream) -> AvifResult<()> {
         self.config.seq_profile = bits.read(3)? as u8;
         if self.config.seq_profile > 2 {
-            return Err(AvifError::BmffParseFailed("invalid seq_profile".into()));
+            return AvifError::bmff_parse_failed("invalid seq_profile");
         }
         let still_picture = bits.read_bool()?;
         self.reduced_still_picture_header = bits.read_bool()?;
         if self.reduced_still_picture_header && !still_picture {
-            return Err(AvifError::BmffParseFailed(
-                "invalid reduced_still_picture_header".into(),
-            ));
+            return AvifError::bmff_parse_failed("invalid reduced_still_picture_header");
         }
         if self.reduced_still_picture_header {
             self.config.seq_level_idx0 = bits.read(5)? as u8;
@@ -265,9 +263,7 @@ impl Av1SequenceHeader {
         // https://aomediacodec.github.io/av1-spec/#obu-header-syntax
         let obu_forbidden_bit = bits.read(1)?;
         if obu_forbidden_bit != 0 {
-            return Err(AvifError::BmffParseFailed(
-                "invalid obu_forbidden_bit".into(),
-            ));
+            return AvifError::bmff_parse_failed("invalid obu_forbidden_bit");
         }
         let obu_type = bits.read(4)? as u8;
         let obu_extension_flag = bits.read_bool()?;
@@ -320,8 +316,6 @@ impl Av1SequenceHeader {
             bits.skip(1)?;
             return Ok(sequence_header);
         }
-        Err(AvifError::BmffParseFailed(
-            "could not parse sequence header".into(),
-        ))
+        AvifError::bmff_parse_failed("could not parse sequence header")
     }
 }

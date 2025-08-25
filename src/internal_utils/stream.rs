@@ -37,7 +37,7 @@ impl IBitStream<'_> {
     fn read_bit(&mut self) -> AvifResult<u8> {
         let byte_offset = self.bit_offset / 8;
         if byte_offset >= self.data.len() {
-            return Err(AvifError::BmffParseFailed("Not enough bits".into()));
+            return AvifError::bmff_parse_failed("Not enough bits");
         }
         let byte = self.data[byte_offset];
         let shift = 7 - (self.bit_offset % 8);
@@ -63,14 +63,14 @@ impl IBitStream<'_> {
     pub(crate) fn pad(&mut self) -> AvifResult<()> {
         let unaligned_bits = self.bit_offset % 8;
         if unaligned_bits != 0 && self.read(8 - unaligned_bits)? != 0 {
-            return Err(AvifError::BmffParseFailed("Padding not set to 0".into()));
+            return AvifError::bmff_parse_failed("Padding not set to 0");
         }
         Ok(())
     }
 
     pub(crate) fn skip(&mut self, n: usize) -> AvifResult<()> {
         if checked_add!(self.bit_offset, n)? > checked_mul!(self.data.len(), 8)? {
-            return Err(AvifError::BmffParseFailed("Not enough bytes".into()));
+            return AvifError::bmff_parse_failed("Not enough bytes");
         }
         self.bit_offset += n;
         Ok(())
@@ -108,7 +108,7 @@ impl IStream<'_> {
 
     fn check(&self, size: usize) -> AvifResult<()> {
         if self.bytes_left()? < size {
-            return Err(AvifError::BmffParseFailed("".into()));
+            return AvifError::bmff_parse_failed("");
         }
         Ok(())
     }
@@ -143,7 +143,7 @@ impl IStream<'_> {
 
     pub(crate) fn bytes_left(&self) -> AvifResult<usize> {
         if self.data.len() < self.offset {
-            return Err(AvifError::UnknownError("".into()));
+            return AvifError::unknown_error("");
         }
         Ok(self.data.len() - self.offset)
     }
@@ -237,7 +237,7 @@ impl IStream<'_> {
             return Ok(0);
         }
         if n > 8 {
-            return Err(AvifError::NotImplemented);
+            return AvifError::not_implemented();
         }
         let mut out = [0; 8];
         let start = out.len() - n;
@@ -269,7 +269,7 @@ impl IStream<'_> {
     ) -> AvifResult<(u8, u32)> {
         let (version, flags) = self.read_version_and_flags()?;
         if version != enforced_version {
-            return Err(AvifError::BmffParseFailed("".into()));
+            return AvifError::bmff_parse_failed("");
         }
         Ok((version, flags))
     }
@@ -304,9 +304,7 @@ impl IStream<'_> {
         }
         // It is a requirement of bitstream conformance that the most
         // significant bit of leb128_byte is equal to 0 if i is equal to 7.
-        Err(AvifError::BmffParseFailed(
-            "uleb value did not terminate after 8 bytes".into(),
-        ))
+        AvifError::bmff_parse_failed("uleb value did not terminate after 8 bytes")
     }
 }
 
@@ -332,15 +330,15 @@ impl OStream {
     }
 
     pub(crate) fn try_reserve(&mut self, size: usize) -> AvifResult<()> {
-        self.data.try_reserve(size).or(Err(AvifError::OutOfMemory))
+        self.data.try_reserve(size).or(AvifError::out_of_memory())
     }
 
     pub(crate) fn write_bits(&mut self, value: u32, num_bits: u8) -> AvifResult<()> {
         if num_bits == 0 || num_bits > 31 {
-            return Err(AvifError::UnknownError("".into()));
+            return AvifError::unknown_error("");
         }
         if value >= (1 << num_bits) {
-            return Err(AvifError::UnknownError("".into()));
+            return AvifError::unknown_error("");
         }
         let mut num_remaining_bits = num_bits;
         while num_remaining_bits != 0 {
@@ -389,7 +387,7 @@ impl OStream {
     pub(crate) fn write_u24(&mut self, value: u32) -> AvifResult<()> {
         assert_eq!(self.num_bits, 0);
         if value > 0xFFFFFF {
-            return Err(AvifError::InvalidArgument);
+            return AvifError::invalid_argument();
         }
         self.try_reserve(3)?;
         self.data.extend_from_slice(&value.to_be_bytes()[1..]);
@@ -567,7 +565,7 @@ mod tests {
         stream.offset = 0;
         assert_eq!(stream.read_u64(), Ok(72623859790382856));
         stream.offset = 0;
-        assert_eq!(stream.read_uxx(9), Err(AvifError::NotImplemented));
+        assert_eq!(stream.read_uxx(9), AvifError::not_implemented());
     }
 
     #[test]

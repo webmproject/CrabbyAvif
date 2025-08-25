@@ -370,7 +370,7 @@ fn find_conversion_function(
 #[cfg_attr(feature = "disable_cfi", sanitize(cfi = "off"))]
 pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<bool> {
     if (rgb.depth != 8 && rgb.depth != 10) || !image.depth_valid() {
-        return Err(AvifError::NotImplemented);
+        return AvifError::not_implemented();
     }
     if rgb.depth == 10
         && (!matches!(
@@ -378,7 +378,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
             PixelFormat::AndroidP010 | PixelFormat::Yuv420
         ) || rgb.format != Format::Rgba1010102)
     {
-        return Err(AvifError::NotImplemented);
+        return AvifError::not_implemented();
     }
 
     let (matrix_yuv, matrix_yvu) = find_constants(image).ok_or(AvifError::NotImplemented)?;
@@ -531,7 +531,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
             return if result == 0 {
                 Ok(!image.has_alpha() || conversion_function.is_yuva())
             } else {
-                Err(AvifError::ReformatFailed)
+                AvifError::reformat_failed()
             };
         }
         let mut image8 = image::Image::default();
@@ -627,7 +627,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
     if result == 0 {
         Ok(!image.has_alpha() || conversion_function.is_yuva())
     } else {
-        Err(AvifError::ReformatFailed)
+        AvifError::reformat_failed()
     }
 }
 
@@ -677,11 +677,11 @@ fn downshift_to_8bit(
 
 pub(crate) fn process_alpha(rgb: &mut rgb::Image, multiply: bool) -> AvifResult<()> {
     if rgb.depth != 8 {
-        return Err(AvifError::NotImplemented);
+        return AvifError::not_implemented();
     }
     match rgb.format {
         Format::Rgba | Format::Bgra => {}
-        _ => return Err(AvifError::NotImplemented),
+        _ => return AvifError::not_implemented(),
     }
     let result = unsafe {
         if multiply {
@@ -707,7 +707,7 @@ pub(crate) fn process_alpha(rgb: &mut rgb::Image, multiply: bool) -> AvifResult<
     if result == 0 {
         Ok(())
     } else {
-        Err(AvifError::ReformatFailed)
+        AvifError::reformat_failed()
     }
 }
 
@@ -726,7 +726,7 @@ pub(crate) fn convert_to_half_float(rgb: &mut rgb::Image, scale: f32) -> AvifRes
     if res == 0 {
         Ok(())
     } else {
-        Err(AvifError::InvalidArgument)
+        AvifError::invalid_argument()
     }
 }
 
@@ -754,7 +754,7 @@ fn rgb_to_yuv_conversion_function(
             MatrixCoefficients::Bt470bg | MatrixCoefficients::Bt601
         )
     {
-        return Err(AvifError::NotImplemented);
+        return AvifError::not_implemented();
     }
     // TODO: b/410088660 - Implement 2-step RGB conversion for functions which aren't directly
     // available in libyuv.
@@ -819,7 +819,7 @@ fn rgb_to_yuv_conversion_function(
         (PixelFormat::Yuv422, YuvRange::Full, Format::Bgra) => {
             Ok(RGBToYUVConversionFunction::RGBToYUV(ARGBToJ422))
         }
-        _ => Err(AvifError::NotImplemented),
+        _ => AvifError::not_implemented(),
     }
 }
 
@@ -858,6 +858,6 @@ pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResu
     if result == 0 {
         Ok(())
     } else {
-        Err(AvifError::ReformatFailed)
+        AvifError::reformat_failed()
     }
 }

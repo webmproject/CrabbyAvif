@@ -517,11 +517,7 @@ fn create_decoder_and_parse(args: &CommandLineArgs) -> AvifResult<Decoder> {
     }
     let mut decoder = Decoder::default();
     decoder.settings = settings;
-    decoder
-        .set_io_file(&args.input_file)
-        .or(Err(AvifError::UnknownError(
-            "Cannot open input file".into(),
-        )))?;
+    decoder.set_io_file(&args.input_file)?;
     decoder.parse()?;
     Ok(decoder)
 }
@@ -614,14 +610,12 @@ fn decode(args: &CommandLineArgs) -> AvifResult<()> {
             quality: args.quality,
         }),
         _ => {
-            return Err(AvifError::UnknownError(format!(
+            return AvifError::unknown_error(format!(
                 "Unknown output file extension ({extension})"
-            )));
+            ));
         }
     };
-    let mut output_file = File::create(output_filename).or(Err(AvifError::UnknownError(
-        "Could not open output file".into(),
-    )))?;
+    let mut output_file = File::create(output_filename).map_err(AvifError::map_unknown_error)?;
     writer.write_frame(&mut output_file, image)?;
     println!(
         "Wrote image at index {} to output {}",
@@ -652,9 +646,7 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
         #[cfg(feature = "gif")]
         "gif" => Box::new(GifReader::create(&args.input_file)?),
         _ => {
-            return Err(AvifError::UnknownError(format!(
-                "Unknown input file extension ({extension})"
-            )));
+            return AvifError::unknown_error(format!("Unknown input file extension ({extension})"));
         }
     };
     let reader_config = Config {
@@ -721,7 +713,7 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
     if reader.has_more_frames() {
         if args.progressive {
             println!("Automatic progressive encoding can only have one input image.");
-            return Err(AvifError::InvalidArgument);
+            return AvifError::invalid_argument();
         }
         loop {
             encoder.add_image_for_sequence(&image, duration_ms)?;
@@ -753,7 +745,7 @@ fn encode(args: &CommandLineArgs) -> AvifResult<()> {
 
 #[cfg(not(feature = "encoder"))]
 fn encode(_args: &CommandLineArgs) -> AvifResult<()> {
-    Err(AvifError::InvalidArgument)
+    AvifError::invalid_argument()
 }
 
 fn can_decode(filename: &str) -> bool {
@@ -777,25 +769,19 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                 || args.depth.is_some()
                 || args.index.is_some()
             {
-                return Err(AvifError::UnknownError(
-                    "--info contains unsupported extra arguments".into(),
-                ));
+                return AvifError::unknown_error("--info contains unsupported extra arguments");
             }
         } else {
             if args.output_file.is_none() {
-                return Err(AvifError::UnknownError("output_file is required".into()));
+                return AvifError::unknown_error("output_file is required");
             }
             let output_filename = &args.output_file.as_ref().unwrap().as_str();
             let extension = get_extension(output_filename);
             if args.quality.is_some() && extension != "jpg" && extension != "jpeg" {
-                return Err(AvifError::UnknownError(
-                    "quality is only supported for jpeg output".into(),
-                ));
+                return AvifError::unknown_error("quality is only supported for jpeg output");
             }
             if args.depth.is_some() && extension != "png" {
-                return Err(AvifError::UnknownError(
-                    "depth is only supported for png output".into(),
-                ));
+                return AvifError::unknown_error("depth is only supported for png output");
             }
         }
     } else {

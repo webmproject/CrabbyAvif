@@ -204,7 +204,7 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
                 // SAFETY: Pre-conditions are met to call these two functions.
                 dst.yuvPlanes[2] = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
                 if dst.yuvPlanes[2].is_null() {
-                    return Err(AvifError::OutOfMemory);
+                    return AvifError::out_of_memory();
                 }
                 dst.yuvRowBytes[2] = plane_data.width * 2;
             }

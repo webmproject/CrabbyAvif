@@ -371,34 +371,32 @@ impl SampleTransform {
                 }
                 SampleTransformToken::ImageItem(item_idx) => {
                     if *item_idx >= self.num_inputs {
-                        return Err(AvifError::InvalidImageGrid(
-                            "invalid input image item index".into(),
-                        ));
+                        return AvifError::invalid_image_grid("invalid input image item index");
                     }
                     stack_size += 1;
                 }
                 SampleTransformToken::UnaryOp(_) => {
                     if stack_size < 1 {
-                        return Err(AvifError::InvalidImageGrid(
-                            "invalid stack size for unary operator".into(),
-                        ));
+                        return AvifError::invalid_image_grid(
+                            "invalid stack size for unary operator",
+                        );
                     }
                     // Pop one and push one; the stack size doesn't change.
                 }
                 SampleTransformToken::BinaryOp(_) => {
                     if stack_size < 2 {
-                        return Err(AvifError::InvalidImageGrid(
-                            "invalid stack size for binary operator".into(),
-                        ));
+                        return AvifError::invalid_image_grid(
+                            "invalid stack size for binary operator",
+                        );
                     }
                     stack_size -= 1; // Pop two and push one.
                 }
             }
         }
         if stack_size != 1 {
-            return Err(AvifError::InvalidImageGrid(
-                "invalid stack size at the end of sample transform".into(),
-            ));
+            return AvifError::invalid_image_grid(
+                "invalid stack size at the end of sample transform",
+            );
         }
         Ok(())
     }

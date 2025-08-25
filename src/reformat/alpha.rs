@@ -51,10 +51,10 @@ macro_rules! alpha_index_in_rgba_1010102 {
 impl rgb::Image {
     pub(crate) fn premultiply_alpha(&mut self) -> AvifResult<()> {
         if self.pixels_mut().is_null() || self.row_bytes == 0 {
-            return Err(AvifError::ReformatFailed);
+            return AvifError::reformat_failed();
         }
         if !self.has_alpha() {
-            return Err(AvifError::InvalidArgument);
+            return AvifError::invalid_argument();
         }
 
         #[cfg(feature = "libyuv")]
@@ -125,10 +125,10 @@ impl rgb::Image {
 
     pub(crate) fn unpremultiply_alpha(&mut self) -> AvifResult<()> {
         if self.pixels_mut().is_null() || self.row_bytes == 0 {
-            return Err(AvifError::ReformatFailed);
+            return AvifError::reformat_failed();
         }
         if !self.has_alpha() {
-            return Err(AvifError::InvalidArgument);
+            return AvifError::invalid_argument();
         }
 
         #[cfg(feature = "libyuv")]
@@ -202,7 +202,7 @@ impl rgb::Image {
             return Ok(());
         }
         if self.format == rgb::Format::Rgb565 {
-            return Err(AvifError::NotImplemented);
+            return AvifError::not_implemented();
         }
         let alpha_offset = self.format.alpha_offset();
         let width = usize_from_u32(self.width)?;
@@ -238,7 +238,7 @@ impl rgb::Image {
             || self.width != image.width
             || self.height != image.height
         {
-            return Err(AvifError::InvalidArgument);
+            return AvifError::invalid_argument();
         }
         let width = usize_from_u32(self.width)?;
         if self.format == Format::Rgba1010102 {
@@ -400,7 +400,7 @@ impl image::Image {
             || self.height != rgb.height
             || rgb.format == rgb::Format::Rgba1010102
         {
-            return Err(AvifError::InvalidArgument);
+            return AvifError::invalid_argument();
         }
         let src_alpha_offset = rgb.format.alpha_offset();
         let channel_count = rgb.format.channel_count() as usize;
