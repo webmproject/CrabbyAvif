@@ -15,7 +15,7 @@
 use crate::image::YuvRange;
 use crate::internal_utils::stream::*;
 use crate::internal_utils::*;
-use crate::parser::mp4box::Av1CodecConfiguration;
+use crate::parser::mp4box::*;
 use crate::*;
 
 #[derive(Debug)]
@@ -301,9 +301,7 @@ impl Av1SequenceHeader {
                 stream.skip(usize_from_u32(obu.size)?)?;
                 continue;
             }
-            let mut stream = stream.sub_stream(&parser::mp4box::BoxSize::FixedSize(
-                usize_from_u32(obu.size)?,
-            ))?;
+            let mut stream = stream.sub_stream(&BoxSize::FixedSize(usize_from_u32(obu.size)?))?;
             let mut sequence_header = Av1SequenceHeader::default();
             sequence_header.parse_profile(&mut stream)?;
             sequence_header.parse_frame_max_dimensions(&mut stream)?;
