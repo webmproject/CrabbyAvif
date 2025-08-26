@@ -16,6 +16,7 @@ use crate::*;
 
 // To be used instead of direct AvifError enum variants in order to debug
 // unexpected Err propagations as early as possible in the call stack.
+#[allow(dead_code)]
 impl AvifError {
     fn on_error() {
         // Use std::intrinsics::breakpoint() or manually add a breakpoint here.
@@ -23,139 +24,139 @@ impl AvifError {
         // println!("{}", std::backtrace::Backtrace::force_capture());
     }
 
-    pub fn invalid_ftyp<T>() -> Result<T, AvifError> {
+    pub(crate) fn invalid_ftyp<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::InvalidFtyp)
     }
-    pub fn no_content<T>() -> Result<T, AvifError> {
+    pub(crate) fn no_content<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::NoContent)
     }
-    pub fn no_yuv_format_selected<T>() -> Result<T, AvifError> {
+    pub(crate) fn no_yuv_format_selected<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::NoYuvFormatSelected)
     }
-    pub fn reformat_failed<T>() -> Result<T, AvifError> {
+    pub(crate) fn reformat_failed<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::ReformatFailed)
     }
-    pub fn unsupported_depth<T>() -> Result<T, AvifError> {
+    pub(crate) fn unsupported_depth<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::UnsupportedDepth)
     }
-    pub fn encode_color_failed<T>() -> Result<T, AvifError> {
+    pub(crate) fn encode_color_failed<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::EncodeColorFailed)
     }
-    pub fn encode_alpha_failed<T>() -> Result<T, AvifError> {
+    pub(crate) fn encode_alpha_failed<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::EncodeAlphaFailed)
     }
 
-    pub fn missing_image_item<T>() -> Result<T, AvifError> {
+    pub(crate) fn missing_image_item<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::MissingImageItem)
     }
-    pub fn decode_color_failed<T>() -> Result<T, AvifError> {
+    pub(crate) fn decode_color_failed<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::DecodeColorFailed)
     }
-    pub fn decode_alpha_failed<T>() -> Result<T, AvifError> {
+    pub(crate) fn decode_alpha_failed<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::DecodeAlphaFailed)
     }
-    pub fn color_alpha_size_mismatch<T>() -> Result<T, AvifError> {
+    pub(crate) fn color_alpha_size_mismatch<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::ColorAlphaSizeMismatch)
     }
-    pub fn ispe_size_mismatch<T>() -> Result<T, AvifError> {
+    pub(crate) fn ispe_size_mismatch<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::IspeSizeMismatch)
     }
-    pub fn no_codec_available<T>() -> Result<T, AvifError> {
+    pub(crate) fn no_codec_available<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::NoCodecAvailable)
     }
-    pub fn no_images_remaining<T>() -> Result<T, AvifError> {
+    pub(crate) fn no_images_remaining<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::NoImagesRemaining)
     }
-    pub fn invalid_exif_payload<T>() -> Result<T, AvifError> {
+    pub(crate) fn invalid_exif_payload<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::InvalidExifPayload)
     }
 
-    pub fn invalid_codec_specific_option<T>() -> Result<T, AvifError> {
+    pub(crate) fn invalid_codec_specific_option<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::InvalidCodecSpecificOption)
     }
-    pub fn truncated_data<T>() -> Result<T, AvifError> {
+    pub(crate) fn truncated_data<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::TruncatedData)
     }
-    pub fn io_not_set<T>() -> Result<T, AvifError> {
+    pub(crate) fn io_not_set<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::IoNotSet)
     }
-    pub fn io_error<T>() -> Result<T, AvifError> {
+    pub(crate) fn io_error<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::IoError)
     }
-    pub fn waiting_on_io<T>() -> Result<T, AvifError> {
+    pub(crate) fn waiting_on_io<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::WaitingOnIo)
     }
-    pub fn invalid_argument<T>() -> Result<T, AvifError> {
+    pub(crate) fn invalid_argument<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::InvalidArgument)
     }
-    pub fn not_implemented<T>() -> Result<T, AvifError> {
+    pub(crate) fn not_implemented<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::NotImplemented)
     }
-    pub fn out_of_memory<T>() -> Result<T, AvifError> {
+    pub(crate) fn out_of_memory<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::OutOfMemory)
     }
-    pub fn cannot_change_setting<T>() -> Result<T, AvifError> {
+    pub(crate) fn cannot_change_setting<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::CannotChangeSetting)
     }
-    pub fn incompatible_image<T>() -> Result<T, AvifError> {
+    pub(crate) fn incompatible_image<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::IncompatibleImage)
     }
-    pub fn encode_gain_map_failed<T>() -> Result<T, AvifError> {
+    pub(crate) fn encode_gain_map_failed<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::EncodeGainMapFailed)
     }
-    pub fn decode_gain_map_failed<T>() -> Result<T, AvifError> {
+    pub(crate) fn decode_gain_map_failed<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::DecodeGainMapFailed)
     }
 
-    pub fn unknown_error<T, O>(object: O) -> Result<T, AvifError>
+    pub(crate) fn unknown_error<T, O>(object: O) -> Result<T, AvifError>
     where
         O: std::fmt::Display,
     {
         AvifError::on_error();
         Err(AvifError::UnknownError(object.to_string()))
     }
-    pub fn bmff_parse_failed<T, O>(object: O) -> Result<T, AvifError>
+    pub(crate) fn bmff_parse_failed<T, O>(object: O) -> Result<T, AvifError>
     where
         O: std::fmt::Display,
     {
         AvifError::on_error();
         Err(AvifError::BmffParseFailed(object.to_string()))
     }
-    pub fn invalid_image_grid<T, O>(object: O) -> Result<T, AvifError>
+    pub(crate) fn invalid_image_grid<T, O>(object: O) -> Result<T, AvifError>
     where
         O: std::fmt::Display,
     {
         AvifError::on_error();
         Err(AvifError::InvalidImageGrid(object.to_string()))
     }
-    pub fn invalid_tone_mapped_image<T, O>(object: O) -> Result<T, AvifError>
+    pub(crate) fn invalid_tone_mapped_image<T, O>(object: O) -> Result<T, AvifError>
     where
         O: std::fmt::Display,
     {
@@ -163,7 +164,7 @@ impl AvifError {
         Err(AvifError::InvalidToneMappedImage(object.to_string()))
     }
 
-    pub fn map_unknown_error<O>(object: O) -> AvifError
+    pub(crate) fn map_unknown_error<O>(object: O) -> AvifError
     where
         O: std::fmt::Display,
     {

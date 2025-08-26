@@ -1762,9 +1762,9 @@ impl Decoder {
                         != first_tile_image.transfer_characteristics
                     || tile.image.matrix_coefficients != first_tile_image.matrix_coefficients
                 {
-                    return Err(AvifError::InvalidImageGrid(
-                        "overlay image contains mismatched tiles".into(),
-                    ));
+                    return AvifError::invalid_image_grid(
+                        "overlay image contains mismatched tiles",
+                    );
                 }
             }
             dst_image.copy_and_overlay_from_tile(

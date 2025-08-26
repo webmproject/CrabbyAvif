@@ -720,7 +720,7 @@ impl decoder::IO for CustomIO {
         let start = usize::try_from(offset).unwrap();
         let end = start + max_read_size;
         if start > self.data.len() || end > self.data.len() {
-            return AvifError::io_error();
+            return Err(AvifError::IoError);
         }
         let mut ssize = max_read_size;
         if ssize > self.data.len() - start {
@@ -728,7 +728,7 @@ impl decoder::IO for CustomIO {
         }
         let end = start + ssize;
         if *available_size < end {
-            return AvifError::waiting_on_io();
+            return Err(AvifError::WaitingOnIo);
         }
         Ok(&self.data[start..end])
     }
@@ -953,10 +953,10 @@ fn progressive_partial_data() -> AvifResult<()> {
     assert_eq!(extent1.size, 3813);
 
     // Getting the first frame now should fail.
-    assert_eq!(decoder.nth_image(0), AvifError::waiting_on_io());
+    assert_eq!(decoder.nth_image(0), Err(AvifError::WaitingOnIo));
     // Set the available size to 1 byte less than the first frame's extent.
     *available_size_rc.borrow_mut() = extent0.offset as usize + extent0.size - 1;
-    assert_eq!(decoder.nth_image(0), AvifError::waiting_on_io());
+    assert_eq!(decoder.nth_image(0), Err(AvifError::WaitingOnIo));
     // Set the available size to exactly the first frame's extent.
     *available_size_rc.borrow_mut() = extent0.offset as usize + extent0.size;
     assert!(decoder.nth_image(0).is_ok());
@@ -969,11 +969,11 @@ fn progressive_partial_data() -> AvifResult<()> {
     // Set the available size to an offset between the first and second frame's extents.
     *available_size_rc.borrow_mut() = extent0.offset as usize + extent0.size + 100;
     assert!(decoder.nth_image(0).is_ok());
-    assert_eq!(decoder.nth_image(1), AvifError::waiting_on_io());
+    assert_eq!(decoder.nth_image(1), Err(AvifError::WaitingOnIo));
     // Set the available size to 1 byte less than the second frame's extent.
     *available_size_rc.borrow_mut() = extent1.offset as usize + extent1.size - 1;
     assert!(decoder.nth_image(0).is_ok());
-    assert_eq!(decoder.nth_image(1), AvifError::waiting_on_io());
+    assert_eq!(decoder.nth_image(1), Err(AvifError::WaitingOnIo));
     // Set the available size to 1 byte less than the second frame's extent.
     *available_size_rc.borrow_mut() = extent1.offset as usize + extent1.size;
     assert!(decoder.nth_image(1).is_ok());
@@ -1155,7 +1155,7 @@ fn dimg_repetition() {
 #[test]
 fn dimg_shared() {
     let mut decoder = get_decoder("color_grid_alpha_grid_tile_shared_in_dimg.avif");
-    assert_eq!(decoder.parse(), AvifError::not_implemented());
+    assert_eq!(decoder.parse(), Err(AvifError::NotImplemented));
 }
 
 #[test]
