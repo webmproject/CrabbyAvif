@@ -474,23 +474,23 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
             "Box[iloc] has an unsupported version: {version}"
         )));
     }
-    let mut iloc = ItemLocationBox::default();
-    let mut bits = stream.sub_bit_stream(2)?;
-    // unsigned int(4) offset_size;
-    iloc.offset_size = bits.read(4)? as u8;
-    // unsigned int(4) length_size;
-    iloc.length_size = bits.read(4)? as u8;
-    // unsigned int(4) base_offset_size;
-    iloc.base_offset_size = bits.read(4)? as u8;
-    iloc.index_size = if version == 1 || version == 2 {
-        // unsigned int(4) index_size;
-        bits.read(4)? as u8
-    } else {
-        // unsigned int(4) reserved;
-        bits.skip(4)?;
-        0
+    let mut iloc = ItemLocationBox {
+        // unsigned int(4) offset_size;
+        offset_size: stream.read_bits(4)? as u8,
+        // unsigned int(4) length_size;
+        length_size: stream.read_bits(4)? as u8,
+        // unsigned int(4) base_offset_size;
+        base_offset_size: stream.read_bits(4)? as u8,
+        index_size: if version == 1 || version == 2 {
+            // unsigned int(4) index_size;
+            stream.read_bits(4)? as u8
+        } else {
+            // unsigned int(4) reserved;
+            stream.skip_bits(4)?;
+            0
+        },
+        items: vec![],
     };
-    assert_eq!(bits.remaining_bits()?, 0);
 
     // Section 8.11.3.3 of ISO/IEC 14496-12.
     for size in [
@@ -531,15 +531,14 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
             )));
         }
         if version == 1 || version == 2 {
-            let mut bits = stream.sub_bit_stream(2)?;
             // unsigned int(12) reserved = 0;
-            if bits.read(12)? != 0 {
+            if stream.read_bits(12)? != 0 {
                 return Err(AvifError::BmffParseFailed(
                     "Box[iloc] has invalid reserved bits".into(),
                 ));
             }
             // unsigned int(4) construction_method;
-            entry.construction_method = bits.read(4)? as u8;
+            entry.construction_method = stream.read_bits(4)? as u8;
             // 0: file offset, 1: idat offset, 2: item offset.
             if entry.construction_method != 0 && entry.construction_method != 1 {
                 return Err(AvifError::BmffParseFailed(format!(
@@ -625,16 +624,15 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
 fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
     let raw_data = stream.get_immutable_vec(stream.bytes_left()?)?;
     // See https://aomediacodec.github.io/av1-isobmff/v1.2.0.html#av1codecconfigurationbox-syntax.
-    let mut bits = stream.sub_bit_stream(4)?;
     // unsigned int (1) marker = 1;
-    let marker = bits.read(1)?;
+    let marker = stream.read_bits(1)?;
     if marker != 1 {
         return Err(AvifError::BmffParseFailed(format!(
             "Invalid marker ({marker}) in av1C"
         )));
     }
     // unsigned int (7) version = 1;
-    let version = bits.read(7)?;
+    let version = stream.read_bits(7)?;
     if version != 1 {
         return Err(AvifError::BmffParseFailed(format!(
             "Invalid version ({version}) in av1C"
@@ -643,8 +641,8 @@ fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
     let av1C = Av1CodecConfiguration {
         // unsigned int(3) seq_profile;
         // unsigned int(5) seq_level_idx_0;
-        seq_profile: bits.read(3)? as u8,
-        seq_level_idx0: bits.read(5)? as u8,
+        seq_profile: stream.read_bits(3)? as u8,
+        seq_level_idx0: stream.read_bits(5)? as u8,
         // unsigned int(1) seq_tier_0;
         // unsigned int(1) high_bitdepth;
         // unsigned int(1) twelve_bit;
@@ -652,35 +650,34 @@ fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
         // unsigned int(1) chroma_subsampling_x;
         // unsigned int(1) chroma_subsampling_y;
         // unsigned int(2) chroma_sample_position;
-        seq_tier0: bits.read(1)? as u8,
-        high_bitdepth: bits.read_bool()?,
-        twelve_bit: bits.read_bool()?,
-        monochrome: bits.read_bool()?,
-        chroma_subsampling_x: bits.read(1)? as u8,
-        chroma_subsampling_y: bits.read(1)? as u8,
-        chroma_sample_position: bits.read(2)?.into(),
+        seq_tier0: stream.read_bits(1)? as u8,
+        high_bitdepth: stream.read_bool()?,
+        twelve_bit: stream.read_bool()?,
+        monochrome: stream.read_bool()?,
+        chroma_subsampling_x: stream.read_bits(1)? as u8,
+        chroma_subsampling_y: stream.read_bits(1)? as u8,
+        chroma_sample_position: stream.read_bits(2)?.into(),
         raw_data,
     };
 
     // unsigned int(3) reserved = 0;
-    if bits.read(3)? != 0 {
+    if stream.read_bits(3)? != 0 {
         return Err(AvifError::BmffParseFailed(
             "Invalid reserved bits in av1C".into(),
         ));
     }
     // unsigned int(1) initial_presentation_delay_present;
-    if bits.read(1)? == 1 {
+    if stream.read_bits(1)? == 1 {
         // unsigned int(4) initial_presentation_delay_minus_one;
-        bits.read(4)?;
+        stream.read_bits(4)?;
     } else {
         // unsigned int(4) reserved = 0;
-        if bits.read(4)? != 0 {
+        if stream.read_bits(4)? != 0 {
             return Err(AvifError::BmffParseFailed(
                 "Invalid reserved bits in av1C".into(),
             ));
         }
     }
-    assert_eq!(bits.remaining_bits()?, 0);
 
     // https://aomediacodec.github.io/av1-avif/v1.1.0.html#av1-configuration-item-property:
     //   - Sequence Header OBUs should not be present in the AV1CodecConfigurationBox.
@@ -712,7 +709,6 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
             "Unknown configurationVersion({configuration_version}) in hvcC. Expected 0 or 1."
         )));
     }
-    let mut bits = stream.sub_bit_stream(21)?;
     // unsigned int(2) general_profile_space;
     // unsigned int(1) general_tier_flag;
     // unsigned int(5) general_profile_idc;
@@ -724,9 +720,9 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // bit(6) reserved = '111111'b;
     // unsigned int(2) parallelismType;
     // bit(6) reserved = '111111'b;
-    bits.skip(2 + 1 + 5 + 32 + 48 + 8 + 4 + 12 + 6 + 2 + 6)?;
+    stream.skip_bits(2 + 1 + 5 + 32 + 48 + 8 + 4 + 12 + 6 + 2 + 6)?;
     // unsigned int(2) chroma_format_idc;
-    let pixel_format = match bits.read(2)? {
+    let pixel_format = match stream.read_bits(2)? {
         // Defined in ISO/IEC 23008-2 Section 6.2.
         0 => PixelFormat::Yuv400,
         1 => PixelFormat::Yuv420,
@@ -735,19 +731,18 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
         _ => PixelFormat::Yuv444,
     };
     // bit(5) reserved = '11111'b;
-    bits.skip(5)?;
+    stream.skip_bits(5)?;
     // unsigned int(3) bit_depth_luma_minus8;
-    let bitdepth = bits.read(3)? as u8 + 8;
+    let bitdepth = stream.read_bits(3)? as u8 + 8;
     // bit(5) reserved = '11111'b;
     // unsigned int(3) bit_depth_chroma_minus8;
     // unsigned int(16) avgFrameRate;
     // unsigned int(2) constantFrameRate;
     // unsigned int(3) numTemporalLayers;
     // unsigned int(1) temporalIdNested;
-    bits.skip(5 + 3 + 16 + 2 + 3 + 1)?;
+    stream.skip_bits(5 + 3 + 16 + 2 + 3 + 1)?;
     // unsigned int(2) lengthSizeMinusOne;
-    let nal_length_size = 1 + bits.read(2)? as u8;
-    assert!(bits.remaining_bits()? == 0);
+    let nal_length_size = 1 + stream.read_bits(2)? as u8;
 
     // unsigned int(8) numOfArrays;
     let num_of_arrays = stream.read_u8()?;
@@ -817,11 +812,10 @@ fn parse_colr(stream: &mut IStream) -> AvifResult<ItemProperty> {
             matrix_coefficients: stream.read_u16()?.into(),
             ..Nclx::default()
         };
-        let mut bits = stream.sub_bit_stream(1)?;
         // unsigned int(1) full_range_flag;
-        nclx.yuv_range = if bits.read_bool()? { YuvRange::Full } else { YuvRange::Limited };
+        nclx.yuv_range = if stream.read_bool()? { YuvRange::Full } else { YuvRange::Limited };
         // unsigned int(7) reserved = 0;
-        if bits.read(7)? != 0 {
+        if stream.read_bits(7)? != 0 {
             return Err(AvifError::BmffParseFailed(
                 "colr box contains invalid reserved bits".into(),
             ));
@@ -874,29 +868,27 @@ fn parse_clap(stream: &mut IStream) -> AvifResult<ItemProperty> {
 
 fn parse_irot(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // Section 6.5.10.2 of ISO/IEC 23008-12.
-    let mut bits = stream.sub_bit_stream(1)?;
     // unsigned int (6) reserved = 0;
-    if bits.read(6)? != 0 {
+    if stream.read_bits(6)? != 0 {
         return Err(AvifError::BmffParseFailed(
             "invalid reserved bits in irot".into(),
         ));
     }
     // unsigned int (2) angle;
-    let angle = bits.read(2)? as u8;
+    let angle = stream.read_bits(2)? as u8;
     Ok(ItemProperty::ImageRotation(angle))
 }
 
 fn parse_imir(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // Section 6.5.12.1 of ISO/IEC 23008-12.
-    let mut bits = stream.sub_bit_stream(1)?;
     // unsigned int(7) reserved = 0;
-    if bits.read(7)? != 0 {
+    if stream.read_bits(7)? != 0 {
         return Err(AvifError::BmffParseFailed(
             "invalid reserved bits in imir".into(),
         ));
     }
     // unsigned int(1) axis;
-    let axis = bits.read(1)? as u8;
+    let axis = stream.read_bits(1)? as u8;
     Ok(ItemProperty::ImageMirror(axis))
 }
 
@@ -933,15 +925,14 @@ fn parse_lsel(stream: &mut IStream) -> AvifResult<ItemProperty> {
 
 fn parse_a1lx(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // https://aomediacodec.github.io/av1-avif/v1.1.0.html#layered-image-indexing-property-syntax
-    let mut bits = stream.sub_bit_stream(1)?;
     // unsigned int(7) reserved = 0;
-    if bits.read(7)? != 0 {
+    if stream.read_bits(7)? != 0 {
         return Err(AvifError::BmffParseFailed(
             "Invalid reserved bits in a1lx".into(),
         ));
     }
     // unsigned int(1) large_size;
-    let large_size = bits.read_bool()?;
+    let large_size = stream.read_bool()?;
     let mut layer_sizes: [usize; 3] = [0; 3];
     for layer_size in &mut layer_sizes {
         if large_size {
@@ -1029,15 +1020,18 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
         // unsigned int(8) association_count;
         let association_count = stream.read_u8()?;
         for _j in 0..association_count {
-            let mut bits = stream.sub_bit_stream(if flags & 0x1 == 1 { 2 } else { 1 })?;
             // bit(1) essential;
-            let essential = bits.read_bool()?;
+            let essential = stream.read_bool()?;
             if flags & 0x1 == 1 {
                 // unsigned int(15) property_index;
-                entry.associations.push((bits.read(15)? as u16, essential));
+                entry
+                    .associations
+                    .push((stream.read_bits(15)? as u16, essential));
             } else {
                 //unsigned int(7) property_index;
-                entry.associations.push((bits.read(7)? as u16, essential));
+                entry
+                    .associations
+                    .push((stream.read_bits(7)? as u16, essential));
             }
         }
         ipma.push(entry);
@@ -1380,17 +1374,16 @@ fn parse_mdhd(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         )));
     }
 
-    let mut bits = stream.sub_bit_stream(4)?;
     // bit(1) pad = 0;
-    if bits.read(1)? != 0 {
+    if stream.read_bits(1)? != 0 {
         return Err(AvifError::BmffParseFailed(
             "Invalid reserved bits in mdhd".into(),
         ));
     }
     // unsigned int(5)[3] language; // ISO-639-2/T language code
-    bits.skip(5 * 3)?;
+    stream.skip_bits(5 * 3)?;
     // unsigned int(16) pre_defined = 0; ("Readers should expect any value")
-    bits.skip(2)?;
+    stream.skip_bits(16)?;
     Ok(())
 }
 
@@ -1992,14 +1985,13 @@ pub(crate) fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
     let writer_version = stream.read_u16()?;
 
     let mut metadata = GainMapMetadata::default();
-    let mut bits = stream.sub_bit_stream(1)?;
     // unsigned int(1) is_multichannel;
-    let is_multichannel = bits.read_bool()?;
+    let is_multichannel = stream.read_bool()?;
     let channel_count = if is_multichannel { 3 } else { 1 };
     // unsigned int(1) use_base_colour_space;
-    metadata.use_base_color_space = bits.read_bool()?;
+    metadata.use_base_color_space = stream.read_bool()?;
     // unsigned int(6) reserved;
-    bits.skip(6)?;
+    stream.skip_bits(6)?;
 
     // unsigned int(32) base_hdr_headroom_numerator;
     // unsigned int(32) base_hdr_headroom_denominator;
@@ -2044,16 +2036,15 @@ pub(crate) fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
 
 #[cfg(feature = "sample_transform")]
 pub(crate) fn parse_sato(stream: &mut IStream, num_inputs: usize) -> AvifResult<SampleTransform> {
-    let mut bits = stream.sub_bit_stream(1)?;
     // unsigned int(2) version = 0;
-    let version = bits.read(2)?;
+    let version = stream.read_bits(2)?;
     if version != 0 {
         return Err(AvifError::NotImplemented);
     }
     // unsigned int(4) flags;
-    let _reserved = bits.read(4)?;
+    let _reserved = stream.read_bits(4)?;
     // unsigned int(2) bit_depth; // Enum signaling signed 8, 16, 32 or 64-bit.
-    let bit_depth = 1 << (bits.read(2)? + 3);
+    let bit_depth = 1 << (stream.read_bits(2)? + 3);
     let bytes = bit_depth / 8;
 
     // unsigned int(8) token_count;
