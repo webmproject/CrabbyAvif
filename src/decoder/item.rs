@@ -374,7 +374,7 @@ impl Item {
     }
 
     pub(crate) fn is_sample_transform_item(&self) -> bool {
-        cfg!(feature = "sample_transform") && self.item_type == "sato"
+        self.item_type == "sato"
     }
 
     pub(crate) fn is_derived_image_item(&self) -> bool {

@@ -1444,13 +1444,8 @@ fn sato_16bit(filename: &str, has_alpha: bool) {
     }
     let res = decoder.next_image();
     assert_eq!(res, Ok(()));
-    assert_eq!(has_alpha, decoder.image().unwrap().has_alpha());
-    if cfg!(feature = "sample_transform") {
-        assert_eq!(16, decoder.image().unwrap().depth);
-        // TODO: compare with reference weld_16bit.png
-    } else {
-        assert!(decoder.image().unwrap().depth < 16);
-    }
+    assert_eq!(16, decoder.image().unwrap().depth);
+    // TODO: compare with reference weld_16bit.png
 }
 
 #[test]

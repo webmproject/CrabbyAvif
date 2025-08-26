@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod item;
-#[cfg(feature = "sample_transform")]
 pub mod sampletransform;
 pub mod tile;
 pub mod track;
@@ -1907,12 +1906,13 @@ impl Decoder {
     }
 
     fn apply_sample_transform(&mut self) -> AvifResult<()> {
-        #[cfg(feature = "sample_transform")]
-        return self.tile_info[DecodingItem::COLOR.usize()]
-            .sample_transform
-            .allocate_planes_and_apply(&self.extra_inputs, &mut self.image);
-        #[cfg(not(feature = "sample_transform"))]
-        return Err(AvifError::NotImplemented);
+        if self.settings.allow_sample_transform {
+            self.tile_info[DecodingItem::COLOR.usize()]
+                .sample_transform
+                .allocate_planes_and_apply(&self.extra_inputs, &mut self.image)
+        } else {
+            Err(AvifError::NoContent)
+        }
     }
 
     fn can_use_decode_grid(&self, decoding_item: DecodingItem) -> bool {
