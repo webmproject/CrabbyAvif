@@ -164,11 +164,23 @@ impl AvifError {
         Err(AvifError::InvalidToneMappedImage(object.to_string()))
     }
 
-    pub(crate) fn map_unknown_error<O>(object: O) -> AvifError
+    pub(crate) fn map_unknown_error<E>(error: E) -> AvifError
     where
-        O: std::fmt::Display,
+        E: std::fmt::Display,
     {
         AvifError::on_error();
-        AvifError::UnknownError(object.to_string())
+        AvifError::UnknownError(error.to_string())
+    }
+    pub(crate) fn map_io_error<E>(_: E) -> AvifError {
+        AvifError::on_error();
+        AvifError::IoError
+    }
+    pub(crate) fn map_out_of_memory<E>(_: E) -> AvifError {
+        AvifError::on_error();
+        AvifError::OutOfMemory
+    }
+    pub(crate) fn map_invalid_exif_payload<E>(_: E) -> AvifError {
+        AvifError::on_error();
+        AvifError::InvalidExifPayload
     }
 }

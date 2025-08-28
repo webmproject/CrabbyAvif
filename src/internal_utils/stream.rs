@@ -331,7 +331,9 @@ impl OStream {
     }
 
     pub(crate) fn try_reserve(&mut self, size: usize) -> AvifResult<()> {
-        self.data.try_reserve(size).or(AvifError::out_of_memory())
+        self.data
+            .try_reserve(size)
+            .map_err(AvifError::map_out_of_memory)
     }
 
     pub(crate) fn write_bits(&mut self, value: u32, num_bits: u8) -> AvifResult<()> {

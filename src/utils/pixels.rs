@@ -169,7 +169,7 @@ impl Pixels {
                 let mut cloned_buffer: Vec<u8> = vec![];
                 cloned_buffer
                     .try_reserve_exact(buffer.len())
-                    .or(AvifError::out_of_memory())?;
+                    .map_err(AvifError::map_out_of_memory)?;
                 cloned_buffer.extend_from_slice(buffer);
                 Ok(Pixels::Buffer(cloned_buffer))
             }
@@ -177,7 +177,7 @@ impl Pixels {
                 let mut cloned_buffer16: Vec<u16> = vec![];
                 cloned_buffer16
                     .try_reserve_exact(buffer16.len())
-                    .or(AvifError::out_of_memory())?;
+                    .map_err(AvifError::map_out_of_memory)?;
                 cloned_buffer16.extend_from_slice(buffer16);
                 Ok(Pixels::Buffer16(cloned_buffer16))
             }

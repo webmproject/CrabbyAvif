@@ -27,7 +27,7 @@ pub struct DecoderFileIO {
 
 impl DecoderFileIO {
     pub fn create(filename: &String) -> AvifResult<DecoderFileIO> {
-        let file = File::open(filename).or(AvifError::io_error())?;
+        let file = File::open(filename).map_err(AvifError::map_io_error)?;
         Ok(DecoderFileIO {
             file: Some(file),
             buffer: Vec::new(),

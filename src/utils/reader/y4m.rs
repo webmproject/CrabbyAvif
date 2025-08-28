@@ -227,14 +227,16 @@ impl Reader for Y4MReader {
             for y in 0..plane_data.height {
                 if self.depth == 8 {
                     let row = image.row_exact_mut(plane, y)?;
-                    reader.read_exact(row).or(AvifError::unknown_error(""))?;
+                    reader
+                        .read_exact(row)
+                        .map_err(AvifError::map_unknown_error)?;
                 } else {
                     let row = image.row16_exact_mut(plane, y)?;
                     let mut pixel_bytes: [u8; 2] = [0, 0];
                     for pixel in row {
                         reader
                             .read_exact(&mut pixel_bytes)
-                            .or(AvifError::unknown_error(""))?;
+                            .map_err(AvifError::map_unknown_error)?;
                         // y4m is always little endian.
                         *pixel = u16::from_le_bytes(pixel_bytes);
                     }
