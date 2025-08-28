@@ -300,7 +300,7 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
         rust_encoder(encoder).add_image_grid(gridCols, gridRows, &image_refs)
     } else {
         // Some cells had GainMap and some did not. This is invalid.
-        Err(AvifError::InvalidArgument)
+        AvifError::invalid_argument()
     };
     encoder_ref.diag.set_from_result(&res);
     res.into()

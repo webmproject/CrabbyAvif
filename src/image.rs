@@ -448,7 +448,7 @@ impl Image {
     #[cfg(feature = "encoder")]
     pub(crate) fn copy_and_pad(&mut self, image: &Image) -> AvifResult<()> {
         if image.width > self.width || image.height > self.height {
-            return Err(AvifError::InvalidArgument);
+            return AvifError::invalid_argument();
         }
         self.allocate_planes(Category::Color)?;
         if image.has_alpha() {
