@@ -123,6 +123,7 @@ impl From<&avifEncoder> for Settings {
             } else {
                 None
             },
+            header_format: HeaderFormat::default(),
             keyframe_interval: encoder.keyframeInterval,
             timescale: if encoder.timescale == 0 { 1 } else { encoder.timescale },
             repetition_count: RepetitionCount::create_from(encoder.repetitionCount),

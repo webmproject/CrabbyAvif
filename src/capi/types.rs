@@ -476,13 +476,6 @@ pub enum avifChannelIndex {
     AvifChanA = 3,
 }
 
-/// cbindgen:rename-all=ScreamingSnakeCase
-#[repr(C)]
-pub enum avifHeaderFormat {
-    AvifHeaderFull,
-    AvifHeaderReduced,
-}
-
 #[repr(C)]
 pub struct avifPixelFormatInfo {
     monochrome: avifBool,
