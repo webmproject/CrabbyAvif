@@ -22,7 +22,9 @@ pub(crate) fn parse_exif_tiff_header_offset(stream: &mut IStream) -> AvifResult<
     let mut expected_offset: u32 = 0;
     let mut size = u32::try_from(stream.bytes_left()?).unwrap_or(u32::MAX);
     while size > 0 {
-        let value = stream.read_u32().or(AvifError::invalid_exif_payload())?;
+        let value = stream
+            .read_u32()
+            .map_err(AvifError::map_invalid_exif_payload)?;
         if value == TIFF_HEADER_BE || value == TIFF_HEADER_LE {
             stream.rewind(4)?;
             return Ok(expected_offset);
@@ -37,7 +39,9 @@ pub(crate) fn parse_exif_tiff_header_offset(stream: &mut IStream) -> AvifResult<
 
 pub(crate) fn parse(stream: &mut IStream) -> AvifResult<()> {
     // unsigned int(32) exif_tiff_header_offset;
-    let offset = stream.read_u32().or(AvifError::invalid_exif_payload())?;
+    let offset = stream
+        .read_u32()
+        .map_err(AvifError::map_invalid_exif_payload)?;
 
     let bytes_left = stream.bytes_left()?;
     let mut sub_stream = stream.sub_stream(&BoxSize::FixedSize(bytes_left))?;

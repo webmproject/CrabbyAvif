@@ -25,7 +25,7 @@ use std::ops::Range;
 macro_rules! conversion_function {
     ($func:ident, $to: ident, $from:ty) => {
         pub(crate) fn $func(value: $from) -> AvifResult<$to> {
-            $to::try_from(value).or(AvifError::bmff_parse_failed(""))
+            $to::try_from(value).map_err(AvifError::map_unknown_error)
         }
     };
 }
