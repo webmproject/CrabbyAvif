@@ -323,13 +323,8 @@ impl Image {
 
     fn convert_to_half_float(&mut self) -> AvifResult<()> {
         let scale = 1.0 / self.max_channel_f();
-        match libyuv::convert_to_half_float(self, scale) {
-            Ok(_) => return Ok(()),
-            Err(err) => {
-                if err != AvifError::NotImplemented {
-                    return Err(err);
-                }
-            }
+        if libyuv::convert_to_half_float(self, scale)?.is_some() {
+            return Ok(());
         }
         // This constant comes from libyuv. For details, see here:
         // https://chromium.googlesource.com/libyuv/libyuv/+/2f87e9a7/source/row_common.cc#3537
@@ -406,16 +401,9 @@ impl Image {
         let mut converted_with_libyuv: bool = false;
         let mut alpha_reformatted_with_libyuv = false;
         if alpha_multiply_mode == AlphaMultiplyMode::NoOp || self.has_alpha() {
-            match libyuv::yuv_to_rgb(image, self) {
-                Ok(alpha_reformatted) => {
-                    alpha_reformatted_with_libyuv = alpha_reformatted;
-                    converted_with_libyuv = true;
-                }
-                Err(err) => {
-                    if err != AvifError::NotImplemented {
-                        return Err(err);
-                    }
-                }
+            if let Some(alpha_reformatted) = libyuv::yuv_to_rgb(image, self)? {
+                alpha_reformatted_with_libyuv = alpha_reformatted;
+                converted_with_libyuv = true;
             }
         }
         if image.yuv_format == PixelFormat::AndroidNv21 || self.format == Format::Rgba1010102 {
@@ -447,14 +435,7 @@ impl Image {
                 ) || matches!(image.yuv_format, PixelFormat::Yuv444 | PixelFormat::Yuv400))
                 && (alpha_multiply_mode == AlphaMultiplyMode::NoOp || self.format.has_alpha())
             {
-                match rgb_impl::yuv_to_rgb_fast(image, self) {
-                    Ok(_) => converted_by_fast_path = true,
-                    Err(err) => {
-                        if err != AvifError::NotImplemented {
-                            return Err(err);
-                        }
-                    }
-                }
+                converted_by_fast_path = rgb_impl::yuv_to_rgb_fast(image, self)?.is_some();
             }
             if !converted_by_fast_path {
                 rgb_impl::yuv_to_rgb_any(image, self, alpha_multiply_mode)?;
@@ -493,21 +474,10 @@ impl Image {
         } else {
             let mut conversion_complete = false;
             if self.chroma_downsampling == ChromaDownsampling::SharpYuv {
-                match sharpyuv::rgb_to_yuv(self, image) {
-                    Ok(_) => conversion_complete = true,
-                    Err(err) => return Err(err),
-                }
+                sharpyuv::rgb_to_yuv(self, image)?;
+                conversion_complete = true;
             } else if alpha_multiply_mode == AlphaMultiplyMode::NoOp {
-                match libyuv::rgb_to_yuv(self, image) {
-                    Ok(_) => {
-                        conversion_complete = true;
-                    }
-                    Err(err) => {
-                        if err != AvifError::NotImplemented {
-                            return Err(err);
-                        }
-                    }
-                }
+                conversion_complete = libyuv::rgb_to_yuv(self, image)?.is_some();
             }
             if !conversion_complete {
                 rgb_impl::rgb_to_yuv(self, image)?;

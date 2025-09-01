@@ -31,16 +31,25 @@ pub mod libyuv {
     use crate::reformat::*;
     use crate::*;
 
-    pub(crate) fn yuv_to_rgb(_image: &image::Image, _rgb: &mut rgb::Image) -> AvifResult<bool> {
-        AvifError::not_implemented()
+    pub(crate) fn yuv_to_rgb(
+        _image: &image::Image,
+        _rgb: &mut rgb::Image,
+    ) -> AvifResult<Option<bool>> {
+        Ok(None) // Not implemented.
     }
 
-    pub(crate) fn rgb_to_yuv(_rgb: &rgb::Image, _image: &mut image::Image) -> AvifResult<bool> {
-        AvifError::not_implemented()
+    pub(crate) fn rgb_to_yuv(
+        _rgb: &rgb::Image,
+        _image: &mut image::Image,
+    ) -> AvifResult<Option<()>> {
+        Ok(None) // Not implemented.
     }
 
-    pub(crate) fn convert_to_half_float(_rgb: &mut rgb::Image, _scale: f32) -> AvifResult<()> {
-        AvifError::not_implemented()
+    pub(crate) fn convert_to_half_float(
+        _rgb: &mut rgb::Image,
+        _scale: f32,
+    ) -> AvifResult<Option<()>> {
+        Ok(None) // Not implemented.
     }
 
     impl image::Image {
@@ -65,7 +74,7 @@ pub mod sharpyuv {
     use crate::reformat::*;
     use crate::*;
 
-    pub(crate) fn rgb_to_yuv(_rgb: &rgb::Image, _image: &mut image::Image) -> AvifResult<bool> {
+    pub(crate) fn rgb_to_yuv(_rgb: &rgb::Image, _image: &mut image::Image) -> AvifResult<()> {
         AvifError::not_implemented()
     }
 }

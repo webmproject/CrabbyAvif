@@ -23,9 +23,12 @@ use crate::*;
 
 use std::cmp::min;
 
-fn identity_yuv8_to_rgb8_full_range(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
+fn identity_yuv8_to_rgb8_full_range(
+    image: &image::Image,
+    rgb: &mut rgb::Image,
+) -> AvifResult<Option<()>> {
     if image.yuv_format != PixelFormat::Yuv444 || rgb.format == Format::Rgb565 {
-        return AvifError::not_implemented();
+        return Ok(None); // Not implemented.
     }
 
     let r_offset = rgb.format.r_offset();
@@ -43,7 +46,7 @@ fn identity_yuv8_to_rgb8_full_range(image: &image::Image, rgb: &mut rgb::Image) 
             rgb_pixels[(j * channel_count) + b_offset] = u[j];
         }
     }
-    Ok(())
+    Ok(Some(()))
 }
 
 // This is a macro and not a function because this is invoked per-pixel and there is a non-trivial
@@ -406,20 +409,19 @@ fn yuv8_to_rgb16_monochrome(
     Ok(())
 }
 
-pub(crate) fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<()> {
+pub(crate) fn yuv_to_rgb_fast(
+    image: &image::Image,
+    rgb: &mut rgb::Image,
+) -> AvifResult<Option<()>> {
     let mode: Mode = image.into();
-    match mode {
-        Mode::Identity => {
-            if image.depth == 8 && rgb.depth == 8 && image.yuv_range == YuvRange::Full {
-                identity_yuv8_to_rgb8_full_range(image, rgb)
-            } else {
-                // TODO: Add more fast paths for identity.
-                AvifError::not_implemented()
-            }
-        }
+    Ok(match mode {
+        Mode::Identity => match (image.depth, rgb.depth, image.yuv_range) {
+            (8, 8, YuvRange::Full) => identity_yuv8_to_rgb8_full_range(image, rgb)?,
+            _ => None,
+        },
         Mode::YuvCoefficients(kr, kg, kb) => {
             let has_color = image.yuv_format != PixelFormat::Yuv400;
-            match (image.depth == 8, rgb.depth == 8, has_color) {
+            Some(match (image.depth == 8, rgb.depth == 8, has_color) {
                 (true, true, true) => yuv8_to_rgb8_color(image, rgb, kr, kg, kb),
                 (false, false, true) => yuv16_to_rgb16_color(image, rgb, kr, kg, kb),
                 (false, true, true) => yuv16_to_rgb8_color(image, rgb, kr, kg, kb),
@@ -428,10 +430,10 @@ pub(crate) fn yuv_to_rgb_fast(image: &image::Image, rgb: &mut rgb::Image) -> Avi
                 (false, false, false) => yuv16_to_rgb16_monochrome(image, rgb, kr, kg, kb),
                 (false, true, false) => yuv16_to_rgb8_monochrome(image, rgb, kr, kg, kb),
                 (true, false, false) => yuv8_to_rgb16_monochrome(image, rgb, kr, kg, kb),
-            }
+            }?)
         }
-        Mode::Ycgco | Mode::YcgcoRe | Mode::YcgcoRo => AvifError::not_implemented(),
-    }
+        Mode::Ycgco | Mode::YcgcoRe | Mode::YcgcoRo => None, // Not implemented
+    })
 }
 
 fn bias_and_range_y(image: &image::Image) -> (f32, f32) {
