@@ -76,38 +76,38 @@ pub enum CodecChoice {
 }
 
 impl CodecChoice {
-    fn get_codec(&self, is_avif: bool) -> AvifResult<Codec> {
+    fn get_codec(&self, is_avif: bool) -> Option<Codec> {
         match self {
             CodecChoice::Auto => {
                 // Preferred order of codecs in Auto mode: Android MediaCodec, Dav1d, Libgav1.
                 CodecChoice::MediaCodec
                     .get_codec(is_avif)
-                    .or_else(|_| CodecChoice::Dav1d.get_codec(is_avif))
-                    .or_else(|_| CodecChoice::Libgav1.get_codec(is_avif))
+                    .or_else(|| CodecChoice::Dav1d.get_codec(is_avif))
+                    .or_else(|| CodecChoice::Libgav1.get_codec(is_avif))
             }
             CodecChoice::Dav1d => {
                 if !is_avif {
-                    return AvifError::no_codec_available();
+                    return None;
                 }
                 #[cfg(feature = "dav1d")]
-                return Ok(Box::<Dav1d>::default());
+                return Some(Box::<Dav1d>::default());
                 #[cfg(not(feature = "dav1d"))]
-                return AvifError::no_codec_available();
+                return None;
             }
             CodecChoice::Libgav1 => {
                 if !is_avif {
-                    return AvifError::no_codec_available();
+                    return None;
                 }
                 #[cfg(feature = "libgav1")]
-                return Ok(Box::<Libgav1>::default());
+                return Some(Box::<Libgav1>::default());
                 #[cfg(not(feature = "libgav1"))]
-                return AvifError::no_codec_available();
+                return None;
             }
             CodecChoice::MediaCodec => {
                 #[cfg(feature = "android_mediacodec")]
-                return Ok(Box::<MediaCodec>::default());
+                return Some(Box::<MediaCodec>::default());
                 #[cfg(not(feature = "android_mediacodec"))]
-                return AvifError::no_codec_available();
+                return None;
             }
         }
     }
@@ -1491,10 +1491,14 @@ impl Decoder {
 
     fn create_codec(&mut self, decoding_item: DecodingItem, tile_index: usize) -> AvifResult<()> {
         let tile = &self.tiles[decoding_item.usize()][tile_index];
-        let mut codec: Codec = self
+        let mut codec: Codec = match self
             .settings
             .codec_choice
-            .get_codec(tile.codec_config.is_avif())?;
+            .get_codec(tile.codec_config.is_avif())
+        {
+            None => return AvifError::no_codec_available(),
+            Some(codec) => codec,
+        };
         let config = DecoderConfig {
             operating_point: tile.operating_point,
             all_layers: tile.input.all_layers,
