@@ -367,6 +367,11 @@ fn find_conversion_function(
     }
 }
 
+// Converts YUV(A) samples to RGB(A).
+// Returns Ok(Some(true)) if the whole conversion was performed.
+// Returns Ok(Some(false)) if only YUV was converted and alpha
+// needs to be imported separately.
+// Returns Ok(None) if the conversion is not implemented.
 #[cfg_attr(feature = "disable_cfi", sanitize(cfi = "off"))]
 pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResult<Option<bool>> {
     if (rgb.depth != 8 && rgb.depth != 10) || !image.depth_valid() {
