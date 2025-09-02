@@ -49,7 +49,6 @@ impl BoxHeader {
 #[derive(Debug, Default)]
 pub struct FileTypeBox {
     pub major_brand: String,
-    #[cfg_attr(not(feature = "mini"), allow(dead_code))]
     pub minor_version: String,
     pub compatible_brands: Vec<String>,
 }
@@ -71,7 +70,6 @@ impl FileTypeBox {
     }
 
     pub(crate) fn is_avif(&self) -> bool {
-        #[cfg(feature = "mini")]
         if self.needs_mini() {
             return true;
         }
@@ -112,7 +110,6 @@ impl FileTypeBox {
         ])
     }
 
-    #[cfg(feature = "mini")]
     pub(crate) fn needs_mini(&self) -> bool {
         self.major_brand.as_str() == "mif3" && self.minor_version == "avif"
     }
@@ -1811,7 +1808,6 @@ fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
 pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
     let mut ftyp: Option<FileTypeBox> = None;
     let mut meta: Option<MetaBox> = None;
-    #[cfg(feature = "mini")]
     let mut seen_mini = false;
     let mut tracks: Option<Vec<Track>> = None;
     let mut parse_offset: u64 = 0;
@@ -1855,19 +1851,16 @@ pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
                     "meta" => meta = Some(parse_meta(&mut box_stream)?),
                     "moov" => tracks = Some(parse_moov(&mut box_stream)?),
                     "mini" => {
-                        #[cfg(feature = "mini")]
-                        {
-                            seen_mini = true;
-                            // The MinimizedImageBox is mapped to a virtually
-                            // reconstructed MetaBox.
-                            let offset = parse_offset as usize;
-                            meta = Some(parser::mini::parse_mini(&mut box_stream, offset)?);
-                            if meta.unwrap_ref().iinf.iter().any(|i| i.item_type == "tmap") {
-                                // Decoder::parse() requires the 'tmap' brand to
-                                // be registered for the tone mapping derived
-                                // image item to be parsed.
-                                ftyp.unwrap_mut().compatible_brands.push("tmap".into());
-                            }
+                        seen_mini = true;
+                        // The MinimizedImageBox is mapped to a virtually
+                        // reconstructed MetaBox.
+                        let offset = parse_offset as usize;
+                        meta = Some(parser::mini::parse_mini(&mut box_stream, offset)?);
+                        if meta.unwrap_ref().iinf.iter().any(|i| i.item_type == "tmap") {
+                            // Decoder::parse() requires the 'tmap' brand to
+                            // be registered for the tone mapping derived
+                            // image item to be parsed.
+                            ftyp.unwrap_mut().compatible_brands.push("tmap".into());
                         }
                     }
                     _ => {} // Not reached.
@@ -1875,7 +1868,6 @@ pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
                 if ftyp.is_some() {
                     let ftyp = ftyp.unwrap_ref();
                     let mut enough_information = true;
-                    #[cfg(feature = "mini")]
                     if ftyp.needs_mini() && !seen_mini {
                         enough_information = false;
                     }
@@ -1904,17 +1896,14 @@ pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
         return AvifError::invalid_ftyp();
     }
     let ftyp = ftyp.unwrap();
-    if (ftyp.needs_meta() && meta.is_none()) || (ftyp.needs_moov() && tracks.is_none()) {
-        return AvifError::truncated_data();
+    if ftyp.needs_mini() && (ftyp.needs_meta() || ftyp.needs_moov()) {
+        return AvifError::invalid_ftyp();
     }
-    #[cfg(feature = "mini")]
+    if (ftyp.needs_meta() && meta.is_none())
+        || (ftyp.needs_moov() && tracks.is_none())
+        || (ftyp.needs_mini() && !seen_mini)
     {
-        if ftyp.needs_mini() && (ftyp.needs_meta() || ftyp.needs_moov()) {
-            return AvifError::invalid_ftyp();
-        }
-        if ftyp.needs_mini() && !seen_mini {
-            return AvifError::truncated_data();
-        }
+        return AvifError::truncated_data();
     }
     Ok(AvifBoxes {
         ftyp,

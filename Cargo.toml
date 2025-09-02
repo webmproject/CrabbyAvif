@@ -79,7 +79,6 @@ png = ["dep:png"]
 jpeg = ["dep:image"]
 gif = ["dep:gif", "dep:gif-dispose"]
 sample_transform = []
-mini = []
 sharpyuv = ["dep:libsharpyuv-sys"]
 
 [package.metadata.capi.header]
