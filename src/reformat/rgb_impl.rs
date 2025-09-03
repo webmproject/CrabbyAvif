@@ -23,6 +23,7 @@ use crate::*;
 
 use std::cmp::min;
 
+// Copies GBR samples to YUV samples. Returns Ok(None) if not implemented.
 fn identity_yuv8_to_rgb8_full_range(
     image: &image::Image,
     rgb: &mut rgb::Image,
@@ -40,6 +41,33 @@ fn identity_yuv8_to_rgb8_full_range(
         let u = image.row(Plane::U, i)?;
         let v = image.row(Plane::V, i)?;
         let rgb_pixels = rgb.row_mut(i)?;
+        for j in 0..image.width as usize {
+            rgb_pixels[(j * channel_count) + r_offset] = v[j];
+            rgb_pixels[(j * channel_count) + g_offset] = y[j];
+            rgb_pixels[(j * channel_count) + b_offset] = u[j];
+        }
+    }
+    Ok(Some(()))
+}
+
+// Copies GBR samples to YUV samples. Returns Ok(None) if not implemented.
+fn identity_yuv16_to_rgb16_full_range(
+    image: &image::Image,
+    rgb: &mut rgb::Image,
+) -> AvifResult<Option<()>> {
+    if image.yuv_format != PixelFormat::Yuv444 {
+        return Ok(None); // Not implemented.
+    }
+
+    let r_offset = rgb.format.r_offset();
+    let g_offset = rgb.format.g_offset();
+    let b_offset = rgb.format.b_offset();
+    let channel_count = rgb.channel_count() as usize;
+    for i in 0..image.height {
+        let y = image.row16(Plane::Y, i)?;
+        let u = image.row16(Plane::U, i)?;
+        let v = image.row16(Plane::V, i)?;
+        let rgb_pixels = rgb.row16_mut(i)?;
         for j in 0..image.width as usize {
             rgb_pixels[(j * channel_count) + r_offset] = v[j];
             rgb_pixels[(j * channel_count) + g_offset] = y[j];
@@ -409,6 +437,7 @@ fn yuv8_to_rgb16_monochrome(
     Ok(())
 }
 
+// Converts RGB samples to YUV samples. Returns Ok(None) if not implemented.
 pub(crate) fn yuv_to_rgb_fast(
     image: &image::Image,
     rgb: &mut rgb::Image,
@@ -417,6 +446,7 @@ pub(crate) fn yuv_to_rgb_fast(
     Ok(match mode {
         Mode::Identity => match (image.depth, rgb.depth, image.yuv_range) {
             (8, 8, YuvRange::Full) => identity_yuv8_to_rgb8_full_range(image, rgb)?,
+            (16, 16, YuvRange::Full) => identity_yuv16_to_rgb16_full_range(image, rgb)?,
             _ => None,
         },
         Mode::YuvCoefficients(kr, kg, kb) => {

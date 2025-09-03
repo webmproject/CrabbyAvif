@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::decoder::tile::SampleTransform;
-use crate::decoder::tile::*;
 use crate::decoder::track::*;
 use crate::decoder::Extent;
 use crate::decoder::GenericIO;
 use crate::gainmap::GainMapMetadata;
 use crate::image::YuvRange;
 use crate::image::MAX_PLANE_COUNT;
+use crate::internal_utils::sampletransform::*;
 use crate::internal_utils::stream::*;
 use crate::internal_utils::*;
 use crate::utils::clap::CleanAperture;
@@ -2040,7 +2039,7 @@ pub(crate) fn parse_sato(stream: &mut IStream, num_inputs: usize) -> AvifResult<
             64 => SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Negation),
             65 => SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Absolute),
             66 => SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Not),
-            67 => SampleTransformToken::UnaryOp(SampleTransformUnaryOp::BSR),
+            67 => SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Bsr),
             128 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Sum),
             129 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Difference),
             130 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Product),

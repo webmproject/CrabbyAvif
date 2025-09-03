@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::decoder::*;
+use crate::internal_utils::sampletransform::*;
 use crate::*;
 
 use std::num::NonZero;
@@ -75,44 +76,6 @@ pub struct Overlay {
     pub height: u32,
     pub horizontal_offsets: Vec<i32>,
     pub vertical_offsets: Vec<i32>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum SampleTransformUnaryOp {
-    // Unary operators. L is the operand.
-    Negation, // S = -L
-    Absolute, // S = |L|
-    Not,      // S = ~L
-    BSR,      // S = L<=0 ? 0 : truncate(log2(L)) (Bit Scan Reverse)
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum SampleTransformBinaryOp {
-    Sum,        // S = L + R
-    Difference, // S = L - R
-    Product,    // S = L * R
-    Quotient,   // S = R==0 ? L : truncate(L / R)
-    And,        // S = L & R
-    Or,         // S = L | R
-    Xor,        // S = L ^ R
-    Pow,        // S = L==0 ? 0 : truncate(pow(L, R))
-    Min,        // S = L<=R ? L : R
-    Max,        // S = L<=R ? R : L
-}
-
-#[derive(Debug)]
-pub enum SampleTransformToken {
-    Constant(i64),
-    ImageItem(usize), // item_idx in source items
-    UnaryOp(SampleTransformUnaryOp),
-    BinaryOp(SampleTransformBinaryOp),
-}
-
-#[derive(Debug, Default)]
-pub struct SampleTransform {
-    pub bit_depth: u8,
-    pub num_inputs: usize, // Number of input images.
-    pub tokens: Vec<SampleTransformToken>,
 }
 
 #[derive(Debug, Default)]

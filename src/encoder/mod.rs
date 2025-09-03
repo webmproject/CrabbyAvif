@@ -15,6 +15,7 @@
 pub mod item;
 pub mod mini;
 pub mod mp4box;
+mod sampletransform;
 
 use crate::encoder::item::*;
 use crate::encoder::mp4box::*;
@@ -121,6 +122,7 @@ pub struct Settings {
     pub timescale: u64,
     pub repetition_count: RepetitionCount,
     pub extra_layer_count: u32,
+    pub sample_transform_recipe: SampleTransformRecipe,
     pub mutable: MutableSettings,
 }
 
@@ -134,21 +136,13 @@ impl Default for Settings {
             timescale: 1,
             repetition_count: RepetitionCount::Infinite,
             extra_layer_count: 0,
+            sample_transform_recipe: SampleTransformRecipe::None,
             mutable: Default::default(),
         }
     }
 }
 
 impl Settings {
-    pub(crate) fn quantizer(&self, category: Category) -> i32 {
-        let quality = match category {
-            Category::Color => self.mutable.quality,
-            Category::Alpha => self.mutable.quality_alpha,
-            Category::Gainmap => self.mutable.quality_gainmap,
-        };
-        ((100 - quality) * 63 + 50) / 100
-    }
-
     pub(crate) fn is_valid(&self) -> bool {
         self.extra_layer_count < MAX_AV1_LAYER_COUNT as u32 && self.timescale > 0
     }
@@ -241,24 +235,24 @@ impl Encoder {
         Ok(item_id)
     }
 
-    fn add_items(&mut self, grid: &Grid, category: Category) -> AvifResult<u16> {
+    fn add_items(&mut self, grid: &Grid, category: Category, hidden: bool) -> AvifResult<u16> {
         let cell_count = usize_from_u32(grid.rows * grid.columns)?;
         let mut top_level_item_id = 0;
         if cell_count > 1 {
             let mut stream = OStream::default();
             write_grid(&mut stream, grid)?;
-            let item = Item {
+            let grid_item = Item {
                 id: u16_from_usize(self.items.len() + 1)?,
                 item_type: "grid".into(),
                 infe_name: category.infe_name(),
                 category,
                 grid: Some(*grid),
                 metadata_payload: stream.data,
-                hidden_image: category == Category::Gainmap,
+                hidden_image: hidden,
                 ..Default::default()
             };
-            top_level_item_id = item.id;
-            self.items.push(item);
+            top_level_item_id = grid_item.id;
+            self.items.push(grid_item);
         }
         for cell_index in 0..cell_count {
             let item = Item {
@@ -268,7 +262,7 @@ impl Encoder {
                 cell_index,
                 category,
                 dimg_from_id: if cell_count > 1 { Some(top_level_item_id) } else { None },
-                hidden_image: cell_count > 1,
+                hidden_image: hidden || cell_count > 1,
                 extra_layer_count: self.settings.extra_layer_count,
                 #[cfg(feature = "aom")]
                 codec: Some(Box::<Aom>::default()),
@@ -341,11 +335,19 @@ impl Encoder {
         self.alt_image_metadata.clli = Some(gainmap.alt_clli);
     }
 
-    fn validate_image_grid(grid: &Grid, images: &[&Image]) -> AvifResult<()> {
+    fn validate_image_grid(
+        grid: &Grid,
+        images: &[&Image],
+        recipe: SampleTransformRecipe,
+    ) -> AvifResult<()> {
         let first_image = images[0];
         let last_image = images.last().unwrap();
         for (index, image) in images.iter().enumerate() {
-            if image.depth != 8 && image.depth != 10 && image.depth != 12 {
+            if !matches!(
+                (image.depth, recipe),
+                (8 | 10 | 12, SampleTransformRecipe::None)
+                    | (16, SampleTransformRecipe::BitDepthExtension8b8b)
+            ) {
                 return AvifError::invalid_argument();
             }
             let expected_width = if grid.is_last_column(index as u32) {
@@ -405,7 +407,7 @@ impl Encoder {
             return AvifError::invalid_argument();
         }
         let gainmap_images: Vec<_> = gainmaps.iter().map(|x| &x.image).collect();
-        Self::validate_image_grid(grid, &gainmap_images)?;
+        Self::validate_image_grid(grid, &gainmap_images, SampleTransformRecipe::None)?;
         // Ensure that the gainmap image does not have alpha. validate_image_grid() ensures that
         // either all the cell images have alpha or all of them don't. So it is sufficient to check
         // if the first cell image does not have alpha.
@@ -440,13 +442,13 @@ impl Encoder {
                 width: (grid_columns - 1) * first_image.width + last_image.width,
                 height: (grid_rows - 1) * first_image.height + last_image.height,
             };
-            Self::validate_image_grid(&grid, cell_images)?;
+            Self::validate_image_grid(&grid, cell_images, self.settings.sample_transform_recipe)?;
             self.image_metadata = first_image.shallow_clone();
             if let Some(gainmaps) = gainmaps {
                 self.gainmap_image_metadata = gainmaps[0].image.shallow_clone();
                 self.copy_alt_image_metadata(gainmaps[0], &grid);
             }
-            let color_item_id = self.add_items(&grid, Category::Color)?;
+            let color_item_id = self.add_items(&grid, Category::Color, /*hidden=*/ false)?;
             self.primary_item_id = color_item_id;
             self.alpha_present = first_image.has_plane(Plane::A)
                 && if is_single_image {
@@ -459,7 +461,8 @@ impl Encoder {
                 };
 
             if self.alpha_present {
-                let alpha_item_id = self.add_items(&grid, Category::Alpha)?;
+                let alpha_item_id =
+                    self.add_items(&grid, Category::Alpha, /*hidden=*/ false)?;
                 let alpha_item = &mut self.items[alpha_item_id as usize - 1];
                 alpha_item.iref_type = Some(String::from("auxl"));
                 alpha_item.iref_to_id = Some(color_item_id);
@@ -490,11 +493,23 @@ impl Encoder {
                 }
                 self.alternative_item_ids.push(tonemap_item_id);
                 self.alternative_item_ids.push(color_item_id);
-                let gainmap_item_id = self.add_items(&gainmap_grid, Category::Gainmap)?;
+                let gainmap_item_id =
+                    self.add_items(&gainmap_grid, Category::Gainmap, /*hidden=*/ true)?;
                 for item_id in [color_item_id, gainmap_item_id] {
                     self.items[item_id as usize - 1].dimg_from_id = Some(tonemap_item_id);
                 }
             }
+
+            match self.settings.sample_transform_recipe {
+                SampleTransformRecipe::None => {}
+                SampleTransformRecipe::BitDepthExtension8b8b => {
+                    if first_image.depth != 16 || gainmaps.is_some() {
+                        return AvifError::not_implemented();
+                    }
+                    self.create_bit_depth_extension_items(&grid)?;
+                }
+            }
+
             self.add_exif_item()?;
             self.add_xmp_item()?;
         } else {
@@ -534,14 +549,38 @@ impl Encoder {
             };
             let mut padded_image;
             if image.width != first_image.width || image.height != first_image.height {
+                // Pad the right-most and/or bottom-most tiles so that all tiles share the same dimensions.
                 padded_image = first_image.shallow_clone();
                 padded_image.copy_and_pad(image)?;
                 image = &padded_image;
             }
+            let mut quality = match item.category {
+                Category::Color => self.settings.mutable.quality,
+                Category::Alpha => self.settings.mutable.quality_alpha,
+                Category::Gainmap => self.settings.mutable.quality_gainmap,
+            };
+
+            // If used, contains the most or least significiant bits of the image.
+            let bit_depth_extension_image;
+            match self.settings.sample_transform_recipe {
+                SampleTransformRecipe::None => assert!(!item.is_sato_least_significant_input),
+                SampleTransformRecipe::BitDepthExtension8b8b => {
+                    if !item.is_sato_least_significant_input {
+                        // Encoding the least significant bits of a sample does not
+                        // make any sense if the other bits are lossily compressed.
+                        // Encode the most significant bits losslessly.
+                        quality = 100;
+                    }
+                    bit_depth_extension_image =
+                        Self::create_bit_depth_extension_image(image, item)?;
+                    image = &bit_depth_extension_image;
+                }
+            }
+
             let encoder_config = EncoderConfig {
                 tile_rows_log2,
                 tile_columns_log2,
-                quantizer: self.settings.quantizer(item.category),
+                quantizer: ((100 - quality) * 63 + 50) / 100,
                 disable_lagged_output: self.alpha_present,
                 is_single_image,
                 speed: self.settings.speed,
