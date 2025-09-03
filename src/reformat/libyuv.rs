@@ -833,7 +833,7 @@ fn rgb_to_yuv_conversion_function(
     }
 }
 
-#[cfg_attr(feature = "disable_cfi", no_sanitize(cfi))]
+#[cfg_attr(feature = "disable_cfi", sanitize(cfi = "off"))]
 pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<Option<()>> {
     let conversion_function = match rgb_to_yuv_conversion_function(rgb, image) {
         Some(conversion_function) => conversion_function,
