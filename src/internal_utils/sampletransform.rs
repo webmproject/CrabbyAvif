@@ -300,7 +300,7 @@ impl SampleTransform {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[cfg(feature = "encoder")]
     pub(crate) fn apply_to_planes(
         &self,
         category: Category,
