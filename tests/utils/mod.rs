@@ -50,8 +50,8 @@ pub fn decode_png(filename: &str) -> Vec<u8> {
     pixels
 }
 
-fn full_to_limited_pixel(min: i32, max: i32, full: i32, v: u16) -> u16 {
-    let v = v as i32;
+fn full_to_limited_pixel(min: u32, max: u32, full: u32, v: u16) -> u16 {
+    let v = v as u32;
     let v = (((v * (max - min)) + (full / 2)) / full) + min;
     if v < min {
         min as u16
@@ -67,9 +67,11 @@ fn full_to_limited(v: u16, plane: Plane, depth: u8) -> u16 {
         (Plane::Y, 8) => full_to_limited_pixel(16, 235, 255, v),
         (Plane::Y, 10) => full_to_limited_pixel(64, 940, 1023, v),
         (Plane::Y, 12) => full_to_limited_pixel(256, 3760, 4095, v),
+        (Plane::Y, 16) => full_to_limited_pixel(4096, 60160, 65535, v),
         (Plane::U | Plane::V, 8) => full_to_limited_pixel(16, 240, 255, v),
         (Plane::U | Plane::V, 10) => full_to_limited_pixel(64, 960, 1023, v),
         (Plane::U | Plane::V, 12) => full_to_limited_pixel(256, 3840, 4095, v),
+        (Plane::U | Plane::V, 16) => full_to_limited_pixel(4096, 61440, 65535, v),
         _ => unreachable!(""),
     }
 }

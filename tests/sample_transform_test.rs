@@ -16,10 +16,13 @@
 #![cfg(feature = "encoder")]
 
 mod utils;
+use crabby_avif::encoder::Recipe;
+use crabby_avif::image::*;
 use crabby_avif::utils::reader::png::PngReader;
 use crabby_avif::utils::reader::Config;
 use crabby_avif::utils::reader::Reader;
 use crabby_avif::*;
+use test_case::test_matrix;
 use utils::*;
 
 #[test]
@@ -41,7 +44,7 @@ fn lossless_sample_transform_roundtrip() -> AvifResult<()> {
             quality: 100,
             ..Default::default()
         },
-        sample_transform_recipe: SampleTransformRecipe::BitDepthExtension8b8b,
+        recipe: Recipe::BitDepthExtension8b8b,
         ..Default::default()
     };
     let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
@@ -60,5 +63,43 @@ fn lossless_sample_transform_roundtrip() -> AvifResult<()> {
     assert!(decoder.next_image().is_ok());
     let decoded_image = decoder.image().unwrap();
     assert!(are_images_equal(&image, decoded_image)?);
+    Ok(())
+}
+
+#[test_matrix(
+    [8, 10, 12, 16],
+    [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444, PixelFormat::Yuv400],
+    [YuvRange::Limited, YuvRange::Full],
+    [false, true]
+)]
+fn recipe_auto(
+    depth: u8,
+    yuv_format: PixelFormat,
+    yuv_range: YuvRange,
+    alpha: bool,
+) -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let input_image = generate_gradient_image(64, 64, depth, yuv_format, yuv_range, alpha)?;
+    let settings = encoder::Settings {
+        speed: Some(10),
+        recipe: Recipe::Auto,
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image(&input_image)?;
+    let edata = encoder.finish()?;
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.settings.allow_sample_transform = true;
+    assert_eq!(decoder.parse(), Ok(()));
+
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    assert_eq!(decoder.next_image(), Ok(()));
+    assert!(psnr(decoder.image().unwrap(), &input_image)? >= 30.0);
     Ok(())
 }

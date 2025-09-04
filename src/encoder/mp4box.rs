@@ -335,9 +335,10 @@ impl Encoder {
             } else if item.category == Category::Gainmap {
                 &self.gainmap_image_metadata
             } else {
-                match self.settings.sample_transform_recipe {
-                    SampleTransformRecipe::None => &self.image_metadata,
-                    SampleTransformRecipe::BitDepthExtension8b8b => {
+                match self.final_recipe.unwrap() {
+                    Recipe::Auto => unreachable!(),
+                    Recipe::None => &self.image_metadata,
+                    Recipe::BitDepthExtension8b8b => {
                         if item.is_sato() {
                             &self.image_metadata
                         } else {
