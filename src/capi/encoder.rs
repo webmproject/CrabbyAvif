@@ -128,7 +128,7 @@ impl From<&avifEncoder> for Settings {
             timescale: if encoder.timescale == 0 { 1 } else { encoder.timescale },
             repetition_count: RepetitionCount::create_from(encoder.repetitionCount),
             extra_layer_count: encoder.extraLayerCount,
-            sample_transform_recipe: SampleTransformRecipe::None,
+            recipe: Recipe::None,
             mutable: encoder.into(),
         }
     }

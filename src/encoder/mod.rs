@@ -113,6 +113,26 @@ impl Default for MutableSettings {
     }
 }
 
+// Scheme for splitting, combining and/or transforming the input samples to
+// bypass some codec or format limits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Recipe {
+    // Automatically apply one of the Recipes below based on the input samples.
+    Auto,
+    // Do not split or transform the input samples. An error is returned if the
+    // selected codec or base video format does not support encoding the input
+    // samples as is (AV1 does not support 16-bit samples for example).
+    None,
+    // Encode the 8 most significant bits of each input image sample losslessly
+    // into a base image. The remaining 8 least significant bits are encoded in
+    // a separate hidden image item. The two are combined at decoding into one
+    // image with the same bit depth as the original image. It is backward
+    // compatible in the sense that it is possible to decode only the base image
+    // (ignoring the hidden image item), leading to a valid image but with
+    // precision loss (16-bit samples truncated to the 8 most significant bits).
+    BitDepthExtension8b8b,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Settings {
     pub threads: u32,
@@ -122,7 +142,7 @@ pub struct Settings {
     pub timescale: u64,
     pub repetition_count: RepetitionCount,
     pub extra_layer_count: u32,
-    pub sample_transform_recipe: SampleTransformRecipe,
+    pub recipe: Recipe,
     pub mutable: MutableSettings,
 }
 
@@ -136,7 +156,7 @@ impl Default for Settings {
             timescale: 1,
             repetition_count: RepetitionCount::Infinite,
             extra_layer_count: 0,
-            sample_transform_recipe: SampleTransformRecipe::None,
+            recipe: Recipe::None,
             mutable: Default::default(),
         }
     }
@@ -190,6 +210,8 @@ pub struct Encoder {
     config_property_name: String,
     duration_in_timescales: Vec<u64>,
     codec_specific_options: CodecSpecificOptions,
+    final_recipe: Option<Recipe>, // Decided when the first image is added.
+                                  // Guaranteed not to be Recipe::Auto.
 }
 
 impl Encoder {
@@ -335,18 +357,13 @@ impl Encoder {
         self.alt_image_metadata.clli = Some(gainmap.alt_clli);
     }
 
-    fn validate_image_grid(
-        grid: &Grid,
-        images: &[&Image],
-        recipe: SampleTransformRecipe,
-    ) -> AvifResult<()> {
+    fn validate_image_grid(grid: &Grid, images: &[&Image], recipe: Recipe) -> AvifResult<()> {
         let first_image = images[0];
         let last_image = images.last().unwrap();
         for (index, image) in images.iter().enumerate() {
             if !matches!(
                 (image.depth, recipe),
-                (8 | 10 | 12, SampleTransformRecipe::None)
-                    | (16, SampleTransformRecipe::BitDepthExtension8b8b)
+                (8 | 10 | 12, Recipe::None) | (16, Recipe::BitDepthExtension8b8b)
             ) {
                 return AvifError::invalid_argument();
             }
@@ -407,7 +424,7 @@ impl Encoder {
             return AvifError::invalid_argument();
         }
         let gainmap_images: Vec<_> = gainmaps.iter().map(|x| &x.image).collect();
-        Self::validate_image_grid(grid, &gainmap_images, SampleTransformRecipe::None)?;
+        Self::validate_image_grid(grid, &gainmap_images, Recipe::None)?;
         // Ensure that the gainmap image does not have alpha. validate_image_grid() ensures that
         // either all the cell images have alpha or all of them don't. So it is sufficient to check
         // if the first cell image does not have alpha.
@@ -433,8 +450,14 @@ impl Encoder {
         if duration == 0 {
             duration = 1;
         }
+        let first_image = cell_images[0];
+        let final_recipe = self
+            .settings
+            .recipe
+            .self_or_auto_choose_depending_on(first_image);
         if self.items.is_empty() {
-            let first_image = cell_images[0];
+            assert!(self.final_recipe.is_none());
+            self.final_recipe = Some(final_recipe);
             let last_image = cell_images.last().unwrap();
             let grid = Grid {
                 rows: grid_rows,
@@ -442,7 +465,7 @@ impl Encoder {
                 width: (grid_columns - 1) * first_image.width + last_image.width,
                 height: (grid_rows - 1) * first_image.height + last_image.height,
             };
-            Self::validate_image_grid(&grid, cell_images, self.settings.sample_transform_recipe)?;
+            Self::validate_image_grid(&grid, cell_images, final_recipe)?;
             self.image_metadata = first_image.shallow_clone();
             if let Some(gainmaps) = gainmaps {
                 self.gainmap_image_metadata = gainmaps[0].image.shallow_clone();
@@ -500,10 +523,14 @@ impl Encoder {
                 }
             }
 
-            match self.settings.sample_transform_recipe {
-                SampleTransformRecipe::None => {}
-                SampleTransformRecipe::BitDepthExtension8b8b => {
-                    if first_image.depth != 16 || gainmaps.is_some() {
+            match final_recipe {
+                Recipe::Auto => unreachable!(),
+                Recipe::None => {}
+                Recipe::BitDepthExtension8b8b => {
+                    if first_image.depth != 16 {
+                        return AvifError::invalid_argument();
+                    }
+                    if gainmaps.is_some() {
                         return AvifError::not_implemented();
                     }
                     self.create_bit_depth_extension_items(&grid)?;
@@ -525,6 +552,9 @@ impl Encoder {
                 // of the current image in that case.
                 || (self.image_metadata.alpha_present && !first_image.alpha_present)
             {
+                return AvifError::invalid_argument();
+            }
+            if self.final_recipe != Some(final_recipe) {
                 return AvifError::invalid_argument();
             }
         }
@@ -562,9 +592,10 @@ impl Encoder {
 
             // If used, contains the most or least significiant bits of the image.
             let bit_depth_extension_image;
-            match self.settings.sample_transform_recipe {
-                SampleTransformRecipe::None => assert!(!item.is_sato_least_significant_input),
-                SampleTransformRecipe::BitDepthExtension8b8b => {
+            match final_recipe {
+                Recipe::Auto => unreachable!(),
+                Recipe::None => assert!(!item.is_sato_least_significant_input),
+                Recipe::BitDepthExtension8b8b => {
                     if !item.is_sato_least_significant_input {
                         // Encoding the least significant bits of a sample does not
                         // make any sense if the other bits are lossily compressed.
