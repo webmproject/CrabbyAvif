@@ -109,12 +109,6 @@ pub struct PlaneData {
     pub pixel_size: u32,
 }
 
-#[derive(Clone, Copy)]
-pub enum PlaneRow<'a> {
-    Depth8(&'a [u8]),
-    Depth16(&'a [u16]),
-}
-
 impl Image {
     pub(crate) fn shallow_clone(&self) -> Self {
         Self {
@@ -311,14 +305,6 @@ impl Image {
     pub fn row16_exact_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u16]> {
         let width = self.width(plane);
         Ok(&mut self.row16_mut(plane, row)?[0..width])
-    }
-
-    pub(crate) fn row_generic(&self, plane: Plane, row: u32) -> AvifResult<PlaneRow<'_>> {
-        Ok(if self.depth == 8 {
-            PlaneRow::Depth8(self.row(plane, row)?)
-        } else {
-            PlaneRow::Depth16(self.row16(plane, row)?)
-        })
     }
 
     #[cfg(feature = "libyuv")]
