@@ -131,9 +131,9 @@ fn yuv8_to_rgb8_color(
         let dst = rgb.row_mut(j)?;
         for i in 0..image.width as usize {
             let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
-            let y = table_y[y_row[i] as usize];
-            let cb = table_uv[u_row[uv_i] as usize];
-            let cr = table_uv[v_row[uv_i] as usize];
+            let y = unsafe { *table_y.get_unchecked(*y_row.get_unchecked(i) as usize) };
+            let cb = unsafe { *table_uv.get_unchecked(*u_row.get_unchecked(uv_i) as usize) };
+            let cr = unsafe { *table_uv.get_unchecked(*v_row.get_unchecked(uv_i) as usize) };
             let r = y + (2.0 * (1.0 - kr)) * cr;
             let b = y + (2.0 * (1.0 - kb)) * cb;
             let g = y - ((2.0 * ((kr * (1.0 - kr) * cr) + (kb * (1.0 - kb) * cb))) / kg);
@@ -281,26 +281,31 @@ fn yuv8_to_rgb16_color(
     let chroma_shift = image.yuv_format.chroma_shift_x();
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
-        let y_row = image.row(Plane::Y, j)?;
-        let u_row = image.row(Plane::U, uv_j)?;
+        let y_row = image.row(Plane::Y, j).unwrap();
+        let u_row = image.row(Plane::U, uv_j).unwrap();
         // If V plane is missing, then the format is NV12. In that case, set V
         // as U plane but starting at offset 1.
-        let v_row = image.row(Plane::V, uv_j).unwrap_or(&u_row[1..]);
+        let v_row = image.row(Plane::V, uv_j).unwrap_or_else(|_| &u_row[1..]);
         let dst = rgb.row16_mut(j)?;
         for i in 0..image.width as usize {
             let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
-            let y = table_y[y_row[i] as usize];
-            let cb = table_uv[u_row[uv_i] as usize];
-            let cr = table_uv[v_row[uv_i] as usize];
+            let y = unsafe { *table_y.get_unchecked(*y_row.get_unchecked(i) as usize) };
+            let cb = unsafe { *table_uv.get_unchecked(*u_row.get_unchecked(uv_i) as usize) };
+            let cr = unsafe { *table_uv.get_unchecked(*v_row.get_unchecked(uv_i) as usize) };
             let r = y + (2.0 * (1.0 - kr)) * cr;
             let b = y + (2.0 * (1.0 - kb)) * cb;
             let g = y - ((2.0 * ((kr * (1.0 - kr) * cr) + (kb * (1.0 - kb) * cb))) / kg);
             let r = clamp_f32(r, 0.0, 1.0);
             let g = clamp_f32(g, 0.0, 1.0);
             let b = clamp_f32(b, 0.0, 1.0);
-            dst[(i * rgb_channel_count) + r_offset] = (0.5 + (r * rgb_max_channel_f)) as u16;
-            dst[(i * rgb_channel_count) + g_offset] = (0.5 + (g * rgb_max_channel_f)) as u16;
-            dst[(i * rgb_channel_count) + b_offset] = (0.5 + (b * rgb_max_channel_f)) as u16;
+            unsafe {
+                *dst.get_unchecked_mut((i * rgb_channel_count) + r_offset) =
+                    (0.5 + (r * rgb_max_channel_f)) as u16;
+                *dst.get_unchecked_mut((i * rgb_channel_count) + g_offset) =
+                    (0.5 + (g * rgb_max_channel_f)) as u16;
+                *dst.get_unchecked_mut((i * rgb_channel_count) + b_offset) =
+                    (0.5 + (b * rgb_max_channel_f)) as u16;
+            }
         }
     }
     Ok(())
