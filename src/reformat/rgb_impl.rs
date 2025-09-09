@@ -22,6 +22,25 @@ use crate::*;
 
 use std::cmp::min;
 
+macro_rules! unorm_value8 {
+    ($row:expr, $index:expr, $table:expr) => {
+        // # Safety:
+        // # $table has 255 values. $row is of type u8, so the $table access is always valid.
+        // # $index is guaranteed to be within the bounds of $row[].
+        unsafe { *$table.get_unchecked(*$row.get_unchecked($index) as usize) }
+    };
+}
+
+macro_rules! unorm_value16 {
+    ($row:expr, $index:expr, $max_channel:expr, $table:expr) => {
+        // # Safety:
+        // # $table has 1024 or 4096 values depending on image depth. the clamp to $max_channel
+        //   makes the $table access always valid.
+        // # $index is guaranteed to be within the bounds of $row[].
+        unsafe { *$table.get_unchecked(min(*$row.get_unchecked($index), $max_channel) as usize) }
+    };
+}
+
 // Copies GBR samples to YUV samples. Returns Ok(None) if not implemented.
 fn identity_yuv8_to_rgb8_full_range(
     image: &image::Image,
@@ -179,26 +198,31 @@ fn yuv16_to_rgb16_color(
     let chroma_shift = image.yuv_format.chroma_shift_x();
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
-        let y_row = image.row16(Plane::Y, j)?;
-        let u_row = image.row16(Plane::U, uv_j)?;
+        let y_row = image.row16(Plane::Y, j).unwrap();
+        let u_row = image.row16(Plane::U, uv_j).unwrap();
         // If V plane is missing, then the format is P010. In that case, set V
         // as U plane but starting at offset 1.
         let v_row = image.row16(Plane::V, uv_j).unwrap_or(&u_row[1..]);
         let dst = rgb.row16_mut(j)?;
         for i in 0..image.width as usize {
             let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
-            let y = table_y[min(y_row[i], yuv_max_channel) as usize];
-            let cb = table_uv[min(u_row[uv_i], yuv_max_channel) as usize];
-            let cr = table_uv[min(v_row[uv_i], yuv_max_channel) as usize];
+            let y = unorm_value16!(y_row, i, yuv_max_channel, table_y);
+            let cb = unorm_value16!(u_row, uv_i, yuv_max_channel, table_uv);
+            let cr = unorm_value16!(v_row, uv_i, yuv_max_channel, table_uv);
             let r = y + (2.0 * (1.0 - kr)) * cr;
             let b = y + (2.0 * (1.0 - kb)) * cb;
             let g = y - ((2.0 * ((kr * (1.0 - kr) * cr) + (kb * (1.0 - kb) * cb))) / kg);
             let r = clamp_f32(r, 0.0, 1.0);
             let g = clamp_f32(g, 0.0, 1.0);
             let b = clamp_f32(b, 0.0, 1.0);
-            dst[(i * rgb_channel_count) + r_offset] = (0.5 + (r * rgb_max_channel_f)) as u16;
-            dst[(i * rgb_channel_count) + g_offset] = (0.5 + (g * rgb_max_channel_f)) as u16;
-            dst[(i * rgb_channel_count) + b_offset] = (0.5 + (b * rgb_max_channel_f)) as u16;
+            unsafe {
+                *dst.get_unchecked_mut((i * rgb_channel_count) + r_offset) =
+                    (0.5 + (r * rgb_max_channel_f)) as u16;
+                *dst.get_unchecked_mut((i * rgb_channel_count) + g_offset) =
+                    (0.5 + (g * rgb_max_channel_f)) as u16;
+                *dst.get_unchecked_mut((i * rgb_channel_count) + b_offset) =
+                    (0.5 + (b * rgb_max_channel_f)) as u16;
+            }
         }
     }
     Ok(())
@@ -571,25 +595,6 @@ fn compute_rgb(
         clamp_f32(g, 0.0, 1.0),
         clamp_f32(b, 0.0, 1.0),
     )
-}
-
-macro_rules! unorm_value8 {
-    ($row:expr, $index:expr, $table:expr) => {
-        // # Safety:
-        // # $table has 255 values. $row is of type u8, so the $table access is always valid.
-        // # $index is guaranteed to be within the bounds of $row[].
-        unsafe { *$table.get_unchecked(*$row.get_unchecked($index) as usize) }
-    };
-}
-
-macro_rules! unorm_value16 {
-    ($row:expr, $index:expr, $max_channel:expr, $table:expr) => {
-        // # Safety:
-        // # $table has 1024 or 4096 values depending on image depth. the clamp to $max_channel
-        //   makes the $table access always valid.
-        // # $index is guaranteed to be within the bounds of $row[].
-        unsafe { *$table.get_unchecked(min(*$row.get_unchecked($index), $max_channel) as usize) }
-    };
 }
 
 fn yuv16_to_rgb_any(
