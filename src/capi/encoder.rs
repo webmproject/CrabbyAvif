@@ -129,6 +129,7 @@ impl From<&avifEncoder> for Settings {
             repetition_count: RepetitionCount::create_from(encoder.repetitionCount),
             extra_layer_count: encoder.extraLayerCount,
             recipe: Recipe::None,
+            write_extended_pixi: false,
             mutable: encoder.into(),
         }
     }

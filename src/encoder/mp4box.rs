@@ -349,7 +349,12 @@ impl Encoder {
                     }
                 }
             };
-            item.get_property_streams(&self.image_metadata, item_metadata, &mut property_streams)?;
+            item.get_property_streams(
+                &self.image_metadata,
+                item_metadata,
+                &mut property_streams,
+                self.settings.write_extended_pixi,
+            )?;
         }
         // Deduplicate the property streams.
         let mut property_index_map = Vec::new();

@@ -15,6 +15,7 @@
 use crate::decoder::*;
 use crate::internal_utils::stream::*;
 use crate::parser::mp4box::*;
+use crate::utils::pixels::ChannelIdc;
 use crate::*;
 
 use std::collections::BTreeMap;
@@ -291,14 +292,32 @@ impl Item {
         }
         match self.pixi() {
             Some(pixi) => {
-                for depth in &pixi.plane_depths {
+                for plane in &pixi.planes {
                     // Check that the depth in pixi matches the codec config.
                     // For derived image items, the codec config comes from the first source item.
                     // Sample transform items can have a depth different from their source items.
-                    if *depth != codec_config.depth() && !self.is_sample_transform_item() {
+                    if plane.depth != codec_config.depth() && !self.is_sample_transform_item() {
                         return AvifError::bmff_parse_failed(
                             "pixi depth does not match codec config depth",
                         );
+                    }
+                    // Extended pixi. Check that the subsampling of the chroma planes matches
+                    // the codec config.
+                    if matches!(
+                        plane.channel_idc,
+                        Some(ChannelIdc::SecondColorChannel | ChannelIdc::ThirdColorChannel)
+                    ) {
+                        if let Some(subsampling_type) = plane.subsampling_type {
+                            if subsampling_type != codec_config.pixel_format() {
+                                return AvifError::bmff_parse_failed(format!(
+                                    "pixi {:?} does not match codec config {:?}",
+                                    subsampling_type,
+                                    codec_config.pixel_format()
+                                ));
+                            }
+                        }
+                        // Do not check subsampling_location.
+                        // It does not matter enough to fail the decoding just because of that.
                     }
                 }
             }
