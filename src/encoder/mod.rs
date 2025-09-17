@@ -143,6 +143,7 @@ pub struct Settings {
     pub repetition_count: RepetitionCount,
     pub extra_layer_count: u32,
     pub recipe: Recipe,
+    pub write_extended_pixi: bool,
     pub mutable: MutableSettings,
 }
 
@@ -157,6 +158,7 @@ impl Default for Settings {
             repetition_count: RepetitionCount::Infinite,
             extra_layer_count: 0,
             recipe: Recipe::None,
+            write_extended_pixi: false,
             mutable: Default::default(),
         }
     }

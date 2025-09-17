@@ -22,6 +22,7 @@ use crate::internal_utils::sampletransform::*;
 use crate::internal_utils::stream::*;
 use crate::internal_utils::*;
 use crate::utils::clap::CleanAperture;
+use crate::utils::pixels::ChannelIdc;
 use crate::*;
 
 #[derive(Debug, PartialEq)]
@@ -142,9 +143,33 @@ pub struct ImageSpatialExtents {
     pub height: u32,
 }
 
+impl ChannelIdc {
+    fn from(value: u32) -> ChannelIdc {
+        match value {
+            0 => ChannelIdc::Unused,
+            1 => ChannelIdc::Unspecified,
+            2 => ChannelIdc::FirstColorChannel,
+            3 => ChannelIdc::SecondColorChannel,
+            4 => ChannelIdc::ThirdColorChannel,
+            5 => ChannelIdc::Alpha,
+            6 => ChannelIdc::Depth,
+            7 => ChannelIdc::FourthColorChannel,
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PlanePixelInformation {
+    pub depth: u8,
+    pub channel_idc: Option<ChannelIdc>,
+    pub subsampling_type: Option<PixelFormat>,
+    pub subsampling_location: Option<ChromaSamplePosition>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PixelInformation {
-    pub plane_depths: Vec<u8>,
+    pub planes: Vec<PlanePixelInformation>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -606,7 +631,7 @@ fn parse_ispe(stream: &mut IStream) -> AvifResult<ItemProperty> {
 
 fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // Section 6.5.6.2 of ISO/IEC 23008-12.
-    let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
+    let (_version, px_flags) = stream.read_and_enforce_version_and_flags(0)?;
     // unsigned int (8) num_channels;
     let num_channels = stream.read_u8()? as usize;
     if num_channels == 0 || num_channels > MAX_PLANE_COUNT {
@@ -615,16 +640,72 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
         ));
     }
     let mut pixi = PixelInformation {
-        plane_depths: create_vec_exact(num_channels)?,
+        planes: create_vec_exact(num_channels)?,
     };
     for _ in 0..num_channels {
-        // unsigned int (8) bits_per_channel;
-        pixi.plane_depths.push(stream.read_u8()?);
-        if pixi.plane_depths.last().unwrap() != pixi.plane_depths.first().unwrap() {
+        pixi.planes.push(PlanePixelInformation {
+            depth: stream.read_u8()?, // unsigned int (8) bits_per_channel;
+            ..Default::default()
+        });
+        if pixi.planes.last().unwrap().depth != pixi.planes.first().unwrap().depth {
             return AvifError::unsupported_depth();
         }
     }
-    if !Image::is_supported_depth(*pixi.plane_depths.last().unwrap()) {
+    if px_flags & 1 != 0 {
+        // See ISO/IEC 23008-12 DAM 2.
+        for i in 0..num_channels {
+            pixi.planes[i].channel_idc = Some(ChannelIdc::from(stream.read_bits(3)?)); // unsigned int(3) channel_idc;
+            stream.skip_bits(1)?; // unsigned int(1) reserved = 0;
+            let component_format = stream.read_bits(2)?; // unsigned int(2) component_format;
+            if component_format != 0 {
+                // Only unsigned integer samples are supported. Float and complex types are not.
+                return AvifError::not_implemented();
+            }
+
+            let subsampling_flag = stream.read_bool()?; // unsigned int(1) subsampling_flag;
+            let channel_label_flag = stream.read_bool()?; // unsigned int(1) channel_label_flag;
+            if subsampling_flag {
+                // unsigned int(4) subsampling_type;
+                pixi.planes[i].subsampling_type = Some(match stream.read_bits(4)? {
+                    0 => PixelFormat::Yuv444,
+                    1 => PixelFormat::Yuv422,
+                    2 => PixelFormat::Yuv420,
+                    _ => return AvifError::not_implemented(),
+                });
+                // unsigned int(4) subsampling_location;
+                let subsampling_location = stream.read_bits(4)?;
+                let horizontal_position = match (
+                    pixi.planes[i].subsampling_type.unwrap(),
+                    subsampling_location,
+                ) {
+                    (PixelFormat::Yuv444, 0..5) => 0.0,
+                    (PixelFormat::Yuv422 | PixelFormat::Yuv420, 0 | 2 | 4) => 0.0,
+                    (PixelFormat::Yuv422 | PixelFormat::Yuv420, 1 | 3 | 5) => 0.5,
+                    _ => return AvifError::not_implemented(),
+                };
+                let vertical_position = match (
+                    pixi.planes[i].subsampling_type.unwrap(),
+                    subsampling_location,
+                ) {
+                    (PixelFormat::Yuv444 | PixelFormat::Yuv422, 0..5) => 0.0,
+                    (PixelFormat::Yuv420, 0 | 1) => 0.5,
+                    (PixelFormat::Yuv420, 2 | 3) => 0.0,
+                    (PixelFormat::Yuv420, 4 | 5) => 1.0,
+                    _ => return AvifError::not_implemented(),
+                };
+                pixi.planes[i].subsampling_location =
+                    Some(match (horizontal_position, vertical_position) {
+                        (0.0, 0.0) => ChromaSamplePosition::Colocated,
+                        (0.0, 0.5) => ChromaSamplePosition::Vertical,
+                        _ => ChromaSamplePosition::Unknown,
+                    });
+            }
+            if channel_label_flag {
+                stream.read_c_string()?; // utf8string channel_label;
+            }
+        }
+    }
+    if !Image::is_supported_depth(pixi.planes.last().unwrap().depth) {
         return AvifError::unsupported_depth();
     }
     Ok(ItemProperty::PixelInformation(pixi))

@@ -610,8 +610,8 @@ impl Decoder {
             self.gainmap.alt_clli = *clli;
         }
         if let Some(pixi) = tonemap_item.pixi() {
-            self.gainmap.alt_plane_count = pixi.plane_depths.len() as u8;
-            self.gainmap.alt_plane_depth = pixi.plane_depths[0];
+            self.gainmap.alt_plane_count = pixi.planes.len() as u8;
+            self.gainmap.alt_plane_depth = pixi.planes[0].depth;
         }
         // HEIC files created by Apple do not conform to these validation rules so skip them when
         // HEIC is enabled.
@@ -1411,7 +1411,7 @@ impl Decoder {
             // the codec config comes from). The depth from the pixi property should be used instead.
             if is_sample_transform {
                 if let Some(pixi) = find_property!(color_properties, PixelInformation) {
-                    self.image.depth = pixi.plane_depths[0];
+                    self.image.depth = pixi.planes[0].depth;
                 }
             }
 
