@@ -440,7 +440,7 @@ pub(crate) struct Grid {
 #[cfg(feature = "encoder")]
 impl Grid {
     pub(crate) fn is_last_column(&self, index: u32) -> bool {
-        (index + 1) % self.columns == 0
+        (index + 1).is_multiple_of(self.columns)
     }
 
     pub(crate) fn is_last_row(&self, index: u32) -> bool {

@@ -85,8 +85,8 @@ impl CropRect {
             return false;
         }
         match pixel_format {
-            PixelFormat::Yuv420 => self.x % 2 == 0 && self.y % 2 == 0,
-            PixelFormat::Yuv422 => self.x % 2 == 0,
+            PixelFormat::Yuv420 => self.x.is_multiple_of(2) && self.y.is_multiple_of(2),
+            PixelFormat::Yuv422 => self.x.is_multiple_of(2),
             _ => true,
         }
     }
