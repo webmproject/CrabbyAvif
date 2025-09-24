@@ -41,6 +41,22 @@ macro_rules! unorm_value16 {
     };
 }
 
+macro_rules! to_unorm8 {
+    ($bias_y: expr, $range_y: expr, $v: expr) => {
+        clamp_i32((0.5 + ($v * $range_y + $bias_y)).floor() as i32, 0, 255) as u8
+    };
+}
+
+macro_rules! to_unorm16 {
+    ($bias_y: expr, $range_y: expr, $max_channel: expr, $v: expr) => {
+        clamp_i32(
+            (0.5 + ($v * $range_y + $bias_y)).floor() as i32,
+            0,
+            $max_channel as i32,
+        ) as u16
+    };
+}
+
 // Copies GBR samples to YUV samples. Returns Ok(None) if not implemented.
 fn identity_yuv8_to_rgb8_full_range(
     image: &image::Image,
@@ -997,7 +1013,54 @@ pub(crate) fn rgb_gray_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> Avi
     Ok(())
 }
 
-pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> {
+fn rgb_pixel_to_yuv_pixel(
+    mode: Mode,
+    r: f32,
+    g: f32,
+    b: f32,
+    rgb_max_channel_f: f32,
+    range_y: f32,
+    range_uv: f32,
+) -> YUVBlock {
+    match mode {
+        Mode::YuvCoefficients(kr, kg, kb) => {
+            let y = (kr * r) + (kg * g) + (kb * b);
+            YUVBlock(
+                y,
+                (b - y) / (2.0 * (1.0 - kb)),
+                (r - y) / (2.0 * (1.0 - kr)),
+            )
+        }
+        Mode::Identity => {
+            // Formulas 41,42,43 from https://www.itu.int/rec/T-REC-H.273-201612-S.
+            YUVBlock(g, b, r)
+        }
+        Mode::YcgcoRe | Mode::YcgcoRo => {
+            // Formulas 58,59,60,61 from https://www.itu.int/rec/T-REC-H.273-202407-P.
+            let r = ((r * rgb_max_channel_f).clamp(0.0, rgb_max_channel_f) + 0.5).floor() as i32;
+            let g = ((g * rgb_max_channel_f).clamp(0.0, rgb_max_channel_f) + 0.5).floor() as i32;
+            let b = ((b * rgb_max_channel_f).clamp(0.0, rgb_max_channel_f) + 0.5).floor() as i32;
+            let co = r - b;
+            let t = b + (co >> 1);
+            let cg = g - t;
+            YUVBlock(
+                (t + (cg >> 1)) as f32 / range_y,
+                cg as f32 / range_uv,
+                co as f32 / range_uv,
+            )
+        }
+        Mode::Ycgco => {
+            // Formulas 44,45,46 from https://www.itu.int/rec/T-REC-H.273-201612-S.
+            YUVBlock(
+                0.5 * g + 0.25 * (r + b),
+                0.5 * g - 0.25 * (r + b),
+                0.5 * (r - b),
+            )
+        }
+    }
+}
+
+fn rgb_to_yuv_420(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> {
     let r_offset = rgb.format.r_offset();
     let g_offset = rgb.format.g_offset();
     let b_offset = rgb.format.b_offset();
@@ -1014,169 +1077,369 @@ pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResu
 
     for outer_j in (0..image.height).step_by(2) {
         let block_h = if (outer_j + 1) >= image.height { 1 } else { 2 };
+        let uv_j = outer_j >> 1;
+        let (dst_u16, dst_v16, dst_u, dst_v) = if image.depth > 8 {
+            (
+                image.row16_mut(Plane::U, uv_j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::V, uv_j).unwrap().as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        } else {
+            (
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                image.row_mut(Plane::U, uv_j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::V, uv_j).unwrap().as_mut_ptr(),
+            )
+        };
         for outer_i in (0..image.width).step_by(2) {
-            let mut yuv_block: [[YUVBlock; 3]; 3] = Default::default();
             let block_w = if (outer_i + 1) >= image.width { 1 } else { 2 };
+            let mut u_sum = 0.0;
+            let mut v_sum = 0.0;
             for block_j in 0..block_h as usize {
+                let j = outer_j + block_j as u32;
+                let (src16, src) = if rgb.depth > 8 {
+                    (rgb.row16(j).unwrap().as_ptr(), std::ptr::null())
+                } else {
+                    (std::ptr::null(), rgb.row(j).unwrap().as_ptr())
+                };
+                let (dst_y16, dst_y) = if image.depth > 8 {
+                    (
+                        image.row16_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                        std::ptr::null_mut(),
+                    )
+                } else {
+                    (
+                        std::ptr::null_mut(),
+                        image.row_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                    )
+                };
+
                 #[allow(clippy::needless_range_loop)]
                 for block_i in 0..block_w as usize {
-                    let j = outer_j + block_j as u32;
                     let i = outer_i as usize + block_i;
-
-                    let rgb_pixel = if rgb.depth == 8 {
-                        let src = rgb.row(j)?;
-                        [
-                            src[(i * rgb_channel_count) + r_offset] as f32 / rgb_max_channel_f,
-                            src[(i * rgb_channel_count) + g_offset] as f32 / rgb_max_channel_f,
-                            src[(i * rgb_channel_count) + b_offset] as f32 / rgb_max_channel_f,
-                        ]
-                    } else {
-                        let src = rgb.row16(j)?;
-                        [
-                            src[(i * rgb_channel_count) + r_offset] as f32 / rgb_max_channel_f,
-                            src[(i * rgb_channel_count) + g_offset] as f32 / rgb_max_channel_f,
-                            src[(i * rgb_channel_count) + b_offset] as f32 / rgb_max_channel_f,
-                        ]
+                    let rgb_pixel = unsafe {
+                        if rgb.depth > 8 {
+                            [
+                                *src16.add((i * rgb_channel_count) + r_offset) as f32
+                                    / rgb_max_channel_f,
+                                *src16.add((i * rgb_channel_count) + g_offset) as f32
+                                    / rgb_max_channel_f,
+                                *src16.add((i * rgb_channel_count) + b_offset) as f32
+                                    / rgb_max_channel_f,
+                            ]
+                        } else {
+                            [
+                                *src.add((i * rgb_channel_count) + r_offset) as f32 / 255.0,
+                                *src.add((i * rgb_channel_count) + g_offset) as f32 / 255.0,
+                                *src.add((i * rgb_channel_count) + b_offset) as f32 / 255.0,
+                            ]
+                        }
                     };
                     // TODO: b/410088660 - handle alpha multiply/unmultiply.
-                    yuv_block[block_i][block_j] = match mode {
-                        Mode::YuvCoefficients(kr, kg, kb) => {
-                            let y = (kr * rgb_pixel[0]) + (kg * rgb_pixel[1]) + (kb * rgb_pixel[2]);
-                            YUVBlock(
-                                y,
-                                (rgb_pixel[2] - y) / (2.0 * (1.0 - kb)),
-                                (rgb_pixel[0] - y) / (2.0 * (1.0 - kr)),
-                            )
-                        }
-                        Mode::Identity => {
-                            // Formulas 41,42,43 from https://www.itu.int/rec/T-REC-H.273-201612-S.
-                            YUVBlock(rgb_pixel[1], rgb_pixel[2], rgb_pixel[0])
-                        }
-                        Mode::YcgcoRe | Mode::YcgcoRo => {
-                            // Formulas 58,59,60,61 from https://www.itu.int/rec/T-REC-H.273-202407-P.
-                            let r = ((rgb_pixel[0] * rgb_max_channel_f)
-                                .clamp(0.0, rgb_max_channel_f)
-                                + 0.5)
-                                .floor() as i32;
-                            let g = ((rgb_pixel[1] * rgb_max_channel_f)
-                                .clamp(0.0, rgb_max_channel_f)
-                                + 0.5)
-                                .floor() as i32;
-                            let b = ((rgb_pixel[2] * rgb_max_channel_f)
-                                .clamp(0.0, rgb_max_channel_f)
-                                + 0.5)
-                                .floor() as i32;
-                            let co = r - b;
-                            let t = b + (co >> 1);
-                            let cg = g - t;
-                            YUVBlock(
-                                (t + (cg >> 1)) as f32 / range_y,
-                                cg as f32 / range_uv,
-                                co as f32 / range_uv,
-                            )
-                        }
-                        Mode::Ycgco => {
-                            // Formulas 44,45,46 from https://www.itu.int/rec/T-REC-H.273-201612-S.
-                            YUVBlock(
-                                0.5 * rgb_pixel[1] + 0.25 * (rgb_pixel[0] + rgb_pixel[2]),
-                                0.5 * rgb_pixel[1] - 0.25 * (rgb_pixel[0] + rgb_pixel[2]),
-                                0.5 * (rgb_pixel[0] - rgb_pixel[2]),
-                            )
-                        }
-                    };
-                    if image.depth == 8 {
-                        let dst_y = image.row_mut(Plane::Y, j)?;
-                        dst_y[i] = to_unorm(
-                            bias_y,
-                            range_y,
-                            yuv_max_channel,
-                            yuv_block[block_i][block_j].0,
-                        ) as u8;
-                        if image.yuv_format == PixelFormat::Yuv444 {
-                            let dst_u = image.row_mut(Plane::U, j)?;
-                            dst_u[i] = to_unorm(
-                                bias_uv,
-                                range_uv,
-                                yuv_max_channel,
-                                yuv_block[block_i][block_j].1,
-                            ) as u8;
-                            let dst_v = image.row_mut(Plane::V, j)?;
-                            dst_v[i] = to_unorm(
-                                bias_uv,
-                                range_uv,
-                                yuv_max_channel,
-                                yuv_block[block_i][block_j].2,
-                            ) as u8;
-                        }
-                    } else {
-                        let dst_y = image.row16_mut(Plane::Y, j)?;
-                        dst_y[i] = to_unorm(
-                            bias_y,
-                            range_y,
-                            yuv_max_channel,
-                            yuv_block[block_i][block_j].0,
-                        );
-                        if image.yuv_format == PixelFormat::Yuv444 {
-                            let dst_u = image.row16_mut(Plane::U, j)?;
-                            dst_u[i] = to_unorm(
-                                bias_uv,
-                                range_uv,
-                                yuv_max_channel,
-                                yuv_block[block_i][block_j].1,
-                            );
-                            let dst_v = image.row16_mut(Plane::V, j)?;
-                            dst_v[i] = to_unorm(
-                                bias_uv,
-                                range_uv,
-                                yuv_max_channel,
-                                yuv_block[block_i][block_j].2,
-                            );
+                    let yuv_pixel = rgb_pixel_to_yuv_pixel(
+                        mode,
+                        rgb_pixel[0],
+                        rgb_pixel[1],
+                        rgb_pixel[2],
+                        rgb_max_channel_f,
+                        range_y,
+                        range_uv,
+                    );
+                    unsafe {
+                        if image.depth > 8 {
+                            *dst_y16.add(i) =
+                                to_unorm16!(bias_y, range_y, yuv_max_channel, yuv_pixel.0);
+                        } else {
+                            *dst_y.add(i) = to_unorm8!(bias_y, range_y, yuv_pixel.0);
                         }
                     }
+                    u_sum += yuv_pixel.1;
+                    v_sum += yuv_pixel.2;
                 }
             }
 
             // Populate subsampled channels with average values of the 2x2 block.
-            match image.yuv_format {
-                PixelFormat::Yuv420 => {
-                    let (avg_u, avg_v) = average_2x2(&yuv_block, block_w * block_h);
-                    let uv_j = outer_j >> 1;
-                    let uv_i = outer_i as usize >> 1;
-                    if image.depth == 8 {
-                        let dst_u = image.row_mut(Plane::U, uv_j)?;
-                        dst_u[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_u) as u8;
-                        let dst_v = image.row_mut(Plane::V, uv_j)?;
-                        dst_v[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_v) as u8;
-                    } else {
-                        let dst_u = image.row16_mut(Plane::U, uv_j)?;
-                        dst_u[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_u);
-                        let dst_v = image.row16_mut(Plane::V, uv_j)?;
-                        dst_v[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_v);
-                    }
+            let avg_u = u_sum / (block_w * block_h) as f32;
+            let avg_v = v_sum / (block_w * block_h) as f32;
+            let uv_i = outer_i as usize >> 1;
+            unsafe {
+                if image.depth > 8 {
+                    *dst_u16.add(uv_i) = to_unorm16!(bias_uv, range_uv, yuv_max_channel, avg_u);
+                    *dst_v16.add(uv_i) = to_unorm16!(bias_uv, range_uv, yuv_max_channel, avg_v);
+                } else {
+                    *dst_u.add(uv_i) = to_unorm8!(bias_uv, range_uv, avg_u);
+                    *dst_v.add(uv_i) = to_unorm8!(bias_uv, range_uv, avg_v);
                 }
-                PixelFormat::Yuv422 => {
-                    for block_j in 0..block_h {
-                        let (avg_u, avg_v) = average_1x2(&yuv_block, block_j, block_w);
-                        let uv_j = outer_j + block_j;
-                        let uv_i = outer_i as usize >> 1;
-                        if image.depth == 8 {
-                            let dst_u = image.row_mut(Plane::U, uv_j)?;
-                            dst_u[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_u) as u8;
-                            let dst_v = image.row_mut(Plane::V, uv_j)?;
-                            dst_v[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_v) as u8;
-                        } else {
-                            let dst_u = image.row16_mut(Plane::U, uv_j)?;
-                            dst_u[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_u);
-                            let dst_v = image.row16_mut(Plane::V, uv_j)?;
-                            dst_v[uv_i] = to_unorm(bias_uv, range_uv, yuv_max_channel, avg_v);
-                        }
-                    }
-                }
-                _ => {}
             }
         }
     }
     Ok(())
+}
+
+fn rgb_to_yuv_422(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> {
+    let r_offset = rgb.format.r_offset();
+    let g_offset = rgb.format.g_offset();
+    let b_offset = rgb.format.b_offset();
+    let rgb_channel_count = rgb.channel_count() as usize;
+    let rgb_max_channel_f = rgb.max_channel_f();
+    let mode = (image as &image::Image).into();
+    let (bias_y, range_y) = bias_and_range_y(image);
+    let (bias_uv, range_uv) = if mode == Mode::Identity {
+        (bias_y, range_y)
+    } else {
+        bias_and_range_uv(image)
+    };
+    let yuv_max_channel = image.max_channel();
+
+    for j in 0..image.height {
+        let (src16, src) = if rgb.depth > 8 {
+            (rgb.row16(j).unwrap().as_ptr(), std::ptr::null())
+        } else {
+            (std::ptr::null(), rgb.row(j).unwrap().as_ptr())
+        };
+        let (dst_y16, dst_u16, dst_v16, dst_y, dst_u, dst_v) = if image.depth > 8 {
+            (
+                image.row16_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::U, j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::V, j).unwrap().as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        } else {
+            (
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                image.row_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::U, j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::V, j).unwrap().as_mut_ptr(),
+            )
+        };
+        for outer_i in (0..image.width).step_by(2) {
+            let mut u_sum = 0.0;
+            let mut v_sum = 0.0;
+
+            let block_w = if (outer_i + 1) >= image.width { 1 } else { 2 };
+            #[allow(clippy::needless_range_loop)]
+            for block_i in 0..block_w as usize {
+                let i = outer_i as usize + block_i;
+                let rgb_pixel = unsafe {
+                    if rgb.depth > 8 {
+                        [
+                            *src16.add((i * rgb_channel_count) + r_offset) as f32
+                                / rgb_max_channel_f,
+                            *src16.add((i * rgb_channel_count) + g_offset) as f32
+                                / rgb_max_channel_f,
+                            *src16.add((i * rgb_channel_count) + b_offset) as f32
+                                / rgb_max_channel_f,
+                        ]
+                    } else {
+                        [
+                            *src.add((i * rgb_channel_count) + r_offset) as f32 / 255.0,
+                            *src.add((i * rgb_channel_count) + g_offset) as f32 / 255.0,
+                            *src.add((i * rgb_channel_count) + b_offset) as f32 / 255.0,
+                        ]
+                    }
+                };
+                // TODO: b/410088660 - handle alpha multiply/unmultiply.
+                let yuv_pixel = rgb_pixel_to_yuv_pixel(
+                    mode,
+                    rgb_pixel[0],
+                    rgb_pixel[1],
+                    rgb_pixel[2],
+                    rgb_max_channel_f,
+                    range_y,
+                    range_uv,
+                );
+                unsafe {
+                    if image.depth > 8 {
+                        *dst_y16.add(i) =
+                            to_unorm16!(bias_y, range_y, yuv_max_channel, yuv_pixel.0);
+                    } else {
+                        *dst_y.add(i) = to_unorm8!(bias_y, range_y, yuv_pixel.0);
+                    }
+                }
+                u_sum += yuv_pixel.1;
+                v_sum += yuv_pixel.2;
+            }
+            // Populate subsampled channels with average values of the 1x2 block.
+            let avg_u = u_sum / block_w as f32;
+            let avg_v = v_sum / block_w as f32;
+            let uv_i = outer_i as usize >> 1;
+            unsafe {
+                if image.depth > 8 {
+                    *dst_u16.add(uv_i) = to_unorm16!(bias_uv, range_uv, yuv_max_channel, avg_u);
+                    *dst_v16.add(uv_i) = to_unorm16!(bias_uv, range_uv, yuv_max_channel, avg_v);
+                } else {
+                    *dst_u.add(uv_i) = to_unorm8!(bias_uv, range_uv, avg_u);
+                    *dst_v.add(uv_i) = to_unorm8!(bias_uv, range_uv, avg_v);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn rgb_to_yuv_444(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> {
+    let r_offset = rgb.format.r_offset();
+    let g_offset = rgb.format.g_offset();
+    let b_offset = rgb.format.b_offset();
+    let rgb_channel_count = rgb.channel_count() as usize;
+    let rgb_max_channel_f = rgb.max_channel_f();
+    let mode = (image as &image::Image).into();
+    let (bias_y, range_y) = bias_and_range_y(image);
+    let (bias_uv, range_uv) = if mode == Mode::Identity {
+        (bias_y, range_y)
+    } else {
+        bias_and_range_uv(image)
+    };
+    let yuv_max_channel = image.max_channel();
+    let width = image.width as usize;
+
+    for j in 0..image.height {
+        let (src16, src) = if rgb.depth > 8 {
+            (rgb.row16(j).unwrap().as_ptr(), std::ptr::null())
+        } else {
+            (std::ptr::null(), rgb.row(j).unwrap().as_ptr())
+        };
+        let (dst_y16, dst_u16, dst_v16, dst_y, dst_u, dst_v) = if image.depth > 8 {
+            (
+                image.row16_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::U, j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::V, j).unwrap().as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        } else {
+            (
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                image.row_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::U, j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::V, j).unwrap().as_mut_ptr(),
+            )
+        };
+        for i in 0..width {
+            let rgb_pixel = unsafe {
+                if rgb.depth > 8 {
+                    [
+                        *src16.add((i * rgb_channel_count) + r_offset) as f32 / rgb_max_channel_f,
+                        *src16.add((i * rgb_channel_count) + g_offset) as f32 / rgb_max_channel_f,
+                        *src16.add((i * rgb_channel_count) + b_offset) as f32 / rgb_max_channel_f,
+                    ]
+                } else {
+                    [
+                        *src.add((i * rgb_channel_count) + r_offset) as f32 / 255.0,
+                        *src.add((i * rgb_channel_count) + g_offset) as f32 / 255.0,
+                        *src.add((i * rgb_channel_count) + b_offset) as f32 / 255.0,
+                    ]
+                }
+            };
+            // TODO: b/410088660 - handle alpha multiply/unmultiply.
+            let yuv_pixel = rgb_pixel_to_yuv_pixel(
+                mode,
+                rgb_pixel[0],
+                rgb_pixel[1],
+                rgb_pixel[2],
+                rgb_max_channel_f,
+                range_y,
+                range_uv,
+            );
+            unsafe {
+                if image.depth > 8 {
+                    *dst_y16.add(i) = to_unorm16!(bias_y, range_y, yuv_max_channel, yuv_pixel.0);
+                    *dst_u16.add(i) = to_unorm16!(bias_uv, range_uv, yuv_max_channel, yuv_pixel.1);
+                    *dst_v16.add(i) = to_unorm16!(bias_uv, range_uv, yuv_max_channel, yuv_pixel.2);
+                } else {
+                    *dst_y.add(i) = to_unorm8!(bias_y, range_y, yuv_pixel.0);
+                    *dst_u.add(i) = to_unorm8!(bias_uv, range_uv, yuv_pixel.1);
+                    *dst_v.add(i) = to_unorm8!(bias_uv, range_uv, yuv_pixel.2);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn rgb_to_yuv_400(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> {
+    let r_offset = rgb.format.r_offset();
+    let g_offset = rgb.format.g_offset();
+    let b_offset = rgb.format.b_offset();
+    let rgb_channel_count = rgb.channel_count() as usize;
+    let rgb_max_channel_f = rgb.max_channel_f();
+    let mode = (image as &image::Image).into();
+    let (bias_y, range_y) = bias_and_range_y(image);
+    let yuv_max_channel = image.max_channel();
+    let width = image.width as usize;
+
+    for j in 0..image.height {
+        let (src16, src) = if rgb.depth > 8 {
+            (rgb.row16(j).unwrap().as_ptr(), std::ptr::null())
+        } else {
+            (std::ptr::null(), rgb.row(j).unwrap().as_ptr())
+        };
+        let (dst_y16, dst_y) = if image.depth > 8 {
+            (
+                image.row16_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                std::ptr::null_mut(),
+            )
+        } else {
+            (
+                std::ptr::null_mut(),
+                image.row_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+            )
+        };
+        for i in 0..width {
+            let rgb_pixel = unsafe {
+                if rgb.depth > 8 {
+                    [
+                        *src16.add((i * rgb_channel_count) + r_offset) as f32 / rgb_max_channel_f,
+                        *src16.add((i * rgb_channel_count) + g_offset) as f32 / rgb_max_channel_f,
+                        *src16.add((i * rgb_channel_count) + b_offset) as f32 / rgb_max_channel_f,
+                    ]
+                } else {
+                    [
+                        *src.add((i * rgb_channel_count) + r_offset) as f32 / 255.0,
+                        *src.add((i * rgb_channel_count) + g_offset) as f32 / 255.0,
+                        *src.add((i * rgb_channel_count) + b_offset) as f32 / 255.0,
+                    ]
+                }
+            };
+            // TODO: b/410088660 - handle alpha multiply/unmultiply.
+            let yuv_pixel = rgb_pixel_to_yuv_pixel(
+                mode,
+                rgb_pixel[0],
+                rgb_pixel[1],
+                rgb_pixel[2],
+                rgb_max_channel_f,
+                range_y,
+                0.0,
+            );
+            unsafe {
+                if image.depth > 8 {
+                    *dst_y16.add(i) = to_unorm16!(bias_y, range_y, yuv_max_channel, yuv_pixel.0);
+                } else {
+                    *dst_y.add(i) = to_unorm8!(bias_y, range_y, yuv_pixel.0);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> {
+    match image.yuv_format {
+        PixelFormat::Yuv420 => rgb_to_yuv_420(rgb, image),
+        PixelFormat::Yuv422 => rgb_to_yuv_422(rgb, image),
+        PixelFormat::Yuv444 => rgb_to_yuv_444(rgb, image),
+        PixelFormat::Yuv400 => rgb_to_yuv_400(rgb, image),
+        _ => Err(AvifError::NotImplemented),
+    }
 }
 
 // TODO - b/410088660: this can be a macro since it's per pixel?
@@ -1186,22 +1449,6 @@ fn to_unorm(bias_y: f32, range_y: f32, max_channel: u16, v: f32) -> u16 {
         0,
         max_channel as i32,
     ) as u16
-}
-
-fn average_2x2(yuv_block: &[[YUVBlock; 3]; 3], sample_count: u32) -> (f32, f32) {
-    let sum_u: f32 = yuv_block.iter().flatten().map(|pixel| pixel.1).sum();
-    let sum_v: f32 = yuv_block.iter().flatten().map(|pixel| pixel.2).sum();
-    (sum_u / sample_count as f32, sum_v / sample_count as f32)
-}
-
-fn average_1x2(yuv_block: &[[YUVBlock; 3]; 3], block_j: u32, block_w: u32) -> (f32, f32) {
-    let mut sum_u = 0.0;
-    let mut sum_v = 0.0;
-    for row in yuv_block.iter().take(block_w as usize) {
-        sum_u += row[block_j as usize].1;
-        sum_v += row[block_j as usize].2;
-    }
-    (sum_u / block_w as f32, sum_v / block_w as f32)
 }
 
 #[cfg(test)]
