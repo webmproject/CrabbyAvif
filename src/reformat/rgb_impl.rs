@@ -165,7 +165,12 @@ fn yuv8_to_rgb8_color(
         let v_row = image.row(Plane::V, uv_j).unwrap_or(&u_row[1..]);
         let dst = rgb.row_mut(j)?;
         for i in 0..image.width as usize {
-            let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
+            let uv_i = if cfg!(feature = "android_mediacodec") {
+                (i >> chroma_shift.0) << chroma_shift.1
+            } else {
+                // chroma_shift.1 is always 0 in this case.
+                i >> chroma_shift.0
+            };
             let y = unsafe { *table_y.get_unchecked(*y_row.get_unchecked(i) as usize) };
             let cb = unsafe { *table_uv.get_unchecked(*u_row.get_unchecked(uv_i) as usize) };
             let cr = unsafe { *table_uv.get_unchecked(*v_row.get_unchecked(uv_i) as usize) };
@@ -221,7 +226,12 @@ fn yuv16_to_rgb16_color(
         let v_row = image.row16(Plane::V, uv_j).unwrap_or(&u_row[1..]);
         let dst = rgb.row16_mut(j)?;
         for i in 0..image.width as usize {
-            let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
+            let uv_i = if cfg!(feature = "android_mediacodec") {
+                (i >> chroma_shift.0) << chroma_shift.1
+            } else {
+                // chroma_shift.1 is always 0 in this case.
+                i >> chroma_shift.0
+            };
             let y = unorm_value16!(y_row, i, yuv_max_channel, table_y);
             let cb = unorm_value16!(u_row, uv_i, yuv_max_channel, table_uv);
             let cr = unorm_value16!(v_row, uv_i, yuv_max_channel, table_uv);
@@ -273,7 +283,12 @@ fn yuv16_to_rgb8_color(
         let v_row = image.row16(Plane::V, uv_j).unwrap_or(&u_row[1..]);
         let dst = rgb.row_mut(j)?;
         for i in 0..image.width as usize {
-            let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
+            let uv_i = if cfg!(feature = "android_mediacodec") {
+                (i >> chroma_shift.0) << chroma_shift.1
+            } else {
+                // chroma_shift.1 is always 0 in this case.
+                i >> chroma_shift.0
+            };
             let y = table_y[min(y_row[i], yuv_max_channel) as usize];
             let cb = table_uv[min(u_row[uv_i], yuv_max_channel) as usize];
             let cr = table_uv[min(v_row[uv_i], yuv_max_channel) as usize];
@@ -328,7 +343,12 @@ fn yuv8_to_rgb16_color(
         let v_row = image.row(Plane::V, uv_j).unwrap_or_else(|_| &u_row[1..]);
         let dst = rgb.row16_mut(j)?;
         for i in 0..image.width as usize {
-            let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
+            let uv_i = if cfg!(feature = "android_mediacodec") {
+                (i >> chroma_shift.0) << chroma_shift.1
+            } else {
+                // chroma_shift.1 is always 0 in this case.
+                i >> chroma_shift.0
+            };
             let y = unsafe { *table_y.get_unchecked(*y_row.get_unchecked(i) as usize) };
             let cb = unsafe { *table_uv.get_unchecked(*u_row.get_unchecked(uv_i) as usize) };
             let cr = unsafe { *table_uv.get_unchecked(*v_row.get_unchecked(uv_i) as usize) };
@@ -495,6 +515,10 @@ pub(crate) fn yuv_to_rgb_fast(
         },
         Mode::YuvCoefficients(kr, kg, kb) => {
             let has_color = image.yuv_format != PixelFormat::Yuv400;
+            if !cfg!(feature = "android_mediacodec") {
+                // In this case, P010 and NV12 formats are not supported.
+                assert_eq!(image.yuv_format.chroma_shift_x().1, 0);
+            }
             Some(match (image.depth == 8, rgb.depth == 8, has_color) {
                 (true, true, true) => yuv8_to_rgb8_color(image, rgb, kr, kg, kb),
                 (false, false, true) => yuv16_to_rgb16_color(image, rgb, kr, kg, kb),
