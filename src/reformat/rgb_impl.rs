@@ -1417,6 +1417,7 @@ fn rgb_to_yuv_422(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
         bias_and_range_uv(image)
     };
     let yuv_max_channel = image.max_channel();
+    let width = image.width as usize;
 
     for j in 0..image.height {
         let (src16, src) = if rgb.depth > 8 {
@@ -1443,64 +1444,84 @@ fn rgb_to_yuv_422(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
                 image.row_mut(Plane::V, j).unwrap().as_mut_ptr(),
             )
         };
-        for outer_i in (0..image.width).step_by(2) {
-            let mut u_sum = 0.0;
-            let mut v_sum = 0.0;
-
-            let block_w = if (outer_i + 1) >= image.width { 1 } else { 2 };
-            #[allow(clippy::needless_range_loop)]
-            for block_i in 0..block_w as usize {
-                let i = outer_i as usize + block_i;
-                let rgb_pixel = unsafe {
-                    if rgb.depth > 8 {
-                        [
-                            *src16.add((i * rgb_channel_count) + r_offset) as f32
-                                / rgb_max_channel_f,
-                            *src16.add((i * rgb_channel_count) + g_offset) as f32
-                                / rgb_max_channel_f,
-                            *src16.add((i * rgb_channel_count) + b_offset) as f32
-                                / rgb_max_channel_f,
-                        ]
-                    } else {
-                        [
-                            *src.add((i * rgb_channel_count) + r_offset) as f32 / 255.0,
-                            *src.add((i * rgb_channel_count) + g_offset) as f32 / 255.0,
-                            *src.add((i * rgb_channel_count) + b_offset) as f32 / 255.0,
-                        ]
-                    }
-                };
-                // TODO: b/410088660 - handle alpha multiply/unmultiply.
-                let yuv_pixel = rgb_pixel_to_yuv_pixel(
-                    mode,
-                    rgb_pixel[0],
-                    rgb_pixel[1],
-                    rgb_pixel[2],
+        for i in (0..width - 1).step_by(2) {
+            let yuv_pixel = [
+                yuv_pixel!(
+                    rgb,
+                    src16,
+                    src,
+                    i,
+                    rgb_channel_count,
+                    r_offset,
+                    g_offset,
+                    b_offset,
                     rgb_max_channel_f,
+                    mode,
                     range_y,
-                    range_uv,
-                );
-                unsafe {
-                    if image.depth > 8 {
-                        *dst_y16.add(i) =
-                            to_unorm16!(bias_y, range_y, yuv_max_channel, yuv_pixel.0);
-                    } else {
-                        *dst_y.add(i) = to_unorm8!(bias_y, range_y, yuv_pixel.0);
-                    }
-                }
-                u_sum += yuv_pixel.1;
-                v_sum += yuv_pixel.2;
-            }
-            // Populate subsampled channels with average values of the 1x2 block.
-            let avg_u = u_sum / block_w as f32;
-            let avg_v = v_sum / block_w as f32;
-            let uv_i = outer_i as usize >> 1;
+                    range_uv
+                ),
+                yuv_pixel!(
+                    rgb,
+                    src16,
+                    src,
+                    i + 1,
+                    rgb_channel_count,
+                    r_offset,
+                    g_offset,
+                    b_offset,
+                    rgb_max_channel_f,
+                    mode,
+                    range_y,
+                    range_uv
+                ),
+            ];
+            let avg_u = (yuv_pixel[0].1 + yuv_pixel[1].1) / 2.0;
+            let avg_v = (yuv_pixel[0].2 + yuv_pixel[1].2) / 2.0;
+            let uv_i = i >> 1;
             unsafe {
                 if image.depth > 8 {
+                    *dst_y16.add(i) = to_unorm16!(bias_y, range_y, yuv_max_channel, yuv_pixel[0].0);
+                    *dst_y16.add(i + 1) =
+                        to_unorm16!(bias_y, range_y, yuv_max_channel, yuv_pixel[1].0);
                     *dst_u16.add(uv_i) = to_unorm16!(bias_uv, range_uv, yuv_max_channel, avg_u);
                     *dst_v16.add(uv_i) = to_unorm16!(bias_uv, range_uv, yuv_max_channel, avg_v);
                 } else {
+                    *dst_y.add(i) = to_unorm8!(bias_y, range_y, yuv_pixel[0].0);
+                    *dst_y.add(i + 1) = to_unorm8!(bias_y, range_y, yuv_pixel[1].0);
                     *dst_u.add(uv_i) = to_unorm8!(bias_uv, range_uv, avg_u);
                     *dst_v.add(uv_i) = to_unorm8!(bias_uv, range_uv, avg_v);
+                }
+            }
+        }
+        // Last column.
+        if !width.is_multiple_of(2) {
+            let i = width - 1;
+            let yuv_pixel = yuv_pixel!(
+                rgb,
+                src16,
+                src,
+                i,
+                rgb_channel_count,
+                r_offset,
+                g_offset,
+                b_offset,
+                rgb_max_channel_f,
+                mode,
+                range_y,
+                range_uv
+            );
+            let uv_i = i >> 1;
+            unsafe {
+                if image.depth > 8 {
+                    *dst_y16.add(i) = to_unorm16!(bias_y, range_y, yuv_max_channel, yuv_pixel.0);
+                    *dst_u16.add(uv_i) =
+                        to_unorm16!(bias_uv, range_uv, yuv_max_channel, yuv_pixel.1);
+                    *dst_v16.add(uv_i) =
+                        to_unorm16!(bias_uv, range_uv, yuv_max_channel, yuv_pixel.2);
+                } else {
+                    *dst_y.add(i) = to_unorm8!(bias_y, range_y, yuv_pixel.0);
+                    *dst_u.add(uv_i) = to_unorm8!(bias_uv, range_uv, yuv_pixel.1);
+                    *dst_v.add(uv_i) = to_unorm8!(bias_uv, range_uv, yuv_pixel.2);
                 }
             }
         }
