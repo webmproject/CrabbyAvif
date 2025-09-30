@@ -1550,30 +1550,19 @@ fn rgb_to_yuv_444(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
             )
         };
         for i in 0..width {
-            let rgb_pixel = unsafe {
-                if rgb.depth > 8 {
-                    [
-                        *src16.add((i * rgb_channel_count) + r_offset) as f32 / rgb_max_channel_f,
-                        *src16.add((i * rgb_channel_count) + g_offset) as f32 / rgb_max_channel_f,
-                        *src16.add((i * rgb_channel_count) + b_offset) as f32 / rgb_max_channel_f,
-                    ]
-                } else {
-                    [
-                        *src.add((i * rgb_channel_count) + r_offset) as f32 / 255.0,
-                        *src.add((i * rgb_channel_count) + g_offset) as f32 / 255.0,
-                        *src.add((i * rgb_channel_count) + b_offset) as f32 / 255.0,
-                    ]
-                }
-            };
-            // TODO: b/410088660 - handle alpha multiply/unmultiply.
-            let yuv_pixel = rgb_pixel_to_yuv_pixel(
-                mode,
-                rgb_pixel[0],
-                rgb_pixel[1],
-                rgb_pixel[2],
+            let yuv_pixel = yuv_pixel!(
+                rgb,
+                src16,
+                src,
+                i,
+                rgb_channel_count,
+                r_offset,
+                g_offset,
+                b_offset,
                 rgb_max_channel_f,
+                mode,
                 range_y,
-                range_uv,
+                range_uv
             );
             unsafe {
                 if image.depth > 8 {
@@ -1620,30 +1609,19 @@ fn rgb_to_yuv_400(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
             )
         };
         for i in 0..width {
-            let rgb_pixel = unsafe {
-                if rgb.depth > 8 {
-                    [
-                        *src16.add((i * rgb_channel_count) + r_offset) as f32 / rgb_max_channel_f,
-                        *src16.add((i * rgb_channel_count) + g_offset) as f32 / rgb_max_channel_f,
-                        *src16.add((i * rgb_channel_count) + b_offset) as f32 / rgb_max_channel_f,
-                    ]
-                } else {
-                    [
-                        *src.add((i * rgb_channel_count) + r_offset) as f32 / 255.0,
-                        *src.add((i * rgb_channel_count) + g_offset) as f32 / 255.0,
-                        *src.add((i * rgb_channel_count) + b_offset) as f32 / 255.0,
-                    ]
-                }
-            };
-            // TODO: b/410088660 - handle alpha multiply/unmultiply.
-            let yuv_pixel = rgb_pixel_to_yuv_pixel(
-                mode,
-                rgb_pixel[0],
-                rgb_pixel[1],
-                rgb_pixel[2],
+            let yuv_pixel = yuv_pixel!(
+                rgb,
+                src16,
+                src,
+                i,
+                rgb_channel_count,
+                r_offset,
+                g_offset,
+                b_offset,
                 rgb_max_channel_f,
+                mode,
                 range_y,
-                0.0,
+                0.0
             );
             unsafe {
                 if image.depth > 8 {
