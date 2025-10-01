@@ -686,6 +686,7 @@ mod tests {
                 continue;
             }
             let plane_width = image.width(plane);
+            #[allow(clippy::needless_range_loop)]
             for y in 0..image.height(plane) {
                 let row16 = image.row16_mut(plane, y as u32)?;
                 let dst = &mut row16[..plane_width];
