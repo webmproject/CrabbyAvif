@@ -46,6 +46,12 @@ pub struct avifEncoder {
     pub ioStats: crate::decoder::IOStats,
     pub diag: avifDiagnostics,
     pub qualityGainMap: i32,
+    /// Used when encoding an image sequence. Specified in seconds since midnight, Jan. 1, 1970 UTC
+    /// (the Unix epoch) If set to 0 (the default), now() is used.
+    pub creationTime: u64,
+    /// Used when encoding an image sequence. Specified in seconds since midnight, Jan. 1, 1970 UTC
+    /// (the Unix epoch) If set to 0 (the default), now() is used.
+    pub modificationTime: u64,
     rust_encoder: Box<Encoder>,
     rust_encoder_initialized: bool,
     codec_specific_options: Box<CodecSpecificOptions>,
@@ -76,6 +82,8 @@ impl Default for avifEncoder {
             diag: Default::default(),
             qualityGainMap: AVIF_QUALITY_DEFAULT,
             rust_encoder: Default::default(),
+            creationTime: 0,
+            modificationTime: 0,
             rust_encoder_initialized: false,
             codec_specific_options: Default::default(),
         }
@@ -130,6 +138,16 @@ impl From<&avifEncoder> for Settings {
             extra_layer_count: encoder.extraLayerCount,
             recipe: Recipe::None,
             write_extended_pixi: false,
+            creation_time: if encoder.creationTime == 0 {
+                None
+            } else {
+                Some(encoder.creationTime)
+            },
+            modification_time: if encoder.modificationTime == 0 {
+                None
+            } else {
+                Some(encoder.modificationTime)
+            },
             mutable: encoder.into(),
         }
     }

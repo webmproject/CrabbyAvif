@@ -144,6 +144,8 @@ pub struct Settings {
     pub extra_layer_count: u32,
     pub recipe: Recipe,
     pub write_extended_pixi: bool,
+    pub creation_time: Option<u64>,
+    pub modification_time: Option<u64>,
     pub mutable: MutableSettings,
 }
 
@@ -159,6 +161,8 @@ impl Default for Settings {
             extra_layer_count: 0,
             recipe: Recipe::None,
             write_extended_pixi: false,
+            creation_time: None,
+            modification_time: None,
             mutable: Default::default(),
         }
     }
@@ -725,7 +729,11 @@ impl Encoder {
 
         self.write_ftyp(&mut stream)?;
         self.write_meta(&mut stream)?;
-        self.write_moov(&mut stream)?;
+        self.write_moov(
+            &mut stream,
+            self.settings.creation_time,
+            self.settings.modification_time,
+        )?;
         self.write_mdat(&mut stream)?;
         Ok(stream.data)
     }

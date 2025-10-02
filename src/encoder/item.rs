@@ -481,13 +481,14 @@ impl Item {
         stream: &mut OStream,
         image_metadata: &Image,
         duration: u64,
-        timestamp: u64,
+        creation_time: u64,
+        modification_time: u64,
     ) -> AvifResult<()> {
         stream.start_full_box("tkhd", (1, 1))?;
         // unsigned int(64) creation_time;
-        stream.write_u64(timestamp)?;
+        stream.write_u64(creation_time)?;
         // unsigned int(64) modification_time;
-        stream.write_u64(timestamp)?;
+        stream.write_u64(modification_time)?;
         // unsigned int(32) track_ID;
         stream.write_u32(self.id as u32)?;
         // const unsigned int(32) reserved = 0;
