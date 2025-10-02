@@ -654,6 +654,15 @@ impl Encoder {
         stream.finish_box()
     }
 
+    fn convert_unix_epoch_to_iso_bmff_epoch(value: u64) -> u64 {
+        // Unix epoch is seconds since midnight, Jan. 1, 1970 UTC.
+        // ISO BMFF epoch is seconds since midnight, Jan. 1 1904 UTC.
+        // There were 17 leap years in between 1904 (inclusive) and 1970 (exclusive). So the
+        // conversion formula would be:
+        const EPOCH_OFFSET: u64 = ((1970 - 1904) * 365 + 17) * 24 * 60 * 60; // 2082844800
+        checked_add!(value, EPOCH_OFFSET).unwrap_or(0)
+    }
+
     pub(crate) fn write_moov(
         &mut self,
         stream: &mut OStream,
@@ -668,13 +677,15 @@ impl Encoder {
             .iter()
             .try_fold(0u64, |acc, &x| acc.checked_add(x))
             .ok_or(AvifError::UnknownError("".into()))?;
-        let creation_time: u64 = creation_time.unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-        });
-        let modification_time: u64 = modification_time.unwrap_or(creation_time);
+        let creation_time =
+            Self::convert_unix_epoch_to_iso_bmff_epoch(creation_time.unwrap_or_else(|| {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            }));
+        let modification_time =
+            Self::convert_unix_epoch_to_iso_bmff_epoch(modification_time.unwrap_or(creation_time));
         let total_duration_in_timescales = if self.settings.repetition_count.is_infinite() {
             u64::MAX
         } else {
