@@ -1256,7 +1256,7 @@ fn rgb_to_yuv_420(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
             }
         }
         // Last column.
-        if !width.is_multiple_of(2) {
+        if width % 2 != 0 {
             let i = width - 1;
             let yuv_pixel = [
                 yuv_pixel!(
@@ -1308,7 +1308,7 @@ fn rgb_to_yuv_420(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
         }
     }
     // Last row.
-    if !image.height.is_multiple_of(2) {
+    if image.height % 2 != 0 {
         let j = image.height - 1;
         let uv_j = j >> 1;
         let (dst_y16, dst_u16, dst_v16, dst_y, dst_u, dst_v) = if image.depth > 8 {
@@ -1494,7 +1494,7 @@ fn rgb_to_yuv_422(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
             }
         }
         // Last column.
-        if !width.is_multiple_of(2) {
+        if width % 2 != 0 {
             let i = width - 1;
             let yuv_pixel = yuv_pixel!(
                 rgb,

@@ -78,7 +78,7 @@ clamp_function!(clamp_i32, i32);
 macro_rules! round2_function {
     ($func:ident, $type:ty) => {
         pub(crate) fn $func(value: $type) -> $type {
-            if value.is_multiple_of(2) || value == <$type>::MAX {
+            if value % 2 == 0 || value == <$type>::MAX {
                 value
             } else {
                 value + 1
@@ -256,9 +256,9 @@ pub(crate) fn validate_grid_image_dimensions(image: &Image, grid: &Grid) -> Avif
     // wild which do not conform to this constraint.
     if !cfg!(feature = "heic")
         && (((image.yuv_format == PixelFormat::Yuv420 || image.yuv_format == PixelFormat::Yuv422)
-            && (!grid.width.is_multiple_of(2) || !image.width.is_multiple_of(2)))
+            && (grid.width % 2 != 0 || image.width % 2 != 0))
             || (image.yuv_format == PixelFormat::Yuv420
-                && (!grid.height.is_multiple_of(2) || !image.height.is_multiple_of(2))))
+                && (grid.height % 2 != 0 || image.height % 2 != 0)))
     {
         return AvifError::invalid_image_grid(format!(
             "Grid image width ({}) or height ({}) or tile width ({}) or height ({}) shall be \
