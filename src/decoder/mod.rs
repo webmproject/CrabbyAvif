@@ -734,8 +734,7 @@ impl Decoder {
         if self.tiles[decoding_item.usize()].is_empty() {
             return Ok(());
         }
-        let mut search_size = 64;
-        while search_size < 4096 {
+        for search_size in (64..4096).step_by(64) {
             let tile_index = 0;
             self.prepare_sample(
                 /*image_index=*/ 0,
@@ -761,7 +760,6 @@ impl Decoder {
                 self.image.yuv_range = sequence_header.yuv_range;
                 break;
             }
-            search_size += 64;
         }
         Ok(())
     }

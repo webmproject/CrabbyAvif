@@ -17,6 +17,8 @@
 // Clippy flags this as a false positive for some of the uses in this library. Disable this clippy
 // warning.
 #![allow(clippy::cast_slice_from_raw_parts)]
+// This is a new feature which became stable in Feb 2025. Older compilers cannot use it.
+#![allow(clippy::manual_is_multiple_of)]
 
 #[macro_use]
 mod internal_utils;
