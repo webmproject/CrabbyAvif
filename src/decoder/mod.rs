@@ -1085,6 +1085,19 @@ impl Decoder {
                     .input
                     .samples
                     .len() as u32;
+                // For image sequences, ensure that all the DecodingItems have the same number of
+                // samples. This check ensures that the image_count field set in the above line is
+                // correct.
+                if self.image.image_sequence_track_present
+                    && !self.tiles.iter().all(|tiles| {
+                        tiles.is_empty() || tiles[0].input.samples.len() as u32 == self.image_count
+                    })
+                {
+                    return AvifError::bmff_parse_failed(
+                        "not all items have the same number of samples",
+                    );
+                }
+
                 self.timescale = color_track.media_timescale as u64;
                 self.duration_in_timescales = color_track.media_duration;
                 if self.timescale != 0 {
