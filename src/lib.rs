@@ -55,6 +55,16 @@ impl std::hash::BuildHasher for NonRandomHasherState {
 pub type HashMap<K, V> = std::collections::HashMap<K, V, NonRandomHasherState>;
 pub type HashSet<K> = std::collections::HashSet<K, NonRandomHasherState>;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum CodecChoice {
+    #[default]
+    Auto, // Uses the first available codec in the following decreasing order of preference:
+    Aom,        // AVIF (AV1-HEIF) encoder.
+    MediaCodec, // AVIF (AV1-HEIF) and HEIC (HEVC-HEIF) decoder on Android.
+    Dav1d,      // AVIF (AV1-HEIF) decoder.
+    Libgav1,    // AVIF (AV1-HEIF) decoder.
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum HeaderFormat {
@@ -554,10 +564,15 @@ impl RepetitionCount {
 }
 
 pub fn codec_versions() -> String {
-    let versions = &[
-        decoder::CodecChoice::versions(),
+    let versions: &[String] = &[
         #[cfg(feature = "aom")]
         codecs::aom::Aom::version(),
+        #[cfg(feature = "android_mediacodec")]
+        "android_mediacodec".into(),
+        #[cfg(feature = "dav1d")]
+        codecs::dav1d::Dav1d::version(),
+        #[cfg(feature = "libgav1")]
+        codecs::libgav1::Libgav1::version(),
     ];
     versions.join(", ")
 }

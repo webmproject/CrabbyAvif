@@ -24,13 +24,13 @@ pub mod android_mediacodec;
 #[cfg(feature = "aom")]
 pub mod aom;
 
-use crate::decoder::CodecChoice;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::parser::mp4box::CodecConfiguration;
 use crate::AndroidMediaCodecOutputColorFormat;
 use crate::AvifResult;
 use crate::Category;
+use crate::CodecChoice;
 
 #[cfg(feature = "encoder")]
 use crate::encoder::*;

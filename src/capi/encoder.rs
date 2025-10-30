@@ -125,6 +125,12 @@ impl From<&avifEncoder> for MutableSettings {
 impl From<&avifEncoder> for Settings {
     fn from(encoder: &avifEncoder) -> Self {
         Self {
+            codec_choice: match encoder.codecChoice {
+                avifCodecChoice::Auto => CodecChoice::Auto,
+                avifCodecChoice::Aom => CodecChoice::Aom,
+                // Silently treat all other choices the same as Auto.
+                _ => CodecChoice::Auto,
+            },
             threads: encoder.maxThreads as u32,
             speed: if encoder.speed >= 0 && encoder.speed <= 10 {
                 Some(encoder.speed as u32)

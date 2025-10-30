@@ -133,8 +133,26 @@ pub enum Recipe {
     BitDepthExtension8b8b,
 }
 
+impl CodecChoice {
+    fn get_encoder_codec(&self, is_avif: bool) -> Option<Codec> {
+        match self {
+            CodecChoice::Auto | CodecChoice::Aom => {
+                if !is_avif {
+                    return None;
+                }
+                #[cfg(feature = "aom")]
+                return Some(Box::<Aom>::default());
+                #[cfg(not(feature = "aom"))]
+                return None;
+            }
+            CodecChoice::Dav1d | CodecChoice::Libgav1 | CodecChoice::MediaCodec => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Settings {
+    pub codec_choice: CodecChoice,
     pub threads: u32,
     pub speed: Option<u32>,
     pub header_format: HeaderFormat,
@@ -152,6 +170,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
+            codec_choice: CodecChoice::default(),
             threads: 1,
             speed: None,
             header_format: HeaderFormat::default(),
@@ -292,8 +311,14 @@ impl Encoder {
                 dimg_from_id: if cell_count > 1 { Some(top_level_item_id) } else { None },
                 hidden_image: hidden || cell_count > 1,
                 extra_layer_count: self.settings.extra_layer_count,
-                #[cfg(feature = "aom")]
-                codec: Some(Box::<Aom>::default()),
+                codec: match self
+                    .settings
+                    .codec_choice
+                    .get_encoder_codec(/*is_avif=*/ true)
+                {
+                    None => return AvifError::no_codec_available(),
+                    Some(codec) => Some(codec),
+                },
                 ..Default::default()
             };
             if cell_count == 1 {

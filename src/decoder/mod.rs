@@ -65,24 +65,15 @@ impl dyn IO {
 pub type GenericIO = Box<dyn IO>;
 pub(crate) type Codec = Box<dyn crate::codecs::Decoder>;
 
-#[derive(Debug, Default, PartialEq)]
-pub enum CodecChoice {
-    #[default]
-    Auto,
-    Dav1d,
-    Libgav1,
-    MediaCodec,
-}
-
 impl CodecChoice {
-    fn get_codec(&self, is_avif: bool) -> Option<Codec> {
+    fn get_decoder_codec(&self, is_avif: bool) -> Option<Codec> {
         match self {
-            CodecChoice::Auto => {
-                // Preferred order of codecs in Auto mode: Android MediaCodec, Dav1d, Libgav1.
-                CodecChoice::MediaCodec
-                    .get_codec(is_avif)
-                    .or_else(|| CodecChoice::Dav1d.get_codec(is_avif))
-                    .or_else(|| CodecChoice::Libgav1.get_codec(is_avif))
+            CodecChoice::Auto => CodecChoice::MediaCodec
+                .get_decoder_codec(is_avif)
+                .or_else(|| CodecChoice::Dav1d.get_decoder_codec(is_avif))
+                .or_else(|| CodecChoice::Libgav1.get_decoder_codec(is_avif)),
+            CodecChoice::Aom => {
+                None // Not used as a decoder.
             }
             CodecChoice::Dav1d => {
                 if !is_avif {
@@ -109,16 +100,6 @@ impl CodecChoice {
                 return None;
             }
         }
-    }
-
-    #[allow(unused_mut)]
-    pub(crate) fn versions() -> String {
-        let mut versions: Vec<String> = vec![];
-        #[cfg(feature = "dav1d")]
-        {
-            versions.push(Dav1d::version());
-        }
-        versions.join(", ")
     }
 }
 
@@ -1504,7 +1485,7 @@ impl Decoder {
         let mut codec: Codec = match self
             .settings
             .codec_choice
-            .get_codec(tile.codec_config.is_avif())
+            .get_decoder_codec(tile.codec_config.is_avif())
         {
             None => return AvifError::no_codec_available(),
             Some(codec) => codec,
