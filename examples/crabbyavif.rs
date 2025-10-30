@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use clap::crate_name;
-use clap::crate_version;
 use clap::value_parser;
 use clap::Parser;
 
@@ -869,8 +867,8 @@ fn main() {
         println!(
             "{} (crate {} {})",
             binary_name(),
-            crate_name!(),
-            crate_version!()
+            env!("CARGO_PKG_NAME"),    // Same as clap::crate_name!().
+            env!("CARGO_PKG_VERSION"), // Same as clap::crate_version!().
         );
         println!("Available codecs:");
         println!("  {}", codec_versions());
