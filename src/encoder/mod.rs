@@ -219,20 +219,15 @@ pub(crate) type Codec = Box<dyn crate::codecs::Encoder>;
 pub(crate) type CodecSpecificOptions = HashMap<(Option<Category>, String), String>;
 
 #[derive(Default)]
-#[allow(dead_code)]
 pub struct Encoder {
     settings: Settings,
     items: Vec<Item>,
     image_metadata: Image,
     gainmap_image_metadata: Image,
     alt_image_metadata: Image,
-    quantizer: i32,
     primary_item_id: u16,
     alternative_item_ids: Vec<u16>,
-    single_image: bool,
     alpha_present: bool,
-    image_item_type: String,
-    config_property_name: String,
     duration_in_timescales: Vec<u64>,
     codec_specific_options: CodecSpecificOptions,
     final_recipe: Option<Recipe>, // Decided when the first image is added.
