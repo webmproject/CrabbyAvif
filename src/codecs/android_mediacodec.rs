@@ -288,7 +288,7 @@ enum CodecInitializer {
 
 #[cfg(android_soong)]
 fn prefer_hardware_decoder(config: &DecoderConfig) -> bool {
-    let prefer_hw = rustutils::system_properties::read_bool(
+    let prefer_hw = rustutils::android::system_properties::read_bool(
         "media.stagefright.thumbnail.prefer_hw_codecs",
         false,
     )
@@ -322,7 +322,7 @@ fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {
     {
         // Use a specific decoder if it is requested.
         if let Ok(Some(decoder)) =
-            rustutils::system_properties::read("media.crabbyavif.debug.decoder")
+            rustutils::android::system_properties::read("media.crabbyavif.debug.decoder")
         {
             if !decoder.is_empty() {
                 return vec![CodecInitializer::ByName(decoder)];
