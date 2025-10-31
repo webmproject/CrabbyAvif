@@ -201,7 +201,9 @@ impl Image {
             width: image.width,
             height: image.height,
             depth: image.depth,
-            format: if image.alpha_present { Format::Rgba } else { Format::Rgb },
+            // In libavif, Rgba is the default format. So we cannot set this based on
+            // image.alpha_present without breaking the C API contract.
+            format: Format::Rgba,
             chroma_upsampling: ChromaUpsampling::Automatic,
             chroma_downsampling: ChromaDownsampling::Automatic,
             premultiply_alpha: false,
