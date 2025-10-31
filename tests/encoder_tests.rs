@@ -54,7 +54,7 @@ fn encode_decode(
     let settings = encoder::Settings {
         speed: Some(10),
         mutable: encoder::MutableSettings {
-            quality: 90,
+            quality: 90.0,
             tiling_mode,
             ..Default::default()
         },
@@ -153,8 +153,8 @@ fn encode_decode_grid_impl(
         speed: Some(10),
         mutable: encoder::MutableSettings {
             // Encode losslessly for easier comparison of outputs.
-            quality: 100,
-            quality_alpha: 100,
+            quality: 100.0,
+            quality_alpha: 100.0,
             ..Default::default()
         },
         ..Default::default()
@@ -425,7 +425,7 @@ fn encode_decode_sequence(
         speed: Some(10),
         repetition_count,
         mutable: encoder::MutableSettings {
-            quality: 50,
+            quality: 50.0,
             ..Default::default()
         },
         ..Default::default()
@@ -500,7 +500,7 @@ fn sequence_alpha_combinations(first_image_has_alpha: bool) -> AvifResult<()> {
     let settings = encoder::Settings {
         speed: Some(10),
         mutable: encoder::MutableSettings {
-            quality: 50,
+            quality: 50.0,
             ..Default::default()
         },
         ..Default::default()
@@ -612,7 +612,7 @@ fn progressive_quality_change(use_grid: bool) -> AvifResult<()> {
         speed: Some(10),
         extra_layer_count: 1,
         mutable: encoder::MutableSettings {
-            quality: 2,
+            quality: 2.0,
             ..Default::default()
         },
         ..Default::default()
@@ -624,7 +624,7 @@ fn progressive_quality_change(use_grid: bool) -> AvifResult<()> {
     } else {
         encoder.add_image(&image)?;
     }
-    settings.mutable.quality = 90;
+    settings.mutable.quality = 90.0;
     encoder.update_settings(&settings.mutable)?;
     if use_grid {
         encoder.add_image_grid(2, 1, &images)?;
@@ -652,7 +652,7 @@ fn progressive_dimension_change(scaling_fraction: IFraction, use_grid: bool) -> 
         speed: Some(10),
         extra_layer_count: 1,
         mutable: encoder::MutableSettings {
-            quality: 100,
+            quality: 100.0,
             scaling_mode: ScalingMode {
                 horizontal: scaling_fraction,
                 vertical: scaling_fraction,
@@ -696,7 +696,7 @@ fn progressive_same_layers() -> AvifResult<()> {
         extra_layer_count: 3,
         speed: Some(10),
         mutable: encoder::MutableSettings {
-            quality: 50,
+            quality: 50.0,
             ..Default::default()
         },
         ..Default::default()
@@ -721,7 +721,7 @@ fn progressive_incorrect_number_of_layers() -> AvifResult<()> {
         speed: Some(10),
         extra_layer_count: 1,
         mutable: encoder::MutableSettings {
-            quality: 50,
+            quality: 50.0,
             ..Default::default()
         },
         ..Default::default()
@@ -795,7 +795,7 @@ fn gainmap_base_image_sdr() -> AvifResult<()> {
     let settings = encoder::Settings {
         speed: Some(10),
         mutable: encoder::MutableSettings {
-            quality: 80,
+            quality: 80.0,
             ..Default::default()
         },
         ..Default::default()
@@ -847,7 +847,7 @@ fn gainmap_base_image_hdr() -> AvifResult<()> {
     let settings = encoder::Settings {
         speed: Some(10),
         mutable: encoder::MutableSettings {
-            quality: 80,
+            quality: 80.0,
             ..Default::default()
         },
         ..Default::default()
@@ -918,9 +918,9 @@ fn alpha_transformative_properties() -> AvifResult<()> {
     let mut encoder = encoder::Encoder::create_with_settings(&encoder::Settings {
         speed: Some(10),
         mutable: MutableSettings {
-            quality: 100,
-            quality_alpha: 100,
-            quality_gainmap: 100,
+            quality: 100.0,
+            quality_alpha: 100.0,
+            quality_gainmap: 100.0,
             ..Default::default()
         },
         ..Default::default()
@@ -1310,8 +1310,8 @@ fn quality_categories() -> AvifResult<()> {
     let settings = encoder::Settings {
         speed: Some(10),
         mutable: encoder::MutableSettings {
-            quality: 5,
-            quality_alpha: 100,
+            quality: 5.0,
+            quality_alpha: 100.0,
             ..Default::default()
         },
         ..Default::default()

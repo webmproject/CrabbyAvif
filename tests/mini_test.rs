@@ -80,9 +80,9 @@ fn encode_decode(
         speed: Some(10),
         header_format: HeaderFormat::Mini,
         mutable: encoder::MutableSettings {
-            quality: 90,
-            quality_gainmap: 90,
-            quality_alpha: 90,
+            quality: 90.0,
+            quality_gainmap: 90.0,
+            quality_alpha: 90.0,
             ..Default::default()
         },
         ..Default::default()

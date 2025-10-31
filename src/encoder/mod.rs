@@ -94,9 +94,9 @@ impl TilingMode {
 
 #[derive(Clone, Copy, Debug)]
 pub struct MutableSettings {
-    pub quality: i32,
-    pub quality_alpha: i32,
-    pub quality_gainmap: i32,
+    pub quality: f32,
+    pub quality_alpha: f32,
+    pub quality_gainmap: f32,
     pub tiling_mode: TilingMode,
     pub scaling_mode: ScalingMode,
 }
@@ -104,9 +104,9 @@ pub struct MutableSettings {
 impl Default for MutableSettings {
     fn default() -> Self {
         Self {
-            quality: 60,
-            quality_alpha: 60,
-            quality_gainmap: 60,
+            quality: 60.0,
+            quality_alpha: 60.0,
+            quality_gainmap: 60.0,
             tiling_mode: Default::default(),
             scaling_mode: Default::default(),
         }
@@ -626,7 +626,7 @@ impl Encoder {
                         // Encoding the least significant bits of a sample does not
                         // make any sense if the other bits are lossily compressed.
                         // Encode the most significant bits losslessly.
-                        quality = 100;
+                        quality = 100.0;
                     }
                     bit_depth_extension_image =
                         Self::create_bit_depth_extension_image(image, item)?;
@@ -637,7 +637,7 @@ impl Encoder {
             let encoder_config = EncoderConfig {
                 tile_rows_log2,
                 tile_columns_log2,
-                quantizer: ((100 - quality) * 63 + 50) / 100,
+                quality,
                 disable_lagged_output: self.alpha_present,
                 is_single_image,
                 speed: self.settings.speed,

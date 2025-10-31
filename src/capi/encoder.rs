@@ -101,17 +101,17 @@ impl From<&avifEncoder> for MutableSettings {
                 quality_from_quantizers(encoder.minQuantizer, encoder.maxQuantizer)
             } else {
                 encoder.quality
-            },
+            } as f32,
             quality_alpha: if encoder.qualityAlpha == -1 {
                 quality_from_quantizers(encoder.minQuantizerAlpha, encoder.maxQuantizerAlpha)
             } else {
                 encoder.qualityAlpha
-            },
+            } as f32,
             quality_gainmap: if encoder.qualityGainMap == -1 {
                 quality_from_quantizers(encoder.minQuantizer, encoder.maxQuantizer)
             } else {
                 encoder.qualityGainMap
-            },
+            } as f32,
             tiling_mode: if encoder.autoTiling == AVIF_TRUE {
                 TilingMode::Auto
             } else {

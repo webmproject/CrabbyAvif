@@ -82,7 +82,7 @@ pub(crate) trait Decoder {
 pub(crate) struct EncoderConfig {
     pub tile_rows_log2: i32,
     pub tile_columns_log2: i32,
-    pub quantizer: i32,
+    pub quality: f32, // From 0 (maximum distortion) to 100 (lossless) inclusive.
     pub disable_lagged_output: bool,
     pub is_single_image: bool,
     pub speed: Option<u32>,
@@ -127,13 +127,18 @@ impl EncoderConfig {
         options
     }
 
+    pub(crate) fn quantizer(&self) -> i32 {
+        ((100 - (self.quality.clamp(0.0, 100.0) as i32)) * 63 + 50) / 100
+    }
+
     pub(crate) fn min_max_quantizers(&self) -> (u32, u32) {
-        if self.quantizer == 0 {
+        let quantizer = self.quantizer();
+        if quantizer == 0 {
             (0, 0)
         } else {
             (
-                std::cmp::max(self.quantizer - 4, 0) as u32,
-                std::cmp::min(self.quantizer + 4, 63) as u32,
+                std::cmp::max(quantizer - 4, 0) as u32,
+                std::cmp::min(quantizer + 4, 63) as u32,
             )
         }
     }
