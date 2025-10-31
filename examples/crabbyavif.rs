@@ -211,8 +211,8 @@ struct CommandLineArgs {
     depth: Option<u8>,
 
     /// Output quality in 0..100. (JPEG/AVIF only, default: 90).
-    #[arg(long, short = 'q', value_parser = value_parser!(u8).range(0..=100))]
-    quality: Option<u8>,
+    #[arg(long, short = 'q', value_parser = value_parser!(f32))]
+    quality: Option<f32>,
 
     /// AVIF Encode only: Speed used for encoding.
     #[arg(long, short = 's', value_parser = value_parser!(u32).range(0..=10))]
@@ -648,7 +648,7 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
         "png" => Box::new(PngWriter { depth: args.depth }),
         #[cfg(feature = "jpeg")]
         "jpg" | "jpeg" => Box::new(JpegWriter {
-            quality: args.quality,
+            quality: args.quality.map(|quality| quality as u8),
         }),
         _ => {
             return Err(AvifError::UnknownError(format!(
@@ -678,7 +678,7 @@ fn read_file(filepath: &String) -> io::Result<Vec<u8>> {
 
 #[cfg(feature = "encoder")]
 fn encode(args: &CommandLineArgs, input_file: &str) -> AvifResult<()> {
-    const DEFAULT_ENCODE_QUALITY: u8 = 90;
+    const DEFAULT_ENCODE_QUALITY: f32 = 90.0;
     let extension = get_extension(input_file);
     let mut reader: Box<dyn Reader> = match extension.as_str() {
         "y4m" => Box::new(Y4MReader::create(input_file)?),
@@ -738,7 +738,7 @@ fn encode(args: &CommandLineArgs, input_file: &str) -> AvifResult<()> {
         timescale: 1000, // ms.
         repetition_count: args.repetition_count,
         mutable: MutableSettings {
-            quality: args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY) as i32,
+            quality: args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY),
             tiling_mode: if args.autotiling {
                 TilingMode::Auto
             } else {
@@ -772,11 +772,11 @@ fn encode(args: &CommandLineArgs, input_file: &str) -> AvifResult<()> {
         }
     } else if args.progressive {
         // Encode the base layer with very low quality.
-        settings.mutable.quality = 2;
+        settings.mutable.quality = 2.0;
         encoder.update_settings(&settings.mutable)?;
         encoder.add_image(&image)?;
         // Encode the second layer with the requested quality.
-        settings.mutable.quality = args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY) as i32;
+        settings.mutable.quality = args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY);
         encoder.update_settings(&settings.mutable)?;
         encoder.add_image(&image)?;
     } else {
@@ -828,10 +828,17 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                 }
                 let output_filename = &args.output_file.as_ref().unwrap().as_str();
                 let extension = get_extension(output_filename);
-                if args.quality.is_some() && extension != "jpg" && extension != "jpeg" {
-                    return Err(AvifError::UnknownError(
-                        "quality is only supported for jpeg output".into(),
-                    ));
+                if let Some(quality) = args.quality {
+                    if extension != "jpg" && extension != "jpeg" {
+                        return Err(AvifError::UnknownError(
+                            "quality is only supported for jpeg output".into(),
+                        ));
+                    }
+                    if !(0.0..=100.0).contains(&quality) {
+                        return Err(AvifError::UnknownError(
+                            "quality must be between 0 and 100 inclusive".into(),
+                        ));
+                    }
                 }
                 if args.depth.is_some() && extension != "png" {
                     return Err(AvifError::UnknownError(
@@ -841,6 +848,13 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
             }
         } else {
             // TODO: b/403090413 - validate encoding args.
+            if let Some(quality) = args.quality {
+                if !(0.0..=100.0).contains(&quality) {
+                    return Err(AvifError::UnknownError(
+                        "quality must be between 0 and 100 inclusive".into(),
+                    ));
+                }
+            }
         }
     } else if !args.version {
         return Err(AvifError::UnknownError("input_file is required".into()));
