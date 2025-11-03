@@ -41,7 +41,7 @@ fn lossless_sample_transform_roundtrip() -> AvifResult<()> {
     let settings = encoder::Settings {
         speed: Some(10),
         mutable: encoder::MutableSettings {
-            quality: 100,
+            quality: 100.0,
             ..Default::default()
         },
         recipe: Recipe::BitDepthExtension8b8b,

@@ -100,7 +100,7 @@ fn lossless_roundtrip(
     let settings = encoder::Settings {
         speed: Some(10),
         mutable: encoder::MutableSettings {
-            quality: 100,
+            quality: 100.0,
             ..Default::default()
         },
         ..Default::default()
