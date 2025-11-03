@@ -70,6 +70,7 @@ impl Decoder for Libgav1 {
         spatial_id: u8,
         image: &mut Image,
         category: Category,
+        is_eos: bool,
     ) -> AvifResult<()> {
         if self.decoder.is_none() {
             self.initialize(&DecoderConfig::default())?;

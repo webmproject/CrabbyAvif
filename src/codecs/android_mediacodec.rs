@@ -633,6 +633,7 @@ impl MediaCodec {
         _spatial_id: u8,
         image: &mut Image,
         category: Category,
+        is_eos: bool,
     ) -> AvifResult<()> {
         if self.codec.is_none() {
             self.initialize_impl(/*low_latency=*/ true)?;
@@ -650,7 +651,15 @@ impl MediaCodec {
                 retry_count += 1;
                 let input_index = AMediaCodec_dequeueInputBuffer(codec, Self::TIMEOUT as _);
                 if input_index >= 0 {
-                    self.enqueue_payload(input_index, payload, 0)?;
+                    self.enqueue_payload(
+                        input_index,
+                        payload,
+                        if is_eos {
+                            AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM as u32
+                        }  else {
+                            0
+                        },
+                    )?;
                     break;
                 } else if input_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
                     continue;
@@ -837,9 +846,10 @@ impl Decoder for MediaCodec {
         spatial_id: u8,
         image: &mut Image,
         category: Category,
+        is_eos: bool,
     ) -> AvifResult<()> {
         while self.codec_index < self.codec_initializers.len() {
-            let res = self.get_next_image_impl(payload, spatial_id, image, category);
+            let res = self.get_next_image_impl(payload, spatial_id, image, category, is_eos);
             if res.is_ok() {
                 return Ok(());
             }

@@ -357,6 +357,7 @@ impl Decoder for Dav1d {
         spatial_id: u8,
         image: &mut Image,
         category: Category,
+        is_eos: bool,
     ) -> AvifResult<()> {
         if self.context.is_none() {
             self.initialize_impl(true)?;

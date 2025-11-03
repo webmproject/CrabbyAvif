@@ -1662,8 +1662,10 @@ impl Decoder {
             }
             (_, Err(err)) => return Err(err),
         };
+        let tile_count = self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
+        let is_eos = image_index + 1 == self.image_count as usize && (tile_count == 0 || tile_index + 1 == tile_count);
         let next_image_result =
-            codec.get_next_image(data, sample.spatial_id, &mut tile.image, category);
+            codec.get_next_image(data, sample.spatial_id, &mut tile.image, category, is_eos);
         if next_image_result.is_err() {
             if cfg!(feature = "android_mediacodec")
                 && cfg!(feature = "heic")

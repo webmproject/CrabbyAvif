@@ -64,6 +64,7 @@ pub(crate) trait Decoder {
         spatial_id: u8,
         image: &mut Image,
         category: Category,
+        is_eos: bool,
     ) -> AvifResult<()>;
     // Decode a list of input images and outputs them into the |grid_image_helper|.
     fn get_next_image_grid(
