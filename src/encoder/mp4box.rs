@@ -353,7 +353,8 @@ impl Encoder {
                 &self.image_metadata,
                 item_metadata,
                 &mut property_streams,
-                self.settings.write_extended_pixi,
+                self.settings.must_write_extended_pixi(),
+                self.settings.codec_supports_native_alpha_channel(),
             )?;
         }
         // Deduplicate the property streams.

@@ -64,7 +64,11 @@ impl Item {
     }
 
     pub(crate) fn is_metadata(&self) -> bool {
-        self.item_type != "av01"
+        match self.item_type.as_str() {
+            "av01" => false,
+            "hvc1" => false, // Should not happen.
+            _ => true,
+        }
     }
 
     pub(crate) fn is_tmap(&self) -> bool {
@@ -100,23 +104,28 @@ impl Item {
         &mut self,
         stream: &mut OStream,
         image_metadata: &Image,
-        write_extended_pixi: bool,
+        force_write_extended_pixi: bool,
+        codec_supports_native_alpha_channel: bool,
     ) -> AvifResult<()> {
-        stream.start_full_box("pixi", (0, if write_extended_pixi { 1 } else { 0 }))?;
-        let num_channels = if self.category == Category::Alpha {
+        stream.start_full_box("pixi", (0, if force_write_extended_pixi { 1 } else { 0 }))?;
+        let num_color_channels = if self.category == Category::Alpha {
             1
         } else {
             image_metadata.yuv_format.plane_count() as u8
         };
+        let has_native_alpha_channel = self.category == Category::Color
+            && image_metadata.alpha_present
+            && codec_supports_native_alpha_channel;
+        let num_channels = num_color_channels + if has_native_alpha_channel { 1 } else { 0 };
         // unsigned int (8) num_channels;
         stream.write_u8(num_channels)?;
         for _ in 0..num_channels {
             // unsigned int (8) bits_per_channel;
             stream.write_u8(image_metadata.depth)?;
         }
-        if write_extended_pixi {
+        if force_write_extended_pixi {
             // See ISO/IEC 23008-12 DAM 2.
-            for i in 0..num_channels {
+            for i in 0..num_color_channels {
                 let channel_idc = match self.category {
                     Category::Color | Category::Gainmap => {
                         ChannelIdc::FirstColorChannel as u32 + i as u32
@@ -144,10 +153,11 @@ impl Item {
                 let subsampling_location = match (self.category, i) {
                     (Category::Color | Category::Gainmap | Category::Alpha, 0) => Some(0),
                     (Category::Color | Category::Gainmap, 1 | 2) => {
-                        match image_metadata.chroma_sample_position {
-                            ChromaSamplePosition::Unknown => None,
-                            ChromaSamplePosition::Vertical => Some(0), // (0, 0.5)
-                            ChromaSamplePosition::Colocated => Some(2), // (0, 0)
+                        match (image_metadata.chroma_sample_position, subsampling_type) {
+                            (ChromaSamplePosition::Unknown, 0) => Some(2), // 4:4:4 so (0, 0) is fine
+                            (ChromaSamplePosition::Unknown, _) => None,
+                            (ChromaSamplePosition::Vertical, _) => Some(0), // (0, 0.5)
+                            (ChromaSamplePosition::Colocated, _) => Some(2), // (0, 0)
                             _ => unreachable!(),
                         }
                     }
@@ -164,20 +174,35 @@ impl Item {
                     stream.write_bits(0, 1)?; // unsigned int(1) channel_label_flag;
                 }
             }
+
+            if self.category == Category::Color
+                && image_metadata.alpha_present
+                && codec_supports_native_alpha_channel
+            {
+                // Assume the alpha channel to be last (RGBA, YUVA).
+                stream.write_bits(ChannelIdc::Alpha as u32, 3)?; // unsigned int(3) channel_idc;
+                stream.write_bits(0, 1)?; // unsigned int(1) reserved;
+                stream.write_bits(0, 2)?; // unsigned int(2) component_format;
+                stream.write_bits(0, 1)?; // unsigned int(1) subsampling_flag;
+                stream.write_bits(0, 1)?; // unsigned int(1) channel_label_flag;
+            }
         }
         stream.finish_box()
     }
 
     pub(crate) fn write_codec_config_box(&self, stream: &mut OStream) -> AvifResult<()> {
-        if let CodecConfiguration::Av1(config) = &self.codec_configuration {
-            stream.start_box("av1C")?;
-            Self::write_codec_config(config, stream)?;
-            stream.finish_box()?;
+        match &self.codec_configuration {
+            CodecConfiguration::Av1(config) => {
+                stream.start_box("av1C")?;
+                Self::write_av1_codec_config(config, stream)?;
+                stream.finish_box()?;
+            }
+            CodecConfiguration::Hevc(_) => unreachable!(),
         }
         Ok(())
     }
 
-    pub(crate) fn write_codec_config(
+    pub(crate) fn write_av1_codec_config(
         config: &Av1CodecConfiguration,
         stream: &mut OStream,
     ) -> AvifResult<()> {
@@ -361,7 +386,8 @@ impl Item {
         image_metadata: &Image,
         item_metadata: &Image,
         streams: &mut Vec<OStream>,
-        write_extended_pixi: bool,
+        force_write_extended_pixi: bool,
+        codec_supports_native_alpha_channel: bool,
     ) -> AvifResult<()> {
         if !self.has_ipma() {
             return Ok(());
@@ -377,7 +403,8 @@ impl Item {
         self.write_pixi(
             streams.last_mut().unwrap(),
             item_metadata,
-            write_extended_pixi,
+            force_write_extended_pixi,
+            codec_supports_native_alpha_channel,
         )?;
         self.associations
             .push((u8_from_usize(streams.len())?, false));
@@ -612,7 +639,10 @@ impl Item {
         // unsigned int(32) entry_count;
         stream.write_u32(1)?;
         {
-            stream.start_box("av01")?;
+            stream.start_box(match self.codec_configuration {
+                CodecConfiguration::Av1(_) => "av01",
+                CodecConfiguration::Hevc(_) => unreachable!(),
+            })?;
             // const unsigned int(8)[6] reserved = 0;
             for _ in 0..6 {
                 stream.write_u8(0)?;

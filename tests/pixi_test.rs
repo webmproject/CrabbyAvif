@@ -29,7 +29,7 @@ fn encode_decode_extended_pixi() -> AvifResult<()> {
         generate_gradient_image(64, 64, 8, PixelFormat::Yuv420, YuvRange::Full, true)?;
     let settings = encoder::Settings {
         speed: Some(10),
-        write_extended_pixi: true,
+        force_write_extended_pixi: true,
         ..Default::default()
     };
     let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
