@@ -1213,23 +1213,24 @@ fn heic_peek() {
 
 #[test]
 fn heic_parsing() {
-    let mut decoder = get_decoder("blue.heic");
-    let res = decoder.parse();
-    if cfg!(feature = "heic") {
-        assert!(res.is_ok());
-        let image = decoder.image().expect("image was none");
-        assert_eq!(image.width, 320);
-        assert_eq!(image.height, 240);
-        assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
-        if cfg!(feature = "android_mediacodec") {
-            // Decoding is available only via android_mediacodec.
-            assert!(!matches!(
-                decoder.next_image(),
-                Err(AvifError::NoCodecAvailable)
-            ));
+    let test_images = ["blue.heic", "blue_p1.heic"];
+    for filename in test_images.iter() {
+        let mut decoder = get_decoder(filename);
+        let res = decoder.parse();
+        if cfg!(feature = "heic") {
+            assert!(res.is_ok());
+            let image = decoder.image().expect("image was none");
+            assert_eq!(image.width, 320);
+            assert_eq!(image.height, 240);
+            assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
+            if cfg!(feature = "android_mediacodec") {
+                // Decoding is available only via android_mediacodec.
+                let res_dec = decoder.next_image();
+                assert!(res_dec.is_ok(), "decode res {:?} ", res_dec);
+            }
+        } else {
+            assert!(res.is_err());
         }
-    } else {
-        assert!(res.is_err());
     }
 }
 
