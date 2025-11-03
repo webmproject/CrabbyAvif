@@ -66,39 +66,23 @@ pub type GenericIO = Box<dyn IO>;
 pub(crate) type Codec = Box<dyn crate::codecs::Decoder>;
 
 impl CodecChoice {
-    fn get_decoder_codec(&self, is_avif: bool) -> Option<Codec> {
-        match self {
-            CodecChoice::Auto => CodecChoice::MediaCodec
-                .get_decoder_codec(is_avif)
-                .or_else(|| CodecChoice::Dav1d.get_decoder_codec(is_avif))
-                .or_else(|| CodecChoice::Libgav1.get_decoder_codec(is_avif)),
-            CodecChoice::Aom => {
-                None // Not used as a decoder.
-            }
-            CodecChoice::Dav1d => {
-                if !is_avif {
-                    return None;
-                }
-                #[cfg(feature = "dav1d")]
-                return Some(Box::<Dav1d>::default());
-                #[cfg(not(feature = "dav1d"))]
-                return None;
-            }
-            CodecChoice::Libgav1 => {
-                if !is_avif {
-                    return None;
-                }
-                #[cfg(feature = "libgav1")]
-                return Some(Box::<Libgav1>::default());
-                #[cfg(not(feature = "libgav1"))]
-                return None;
-            }
-            CodecChoice::MediaCodec => {
+    fn get_decoder_codec(&self, compression_format: CompressionFormat) -> Option<Codec> {
+        match compression_format {
+            CompressionFormat::Avif => match self {
+                CodecChoice::Aom => None, // Not used as a decoder.
                 #[cfg(feature = "android_mediacodec")]
-                return Some(Box::<MediaCodec>::default());
-                #[cfg(not(feature = "android_mediacodec"))]
-                return None;
-            }
+                CodecChoice::Auto | CodecChoice::MediaCodec => Some(Box::<MediaCodec>::default()),
+                #[cfg(feature = "dav1d")]
+                CodecChoice::Auto | CodecChoice::Dav1d => Some(Box::<Dav1d>::default()),
+                #[cfg(feature = "libgav1")]
+                CodecChoice::Auto | CodecChoice::Libgav1 => Some(Box::<Libgav1>::default()),
+                _ => None,
+            },
+            CompressionFormat::Heic => match self {
+                #[cfg(feature = "android_mediacodec")]
+                CodecChoice::Auto | CodecChoice::MediaCodec => Some(Box::<MediaCodec>::default()),
+                _ => None,
+            },
         }
     }
 }
@@ -1168,8 +1152,12 @@ impl Decoder {
                         let codec_config = item
                             .codec_config()
                             .ok_or(AvifError::BmffParseFailed("".into()))?;
-                        self.extra_inputs[idx].depth = codec_config.depth();
-                        self.extra_inputs[idx].yuv_format = codec_config.pixel_format();
+                        self.extra_inputs[idx].depth = depth_from_properties(&item.properties).ok_or(
+                            AvifError::InvalidImageGrid("input images for sato derived image item must all have a specified depth".into())
+                        )?;
+                        self.extra_inputs[idx].yuv_format = pixel_format_from_properties(&item.properties).ok_or(
+                            AvifError::InvalidImageGrid("input images for sato derived image item must all have a specified format".into())
+                        )?;
                         self.extra_inputs[idx].chroma_sample_position =
                             codec_config.chroma_sample_position();
                     }
@@ -1279,8 +1267,16 @@ impl Decoder {
                     let codec_config = gainmap_item
                         .codec_config()
                         .ok_or(AvifError::BmffParseFailed("".into()))?;
-                    self.gainmap.image.depth = codec_config.depth();
-                    self.gainmap.image.yuv_format = codec_config.pixel_format();
+                    self.gainmap.image.depth = depth_from_properties(&gainmap_item.properties)
+                        .ok_or(AvifError::InvalidImageGrid(
+                            "gain map item must have a specified depth".into(),
+                        ))?;
+                    self.gainmap.image.yuv_format = pixel_format_from_properties(
+                        &gainmap_item.properties,
+                    )
+                    .ok_or(AvifError::InvalidImageGrid(
+                        "gain map item must have a specified format".into(),
+                    ))?;
                     self.gainmap.image.chroma_sample_position =
                         codec_config.chroma_sample_position();
                 }
@@ -1398,7 +1394,9 @@ impl Decoder {
 
             let codec_config = find_property!(color_properties, CodecConfiguration)
                 .ok_or(AvifError::BmffParseFailed("".into()))?;
-            self.image.depth = codec_config.depth();
+            self.image.depth = depth_from_properties(color_properties).ok_or(
+                AvifError::InvalidImageGrid("color item must have a specified depth".into()),
+            )?;
             // A sample transform item can have a depth different from its input images (which is where
             // the codec config comes from). The depth from the pixi property should be used instead.
             if is_sample_transform {
@@ -1407,13 +1405,11 @@ impl Decoder {
                 }
             }
 
-            self.image.yuv_format = codec_config.pixel_format();
+            self.image.yuv_format = pixel_format_from_properties(color_properties).ok_or(
+                AvifError::InvalidImageGrid("color item must have a specified format".into()),
+            )?;
             self.image.chroma_sample_position = codec_config.chroma_sample_position();
-            self.compression_format = if codec_config.is_avif() {
-                CompressionFormat::Avif
-            } else {
-                CompressionFormat::Heic
-            };
+            self.compression_format = codec_config.compression_format();
 
             if cicp_set {
                 self.parse_state = ParseState::Complete;
@@ -1485,7 +1481,7 @@ impl Decoder {
         let mut codec: Codec = match self
             .settings
             .codec_choice
-            .get_decoder_codec(tile.codec_config.is_avif())
+            .get_decoder_codec(tile.codec_config.compression_format())
         {
             None => return AvifError::no_codec_available(),
             Some(codec) => codec,
@@ -1667,7 +1663,7 @@ impl Decoder {
         if next_image_result.is_err() {
             if cfg!(feature = "android_mediacodec")
                 && cfg!(feature = "heic")
-                && tile.codec_config.is_heic()
+                && tile.codec_config.compression_format() == CompressionFormat::Heic
                 && category == Category::Alpha
             {
                 // When decoding HEIC on Android, if the alpha channel decoding fails, simply
@@ -1859,7 +1855,7 @@ impl Decoder {
         if next_image_result.is_err() {
             if cfg!(feature = "android_mediacodec")
                 && cfg!(feature = "heic")
-                && first_tile.codec_config.is_heic()
+                && first_tile.codec_config.compression_format() == CompressionFormat::Heic
                 && category == Category::Alpha
             {
                 // When decoding HEIC on Android, if the alpha channel decoding fails, simply
