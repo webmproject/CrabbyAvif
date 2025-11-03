@@ -134,18 +134,11 @@ pub enum Recipe {
 }
 
 impl CodecChoice {
-    fn get_encoder_codec(&self, is_avif: bool) -> Option<Codec> {
+    fn get_item_type_and_encoder_codec(&self) -> Result<(&str, Codec), AvifError> {
         match self {
-            CodecChoice::Auto | CodecChoice::Aom => {
-                if !is_avif {
-                    return None;
-                }
-                #[cfg(feature = "aom")]
-                return Some(Box::<Aom>::default());
-                #[cfg(not(feature = "aom"))]
-                return None;
-            }
-            CodecChoice::Dav1d | CodecChoice::Libgav1 | CodecChoice::MediaCodec => None,
+            #[cfg(feature = "aom")]
+            CodecChoice::Auto | CodecChoice::Aom => Ok(("av01", Box::<Aom>::default())),
+            _ => AvifError::no_codec_available(),
         }
     }
 }
@@ -161,7 +154,7 @@ pub struct Settings {
     pub repetition_count: RepetitionCount,
     pub extra_layer_count: u32,
     pub recipe: Recipe,
-    pub write_extended_pixi: bool,
+    pub force_write_extended_pixi: bool,
     pub creation_time: Option<u64>,
     pub modification_time: Option<u64>,
     pub mutable: MutableSettings,
@@ -179,7 +172,7 @@ impl Default for Settings {
             repetition_count: RepetitionCount::Infinite,
             extra_layer_count: 0,
             recipe: Recipe::None,
-            write_extended_pixi: false,
+            force_write_extended_pixi: false,
             creation_time: None,
             modification_time: None,
             mutable: Default::default(),
@@ -190,6 +183,15 @@ impl Default for Settings {
 impl Settings {
     pub(crate) fn is_valid(&self) -> bool {
         self.extra_layer_count < MAX_AV1_LAYER_COUNT as u32 && self.timescale > 0
+    }
+
+    pub(crate) fn must_write_extended_pixi(&self) -> bool {
+        // TODO: b/456440247 - Add support for codecs requiring extended pixi.
+        self.force_write_extended_pixi
+    }
+    pub(crate) fn codec_supports_native_alpha_channel(&self) -> bool {
+        // TODO: b/456440247 - Add support for codecs with native alpha channels.
+        false
     }
 }
 
@@ -297,23 +299,20 @@ impl Encoder {
             self.items.push(grid_item);
         }
         for cell_index in 0..cell_count {
+            let (item_type, codec) = self
+                .settings
+                .codec_choice
+                .get_item_type_and_encoder_codec()?;
             let item = Item {
                 id: u16_from_usize(self.items.len() + 1)?,
-                item_type: "av01".into(),
+                item_type: item_type.into(),
                 infe_name: category.infe_name(),
                 cell_index,
                 category,
                 dimg_from_id: if cell_count > 1 { Some(top_level_item_id) } else { None },
                 hidden_image: hidden || cell_count > 1,
                 extra_layer_count: self.settings.extra_layer_count,
-                codec: match self
-                    .settings
-                    .codec_choice
-                    .get_encoder_codec(/*is_avif=*/ true)
-                {
-                    None => return AvifError::no_codec_available(),
-                    Some(codec) => Some(codec),
-                },
+                codec: Some(codec),
                 ..Default::default()
             };
             if cell_count == 1 {
@@ -499,7 +498,7 @@ impl Encoder {
             }
             let color_item_id = self.add_items(&grid, Category::Color, /*hidden=*/ false)?;
             self.primary_item_id = color_item_id;
-            self.alpha_present = first_image.has_plane(Plane::A)
+            self.alpha_present = first_image.has_alpha()
                 && if is_single_image {
                     // When encoding a single image in which the alpha plane exists but is entirely
                     // opaque, skip writing an alpha AV1 payload. This does not apply to image
@@ -509,7 +508,7 @@ impl Encoder {
                     true
                 };
 
-            if self.alpha_present {
+            if self.alpha_present && !self.settings.codec_supports_native_alpha_channel() {
                 let alpha_item_id =
                     self.add_items(&grid, Category::Alpha, /*hidden=*/ false)?;
                 let alpha_item = &mut self.items[alpha_item_id as usize - 1];
@@ -735,9 +734,17 @@ impl Encoder {
             // TODO: check if sample count == duration count.
 
             if !item.samples.is_empty() {
-                // Harvest codec configuration from sequence header.
-                let sequence_header = Av1SequenceHeader::parse_from_obus(&item.samples[0].data)?;
-                item.codec_configuration = CodecConfiguration::Av1(sequence_header.config);
+                match self.settings.codec_choice {
+                    CodecChoice::Auto | CodecChoice::Aom => {
+                        // Harvest codec configuration from AV1 sequence header.
+                        let sequence_header =
+                            Av1SequenceHeader::parse_from_obus(&item.samples[0].data)?;
+                        item.codec_configuration = CodecConfiguration::Av1(sequence_header.config);
+                    }
+                    CodecChoice::MediaCodec | CodecChoice::Dav1d | CodecChoice::Libgav1 => {
+                        return AvifError::no_codec_available()
+                    }
+                }
             }
         }
         let mut stream = OStream::default();

@@ -224,7 +224,7 @@ struct CommandLineArgs {
 
     /// AVIF Encode only: Write more metadata in the PixelInformationBox. Backward-compatible.
     #[arg(long, default_value = "false")]
-    write_extended_pixi: bool,
+    force_write_extended_pixi: bool,
 
     /// When decoding AVIF: Enable progressive AVIF processing. If a progressive image is
     /// encountered and --progressive is passed, --index will be used to choose which layer to
@@ -734,7 +734,7 @@ fn encode(args: &CommandLineArgs, input_file: &str) -> AvifResult<()> {
         codec_choice: args.codec,
         speed: args.speed,
         header_format: args.header,
-        write_extended_pixi: args.write_extended_pixi,
+        force_write_extended_pixi: args.force_write_extended_pixi,
         timescale: 1000, // ms.
         repetition_count: args.repetition_count,
         mutable: MutableSettings {
