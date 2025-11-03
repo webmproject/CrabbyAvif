@@ -190,7 +190,18 @@ impl Image {
                         i32_from_u32(dst_pd.row_bytes)?,
                         i32_from_u32(dst_pd.width)?,
                         i32_from_u32(dst_pd.height)?,
-                        FilterMode_kFilterBox,
+                        if cfg!(feature = "android_mediacodec")
+                            && (*plane == Plane::U || *plane == Plane::V)
+                        {
+                            // In Android, use bilinear filter for chroma planes. libyuv uses only
+                            // bilinear filtering for NV12Scale. So in order to be consistent
+                            // between Nv12 and Yuv420, we need to use bilinear filter here so that
+                            // the output looks the same irrespective of the decoder's color
+                            // format.
+                            FilterMode_kFilterBilinear
+                        } else {
+                            FilterMode_kFilterBox
+                        },
                     )
                 }
             };
