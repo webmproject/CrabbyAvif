@@ -650,7 +650,15 @@ impl MediaCodec {
                 retry_count += 1;
                 let input_index = AMediaCodec_dequeueInputBuffer(codec, Self::TIMEOUT as _);
                 if input_index >= 0 {
-                    self.enqueue_payload(input_index, payload, 0)?;
+                    self.enqueue_payload(
+                        input_index,
+                        payload,
+                        if self.config.unwrap_ref().is_single_image {
+                            AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM as _
+                        } else {
+                            0
+                        },
+                    )?;
                     break;
                 } else if input_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
                     continue;

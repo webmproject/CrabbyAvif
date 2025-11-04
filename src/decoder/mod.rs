@@ -1504,6 +1504,7 @@ impl Decoder {
             android_mediacodec_output_color_format: self
                 .settings
                 .android_mediacodec_output_color_format,
+            is_single_image: !self.image.image_sequence_track_present,
         };
         codec.initialize(&config)?;
         self.codecs.push(codec);

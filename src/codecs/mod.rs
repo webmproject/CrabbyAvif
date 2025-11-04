@@ -52,6 +52,9 @@ pub(crate) struct DecoderConfig {
     pub codec_config: CodecConfiguration,
     pub category: Category,
     pub android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat,
+    // Set to true only if the codec will be used for exactly one image. Only used by Android
+    // MediaCodec.
+    pub is_single_image: bool,
 }
 
 pub(crate) trait Decoder {
