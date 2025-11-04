@@ -475,30 +475,36 @@ impl Item {
 }
 
 // Returns the depth information from either the codec configuration property or
-// the PixelInformationProperty, or None if the information cannot be found.
+// the PixelInformationProperty, or an error if the information cannot be found.
 // Item::validate_properties() checks for cross-property consistency.
-pub(crate) fn depth_from_properties(properties: &[ItemProperty]) -> Option<u8> {
+pub(crate) fn depth_from_properties(
+    properties: &[ItemProperty],
+    item_name: &str,
+) -> Result<u8, AvifError> {
     if let Some(codec_config) = find_property!(properties, CodecConfiguration) {
         if let Some(depth) = codec_config.depth() {
-            return Some(depth);
+            return Ok(depth);
         }
     }
     if let Some(pixi) = find_property!(properties, PixelInformation) {
         if let Some(plane) = pixi.planes.first() {
             // Item::validate_properties() makes sure all planes have the same depth.
-            return Some(plane.depth);
+            return Ok(plane.depth);
         }
     }
-    None
+    AvifError::bmff_parse_failed(format!("{item_name} item must have a specified depth"))
 }
 
-// Returns the subsampling information from either the codec configuration property or the
-// extended PixelInformationProperty (px_flags&1==1), or None if the information cannot be found.
+// Returns the subsampling information from either the codec configuration property or the extended
+// PixelInformationProperty (px_flags&1==1), or an error if the information cannot be found.
 // Item::validate_properties() checks for cross-property consistency.
-pub(crate) fn pixel_format_from_properties(properties: &[ItemProperty]) -> Option<PixelFormat> {
+pub(crate) fn pixel_format_from_properties(
+    properties: &[ItemProperty],
+    item_name: &str,
+) -> Result<PixelFormat, AvifError> {
     if let Some(codec_config) = find_property!(properties, CodecConfiguration) {
         if let Some(pixel_format) = codec_config.pixel_format() {
-            return Some(pixel_format);
+            return Ok(pixel_format);
         }
     }
     if let Some(pixi) = find_property!(properties, PixelInformation) {
@@ -522,27 +528,34 @@ pub(crate) fn pixel_format_from_properties(properties: &[ItemProperty]) -> Optio
                 None
             }
         }
-        // Only return something for an item with exactly one or exactly three color channels.
         return match (
             get_unique_plane(pixi, ChannelIdc::FirstColorChannel),
             get_unique_plane(pixi, ChannelIdc::SecondColorChannel),
             get_unique_plane(pixi, ChannelIdc::ThirdColorChannel),
             get_unique_plane(pixi, ChannelIdc::FourthColorChannel),
         ) {
-            (Some(_y), None, None, None) => Some(PixelFormat::Yuv400),
+            (Some(_y), None, None, None) => Ok(PixelFormat::Yuv400),
             (Some(_y), Some(u), Some(v), None) => {
                 if u.subsampling_type == v.subsampling_type {
-                    u.subsampling_type
+                    if let Some(subsampling_type) = u.subsampling_type {
+                        Ok(subsampling_type)
+                    } else {
+                        AvifError::bmff_parse_failed(format!(
+                            "{item_name} item must have subsampling defined"
+                        ))
+                    }
                 } else {
-                    // Different subsampling information for U and V is not supported.
-                    None
+                    AvifError::bmff_parse_failed(format!(
+                        "{item_name} item must have the same subsampling for both chroma channels"
+                    ))
                 }
             }
-            // Other color patterns are not supported by CrabbyAvif.
-            _ => None,
+            _ => AvifError::bmff_parse_failed(format!(
+                "{item_name} item must have exactly one or exactly three unique color channels"
+            )),
         };
     }
-    None
+    AvifError::bmff_parse_failed(format!("{item_name} item must have a specified format"))
 }
 
 pub type Items = BTreeMap<u32, Item>;

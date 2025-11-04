@@ -1152,12 +1152,10 @@ impl Decoder {
                         let codec_config = item
                             .codec_config()
                             .ok_or(AvifError::BmffParseFailed("".into()))?;
-                        self.extra_inputs[idx].depth = depth_from_properties(&item.properties).ok_or(
-                            AvifError::InvalidImageGrid("input images for sato derived image item must all have a specified depth".into())
-                        )?;
-                        self.extra_inputs[idx].yuv_format = pixel_format_from_properties(&item.properties).ok_or(
-                            AvifError::InvalidImageGrid("input images for sato derived image item must all have a specified format".into())
-                        )?;
+                        self.extra_inputs[idx].depth =
+                            depth_from_properties(&item.properties, "sato input")?;
+                        self.extra_inputs[idx].yuv_format =
+                            pixel_format_from_properties(&item.properties, "sato input")?;
                         self.extra_inputs[idx].chroma_sample_position =
                             codec_config.chroma_sample_position();
                     }
@@ -1267,16 +1265,10 @@ impl Decoder {
                     let codec_config = gainmap_item
                         .codec_config()
                         .ok_or(AvifError::BmffParseFailed("".into()))?;
-                    self.gainmap.image.depth = depth_from_properties(&gainmap_item.properties)
-                        .ok_or(AvifError::InvalidImageGrid(
-                            "gain map item must have a specified depth".into(),
-                        ))?;
-                    self.gainmap.image.yuv_format = pixel_format_from_properties(
-                        &gainmap_item.properties,
-                    )
-                    .ok_or(AvifError::InvalidImageGrid(
-                        "gain map item must have a specified format".into(),
-                    ))?;
+                    self.gainmap.image.depth =
+                        depth_from_properties(&gainmap_item.properties, "gain map")?;
+                    self.gainmap.image.yuv_format =
+                        pixel_format_from_properties(&gainmap_item.properties, "gain map")?;
                     self.gainmap.image.chroma_sample_position =
                         codec_config.chroma_sample_position();
                 }
@@ -1394,9 +1386,7 @@ impl Decoder {
 
             let codec_config = find_property!(color_properties, CodecConfiguration)
                 .ok_or(AvifError::BmffParseFailed("".into()))?;
-            self.image.depth = depth_from_properties(color_properties).ok_or(
-                AvifError::InvalidImageGrid("color item must have a specified depth".into()),
-            )?;
+            self.image.depth = depth_from_properties(color_properties, "color")?;
             // A sample transform item can have a depth different from its input images (which is where
             // the codec config comes from). The depth from the pixi property should be used instead.
             if is_sample_transform {
@@ -1405,9 +1395,7 @@ impl Decoder {
                 }
             }
 
-            self.image.yuv_format = pixel_format_from_properties(color_properties).ok_or(
-                AvifError::InvalidImageGrid("color item must have a specified format".into()),
-            )?;
+            self.image.yuv_format = pixel_format_from_properties(color_properties, "color")?;
             self.image.chroma_sample_position = codec_config.chroma_sample_position();
             self.compression_format = codec_config.compression_format();
 
