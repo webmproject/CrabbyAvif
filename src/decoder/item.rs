@@ -480,7 +480,7 @@ impl Item {
 pub(crate) fn depth_from_properties(
     properties: &[ItemProperty],
     item_name: &str,
-) -> Result<u8, AvifError> {
+) -> AvifResult<u8> {
     if let Some(codec_config) = find_property!(properties, CodecConfiguration) {
         if let Some(depth) = codec_config.depth() {
             return Ok(depth);
@@ -501,7 +501,7 @@ pub(crate) fn depth_from_properties(
 pub(crate) fn pixel_format_from_properties(
     properties: &[ItemProperty],
     item_name: &str,
-) -> Result<PixelFormat, AvifError> {
+) -> AvifResult<PixelFormat> {
     if let Some(codec_config) = find_property!(properties, CodecConfiguration) {
         if let Some(pixel_format) = codec_config.pixel_format() {
             return Ok(pixel_format);
