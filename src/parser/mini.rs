@@ -1037,7 +1037,7 @@ fn check_subsampling(
         chroma_is_horizontally_centered,
         chroma_is_vertically_centered,
     )?;
-    if pixel_format != CodecConfiguration::Av1(codec_config.clone()).pixel_format()
+    if pixel_format != codec_config.pixel_format()
         || chroma_sample_position != codec_config.chroma_sample_position
     {
         return AvifError::bmff_parse_failed("Mismatch between mini and AV1 codec config");

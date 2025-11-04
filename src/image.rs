@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::decoder::tile::TileInfo;
-use crate::decoder::ProgressiveState;
+use crate::decoder::{CompressionFormat, ProgressiveState};
 use crate::internal_utils::*;
 use crate::parser::mp4box::CodecConfiguration;
 use crate::reformat::coeffs::*;
@@ -403,7 +403,7 @@ impl Image {
     ) {
         self.yuv_format = image.yuv_format;
         self.depth = image.depth;
-        if cfg!(feature = "heic") && codec_config.is_heic() {
+        if cfg!(feature = "heic") && codec_config.compression_format() == CompressionFormat::Heic {
             // For AVIF, the information in the `colr` box takes precedence over what is reported
             // by the decoder. For HEIC, we always honor what is reported by the decoder.
             self.yuv_range = image.yuv_range;
