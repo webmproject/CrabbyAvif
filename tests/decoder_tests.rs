@@ -1216,9 +1216,10 @@ fn heic_peek() {
     );
 }
 
-#[test]
-fn heic_parsing() {
-    let mut decoder = get_decoder("blue.heic");
+#[test_case("blue.heic")]
+#[test_case("blue_gh_issue_692.heic")]
+fn heic(filename: &str) {
+    let mut decoder = get_decoder(filename);
     let res = decoder.parse();
     if cfg!(feature = "heic") {
         assert!(res.is_ok());
@@ -1227,11 +1228,7 @@ fn heic_parsing() {
         assert_eq!(image.height, 240);
         assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
         if cfg!(feature = "android_mediacodec") {
-            // Decoding is available only via android_mediacodec.
-            assert!(!matches!(
-                decoder.next_image(),
-                Err(AvifError::NoCodecAvailable)
-            ));
+            assert!(decoder.next_image().is_ok());
         }
     } else {
         assert!(res.is_err());
