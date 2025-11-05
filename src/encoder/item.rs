@@ -67,6 +67,8 @@ impl Item {
         match self.item_type.as_str() {
             "av01" => false,
             "hvc1" => false, // Should not happen.
+            #[cfg(feature = "jpegxl")]
+            "hxlI" => false,
             _ => true,
         }
     }
@@ -198,6 +200,12 @@ impl Item {
                 stream.finish_box()?;
             }
             CodecConfiguration::Hevc(_) => unreachable!(),
+            #[cfg(feature = "jpegxl")]
+            CodecConfiguration::JpegXl(_) => {
+                stream.start_box("hxlC")?;
+                // TODO: b/456440247
+                stream.finish_box()?;
+            }
         }
         Ok(())
     }
@@ -642,6 +650,8 @@ impl Item {
             stream.start_box(match self.codec_configuration {
                 CodecConfiguration::Av1(_) => "av01",
                 CodecConfiguration::Hevc(_) => unreachable!(),
+                #[cfg(feature = "jpegxl")]
+                CodecConfiguration::JpegXl(_) => "hxlS",
             })?;
             // const unsigned int(8)[6] reserved = 0;
             for _ in 0..6 {
@@ -670,9 +680,14 @@ impl Item {
             // template unsigned int(16) frame_count = 1;
             stream.write_u16(1)?;
             // string[32] compressorname;
-            const COMPRESSOR_NAME: &str = "AOM Coding with CrabbyAvif      ";
-            assert_eq!(COMPRESSOR_NAME.len(), 32);
-            stream.write_str(COMPRESSOR_NAME)?;
+            let compressor_name = match self.codec_configuration {
+                CodecConfiguration::Av1(_) => "AOM Coding with CrabbyAvif      ",
+                CodecConfiguration::Hevc(_) => unreachable!(),
+                #[cfg(feature = "jpegxl")]
+                CodecConfiguration::JpegXl(_) => "JPEG XL Coding with CrabbyAvif  ",
+            };
+            assert_eq!(compressor_name.len(), 32);
+            stream.write_str(compressor_name)?;
             // template unsigned int(16) depth = 0x0018;
             stream.write_u16(0x0018)?;
             // int(16) pre_defined = -1

@@ -24,6 +24,11 @@ pub fn is_mini_compatible(enc: &Encoder) -> bool {
         return false;
     }
 
+    // TODO: b/456440247 - Implement with JPEG XL.
+    if enc.settings.codec_choice.actual() != CodecChoice::Aom {
+        return false;
+    }
+
     // TODO: b/434944440 - Return false if there is any sample transform recipe.
 
     // Check for maximum field values and maximum chunk sizes.

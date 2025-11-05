@@ -24,6 +24,9 @@ pub mod android_mediacodec;
 #[cfg(feature = "aom")]
 pub mod aom;
 
+#[cfg(feature = "jpegxl")]
+pub mod libjxl;
+
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::parser::mp4box::CodecConfiguration;

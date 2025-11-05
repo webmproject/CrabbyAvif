@@ -88,6 +88,10 @@ impl FileTypeBox {
             "mif1",
             #[cfg(feature = "heic")]
             "msf1",
+            #[cfg(feature = "jpegxl")]
+            "hxlI",
+            #[cfg(feature = "jpegxl")]
+            "hxlS",
         ])
     }
 
@@ -100,6 +104,8 @@ impl FileTypeBox {
             "heix",
             #[cfg(feature = "heic")]
             "mif1",
+            #[cfg(feature = "jpegxl")]
+            "hxlI",
         ])
     }
 
@@ -110,6 +116,8 @@ impl FileTypeBox {
             "hevc",
             #[cfg(feature = "heic")]
             "msf1",
+            #[cfg(feature = "jpegxl")]
+            "hxlS",
         ])
     }
 
@@ -199,6 +207,12 @@ pub struct HevcCodecConfiguration {
     pub pps: Vec<u8>,
 }
 
+#[cfg(feature = "jpegxl")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct JpegXlCodecConfiguration {
+    // TODO: b/456440247
+}
+
 impl Av1CodecConfiguration {
     pub(crate) fn depth(&self) -> u8 {
         match self.twelve_bit {
@@ -227,6 +241,8 @@ impl CodecConfiguration {
         match self {
             Self::Av1(config) => Some(config.depth()),
             Self::Hevc(config) => Some(config.bitdepth),
+            #[cfg(feature = "jpegxl")]
+            Self::JpegXl(_) => None,
         }
     }
 
@@ -234,6 +250,8 @@ impl CodecConfiguration {
         match self {
             Self::Av1(config) => Some(config.pixel_format()),
             Self::Hevc(config) => Some(config.pixel_format),
+            #[cfg(feature = "jpegxl")]
+            Self::JpegXl(_) => None,
         }
     }
 
@@ -245,6 +263,11 @@ impl CodecConfiguration {
                 // the only format that android_mediacodec returns.
                 // TODO: b/370549923 - Identify the correct chroma sample position from the codec
                 // configuration data.
+                ChromaSamplePosition::default()
+            }
+            #[cfg(feature = "jpegxl")]
+            Self::JpegXl(_) => {
+                // TODO: b/456440247 - Return None instead. The information should be fetched from pixi.
                 ChromaSamplePosition::default()
             }
         }
@@ -268,6 +291,8 @@ impl CodecConfiguration {
                 }
                 data
             }
+            #[cfg(feature = "jpegxl")]
+            Self::JpegXl(_) => unreachable!(),
         }
     }
 
@@ -279,6 +304,8 @@ impl CodecConfiguration {
                 // data.
                 0
             }
+            #[cfg(feature = "jpegxl")]
+            Self::JpegXl(_) => unreachable!(),
         }
     }
 
@@ -294,6 +321,8 @@ impl CodecConfiguration {
         match self {
             Self::Av1(_) => CompressionFormat::Avif,
             Self::Hevc(_) => CompressionFormat::Heic,
+            #[cfg(feature = "jpegxl")]
+            Self::JpegXl(_) => CompressionFormat::JpegXl,
         }
     }
 }
@@ -309,6 +338,8 @@ pub enum ColorInformation {
 pub enum CodecConfiguration {
     Av1(Av1CodecConfiguration),
     Hevc(HevcCodecConfiguration),
+    #[cfg(feature = "jpegxl")]
+    JpegXl(JpegXlCodecConfiguration),
 }
 
 impl Default for CodecConfiguration {
@@ -880,6 +911,16 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
     )))
 }
 
+#[allow(non_snake_case)]
+#[cfg(feature = "jpegxl")]
+fn parse_jxlC(_stream: &mut IStream) -> AvifResult<ItemProperty> {
+    Ok(ItemProperty::CodecConfiguration(
+        CodecConfiguration::JpegXl(JpegXlCodecConfiguration {
+            // TODO: b/456440247
+        }),
+    ))
+}
+
 fn parse_colr(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // Section 12.1.5.2 of ISO/IEC 14496-12.
 
@@ -1072,6 +1113,8 @@ fn parse_ipco(stream: &mut IStream, is_track: bool) -> AvifResult<Vec<ItemProper
             "clli" => properties.push(parse_clli(&mut sub_stream)?),
             #[cfg(feature = "heic")]
             "hvcC" => properties.push(parse_hvcC(&mut sub_stream)?),
+            #[cfg(feature = "jpegxl")]
+            "hxlC" => properties.push(parse_jxlC(&mut sub_stream)?),
             _ => properties.push(ItemProperty::Unknown(header.box_type)),
         }
     }

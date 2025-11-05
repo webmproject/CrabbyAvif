@@ -13,6 +13,9 @@
 /sys/aom-sys/aom.rs
 /sys/dav1d-sys/dav1d
 /sys/libgav1-sys/libgav1
+/sys/libjxl-sys/libjxl
+/sys/libjxl-sys/libjxl.rs
+/sys/libjxl-sys/CMake*
 /sys/libsharpyuv-sys/libwebp
 /sys/libyuv-sys/libyuv
 /sys/ndk-sys/src/bindings.rs

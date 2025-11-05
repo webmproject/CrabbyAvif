@@ -168,6 +168,8 @@ impl SampleDescription {
             "av01",
             #[cfg(feature = "heic")]
             "hvc1",
+            #[cfg(feature = "jpegxl")]
+            "hxlS",
         ]
         .contains(&self.format.as_str())
     }
