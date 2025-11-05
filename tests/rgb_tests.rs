@@ -348,6 +348,8 @@ fn default_8bit_png_to_avif() -> AvifResult<()> {
     })
 }
 
+// Identity is not supported on Android since it always returns decoded pixels in Yuv420 format.
+#[cfg(not(feature = "android_mediacodec"))]
 #[test_matrix(
     [(8, 31), (10, 101), (12, 401), (16, 6421)],
     [8, 10, 12, 16]
