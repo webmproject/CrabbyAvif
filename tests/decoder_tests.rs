@@ -312,7 +312,8 @@ fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     assert_eq!(image.width, width);
     assert_eq!(image.height, height);
     assert_eq!(decoder.image_count(), layer_count);
-    if !HAS_DECODER {
+    // Progressive decoding is not supported on Android.
+    if !HAS_NON_ANDROID_DECODER {
         return;
     }
     for _i in 0..decoder.image_count() {
@@ -869,7 +870,8 @@ fn incremental_decode() {
         parse_result = decoder.parse();
     }
     assert!(parse_result.is_ok());
-    if !HAS_DECODER {
+    // Incremental decoding is not supported on Android.
+    if !HAS_NON_ANDROID_DECODER {
         return;
     }
 
@@ -940,7 +942,8 @@ fn progressive_partial_data() -> AvifResult<()> {
         parse_result = decoder.parse();
     }
     assert!(parse_result.is_ok());
-    if !HAS_DECODER {
+    // Progressive decoding is not supported on Android.
+    if !HAS_NON_ANDROID_DECODER {
         return Ok(());
     }
 
@@ -1052,7 +1055,8 @@ fn white_1x1() -> AvifResult<()> {
     let mut decoder = get_decoder("white_1x1.avif");
     assert_eq!(decoder.parse(), Ok(()));
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
-    if !HAS_DECODER {
+    // Android MediaCodec does not support decoding 1x1 images.
+    if !HAS_NON_ANDROID_DECODER {
         return Ok(());
     }
     assert_eq!(decoder.next_image(), Ok(()));
@@ -1104,7 +1108,8 @@ fn white_1x1_meta_size0() -> AvifResult<()> {
     // Maybe another section or specification enforces that.
     assert_eq!(decoder.parse(), Ok(()));
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
-    if !HAS_DECODER {
+    // Android MediaCodec does not support decoding 1x1 images.
+    if !HAS_NON_ANDROID_DECODER {
         return Ok(());
     }
     assert_eq!(decoder.next_image(), Ok(()));
@@ -1384,7 +1389,7 @@ fn overlay(index: usize) {
     let image = decoder.image().expect("image was none");
     assert_eq!(image.width, info.width);
     assert_eq!(image.height, info.height);
-    if !HAS_DECODER {
+    if !HAS_NON_ANDROID_DECODER {
         return;
     }
     let res = decoder.next_image();
@@ -1439,7 +1444,8 @@ fn sato_16bit(filename: &str, has_alpha: bool) {
     decoder.settings.allow_sample_transform = true;
     assert!(decoder.parse().is_ok());
     assert_eq!(has_alpha, decoder.image().unwrap().alpha_present);
-    if !HAS_DECODER {
+    // Some of the input AV1 streams in this tests are too large for Android MediaCodec.
+    if !HAS_NON_ANDROID_DECODER {
         return;
     }
     let res = decoder.next_image();
