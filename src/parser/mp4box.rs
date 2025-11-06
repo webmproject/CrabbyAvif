@@ -86,6 +86,8 @@ impl FileTypeBox {
             "heix",
             #[cfg(feature = "heic")]
             "mif1",
+            #[cfg(feature = "heic")]
+            "msf1",
         ])
     }
 
