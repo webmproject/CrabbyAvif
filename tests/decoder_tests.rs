@@ -1253,6 +1253,45 @@ fn heic(filename: &str, expected_width: u32, expected_height: u32) {
     }
 }
 
+#[test_case("heic/nokiatech/bird_burst.heic", 640, 360, 90, [3, 10, 50, 85])]
+#[test_case("heic/nokiatech/candle_animation.heic", 256, 144, 120, [1, 20, 50, 109])]
+#[test_case("heic/nokiatech/rally_burst.heic", 640, 360, 60, [4, 12, 45, 54])]
+#[test_case("heic/nokiatech/sea1_animation.heic", 256, 144, 120, [2, 22, 51, 119])]
+#[test_case("heic/nokiatech/starfield_animation.heic", 256, 144, 120, [6, 18, 49, 112])]
+fn heic_sequence(
+    filename: &str,
+    expected_width: u32,
+    expected_height: u32,
+    expected_frame_count: u32,
+    random_valid_frame_indices: [u32; 4],
+) {
+    let mut decoder = get_decoder(filename);
+    decoder.settings.strictness = decoder::Strictness::None;
+    decoder.settings.ignore_exif = true;
+    decoder.settings.ignore_xmp = true;
+    let res = decoder.parse();
+    if cfg!(feature = "heic") {
+        assert!(res.is_ok());
+        let image = decoder.image().expect("image was none");
+        assert_eq!(image.width, expected_width);
+        assert_eq!(image.height, expected_height);
+        assert_eq!(decoder.image_count(), expected_frame_count);
+        assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
+        if cfg!(feature = "android_mediacodec") {
+            // Decode all frames in order.
+            for _ in 0..expected_frame_count {
+                assert!(decoder.next_image().is_ok());
+            }
+            // Decode random frames using nth_image.
+            for frame_index in random_valid_frame_indices {
+                assert!(decoder.nth_image(frame_index).is_ok());
+            }
+        }
+    } else {
+        assert!(res.is_err());
+    }
+}
+
 #[test]
 fn clap_irot_imir_non_essential() {
     let mut decoder = get_decoder("clap_irot_imir_non_essential.avif");
