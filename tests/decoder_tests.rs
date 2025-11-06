@@ -1209,23 +1209,41 @@ fn grid_image_nclx_associated_with_individual_cells() {
 
 #[test]
 fn heic_peek() {
-    let file_data = std::fs::read(get_test_file("blue.heic")).expect("could not read file");
+    let file_data = std::fs::read(get_test_file("heic/blue.heic")).expect("could not read file");
     assert_eq!(
         decoder::Decoder::peek_compatible_file_type(&file_data),
         cfg!(feature = "heic")
     );
 }
 
-#[test_case("blue.heic")]
-#[test_case("blue_gh_issue_692.heic")]
-fn heic(filename: &str) {
+#[test_case("heic/blue.heic", 320, 240)]
+#[test_case("heic/blue_gh_issue_692.heic", 320, 240)]
+#[test_case("heic/nokiatech/autumn_1440x960.heic", 1440, 960)]
+#[test_case("heic/nokiatech/bothie_1440x960.heic", 1440, 960)]
+#[test_case("heic/nokiatech/cheers_1440x960.heic", 1440, 960)]
+#[test_case("heic/nokiatech/crowd_1440x960.heic", 1440, 960)]
+#[test_case("heic/nokiatech/grid_960x640.heic", 960, 640)]
+#[test_case("heic/nokiatech/lights_1440x960.heic", 1440, 960)]
+#[test_case("heic/nokiatech/old_bridge_1440x960.heic", 1440, 960)]
+#[test_case("heic/nokiatech/random_collection_1440x960.heic", 1440, 960)]
+#[test_case("heic/nokiatech/season_collection_1440x960.heic", 1440, 960)]
+#[test_case("heic/nokiatech/ski_jump_1440x960.heic", 1440, 960)]
+#[test_case("heic/nokiatech/spring_1440x960.heic", 1440, 960)]
+#[test_case("heic/nokiatech/stereo_1200x800.heic", 1200, 800)]
+#[test_case("heic/nokiatech/summer_1440x960.heic", 1440, 960)]
+#[test_case("heic/nokiatech/surfer_1440x960.heic", 1440, 960)]
+#[test_case("heic/nokiatech/winter_1440x960.heic", 1440, 960)]
+fn heic(filename: &str, expected_width: u32, expected_height: u32) {
     let mut decoder = get_decoder(filename);
+    decoder.settings.strictness = decoder::Strictness::None;
+    decoder.settings.ignore_exif = true;
+    decoder.settings.ignore_xmp = true;
     let res = decoder.parse();
     if cfg!(feature = "heic") {
         assert!(res.is_ok());
         let image = decoder.image().expect("image was none");
-        assert_eq!(image.width, 320);
-        assert_eq!(image.height, 240);
+        assert_eq!(image.width, expected_width);
+        assert_eq!(image.height, expected_height);
         assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
         if cfg!(feature = "android_mediacodec") {
             assert!(decoder.next_image().is_ok());
