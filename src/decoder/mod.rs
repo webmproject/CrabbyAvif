@@ -1866,8 +1866,7 @@ impl Decoder {
             } else {
                 return next_image_result;
             }
-        }
-        if !grid_image_helper.is_grid_complete()? {
+        } else if !grid_image_helper.is_grid_complete()? {
             return AvifError::unknown_error("codec did not decode all cells");
         }
         checked_incr!(

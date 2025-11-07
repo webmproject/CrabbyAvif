@@ -1217,7 +1217,9 @@ fn heic_peek() {
 }
 
 #[test_case("heic/blue.heic", 320, 240)]
+#[test_case("heic/blue_alpha.heic", 320, 240)]
 #[test_case("heic/blue_gh_issue_692.heic", 320, 240)]
+#[test_case("heic/blue_grid_alpha.heic", 320, 240)]
 #[test_case("heic/nokiatech/autumn_1440x960.heic", 1440, 960)]
 #[test_case("heic/nokiatech/bothie_1440x960.heic", 1440, 960)]
 #[test_case("heic/nokiatech/cheers_1440x960.heic", 1440, 960)]
