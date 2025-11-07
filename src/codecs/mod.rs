@@ -52,9 +52,6 @@ pub(crate) struct DecoderConfig {
     pub codec_config: CodecConfiguration,
     pub category: Category,
     pub android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat,
-    // Set to true only if the codec will be used for exactly one image. Only used by Android
-    // MediaCodec.
-    pub is_single_image: bool,
 }
 
 pub(crate) trait Decoder {
@@ -67,6 +64,7 @@ pub(crate) trait Decoder {
         spatial_id: u8,
         image: &mut Image,
         category: Category,
+        #[cfg(feature = "android_mediacodec")] signal_eos: bool,
     ) -> AvifResult<()>;
     // Decode a list of input images and outputs them into the |grid_image_helper|.
     fn get_next_image_grid(

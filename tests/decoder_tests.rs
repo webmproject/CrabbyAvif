@@ -1225,6 +1225,7 @@ fn heic_peek() {
 #[test_case("heic/nokiatech/grid_960x640.heic", 960, 640)]
 #[test_case("heic/nokiatech/lights_1440x960.heic", 1440, 960)]
 #[test_case("heic/nokiatech/old_bridge_1440x960.heic", 1440, 960)]
+#[test_case("heic/nokiatech/overlay_1000x680.heic", 1000, 680)]
 #[test_case("heic/nokiatech/random_collection_1440x960.heic", 1440, 960)]
 #[test_case("heic/nokiatech/season_collection_1440x960.heic", 1440, 960)]
 #[test_case("heic/nokiatech/ski_jump_1440x960.heic", 1440, 960)]
