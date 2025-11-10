@@ -296,7 +296,7 @@ fn prefer_hardware_decoder(config: &DecoderConfig) -> bool {
         false,
     )
     .unwrap_or(false);
-    match config.codec_config {
+    match &config.codec_config {
         CodecConfiguration::Av1(av1_codec_configuration) => {
             // We will return true when all of the below conditions are true:
             // 1) prefer_hw is true.
