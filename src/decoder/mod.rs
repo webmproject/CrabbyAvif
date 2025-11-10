@@ -1929,6 +1929,17 @@ impl Decoder {
         }
     }
 
+    #[cfg(feature = "android_mediacodec")]
+    fn is_decoding_item_yuv400(&self, decoding_item: DecodingItem) -> bool {
+        !self.tiles[decoding_item.usize()].is_empty()
+            && matches!(
+                self.tiles[decoding_item.usize()][0]
+                    .codec_config
+                    .pixel_format(),
+                Some(PixelFormat::Yuv400)
+            )
+    }
+
     pub fn next_image(&mut self) -> AvifResult<()> {
         if self.io.is_none() {
             return AvifError::io_not_set();
@@ -1936,6 +1947,17 @@ impl Decoder {
         if !self.parsing_complete() {
             return AvifError::no_content();
         }
+
+        // Android MediaCodec does not support monochrome gainmaps for HEIC. So when decoding only
+        // such Gainmaps on Android, return an error instead of unnecessarily creating the codec.
+        #[cfg(feature = "android_mediacodec")]
+        if self.compression_format == CompressionFormat::Heic
+            && self.settings.image_content_to_decode == ImageContentType::GainMap
+            && self.is_decoding_item_yuv400(DecodingItem::GAINMAP)
+        {
+            return Err(AvifError::NoContent);
+        }
+
         if self.is_current_frame_fully_decoded() {
             for decoding_item in DecodingItem::ALL_USIZE {
                 self.tile_info[decoding_item].decoded_tile_count = 0;
