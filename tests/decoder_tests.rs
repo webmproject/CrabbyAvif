@@ -1296,6 +1296,26 @@ fn heic_sequence(
 }
 
 #[test]
+fn heic_monochrome_gainmap() {
+    let mut decoder = get_decoder("heic/yuv420_image_with_yuv400_gainmap.heic");
+    decoder.settings.strictness = decoder::Strictness::None;
+    decoder.settings.ignore_exif = true;
+    decoder.settings.ignore_xmp = true;
+    decoder.settings.image_content_to_decode = ImageContentType::GainMap;
+    let res = decoder.parse();
+    if cfg!(feature = "heic") {
+        assert!(res.is_ok());
+        assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
+        if cfg!(feature = "android_mediacodec") {
+            // Android MediaCodec does not support monochrome HEIC images.
+            assert!(matches!(decoder.next_image(), Err(AvifError::NoContent)));
+        }
+    } else {
+        assert!(res.is_err());
+    }
+}
+
+#[test]
 fn clap_irot_imir_non_essential() {
     let mut decoder = get_decoder("clap_irot_imir_non_essential.avif");
     let res = decoder.parse();
