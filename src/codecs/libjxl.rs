@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(non_upper_case_globals)]
+
 use crate::codecs::*;
 use crate::encoder::Sample;
 use crate::image::Image;
@@ -36,7 +38,6 @@ trait JxlEncoderStatusTrait {
 }
 impl JxlEncoderStatusTrait for JxlEncoderStatus {
     fn map_enc_err(self, encoder: *mut JxlEncoder) -> Result<(), AvifError> {
-        #![allow(non_upper_case_globals)]
         match self {
             JxlEncoderStatus_JXL_ENC_SUCCESS => Ok(()),
             JxlEncoderStatus_JXL_ENC_ERROR => {
@@ -52,7 +53,6 @@ trait JxlDecoderStatusTrait {
 }
 impl JxlDecoderStatusTrait for JxlDecoderStatus {
     fn map_dec_err(self) -> Result<(), AvifError> {
-        #![allow(non_upper_case_globals)]
         match self {
             JxlDecoderStatus_JXL_DEC_SUCCESS => Ok(()),
             _ => AvifError::unknown_error(format!("Unexpected JxlDecoderStatus {self}")),
@@ -222,28 +222,23 @@ impl Encoder for Libjxl {
         // # Safety: Calling a C function with valid parameters.
         unsafe { JxlEncoderCloseInput(encoder) };
 
-        let mut data: Vec<u8> = vec![];
-        data.try_reserve(64).map_err(AvifError::map_out_of_memory)?; // Arbitrary initial size.
-        data.resize(data.capacity(), 0);
-        let mut avail_out = data.len();
-        let mut next_out: *mut u8 = data.as_mut_ptr();
+        let mut data: Vec<u8> = vec![]; // Vector of encoded bytes, growing by chunks.
+        let mut chunk = [0; 64]; // Arbitrary chunk size.
         loop {
+            let mut avail_out = chunk.len();
+            let mut next_out: *mut u8 = chunk.as_mut_ptr();
             // # Safety: Calling a C function with valid parameters.
             let status = unsafe { JxlEncoderProcessOutput(encoder, &mut next_out, &mut avail_out) };
-            // # Safety: Computing the offset between two pointers guaranteed to be from the same allocation.
-            let num_written_bytes =
-                unsafe { next_out.byte_offset_from_unsigned(data.as_mut_ptr()) };
-            if status == JxlEncoderStatus_JXL_ENC_NEED_MORE_OUTPUT {
-                data.try_reserve(data.capacity())
-                    .map_err(AvifError::map_out_of_memory)?;
-                data.resize(data.capacity(), 0);
-                // # Safety: Offsetting pointer by a byte amount guaranteed to fit in the same allocation.
-                next_out = unsafe { data.as_mut_ptr().byte_add(num_written_bytes) };
-                avail_out = data.len() - num_written_bytes;
-            } else {
+            let written_bytes = &chunk[..chunk.len().checked_sub(avail_out).unwrap()];
+            // From the libjxl API:
+            //   It is guaranteed that, if *avail_out >= 32, at least one byte of output will be written.
+            assert!(!written_bytes.is_empty());
+
+            data.try_reserve(written_bytes.len())
+                .map_err(AvifError::map_out_of_memory)?;
+            data.extend_from_slice(written_bytes);
+            if status != JxlEncoderStatus_JXL_ENC_NEED_MORE_OUTPUT {
                 status.map_enc_err(encoder)?; // JxlEncoderStatus_JXL_ENC_SUCCESS is expected.
-                assert!(num_written_bytes <= data.len());
-                data.resize(num_written_bytes, 0); // Trim the unused allocated bytes.
                 output_samples.push(Sample { data, sync: true });
                 return Ok(());
             }
@@ -267,7 +262,11 @@ impl Decoder for Libjxl {
         image: &mut Image,
         category: Category,
     ) -> AvifResult<()> {
-        assert_eq!(spatial_id, 0xff); // Sentinel value.
+        if spatial_id != 0xff {
+            return AvifError::unknown_error(format!(
+                "spatial_id {spatial_id} is not supported with JPEG XL"
+            ));
+        }
         match category {
             Category::Color => {}
             Category::Alpha => unreachable!(), // Should be a channel, not an auxiliary item.
@@ -280,7 +279,6 @@ impl Decoder for Libjxl {
             if decoder.is_null() {
                 return AvifError::unknown_error("JxlDecoderCreate() failed.");
             }
-            // # Safety: decoder cannot be null here thanks to the check above.
             self.decoder = decoder;
 
             const EVENTS: i32 =
