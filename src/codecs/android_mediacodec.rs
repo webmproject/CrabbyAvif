@@ -20,7 +20,6 @@ use crate::image::Image;
 use crate::image::YuvRange;
 use crate::internal_utils::stream::IStream;
 use crate::internal_utils::*;
-#[cfg(android_soong)]
 use crate::parser::mp4box::CodecConfiguration;
 use crate::utils::pixels::*;
 use crate::*;
@@ -599,7 +598,22 @@ impl MediaCodec {
     }
 
     fn enqueue_payload(&self, input_index: isize, payload: &[u8], flags: u32) -> AvifResult<()> {
-        let codec = self.codec.unwrap();
+        Self::enqueue_payload_impl(
+            self.codec.unwrap(),
+            input_index,
+            payload,
+            flags,
+            &self.config.unwrap_ref().codec_config,
+        )
+    }
+
+    fn enqueue_payload_impl(
+        codec: *mut AMediaCodec,
+        input_index: isize,
+        payload: &[u8],
+        flags: u32,
+        codec_config: &CodecConfiguration,
+    ) -> AvifResult<()> {
         let mut input_buffer_size: usize = 0;
         let input_buffer = unsafe {
             AMediaCodec_getInputBuffer(
@@ -613,7 +627,7 @@ impl MediaCodec {
                 "input buffer at index {input_index} was null"
             ));
         }
-        let hevc_whole_nal_units = self.hevc_whole_nal_units(payload)?;
+        let hevc_whole_nal_units = Self::hevc_whole_nal_units(payload, codec_config)?;
         let codec_payload = match &hevc_whole_nal_units {
             Some(hevc_payload) => hevc_payload,
             None => payload,
@@ -896,13 +910,16 @@ impl Decoder for MediaCodec {
 }
 
 impl MediaCodec {
-    fn hevc_whole_nal_units(&self, payload: &[u8]) -> AvifResult<Option<Vec<u8>>> {
-        if self.config.unwrap_ref().codec_config.compression_format() != CompressionFormat::Heic {
+    fn hevc_whole_nal_units(
+        payload: &[u8],
+        codec_config: &CodecConfiguration,
+    ) -> AvifResult<Option<Vec<u8>>> {
+        if codec_config.compression_format() != CompressionFormat::Heic {
             return Ok(None);
         }
         // For HEVC, MediaCodec expects whole NAL units with each unit prefixed with a start code
         // of "\x00\x00\x00\x01".
-        let nal_length_size = self.config.unwrap_ref().codec_config.nal_length_size() as usize;
+        let nal_length_size = codec_config.nal_length_size() as usize;
         let mut offset = 0;
         let mut hevc_payload = Vec::new();
         while offset < payload.len() {
