@@ -229,10 +229,12 @@ impl Encoder for Libjxl {
             let mut next_out: *mut u8 = chunk.as_mut_ptr();
             // # Safety: Calling a C function with valid parameters.
             let status = unsafe { JxlEncoderProcessOutput(encoder, &mut next_out, &mut avail_out) };
-            let written_bytes = &chunk[..chunk.len().checked_sub(avail_out).unwrap()];
             // From the libjxl API:
             //   It is guaranteed that, if *avail_out >= 32, at least one byte of output will be written.
-            assert!(!written_bytes.is_empty());
+            assert!(avail_out < chunk.len());
+            // avail_out now contains the number of unused bytes among the chunk.len() bytes
+            // that were passed to JxlEncoderProcessOutput().
+            let written_bytes = &chunk[..chunk.len() - avail_out];
 
             data.try_reserve(written_bytes.len())
                 .map_err(AvifError::map_out_of_memory)?;
