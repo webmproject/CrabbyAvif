@@ -29,6 +29,9 @@ use crate::codecs::libgav1::Libgav1;
 #[cfg(feature = "android_mediacodec")]
 use crate::codecs::android_mediacodec::MediaCodec;
 
+#[cfg(feature = "jpegxl")]
+use crate::codecs::libjxl::Libjxl;
+
 use crate::codecs::DecoderConfig;
 use crate::gainmap::*;
 use crate::image::*;
@@ -38,6 +41,7 @@ use crate::parser::exif;
 use crate::parser::mp4box;
 use crate::parser::mp4box::*;
 use crate::parser::obu::Av1SequenceHeader;
+use crate::utils::pixels::ChannelIdc;
 use crate::*;
 
 use std::cmp::max;
@@ -81,6 +85,11 @@ impl CodecChoice {
             CompressionFormat::Heic => match self {
                 #[cfg(feature = "android_mediacodec")]
                 CodecChoice::Auto | CodecChoice::MediaCodec => Some(Box::<MediaCodec>::default()),
+                _ => None,
+            },
+            #[cfg(feature = "jpegxl")]
+            CompressionFormat::JpegXl => match self {
+                CodecChoice::Auto | CodecChoice::Libjxl => Some(Box::<Libjxl>::default()),
                 _ => None,
             },
         }
@@ -355,6 +364,8 @@ pub enum CompressionFormat {
     #[default]
     Avif = 0,
     Heic = 1,
+    #[cfg(feature = "jpegxl")]
+    JpegXl = 2,
 }
 
 pub(crate) struct GridImageHelper<'a> {
@@ -1369,6 +1380,22 @@ impl Decoder {
                     || self.image.imir_axis != alpha_imir
                 {
                     return AvifError::not_implemented();
+                }
+            }
+
+            if let Some(pixi) = find_property!(color_properties, PixelInformation) {
+                if pixi
+                    .planes
+                    .iter()
+                    .any(|plane| plane.channel_idc == Some(ChannelIdc::Alpha))
+                {
+                    if self.image.alpha_present {
+                        // TODO: b/456440247 - Handle multiple alpha planes.
+                        return AvifError::not_implemented();
+                    }
+                    self.image.alpha_present = true;
+                    // TODO: b/456440247 - Harvest alpha premultiplied from the new alpi box.
+                    self.image.alpha_premultiplied = false;
                 }
             }
 

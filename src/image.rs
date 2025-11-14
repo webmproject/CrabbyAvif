@@ -340,7 +340,7 @@ impl Image {
         })
     }
 
-    #[cfg(feature = "libyuv")]
+    #[cfg(any(feature = "libyuv", feature = "jpegxl"))]
     pub(crate) fn plane_row_bytes(&self) -> AvifResult<[i32; 4]> {
         Ok(ALL_PLANES.map(|x| {
             if self.has_plane(x) {

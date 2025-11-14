@@ -63,6 +63,8 @@ pub enum CodecChoice {
     MediaCodec, // AVIF (AV1-HEIF) and HEIC (HEVC-HEIF) decoder on Android.
     Dav1d,      // AVIF (AV1-HEIF) decoder.
     Libgav1,    // AVIF (AV1-HEIF) decoder.
+    #[cfg(feature = "jpegxl")]
+    Libjxl, // JPEG XL-HEIF encoder and decoder. WARNING: experimental.
 }
 
 #[repr(C)]
@@ -573,6 +575,8 @@ pub fn codec_versions() -> String {
         codecs::dav1d::Dav1d::version(),
         #[cfg(feature = "libgav1")]
         codecs::libgav1::Libgav1::version(),
+        #[cfg(feature = "jpegxl")]
+        codecs::libjxl::Libjxl::version(),
     ];
     versions.join(", ")
 }

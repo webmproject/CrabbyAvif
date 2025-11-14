@@ -46,6 +46,9 @@ libsharpyuv-sys = { version = "0.1.0", path = "sys/libsharpyuv-sys", features = 
 aom-sys = { version = "0.1.0", path = "sys/aom-sys", features = [
   "aom",
 ], optional = true }
+libjxl-sys = { version = "0.1.0", path = "sys/libjxl-sys", features = [
+  "libjxl",
+], optional = true }
 
 png = { version = "0.17.16", optional = true }
 image = { version = "0.25.6", features = ["jpeg"], optional = true }
@@ -80,6 +83,7 @@ jpeg = ["dep:image"]
 gif = ["dep:gif", "dep:gif-dispose"]
 sample_transform = []
 sharpyuv = ["dep:libsharpyuv-sys"]
+jpegxl = ["dep:libjxl-sys"]
 
 [package.metadata.capi.header]
 name = "avif"

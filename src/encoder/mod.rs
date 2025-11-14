@@ -36,6 +36,9 @@ use crate::*;
 #[cfg(feature = "aom")]
 use crate::codecs::aom::Aom;
 
+#[cfg(feature = "jpegxl")]
+use crate::codecs::libjxl::Libjxl;
+
 use std::collections::HashMap;
 use std::fmt;
 use std::time::SystemTime;
@@ -134,10 +137,21 @@ pub enum Recipe {
 }
 
 impl CodecChoice {
-    fn get_item_type_and_encoder_codec(&self) -> Result<(&str, Codec), AvifError> {
+    // Returns the chosen or default codec.
+    pub(crate) fn actual(self) -> Self {
         match self {
+            Self::Auto => Self::Aom,
+            _ => self,
+        }
+    }
+
+    fn get_item_type_and_encoder_codec(&self) -> Result<(&str, Codec), AvifError> {
+        match self.actual() {
+            Self::Auto => unreachable!(),
             #[cfg(feature = "aom")]
-            CodecChoice::Auto | CodecChoice::Aom => Ok(("av01", Box::<Aom>::default())),
+            Self::Aom => Ok(("av01", Box::<Aom>::default())),
+            #[cfg(feature = "jpegxl")]
+            Self::Libjxl => Ok(("hxlI", Box::<Libjxl>::default())),
             _ => AvifError::no_codec_available(),
         }
     }
@@ -186,11 +200,17 @@ impl Settings {
     }
 
     pub(crate) fn must_write_extended_pixi(&self) -> bool {
-        // TODO: b/456440247 - Add support for codecs requiring extended pixi.
+        #[cfg(feature = "jpegxl")]
+        if self.codec_choice == CodecChoice::Libjxl {
+            return true;
+        }
         self.force_write_extended_pixi
     }
     pub(crate) fn codec_supports_native_alpha_channel(&self) -> bool {
-        // TODO: b/456440247 - Add support for codecs with native alpha channels.
+        #[cfg(feature = "jpegxl")]
+        if self.codec_choice == CodecChoice::Libjxl {
+            return true;
+        }
         false
     }
 }
@@ -743,6 +763,11 @@ impl Encoder {
                     }
                     CodecChoice::MediaCodec | CodecChoice::Dav1d | CodecChoice::Libgav1 => {
                         return AvifError::no_codec_available()
+                    }
+                    #[cfg(feature = "jpegxl")]
+                    CodecChoice::Libjxl => {
+                        item.codec_configuration =
+                            CodecConfiguration::JpegXl(JpegXlCodecConfiguration {});
                     }
                 }
             }

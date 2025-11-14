@@ -319,6 +319,8 @@ fn prefer_hardware_decoder(config: &DecoderConfig) -> bool {
             //    only supports 8-bit images.
             prefer_hw || config.depth > 8
         }
+        #[cfg(feature = "jpegxl")]
+        CodecConfiguration::JpegXl(_) => unreachable!(),
     }
 }
 
@@ -343,6 +345,8 @@ fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {
     let mime_type = match config.codec_config.compression_format() {
         CompressionFormat::Avif => MediaCodec::AV1_MIME,
         CompressionFormat::Heic => MediaCodec::HEVC_MIME,
+        #[cfg(feature = "jpegxl")]
+        CompressionFormat::JpegXl => unreachable!(),
     };
     let prefer_hw = false;
     #[cfg(android_soong)]
@@ -380,6 +384,8 @@ fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {
             CodecInitializer::ByName(gav1),
             CodecInitializer::ByMimeType(mime_type.to_string()),
         ],
+        #[cfg(feature = "jpegxl")]
+        (_, CompressionFormat::JpegXl, _) => unreachable!(),
     }
 }
 
@@ -414,6 +420,8 @@ impl MediaCodec {
             match config.codec_config.compression_format() {
                 CompressionFormat::Avif => Self::AV1_MIME,
                 CompressionFormat::Heic => Self::HEVC_MIME,
+                #[cfg(feature = "jpegxl")]
+                CompressionFormat::JpegXl => unreachable!(),
             }
         );
         unsafe {

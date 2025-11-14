@@ -364,6 +364,8 @@ impl Item {
             "av01",
             #[cfg(feature = "heic")]
             "hvc1",
+            #[cfg(feature = "jpegxl")]
+            "hxlI",
         ]
         .contains(&self.item_type.as_str())
     }
