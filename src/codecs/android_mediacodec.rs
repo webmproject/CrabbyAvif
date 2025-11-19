@@ -29,6 +29,11 @@ use ndk_sys::bindings::*;
 use std::ffi::CString;
 use std::os::raw::c_char;
 use std::ptr;
+use std::sync::mpsc::channel;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
+use std::sync::mpsc::TryRecvError;
+use std::thread;
 
 #[cfg(android_soong)]
 include!(concat!(env!("OUT_DIR"), "/mediaimage2_bindgen.rs"));
@@ -399,6 +404,9 @@ pub struct MediaCodec {
     codec_initializers: Vec<CodecInitializer>,
 }
 
+struct MediaCodecThreadWrapper(*mut AMediaCodec);
+unsafe impl Send for MediaCodecThreadWrapper {}
+
 impl MediaCodec {
     const AV1_MIME: &str = "video/av01";
     const HEVC_MIME: &str = "video/hevc";
@@ -750,6 +758,117 @@ impl MediaCodec {
         Ok(())
     }
 
+    fn enqueue_payloads(
+        codec: MediaCodecThreadWrapper,
+        payloads: Vec<Vec<u8>>,
+        codec_config: CodecConfiguration,
+        tx: Sender<()>,
+        rx: Receiver<()>,
+    ) -> AvifResult<()> {
+        let mut payloads_iter = payloads.iter().peekable();
+        let codec = codec.0;
+        // Try to enqueue input frames to the codec until one of the following conditions is met:
+        // 1) All frames have been enqueued.
+        // 2) The main thread sent us a signal to exit.
+        // 3) If enqueueing a frame caused a fatal error.
+        while payloads_iter.peek().is_some() {
+            let input_index = unsafe { AMediaCodec_dequeueInputBuffer(codec, 0) };
+            if input_index >= 0 {
+                let payload = payloads_iter.next().unwrap();
+                let res = Self::enqueue_payload_impl(
+                    codec,
+                    input_index,
+                    payload,
+                    if payloads_iter.peek().is_some() {
+                        0
+                    } else {
+                        AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM as u32
+                    },
+                    &codec_config,
+                );
+                if res.is_err() {
+                    let _ = tx.send(());
+                    return res;
+                }
+            }
+            match rx.try_recv() {
+                Ok(_) | Err(TryRecvError::Disconnected) => {
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn dequeue_frames(
+        &mut self,
+        grid_image_helper: &mut GridImageHelper,
+        rx: Receiver<()>,
+    ) -> AvifResult<()> {
+        let mut retry_count = 0;
+        let codec = self.codec.unwrap();
+        while !grid_image_helper.is_grid_complete()? {
+            if rx.try_recv().is_ok() {
+                return AvifError::unknown_error("input thread error");
+            }
+            let mut buffer_info = AMediaCodecBufferInfo::default();
+            // # Safety: Calling a C function with valid parameters.
+            let output_index = unsafe {
+                AMediaCodec_dequeueOutputBuffer(
+                    codec,
+                    &mut buffer_info as *mut _,
+                    Self::TIMEOUT as _,
+                )
+            };
+            if output_index == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED as isize {
+                // Do nothing.
+            } else if output_index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED as isize {
+                // # Safety: Calling a C function with valid parameters.
+                let format = unsafe { AMediaCodec_getOutputFormat(codec) };
+                if format.is_null() {
+                    return AvifError::unknown_error("output format was null");
+                }
+                self.format = Some(MediaFormat { format });
+            } else if output_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
+                retry_count += 1;
+                if retry_count >= Self::MAX_RETRIES {
+                    return AvifError::unknown_error("output format was null");
+                }
+            } else if output_index < 0 {
+                return AvifError::unknown_error("");
+            } else {
+                let mut buffer_size: usize = 0;
+                // # Safety: Calling a C function with valid parameters.
+                let output_buffer = unsafe {
+                    AMediaCodec_getOutputBuffer(
+                        codec,
+                        output_index as usize,
+                        &mut buffer_size as *mut _,
+                    )
+                };
+                if output_buffer.is_null() {
+                    return AvifError::unknown_error("output buffer is null");
+                }
+                let mut cell_image = Image::default();
+                self.output_buffer_to_image(
+                    output_buffer,
+                    &mut cell_image,
+                    grid_image_helper.category,
+                )?;
+                grid_image_helper.copy_from_cell_image(&mut cell_image)?;
+                if !grid_image_helper.is_grid_complete()? {
+                    // The last output buffer will be released when the codec is dropped.
+                    // # Safety: Calling a C function with valid parameters.
+                    unsafe {
+                        AMediaCodec_releaseOutputBuffer(codec, output_index as _, false);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn get_next_image_grid_impl(
         &mut self,
         payloads: &[Vec<u8>],
@@ -758,84 +877,37 @@ impl MediaCodec {
         if self.codec.is_none() {
             self.initialize_impl(/*low_latency=*/ false)?;
         }
-        let codec = self.codec.unwrap();
-        let mut retry_count = 0;
-        let mut payloads_iter = payloads.iter().peekable();
-        unsafe {
-            while !grid_image_helper.is_grid_complete()? {
-                // Queue as many inputs as we possibly can, then block on dequeuing outputs. After
-                // getting each output, come back and queue the inputs again to keep the decoder as
-                // busy as possible.
-                while payloads_iter.peek().is_some() {
-                    let input_index = AMediaCodec_dequeueInputBuffer(codec, 0);
-                    if input_index < 0 {
-                        if retry_count >= Self::MAX_RETRIES {
-                            return AvifError::unknown_error("max retries exceeded");
-                        }
-                        break;
-                    }
-                    let payload = payloads_iter.next().unwrap();
-                    self.enqueue_payload(
-                        input_index,
-                        payload,
-                        if payloads_iter.peek().is_some() {
-                            0
-                        } else {
-                            AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM as u32
-                        },
-                    )?;
-                }
-                loop {
-                    let mut buffer_info = AMediaCodecBufferInfo::default();
-                    let output_index = AMediaCodec_dequeueOutputBuffer(
-                        codec,
-                        &mut buffer_info as *mut _,
-                        Self::TIMEOUT as _,
-                    );
-                    if output_index == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED as isize {
-                        continue;
-                    } else if output_index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED as isize {
-                        let format = AMediaCodec_getOutputFormat(codec);
-                        if format.is_null() {
-                            return AvifError::unknown_error("output format was null");
-                        }
-                        self.format = Some(MediaFormat { format });
-                        continue;
-                    } else if output_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
-                        retry_count += 1;
-                        if retry_count >= Self::MAX_RETRIES {
-                            return AvifError::unknown_error("max retries exceeded");
-                        }
-                        break;
-                    } else if output_index < 0 {
-                        return AvifError::unknown_error("");
-                    } else {
-                        let mut buffer_size: usize = 0;
-                        let output_buffer = AMediaCodec_getOutputBuffer(
-                            codec,
-                            usize_from_isize(output_index)?,
-                            &mut buffer_size as *mut _,
-                        );
-                        if output_buffer.is_null() {
-                            return AvifError::unknown_error("output buffer is null");
-                        }
-                        let mut cell_image = Image::default();
-                        self.output_buffer_to_image(
-                            output_buffer,
-                            &mut cell_image,
-                            grid_image_helper.category,
-                        )?;
-                        grid_image_helper.copy_from_cell_image(&mut cell_image)?;
-                        if !grid_image_helper.is_grid_complete()? {
-                            // The last output buffer will be released when the codec is dropped.
-                            AMediaCodec_releaseOutputBuffer(codec, output_index as _, false);
-                        }
-                        break;
-                    }
-                }
+
+        let (enqueue_to_dequeue_tx, enqueue_to_dequeue_rx) = channel::<()>();
+        let (dequeue_to_enqueue_tx, dequeue_to_enqueue_rx) = channel::<()>();
+
+        // Create a thread to enqueue the input frames.
+        let codec_config = self.config.unwrap_ref().codec_config.clone();
+        let codec = MediaCodecThreadWrapper(self.codec.unwrap());
+        let payloads_vec = payloads.to_vec();
+        let enqueue_payloads_thread = thread::spawn(|| {
+            Self::enqueue_payloads(
+                codec,
+                payloads_vec,
+                codec_config,
+                enqueue_to_dequeue_tx,
+                dequeue_to_enqueue_rx,
+            )
+        });
+
+        // Dequeue all the output frames.
+        match self.dequeue_frames(grid_image_helper, enqueue_to_dequeue_rx) {
+            Ok(_) => enqueue_payloads_thread
+                .join()
+                .unwrap_or(Err(AvifError::UnknownError("".into()))),
+            Err(err) => {
+                let _ = dequeue_to_enqueue_tx.send(());
+                enqueue_payloads_thread
+                    .join()
+                    .or(Err(AvifError::UnknownError("".into())))??;
+                Err(err)
             }
         }
-        Ok(())
     }
 
     fn drop_impl(&mut self) {
