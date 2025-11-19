@@ -81,7 +81,6 @@ encoder = []
 png = ["dep:png"]
 jpeg = ["dep:image"]
 gif = ["dep:gif", "dep:gif-dispose"]
-sample_transform = []
 sharpyuv = ["dep:libsharpyuv-sys"]
 jpegxl = ["dep:libjxl-sys"]
 
