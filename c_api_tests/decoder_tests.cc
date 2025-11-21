@@ -143,12 +143,12 @@ TEST(DecoderTest, OneShotDecodeFile) {
 
   // Call avifDecoderReadFile with a different file but with the same decoder
   // instance.
-  file_name = "white_1x1.avif";
+  file_name = "white_2x2.avif";
   ASSERT_EQ(avifDecoderReadFile(decoder.get(), &image,
                                 GetFilename(file_name).c_str()),
             AVIF_RESULT_OK);
-  EXPECT_EQ(image.width, 1);
-  EXPECT_EQ(image.height, 1);
+  EXPECT_EQ(image.width, 2);
+  EXPECT_EQ(image.height, 2);
   EXPECT_EQ(image.depth, 8);
 }
 
