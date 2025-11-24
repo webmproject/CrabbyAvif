@@ -13,7 +13,7 @@ version = "0.1.0"
 edition = "2021"     # Rust version
 
 [lib]
-crate-type = ["rlib", "cdylib"]
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
 libc = { version = "0.2.152", optional = true }
