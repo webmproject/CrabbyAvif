@@ -130,6 +130,11 @@ TEST(DecoderTest, OneShotDecodeFile) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
+#ifdef __ANDROID__
+  // Android MediaCodec does not support re-use of same decoder instance for
+  // multiple images.
+  GTEST_SKIP() << "Unsupported test on Android.";
+#endif
   const char* file_name = "sofa_grid1x5_420.avif";
   DecoderPtr decoder(avifDecoderCreate());
   ASSERT_NE(decoder, nullptr);
@@ -471,6 +476,10 @@ TEST(DecoderTest, KeyFrame) {
 }
 
 TEST(DecoderTest, Progressive) {
+#ifdef __ANDROID__
+  // Android MediaCodec does not support progressive images.
+  GTEST_SKIP() << "Unsupported test on Android.";
+#endif
   struct Params {
     const char* file_name;
     uint32_t width;
