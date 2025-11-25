@@ -693,6 +693,85 @@ INSTANTIATE_TEST_SUITE_P(
                                         AVIF_PIXEL_FORMAT_ANDROID_P010}),
                      testing::ValuesIn({AVIF_PLANES_ALL, AVIF_PLANES_YUV})));
 
+class ImageSetViewRectTest
+    : public testing::TestWithParam<
+          std::tuple<avifPixelFormat, std::tuple<avifCropRect, bool>>> {};
+
+TEST_P(ImageSetViewRectTest, SetViewRect) {
+  const auto pixel_format = std::get<0>(GetParam());
+
+  constexpr int kWidth = 100;
+  constexpr int kHeight = 100;
+  const int depth =
+      (pixel_format == crabbyavif::AVIF_PIXEL_FORMAT_ANDROID_P010) ? 10 : 8;
+  ImagePtr src(avifImageCreate(kWidth, kHeight, depth, pixel_format));
+
+  ASSERT_EQ(avifImageAllocatePlanes(src.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+  for (int i = 0; i < 4; ++i) {
+    const int plane_width_bytes =
+        avifImagePlaneWidth(src.get(), i) * ((depth > 8) ? 2 : 1);
+    const int plane_height = avifImagePlaneHeight(src.get(), i);
+    uint8_t* plane = avifImagePlane(src.get(), i);
+    const int row_bytes = avifImagePlaneRowBytes(src.get(), i);
+    for (int y = 0; y < plane_height; ++y) {
+      std::iota(plane, plane + plane_width_bytes, y);
+      plane += row_bytes;
+    }
+  }
+
+  const auto rect = std::get<0>(std::get<1>(GetParam()));
+  const auto expect_success = std::get<1>(std::get<1>(GetParam()));
+
+  ImagePtr sub_image(avifImageCreateEmpty());
+  auto result = avifImageSetViewRect(sub_image.get(), src.get(), &rect);
+  if (expect_success) {
+    ASSERT_EQ(result, AVIF_RESULT_OK);
+    EXPECT_EQ(sub_image->width, rect.width);
+    EXPECT_EQ(sub_image->height, rect.height);
+  } else {
+    EXPECT_NE(result, AVIF_RESULT_OK);
+  }
+}
+
+#ifdef __ANDROID__
+static constexpr bool kTrueOnlyOnAndroid = true;
+#else
+static constexpr bool kTrueOnlyOnAndroid = false;
+#endif
+
+static const std::tuple<avifCropRect, bool> kRects[] = {
+    // All possible even/odd combinations.
+    {{.x = 60, .y = 60, .width = 20, .height = 20}, true},
+    {{.x = 60, .y = 60, .width = 20, .height = 21}, true},
+    {{.x = 60, .y = 60, .width = 21, .height = 20}, true},
+    {{.x = 60, .y = 60, .width = 21, .height = 21}, true},
+    {{.x = 60, .y = 61, .width = 20, .height = 20}, kTrueOnlyOnAndroid},
+    {{.x = 60, .y = 61, .width = 20, .height = 21}, kTrueOnlyOnAndroid},
+    {{.x = 60, .y = 61, .width = 21, .height = 20}, kTrueOnlyOnAndroid},
+    {{.x = 60, .y = 61, .width = 21, .height = 21}, kTrueOnlyOnAndroid},
+    {{.x = 61, .y = 60, .width = 20, .height = 20}, kTrueOnlyOnAndroid},
+    {{.x = 61, .y = 60, .width = 20, .height = 21}, kTrueOnlyOnAndroid},
+    {{.x = 61, .y = 60, .width = 21, .height = 20}, kTrueOnlyOnAndroid},
+    {{.x = 61, .y = 60, .width = 21, .height = 21}, kTrueOnlyOnAndroid},
+    {{.x = 61, .y = 61, .width = 20, .height = 20}, kTrueOnlyOnAndroid},
+    {{.x = 61, .y = 61, .width = 20, .height = 21}, kTrueOnlyOnAndroid},
+    {{.x = 61, .y = 61, .width = 21, .height = 20}, kTrueOnlyOnAndroid},
+    {{.x = 61, .y = 61, .width = 21, .height = 21}, kTrueOnlyOnAndroid},
+    // Out of bounds.
+    {{.x = 100, .y = 60, .width = 20, .height = 20}, false},
+    {{.x = 60, .y = 100, .width = 20, .height = 20}, false},
+    {{.x = 99, .y = 60, .width = 2, .height = 20}, false},
+    {{.x = 60, .y = 99, .width = 20, .height = 2}, false},
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    ImageSetViewRectTestInstance, ImageSetViewRectTest,
+    testing::Combine(testing::ValuesIn({AVIF_PIXEL_FORMAT_YUV420,
+                                        AVIF_PIXEL_FORMAT_ANDROID_NV12,
+                                        AVIF_PIXEL_FORMAT_ANDROID_P010}),
+                     testing::ValuesIn(kRects)));
+
 TEST(DecoderTest, SetRawIO) {
   DecoderPtr decoder(avifDecoderCreate());
   ASSERT_NE(decoder, nullptr);
