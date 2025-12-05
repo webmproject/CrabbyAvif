@@ -100,7 +100,7 @@ impl Default for avifDecoder {
             imageContentToDecode: AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA,
             imageSequenceTrackPresent: AVIF_FALSE,
             androidMediaCodecOutputColorFormat: AndroidMediaCodecOutputColorFormat::default(),
-            allowSampleTransform: AVIF_TRUE,
+            allowSampleTransform: AVIF_FALSE,
             compressionFormat: CompressionFormat::default(),
             rust_decoder: Box::<Decoder>::default(),
             image_object: avifImage::default(),
