@@ -467,7 +467,7 @@ impl Decoder for Libjxl {
                 ));
             }
         }
-        assert_ne!(self.reconstructed_jxl, None);
+        assert!(self.reconstructed_jxl.is_some());
 
         let decoder = self.decoder;
         let mut basic_info: MaybeUninit<JxlBasicInfo> = MaybeUninit::uninit();
