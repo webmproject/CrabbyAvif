@@ -341,6 +341,16 @@ impl Item {
         find_property!(self.properties, PixelInformation)
     }
 
+    #[cfg(feature = "jpegxl")]
+    pub(crate) fn colr_nclx(&self) -> Option<&Nclx> {
+        for property in &self.properties {
+            if let ItemProperty::ColorInformation(ColorInformation::Nclx(nclx)) = property {
+                return Some(nclx);
+            }
+        }
+        None
+    }
+
     pub(crate) fn a1lx(&self) -> Option<&[usize; 3]> {
         find_property!(self.properties, AV1LayeredImageIndexing)
     }

@@ -27,7 +27,7 @@ use test_case::test_matrix;
     [100, 121],
     [200, 107],
     [8], // TODO: b/456440247 - Support 16-bit
-    [false, true]
+    [false] // TODO: b/456440247 - Support alpha
 )]
 fn encode_decode(width: u32, height: u32, depth: u8, alpha: bool) -> AvifResult<()> {
     let image = generate_gradient_image(

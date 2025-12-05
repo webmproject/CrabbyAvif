@@ -1667,14 +1667,11 @@ impl Decoder {
         let category = decoding_item.category;
 
         let codec = &mut self.codecs[tile.codec_index];
-        let item_data_buffer = if sample.item_id == 0 {
-            &None
-        } else {
-            &self.items.get(&sample.item_id).unwrap().data_buffer
-        };
+        let item = if sample.item_id == 0 { None } else { self.items.get(&sample.item_id) };
+        let data_buffer = if let Some(item) = item { &item.data_buffer } else { &None };
         let data = match (
             self.settings.allow_progressive,
-            sample.data(io, item_data_buffer),
+            sample.data(io, data_buffer),
         ) {
             (_, Ok(data)) => data,
             (true, Err(AvifError::TruncatedData) | Err(AvifError::NoContent)) => {
@@ -1687,6 +1684,7 @@ impl Decoder {
             sample.spatial_id,
             &mut tile.image,
             category,
+            item,
             #[cfg(feature = "android_mediacodec")]
             signal_eos,
         );

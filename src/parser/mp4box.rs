@@ -183,6 +183,50 @@ pub struct PixelInformation {
     pub planes: Vec<PlanePixelInformation>,
 }
 
+#[cfg(feature = "jpegxl")]
+impl PixelInformation {
+    pub fn num_channels_with_idc(&self, channel_idc: ChannelIdc) -> usize {
+        self.planes
+            .iter()
+            .filter(|plane| plane.channel_idc == Some(channel_idc))
+            .count()
+    }
+    pub fn num_color_channels(&self) -> AvifResult<u32> {
+        if self.planes.iter().any(|plane| plane.channel_idc.is_some()) {
+            if self.planes.iter().any(|plane| plane.channel_idc.is_none()) {
+                return AvifError::not_implemented();
+            }
+            match (
+                self.num_channels_with_idc(ChannelIdc::FirstColorChannel),
+                self.num_channels_with_idc(ChannelIdc::SecondColorChannel),
+                self.num_channels_with_idc(ChannelIdc::ThirdColorChannel),
+                self.num_channels_with_idc(ChannelIdc::FourthColorChannel),
+            ) {
+                (1, 0, 0, 0) => Ok(1),
+                (1, 1, 1, 0) => Ok(3),
+                _ => AvifError::not_implemented(),
+            }
+        } else {
+            u32_from_usize(self.planes.len())
+        }
+    }
+    pub fn bit_depth(&self) -> AvifResult<u8> {
+        let depth = self
+            .planes
+            .first()
+            .ok_or_else(|| {
+                AvifError::bmff_parse_failed::<(), _>("Empty pixi property").unwrap_err()
+            })?
+            .depth;
+        if self.planes.iter().any(|plane| plane.depth != depth) {
+            return AvifError::bmff_parse_failed(format!(
+                "Not all pixi planes have the same depth {depth}"
+            ));
+        }
+        Ok(depth)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Av1CodecConfiguration {
     pub seq_profile: u8,
@@ -210,7 +254,10 @@ pub struct HevcCodecConfiguration {
 #[cfg(feature = "jpegxl")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JpegXlCodecConfiguration {
-    // TODO: b/456440247
+    pub have_animation: bool,
+    pub modular_16bit_buffers: bool,
+    pub xyb_encoded: bool,
+    pub level: u8,
 }
 
 impl Av1CodecConfiguration {
@@ -340,12 +387,6 @@ pub enum CodecConfiguration {
     Hevc(HevcCodecConfiguration),
     #[cfg(feature = "jpegxl")]
     JpegXl(JpegXlCodecConfiguration),
-}
-
-impl Default for CodecConfiguration {
-    fn default() -> Self {
-        Self::Av1(Av1CodecConfiguration::default())
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -913,10 +954,30 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
 
 #[allow(non_snake_case)]
 #[cfg(feature = "jpegxl")]
-fn parse_jxlC(_stream: &mut IStream) -> AvifResult<ItemProperty> {
+fn parse_hxlC(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    // unsigned int(3) version;
+    let version = stream.read_bits(3)? as u8;
+    if version != 0 {
+        return AvifError::bmff_parse_failed(format!(
+            "Unknown version({version}) in hxlC. Expected 0."
+        ));
+    }
+    // unsigned int(2) reserved = 0;
+    stream.skip_bits(2)?;
+    // unsigned int(1) have_animation;
+    let have_animation = stream.read_bool()?;
+    // unsigned int(1) modular_16bit_buffers;
+    let modular_16bit_buffers = stream.read_bool()?;
+    // unsigned int(1) xyb_encoded;
+    let xyb_encoded = stream.read_bool()?;
+    // unsigned int(8) level;
+    let level = stream.read_bits(3)? as u8;
     Ok(ItemProperty::CodecConfiguration(
         CodecConfiguration::JpegXl(JpegXlCodecConfiguration {
-            // TODO: b/456440247
+            have_animation,
+            modular_16bit_buffers,
+            xyb_encoded,
+            level,
         }),
     ))
 }
@@ -1114,7 +1175,7 @@ fn parse_ipco(stream: &mut IStream, is_track: bool) -> AvifResult<Vec<ItemProper
             #[cfg(feature = "heic")]
             "hvcC" => properties.push(parse_hvcC(&mut sub_stream)?),
             #[cfg(feature = "jpegxl")]
-            "hxlC" => properties.push(parse_jxlC(&mut sub_stream)?),
+            "hxlC" => properties.push(parse_hxlC(&mut sub_stream)?),
             _ => properties.push(ItemProperty::Unknown(header.box_type)),
         }
     }

@@ -14,6 +14,7 @@
 
 use crate::codecs::Decoder;
 use crate::codecs::DecoderConfig;
+use crate::decoder::item::Item;
 use crate::decoder::CompressionFormat;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
@@ -951,6 +952,7 @@ impl Decoder for MediaCodec {
         spatial_id: u8,
         image: &mut Image,
         category: Category,
+        _item: Option<&Item>,
         signal_eos: bool,
     ) -> AvifResult<()> {
         while self.codec_index < self.codec_initializers.len() {

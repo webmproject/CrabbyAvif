@@ -28,7 +28,7 @@ pub(crate) struct Item {
     pub is_sato_least_significant_input: bool,
     pub codec: Option<Codec>,
     pub samples: Vec<Sample>,
-    pub codec_configuration: CodecConfiguration,
+    pub codec_configuration: Option<CodecConfiguration>,
     pub cell_index: usize,
     pub hidden_image: bool,
     pub infe_name: String,
@@ -194,18 +194,24 @@ impl Item {
 
     pub(crate) fn write_codec_config_box(&self, stream: &mut OStream) -> AvifResult<()> {
         match &self.codec_configuration {
-            CodecConfiguration::Av1(config) => {
+            Some(CodecConfiguration::Av1(config)) => {
                 stream.start_box("av1C")?;
                 Self::write_av1_codec_config(config, stream)?;
                 stream.finish_box()?;
             }
-            CodecConfiguration::Hevc(_) => unreachable!(),
+            Some(CodecConfiguration::Hevc(_)) => unreachable!(),
             #[cfg(feature = "jpegxl")]
-            CodecConfiguration::JpegXl(_) => {
+            Some(CodecConfiguration::JpegXl(config)) => {
                 stream.start_box("hxlC")?;
-                // TODO: b/456440247
+                stream.write_bits(0, 3)?; // unsigned int(3) version;
+                stream.write_bits(0, 2)?; // unsigned int(2) reserved = 0;
+                stream.write_bool(config.have_animation)?; // unsigned int(1) have_animation;
+                stream.write_bool(config.modular_16bit_buffers)?; // unsigned int(1) modular_16bit_buffers;
+                stream.write_bool(config.xyb_encoded)?; // unsigned int(1) xyb_encoded;
+                stream.write_u8(config.level)?; // unsigned int(8) level;
                 stream.finish_box()?;
             }
+            None => unreachable!(),
         }
         Ok(())
     }
@@ -648,10 +654,11 @@ impl Item {
         stream.write_u32(1)?;
         {
             stream.start_box(match self.codec_configuration {
-                CodecConfiguration::Av1(_) => "av01",
-                CodecConfiguration::Hevc(_) => unreachable!(),
+                Some(CodecConfiguration::Av1(_)) => "av01",
+                Some(CodecConfiguration::Hevc(_)) => unreachable!(),
                 #[cfg(feature = "jpegxl")]
-                CodecConfiguration::JpegXl(_) => "hxlS",
+                Some(CodecConfiguration::JpegXl(_)) => "hxlS",
+                None => unreachable!(),
             })?;
             // const unsigned int(8)[6] reserved = 0;
             for _ in 0..6 {
@@ -681,10 +688,11 @@ impl Item {
             stream.write_u16(1)?;
             // string[32] compressorname;
             let compressor_name = match self.codec_configuration {
-                CodecConfiguration::Av1(_) => "AOM Coding with CrabbyAvif      ",
-                CodecConfiguration::Hevc(_) => unreachable!(),
+                Some(CodecConfiguration::Av1(_)) => "AOM Coding with CrabbyAvif      ",
+                Some(CodecConfiguration::Hevc(_)) => unreachable!(),
                 #[cfg(feature = "jpegxl")]
-                CodecConfiguration::JpegXl(_) => "JPEG XL Coding with CrabbyAvif  ",
+                Some(CodecConfiguration::JpegXl(_)) => "JPEG XL Coding with CrabbyAvif  ",
+                None => unreachable!(),
             };
             assert_eq!(compressor_name.len(), 32);
             stream.write_str(compressor_name)?;

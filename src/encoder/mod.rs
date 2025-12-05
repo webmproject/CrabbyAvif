@@ -28,7 +28,6 @@ use crate::internal_utils::stream::OStream;
 use crate::internal_utils::*;
 use crate::parser::exif;
 use crate::parser::mp4box::*;
-use crate::parser::obu::Av1SequenceHeader;
 use crate::utils::clap::CropRect;
 use crate::utils::IFraction;
 use crate::*;
@@ -754,22 +753,13 @@ impl Encoder {
             // TODO: check if sample count == duration count.
 
             if !item.samples.is_empty() {
-                match self.settings.codec_choice {
-                    CodecChoice::Auto | CodecChoice::Aom => {
-                        // Harvest codec configuration from AV1 sequence header.
-                        let sequence_header =
-                            Av1SequenceHeader::parse_from_obus(&item.samples[0].data)?;
-                        item.codec_configuration = CodecConfiguration::Av1(sequence_header.config);
-                    }
-                    CodecChoice::MediaCodec | CodecChoice::Dav1d | CodecChoice::Libgav1 => {
-                        return AvifError::no_codec_available()
-                    }
-                    #[cfg(feature = "jpegxl")]
-                    CodecChoice::Libjxl => {
-                        item.codec_configuration =
-                            CodecConfiguration::JpegXl(JpegXlCodecConfiguration {});
-                    }
-                }
+                assert_eq!(item.codec_configuration, None);
+                item.codec_configuration = Some(item.codec.unwrap_ref().get_codec_config(
+                    &self.image_metadata,
+                    self.duration_in_timescales.len() > 1,
+                    self.settings.mutable.quality == 100.0,
+                    &item.samples,
+                )?);
             }
         }
         let mut stream = OStream::default();

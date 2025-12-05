@@ -95,6 +95,7 @@ fn main() -> Result<(), String> {
         "JxlDecoderDestroy",
         "JxlDecoderGetBasicInfo",
         "JxlDecoderProcessInput",
+        "JxlDecoderReleaseInput",
         "JxlDecoderSetImageOutBuffer",
         "JxlDecoderSetInput",
         "JxlDecoderStatus",
