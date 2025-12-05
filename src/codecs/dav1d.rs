@@ -19,6 +19,7 @@
 
 use crate::codecs::Decoder;
 use crate::codecs::DecoderConfig;
+use crate::decoder::item::Item;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::image::YuvRange;
@@ -357,6 +358,7 @@ impl Decoder for Dav1d {
         spatial_id: u8,
         image: &mut Image,
         category: Category,
+        _item: Option<&Item>,
     ) -> AvifResult<()> {
         if self.context.is_none() {
             self.initialize_impl(true)?;
