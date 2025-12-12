@@ -187,9 +187,9 @@ impl Dav1d {
 
     fn drop_impl(&mut self) {
         self.picture = None;
-        if self.context.is_some() {
+        if let Some(mut context) = self.context {
             // # Safety: Calling a C function with valid parameters.
-            unsafe { dav1d_close(&mut self.context.unwrap()) };
+            unsafe { dav1d_close(&mut context) };
         }
         self.context = None;
     }

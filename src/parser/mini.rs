@@ -530,10 +530,9 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
             ItemProperty::Unused
         },
         // entry 24
-        if has_gainmap && tmap_clli.is_some() {
-            ItemProperty::ContentLightLevelInformation(tmap_clli.unwrap())
-        } else {
-            ItemProperty::Unused
+        match (has_gainmap, tmap_clli) {
+            (true, Some(tmap_clli)) => ItemProperty::ContentLightLevelInformation(tmap_clli),
+            _ => ItemProperty::Unused,
         },
         // entry 25
         ItemProperty::Unused, // tmap_mdcv
