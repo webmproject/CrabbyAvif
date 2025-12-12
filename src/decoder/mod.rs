@@ -1506,7 +1506,11 @@ impl Decoder {
             all_layers: tile.input.all_layers,
             width: tile.width,
             height: tile.height,
-            depth: self.image.depth,
+            depth: if decoding_item.category == Category::Gainmap {
+                self.gainmap.image.depth
+            } else {
+                self.image.depth
+            },
             max_threads: self.settings.max_threads,
             image_size_limit: self.settings.image_size_limit,
             max_input_size: tile.max_sample_size(),
