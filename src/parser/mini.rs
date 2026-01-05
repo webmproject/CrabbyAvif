@@ -545,9 +545,10 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
         // entry 29
         ItemProperty::Unused, // tmap_ndwt
         // entry 30
-        if has_alpha && alpha_item_data_size != 0 {
-            // TODO: Use an AlphaInformationProperty when supported
-            ItemProperty::Unused
+        if has_alpha && alpha_item_data_size == 0 {
+            ItemProperty::AlphaInformation(AlphaInformation {
+                is_premultiplied: alpha_is_premultiplied,
+            })
         } else {
             ItemProperty::Unused
         },

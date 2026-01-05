@@ -183,6 +183,11 @@ pub struct PixelInformation {
     pub planes: Vec<PlanePixelInformation>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct AlphaInformation {
+    pub is_premultiplied: bool,
+}
+
 #[cfg(feature = "jpegxl")]
 impl PixelInformation {
     pub fn num_channels_with_idc(&self, channel_idc: ChannelIdc) -> usize {
@@ -393,6 +398,7 @@ pub enum CodecConfiguration {
 pub enum ItemProperty {
     ImageSpatialExtents(ImageSpatialExtents),
     PixelInformation(PixelInformation),
+    AlphaInformation(AlphaInformation),
     CodecConfiguration(CodecConfiguration),
     ColorInformation(ColorInformation),
     PixelAspectRatio(PixelAspectRatio),
@@ -792,6 +798,36 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
     Ok(ItemProperty::PixelInformation(pixi))
 }
 
+fn parse_alpi(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    // Section 12.1.11.2 of ISO/IEC 14496-12 8th ed DAM 2.
+    let (version, flags) = stream.read_version_and_flags()?;
+    if version != 0 {
+        return AvifError::bmff_parse_failed(format!(
+            "Unexpected alpi box version {version} instead of 0"
+        ));
+    }
+    let is_premultiplied = match flags & 0x3 {
+        0 => false,
+        1 => true,
+        // TODO: b/473502178 - Support color samples premultiplied by alpha in linear RGB space
+        2 => return AvifError::not_implemented(),
+        _ => return AvifError::bmff_parse_failed("Reserved premultiplication_mode in alpi box"),
+    };
+    if flags & 0x4 != 0 {
+        return AvifError::not_implemented();
+    }
+    let opaque_value = stream.read_u16()?; // unsigned int (16) opaque_value;
+    let transparent_value = stream.read_u16()?; // unsigned int (16) transparent_value;
+
+    // TODO: b/473502178 - Adapt the expected opaque_value to the alpha sample bit depth.
+    if opaque_value != 255 && transparent_value != 0 {
+        return AvifError::not_implemented();
+    }
+    Ok(ItemProperty::AlphaInformation(AlphaInformation {
+        is_premultiplied,
+    }))
+}
+
 #[allow(non_snake_case)]
 fn parse_av1C(stream: &mut IStream) -> AvifResult<ItemProperty> {
     Ok(ItemProperty::CodecConfiguration(CodecConfiguration::Av1(
@@ -1160,6 +1196,7 @@ fn parse_ipco(stream: &mut IStream, is_track: bool) -> AvifResult<Vec<ItemProper
         match header.box_type.as_str() {
             "ispe" => properties.push(parse_ispe(&mut sub_stream)?),
             "pixi" => properties.push(parse_pixi(&mut sub_stream)?),
+            "alpi" => properties.push(parse_alpi(&mut sub_stream)?),
             "av1C" => properties.push(parse_av1C(&mut sub_stream)?),
             "colr" => properties.push(parse_colr(&mut sub_stream)?),
             "pasp" => properties.push(parse_pasp(&mut sub_stream)?),

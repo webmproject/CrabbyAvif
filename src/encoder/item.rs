@@ -192,6 +192,19 @@ impl Item {
         stream.finish_box()
     }
 
+    pub(crate) fn write_alpi(
+        &mut self,
+        stream: &mut OStream,
+        image_metadata: &Image,
+    ) -> AvifResult<()> {
+        let version = 0;
+        let flags = if image_metadata.alpha_premultiplied { 0x01 } else { 0x00 };
+        stream.start_full_box("alpi", (version, flags))?;
+        stream.write_u16(image_metadata.max_channel())?; // unsigned int (16) opaque_value;
+        stream.write_u16(0)?; // unsigned int (16) transparent_value;
+        stream.finish_box()
+    }
+
     pub(crate) fn write_codec_config_box(&self, stream: &mut OStream) -> AvifResult<()> {
         match &self.codec_configuration {
             Some(CodecConfiguration::Av1(config)) => {
@@ -422,6 +435,17 @@ impl Item {
         )?;
         self.associations
             .push((u8_from_usize(streams.len())?, false));
+
+        let force_write_alpi = force_write_extended_pixi; // Assumed.
+        if codec_supports_native_alpha_channel
+            && item_metadata.alpha_present
+            && (item_metadata.alpha_premultiplied || force_write_alpi)
+        {
+            streams.push(OStream::default());
+            self.write_alpi(streams.last_mut().unwrap(), item_metadata)?;
+            self.associations
+                .push((u8_from_usize(streams.len())?, false));
+        }
 
         if self.codec.is_some() {
             streams.push(OStream::default());

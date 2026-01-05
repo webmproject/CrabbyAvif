@@ -23,21 +23,33 @@ use utils::*;
 
 use test_case::test_matrix;
 
+#[derive(PartialEq)]
+enum Alpha {
+    None,
+    Straight,
+    Premultiplied,
+}
+
 #[test_matrix(
     [100, 121],
     [200, 107],
     [8], // TODO: b/456440247 - Support 16-bit
-    [false, true]
+    [Alpha::None, Alpha::Straight, Alpha::Premultiplied]
 )]
-fn encode_decode(width: u32, height: u32, depth: u8, alpha: bool) -> AvifResult<()> {
-    let image = generate_gradient_image(
+fn encode_decode(width: u32, height: u32, depth: u8, alpha: Alpha) -> AvifResult<()> {
+    let mut image = generate_gradient_image(
         width,
         height,
         depth,
         PixelFormat::Yuv444,
         YuvRange::Full,
-        alpha,
+        alpha != Alpha::None,
     )?;
+    // This may result in invalid premultiplied color samples but CrabbyAvif
+    // does not reject that for now.
+    image.alpha_premultiplied = alpha == Alpha::Premultiplied;
+    let image = image;
+
     let encoded = {
         let settings = encoder::Settings {
             codec_choice: CodecChoice::Libjxl,
@@ -65,6 +77,7 @@ fn encode_decode(width: u32, height: u32, depth: u8, alpha: bool) -> AvifResult<
 
     let decoded = decoder.image().unwrap();
     assert_eq!(decoded.alpha_present, image.alpha_present);
+    assert_eq!(decoded.alpha_premultiplied, image.alpha_premultiplied);
     assert_eq!(
         decoded.image_sequence_track_present,
         image.image_sequence_track_present
