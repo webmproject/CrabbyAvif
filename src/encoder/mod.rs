@@ -754,10 +754,12 @@ impl Encoder {
 
             if !item.samples.is_empty() {
                 assert_eq!(item.codec_configuration, None);
+                let is_single_image = self.duration_in_timescales.len() < 2;
+                let is_lossless = self.settings.mutable.quality == 100.0;
                 item.codec_configuration = Some(item.codec.unwrap_ref().get_codec_config(
                     &self.image_metadata,
-                    self.duration_in_timescales.len() > 1,
-                    self.settings.mutable.quality == 100.0,
+                    is_single_image,
+                    is_lossless,
                     &item.samples,
                 )?);
             }
