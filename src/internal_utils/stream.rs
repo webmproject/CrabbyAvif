@@ -204,7 +204,9 @@ impl IStream<'_> {
     ) -> AvifResult<(u8, u32)> {
         let (version, flags) = self.read_version_and_flags()?;
         if version != enforced_version {
-            return AvifError::bmff_parse_failed("");
+            return AvifError::bmff_parse_failed(format!(
+                "Unexpected box version {version} instead of {enforced_version}"
+            ));
         }
         Ok((version, flags))
     }
