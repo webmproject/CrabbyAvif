@@ -707,11 +707,20 @@ impl Decoder {
 
     fn harvest_cicp_from_sequence_header(&mut self) -> AvifResult<()> {
         let decoding_item = DecodingItem::COLOR;
+        let tile_index = 0;
         if self.tiles[decoding_item.usize()].is_empty() {
             return Ok(());
         }
+
+        // Only AV1 OBUs can be parsed for CICP values for now.
+        if !matches!(
+            self.tiles[decoding_item.usize()][tile_index].codec_config,
+            CodecConfiguration::Av1(_)
+        ) {
+            return Ok(());
+        }
+
         for search_size in (64..4096).step_by(64) {
-            let tile_index = 0;
             self.prepare_sample(
                 /*image_index=*/ 0,
                 decoding_item,
