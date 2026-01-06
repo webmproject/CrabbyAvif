@@ -96,6 +96,7 @@ pub fn generate_gradient_image(
     if alpha {
         image.allocate_planes(Category::Alpha)?;
         image.alpha_present = true;
+        image.alpha_premultiplied = false;
     }
     for plane in ALL_PLANES {
         if !image.has_plane(plane) {
@@ -107,21 +108,22 @@ pub fn generate_gradient_image(
             if image.depth == 8 {
                 let row = image.row_exact_mut(plane, y)?;
                 for x in 0..plane_data.width {
-                    let value = (x + y) % (max_xy_sum + 1);
-                    row[x as usize] = (value * 255 / std::cmp::max(1, max_xy_sum)) as u8;
+                    let value = (x + y + plane as u32) % (max_xy_sum + 1);
+                    let pixel = &mut row[x as usize];
+                    *pixel = (value * 255 / std::cmp::max(1, max_xy_sum)) as u8;
                     if yuv_range == YuvRange::Limited && plane != Plane::A {
-                        row[x as usize] =
-                            full_to_limited(row[x as usize] as u16, plane, depth) as u8;
+                        *pixel = full_to_limited(*pixel as u16, plane, depth) as u8;
                     }
                 }
             } else {
                 let max_channel = image.max_channel() as u32;
                 let row = image.row16_exact_mut(plane, y)?;
                 for x in 0..plane_data.width {
-                    let value = (x + y) % (max_xy_sum + 1);
-                    row[x as usize] = (value * max_channel / std::cmp::max(1, max_xy_sum)) as u16;
+                    let value = (x + y + plane as u32) % (max_xy_sum + 1);
+                    let pixel = &mut row[x as usize];
+                    *pixel = (value * max_channel / std::cmp::max(1, max_xy_sum)) as u16;
                     if yuv_range == YuvRange::Limited && plane != Plane::A {
-                        row[x as usize] = full_to_limited(row[x as usize], plane, depth);
+                        *pixel = full_to_limited(*pixel, plane, depth);
                     }
                 }
             }
