@@ -534,6 +534,32 @@ fn gainmap_oriented() {
     assert_eq!(decoder.gainmap().image.imir_axis, None);
 }
 
+#[test_matrix(
+    [
+        ("gainmap_oriented.avif", 34),
+        ("color_grid_gainmap_different_grid.avif", 600)
+    ],
+    [ImageContentType::ColorAndAlpha, ImageContentType::GainMap, ImageContentType::All]
+)]
+fn decoded_row_count(
+    filename_and_row_count: (&str, u32),
+    image_content_to_decode: ImageContentType,
+) {
+    let filename = filename_and_row_count.0;
+    let expected_row_count = filename_and_row_count.1;
+    let mut decoder = get_decoder(filename);
+    decoder.settings.image_content_to_decode = image_content_to_decode;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    assert!(decoder.gainmap_present());
+    if !HAS_DECODER {
+        return;
+    }
+    let res = decoder.next_image();
+    assert!(res.is_ok());
+    assert_eq!(decoder.decoded_row_count(), expected_row_count);
+}
+
 // From avifgainmaptest.cc
 // Tests files with gain maps that should be ignored by the decoder for various
 // reasons.

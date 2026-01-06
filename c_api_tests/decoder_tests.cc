@@ -380,6 +380,30 @@ TEST(DecoderTest, GainMapOriented) {
             AVIF_TRANSFORM_NONE);
 }
 
+TEST(DecoderTest, GainmapOnlyDecodedRowCount) {
+  // Both image and gainmap have the same height (34).
+  auto decoder = CreateDecoder("gainmap_oriented.avif");
+  ASSERT_NE(decoder, nullptr);
+  decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_GAIN_MAP;
+  auto result = avifDecoderParse(decoder.get());
+  ASSERT_EQ(result, AVIF_RESULT_OK);
+  result = avifDecoderNextImage(decoder.get());
+  ASSERT_EQ(result, AVIF_RESULT_OK);
+  EXPECT_EQ(avifDecoderDecodedRowCount(decoder.get()), 34);
+
+  // Image height is 600 and gainmap height is 160.
+  decoder = CreateDecoder("color_grid_gainmap_different_grid.avif");
+  ASSERT_NE(decoder, nullptr);
+  decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_GAIN_MAP;
+  result = avifDecoderParse(decoder.get());
+  ASSERT_EQ(result, AVIF_RESULT_OK);
+  result = avifDecoderNextImage(decoder.get());
+  ASSERT_EQ(result, AVIF_RESULT_OK);
+  // Image height will be returned per the API contract even though the gainmap
+  // height is different.
+  EXPECT_EQ(avifDecoderDecodedRowCount(decoder.get()), 600);
+}
+
 TEST(DecoderTest, IgnoreGainMapButReadMetadata) {
   auto decoder = CreateDecoder(("seine_sdr_gainmap_srgb.avif"));
   ASSERT_NE(decoder, nullptr);

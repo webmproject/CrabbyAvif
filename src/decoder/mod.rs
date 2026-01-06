@@ -2116,7 +2116,7 @@ impl Decoder {
     // returned AvifResult::Ok. Returns 0 in all other cases.
     pub fn decoded_row_count(&self) -> u32 {
         let mut min_row_count = self.image.height;
-        for decoding_item in DecodingItem::ALL {
+        for decoding_item in self.settings.image_content_to_decode.decoding_items() {
             let decoding_item_usize = decoding_item.usize();
             if self.tiles[decoding_item_usize].is_empty() {
                 continue;
