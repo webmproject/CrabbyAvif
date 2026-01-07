@@ -407,6 +407,7 @@ impl Decoder for Libjxl {
             let pixi = item.pixi().ok_or_else(|| {
                 AvifError::bmff_parse_failed::<(), _>("pixi is mandatory with hxlI").unwrap_err()
             })?;
+            let premultiplied_alpha = item.alpi().map_or(false, |alpi| alpi.is_premultiplied);
             let codec_config = item
                 .properties
                 .iter()
@@ -434,8 +435,8 @@ impl Decoder for Libjxl {
                 num_channels: pixi.num_color_channels()?,
                 num_extra: u32_from_usize(pixi.num_channels_with_idc(ChannelIdc::Alpha))?,
                 bit_depth: pixi.bit_depth()?,
-                float_sample: false,        // TODO: b/456440247 - Support
-                premultiplied_alpha: false, // TODO: b/456440247 - Support
+                float_sample: false, // TODO: b/456440247 - Support
+                premultiplied_alpha,
                 codec_config,
                 colr_nclx_colour_primaries: ColorPrimaries::Srgb as u32, // TODO: b/456440247 - Use colr_nclx.color_primaries
                 colr_nclx_transfer_characteristics: TransferCharacteristics::Srgb as u32, // TODO: b/456440247 - Use colr_nclx.transfer_characteristics

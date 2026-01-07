@@ -1403,8 +1403,9 @@ impl Decoder {
                         return AvifError::not_implemented();
                     }
                     self.image.alpha_present = true;
-                    // TODO: b/456440247 - Harvest alpha premultiplied from the new alpi box.
-                    self.image.alpha_premultiplied = false;
+                    self.image.alpha_premultiplied =
+                        find_property!(color_properties, AlphaInformation)
+                            .map_or(false, |alpi| alpi.is_premultiplied);
                 }
             }
 
