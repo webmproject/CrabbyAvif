@@ -800,12 +800,7 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
 
 fn parse_alpi(stream: &mut IStream) -> AvifResult<ItemProperty> {
     // Section 12.1.11.2 of ISO/IEC 14496-12 8th ed DAM 2.
-    let (version, flags) = stream.read_version_and_flags()?;
-    if version != 0 {
-        return AvifError::bmff_parse_failed(format!(
-            "Unexpected alpi box version {version} instead of 0"
-        ));
-    }
+    let (_, flags) = stream.read_and_enforce_version_and_flags(0)?;
     let is_premultiplied = match flags & 0x3 {
         0 => false,
         1 => true,

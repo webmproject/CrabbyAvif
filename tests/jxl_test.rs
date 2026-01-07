@@ -26,7 +26,7 @@ use test_case::test_matrix;
 #[derive(PartialEq)]
 enum Alpha {
     None,
-    Straight,
+    Unpremultiplied,
     Premultiplied,
 }
 
@@ -34,7 +34,7 @@ enum Alpha {
     [100, 121],
     [200, 107],
     [8], // TODO: b/456440247 - Support 16-bit
-    [Alpha::None, Alpha::Straight, Alpha::Premultiplied]
+    [Alpha::None, Alpha::Unpremultiplied, Alpha::Premultiplied]
 )]
 fn encode_decode(width: u32, height: u32, depth: u8, alpha: Alpha) -> AvifResult<()> {
     let mut image = generate_gradient_image(
