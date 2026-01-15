@@ -415,6 +415,68 @@ impl Decoder for Dav1d {
         }
         res
     }
+
+    fn get_last_image(
+        &mut self,
+        payloads: &[Vec<u8>],
+        spatial_id: u8,
+        image: &mut Image,
+        category: Category,
+    ) -> AvifResult<()> {
+        if self.context.is_none() {
+            self.initialize_impl(false)?;
+        }
+        let mut res;
+        let context = self.context.unwrap();
+        let mut payloads_iter = payloads.iter().peekable();
+        let mut data = Dav1dDataWrapper::default();
+        let max_retries = 500;
+        let mut retries = 0;
+        let mut got_picture_count = 0;
+        let next_picture: Option<Dav1dPictureWrapper>;
+        loop {
+            if !data.has_data() && payloads_iter.peek().is_some() {
+                data.wrap(payloads_iter.next().unwrap())?;
+            }
+            if data.has_data() {
+                // # Safety: Calling a C function with valid parameters.
+                res = unsafe { dav1d_send_data(context, data.mut_ptr()) };
+                if res != 0 && res != DAV1D_EAGAIN {
+                    return AvifError::unknown_error(format!("dav1d_send_data returned {res}"));
+                }
+            }
+            let mut picture = Dav1dPictureWrapper::default();
+            // # Safety: Calling a C function with valid parameters.
+            res = unsafe { dav1d_get_picture(context, picture.mut_ptr()) };
+            if res != 0 && res != DAV1D_EAGAIN {
+                return AvifError::unknown_error(format!("dav1d_get_picture returned {res}"));
+            } else if res == 0 && picture.use_layer(spatial_id) {
+                got_picture_count += 1;
+                retries = 0;
+                if got_picture_count == payloads.len() {
+                    next_picture = Some(picture);
+                    break;
+                }
+            } else {
+                retries += 1;
+                if retries > max_retries {
+                    return AvifError::unknown_error(format!(
+                        "dav1d_get_picture never returned a frame after {max_retries} calls"
+                    ));
+                }
+            }
+        }
+        self.flush()?;
+        if next_picture.is_some() {
+            self.picture = next_picture;
+        } else if category == Category::Alpha && self.picture.is_some() {
+            // Special case for alpha, re-use last frame.
+        } else {
+            return AvifError::unknown_error("");
+        }
+        self.picture_to_image(self.picture.unwrap_ref().get(), image, category)?;
+        Ok(())
+    }
 }
 
 impl Drop for Dav1d {
