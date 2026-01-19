@@ -212,6 +212,12 @@ impl Item {
                 Self::write_av1_codec_config(config, stream)?;
                 stream.finish_box()?;
             }
+            #[cfg(feature = "avm")]
+            Some(CodecConfiguration::Av2(config)) => {
+                stream.start_box("av2C")?;
+                Self::write_av2_codec_config(config, stream)?;
+                stream.finish_box()?;
+            }
             Some(CodecConfiguration::Hevc(_)) => unreachable!(),
             #[cfg(feature = "jpegxl")]
             Some(CodecConfiguration::JpegXl(config)) => {
@@ -259,6 +265,28 @@ impl Item {
         // unsigned int (1) initial_presentation_delay_present;
         // unsigned int (4) reserved = 0;
         stream.write_u8(0)?;
+        Ok(())
+    }
+
+    #[cfg(feature = "avm")]
+    pub(crate) fn write_av2_codec_config(
+        config: &Av2CodecConfiguration,
+        stream: &mut OStream,
+    ) -> AvifResult<()> {
+        // TODO: b/437292541 - Match AV2-ISOBMFF once finalized.
+        stream.write_bits(1, 1)?; // unsigned int (1) marker = 1;
+        stream.write_bits(1, 7)?; // unsigned int (7) version = 1;
+        stream.write_bits(config.seq_profile.into(), 3)?; // unsigned int(3) seq_profile;
+        stream.write_bits(config.seq_level_idx0.into(), 5)?; // unsigned int(5) seq_level_idx_0;
+        stream.write_bits(config.seq_tier_0.into(), 1)?; // unsigned int(1) seq_tier_0;
+        stream.write_bits(config.bitdepth_idx.into(), 2)?; // unsigned int(2) bitdepth_idx;
+        stream.write_bool(config.monochrome)?; // unsigned int(1) monochrome;
+        stream.write_bits(config.chroma_subsampling_x.into(), 1)?; // unsigned int(1) chroma_subsampling_x;
+        stream.write_bits(config.chroma_subsampling_y.into(), 1)?; // unsigned int(1) chroma_subsampling_y;
+        stream.write_bits(config.chroma_sample_position as u32, 3)?; // unsigned int(3) chroma_sample_position;
+        stream.write_bits(0, 2)?; // unsigned int (2) reserved = 0;
+        stream.write_bits(0, 1)?; // unsigned int (1) initial_presentation_delay_present;
+        stream.write_bits(0, 4)?; // unsigned int (4) reserved = 0;
         Ok(())
     }
 
@@ -679,6 +707,8 @@ impl Item {
         {
             stream.start_box(match self.codec_configuration {
                 Some(CodecConfiguration::Av1(_)) => "av01",
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(_)) => "av02",
                 Some(CodecConfiguration::Hevc(_)) => unreachable!(),
                 #[cfg(feature = "jpegxl")]
                 Some(CodecConfiguration::JpegXl(_)) => "hxlS",
@@ -713,6 +743,8 @@ impl Item {
             // string[32] compressorname;
             let compressor_name = match self.codec_configuration {
                 Some(CodecConfiguration::Av1(_)) => "AOM Coding with CrabbyAvif      ",
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(_)) => "AVM Coding with CrabbyAvif      ",
                 Some(CodecConfiguration::Hevc(_)) => unreachable!(),
                 #[cfg(feature = "jpegxl")]
                 Some(CodecConfiguration::JpegXl(_)) => "JPEG XL Coding with CrabbyAvif  ",

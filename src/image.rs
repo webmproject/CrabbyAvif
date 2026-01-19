@@ -351,14 +351,19 @@ impl Image {
         }))
     }
 
-    #[cfg(any(feature = "dav1d", feature = "libgav1"))]
-    pub(crate) fn clear_chroma_planes(&mut self) {
-        for plane in [Plane::U, Plane::V] {
+    #[cfg(any(feature = "dav1d", feature = "libgav1", feature = "avm"))]
+    pub(crate) fn free_planes(&mut self, planes: &[Plane]) {
+        for plane in planes {
             let plane = plane.as_usize();
             self.planes[plane] = None;
             self.row_bytes[plane] = 0;
             self.image_owns_planes[plane] = false;
         }
+    }
+
+    #[cfg(any(feature = "dav1d", feature = "libgav1"))]
+    pub(crate) fn clear_chroma_planes(&mut self) {
+        self.free_planes(&[Plane::U, Plane::V])
     }
 
     pub(crate) fn allocate_planes_with_default_values(
