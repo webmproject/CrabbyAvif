@@ -407,7 +407,7 @@ impl Decoder for Libjxl {
             let pixi = item.pixi().ok_or_else(|| {
                 AvifError::bmff_parse_failed::<(), _>("pixi is mandatory with hxlI").unwrap_err()
             })?;
-            let premultiplied_alpha = item.alpi().map_or(false, |alpi| alpi.is_premultiplied);
+            let premultiplied_alpha = item.alpi().is_some_and(|alpi| alpi.is_premultiplied);
             let codec_config = item
                 .properties
                 .iter()
