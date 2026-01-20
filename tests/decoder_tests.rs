@@ -237,6 +237,32 @@ fn keyframes() {
     assert_eq!(decoder.nearest_keyframe(15), 3);
 }
 
+#[test]
+fn animated_image_with_unsupported_hdlr() {
+    // The handler in meta box is valid. So this should parse successfully when source is set to
+    // primary item.
+    let mut decoder = get_decoder("colors-animated-8bpc-unsupported-hdlr-moov.avif");
+    decoder.settings.source = decoder::Source::PrimaryItem;
+    let res = decoder.parse();
+    assert!(res.is_ok());
+
+    // The handler in moov box is invalid. So this should fail to parse when source is set to
+    // tracks.
+    let mut decoder = get_decoder("colors-animated-8bpc-unsupported-hdlr-moov.avif");
+    decoder.settings.source = decoder::Source::Tracks;
+    let res = decoder.parse();
+    assert!(res.is_err());
+
+    // The handler in meta box is invalid. So this should fail to parse irrespective of which
+    // source is requested.
+    for source in [decoder::Source::PrimaryItem, decoder::Source::Tracks] {
+        let mut decoder = get_decoder("colors-animated-8bpc-unsupported-hdlr-meta.avif");
+        decoder.settings.source = source;
+        let res = decoder.parse();
+        assert!(res.is_err());
+    }
+}
+
 // From avifdecodetest.cc
 #[test]
 fn color_grid_alpha_no_grid() {
