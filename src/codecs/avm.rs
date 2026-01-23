@@ -34,6 +34,7 @@ use std::cmp;
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
+use std::slice;
 
 // OBU types
 pub(crate) const AV2_OBU_SEQUENCE_HEADER: u8 = OBU_TYPE_OBU_SEQUENCE_HEADER;
@@ -726,22 +727,41 @@ impl Decoder for Avm {
                 image.allocate_planes(category)?;
                 for plane in 0..image.yuv_format.plane_count() {
                     let plane_width = image.width(Plane::from(plane));
-                    let plane_height = image.height(Plane::from(plane)) as u32;
-                    let mut src_row = avm_image.planes[plane] as *mut u16;
-                    if src_row.is_null() {
+                    let plane_height = image.height(Plane::from(plane));
+                    let src_plane = avm_image.planes[plane] as *mut u16;
+                    if src_plane.is_null() {
                         return AvifError::unknown_error("AVM returned a NULL buffer");
                     }
-                    let src_stride = avm_image.stride[plane]
+                    let src_stride_in_bytes = avm_image.stride[plane];
+                    if src_stride_in_bytes % 2 != 0 {
+                        return AvifError::unknown_error(
+                            "AVM returned an odd stride for 16-bit samples",
+                        );
+                    }
+                    let src_stride_in_samples: usize = (src_stride_in_bytes / 2)
                         .try_into()
                         .map_err(AvifError::map_unknown_error)?;
+                    // # Safety: planes and stride are guaranteed to be valid as per
+                    // libavm API contract. So it is safe to construct slices.
+                    let src_plane = unsafe {
+                        slice::from_raw_parts(
+                            src_plane,
+                            checked_add!(
+                                checked_mul!(
+                                    src_stride_in_samples,
+                                    checked_sub!(plane_height, 1)?
+                                )?,
+                                plane_width
+                            )?,
+                        )
+                    };
                     for y in 0..plane_height {
-                        let dst_row = image.row_mut(Plane::from(plane), y)?;
+                        let src_row = &src_plane
+                            [y * src_stride_in_samples..y * src_stride_in_samples + plane_width];
+                        let dst_row = image.row_mut(Plane::from(plane), y as u32)?;
                         for (x, dst_pixel) in dst_row.iter_mut().enumerate().take(plane_width) {
-                            // # Safety: Dereferencing a non-NULL pointer.
-                            *dst_pixel = unsafe { *src_row.add(x) } as u8;
+                            *dst_pixel = src_row[x] as u8;
                         }
-                        // # Safety: Incrementing a non-NULL pointer.
-                        src_row = unsafe { src_row.byte_offset(src_stride) };
                     }
                 }
             } else {
@@ -786,22 +806,38 @@ impl Decoder for Avm {
             if image.depth <= 8 && (avm_image.fmt & AVM_IMG_FMT_HIGHBITDEPTH) != 0 {
                 image.allocate_planes(category)?;
                 let plane_width = image.width(Plane::A);
-                let plane_height = image.height(Plane::A) as u32;
-                let mut src_row = avm_image.planes[0] as *mut u16;
-                if src_row.is_null() {
+                let plane_height = image.height(Plane::A);
+                let src_plane = avm_image.planes[0] as *mut u16;
+                if src_plane.is_null() {
                     return AvifError::unknown_error("AVM returned a NULL buffer");
                 }
-                let src_stride = avm_image.stride[0]
+                let src_stride_in_bytes = avm_image.stride[0];
+                if src_stride_in_bytes % 2 != 0 {
+                    return AvifError::unknown_error(
+                        "AVM returned an odd stride for 16-bit samples",
+                    );
+                }
+                let src_stride_in_samples: usize = (src_stride_in_bytes / 2)
                     .try_into()
                     .map_err(AvifError::map_unknown_error)?;
+                // # Safety: planes[0] and stride[0] are guaranteed to be valid as per
+                // libavm API contract. So it is safe to construct a slice.
+                let src_plane = unsafe {
+                    slice::from_raw_parts(
+                        src_plane,
+                        checked_add!(
+                            checked_mul!(src_stride_in_samples, checked_sub!(plane_height, 1)?)?,
+                            plane_width
+                        )?,
+                    )
+                };
                 for y in 0..plane_height {
-                    let dst_row = image.row_mut(Plane::A, y)?;
+                    let src_row = &src_plane
+                        [y * src_stride_in_samples..y * src_stride_in_samples + plane_width];
+                    let dst_row = image.row_mut(Plane::A, y as u32)?;
                     for (x, dst_pixel) in dst_row.iter_mut().enumerate().take(plane_width) {
-                        // # Safety: Dereferencing a non-NULL pointer.
-                        *dst_pixel = unsafe { *src_row.add(x) } as u8;
+                        *dst_pixel = src_row[x] as u8;
                     }
-                    // # Safety: Incrementing a non-NULL pointer.
-                    src_row = unsafe { src_row.byte_offset(src_stride) };
                 }
             } else {
                 // Steal the pointers from the decoder's image directly

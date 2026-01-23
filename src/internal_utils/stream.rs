@@ -312,7 +312,7 @@ impl IStream<'_> {
 
     #[cfg(feature = "avm")]
     // Variable Length Coding.
-    pub(crate) fn read_vlc(&mut self) -> AvifResult<u32> {
+    pub(crate) fn read_uvlc(&mut self) -> AvifResult<u32> {
         let mut num_bits = 0;
         while !self.read_bool()? {
             num_bits += 1;

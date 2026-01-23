@@ -366,17 +366,17 @@ impl Av2SequenceHeader {
         self.max_height = checked_add!(max_frame_height_minus_1, 1)?;
         if stream.read_bool()? {
             // conf_window_flag
-            stream.read_vlc()?; // conf_win_left_offset
-            stream.read_vlc()?; // conf_win_right_offset
-            stream.read_vlc()?; // conf_win_top_offset
-            stream.read_vlc()?; // conf_win_bottom_offset
+            stream.skip_uvlc()?; // conf_win_left_offset
+            stream.skip_uvlc()?; // conf_win_right_offset
+            stream.skip_uvlc()?; // conf_win_top_offset
+            stream.skip_uvlc()?; // conf_win_bottom_offset
         }
 
         Ok(())
     }
 
     fn parse_chroma_format_bitdepth(&mut self, stream: &mut IStream) -> AvifResult<()> {
-        let chroma_format_idc = stream.read_vlc()?;
+        let chroma_format_idc = stream.read_uvlc()?;
         (
             self.config.monochrome,
             self.config.chroma_subsampling_x,
@@ -393,7 +393,7 @@ impl Av2SequenceHeader {
             }
         };
         self.config.bitdepth_idx = stream
-            .read_vlc()?
+            .read_uvlc()?
             .try_into()
             .map_err(AvifError::map_unknown_error)?;
         if self.config.bitdepth_idx > 2 {
@@ -424,52 +424,54 @@ impl Av2SequenceHeader {
                     "invalid color_description_idc {color_description_idc}",
                 ));
             }
-            match color_description_idc {
-                AV2_IDC_EXPLICIT => {
+            (
+                self.color_primaries,
+                self.transfer_characteristics,
+                self.matrix_coefficients,
+            ) = match color_description_idc {
+                AV2_IDC_EXPLICIT => (
                     // Explicitly signaled
-                    self.color_primaries = ColorPrimaries::from(stream.read_bits(8)? as u16);
-                    self.transfer_characteristics =
-                        TransferCharacteristics::from(stream.read_bits(8)? as u16);
-                    self.matrix_coefficients =
-                        MatrixCoefficients::from(stream.read_bits(8)? as u16);
-                }
-                AV2_BT709SDR => {
+                    ColorPrimaries::from(stream.read_bits(8)? as u16),
+                    TransferCharacteristics::from(stream.read_bits(8)? as u16),
+                    MatrixCoefficients::from(stream.read_bits(8)? as u16),
+                ),
+                AV2_BT709SDR => (
                     // BT.709 SDR
-                    self.color_primaries = ColorPrimaries::Bt709; // 1
-                    self.transfer_characteristics = TransferCharacteristics::Bt709; // 1
-                    self.matrix_coefficients = MatrixCoefficients::Bt470bg; // 5
-                }
-                AV2_BT2100PQ => {
+                    ColorPrimaries::Bt709,          // 1
+                    TransferCharacteristics::Bt709, // 1
+                    MatrixCoefficients::Bt470bg,    // 5
+                ),
+                AV2_BT2100PQ => (
                     // BT.2100 PQ
-                    self.color_primaries = ColorPrimaries::Bt2100; // 9
-                    self.transfer_characteristics = TransferCharacteristics::Pq; // 16
-                    self.matrix_coefficients = MatrixCoefficients::Bt2020Ncl; // 9
-                }
-                AV2_BT2100HLG => {
+                    ColorPrimaries::Bt2100,        // 9
+                    TransferCharacteristics::Pq,   // 16
+                    MatrixCoefficients::Bt2020Ncl, // 9
+                ),
+                AV2_BT2100HLG => (
                     // BT.2100 HLG
-                    self.color_primaries = ColorPrimaries::Bt2100; // 9
-                    self.transfer_characteristics = TransferCharacteristics::Bt2020_10bit; // 14
-                    self.matrix_coefficients = MatrixCoefficients::Bt2020Ncl; // 9
-                }
-                AV2_SRGB => {
+                    ColorPrimaries::Bt2100,                // 9
+                    TransferCharacteristics::Bt2020_10bit, // 14
+                    MatrixCoefficients::Bt2020Ncl,         // 9
+                ),
+                AV2_SRGB => (
                     // sRGB
-                    self.color_primaries = ColorPrimaries::Bt709; // 1
-                    self.transfer_characteristics = TransferCharacteristics::Srgb; // 13
-                    self.matrix_coefficients = MatrixCoefficients::Identity; // 0
-                }
-                AV2_SRGBSYCC => {
+                    ColorPrimaries::Bt709,         // 1
+                    TransferCharacteristics::Srgb, // 13
+                    MatrixCoefficients::Identity,  // 0
+                ),
+                AV2_SRGBSYCC => (
                     // sYCC
-                    self.color_primaries = ColorPrimaries::Bt709; // 1
-                    self.transfer_characteristics = TransferCharacteristics::Srgb; // 13
-                    self.matrix_coefficients = MatrixCoefficients::Bt470bg; // 5
-                }
-                _ => {
+                    ColorPrimaries::Bt709,         // 1
+                    TransferCharacteristics::Srgb, // 13
+                    MatrixCoefficients::Bt470bg,   // 5
+                ),
+                _ => (
                     // Reserved
-                    self.color_primaries = ColorPrimaries::Unspecified; // 2
-                    self.transfer_characteristics = TransferCharacteristics::Unspecified; // 2
-                    self.matrix_coefficients = MatrixCoefficients::Unspecified; // 2
-                }
-            }
+                    ColorPrimaries::Unspecified,          // 2
+                    TransferCharacteristics::Unspecified, // 2
+                    MatrixCoefficients::Unspecified,      // 2
+                ),
+            };
             self.yuv_range = if stream.read_bool()? { YuvRange::Full } else { YuvRange::Limited };
         // color_range
         } else {
@@ -481,7 +483,7 @@ impl Av2SequenceHeader {
             use crate::codecs::avm::AV2_CSP_LEFT;
             use crate::codecs::avm::AV2_CSP_TOPLEFT;
 
-            let chroma_sample_position = stream.read_vlc()?; // ci_chroma_sample_position_0
+            let chroma_sample_position = stream.read_uvlc()?; // ci_chroma_sample_position_0
             self.config.chroma_sample_position = match chroma_sample_position {
                 // Horizontal offset 0, vertical offset 0.5
                 AV2_CSP_LEFT => ChromaSamplePosition::Vertical,
@@ -532,7 +534,7 @@ impl Av2SequenceHeader {
                     let mut stream =
                         stream.sub_stream(&BoxSize::FixedSize(usize_from_u32(obu.size)?))?;
                     let mut sequence_header = Av2SequenceHeader::default();
-                    let seq_header_id = stream.read_vlc()?;
+                    let seq_header_id = stream.read_uvlc()?;
                     if seq_header_id >= 16 {
                         return AvifError::bmff_parse_failed(format!(
                             "invalid seq_header_id {seq_header_id}",
