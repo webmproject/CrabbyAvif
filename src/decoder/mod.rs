@@ -29,6 +29,9 @@ use crate::codecs::libgav1::Libgav1;
 #[cfg(feature = "android_mediacodec")]
 use crate::codecs::android_mediacodec::MediaCodec;
 
+#[cfg(feature = "avm")]
+use crate::codecs::avm::Avm;
+
 #[cfg(feature = "jpegxl")]
 use crate::codecs::libjxl::Libjxl;
 
@@ -80,6 +83,11 @@ impl CodecChoice {
                 CodecChoice::Auto | CodecChoice::Dav1d => Some(Box::<Dav1d>::default()),
                 #[cfg(feature = "libgav1")]
                 CodecChoice::Auto | CodecChoice::Libgav1 => Some(Box::<Libgav1>::default()),
+                _ => None,
+            },
+            #[cfg(feature = "avm")]
+            CompressionFormat::Avif2 => match self {
+                CodecChoice::Auto | CodecChoice::Avm => Some(Box::<Avm>::default()),
                 _ => None,
             },
             CompressionFormat::Heic => match self {
@@ -364,8 +372,10 @@ pub enum CompressionFormat {
     #[default]
     Avif = 0,
     Heic = 1,
+    #[cfg(feature = "avm")]
+    Avif2 = 2, // Future AV2-ISOBMFF with HEIF (experimental)
     #[cfg(feature = "jpegxl")]
-    JpegXl = 2,
+    JpegXl = 3,
 }
 
 pub(crate) struct GridImageHelper<'a> {

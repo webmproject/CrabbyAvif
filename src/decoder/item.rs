@@ -377,6 +377,8 @@ impl Item {
     pub(crate) fn is_image_codec_item(&self) -> bool {
         [
             "av01",
+            #[cfg(feature = "avm")]
+            "av02",
             #[cfg(feature = "heic")]
             "hvc1",
             #[cfg(feature = "jpegxl")]

@@ -203,7 +203,7 @@ pub(crate) fn check_slice_range(len: usize, range: &Range<usize>) -> AvifResult<
     Ok(())
 }
 
-#[cfg(feature = "jpegxl")]
+#[cfg(any(feature = "jpegxl", all(test, feature = "avm")))]
 pub(crate) fn are_planes_equal(image1: &Image, image2: &Image, plane: Plane) -> AvifResult<bool> {
     if !image1.has_same_properties_and_cicp(image2)
         || image1.has_plane(plane) != image2.has_plane(plane)
@@ -227,7 +227,7 @@ pub(crate) fn are_planes_equal(image1: &Image, image2: &Image, plane: Plane) -> 
     Ok(true)
 }
 
-#[cfg(feature = "jpegxl")]
+#[cfg(any(feature = "jpegxl", all(test, feature = "avm")))]
 pub(crate) fn are_images_equal(image1: &Image, image2: &Image) -> AvifResult<bool> {
     for plane in image::ALL_PLANES {
         if !are_planes_equal(image1, image2, plane)? {

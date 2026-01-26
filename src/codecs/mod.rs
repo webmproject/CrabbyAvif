@@ -24,6 +24,9 @@ pub mod android_mediacodec;
 #[cfg(feature = "aom")]
 pub mod aom;
 
+#[cfg(feature = "avm")]
+pub mod avm;
+
 #[cfg(feature = "jpegxl")]
 pub mod libjxl;
 

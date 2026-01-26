@@ -80,6 +80,10 @@ impl FileTypeBox {
         self.has_brand_any(&[
             "avif",
             "avis",
+            #[cfg(feature = "avm")]
+            "av2f",
+            #[cfg(feature = "avm")]
+            "av2s",
             #[cfg(feature = "heic")]
             "heic",
             #[cfg(feature = "heic")]
@@ -98,6 +102,8 @@ impl FileTypeBox {
     pub(crate) fn needs_meta(&self) -> bool {
         self.has_brand_any(&[
             "avif",
+            #[cfg(feature = "avm")]
+            "av2f",
             #[cfg(feature = "heic")]
             "heic",
             #[cfg(feature = "heic")]
@@ -112,6 +118,8 @@ impl FileTypeBox {
     pub(crate) fn needs_moov(&self) -> bool {
         self.has_brand_any(&[
             "avis",
+            #[cfg(feature = "avm")]
+            "av2s",
             #[cfg(feature = "heic")]
             "hevc",
             #[cfg(feature = "heic")]
@@ -246,6 +254,23 @@ pub struct Av1CodecConfiguration {
     pub raw_data: Vec<u8>,
 }
 
+#[cfg(feature = "avm")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Av2CodecConfiguration {
+    // TODO: b/437292541 - Match AV2-ISOBMFF once finalized.
+    pub seq_profile: u8,
+    pub seq_level_idx0: u8,
+    pub seq_tier_0: u8,
+    pub bitdepth_idx: u8,
+    pub monochrome: bool,
+    pub chroma_subsampling_x: u8,
+    pub chroma_subsampling_y: u8,
+    // conf_win
+    pub chroma_sample_position: ChromaSamplePosition,
+    // initial_presentation_delay and other fields
+    pub raw_data: Vec<u8>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HevcCodecConfiguration {
     pub bitdepth: u8,
@@ -288,10 +313,37 @@ impl Av1CodecConfiguration {
     }
 }
 
+#[cfg(feature = "avm")]
+impl Av2CodecConfiguration {
+    pub(crate) fn depth(&self) -> u8 {
+        match self.bitdepth_idx {
+            0 => 10,
+            1 => 8,
+            2 => 12,
+            _ => unreachable!(),
+        }
+    }
+    pub(crate) fn pixel_format(&self) -> PixelFormat {
+        match (
+            self.monochrome,
+            self.chroma_subsampling_x,
+            self.chroma_subsampling_y,
+        ) {
+            (true, 1, 1) => PixelFormat::Yuv400,
+            (false, 1, 1) => PixelFormat::Yuv420,
+            (false, 1, 0) => PixelFormat::Yuv422,
+            (false, 0, 0) => PixelFormat::Yuv444,
+            _ => unreachable!(),
+        }
+    }
+}
+
 impl CodecConfiguration {
     pub(crate) fn depth(&self) -> Option<u8> {
         match self {
             Self::Av1(config) => Some(config.depth()),
+            #[cfg(feature = "avm")]
+            Self::Av2(config) => Some(config.depth()),
             Self::Hevc(config) => Some(config.bitdepth),
             #[cfg(feature = "jpegxl")]
             Self::JpegXl(_) => None,
@@ -301,6 +353,8 @@ impl CodecConfiguration {
     pub(crate) fn pixel_format(&self) -> Option<PixelFormat> {
         match self {
             Self::Av1(config) => Some(config.pixel_format()),
+            #[cfg(feature = "avm")]
+            Self::Av2(config) => Some(config.pixel_format()),
             Self::Hevc(config) => Some(config.pixel_format),
             #[cfg(feature = "jpegxl")]
             Self::JpegXl(_) => None,
@@ -310,6 +364,8 @@ impl CodecConfiguration {
     pub(crate) fn chroma_sample_position(&self) -> ChromaSamplePosition {
         match self {
             Self::Av1(config) => config.chroma_sample_position,
+            #[cfg(feature = "avm")]
+            Self::Av2(config) => config.chroma_sample_position,
             Self::Hevc(_) => {
                 // It is okay to always return ChromaSamplePosition::default() here since that is
                 // the only format that android_mediacodec returns.
@@ -329,6 +385,8 @@ impl CodecConfiguration {
     pub(crate) fn raw_data(&self) -> Vec<u8> {
         match self {
             Self::Av1(config) => config.raw_data.clone(),
+            #[cfg(feature = "avm")]
+            Self::Av2(config) => unreachable!(),
             Self::Hevc(config) => {
                 // For HEVC, the codec specific data consists of the following 3 NAL units in
                 // order: VPS, SPS and PPS. Each unit should be preceded by a start code of
@@ -351,6 +409,8 @@ impl CodecConfiguration {
     pub fn profile(&self) -> u8 {
         match self {
             Self::Av1(config) => config.seq_profile,
+            #[cfg(feature = "avm")]
+            Self::Av2(config) => config.seq_profile,
             Self::Hevc(_) => {
                 // TODO: b/370549923 - Identify the correct profile from the codec configuration
                 // data.
@@ -372,6 +432,8 @@ impl CodecConfiguration {
     pub(crate) fn compression_format(&self) -> CompressionFormat {
         match self {
             Self::Av1(_) => CompressionFormat::Avif,
+            #[cfg(feature = "avm")]
+            Self::Av2(_) => CompressionFormat::Avif2,
             Self::Hevc(_) => CompressionFormat::Heic,
             #[cfg(feature = "jpegxl")]
             Self::JpegXl(_) => CompressionFormat::JpegXl,
@@ -389,6 +451,8 @@ pub enum ColorInformation {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CodecConfiguration {
     Av1(Av1CodecConfiguration),
+    #[cfg(feature = "avm")]
+    Av2(Av2CodecConfiguration),
     Hevc(HevcCodecConfiguration),
     #[cfg(feature = "jpegxl")]
     JpegXl(JpegXlCodecConfiguration),
@@ -901,6 +965,67 @@ impl Av1CodecConfiguration {
     }
 }
 
+#[cfg(feature = "avm")]
+#[allow(non_snake_case)]
+fn parse_av2C(stream: &mut IStream) -> AvifResult<ItemProperty> {
+    Ok(ItemProperty::CodecConfiguration(CodecConfiguration::Av2(
+        Av2CodecConfiguration::parse(stream)?,
+    )))
+}
+
+#[cfg(feature = "avm")]
+impl Av2CodecConfiguration {
+    #[allow(non_snake_case)]
+    pub(crate) fn parse(stream: &mut IStream) -> AvifResult<Av2CodecConfiguration> {
+        // TODO: b/437292541 - Match write_av2_codec_config() once AV2-ISOBMFF is finalized.
+        let raw_data = stream.get_immutable_vec(stream.bytes_left()?)?;
+        // unsigned int (1) marker = 1;
+        let marker = stream.read_bits(1)?;
+        if marker != 1 {
+            return AvifError::bmff_parse_failed(format!("Invalid marker {marker} in av2C"));
+        }
+        // unsigned int (7) version = 1;
+        let version = stream.read_bits(7)?;
+        if version != 1 {
+            return AvifError::bmff_parse_failed(format!("Invalid version {version} in av2C"));
+        }
+        let av2C = Av2CodecConfiguration {
+            seq_profile: stream.read_bits(3)? as u8,
+            seq_level_idx0: stream.read_bits(5)? as u8,
+            seq_tier_0: stream.read_bits(1)? as u8,
+            bitdepth_idx: stream.read_bits(2)? as u8,
+            monochrome: stream.read_bool()?,
+            chroma_subsampling_x: stream.read_bits(1)? as u8,
+            chroma_subsampling_y: stream.read_bits(1)? as u8,
+            chroma_sample_position: stream.read_bits(3)?.into(),
+            raw_data,
+        };
+        if av2C.bitdepth_idx > 2 {
+            return AvifError::bmff_parse_failed(format!(
+                "Invalid bitdepth_idx {} in av2C",
+                av2C.bitdepth_idx
+            ));
+        }
+
+        // unsigned int(2) reserved = 0;
+        if stream.read_bits(2)? != 0 {
+            return AvifError::bmff_parse_failed("Invalid reserved bits in av2C");
+        }
+        // unsigned int(1) initial_presentation_delay_present;
+        if stream.read_bits(1)? == 1 {
+            // unsigned int(4) initial_presentation_delay_minus_one;
+            stream.skip_bits(4)?;
+        } else {
+            // unsigned int(4) reserved = 0;
+            if stream.read_bits(4)? != 0 {
+                return AvifError::bmff_parse_failed("Invalid reserved bits in av2C");
+            }
+        }
+
+        Ok(av2C)
+    }
+}
+
 #[allow(non_snake_case)]
 #[cfg(feature = "heic")]
 fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
@@ -1193,6 +1318,8 @@ fn parse_ipco(stream: &mut IStream, is_track: bool) -> AvifResult<Vec<ItemProper
             "pixi" => properties.push(parse_pixi(&mut sub_stream)?),
             "alpi" => properties.push(parse_alpi(&mut sub_stream)?),
             "av1C" => properties.push(parse_av1C(&mut sub_stream)?),
+            #[cfg(feature = "avm")]
+            "av2C" => properties.push(parse_av2C(&mut sub_stream)?),
             "colr" => properties.push(parse_colr(&mut sub_stream)?),
             "pasp" => properties.push(parse_pasp(&mut sub_stream)?),
             "auxC" if !is_track => properties.push(parse_auxC(&mut sub_stream)?),

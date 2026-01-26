@@ -35,6 +35,9 @@ use crate::*;
 #[cfg(feature = "aom")]
 use crate::codecs::aom::Aom;
 
+#[cfg(feature = "avm")]
+use crate::codecs::avm::Avm;
+
 #[cfg(feature = "jpegxl")]
 use crate::codecs::libjxl::Libjxl;
 
@@ -149,6 +152,8 @@ impl CodecChoice {
             Self::Auto => unreachable!(),
             #[cfg(feature = "aom")]
             Self::Aom => Ok(("av01", Box::<Aom>::default())),
+            #[cfg(feature = "avm")]
+            Self::Avm => Ok(("av02", Box::<Avm>::default())),
             #[cfg(feature = "jpegxl")]
             Self::Libjxl => Ok(("hxlI", Box::<Libjxl>::default())),
             _ => AvifError::no_codec_available(),

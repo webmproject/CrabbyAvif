@@ -46,6 +46,9 @@ libsharpyuv-sys = { version = "0.1.0", path = "sys/libsharpyuv-sys", features = 
 aom-sys = { version = "0.1.0", path = "sys/aom-sys", features = [
   "aom",
 ], optional = true }
+avm-sys = { version = "0.1.0", path = "sys/avm-sys", features = [
+  "avm",
+], optional = true }
 libjxl-sys = { version = "0.1.0", path = "sys/libjxl-sys", features = [
   "libjxl",
 ], optional = true }
@@ -78,6 +81,7 @@ heic = []
 disable_cfi = []
 aom = ["dep:aom-sys", "encoder"]
 encoder = []
+avm = ["dep:avm-sys"]
 png = ["dep:png"]
 jpeg = ["dep:image"]
 gif = ["dep:gif", "dep:gif-dispose"]
