@@ -26,3 +26,13 @@ cp blue_alpha.png tile-01-00.png
 cp blue_alpha.png tile-01-01.png
 
 heif-enc -o blue_grid_alpha.heic -T tile-00-00.png
+
+## blue_422.heic and blue_444.heic
+
+HEIC image with different chroma subsamplings. Generated with ffmpeg and libheif:
+
+ffmpeg -f lavfi -i color=c=blue@1.0:s=320x240:d=1 -frames:v 1 -pix_fmt rgb24 blue.png
+
+heif-enc -o blue_422.heic -p chroma=422 blue.png
+heif-enc -o blue_444.heic -p chroma=444 blue.png
+
