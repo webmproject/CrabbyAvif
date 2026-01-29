@@ -200,6 +200,16 @@ impl Decoder for Libgav1 {
     ) -> AvifResult<()> {
         AvifError::not_implemented()
     }
+
+    fn get_last_image(
+        &mut self,
+        _payloads: &[Vec<u8>],
+        _spatial_id: u8,
+        _image: &mut Image,
+        _category: Category,
+    ) -> AvifResult<()> {
+        AvifError::not_implemented()
+    }
 }
 
 impl Libgav1 {
