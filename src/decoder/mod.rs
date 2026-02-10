@@ -1952,10 +1952,6 @@ impl Decoder {
                 .all(|x| x.codec_index == first_tile.codec_index)
     }
 
-    fn can_use_decode_until(&self) -> bool {
-        self.image.image_sequence_track_present && cfg!(feature = "dav1d")
-    }
-
     fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
         let mut decoded_something = false;
         for decoding_item in self.settings.image_content_to_decode.decoding_items() {
@@ -2075,61 +2071,12 @@ impl Decoder {
             // Start decoding from the nearest keyframe.
             self.image_index = nearest_keyframe - 1;
         }
-        if self.can_use_decode_until() {
-            self.decode_until(requested_index)?;
-        } else {
-            loop {
-                self.next_image()?;
-                if requested_index == self.image_index {
-                    break;
-                }
+        loop {
+            self.next_image()?;
+            if requested_index == self.image_index {
+                break;
             }
         }
-        Ok(())
-    }
-
-    fn decode_until(&mut self, requested_index: i32) -> AvifResult<()> {
-        if self.io.is_none() {
-            return AvifError::io_not_set();
-        }
-        self.create_codecs()?;
-        for decoding_item in self.settings.image_content_to_decode.decoding_items() {
-            if self.tiles[decoding_item.usize()].is_empty() {
-                continue;
-            }
-            let mut payloads = vec![];
-            let mut spatial_id: Option<u8> = None;
-            for image_index in (self.image_index + 1)..=requested_index {
-                let tile_index = 0;
-                let tile = &self.tiles[decoding_item.usize()][tile_index];
-                let sample = &tile.input.samples[image_index as usize];
-                if spatial_id.is_none() {
-                    spatial_id = Some(sample.spatial_id);
-                }
-                let item_data_buffer = if sample.item_id == 0 {
-                    &None
-                } else {
-                    &self.items.get(&sample.item_id).unwrap().data_buffer
-                };
-                let io = &mut self.io.unwrap_mut();
-                let data = sample.data(io, item_data_buffer)?;
-                payloads.push(data.to_vec());
-            }
-            if payloads.is_empty() {
-                continue;
-            }
-            let first_tile = &self.tiles[decoding_item.usize()][0];
-            let codec = &mut self.codecs[first_tile.codec_index];
-            codec.get_last_image(
-                &payloads,
-                spatial_id.unwrap(),
-                &mut self.image,
-                decoding_item.category,
-            )?;
-            checked_incr!(self.tile_info[decoding_item.usize()].decoded_tile_count, 1);
-        }
-        self.image_index = requested_index;
-        self.image_timing = self.nth_image_timing(self.image_index as u32)?;
         Ok(())
     }
 
