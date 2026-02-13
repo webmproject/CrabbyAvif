@@ -26,15 +26,12 @@ jobs:
       CXX: clang++
 
     steps:
-    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
-    - uses: ./.github/actions/setup-deps
+      - uses: ./.github/actions/setup-deps
 
-    - name: Build and run CLI tests with minimal features
-      run: cargo test --no-default-features --features cli -- --skip test_conformance
+      - name: Build and run CLI tests with minimal features
+        run: cargo test --no-default-features --features cli -- --skip test_conformance
 
-    - name: Build and run CLI tests
-      run: cargo test --features cli -- --skip test_conformance
-
-    - name: Build and run CLI tests with all features
-      run: cargo test --features all -- --skip test_conformance
+      - name: Build and run CLI tests
+        run: cargo test --features libgav1,libyuv,aom,sharpyuv,cli -- --skip test_conformance
