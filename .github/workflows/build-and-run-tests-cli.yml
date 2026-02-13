@@ -1,0 +1,40 @@
+name: Build and Run CLI Tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+# Cancel the workflow if a new one is triggered from the same PR, branch, or tag, except on main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build-and-run-tests:
+    name: "Build and Run CLI Tests on ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    env:
+      CC: clang
+      CXX: clang++
+
+    steps:
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - uses: ./.github/actions/setup-deps
+
+    - name: Build and run CLI tests with minimal features
+      run: cargo test --no-default-features --features cli -- --skip test_conformance
+
+    - name: Build and run CLI tests
+      run: cargo test --features cli -- --skip test_conformance
+
+    - name: Build and run CLI tests with all features
+      run: cargo test --features all -- --skip test_conformance

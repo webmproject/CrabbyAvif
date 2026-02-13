@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(test)]
+mod crabbyavif_test;
+
 use clap::value_parser;
 use clap::Parser;
 
@@ -893,8 +896,12 @@ fn binary_name() -> String {
     }
 }
 
-fn main() {
-    let args = CommandLineArgs::parse();
+pub fn main_impl<I, T>(itr: I) -> AvifResult<()>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    let args = CommandLineArgs::parse_from(itr);
     if args.version {
         println!(
             "{} (crate {} {})",
@@ -905,39 +912,28 @@ fn main() {
         println!("Available codecs:");
         println!("  {}", codec_versions());
     }
-    if let Err(err) = validate_args(&args) {
-        eprintln!("ERROR: {err:#?}");
-        std::process::exit(1);
-    }
-    let res = if let Some(input_file) = &args.input_file {
+    validate_args(&args)?;
+    if let Some(input_file) = &args.input_file {
         if can_decode(input_file) {
             if args.info {
-                info(&args, input_file)
+                info(&args, input_file)?
             } else {
-                decode(&args, input_file)
+                decode(&args, input_file)?
             }
         } else if let Some(output_file) = &args.output_file {
             if can_encode(output_file) {
-                encode(&args, input_file, output_file)
+                encode(&args, input_file, output_file)?
             } else {
-                eprintln!("Input/output file extensions not supported");
-                std::process::exit(1);
+                return Err(AvifError::UnknownError(
+                    "Input/output file extensions not supported".into(),
+                ));
             }
         } else {
-            eprintln!(
+            return Err(AvifError::UnknownError(format!(
                 "Input file extension not supported: {}",
                 get_extension(input_file)
-            );
-            std::process::exit(1);
-        }
-    } else {
-        Ok(())
-    };
-    match res {
-        Ok(_) => std::process::exit(0),
-        Err(err) => {
-            eprintln!("ERROR: {err:#?}");
-            std::process::exit(1);
+            )));
         }
     }
+    Ok(())
 }
