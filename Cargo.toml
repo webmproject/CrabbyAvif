@@ -53,6 +53,8 @@ libjxl-sys = { version = "0.1.0", path = "sys/libjxl-sys", features = [
   "libjxl",
 ], optional = true }
 
+clap = { version = "4.5.28", features = ["derive"], optional = true }
+clap_derive = { version = "4.5.28", optional = true }
 png = { version = "0.17.16", optional = true }
 image = { version = "0.25.6", features = ["jpeg"], optional = true }
 gif = { version = "0.13.1", optional = true }
@@ -63,8 +65,6 @@ test-case = "3.3.1"
 seq-macro = "0.3.5"
 tempfile = "3.8.1"
 rand = "0.8.5"
-clap = { version = "4.5.28", features = ["derive"] }
-clap_derive = { version = "4.5.28" }
 
 [build-dependencies]
 bindgen = "0.69.1"
@@ -72,6 +72,7 @@ cbindgen = "0.26.0"
 
 [features]
 default = ["dav1d", "libyuv", "png", "jpeg", "gif", "sharpyuv"]
+cli = ["dep:clap", "dep:clap_derive"]
 capi = []
 dav1d = ["dep:libc", "dep:dav1d-sys"]
 libgav1 = ["dep:libgav1-sys"]
@@ -97,3 +98,12 @@ unexpected_cfgs = { level = "warn", check-cfg = [
   'cfg(google3)',
   'cfg(android_soong)',
 ] }
+
+# As of Feb 2026, there is no way to enable dependencies only with cargo --bin
+# and with cargo run. To avoid the dependencies used only for the crabbyavif
+# binary to be built even when generating only the library, rely on the
+# required-features mechanism which will print an error asking for
+# --features=cli to be passed when running cargo --bin and cargo run.
+[[bin]]
+name = "crabbyavif"
+required-features = ["cli"]

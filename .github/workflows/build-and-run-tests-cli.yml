@@ -1,0 +1,35 @@
+name: Build and Run CLI Tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+# Cancel the workflow if a new one is triggered from the same PR, branch, or tag, except on main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build-and-run-tests:
+    name: "Build and Run CLI Tests"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    env:
+      CC: clang
+      CXX: clang++
+
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - uses: ./.github/actions/setup-deps
+
+      - name: Build and run CLI tests with minimal features
+        run: cargo test --no-default-features --features cli -- --skip test_conformance
+
+      - name: Build and run CLI tests
+        run: cargo test --features libgav1,libyuv,aom,sharpyuv,cli -- --skip test_conformance
