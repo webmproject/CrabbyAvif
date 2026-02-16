@@ -75,16 +75,24 @@ pub(crate) type Codec = Box<dyn crate::codecs::Decoder>;
 impl CodecChoice {
     fn get_decoder_codec(&self, compression_format: CompressionFormat) -> Option<Codec> {
         match compression_format {
-            CompressionFormat::Avif => match self {
-                CodecChoice::Aom => None, // Not used as a decoder.
+            CompressionFormat::Avif => {
+                if matches!(self, CodecChoice::Aom) {
+                    return None; // Not used as a decoder.
+                }
                 #[cfg(feature = "android_mediacodec")]
-                CodecChoice::Auto | CodecChoice::MediaCodec => Some(Box::<MediaCodec>::default()),
+                if matches!(self, CodecChoice::Auto | CodecChoice::MediaCodec) {
+                    return Some(Box::<MediaCodec>::default());
+                }
                 #[cfg(feature = "dav1d")]
-                CodecChoice::Auto | CodecChoice::Dav1d => Some(Box::<Dav1d>::default()),
+                if matches!(self, CodecChoice::Auto | CodecChoice::Dav1d) {
+                    return Some(Box::<Dav1d>::default());
+                }
                 #[cfg(feature = "libgav1")]
-                CodecChoice::Auto | CodecChoice::Libgav1 => Some(Box::<Libgav1>::default()),
-                _ => None,
-            },
+                if matches!(self, CodecChoice::Auto | CodecChoice::Libgav1) {
+                    return Some(Box::<Libgav1>::default());
+                }
+                None
+            }
             #[cfg(feature = "avm")]
             CompressionFormat::Avif2 => match self {
                 CodecChoice::Auto | CodecChoice::Avm => Some(Box::<Avm>::default()),
