@@ -25,8 +25,10 @@ use crabby_avif::*;
 use test_case::test_matrix;
 use utils::*;
 
-#[test]
-fn lossless_sample_transform_roundtrip() -> AvifResult<()> {
+#[test_matrix(
+    [Recipe::BitDepthExtension8b8b, Recipe::BitDepthExtension12b4b]
+)]
+fn lossless_sample_transform_roundtrip(recipe: Recipe) -> AvifResult<()> {
     if !HAS_ENCODER {
         return Ok(());
     }
@@ -44,7 +46,7 @@ fn lossless_sample_transform_roundtrip() -> AvifResult<()> {
             quality: 100.0,
             ..Default::default()
         },
-        recipe: Recipe::BitDepthExtension8b8b,
+        recipe,
         ..Default::default()
     };
     let mut encoder = encoder::Encoder::create_with_settings(&settings)?;

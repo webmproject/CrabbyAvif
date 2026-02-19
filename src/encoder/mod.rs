@@ -136,6 +136,15 @@ pub enum Recipe {
     // (ignoring the hidden image item), leading to a valid image but with
     // precision loss (16-bit samples truncated to the 8 most significant bits).
     BitDepthExtension8b8b,
+    // Encode the 12 most significant bits of each input image sample losslessly
+    // into a base image. The remaining 4 least significant bits are encoded in
+    // a separate hidden image item. The two are combined at decoding into one
+    // image with the same bit depth as the original image. It is backward
+    // compatible in the sense that it is possible to decode only the base image
+    // (ignoring the hidden image item), leading to a valid image but with
+    // precision loss (16-bit samples truncated to the 12 most significant
+    // bits).
+    BitDepthExtension12b4b,
 }
 
 impl CodecChoice {
@@ -412,7 +421,9 @@ impl Encoder {
         for (index, image) in images.iter().enumerate() {
             if !matches!(
                 (image.depth, recipe),
-                (8 | 10 | 12, Recipe::None) | (16, Recipe::BitDepthExtension8b8b)
+                (8 | 10 | 12, Recipe::None)
+                    | (16, Recipe::BitDepthExtension8b8b)
+                    | (16, Recipe::BitDepthExtension12b4b)
             ) {
                 return AvifError::invalid_argument();
             }
@@ -575,7 +586,7 @@ impl Encoder {
             match final_recipe {
                 Recipe::Auto => unreachable!(),
                 Recipe::None => {}
-                Recipe::BitDepthExtension8b8b => {
+                Recipe::BitDepthExtension8b8b | Recipe::BitDepthExtension12b4b => {
                     if first_image.depth != 16 {
                         return AvifError::invalid_argument();
                     }
@@ -652,7 +663,22 @@ impl Encoder {
                         quality = 100.0;
                     }
                     bit_depth_extension_image =
-                        Self::create_bit_depth_extension_image(image, item)?;
+                        Self::create_bit_depth_extension_8b8b_image(image, item)?;
+                    image = &bit_depth_extension_image;
+                }
+                Recipe::BitDepthExtension12b4b => {
+                    if !item.is_sato_least_significant_input {
+                        // Encoding the least significant bits of a sample does not
+                        // make any sense if the other bits are lossily compressed.
+                        // Encode the most significant bits losslessly.
+                        quality = 100.0;
+                    }
+                    let item_will_be_encoded_losslessly = quality == 100.0;
+                    bit_depth_extension_image = Self::create_bit_depth_extension_12b4b_image(
+                        image,
+                        item,
+                        item_will_be_encoded_losslessly,
+                    )?;
                     image = &bit_depth_extension_image;
                 }
             }

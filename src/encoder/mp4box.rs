@@ -426,7 +426,8 @@ impl Encoder {
             } else if item.category == Category::Gainmap {
                 &self.gainmap_image_metadata
             } else {
-                match self.final_recipe.unwrap() {
+                let final_recipe = self.final_recipe.unwrap();
+                match final_recipe {
                     Recipe::Auto => unreachable!(),
                     Recipe::None => &self.image_metadata,
                     Recipe::BitDepthExtension8b8b => {
@@ -435,6 +436,16 @@ impl Encoder {
                         } else {
                             bit_depth_extension_metadata = self.image_metadata.shallow_clone();
                             bit_depth_extension_metadata.depth = 8;
+                            &bit_depth_extension_metadata
+                        }
+                    }
+                    Recipe::BitDepthExtension12b4b => {
+                        if item.is_sato() {
+                            &self.image_metadata
+                        } else {
+                            bit_depth_extension_metadata = self.image_metadata.shallow_clone();
+                            bit_depth_extension_metadata.depth =
+                                if item.is_sato_least_significant_input { 8 } else { 12 };
                             &bit_depth_extension_metadata
                         }
                     }
