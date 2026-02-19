@@ -16,7 +16,7 @@ edition = "2021"     # Rust version
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
-libc = { version = "0.2.152", optional = true }
+libc = { version = "0.2.152" }
 
 # The dependencies below are also workspace members in order to include their
 # custom wrappers (lib.rs) in this project. However, even if their respective
@@ -74,7 +74,7 @@ cbindgen = "0.26.0"
 default = ["dav1d", "libyuv", "png", "jpeg", "gif", "sharpyuv"]
 cli = ["dep:clap", "dep:clap_derive"]
 capi = []
-dav1d = ["dep:libc", "dep:dav1d-sys"]
+dav1d = ["dep:dav1d-sys"]
 libgav1 = ["dep:libgav1-sys"]
 libyuv = ["dep:libyuv-sys"]
 android_mediacodec = ["dep:ndk-sys"]
