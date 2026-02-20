@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::decoder::{CompressionFormat, ProgressiveState};
+use crate::decoder::ProgressiveState;
 use crate::internal_utils::*;
-use crate::parser::mp4box::CodecConfiguration;
 use crate::reformat::coeffs::*;
 use crate::utils::clap::*;
 use crate::utils::pixels::*;
@@ -439,23 +438,6 @@ impl Image {
 
     pub fn allocate_planes(&mut self, category: Category) -> AvifResult<()> {
         self.allocate_planes_with_default_values(category, [0, 0, 0, self.max_channel()])
-    }
-
-    pub(crate) fn copy_properties_from(
-        &mut self,
-        image: &Image,
-        codec_config: &CodecConfiguration,
-    ) {
-        self.yuv_format = image.yuv_format;
-        self.depth = image.depth;
-        if cfg!(feature = "heic") && codec_config.compression_format() == CompressionFormat::Heic {
-            // For AVIF, the information in the `colr` box takes precedence over what is reported
-            // by the decoder. For HEIC, we always honor what is reported by the decoder.
-            self.yuv_range = image.yuv_range;
-            self.color_primaries = image.color_primaries;
-            self.transfer_characteristics = image.transfer_characteristics;
-            self.matrix_coefficients = image.matrix_coefficients;
-        }
     }
 
     // If src contains pointers, this function will simply make a copy of the pointer without

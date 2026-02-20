@@ -398,6 +398,21 @@ pub(crate) struct GridImageHelper<'a> {
     tile_height: u32,
 }
 
+impl Image {
+    fn copy_properties_from(&mut self, image: &Image, codec_config: &CodecConfiguration) {
+        self.yuv_format = image.yuv_format;
+        self.depth = image.depth;
+        if cfg!(feature = "heic") && codec_config.compression_format() == CompressionFormat::Heic {
+            // For AVIF, the information in the `colr` box takes precedence over what is reported
+            // by the decoder. For HEIC, we always honor what is reported by the decoder.
+            self.yuv_range = image.yuv_range;
+            self.color_primaries = image.color_primaries;
+            self.transfer_characteristics = image.transfer_characteristics;
+            self.matrix_coefficients = image.matrix_coefficients;
+        }
+    }
+}
+
 // These functions are not used in all configurations.
 #[allow(dead_code)]
 impl GridImageHelper<'_> {
