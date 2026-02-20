@@ -776,7 +776,6 @@ impl Decoder for Avm {
                         image.height,
                         image.row_bytes[plane],
                     )?);
-                    image.image_owns_planes[plane] = false;
                 }
             }
         } else {
@@ -850,7 +849,6 @@ impl Decoder for Avm {
                     image.height,
                     image.row_bytes[0],
                 )?);
-                image.image_owns_planes[Plane::A.as_usize()] = false;
             }
         }
 

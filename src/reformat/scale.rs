@@ -252,7 +252,6 @@ mod tests {
                 Pixels::Buffer(values.to_vec())
             });
             yuv.row_bytes[plane.as_usize()] = 2;
-            yuv.image_owns_planes[plane.as_usize()] = !is_pointer_input;
         }
         let categories: &[Category] =
             if use_alpha { &[Category::Color, Category::Alpha] } else { &[Category::Color] };
