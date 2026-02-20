@@ -80,7 +80,6 @@ pub struct Image {
     pub alpha_premultiplied: bool,
 
     pub row_bytes: [u32; MAX_PLANE_COUNT],
-    pub image_owns_planes: [bool; MAX_PLANE_COUNT],
 
     pub planes: [Option<Pixels>; MAX_PLANE_COUNT],
 
@@ -408,7 +407,6 @@ impl Image {
             let plane = plane.as_usize();
             self.planes[plane] = None;
             self.row_bytes[plane] = 0;
-            self.image_owns_planes[plane] = false;
         }
     }
 
@@ -436,7 +434,6 @@ impl Image {
             let pixels = self.planes[plane_index].unwrap_mut();
             pixels.resize(plane_size, default_values[plane_index])?;
             self.row_bytes[plane_index] = u32_from_usize(checked_mul!(width, pixel_size)?)?;
-            self.image_owns_planes[plane_index] = true;
         }
         Ok(())
     }

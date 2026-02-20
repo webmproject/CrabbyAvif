@@ -138,7 +138,6 @@ impl Decoder for Libgav1 {
                         image.height,
                         image.row_bytes[3],
                     )?);
-                    image.image_owns_planes[3] = false;
                     image.yuv_range =
                         if gav1_image.color_range == Libgav1ColorRange_kLibgav1ColorRangeStudio {
                             YuvRange::Limited
@@ -180,7 +179,6 @@ impl Decoder for Libgav1 {
                             image.height,
                             image.row_bytes[plane],
                         )?);
-                        image.image_owns_planes[plane] = false;
                     }
                     if image.yuv_format == PixelFormat::Yuv400 {
                         // Clear left over chroma planes from previous frames.
