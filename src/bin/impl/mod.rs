@@ -326,6 +326,10 @@ struct CommandLineArgs {
     #[arg(long, default_value = "infinite", value_parser = repetition_count_parser)]
     repetition_count: RepetitionCount,
 
+    /// AVIF Decode only: Allow sample transform. (Default: false)
+    #[arg(long, default_value = "false")]
+    allow_sample_transform: bool,
+
     /// Input AVIF file
     #[arg(allow_hyphen_values = false)]
     input_file: Option<String>,
@@ -547,6 +551,7 @@ fn create_decoder_and_parse(args: &CommandLineArgs, input_file: &String) -> Avif
         allow_progressive: args.progressive,
         ignore_exif: args.ignore_exif,
         ignore_xmp: args.ignore_xmp,
+        allow_sample_transform: args.allow_sample_transform,
         ..Default::default()
     };
     // These values cannot be initialized in the list above since we need the default values to be
