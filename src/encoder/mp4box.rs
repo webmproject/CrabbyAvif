@@ -426,8 +426,7 @@ impl Encoder {
             } else if item.category == Category::Gainmap {
                 &self.gainmap_image_metadata
             } else {
-                let final_recipe = self.final_recipe.unwrap();
-                match final_recipe {
+                match self.final_recipe.unwrap() {
                     Recipe::Auto => unreachable!(),
                     Recipe::None => &self.image_metadata,
                     Recipe::BitDepthExtension8b8b => {
