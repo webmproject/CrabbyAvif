@@ -664,7 +664,23 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
     let mut output_file = File::create(output_filename).or(Err(AvifError::UnknownError(
         "Could not open output file".into(),
     )))?;
-    writer.write_frame(&mut output_file, image)?;
+    let cropped_image = if image.clap.is_some() {
+        if let Ok(cropped_image) = image.cropped_image() {
+            Some(cropped_image)
+        } else {
+            println!("Warning: clap was invalid. So writing whole image.");
+            None
+        }
+    } else {
+        None
+    };
+    writer.write_frame(
+        &mut output_file,
+        match &cropped_image {
+            Some(cropped_image) => cropped_image,
+            None => image,
+        },
+    )?;
     println!(
         "Wrote image at index {} to output {}",
         args.index.unwrap_or(0),

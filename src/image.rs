@@ -17,7 +17,7 @@ use crate::decoder::{CompressionFormat, ProgressiveState};
 use crate::internal_utils::*;
 use crate::parser::mp4box::CodecConfiguration;
 use crate::reformat::coeffs::*;
-use crate::utils::clap::CleanAperture;
+use crate::utils::clap::*;
 use crate::utils::pixels::*;
 use crate::*;
 
@@ -305,6 +305,57 @@ impl Image {
     pub fn row16_exact_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u16]> {
         let width = self.width(plane);
         Ok(&mut self.row16_mut(plane, row)?[0..width])
+    }
+
+    #[cfg(feature = "cli")]
+    pub fn cropped_image(&self) -> AvifResult<Image> {
+        match self.clap {
+            Some(clap) => {
+                match CropRect::create_from(&clap, self.width, self.height, self.yuv_format) {
+                    Ok(rect) => {
+                        let mut image = self.shallow_clone();
+                        image.width = rect.width;
+                        image.height = rect.height;
+                        image.row_bytes = self.row_bytes;
+                        for plane in ALL_PLANES {
+                            if self.planes[plane.as_usize()].is_none() {
+                                continue;
+                            }
+                            let (x, y) = if plane == Plane::Y || plane == Plane::A {
+                                (usize_from_u32(rect.x)?, rect.y)
+                            } else {
+                                (
+                                    usize_from_u32(image.yuv_format.apply_chroma_shift_x(rect.x))?,
+                                    image.yuv_format.apply_chroma_shift_y(rect.y),
+                                )
+                            };
+                            let ptr = if image.depth == 8 {
+                                let row = self.row(plane, y)?;
+                                // SAFETY: rect is a valid rectangle that is guaranteed to be
+                                // within the image bounds. So this pointer is pointing to a valid
+                                // buffer.
+                                unsafe { row.as_ptr().add(x) as *mut u8 }
+                            } else {
+                                let row = self.row16(plane, y)?;
+                                // SAFETY: rect is a valid rectangle that is guaranteed to be
+                                // within the image bounds. So this pointer is pointing to a valid
+                                // buffer.
+                                unsafe { row.as_ptr().add(x) as *mut u8 }
+                            };
+                            image.planes[plane.as_usize()] = Some(Pixels::from_raw_pointer(
+                                ptr,
+                                image.depth as _,
+                                u32_from_usize(image.height(plane))?,
+                                image.row_bytes[plane.as_usize()],
+                            )?);
+                        }
+                        Ok(image)
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            None => Err(AvifError::InvalidArgument),
+        }
     }
 
     #[cfg(feature = "libyuv")]
