@@ -378,3 +378,17 @@ impl<T> PointerSlice<T> {
         self.slice_impl().is_empty()
     }
 }
+
+pub trait TryClone: Sized {
+    fn try_clone(&self) -> AvifResult<Self>;
+}
+
+impl<T: Clone> TryClone for Vec<T> {
+    fn try_clone(&self) -> AvifResult<Vec<T>> {
+        let mut vec: Vec<T> = vec![];
+        vec.try_reserve_exact(self.len())
+            .map_err(AvifError::map_out_of_memory)?;
+        vec.extend_from_slice(self.as_slice());
+        Ok(vec)
+    }
+}
