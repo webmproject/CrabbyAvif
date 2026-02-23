@@ -440,24 +440,6 @@ impl Image {
         self.allocate_planes_with_default_values(category, [0, 0, 0, self.max_channel()])
     }
 
-    // If src contains pointers, this function will simply make a copy of the pointer without
-    // copying the actual pixels (stealing). If src contains buffer, this function will clone the
-    // buffers (copying).
-    pub(crate) fn steal_or_copy_planes_from(
-        &mut self,
-        src: &Image,
-        category: Category,
-    ) -> AvifResult<()> {
-        for plane in category.planes() {
-            let plane = plane.as_usize();
-            (self.planes[plane], self.row_bytes[plane]) = match &src.planes[plane] {
-                Some(src_plane) => (Some(src_plane.try_clone()?), src.row_bytes[plane]),
-                None => (None, 0),
-            }
-        }
-        Ok(())
-    }
-
     #[cfg(feature = "encoder")]
     pub(crate) fn copy_and_pad(&mut self, image: &Image) -> AvifResult<()> {
         if image.width > self.width || image.height > self.height {
