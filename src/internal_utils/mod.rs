@@ -379,7 +379,8 @@ impl<T> PointerSlice<T> {
     }
 }
 
-pub trait TryClone: Sized {
+#[allow(dead_code)]
+pub(crate) trait TryClone: Sized {
     fn try_clone(&self) -> AvifResult<Self>;
 }
 
