@@ -1846,13 +1846,21 @@ impl Decoder {
                     dst_image.width = tile.image.width;
                     dst_image.height = tile.image.height;
                     dst_image.copy_properties_from(&tile.image, &tile.codec_config);
-                    dst_image.steal_or_copy_planes_from(&tile.image, category)?;
                 }
                 Category::Alpha => {
                     if !dst_image.has_same_properties(&tile.image) {
                         return AvifError::decode_alpha_failed();
                     }
-                    dst_image.steal_or_copy_planes_from(&tile.image, category)?;
+                }
+            }
+
+            for plane in category.planes() {
+                let plane = plane.as_usize();
+                (dst_image.planes[plane], dst_image.row_bytes[plane]) = match &tile.image.planes
+                    [plane]
+                {
+                    Some(src_plane) => (Some(src_plane.try_clone()?), tile.image.row_bytes[plane]),
+                    None => (None, 0),
                 }
             }
         }
