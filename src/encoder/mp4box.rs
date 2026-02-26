@@ -433,7 +433,7 @@ impl Encoder {
                         if item.is_sato() {
                             &self.image_metadata
                         } else {
-                            bit_depth_extension_metadata = self.image_metadata.shallow_clone();
+                            bit_depth_extension_metadata = self.image_metadata.clone_properties();
                             bit_depth_extension_metadata.depth = 8;
                             &bit_depth_extension_metadata
                         }
@@ -442,7 +442,7 @@ impl Encoder {
                         if item.is_sato() {
                             &self.image_metadata
                         } else {
-                            bit_depth_extension_metadata = self.image_metadata.shallow_clone();
+                            bit_depth_extension_metadata = self.image_metadata.clone_properties();
                             bit_depth_extension_metadata.depth =
                                 if item.is_sato_least_significant_input { 8 } else { 12 };
                             &bit_depth_extension_metadata

@@ -236,7 +236,7 @@ impl Encoder {
         assert_eq!(full_depth_image.depth, 16);
         if item.is_sato_least_significant_input {
             // 8-bit image containing the 8 least significant bits of the 16-bit image.
-            let mut lsb = full_depth_image.shallow_clone();
+            let mut lsb = full_depth_image.clone_properties();
             lsb.depth = 8;
             lsb.allocate_planes(item.category)?;
             SampleTransform::create_from(
@@ -257,7 +257,7 @@ impl Encoder {
             Ok(lsb)
         } else {
             // 8-bit image containing the most significant bits of the 16-bit image.
-            let mut msb = full_depth_image.shallow_clone();
+            let mut msb = full_depth_image.clone_properties();
             msb.depth = 8;
             msb.allocate_planes(item.category)?;
             SampleTransform::create_from(
@@ -287,7 +287,7 @@ impl Encoder {
         assert_eq!(full_depth_image.depth, 16);
         if item.is_sato_least_significant_input {
             // 8-bit image containing the 4 least significant bits of the 16-bit image.
-            let mut lsb = full_depth_image.shallow_clone();
+            let mut lsb = full_depth_image.clone_properties();
             lsb.depth = 8;
             lsb.allocate_planes(item.category)?;
             let mut tokens = vec![
@@ -327,7 +327,7 @@ impl Encoder {
             Ok(lsb)
         } else {
             // 12-bit image containing the 12 most significant bits of the 16-bit image.
-            let mut msb = full_depth_image.shallow_clone();
+            let mut msb = full_depth_image.clone_properties();
             msb.depth = 12;
             msb.allocate_planes(item.category)?;
             SampleTransform::create_from(
