@@ -4,6 +4,7 @@ workspace = { members = [
   "sys/libsharpyuv-sys",
   "sys/libyuv-sys",
   "sys/libgav1-sys",
+  "sys/libpng-sys",
   "sys/ndk-sys",
 ] }
 
@@ -51,6 +52,9 @@ avm-sys = { version = "0.1.0", path = "sys/avm-sys", features = [
 ], optional = true }
 libjxl-sys = { version = "0.1.0", path = "sys/libjxl-sys", features = [
   "libjxl",
+], optional = true }
+libpng-sys = { version = "0.1.0", path = "sys/libpng-sys", features = [
+  "png",
 ], optional = true }
 
 clap = { version = "4.5.28", features = ["derive"], optional = true }
