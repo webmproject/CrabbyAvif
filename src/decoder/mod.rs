@@ -445,7 +445,7 @@ impl GridImageHelper<'_> {
         self.image
             .copy_from_tile(cell_image, self.grid, self.cell_index as u32, self.category)?;
         if self.cell_index == 0 {
-            self.first_cell_image = Some(cell_image.shallow_clone());
+            self.first_cell_image = Some(cell_image.clone_properties());
         }
         self.cell_index += 1;
         Ok(())

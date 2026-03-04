@@ -107,30 +107,19 @@ pub struct PlaneData {
 }
 
 impl Image {
-    pub(crate) fn shallow_clone(&self) -> Self {
+    // Creates an instance with all the properties of self but with pixels and
+    // Exif, XMP, ICC metadata left unallocated.
+    pub(crate) fn clone_properties(&self) -> Self {
         Self {
-            width: self.width,
-            height: self.height,
-            depth: self.depth,
-            yuv_format: self.yuv_format,
-            yuv_range: self.yuv_range,
-            chroma_sample_position: self.chroma_sample_position,
-            alpha_present: self.alpha_present,
-            alpha_premultiplied: self.alpha_premultiplied,
-            color_primaries: self.color_primaries,
-            transfer_characteristics: self.transfer_characteristics,
-            matrix_coefficients: self.matrix_coefficients,
-            clli: self.clli,
-            pasp: self.pasp,
-            clap: self.clap,
-            irot_angle: self.irot_angle,
-            imir_axis: self.imir_axis,
-            exif: self.exif.clone(),
-            icc: self.icc.clone(),
-            xmp: self.xmp.clone(),
-            image_sequence_track_present: self.image_sequence_track_present,
-            progressive_state: self.progressive_state,
-            ..Default::default()
+            // Fields requiring dynamic allocation.
+            row_bytes: [0; MAX_PLANE_COUNT],
+            planes: [const { None }; MAX_PLANE_COUNT],
+            exif: vec![],
+            icc: vec![],
+            xmp: vec![],
+
+            // All other field values can be copied.
+            ..*self
         }
     }
 
@@ -304,13 +293,15 @@ impl Image {
         Ok(&mut self.row16_mut(plane, row)?[0..width])
     }
 
+    // Returns a view with the same image properties as self and pointing to
+    // the pixel values of self. Copies all Exif, XMP and ICC data if any.
     #[cfg(feature = "cli")]
     pub fn cropped_image(&self) -> AvifResult<Image> {
         match self.clap {
             Some(clap) => {
                 match CropRect::create_from(&clap, self.width, self.height, self.yuv_format) {
                     Ok(rect) => {
-                        let mut image = self.shallow_clone();
+                        let mut image = self.clone_properties();
                         image.width = rect.width;
                         image.height = rect.height;
                         image.row_bytes = self.row_bytes;
@@ -346,6 +337,9 @@ impl Image {
                                 image.row_bytes[plane.as_usize()],
                             )?);
                         }
+                        image.exif = self.exif.try_clone()?;
+                        image.xmp = self.xmp.try_clone()?;
+                        image.icc = self.icc.try_clone()?;
                         Ok(image)
                     }
                     Err(e) => Err(e),

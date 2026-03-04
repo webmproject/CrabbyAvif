@@ -394,10 +394,10 @@ impl Encoder {
         Ok(())
     }
 
-    fn copy_alt_image_metadata(&mut self, gainmap: &GainMap, grid: &Grid) {
+    fn copy_alt_image_metadata(&mut self, gainmap: &GainMap, grid: &Grid) -> AvifResult<()> {
         self.alt_image_metadata.width = grid.width;
         self.alt_image_metadata.height = grid.height;
-        self.alt_image_metadata.icc = gainmap.alt_icc.clone();
+        self.alt_image_metadata.icc = gainmap.alt_icc.try_clone()?;
         self.alt_image_metadata.color_primaries = gainmap.alt_color_primaries;
         self.alt_image_metadata.transfer_characteristics = gainmap.alt_transfer_characteristics;
         self.alt_image_metadata.matrix_coefficients = gainmap.alt_matrix_coefficients;
@@ -413,6 +413,7 @@ impl Encoder {
             PixelFormat::Yuv444
         };
         self.alt_image_metadata.clli = Some(gainmap.alt_clli);
+        Ok(())
     }
 
     fn validate_image_grid(grid: &Grid, images: &[&Image], recipe: Recipe) -> AvifResult<()> {
@@ -526,10 +527,13 @@ impl Encoder {
                 height: (grid_rows - 1) * first_image.height + last_image.height,
             };
             Self::validate_image_grid(&grid, cell_images, final_recipe)?;
-            self.image_metadata = first_image.shallow_clone();
+            self.image_metadata = first_image.clone_properties();
+            self.image_metadata.exif = first_image.exif.try_clone()?;
+            self.image_metadata.xmp = first_image.xmp.try_clone()?;
+            self.image_metadata.icc = first_image.icc.try_clone()?;
             if let Some(gainmaps) = gainmaps {
-                self.gainmap_image_metadata = gainmaps[0].image.shallow_clone();
-                self.copy_alt_image_metadata(gainmaps[0], &grid);
+                self.gainmap_image_metadata = gainmaps[0].image.clone_properties();
+                self.copy_alt_image_metadata(gainmaps[0], &grid)?;
             }
             let color_item_id = self.add_items(&grid, Category::Color, /*hidden=*/ false)?;
             self.primary_item_id = color_item_id;
@@ -640,7 +644,7 @@ impl Encoder {
             let mut padded_image;
             if image.width != first_image.width || image.height != first_image.height {
                 // Pad the right-most and/or bottom-most tiles so that all tiles share the same dimensions.
-                padded_image = first_image.shallow_clone();
+                padded_image = first_image.clone_properties();
                 padded_image.copy_and_pad(image)?;
                 image = &padded_image;
             }
