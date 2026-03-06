@@ -1,9 +1,11 @@
 git clone -b v1.3.2 --depth 1 https://github.com/madler/zlib.git
 
 cd zlib
-cmake -DBUILD_SHARED_LIBS=OFF
+mkdir build
+cd build
+cmake -DBUILD_SHARED_LIBS=OFF ..
 make
-cd ..
+cd ../..
 
 git clone -b v1.6.51 --depth 1 https://github.com/glennrp/libpng.git
 cd libpng
