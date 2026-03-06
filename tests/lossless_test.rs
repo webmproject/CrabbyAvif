@@ -17,16 +17,11 @@
 mod utils;
 use utils::*;
 
-use crabby_avif::reformat::rgb::*;
 #[cfg(all(feature = "jpeg", feature = "encoder"))]
 use crabby_avif::utils::reader::jpeg::JpegReader;
-#[cfg(feature = "encoder")]
 use crabby_avif::utils::reader::png::PngReader;
-#[cfg(feature = "encoder")]
 use crabby_avif::utils::reader::Config;
-#[cfg(feature = "encoder")]
 use crabby_avif::utils::reader::Reader;
-#[cfg(feature = "encoder")]
 use crabby_avif::*;
 
 use test_case::test_case;
@@ -35,28 +30,22 @@ use test_case::test_matrix;
 
 #[test_case("paris_identity.avif", "paris_icc_exif_xmp.png"; "lossless_identity")]
 #[test_case("paris_ycgco_re.avif", "paris_icc_exif_xmp.png"; "lossless_ycgco_re")]
-fn lossless(avif_file: &str, png_file: &str) {
+fn lossless(avif_file: &str, png_file: &str) -> AvifResult<()> {
     let mut decoder = get_decoder(avif_file);
     assert!(decoder.parse().is_ok());
     if !HAS_DECODER {
-        return;
+        return Ok(());
     }
     assert!(decoder.next_image().is_ok());
-    let decoded = decoder.image().expect("image was none");
-    let mut rgb = Image::create_from_yuv(decoded);
-    rgb.depth = 8;
-    rgb.format = Format::Rgb;
-    assert!(rgb.allocate().is_ok());
-    assert!(rgb.convert_from_yuv(decoded).is_ok());
-    let source = decode_png(png_file);
-    assert_eq!(
-        source,
-        rgb.pixels
-            .as_ref()
-            .unwrap()
-            .slice(0, source.len() as u32)
-            .unwrap()
-    );
+    let avif_image = decoder.image().expect("image was none");
+    let mut png_reader = PngReader::create(&get_test_file(png_file))?;
+    let (png_image, _) = png_reader.read_frame(&Config {
+        yuv_format: Some(avif_image.yuv_format),
+        depth: Some(avif_image.depth),
+        matrix_coefficients: Some(avif_image.matrix_coefficients),
+    })?;
+    assert!(are_images_equal(avif_image, &png_image)?);
+    Ok(())
 }
 
 #[test_matrix(
