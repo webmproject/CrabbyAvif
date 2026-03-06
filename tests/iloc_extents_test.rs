@@ -14,37 +14,41 @@
 
 mod utils;
 
-use crabby_avif::reformat::rgb::*;
+#[cfg(feature = "png")]
+use crabby_avif::utils::reader::png::PngReader;
+#[cfg(feature = "png")]
+use crabby_avif::utils::reader::Config;
+#[cfg(feature = "png")]
+use crabby_avif::utils::reader::Reader;
+use crabby_avif::AvifResult;
 use utils::*;
 
 #[test]
-fn iloc_extents() {
+fn iloc_extents() -> AvifResult<()> {
     let mut decoder = get_decoder("sacre_coeur_2extents.avif");
     assert!(decoder.parse().is_ok());
     if !HAS_DECODER {
-        return;
+        return Ok(());
     }
     assert!(decoder.next_image().is_ok());
-    let decoded = decoder.image().expect("image was none");
-    let mut rgb = Image::create_from_yuv(decoded);
-    rgb.format = Format::Rgb;
-    assert!(rgb.allocate().is_ok());
-    assert!(rgb.convert_from_yuv(decoded).is_ok());
     #[cfg(feature = "png")]
     {
-        let source = decode_png("sacre_coeur.png");
+        let decoded = decoder.image().expect("image was none");
         // sacre_coeur_2extents.avif was generated with
         //   avifenc --lossless --ignore-exif --ignore-xmp --ignore-icc sacre_coeur.png
         // so pixels can be compared byte by byte.
-        assert_eq!(
-            source,
-            rgb.pixels
-                .as_ref()
-                .unwrap()
-                .slice(0, source.len() as u32)
-                .unwrap()
-        );
+        let mut png_reader = PngReader::create(&get_test_file("sacre_coeur.png"))?;
+        let (mut png_image, _) = png_reader.read_frame(&Config {
+            yuv_format: Some(decoded.yuv_format),
+            depth: Some(decoded.depth),
+            matrix_coefficients: Some(decoded.matrix_coefficients),
+        })?;
+        // PngReader sets these to Unspecified if there is no CICP info in the file.
+        png_image.color_primaries = decoded.color_primaries;
+        png_image.transfer_characteristics = decoded.transfer_characteristics;
+        assert!(are_images_equal(decoded, &png_image)?);
     }
+    Ok(())
 }
 
 #[test]
