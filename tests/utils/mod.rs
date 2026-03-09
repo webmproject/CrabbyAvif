@@ -39,17 +39,6 @@ pub fn get_decoder(filename: &str) -> decoder::Decoder {
     decoder
 }
 
-#[cfg(feature = "png")]
-pub fn decode_png(filename: &str) -> Vec<u8> {
-    let decoder = png::Decoder::new(std::fs::File::open(get_test_file(filename)).unwrap());
-    let mut reader = decoder.read_info().unwrap();
-    // Indexed colors are not supported.
-    assert_ne!(reader.output_color_type().0, png::ColorType::Indexed);
-    let mut pixels = vec![0; reader.output_buffer_size()];
-    reader.next_frame(&mut pixels).unwrap();
-    pixels
-}
-
 fn full_to_limited_pixel(min: u32, max: u32, full: u32, v: u16) -> u16 {
     let v = v as u32;
     let v = (((v * (max - min)) + (full / 2)) / full) + min;
