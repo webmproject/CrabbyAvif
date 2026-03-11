@@ -14,7 +14,6 @@
 /sys/avm-sys/avm
 /sys/avm-sys/avm.rs
 /sys/dav1d-sys/dav1d
-/sys/libgav1-sys/libgav1
 /sys/libjxl-sys/CMake*
 /sys/libjxl-sys/libjxl
 /sys/libjxl-sys/libjxl.rs

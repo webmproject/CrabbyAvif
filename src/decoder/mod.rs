@@ -23,9 +23,6 @@ use crate::decoder::track::*;
 #[cfg(feature = "dav1d")]
 use crate::codecs::dav1d::Dav1d;
 
-#[cfg(feature = "libgav1")]
-use crate::codecs::libgav1::Libgav1;
-
 #[cfg(feature = "android_mediacodec")]
 use crate::codecs::android_mediacodec::MediaCodec;
 
@@ -86,10 +83,6 @@ impl CodecChoice {
                 #[cfg(feature = "dav1d")]
                 if matches!(self, CodecChoice::Auto | CodecChoice::Dav1d) {
                     return Some(Box::<Dav1d>::default());
-                }
-                #[cfg(feature = "libgav1")]
-                if matches!(self, CodecChoice::Auto | CodecChoice::Libgav1) {
-                    return Some(Box::<Libgav1>::default());
                 }
                 None
             }
@@ -987,6 +980,9 @@ impl Decoder {
     }
 
     pub fn parse(&mut self) -> AvifResult<()> {
+        if self.settings.codec_choice == CodecChoice::Libgav1 {
+            return Err(AvifError::NotImplemented);
+        }
         if self.parsing_complete() {
             // Parse was called again. Reset the data and start over.
             self.parse_state = ParseState::None;

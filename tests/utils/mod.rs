@@ -314,12 +314,8 @@ pub fn merge_cells_into_grid_image(
     Ok(image)
 }
 
-pub const HAS_DECODER: bool = cfg!(any(
-    feature = "dav1d",
-    feature = "libgav1",
-    feature = "android_mediacodec"
-));
+pub const HAS_DECODER: bool = cfg!(any(feature = "dav1d", feature = "android_mediacodec"));
 
-pub const HAS_NON_ANDROID_DECODER: bool = cfg!(any(feature = "dav1d", feature = "libgav1",));
+pub const HAS_NON_ANDROID_DECODER: bool = cfg!(feature = "dav1d");
 
 pub const HAS_ENCODER: bool = cfg!(feature = "aom");

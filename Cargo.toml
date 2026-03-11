@@ -1,10 +1,9 @@
 workspace = { members = [
   "sys/aom-sys",
   "sys/dav1d-sys",
+  "sys/libpng-sys",
   "sys/libsharpyuv-sys",
   "sys/libyuv-sys",
-  "sys/libgav1-sys",
-  "sys/libpng-sys",
   "sys/ndk-sys",
 ] }
 
@@ -35,9 +34,7 @@ ndk-sys = { version = "0.1.0", path = "sys/ndk-sys", features = [
 dav1d-sys = { version = "0.1.0", path = "sys/dav1d-sys", features = [
   "dav1d",
 ], optional = true }
-libgav1-sys = { version = "0.1.0", path = "sys/libgav1-sys", features = [
-  "libgav1",
-], optional = true }
+
 libyuv-sys = { version = "0.1.0", path = "sys/libyuv-sys", features = [
   "libyuv",
 ], optional = true }
@@ -79,7 +76,6 @@ default = ["dav1d", "libyuv", "png", "jpeg", "gif", "sharpyuv"]
 cli = ["dep:clap", "dep:clap_derive"]
 capi = []
 dav1d = ["dep:dav1d-sys"]
-libgav1 = ["dep:libgav1-sys"]
 libyuv = ["dep:libyuv-sys"]
 android_mediacodec = ["dep:ndk-sys"]
 heic = []

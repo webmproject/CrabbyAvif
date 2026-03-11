@@ -393,7 +393,7 @@ impl Image {
         }))
     }
 
-    #[cfg(any(feature = "dav1d", feature = "libgav1", feature = "avm"))]
+    #[cfg(any(feature = "dav1d", feature = "avm"))]
     pub(crate) fn free_planes(&mut self, planes: &[Plane]) {
         for plane in planes {
             let plane = plane.as_usize();
@@ -402,7 +402,7 @@ impl Image {
         }
     }
 
-    #[cfg(any(feature = "dav1d", feature = "libgav1"))]
+    #[cfg(feature = "dav1d")]
     pub(crate) fn clear_chroma_planes(&mut self) {
         self.free_planes(&[Plane::U, Plane::V])
     }

@@ -281,8 +281,6 @@ impl avifCodecChoice {
             (Self::Aom, "aom"),
             #[cfg(feature = "dav1d")]
             (Self::Dav1d, "dav1d"),
-            #[cfg(feature = "libgav1")]
-            (Self::Libgav1, "libgav1"),
         ];
         for available_codec in available_codecs {
             if name == available_codec.1 {
