@@ -36,6 +36,7 @@ fn lossless_sample_transform_roundtrip(recipe: Recipe) -> AvifResult<()> {
     let (image, _) = PngReader::create(&input_file)?.read_frame(&Config {
         yuv_format: Some(PixelFormat::Yuv444),
         matrix_coefficients: Some(MatrixCoefficients::Identity),
+        allow_sample_transform: true,
         ..Default::default()
     })?;
     assert_eq!(image.depth, 16);

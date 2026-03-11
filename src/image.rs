@@ -489,7 +489,7 @@ impl Image {
         ]
     }
 
-    #[cfg(feature = "encoder")]
+    #[cfg(any(feature = "encoder", feature = "png"))]
     pub(crate) fn is_opaque(&self) -> bool {
         if let Some(plane_data) = self.plane_data(Plane::A) {
             let opaque_value = self.max_channel();

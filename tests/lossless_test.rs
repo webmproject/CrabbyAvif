@@ -43,6 +43,7 @@ fn lossless(avif_file: &str, png_file: &str) -> AvifResult<()> {
         yuv_format: Some(avif_image.yuv_format),
         depth: Some(avif_image.depth),
         matrix_coefficients: Some(avif_image.matrix_coefficients),
+        ..Default::default()
     })?;
     assert!(are_images_equal(avif_image, &png_image)?);
     Ok(())

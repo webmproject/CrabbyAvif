@@ -42,6 +42,7 @@ fn iloc_extents() -> AvifResult<()> {
             yuv_format: Some(decoded.yuv_format),
             depth: Some(decoded.depth),
             matrix_coefficients: Some(decoded.matrix_coefficients),
+            ..Default::default()
         })?;
         // PngReader sets these to Unspecified if there is no CICP info in the file.
         png_image.color_primaries = decoded.color_primaries;

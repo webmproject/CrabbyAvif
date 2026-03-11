@@ -50,15 +50,25 @@ fn main() -> Result<(), String> {
     let abs_library_dir = PathBuf::from(&project_root).join("libpng");
     let zlib_dir = PathBuf::from(&project_root).join("zlib").join(build_dir);
     let abs_object_dir = PathBuf::from(&abs_library_dir).join(build_dir);
-    let library_file = PathBuf::from(&abs_object_dir).join("libpng.a");
+    let library_file = PathBuf::from(&abs_object_dir).join(if cfg!(target_os = "windows") {
+        "libpng16_static.lib"
+    } else {
+        "libpng.a"
+    });
     let mut include_paths: Vec<String> = Vec::new();
 
     if Path::new(&library_file).exists() {
         println!("cargo:rustc-link-search={}", abs_object_dir.display());
         println!("cargo:rustc-link-search={}", zlib_dir.display());
-        println!("cargo:rustc-link-lib=static=png");
-        println!("cargo:rustc-link-lib=static=z");
+        if cfg!(target_os = "windows") {
+            println!("cargo:rustc-link-lib=static=libpng16_static");
+            println!("cargo:rustc-link-lib=static=zs");
+        } else {
+            println!("cargo:rustc-link-lib=static=png");
+            println!("cargo:rustc-link-lib=static=z");
+        }
         include_paths.push(format!("-I{}", abs_library_dir.display()));
+        include_paths.push(format!("-I{}", abs_object_dir.display()));
     } else {
         match pkg_config::Config::new().probe("libpng") {
             Ok(library) => {

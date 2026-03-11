@@ -56,10 +56,10 @@ libpng-sys = { version = "0.1.0", path = "sys/libpng-sys", features = [
 
 clap = { version = "4.5.28", features = ["derive"], optional = true }
 clap_derive = { version = "4.5.28", optional = true }
-png = { version = "0.17.16", optional = true }
 image = { version = "0.25.6", features = ["jpeg"], optional = true }
 gif = { version = "0.13.1", optional = true }
 gif-dispose = { version = "5.0.1", optional = true }
+md-5 = { version = "0.10.6", optional = true }
 
 [dev-dependencies]
 test-case = "3.3.1"
@@ -83,7 +83,7 @@ disable_cfi = []
 aom = ["dep:aom-sys", "encoder"]
 encoder = []
 avm = ["dep:avm-sys"]
-png = ["dep:png"]
+png = ["dep:libpng-sys", "dep:md-5"]
 jpeg = ["dep:image"]
 gif = ["dep:gif", "dep:gif-dispose"]
 sharpyuv = ["dep:libsharpyuv-sys"]

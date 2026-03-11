@@ -219,6 +219,10 @@ struct CommandLineArgs {
     #[arg(long, short = 'q', value_parser = value_parser!(f32))]
     quality: Option<f32>,
 
+    /// PNG output compression level in 0..9 (default: 5).
+    #[arg(long, value_parser = value_parser!(i32).range(0..=9))]
+    png_compress: Option<i32>,
+
     /// AVIF Encode only: Speed used for encoding.
     #[arg(long, short = 's', value_parser = value_parser!(u32).range(0..=10))]
     speed: Option<u32>,
@@ -655,7 +659,10 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
             Box::new(Y4MWriter::create(extension == "yuv"))
         }
         #[cfg(feature = "png")]
-        "png" => Box::new(PngWriter { depth: args.depth }),
+        "png" => Box::new(PngWriter {
+            depth: args.depth,
+            compression_level: args.png_compress,
+        }),
         #[cfg(feature = "jpeg")]
         "jpg" | "jpeg" => Box::new(JpegWriter {
             quality: args.quality.map(|quality| quality as u8),
@@ -723,6 +730,7 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
     let reader_config = Config {
         yuv_format: args.yuv_format,
         depth: args.depth,
+        allow_sample_transform: args.allow_sample_transform,
         ..Default::default()
     };
     let (mut image, mut duration_ms) = reader.read_frame(&reader_config)?;
@@ -754,6 +762,17 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
     }
     if let Some(xmp) = &args.xmp {
         image.xmp = read_file(xmp).expect("failed to read xmp file");
+    }
+    if image.icc.is_empty()
+        && args.cicp.is_none()
+        && image.color_primaries == ColorPrimaries::Unspecified
+        && image.transfer_characteristics == TransferCharacteristics::Unspecified
+    {
+        // The final image has no ICC profile, the user didn't specify any CICP, and the source
+        // image didn't provide any CICP. Explicitly signal SRGB CP/TC here, as 2/2/x will be
+        // interpreted as SRGB anyway.
+        image.color_primaries = ColorPrimaries::Srgb;
+        image.transfer_characteristics = TransferCharacteristics::Srgb;
     }
     let codec_choice = match args.codec {
         CodecChoice::Auto => match get_extension(output_file).as_str() {
@@ -885,6 +904,11 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                 if args.depth.is_some() && extension != "png" {
                     return Err(AvifError::UnknownError(
                         "depth is only supported for png output".into(),
+                    ));
+                }
+                if args.png_compress.is_some() && extension != "png" {
+                    return Err(AvifError::UnknownError(
+                        "png-compress-level is only supported for png output".into(),
                     ));
                 }
             }

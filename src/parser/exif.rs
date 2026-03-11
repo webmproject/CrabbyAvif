@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crate::internal_utils::stream::*;
+#[cfg(feature = "png")]
+use crate::internal_utils::*;
 use crate::parser::mp4box::BoxSize;
 use crate::*;
 
@@ -51,4 +53,67 @@ pub(crate) fn parse(stream: &mut IStream) -> AvifResult<()> {
     }
     stream.rewind(bytes_left)?;
     Ok(())
+}
+
+#[cfg(feature = "png")]
+pub(crate) fn get_orientation_offset(exif: &[u8]) -> AvifResult<Option<usize>> {
+    let mut temp_stream = IStream::create(exif);
+    let tiff_offset = usize_from_u32(parse_exif_tiff_header_offset(&mut temp_stream)?)?;
+    let tiff_data = &exif[tiff_offset..];
+    let little_endian = tiff_data[0] == b'I';
+    let mut stream = IStream::create(tiff_data);
+    let _ = stream.skip(4); // skip tiff header
+
+    let offset_to_0th_ifd =
+        if little_endian { stream.read_u32_le()? } else { stream.read_u32()? };
+    stream.offset = usize_from_u32(offset_to_0th_ifd)?;
+
+    let field_count = if little_endian { stream.read_u16_le()? } else { stream.read_u16()? };
+    for _ in 0..field_count {
+        let (tag, field_type, count, value_offset) = if little_endian {
+            (
+                stream.read_u16_le()?,
+                stream.read_u16_le()?,
+                stream.read_u32_le()?,
+                stream.read_u16_le()?,
+            )
+        } else {
+            (
+                stream.read_u16()?,
+                stream.read_u16()?,
+                stream.read_u32()?,
+                stream.read_u16()?,
+            )
+        };
+        let _ = stream.skip(2);
+
+        // Orientation tag is 0x0112, type is SHORT (3), count is 1.
+        if tag == 0x0112 && field_type == 3 && count == 1 && (1..=8).contains(&value_offset) {
+            // Offset to the least meaningful byte of value_offset.
+            // In a 12-byte field, the value/offset starts at byte 8.
+            // If it fits in 2 or 4 bytes, it's stored directly there.
+            // Our stream.offset is at the end of the 12-byte field (after skip(2)).
+            return Ok(Some(
+                tiff_offset + stream.offset - if little_endian { 4 } else { 3 },
+            ));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "png")]
+pub(crate) fn set_orientation(exif: &mut [u8], orientation: u8) -> AvifResult<()> {
+    match get_orientation_offset(exif)? {
+        Some(offset) => {
+            exif[offset] = orientation;
+            Ok(())
+        }
+        None => {
+            if orientation == 1 {
+                Ok(())
+            } else {
+                Err(AvifError::NotImplemented)
+            }
+        }
+    }
 }
