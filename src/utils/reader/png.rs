@@ -237,7 +237,11 @@ impl Drop for PngReaderNative {
 
 /// # Safety
 /// C-callback function. So it has to be unsafe.
-unsafe extern "C" fn png_read_data(png_ptr: png_structp, data: png_bytep, length: png_size_t) {
+unsafe extern "C" fn crabbyavif_png_read_data(
+    png_ptr: png_structp,
+    data: png_bytep,
+    length: png_size_t,
+) {
     // # Safety: Calling a C function with valid parameters.
     let io_ptr = unsafe { png_get_io_ptr(png_ptr) };
     // # Safety: Dereferencing a valid pointer that was set in png_set_read_fn.
@@ -314,7 +318,7 @@ impl Reader for PngReader {
             png_set_read_fn(
                 png.png,
                 &mut file as *mut File as *mut _,
-                Some(png_read_data),
+                Some(crabbyavif_png_read_data),
             );
             png_set_sig_bytes(png.png, 8);
             png_read_info(png.png, png.info);

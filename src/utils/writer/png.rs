@@ -58,7 +58,11 @@ impl Drop for PngWriterNative {
 
 /// # Safety
 /// C-callback function. So it has to be unsafe.
-unsafe extern "C" fn png_write_data(png_ptr: png_structp, data: png_bytep, length: png_size_t) {
+unsafe extern "C" fn crabbyavif_png_write_data(
+    png_ptr: png_structp,
+    data: png_bytep,
+    length: png_size_t,
+) {
     // # Safety: Calling a C function with valid parameters.
     let io_ptr = unsafe { png_get_io_ptr(png_ptr) };
     // # Safety: The best we can do is trust the pointer and buffer length reported by the libpng.
@@ -75,7 +79,7 @@ unsafe extern "C" fn png_write_data(png_ptr: png_structp, data: png_bytep, lengt
 
 /// # Safety
 /// C-callback function. So it has to be unsafe.
-unsafe extern "C" fn png_output_flush(_png_ptr: png_structp) {}
+unsafe extern "C" fn crabbyavif_png_output_flush(_png_ptr: png_structp) {}
 
 impl Writer for PngWriter {
     fn write_frame(&mut self, file: &mut File, image: &Image) -> AvifResult<()> {
@@ -174,8 +178,8 @@ impl Writer for PngWriter {
             png_set_write_fn(
                 png.png,
                 file as *mut File as *mut _,
-                Some(png_write_data),
-                Some(png_output_flush),
+                Some(crabbyavif_png_write_data),
+                Some(crabbyavif_png_output_flush),
             );
             png_set_option(
                 png.png,
