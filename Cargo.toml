@@ -53,6 +53,9 @@ libjxl-sys = { version = "0.1.0", path = "sys/libjxl-sys", features = [
 libpng-sys = { version = "0.1.0", path = "sys/libpng-sys", features = [
   "png",
 ], optional = true }
+libjpeg-sys = { version = "0.1.0", path = "sys/libjpeg-sys", features = [
+  "jpeg",
+], optional = true }
 
 clap = { version = "4.5.28", features = ["derive"], optional = true }
 clap_derive = { version = "4.5.28", optional = true }
