@@ -734,8 +734,12 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
         ..Default::default()
     };
     let (mut image, mut duration_ms) = reader.read_frame(&reader_config)?;
-    image.irot_angle = args.irot_angle;
-    image.imir_axis = args.imir_axis;
+    if args.irot_angle.is_some() {
+        image.irot_angle = args.irot_angle;
+    }
+    if args.imir_axis.is_some() {
+        image.imir_axis = args.imir_axis;
+    }
     if let Some(clap) = args.clap {
         image.clap = Some(clap);
     }
