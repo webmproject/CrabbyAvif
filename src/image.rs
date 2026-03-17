@@ -530,4 +530,14 @@ impl Image {
         }
         Ok(())
     }
+
+    #[cfg(feature = "png")]
+    pub(crate) fn remove_trailing_null_from_xmp(&mut self) {
+        if self.xmp.len() >= 2
+            && self.xmp[self.xmp.len() - 1] == 0
+            && self.xmp[self.xmp.len() - 2] != 0
+        {
+            self.xmp.pop();
+        }
+    }
 }

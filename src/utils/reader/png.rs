@@ -199,10 +199,7 @@ fn extract_exif_and_xmp(
             }
         }
     }
-    let xmp_len = image.xmp.len();
-    if xmp_len >= 2 && image.xmp[xmp_len - 1] == 0 && image.xmp[xmp_len - 2] != 0 {
-        image.xmp.pop();
-    }
+    image.remove_trailing_null_from_xmp();
     Ok(())
 }
 
