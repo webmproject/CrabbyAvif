@@ -14,8 +14,7 @@
 
 use crate::reformat::*;
 use crate::utils::pixels::Pixels;
-use crate::AvifError;
-use crate::AvifResult;
+
 use crate::*;
 
 use super::Config;
@@ -25,6 +24,7 @@ use std::fs::File;
 use std::io::BufReader;
 
 use ::image::codecs::jpeg;
+use ::image::metadata::Orientation;
 use ::image::ColorType;
 use ::image::ImageDecoder;
 
@@ -45,7 +45,8 @@ impl Reader for JpegReader {
         let mut reader = BufReader::new(
             File::open(self.filename.clone()).map_err(AvifError::map_unknown_error)?,
         );
-        let decoder = jpeg::JpegDecoder::new(&mut reader).map_err(AvifError::map_unknown_error)?;
+        let mut decoder =
+            jpeg::JpegDecoder::new(&mut reader).map_err(AvifError::map_unknown_error)?;
         let color_type = decoder.color_type();
         if color_type != ColorType::Rgb8 {
             return AvifError::unknown_error(format!(
@@ -54,6 +55,23 @@ impl Reader for JpegReader {
         }
         let (width, height) = decoder.dimensions();
         let total_bytes = decoder.total_bytes() as usize;
+
+        let icc = decoder
+            .icc_profile()
+            .map_err(AvifError::map_unknown_error)?
+            .unwrap_or_default();
+        let exif = decoder
+            .exif_metadata()
+            .map_err(AvifError::map_unknown_error)?
+            .unwrap_or_default();
+        let xmp = decoder
+            .xmp_metadata()
+            .map_err(AvifError::map_unknown_error)?
+            .unwrap_or_default();
+        let orientation = decoder
+            .orientation()
+            .map_err(AvifError::map_unknown_error)?;
+
         let mut rgb_bytes = vec![0u8; total_bytes];
         decoder
             .read_image(&mut rgb_bytes)
@@ -76,8 +94,37 @@ impl Reader for JpegReader {
             matrix_coefficients: config
                 .matrix_coefficients
                 .unwrap_or(MatrixCoefficients::Bt601),
+            icc,
+            exif,
+            xmp,
             ..Default::default()
         };
+        match orientation {
+            Orientation::NoTransforms => {}
+            Orientation::FlipHorizontal => {
+                yuv.imir_axis = Some(1);
+            }
+            Orientation::Rotate180 => {
+                yuv.irot_angle = Some(2);
+            }
+            Orientation::FlipVertical => {
+                yuv.imir_axis = Some(0);
+            }
+            Orientation::Rotate90FlipH => {
+                yuv.irot_angle = Some(1);
+                yuv.imir_axis = Some(0);
+            }
+            Orientation::Rotate90 => {
+                yuv.irot_angle = Some(3);
+            }
+            Orientation::Rotate270FlipH => {
+                yuv.irot_angle = Some(3);
+                yuv.imir_axis = Some(0);
+            }
+            Orientation::Rotate270 => {
+                yuv.irot_angle = Some(1);
+            }
+        }
         rgb.convert_to_yuv(&mut yuv)?;
         Ok((yuv, 0))
     }
