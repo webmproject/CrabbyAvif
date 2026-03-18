@@ -38,7 +38,7 @@ fn iloc_extents() -> AvifResult<()> {
         //   avifenc --lossless --ignore-exif --ignore-xmp --ignore-icc sacre_coeur.png
         // so pixels can be compared byte by byte.
         let mut png_reader = PngReader::create(&get_test_file("sacre_coeur.png"))?;
-        let (mut png_image, _) = png_reader.read_frame(&Config {
+        let (mut png_image, _, _) = png_reader.read_frame(&Config {
             yuv_format: Some(decoded.yuv_format),
             depth: Some(decoded.depth),
             matrix_coefficients: Some(decoded.matrix_coefficients),

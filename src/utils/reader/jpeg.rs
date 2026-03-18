@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::gainmap::GainMap;
 use crate::reformat::*;
 use crate::utils::pixels::Pixels;
 
@@ -41,7 +42,7 @@ impl JpegReader {
 }
 
 impl Reader for JpegReader {
-    fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64)> {
+    fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64, Option<GainMap>)> {
         let mut reader = BufReader::new(
             File::open(self.filename.clone()).map_err(AvifError::map_unknown_error)?,
         );
@@ -126,7 +127,7 @@ impl Reader for JpegReader {
             }
         }
         rgb.convert_to_yuv(&mut yuv)?;
-        Ok((yuv, 0))
+        Ok((yuv, 0, None))
     }
 
     fn has_more_frames(&mut self) -> bool {

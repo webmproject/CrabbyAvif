@@ -733,7 +733,7 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
         allow_sample_transform: args.allow_sample_transform,
         ..Default::default()
     };
-    let (mut image, mut duration_ms) = reader.read_frame(&reader_config)?;
+    let (mut image, mut duration_ms, mut gainmap) = reader.read_frame(&reader_config)?;
     if args.irot_angle.is_some() {
         image.irot_angle = args.irot_angle;
     }
@@ -778,6 +778,13 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
         image.color_primaries = ColorPrimaries::Srgb;
         image.transfer_characteristics = TransferCharacteristics::Srgb;
     }
+    if let Some(gainmap) = &mut gainmap {
+        if gainmap.alt_icc.is_empty() {
+            if gainmap.alt_color_primaries == ColorPrimaries::Unspecified {
+                gainmap.alt_color_primaries = image.color_primaries;
+            }
+        }
+    }
     let codec_choice = match args.codec {
         CodecChoice::Auto => match get_extension(output_file).as_str() {
             "avif" => CodecChoice::Auto, // CodecChoice::Auto maps to AV1 only. Keep it.
@@ -797,6 +804,7 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
         repetition_count: args.repetition_count,
         mutable: MutableSettings {
             quality: args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY),
+            quality_gainmap: args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY),
             tiling_mode: if args.autotiling {
                 TilingMode::Auto
             } else {
@@ -826,7 +834,7 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
             if !reader.has_more_frames() {
                 break;
             }
-            (image, duration_ms) = reader.read_frame(&reader_config)?;
+            (image, duration_ms, _) = reader.read_frame(&reader_config)?;
         }
     } else if args.progressive {
         // Encode the base layer with very low quality.
@@ -837,6 +845,8 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
         settings.mutable.quality = args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY);
         encoder.update_settings(&settings.mutable)?;
         encoder.add_image(&image)?;
+    } else if let Some(gainmap) = &gainmap {
+        encoder.add_image_gainmap(&image, gainmap)?;
     } else {
         encoder.add_image(&image)?;
     }

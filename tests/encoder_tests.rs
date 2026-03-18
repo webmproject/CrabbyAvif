@@ -905,7 +905,7 @@ fn alpha_transformative_properties() -> AvifResult<()> {
     reference.next_image()?;
     let reference = reference.image().unwrap();
 
-    let (mut image, _) = reader::Reader::read_frame(
+    let (mut image, _, _) = reader::Reader::read_frame(
         &mut reader::png::PngReader::create(&get_test_file("abc.png"))?,
         &reader::Config {
             yuv_format: Some(PixelFormat::Yuv444),

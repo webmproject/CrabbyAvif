@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::gainmap::GainMap;
 use crate::parser::exif;
 use crate::reformat::*;
 use crate::utils::*;
@@ -264,7 +265,7 @@ impl PngReader {
 }
 
 impl Reader for PngReader {
-    fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64)> {
+    fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64, Option<GainMap>)> {
         let mut file = File::open(&self.filename)
             .map_err(|_| AvifError::UnknownError("failed to open file".into()))?;
         let mut header = [0u8; 8];
@@ -551,7 +552,7 @@ impl Reader for PngReader {
                     &mut ignore_xmp,
                 )?;
             }
-            Ok((yuv, 0))
+            Ok((yuv, 0, None))
         }
     }
 

@@ -39,7 +39,7 @@ fn lossless(avif_file: &str, png_file: &str) -> AvifResult<()> {
     assert!(decoder.next_image().is_ok());
     let avif_image = decoder.image().expect("image was none");
     let mut png_reader = PngReader::create(&get_test_file(png_file))?;
-    let (png_image, _) = png_reader.read_frame(&Config {
+    let (png_image, _, _) = png_reader.read_frame(&Config {
         yuv_format: Some(avif_image.yuv_format),
         depth: Some(avif_image.depth),
         matrix_coefficients: Some(avif_image.matrix_coefficients),
@@ -81,7 +81,7 @@ fn lossless_roundtrip(
         #[cfg(not(feature = "jpeg"))]
         unreachable!();
     };
-    let (image, _) = reader.read_frame(&Config {
+    let (image, _, _) = reader.read_frame(&Config {
         yuv_format: Some(yuv_format),
         matrix_coefficients: Some(matrix_coefficients),
         ..Default::default()

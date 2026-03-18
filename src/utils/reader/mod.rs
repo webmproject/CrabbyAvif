@@ -26,6 +26,7 @@ pub mod y4m;
 #[cfg(feature = "png")]
 mod icc;
 
+use crate::gainmap::GainMap;
 use crate::image::Image;
 use crate::AvifResult;
 use crate::MatrixCoefficients;
@@ -44,6 +45,6 @@ pub struct Config {
 }
 
 pub trait Reader {
-    fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64)>;
+    fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64, Option<GainMap>)>;
     fn has_more_frames(&mut self) -> bool;
 }
