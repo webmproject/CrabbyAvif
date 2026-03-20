@@ -123,7 +123,7 @@ impl Encoder for Libjxl {
         let is_lossless = config.quality == 100.0;
         if is_lossless {
             // Make sure the YUV->RGB->YUV conversion is lossless too.
-            let mut yuv = image.clone_properties();
+            let mut yuv = image.shallow_clone();
             yuv.allocate_planes(Category::Color)?;
             rgb.convert_to_yuv(&mut yuv)?;
             if !are_images_equal(image, &yuv)? {

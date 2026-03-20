@@ -109,7 +109,7 @@ pub struct PlaneData {
 impl Image {
     // Creates an instance with all the properties of self but with pixels and
     // Exif, XMP, ICC metadata left unallocated.
-    pub(crate) fn clone_properties(&self) -> Self {
+    pub(crate) fn shallow_clone(&self) -> Self {
         Self {
             // Fields requiring dynamic allocation.
             row_bytes: [0; MAX_PLANE_COUNT],
@@ -301,7 +301,7 @@ impl Image {
             Some(clap) => {
                 match CropRect::create_from(&clap, self.width, self.height, self.yuv_format) {
                     Ok(rect) => {
-                        let mut image = self.clone_properties();
+                        let mut image = self.shallow_clone();
                         image.width = rect.width;
                         image.height = rect.height;
                         image.row_bytes = self.row_bytes;

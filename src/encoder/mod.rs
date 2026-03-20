@@ -527,12 +527,12 @@ impl Encoder {
                 height: (grid_rows - 1) * first_image.height + last_image.height,
             };
             Self::validate_image_grid(&grid, cell_images, final_recipe)?;
-            self.image_metadata = first_image.clone_properties();
+            self.image_metadata = first_image.shallow_clone();
             self.image_metadata.exif = first_image.exif.try_clone()?;
             self.image_metadata.xmp = first_image.xmp.try_clone()?;
             self.image_metadata.icc = first_image.icc.try_clone()?;
             if let Some(gainmaps) = gainmaps {
-                self.gainmap_image_metadata = gainmaps[0].image.clone_properties();
+                self.gainmap_image_metadata = gainmaps[0].image.shallow_clone();
                 self.copy_alt_image_metadata(gainmaps[0], &grid)?;
             }
             let color_item_id = self.add_items(&grid, Category::Color, /*hidden=*/ false)?;
@@ -644,7 +644,7 @@ impl Encoder {
             let mut padded_image;
             if image.width != first_image.width || image.height != first_image.height {
                 // Pad the right-most and/or bottom-most tiles so that all tiles share the same dimensions.
-                padded_image = first_image.clone_properties();
+                padded_image = first_image.shallow_clone();
                 padded_image.copy_and_pad(image)?;
                 image = &padded_image;
             }
