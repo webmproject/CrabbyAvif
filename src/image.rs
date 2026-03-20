@@ -304,7 +304,6 @@ impl Image {
                         let mut image = self.shallow_clone();
                         image.width = rect.width;
                         image.height = rect.height;
-                        image.row_bytes = self.row_bytes;
                         for plane in ALL_PLANES {
                             if self.planes[plane.as_usize()].is_none() {
                                 continue;
@@ -334,8 +333,9 @@ impl Image {
                                 ptr,
                                 image.depth as _,
                                 u32_from_usize(image.height(plane))?,
-                                image.row_bytes[plane.as_usize()],
+                                self.row_bytes[plane.as_usize()],
                             )?);
+                            image.row_bytes[plane.as_usize()] = self.row_bytes[plane.as_usize()];
                         }
                         image.exif = self.exif.try_clone()?;
                         image.xmp = self.xmp.try_clone()?;
