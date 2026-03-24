@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::gainmap::GainMap;
+use crate::parser::exif;
 use crate::reformat::*;
 use crate::utils::pixels::Pixels;
-
-use crate::*;
+use crate::utils::*;
 
 use super::Config;
 use super::Reader;
@@ -24,10 +24,7 @@ use super::Reader;
 use std::fs::File;
 use std::io::BufReader;
 
-use ::image::codecs::jpeg;
-use ::image::metadata::Orientation;
-use ::image::ColorType;
-use ::image::ImageDecoder;
+use zune_jpeg::JpegDecoder;
 
 pub struct JpegReader {
     filename: String,
@@ -43,40 +40,29 @@ impl JpegReader {
 
 impl Reader for JpegReader {
     fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64, Option<GainMap>)> {
-        let mut reader = BufReader::new(
-            File::open(self.filename.clone()).map_err(AvifError::map_unknown_error)?,
-        );
-        let mut decoder =
-            jpeg::JpegDecoder::new(&mut reader).map_err(AvifError::map_unknown_error)?;
-        let color_type = decoder.color_type();
-        if color_type != ColorType::Rgb8 {
+        let file = File::open(self.filename.clone()).map_err(AvifError::map_unknown_error)?;
+        let mut decoder = JpegDecoder::new(BufReader::new(file));
+        decoder
+            .decode_headers()
+            .map_err(|e| AvifError::UnknownError(format!("jpeg header decode error: {e:?}")))?;
+        let info = decoder
+            .info()
+            .ok_or(AvifError::UnknownError("jpeg info not found".into()))?;
+        if info.components != 3 {
             return AvifError::unknown_error(format!(
-                "jpeg color type was something other than rgb8: {color_type:#?}"
+                "jpeg components was something other than 3: {}",
+                info.components
             ));
         }
-        let (width, height) = decoder.dimensions();
-        let total_bytes = decoder.total_bytes() as usize;
-
-        let icc = decoder
-            .icc_profile()
-            .map_err(AvifError::map_unknown_error)?
-            .unwrap_or_default();
-        let exif = decoder
-            .exif_metadata()
-            .map_err(AvifError::map_unknown_error)?
-            .unwrap_or_default();
-        let xmp = decoder
-            .xmp_metadata()
-            .map_err(AvifError::map_unknown_error)?
-            .unwrap_or_default();
-        let orientation = decoder
-            .orientation()
-            .map_err(AvifError::map_unknown_error)?;
-
-        let mut rgb_bytes = vec![0u8; total_bytes];
-        decoder
-            .read_image(&mut rgb_bytes)
-            .map_err(AvifError::map_unknown_error)?;
+        let width = info.width as u32;
+        let height = info.height as u32;
+        let icc = decoder.icc_profile().unwrap_or_default();
+        let exif = info.exif_data.clone().unwrap_or_default();
+        let xmp = info.xmp_data.clone().unwrap_or_default();
+        let (irot_angle, imir_axis) = exif::get_orientation(&exif)?;
+        let rgb_bytes = decoder
+            .decode()
+            .map_err(|e| AvifError::UnknownError(format!("jpeg decode error: {e:?}")))?;
         let rgb = rgb::Image {
             width,
             height,
@@ -98,34 +84,10 @@ impl Reader for JpegReader {
             icc,
             exif,
             xmp,
+            irot_angle,
+            imir_axis,
             ..Default::default()
         };
-        match orientation {
-            Orientation::NoTransforms => {}
-            Orientation::FlipHorizontal => {
-                yuv.imir_axis = Some(1);
-            }
-            Orientation::Rotate180 => {
-                yuv.irot_angle = Some(2);
-            }
-            Orientation::FlipVertical => {
-                yuv.imir_axis = Some(0);
-            }
-            Orientation::Rotate90FlipH => {
-                yuv.irot_angle = Some(1);
-                yuv.imir_axis = Some(0);
-            }
-            Orientation::Rotate90 => {
-                yuv.irot_angle = Some(3);
-            }
-            Orientation::Rotate270FlipH => {
-                yuv.irot_angle = Some(3);
-                yuv.imir_axis = Some(0);
-            }
-            Orientation::Rotate270 => {
-                yuv.irot_angle = Some(1);
-            }
-        }
         rgb.convert_to_yuv(&mut yuv)?;
         Ok((yuv, 0, None))
     }

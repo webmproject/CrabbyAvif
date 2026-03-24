@@ -60,6 +60,7 @@ image = { version = "0.25.6", features = ["jpeg"], optional = true }
 gif = { version = "0.13.1", optional = true }
 gif-dispose = { version = "5.0.1", optional = true }
 md-5 = { version = "0.10.6", optional = true }
+zune-jpeg = { version = "0.5.14", optional = true }
 
 [dev-dependencies]
 test-case = "3.3.1"
@@ -84,7 +85,7 @@ aom = ["dep:aom-sys", "encoder"]
 encoder = []
 avm = ["dep:avm-sys"]
 png = ["dep:libpng-sys", "dep:md-5"]
-jpeg = ["dep:image"]
+jpeg = ["dep:image", "dep:zune-jpeg"]
 gif = ["dep:gif", "dep:gif-dispose"]
 sharpyuv = ["dep:libsharpyuv-sys"]
 jpegxl = ["dep:libjxl-sys"]

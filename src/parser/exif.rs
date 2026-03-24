@@ -101,6 +101,24 @@ pub(crate) fn get_orientation_offset(exif: &[u8]) -> AvifResult<Option<usize>> {
     Ok(None)
 }
 
+/// The return value is a tuple containing (irot_angle, imir_axis).
+#[cfg(feature = "jpeg")]
+pub(crate) fn get_orientation(exif: &[u8]) -> AvifResult<(Option<u8>, Option<u8>)> {
+    Ok(match get_orientation_offset(exif) {
+        Ok(Some(offset)) => match exif[offset] {
+            2 => (None, Some(1)),
+            3 => (Some(2), None),
+            4 => (None, Some(0)),
+            5 => (Some(1), Some(0)),
+            6 => (Some(3), None),
+            7 => (Some(3), Some(0)),
+            8 => (Some(1), None),
+            _ => (None, None),
+        },
+        _ => (None, None),
+    })
+}
+
 #[cfg(feature = "png")]
 pub(crate) fn set_orientation(exif: &mut [u8], orientation: u8) -> AvifResult<()> {
     match get_orientation_offset(exif)? {
