@@ -62,6 +62,14 @@ runs:
     working-directory: ./sys/libpng-sys
     run: ./zlibpng_windows.cmd
     shell: bash
+  - name: Clone av1-avif (specification repository for testFiles)
+    if: steps.cache-ext.outputs.cache-hit != 'true'
+    working-directory: ./external
+    run: |
+      git clone https://github.com/AOMediaCodec/av1-avif.git
+      cd av1-avif
+      git checkout aa906e00c9d8655a8b97718aa16d379970678663
+    shell: bash
   - uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af # v1.0.7
     with:
       toolchain: stable

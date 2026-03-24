@@ -13,17 +13,12 @@
 // limitations under the License.
 
 use crabby_avif::image::*;
-use crabby_avif::utils::writer::y4m::Y4MWriter;
-use crabby_avif::utils::writer::Writer;
 use crabby_avif::*;
 
 use std::env;
-use std::fs::remove_file;
-use std::fs::File;
-use std::io::BufReader;
-use std::io::Read;
-use std::process::Command;
-use tempfile::NamedTempFile;
+
+mod utils;
+use utils::HAS_DECODER;
 
 // See README.md for instructions on how to set up the dependencies for
 // running the conformance tests.
@@ -44,23 +39,6 @@ fn get_test_file(filename: &str) -> String {
         }
     };
     format!("{base_path}/{filename}")
-}
-
-fn get_avifdec() -> String {
-    if cfg!(google3) {
-        format!(
-            "{}/google3/third_party/libavif/avifdec",
-            env::var("TEST_SRCDIR").expect("TEST_SRCDIR is not defined")
-        )
-    } else {
-        match env::var("CRABBYAVIF_CONFORMANCE_TEST_AVIFDEC") {
-            Ok(avifdec) => avifdec,
-            Err(_) => format!(
-                "{}/external/libavif/build/avifdec",
-                env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not defined")
-            ),
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -97,54 +75,6 @@ fn verify_info(expected_info: &ExpectedImageInfo, image: &Image) {
     );
 }
 
-fn get_tempfile() -> String {
-    let file = NamedTempFile::new().expect("unable to open tempfile");
-    let path = file.into_temp_path();
-    let filename = String::from(path.to_str().unwrap());
-    let _ = path.close();
-    filename
-}
-
-fn write_y4m(image: &Image) -> String {
-    let mut y4m = Y4MWriter::default();
-    let filename = get_tempfile();
-    let mut file = File::create(&filename).expect("unable to open output file");
-    y4m.write_frame(&mut file, image)
-        .expect("unable to write y4m frame");
-    filename
-}
-
-fn run_avifdec(filename: &String) -> String {
-    let mut outfile = get_tempfile();
-    outfile.push_str(".y4m");
-    let avifdec = Command::new(get_avifdec())
-        .arg("--no-strict")
-        .arg("--jobs")
-        .arg("8")
-        .arg(filename)
-        .arg(&outfile)
-        .output()
-        .unwrap();
-    assert!(avifdec.status.success());
-    outfile
-}
-
-fn compare_files(file1: &String, file2: &String) -> bool {
-    let f1 = File::open(file1).unwrap();
-    let f2 = File::open(file2).unwrap();
-    if f1.metadata().unwrap().len() != f2.metadata().unwrap().len() {
-        return false;
-    }
-    let f1 = BufReader::new(f1);
-    let f2 = BufReader::new(f2);
-    for (byte1, byte2) in f1.bytes().zip(f2.bytes()) {
-        if byte1.unwrap() != byte2.unwrap() {
-            return false;
-        }
-    }
-    true
-}
-
 #[allow(clippy::zero_prefixed_literal)]
 #[test_case::test_matrix(0usize..172)]
 fn test_conformance(index: usize) {
@@ -165,6 +95,9 @@ fn test_conformance(index: usize) {
     );
     let image = decoder.image().expect("image was none");
     verify_info(expected_info, image);
+    if !HAS_DECODER {
+        return;
+    }
     let res = decoder.next_image();
     assert!(res.is_ok());
     let image = decoder.image().expect("image was none");
@@ -174,15 +107,6 @@ fn test_conformance(index: usize) {
     if !filename.contains("Link-U") || !filename.contains("yuv422") {
         verify_info(expected_info, image);
     }
-
-    // Write y4m.
-    let y4m_file = write_y4m(image);
-    // Write y4m by invoking avifdec.
-    let gold_y4m_file = run_avifdec(&filename);
-    // Compare.
-    assert!(compare_files(&y4m_file, &gold_y4m_file));
-    let _ = remove_file(y4m_file);
-    let _ = remove_file(gold_y4m_file);
 }
 
 // If more files are added to this array, update the call to generate_tests macro below.

@@ -50,4 +50,4 @@ jobs:
         run: ./avm.cmd
 
       - name: Build and run the Rust tests
-        run: cargo test --features aom,avm -- --skip test_conformance
+        run: cargo test --features aom,avm

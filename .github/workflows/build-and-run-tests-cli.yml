@@ -29,7 +29,7 @@ jobs:
       - uses: ./.github/actions/setup-deps
 
       - name: Build and run CLI tests with minimal features
-        run: cargo test --no-default-features --features cli -- --skip test_conformance
+        run: cargo test --no-default-features --features cli
 
       - name: Build and run CLI tests
-        run: cargo test --features libyuv,aom,sharpyuv,cli -- --skip test_conformance
+        run: cargo test --features libyuv,aom,sharpyuv,cli

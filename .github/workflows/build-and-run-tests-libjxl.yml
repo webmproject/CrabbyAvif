@@ -43,4 +43,4 @@ jobs:
         run: ./libjxl.cmd
 
       - name: Build and run the Rust tests
-        run: cargo test --features aom,jpegxl -- --skip test_conformance
+        run: cargo test --features aom,jpegxl

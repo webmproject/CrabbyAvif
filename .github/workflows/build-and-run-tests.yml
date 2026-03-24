@@ -31,7 +31,7 @@ jobs:
     - uses: ./.github/actions/setup-deps
 
     - name: Build and run the Rust tests
-      run: cargo test -- --skip test_conformance
+      run: cargo test
 
     - name: Build and run the C++ tests
       # TODO: This step fails on macos. So run it on linux only for now.
@@ -40,7 +40,7 @@ jobs:
         cargo build --features capi,aom --release
         cmake -S c_api_tests -B c_build
         make -C c_build
-        ctest --test-dir c_build -E conformance_tests
+        ctest --test-dir c_build
 
 
     - name: Build and run the heic tests with heic feature enabled
@@ -49,4 +49,4 @@ jobs:
     - name: Build and run all the tests with aom feature enabled
       # TODO: Enable this for windows.
       if: runner.os != 'Windows'
-      run: cargo test --features aom -- --skip test_conformance
+      run: cargo test --features aom
