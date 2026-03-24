@@ -1956,16 +1956,6 @@ impl Decoder {
         }
     }
 
-    fn apply_sample_transform(&mut self) -> AvifResult<()> {
-        if self.settings.allow_sample_transform {
-            self.tile_info[DecodingItem::COLOR.usize()]
-                .sample_transform
-                .allocate_planes_and_apply(&self.extra_inputs, &mut self.image)
-        } else {
-            AvifError::not_implemented()
-        }
-    }
-
     fn can_use_decode_grid(&self, decoding_item: DecodingItem) -> bool {
         let first_tile = &self.tiles[decoding_item.usize()][0];
         let codec = self.codecs[first_tile.codec_index].codec();
@@ -2056,7 +2046,14 @@ impl Decoder {
             .tokens
             .is_empty()
         {
-            self.apply_sample_transform()?;
+            // The tokens were created in parse_sato() which was only called
+            // if a sato item was processed in find_and_parse_item(), meaning
+            // allow_sample_transform is true.
+            assert!(self.settings.allow_sample_transform);
+
+            self.tile_info[DecodingItem::COLOR.usize()]
+                .sample_transform
+                .allocate_planes_and_apply(&self.extra_inputs, &mut self.image)?;
         }
 
         self.image_index = next_image_index;
