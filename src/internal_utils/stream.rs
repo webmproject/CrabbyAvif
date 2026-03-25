@@ -120,13 +120,13 @@ impl IStream<'_> {
         Ok(u64::from_be_bytes(self.get_slice(8)?.try_into().unwrap()))
     }
 
-    #[cfg(feature = "png")]
+    #[cfg(any(feature = "png", feature = "jpeg"))]
     pub(crate) fn read_u16_le(&mut self) -> AvifResult<u16> {
         assert_eq!(self.num_bits, 0);
         Ok(u16::from_le_bytes(self.get_slice(2)?.try_into().unwrap()))
     }
 
-    #[cfg(feature = "png")]
+    #[cfg(any(feature = "png", feature = "jpeg"))]
     pub(crate) fn read_u32_le(&mut self) -> AvifResult<u32> {
         assert_eq!(self.num_bits, 0);
         Ok(u32::from_le_bytes(self.get_slice(4)?.try_into().unwrap()))
@@ -150,6 +150,12 @@ impl IStream<'_> {
     pub(crate) fn read_i64(&mut self) -> AvifResult<i64> {
         assert_eq!(self.num_bits, 0);
         Ok(self.read_u64()? as i64)
+    }
+
+    #[cfg(feature = "jpeg")]
+    pub(crate) fn skip_u16(&mut self) -> AvifResult<()> {
+        assert_eq!(self.num_bits, 0);
+        self.skip(2)
     }
 
     pub(crate) fn skip_u32(&mut self) -> AvifResult<()> {

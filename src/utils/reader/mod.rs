@@ -25,6 +25,8 @@ pub mod y4m;
 
 #[cfg(feature = "png")]
 mod icc;
+#[cfg(feature = "jpeg")]
+mod xmp;
 
 use crate::gainmap::GainMap;
 use crate::image::Image;
