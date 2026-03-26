@@ -346,6 +346,11 @@ struct CommandLineArgs {
     #[arg(long, default_value = "false")]
     extract_gainmap: bool,
 
+    /// AVIF Encode only: CLLI information of the alternate image. Only used when encoding an image
+    /// with gainmap. Ignored otherwise.
+    #[arg(long, value_parser = clli_parser)]
+    alt_clli: Option<ContentLightLevelInformation>,
+
     /// Input AVIF file
     #[arg(allow_hyphen_values = false)]
     input_file: Option<String>,
@@ -808,6 +813,9 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
             if gainmap.alt_color_primaries == ColorPrimaries::Unspecified {
                 gainmap.alt_color_primaries = image.color_primaries;
             }
+        }
+        if let Some(alt_clli) = args.alt_clli {
+            gainmap.alt_clli = alt_clli;
         }
     }
     let codec_choice = match args.codec {
