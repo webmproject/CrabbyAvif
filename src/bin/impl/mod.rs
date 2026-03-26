@@ -334,6 +334,10 @@ struct CommandLineArgs {
     #[arg(long, default_value = "false")]
     allow_sample_transform: bool,
 
+    /// AVIF Decode only: Decode and output only the gainmap.
+    #[arg(long, default_value = "false")]
+    extract_gainmap: bool,
+
     /// Input AVIF file
     #[arg(allow_hyphen_values = false)]
     input_file: Option<String>,
@@ -549,7 +553,11 @@ fn max_threads(jobs: &Option<u32>) -> u32 {
 fn create_decoder_and_parse(args: &CommandLineArgs, input_file: &String) -> AvifResult<Decoder> {
     let mut settings = decoder::Settings {
         strictness: if args.no_strict { Strictness::None } else { Strictness::All },
-        image_content_to_decode: ImageContentType::All,
+        image_content_to_decode: if args.extract_gainmap {
+            ImageContentType::GainMap
+        } else {
+            ImageContentType::All
+        },
         codec_choice: args.codec,
         max_threads: max_threads(&args.jobs),
         allow_progressive: args.progressive,
@@ -649,7 +657,16 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
     print_image_info(&decoder);
 
     let output_filename = &args.output_file.as_ref().unwrap().as_str();
-    let image = decoder.image().unwrap();
+    let image = if args.extract_gainmap {
+        if !decoder.gainmap_present() {
+            return Err(AvifError::UnknownError(
+                "Input image does not contain a gain map".into(),
+            ));
+        }
+        &decoder.gainmap().image
+    } else {
+        decoder.image().unwrap()
+    };
     let extension = get_extension(output_filename);
     let mut writer: Box<dyn Writer> = match extension.as_str() {
         "y4m" | "yuv" => {
@@ -892,6 +909,7 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                     || args.quality.is_some()
                     || args.depth.is_some()
                     || args.index.is_some()
+                    || args.extract_gainmap
                 {
                     return Err(AvifError::UnknownError(
                         "--info contains unsupported extra arguments".into(),
