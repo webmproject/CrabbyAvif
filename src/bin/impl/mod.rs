@@ -219,6 +219,14 @@ struct CommandLineArgs {
     #[arg(long, short = 'q', value_parser = value_parser!(f32))]
     quality: Option<f32>,
 
+    /// AVIF Encode only: Output alpha channel quality in 0..100. (default: quality).
+    #[arg(long, value_parser = value_parser!(f32))]
+    quality_alpha: Option<f32>,
+
+    /// AVIF Encode only: Output gainmap quality in 0..100. (default: quality).
+    #[arg(long, value_parser = value_parser!(f32))]
+    quality_gainmap: Option<f32>,
+
     /// PNG output compression level in 0..9 (default: 5).
     #[arg(long, value_parser = value_parser!(i32).range(0..=9))]
     png_compress: Option<i32>,
@@ -811,6 +819,7 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
         },
         explicit_codec_choice => explicit_codec_choice,
     };
+    let quality = args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY);
     let mut settings = encoder::Settings {
         extra_layer_count: if args.progressive { 1 } else { 0 },
         codec_choice,
@@ -820,8 +829,9 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
         timescale: 1000, // ms.
         repetition_count: args.repetition_count,
         mutable: MutableSettings {
-            quality: args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY),
-            quality_gainmap: args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY),
+            quality,
+            quality_alpha: args.quality_alpha.unwrap_or(quality),
+            quality_gainmap: args.quality_gainmap.unwrap_or(quality),
             tiling_mode: if args.autotiling {
                 TilingMode::Auto
             } else {
