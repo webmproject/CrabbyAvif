@@ -25,6 +25,7 @@ use utils::*;
 use test_case::test_case;
 
 #[test_case("apple_gainmap_new.jpg", true, true, false, true)]
+#[test_case("apple_gainmap_old.jpg", true, true, false, true)]
 #[test_case("dog_exif_extended_xmp_icc.jpg", true, true, true, false)]
 #[test_case("paris_exif_orientation_5.jpg", true, false, false, false)]
 #[test_case("paris_exif_xmp_gainmap_bigendian.jpg", true, false, true, true)]

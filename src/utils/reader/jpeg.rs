@@ -64,17 +64,6 @@ impl Reader for JpegReader {
         let exif = info.exif_data.clone().unwrap_or_default();
         let xmp = info.xmp_data.clone().unwrap_or_default();
         let (irot_angle, imir_axis) = exif::get_orientation(&exif)?;
-        let mut gainmap = None;
-        if let (Some(mpf_data), Some(mpf_offset)) = (
-            &info.multi_picture_information,
-            info.multi_picture_information_offset,
-        ) {
-            if let Ok(aux_images) = extract_aux_images(mpf_data, u32_from_u64(mpf_offset)?) {
-                let mut file =
-                    File::open(self.filename.clone()).map_err(AvifError::map_unknown_error)?;
-                gainmap = get_gainmap(&mut file, &aux_images)?;
-            }
-        }
         let rgb_bytes = decoder
             .decode()
             .map_err(|e| AvifError::UnknownError(format!("jpeg decode error: {e:?}")))?;
@@ -103,6 +92,17 @@ impl Reader for JpegReader {
             imir_axis,
             ..Default::default()
         };
+        let mut gainmap = None;
+        if let (Some(mpf_data), Some(mpf_offset)) = (
+            &info.multi_picture_information,
+            info.multi_picture_information_offset,
+        ) {
+            if let Ok(aux_images) = extract_aux_images(mpf_data, u32_from_u64(mpf_offset)?) {
+                let mut file =
+                    File::open(self.filename.clone()).map_err(AvifError::map_unknown_error)?;
+                gainmap = get_gainmap(&mut file, &aux_images, &yuv)?;
+            }
+        }
         if let Some(gainmap) = &mut gainmap {
             gainmap.alt_color_primaries = yuv.color_primaries;
             gainmap.alt_transfer_characteristics = TransferCharacteristics::Pq;
@@ -189,7 +189,11 @@ fn extract_aux_images(mpf_data: &[u8], mpf_offset: u32) -> AvifResult<Vec<(u32, 
     Ok(aux_images)
 }
 
-fn get_gainmap(file: &mut File, aux_images: &[(u32, u32)]) -> AvifResult<Option<GainMap>> {
+fn get_gainmap(
+    file: &mut File,
+    aux_images: &[(u32, u32)],
+    base_image: &Image,
+) -> AvifResult<Option<GainMap>> {
     for &(offset, size) in aux_images {
         file.seek(SeekFrom::Start(offset as u64))
             .map_err(AvifError::map_unknown_error)?;
@@ -207,7 +211,16 @@ fn get_gainmap(file: &mut File, aux_images: &[(u32, u32)]) -> AvifResult<Option<
         };
 
         if let Some(xmp) = &info.xmp_data {
-            if let Ok(metadata) = xmp::parse_gainmap_metadata(xmp) {
+            if let Ok((mut metadata, is_apple)) = xmp::parse_gainmap_metadata(xmp) {
+                if is_apple && metadata.alternate_hdr_headroom.0 == 0 {
+                    match exif::apple_headroom(&base_image.exif) {
+                        Ok(Some(headroom)) if headroom > 0.0 => {
+                            metadata.alternate_hdr_headroom = headroom.into();
+                            metadata.max = [headroom.into(); 3];
+                        }
+                        _ => return Ok(None),
+                    }
+                }
                 let width = info.width as u32;
                 let height = info.height as u32;
                 let rgb_bytes = match decoder.decode() {

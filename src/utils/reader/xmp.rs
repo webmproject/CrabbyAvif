@@ -23,7 +23,8 @@ const XML_NAME_SPACE_RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const XML_NAME_SPACE_GAIN_MAP: &str = "http://ns.adobe.com/hdr-gain-map/1.0/";
 const XML_NAME_SPACE_APPLE_GAIN_MAP: &str = "http://ns.apple.com/HDRGainMap/1.0/";
 
-pub(crate) fn parse_gainmap_metadata(xmp_data: &[u8]) -> AvifResult<GainMapMetadata> {
+/// Return value is a tuple of the form (GainMapMetadata, is_apple_gainmap).
+pub(crate) fn parse_gainmap_metadata(xmp_data: &[u8]) -> AvifResult<(GainMapMetadata, bool)> {
     let reader = EventReader::new(Cursor::new(xmp_data));
 
     // Default values for Adobe HDR gainmap.
@@ -36,6 +37,12 @@ pub(crate) fn parse_gainmap_metadata(xmp_data: &[u8]) -> AvifResult<GainMapMetad
         base_hdr_headroom: UFraction(0, 1),
         alternate_hdr_headroom: UFraction(1, 1),
         use_base_color_space: true,
+    };
+    let apple_default = GainMapMetadata {
+        base_offset: [Fraction(0, 1), Fraction(0, 1), Fraction(0, 1)],
+        alternate_offset: [Fraction(0, 1), Fraction(0, 1), Fraction(0, 1)],
+        alternate_hdr_headroom: UFraction(0, 1),
+        ..metadata
     };
 
     let mut inside_rdf = false;
@@ -110,6 +117,7 @@ pub(crate) fn parse_gainmap_metadata(xmp_data: &[u8]) -> AvifResult<GainMapMetad
                             == Some(XML_NAME_SPACE_APPLE_GAIN_MAP)
                         {
                             is_apple = true;
+                            metadata = apple_default.clone();
                         }
                     }
                 } else if name.namespace.as_deref() == Some(XML_NAME_SPACE_GAIN_MAP)
@@ -117,6 +125,9 @@ pub(crate) fn parse_gainmap_metadata(xmp_data: &[u8]) -> AvifResult<GainMapMetad
                 {
                     current_prop = Some(name.local_name.clone());
                     if name.namespace.as_deref() == Some(XML_NAME_SPACE_APPLE_GAIN_MAP) {
+                        if !is_apple {
+                            metadata = apple_default.clone();
+                        }
                         is_apple = true;
                     }
                     li_index = 0;
@@ -227,7 +238,7 @@ pub(crate) fn parse_gainmap_metadata(xmp_data: &[u8]) -> AvifResult<GainMapMetad
             );
         }
     }
-    Ok(metadata)
+    Ok((metadata, is_apple))
 }
 
 #[cfg(test)]
@@ -382,7 +393,7 @@ mod tests {
     fn parse_gainmap_metadata(index: usize) -> AvifResult<()> {
         let (xmp_data, expected_metadata) = test_data(index);
         assert_eq!(
-            super::parse_gainmap_metadata(xmp_data.as_bytes())?,
+            super::parse_gainmap_metadata(xmp_data.as_bytes())?.0,
             expected_metadata
         );
         Ok(())
