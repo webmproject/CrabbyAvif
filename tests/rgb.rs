@@ -21,6 +21,9 @@ use crabby_avif::*;
 use test_case::test_case;
 use test_case::test_matrix;
 
+mod utils;
+use utils::*;
+
 #[derive(Default)]
 struct RgbToYuvParam {
     rgb_depth: u8,
@@ -687,5 +690,30 @@ fn gray_round_trip(
         assert_eq!(src_rgb_row[0], dst_rgb_row[0]);
         assert_eq!(src_rgb_row[1], dst_rgb_row[1]);
     }
+    Ok(())
+}
+
+#[test]
+fn b_496622631() -> AvifResult<()> {
+    let mut image =
+        generate_gradient_image(12, 12, 16, PixelFormat::AndroidP010, YuvRange::Full, false)?;
+    image.color_primaries = ColorPrimaries::Smpte432;
+    image.transfer_characteristics = TransferCharacteristics::Pq;
+    image.matrix_coefficients = MatrixCoefficients::ChromaDerivedNcl;
+
+    let mut rgb = rgb::Image::create_from_yuv(&image);
+    rgb.depth = 10;
+    rgb.format = rgb::Format::Rgba1010102;
+    rgb.allocate()?;
+
+    // Color conversion on Android was failing on certain unimplemented CICP values. When
+    // unimplemented values are encoutered on Android MediaCodec, the library should still be able
+    // to perform the color conversion and not fail. See b/496622631 for a sample failure. This is
+    // so that we are able to render such images on Android. On all other platforms we still treat
+    // it as a failure.
+    assert_eq!(
+        rgb.convert_from_yuv(&image).is_ok(),
+        cfg!(feature = "android_mediacodec")
+    );
     Ok(())
 }
