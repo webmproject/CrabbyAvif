@@ -255,11 +255,9 @@ pub(crate) fn apple_headroom(exif: &[u8]) -> AvifResult<Option<f64>> {
         } else {
             -0.101 * m48 + 1.601
         }
+    } else if m48 <= 0.01 {
+        -70.0 * m48 + 3.0
     } else {
-        if m48 <= 0.01 {
-            -70.0 * m48 + 3.0
-        } else {
-            -0.303 * m48 + 2.303
-        }
+        -0.303 * m48 + 2.303
     }))
 }
