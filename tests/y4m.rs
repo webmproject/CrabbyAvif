@@ -27,14 +27,6 @@ use std::fs::File;
 use tempfile::NamedTempFile;
 use test_case::test_matrix;
 
-fn get_tempfile() -> String {
-    let file = NamedTempFile::new().expect("unable to open tempfile");
-    let path = file.into_temp_path();
-    let filename = String::from(path.to_str().unwrap());
-    let _ = path.close();
-    filename
-}
-
 #[test_matrix(
     [100, 121],
     [200, 107],
@@ -56,17 +48,19 @@ fn roundtrip(
         return Ok(());
     }
     let image1 = generate_gradient_image(width, height, depth, yuv_format, yuv_range, alpha)?;
-    let output_filename = get_tempfile();
+    let path = NamedTempFile::new().unwrap().into_temp_path();
+    let path = format!("{}.y4m", path.to_str().unwrap());
     // Write the image.
     {
         let mut writer = Y4MWriter::create(false);
-        let mut output_file =
-            File::create(output_filename.clone()).expect("output file creation failed");
+        let mut output_file = File::create(path.clone()).expect("output file creation failed");
         writer.write_frame(&mut output_file, &image1)?;
     }
     // Read the image.
-    let mut reader = Y4MReader::create(&output_filename)?;
+    let mut reader = Y4MReader::create(&path)?;
     let (image2, _, _) = reader.read_frame(&Config::default())?;
     are_images_equal(&image1, &image2)?;
+    // Read the image using the generic test utils API.
+    are_images_equal(&image1, &read_image(&path)?)?;
     Ok(())
 }

@@ -123,6 +123,33 @@ impl Image {
         }
     }
 
+    pub(crate) fn try_deep_clone(&self) -> AvifResult<Self> {
+        let mut image = self.shallow_clone();
+        for plane in ALL_PLANES.iter().filter(|p| self.has_plane(**p)) {
+            // Allocate and copy row by row to avoid carrying large row padding
+            // over if any.
+            image.allocate_plane(*plane)?;
+            for y in 0..self.height(*plane) as u32 {
+                if self.depth <= 8 {
+                    image
+                        .row_mut(*plane, y)?
+                        .copy_from_slice(self.row(*plane, y)?);
+                } else {
+                    image
+                        .row16_mut(*plane, y)?
+                        .copy_from_slice(self.row16(*plane, y)?);
+                }
+            }
+        }
+        image.exif = self
+            .exif
+            .try_clone()
+            .map_err(AvifError::map_out_of_memory)?;
+        image.icc = self.icc.try_clone().map_err(AvifError::map_out_of_memory)?;
+        image.xmp = self.xmp.try_clone().map_err(AvifError::map_out_of_memory)?;
+        Ok(image)
+    }
+
     pub(crate) fn is_supported_depth(depth: u8) -> bool {
         matches!(depth, 8 | 10 | 12 | 16)
     }
@@ -379,30 +406,44 @@ impl Image {
         self.free_planes(&[Plane::U, Plane::V])
     }
 
-    pub(crate) fn allocate_planes_with_default_values(
+    fn allocate_plane(&mut self, plane: Plane) -> AvifResult<()> {
+        // Rust has no idiomatic way to allocate memory without initializing it.
+        const DEFAULT_VALUE: u16 = 0; // The default value does not matter.
+        self.allocate_plane_with_default_value(plane, DEFAULT_VALUE)
+    }
+
+    fn allocate_plane_with_default_value(
         &mut self,
-        category: Category,
-        default_values: [u16; 4],
+        plane: Plane,
+        default_value: u16,
     ) -> AvifResult<()> {
-        let pixel_size: usize = if self.depth == 8 { 1 } else { 2 };
-        for plane in category.planes() {
-            let plane = *plane;
-            let plane_index = plane.as_usize();
-            let width = round2_usize(self.width(plane));
-            let plane_size = checked_mul!(width, round2_usize(self.height(plane)))?;
-            if plane_size == 0 {
-                self.planes[plane_index] = None;
-                self.row_bytes[plane_index] = 0;
-                continue;
-            }
+        let plane_index = plane.as_usize();
+        let width = round2_usize(self.width(plane));
+        let plane_size = checked_mul!(width, round2_usize(self.height(plane)))?;
+        if plane_size == 0 {
+            self.planes[plane_index] = None;
+            self.row_bytes[plane_index] = 0;
+        } else {
             self.planes[plane_index] = Some(if self.depth == 8 {
                 Pixels::Buffer(Vec::new())
             } else {
                 Pixels::Buffer16(Vec::new())
             });
             let pixels = self.planes[plane_index].unwrap_mut();
-            pixels.resize(plane_size, default_values[plane_index])?;
+            pixels.resize(plane_size, default_value)?;
+            let pixel_size: usize = if self.depth == 8 { 1 } else { 2 };
             self.row_bytes[plane_index] = u32_from_usize(checked_mul!(width, pixel_size)?)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn allocate_planes_with_default_values(
+        &mut self,
+        category: Category,
+        default_values: [u16; 4],
+    ) -> AvifResult<()> {
+        for plane in category.planes() {
+            self.allocate_plane_with_default_value(*plane, default_values[plane.as_usize()])?;
         }
         Ok(())
     }
