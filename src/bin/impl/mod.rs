@@ -809,10 +809,9 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
         image.transfer_characteristics = TransferCharacteristics::Srgb;
     }
     if let Some(gainmap) = &mut gainmap {
-        if gainmap.alt_icc.is_empty() {
-            if gainmap.alt_color_primaries == ColorPrimaries::Unspecified {
-                gainmap.alt_color_primaries = image.color_primaries;
-            }
+        if gainmap.alt_icc.is_empty() && gainmap.alt_color_primaries == ColorPrimaries::Unspecified
+        {
+            gainmap.alt_color_primaries = image.color_primaries;
         }
         if let Some(alt_clli) = args.alt_clli {
             gainmap.alt_clli = alt_clli;
