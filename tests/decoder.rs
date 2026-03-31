@@ -1619,3 +1619,35 @@ fn sato_disabled() {
     assert_eq!(res, Ok(()));
     assert_eq!(decoder.image().unwrap().depth, 8);
 }
+
+#[test]
+fn b_497926602() -> AvifResult<()> {
+    // The file has two cells with the mdat payloads (offset, size) at (424, 36) and (460, 35).
+    let data =
+        std::fs::read(get_test_file("grid_cell0_444_cell1_420.avif")).expect("Unable to read file");
+    let len = data.len();
+    // Make only the first cell available.
+    let available_size_rc = Rc::new(RefCell::new(460));
+    let mut decoder = decoder::Decoder::default();
+    decoder.settings.allow_incremental = true;
+    let io = Box::new(CustomIO {
+        available_size_rc: available_size_rc.clone(),
+        data,
+    });
+    decoder.set_io(io);
+    assert!(decoder.parse().is_ok());
+    // Incremental decoding is not supported on Android.
+    if !HAS_NON_ANDROID_DECODER {
+        return Ok(());
+    }
+    // Decode the first cell.
+    assert!(matches!(decoder.next_image(), Err(AvifError::WaitingOnIo)));
+    // Make the second cell available.
+    *available_size_rc.borrow_mut() = len;
+    // Now, trying to decode should fail with an error other than WaitingOnIo since the cells have
+    // different YUV formats.
+    let res = decoder.next_image();
+    assert!(res.is_err());
+    assert!(!matches!(res, Err(AvifError::WaitingOnIo)));
+    Ok(())
+}

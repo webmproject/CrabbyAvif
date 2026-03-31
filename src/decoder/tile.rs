@@ -376,6 +376,12 @@ impl Image {
         tile_index: u32,
         category: Category,
     ) -> AvifResult<()> {
+        // When copying non-alpha planes, the source and destination depth and yuv_format has
+        // to be the same. This restriction does not apply to alpha planes since only Y plane is
+        // copied.
+        if category != Category::Alpha && self.yuv_format != tile.yuv_format {
+            return AvifError::invalid_image_grid("mismatch in grid tile yuv formats.");
+        }
         let row_index = tile_index / grid.columns;
         let column_index = tile_index % grid.columns;
         for plane in category.planes() {
@@ -432,6 +438,12 @@ impl Image {
         tile_index: u32,
         category: Category,
     ) -> AvifResult<()> {
+        // When copying non-alpha planes, the source and destination depth and yuv_format has
+        // to be the same. This restriction does not apply to alpha planes since only Y plane is
+        // copied.
+        if category != Category::Alpha && self.yuv_format != tile.yuv_format {
+            return AvifError::invalid_image_grid("mismatch in overlay tile yuv formats.");
+        }
         // This function is used only when |tile| contains pointers and self contains buffers.
         for plane in category.planes() {
             let plane = *plane;
