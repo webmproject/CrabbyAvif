@@ -23,6 +23,7 @@ use crate::decoder::item::Item;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::image::YuvRange;
+use crate::internal_utils::u32_from_usize;
 use crate::utils::pixels::*;
 use crate::*;
 
@@ -254,7 +255,7 @@ impl Dav1d {
                     image.planes[plane] = Some(Pixels::from_raw_pointer(
                         dav1d_picture.data[plane] as *mut u8,
                         image.depth as u32,
-                        image.height,
+                        u32_from_usize(image.height(plane.into()))?,
                         image.row_bytes[plane],
                     )?);
                 }
