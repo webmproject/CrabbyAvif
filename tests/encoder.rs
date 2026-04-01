@@ -1256,9 +1256,9 @@ fn opaque_alpha_grid(depth: u8, all_cells_opaque: bool) -> AvifResult<()> {
     if !all_cells_opaque {
         // Set some alpha pixels as not opaque in one of the cells.
         if depth == 8 {
-            image2.row_mut(Plane::A, 0)?[0] = 10;
+            image2.row_exact_mut(Plane::A, 0)?[0] = 10;
         } else {
-            image2.row16_mut(Plane::A, 0)?[0] = 10;
+            image2.row16_exact_mut(Plane::A, 0)?[0] = 10;
         }
     }
     let settings = encoder::Settings {

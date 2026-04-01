@@ -217,10 +217,10 @@ pub(crate) fn are_planes_equal(image1: &Image, image2: &Image, plane: Plane) -> 
     let height = image1.height(plane);
     for y in 0..height as u32 {
         if image1.depth > 8 {
-            if image1.row16(plane, y)?[..width] != image2.row16(plane, y)?[..width] {
+            if image1.row16_exact(plane, y)?[..width] != image2.row16_exact(plane, y)?[..width] {
                 return Ok(false);
             }
-        } else if image1.row(plane, y)?[..width] != image2.row(plane, y)?[..width] {
+        } else if image1.row_exact(plane, y)?[..width] != image2.row_exact(plane, y)?[..width] {
             return Ok(false);
         }
     }
