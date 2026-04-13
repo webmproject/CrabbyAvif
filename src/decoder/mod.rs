@@ -1877,14 +1877,9 @@ impl Decoder {
                     dst_image.planes[plane] = Some(match src_plane {
                         Pixels::Pointer(p) => Pixels::Pointer(*p),
                         Pixels::Pointer16(p) => Pixels::Pointer16(*p),
-                        // SAFETY: Bounded lifetime and read-only access.
-                        Pixels::Buffer(b) => Pixels::Pointer(unsafe {
-                            PointerSlice::create(b.as_ptr() as *mut _, b.len())?
-                        }),
-                        // SAFETY: Bounded lifetime and read-only access.
-                        Pixels::Buffer16(b) => Pixels::Pointer16(unsafe {
-                            PointerSlice::create(b.as_ptr() as *mut _, b.len())?
-                        }),
+                        // TODO: b/497981301 - Avoid cloning or explain why the clone is needed.
+                        Pixels::Buffer(b) => Pixels::Buffer(b.try_clone()?),
+                        Pixels::Buffer16(b) => Pixels::Buffer16(b.try_clone()?),
                     });
                     dst_image.row_bytes[plane] = tile.image.row_bytes[plane];
                 } else {
