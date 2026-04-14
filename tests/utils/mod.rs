@@ -134,10 +134,10 @@ pub fn are_planes_equal(image1: &Image, image2: &Image, plane: Plane) -> AvifRes
     let height = image1.height(plane);
     for y in 0..height as u32 {
         if image1.depth > 8 {
-            if image1.row16(plane, y)?[..width] != image2.row16(plane, y)?[..width] {
+            if image1.row16_exact(plane, y)?[..width] != image2.row16_exact(plane, y)?[..width] {
                 return Ok(false);
             }
-        } else if image1.row(plane, y)?[..width] != image2.row(plane, y)?[..width] {
+        } else if image1.row_exact(plane, y)?[..width] != image2.row_exact(plane, y)?[..width] {
             return Ok(false);
         }
     }
@@ -174,14 +174,14 @@ pub fn psnr(image1: &Image, image2: &Image) -> AvifResult<f64> {
         }
         for y in 0..height as u32 {
             if image1.depth > 8 {
-                let row1 = image1.row16(plane, y)?;
-                let row2 = image2.row16(plane, y)?;
+                let row1 = image1.row16_exact(plane, y)?;
+                let row2 = image2.row16_exact(plane, y)?;
                 for x in 0..width {
                     diff_sum += squared_diff_sum(row1[x], row2[x]);
                 }
             } else {
-                let row1 = image1.row(plane, y)?;
-                let row2 = image2.row(plane, y)?;
+                let row1 = image1.row_exact(plane, y)?;
+                let row2 = image2.row_exact(plane, y)?;
                 for x in 0..width {
                     diff_sum += squared_diff_sum(row1[x] as u16, row2[x] as u16);
                 }
@@ -250,17 +250,17 @@ fn copy_cell_image_into_grid(
         let dst_x_offset_end = dst_x_offset + src_plane.width as usize;
         if image.depth == 8 {
             for y in 0..src_plane.height {
-                let src_row = cell.row(plane, y)?;
+                let src_row = cell.row_exact(plane, y)?;
                 let src_slice = &src_row[0..src_plane.width as usize];
-                let dst_row = image.row_mut(plane, dst_y_start + y)?;
+                let dst_row = image.row_exact_mut(plane, dst_y_start + y)?;
                 let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset_end];
                 dst_slice.copy_from_slice(src_slice);
             }
         } else {
             for y in 0..src_plane.height {
-                let src_row = cell.row16(plane, y)?;
+                let src_row = cell.row16_exact(plane, y)?;
                 let src_slice = &src_row[0..src_plane.width as usize];
-                let dst_row = image.row16_mut(plane, dst_y_start + y)?;
+                let dst_row = image.row16_exact_mut(plane, dst_y_start + y)?;
                 let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset_end];
                 dst_slice.copy_from_slice(src_slice);
             }

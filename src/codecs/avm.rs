@@ -757,7 +757,7 @@ impl Decoder for Avm {
                     for y in 0..plane_height {
                         let src_row = &src_plane
                             [y * src_stride_in_samples..y * src_stride_in_samples + plane_width];
-                        let dst_row = image.row_mut(Plane::from(plane), y as u32)?;
+                        let dst_row = image.row_exact_mut(Plane::from(plane), y as u32)?;
                         for (x, dst_pixel) in dst_row.iter_mut().enumerate().take(plane_width) {
                             *dst_pixel = src_row[x] as u8;
                         }
@@ -832,7 +832,7 @@ impl Decoder for Avm {
                 for y in 0..plane_height {
                     let src_row = &src_plane
                         [y * src_stride_in_samples..y * src_stride_in_samples + plane_width];
-                    let dst_row = image.row_mut(Plane::A, y as u32)?;
+                    let dst_row = image.row_exact_mut(Plane::A, y as u32)?;
                     for (x, dst_pixel) in dst_row.iter_mut().enumerate().take(plane_width) {
                         *dst_pixel = src_row[x] as u8;
                     }

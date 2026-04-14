@@ -827,7 +827,7 @@ mod tests {
 
         if yuv_depth == 8 {
             for y in 0..height {
-                let row = image.row(Plane::A, y)?;
+                let row = image.row_exact(Plane::A, y)?;
                 let start = (y * width) as usize;
                 let expected_values_u8: Vec<u8> = expected_values[start..start + width as usize]
                     .iter()
@@ -837,7 +837,7 @@ mod tests {
             }
         } else {
             for y in 0..height {
-                let row = image.row16(Plane::A, y)?;
+                let row = image.row16_exact(Plane::A, y)?;
                 let start = (y * width) as usize;
                 assert_eq!(
                     expected_values[start..start + width as usize],

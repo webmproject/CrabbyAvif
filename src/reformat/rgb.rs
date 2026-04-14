@@ -697,7 +697,7 @@ mod tests {
             let plane_width = image.width(plane);
             #[allow(clippy::needless_range_loop)]
             for y in 0..image.height(plane) {
-                let row16 = image.row16_mut(plane, y as u32)?;
+                let row16 = image.row16_exact_mut(plane, y as u32)?;
                 let dst = &mut row16[..plane_width];
                 assert_eq!(dst.len(), yuva_planes[plane_index][y].len());
                 dst.copy_from_slice(yuva_planes[plane_index][y]);
