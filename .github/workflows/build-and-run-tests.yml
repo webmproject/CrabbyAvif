@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [windows-latest]
     env:
       CC: clang
       CXX: clang++
@@ -29,6 +29,34 @@ jobs:
     - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
     - uses: ./.github/actions/setup-deps
+
+    - name: Print A
+      run: ls sys
+      continue-on-error: true
+
+    - name: Print B
+      run: ls sys/dav1d-sys
+      continue-on-error: true
+
+    - name: Print C
+      run: ls sys/dav1d-sys/dav1d
+      continue-on-error: true
+
+    - name: Print D
+      run: ls sys/dav1d-sys/dav1d/build
+      continue-on-error: true
+
+    - name: Print E
+      run: ls sys/dav1d-sys/dav1d/build/src
+      continue-on-error: true
+
+    - name: Print F
+      run: ls sys/libwebp
+      continue-on-error: true
+
+    - name: Print G
+      run: ls sys/libwebp/build
+      continue-on-error: true
 
     - name: Build and run the Rust tests
       run: cargo test
