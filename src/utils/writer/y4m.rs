@@ -121,13 +121,13 @@ impl Writer for Y4MWriter {
             }
             if image.depth == 8 {
                 for y in 0..image.height(plane) {
-                    let row = image.row_exact(plane, y as u32)?;
+                    let row = image.row(plane, y as u32)?;
                     let pixels = &row[..image.width(plane)];
                     file.write_all(pixels).map_err(AvifError::map_io_error)?;
                 }
             } else {
                 for y in 0..image.height(plane) {
-                    let row16 = image.row16_exact(plane, y as u32)?;
+                    let row16 = image.row16(plane, y as u32)?;
                     let pixels16 = &row16[..image.width(plane)];
                     let mut pixels: Vec<u8> = Vec::new();
                     // y4m is always little endian.

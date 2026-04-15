@@ -303,9 +303,9 @@ impl Writer for PngWriter {
         if copy_y_plane {
             for y in 0..height {
                 if image.depth == 8 {
-                    row_pointers.push(image.row_exact(Plane::Y, y)?.as_ptr() as _);
+                    row_pointers.push(image.row(Plane::Y, y)?.as_ptr() as _);
                 } else {
-                    row_pointers.push(image.row16_exact(Plane::Y, y)?.as_ptr() as _);
+                    row_pointers.push(image.row16(Plane::Y, y)?.as_ptr() as _);
                 }
             }
         } else {

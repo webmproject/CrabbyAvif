@@ -1263,8 +1263,8 @@ fn dimg_ordering() {
     let image1 = decoder1.image().expect("image1 was none");
     let image2 = decoder2.image().expect("image2 was none");
     // Ensure that the pixels in image1 and image2 are not the same.
-    let row1 = image1.row_exact(Plane::Y, 0).expect("row1 was none");
-    let row2 = image2.row_exact(Plane::Y, 0).expect("row2 was none");
+    let row1 = image1.row(Plane::Y, 0).expect("row1 was none");
+    let row2 = image2.row(Plane::Y, 0).expect("row2 was none");
     assert_ne!(row1, row2);
 }
 

@@ -631,32 +631,26 @@ fn gray_round_trip(
     rgb.convert_to_yuv(&mut image)?;
 
     if depth == 8 {
-        assert_eq!(image.row_exact(Plane::Y, 0)?, &[4, 3]);
-        assert_eq!(image.row_exact(Plane::Y, 1)?, &[2, 1]);
+        assert_eq!(image.row(Plane::Y, 0)?, &[4, 3]);
+        assert_eq!(image.row(Plane::Y, 1)?, &[2, 1]);
         if yuv_format != PixelFormat::Yuv400 {
-            assert!(image
-                .row_exact(Plane::U, 0)?
-                .iter()
-                .all(|x| *x == half as u8));
-            assert!(image
-                .row_exact(Plane::V, 0)?
-                .iter()
-                .all(|x| *x == half as u8));
+            assert!(image.row(Plane::U, 0)?.iter().all(|x| *x == half as u8));
+            assert!(image.row(Plane::V, 0)?.iter().all(|x| *x == half as u8));
         }
         if rgb_format.has_alpha() {
-            assert_eq!(image.row_exact(Plane::A, 0)?, &[40, 30]);
-            assert_eq!(image.row_exact(Plane::A, 1)?, &[20, 10]);
+            assert_eq!(image.row(Plane::A, 0)?, &[40, 30]);
+            assert_eq!(image.row(Plane::A, 1)?, &[20, 10]);
         }
     } else {
-        assert_eq!(image.row16_exact(Plane::Y, 0)?, &[4, 3]);
-        assert_eq!(image.row16_exact(Plane::Y, 1)?, &[2, 1]);
+        assert_eq!(image.row16(Plane::Y, 0)?, &[4, 3]);
+        assert_eq!(image.row16(Plane::Y, 1)?, &[2, 1]);
         if yuv_format != PixelFormat::Yuv400 {
-            assert!(image.row16_exact(Plane::U, 0)?.iter().all(|x| *x == half));
-            assert!(image.row16_exact(Plane::V, 0)?.iter().all(|x| *x == half));
+            assert!(image.row16(Plane::U, 0)?.iter().all(|x| *x == half));
+            assert!(image.row16(Plane::V, 0)?.iter().all(|x| *x == half));
         }
         if rgb_format.has_alpha() {
-            assert_eq!(image.row16_exact(Plane::A, 0)?, &[40, 30]);
-            assert_eq!(image.row16_exact(Plane::A, 1)?, &[20, 10]);
+            assert_eq!(image.row16(Plane::A, 0)?, &[40, 30]);
+            assert_eq!(image.row16(Plane::A, 1)?, &[20, 10]);
         }
     }
 

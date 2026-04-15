@@ -95,7 +95,7 @@ pub fn generate_gradient_image(
         let max_xy_sum = plane_data.width + plane_data.height - 2;
         for y in 0..plane_data.height {
             if image.depth == 8 {
-                let row = image.row_exact_mut(plane, y)?;
+                let row = image.row_mut(plane, y)?;
                 for x in 0..plane_data.width {
                     let value = (x + y + plane as u32) % (max_xy_sum + 1);
                     let pixel = &mut row[x as usize];
@@ -106,7 +106,7 @@ pub fn generate_gradient_image(
                 }
             } else {
                 let max_channel = image.max_channel() as u32;
-                let row = image.row16_exact_mut(plane, y)?;
+                let row = image.row16_mut(plane, y)?;
                 for x in 0..plane_data.width {
                     let value = (x + y + plane as u32) % (max_xy_sum + 1);
                     let pixel = &mut row[x as usize];
@@ -134,10 +134,10 @@ pub fn are_planes_equal(image1: &Image, image2: &Image, plane: Plane) -> AvifRes
     let height = image1.height(plane);
     for y in 0..height as u32 {
         if image1.depth > 8 {
-            if image1.row16_exact(plane, y)?[..width] != image2.row16_exact(plane, y)?[..width] {
+            if image1.row16(plane, y)?[..width] != image2.row16(plane, y)?[..width] {
                 return Ok(false);
             }
-        } else if image1.row_exact(plane, y)?[..width] != image2.row_exact(plane, y)?[..width] {
+        } else if image1.row(plane, y)?[..width] != image2.row(plane, y)?[..width] {
             return Ok(false);
         }
     }
@@ -174,14 +174,14 @@ pub fn psnr(image1: &Image, image2: &Image) -> AvifResult<f64> {
         }
         for y in 0..height as u32 {
             if image1.depth > 8 {
-                let row1 = image1.row16_exact(plane, y)?;
-                let row2 = image2.row16_exact(plane, y)?;
+                let row1 = image1.row16(plane, y)?;
+                let row2 = image2.row16(plane, y)?;
                 for x in 0..width {
                     diff_sum += squared_diff_sum(row1[x], row2[x]);
                 }
             } else {
-                let row1 = image1.row_exact(plane, y)?;
-                let row2 = image2.row_exact(plane, y)?;
+                let row1 = image1.row(plane, y)?;
+                let row2 = image2.row(plane, y)?;
                 for x in 0..width {
                     diff_sum += squared_diff_sum(row1[x] as u16, row2[x] as u16);
                 }
@@ -205,11 +205,11 @@ pub fn fill_plane(image: &mut Image, plane: Plane, value: u16) -> AvifResult<()>
     let plane_data = image.plane_data(plane).ok_or(AvifError::NoContent)?;
     for y in 0..plane_data.height {
         if image.depth == 8 {
-            for pixel in image.row_exact_mut(Plane::A, y)? {
+            for pixel in image.row_mut(Plane::A, y)? {
                 *pixel = value as u8;
             }
         } else {
-            for pixel in image.row16_exact_mut(Plane::A, y)? {
+            for pixel in image.row16_mut(Plane::A, y)? {
                 *pixel = value;
             }
         }
@@ -250,17 +250,17 @@ fn copy_cell_image_into_grid(
         let dst_x_offset_end = dst_x_offset + src_plane.width as usize;
         if image.depth == 8 {
             for y in 0..src_plane.height {
-                let src_row = cell.row_exact(plane, y)?;
+                let src_row = cell.row(plane, y)?;
                 let src_slice = &src_row[0..src_plane.width as usize];
-                let dst_row = image.row_exact_mut(plane, dst_y_start + y)?;
+                let dst_row = image.row_mut(plane, dst_y_start + y)?;
                 let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset_end];
                 dst_slice.copy_from_slice(src_slice);
             }
         } else {
             for y in 0..src_plane.height {
-                let src_row = cell.row16_exact(plane, y)?;
+                let src_row = cell.row16(plane, y)?;
                 let src_slice = &src_row[0..src_plane.width as usize];
-                let dst_row = image.row16_exact_mut(plane, dst_y_start + y)?;
+                let dst_row = image.row16_mut(plane, dst_y_start + y)?;
                 let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset_end];
                 dst_slice.copy_from_slice(src_slice);
             }
