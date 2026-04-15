@@ -479,7 +479,7 @@ mod tests {
 
     use crate::utils::pixels::*;
 
-    use rand::Rng;
+    use rand::RngExt;
     use test_case::test_matrix;
 
     const ALPHA_RGB_FORMATS: [rgb::Format; 4] = [
@@ -625,14 +625,14 @@ mod tests {
         };
         image.allocate_planes(Category::Alpha)?;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut expected_values: Vec<u16> = Vec::new();
         let image_max_channel_f = image.max_channel_f();
         if yuv_depth == 8 {
             for y in 0..height {
                 let row = image.row_mut(Plane::A, y)?;
                 for pixel in row {
-                    let value = rng.gen_range(0..256) as u8;
+                    let value = rng.random_range(0..256) as u8;
                     if rgb.depth == 8 {
                         expected_values.push(value as u16);
                     } else {
@@ -649,7 +649,7 @@ mod tests {
             for y in 0..height {
                 let row = image.row16_mut(Plane::A, y)?;
                 for pixel in row {
-                    let value = rng.gen_range(0..(1i32 << yuv_depth)) as u16;
+                    let value = rng.random_range(0..(1i32 << yuv_depth)) as u16;
                     if rgb.depth == yuv_depth {
                         expected_values.push(value);
                     } else {
@@ -722,13 +722,13 @@ mod tests {
         };
         image.allocate_planes(Category::Alpha)?;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut expected_values: Vec<u16> = Vec::new();
         if yuv_depth == 8 {
             for y in 0..height {
                 let row = image.row_mut(Plane::A, y)?;
                 for pixel in row {
-                    let value = rng.gen_range(0..256) as u8;
+                    let value = rng.random_range(0..256) as u8;
                     expected_values.push((value >> 6) as u16);
                     *pixel = value;
                 }
@@ -737,7 +737,7 @@ mod tests {
             for y in 0..height {
                 let row = image.row16_mut(Plane::A, y)?;
                 for pixel in row {
-                    let value = rng.gen_range(0..(1i32 << yuv_depth)) as u16;
+                    let value = rng.random_range(0..(1i32 << yuv_depth)) as u16;
                     expected_values.push(value >> (yuv_depth - 2));
                     *pixel = value;
                 }
@@ -781,7 +781,7 @@ mod tests {
         };
         image.allocate_planes(Category::Alpha)?;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut expected_values: Vec<u16> = Vec::new();
         let rgb_max_channel_f = rgb.max_channel_f();
         let rgb_channel_count = rgb.channel_count() as usize;
@@ -791,7 +791,7 @@ mod tests {
             for y in 0..height {
                 let row = &mut rgb.row_mut(y)?[..rgb_pixel_width];
                 for pixels in row.chunks_exact_mut(rgb_channel_count) {
-                    let value = rng.gen_range(0..256) as u8;
+                    let value = rng.random_range(0..256) as u8;
                     if yuv_depth == 8 {
                         expected_values.push(value as u16);
                     } else {
@@ -808,7 +808,7 @@ mod tests {
             for y in 0..height {
                 let row = &mut rgb.row16_mut(y)?[..rgb_pixel_width];
                 for pixels in row.chunks_exact_mut(rgb_channel_count) {
-                    let value = rng.gen_range(0..(1i32 << yuv_depth)) as u16;
+                    let value = rng.random_range(0..(1i32 << yuv_depth)) as u16;
                     if yuv_depth == rgb_depth {
                         expected_values.push(value);
                     } else {
