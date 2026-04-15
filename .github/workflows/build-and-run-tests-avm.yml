@@ -26,7 +26,7 @@ jobs:
       CXX: clang++
 
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # Build aom.
       - uses: ./.github/actions/setup-deps
@@ -34,15 +34,15 @@ jobs:
       # Build avm.
       - name: Cache external avm dependency
         id: cache-ext-avm
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: sys/avm-sys
           key: ${{ runner.os }}-${{ hashFiles('.github/workflows/build-and-run-tests-avm.yml', 'sys/avm-sys/build.rs', 'sys/avm-sys/Cargo.toml', 'sys/avm-sys/avm.cmd', 'sys/avm-sys/wrapper.h') }}
-      - uses: jwlawson/actions-setup-cmake@d06b37b47cfd043ec794ffa3e40e0b6b5858a7ec # v1.14.2
+      - uses: jwlawson/actions-setup-cmake@0d6a7d60b009d01c9e7523be22153ff8f19460d3 # v2.2.0
         if: steps.cache-ext-avm.outputs.cache-hit != 'true'
-      - uses: ilammy/setup-nasm@13cbeb366c45c4379d3478cdcbadd8295feb5028 # v1.5.1
+      - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
         if: steps.cache-ext-avm.outputs.cache-hit != 'true'
-      - uses: seanmiddleditch/gha-setup-ninja@8b297075da4cd2a5f1fd21fe011b499edf06e9d2 # v4
+      - uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67 # v6
         if: steps.cache-ext-avm.outputs.cache-hit != 'true'
       - name: Download and build avm
         if: steps.cache-ext-avm.outputs.cache-hit != 'true'
