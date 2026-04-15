@@ -1874,13 +1874,20 @@ impl Decoder {
             for plane in category.planes() {
                 let plane = plane.as_usize();
                 if let Some(src_plane) = &tile.image.planes[plane] {
-                    dst_image.planes[plane] = Some(match src_plane {
-                        Pixels::Pointer(p) => Pixels::Pointer(*p),
-                        Pixels::Pointer16(p) => Pixels::Pointer16(*p),
-                        // TODO: b/497981301 - Avoid cloning or explain why the clone is needed.
-                        Pixels::Buffer(b) => Pixels::Buffer(b.try_clone()?),
-                        Pixels::Buffer16(b) => Pixels::Buffer16(b.try_clone()?),
-                    });
+                    dst_image.planes[plane] = match src_plane {
+                        Pixels::Pointer(p) => Some(Pixels::Pointer(*p)),
+                        Pixels::Pointer16(p) => Some(Pixels::Pointer16(*p)),
+                        Pixels::Buffer(b) if b.is_empty() => None,
+                        // SAFETY: Bounded lifetime and read-only access.
+                        Pixels::Buffer(b) => Some(Pixels::Pointer(unsafe {
+                            PointerSlice::create(b.as_ptr() as *mut _, b.len())?
+                        })),
+                        Pixels::Buffer16(b) if b.is_empty() => None,
+                        // SAFETY: Bounded lifetime and read-only access.
+                        Pixels::Buffer16(b) => Some(Pixels::Pointer16(unsafe {
+                            PointerSlice::create(b.as_ptr() as *mut _, b.len())?
+                        })),
+                    };
                     dst_image.row_bytes[plane] = tile.image.row_bytes[plane];
                 } else {
                     dst_image.planes[plane] = None;
