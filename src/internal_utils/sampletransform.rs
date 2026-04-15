@@ -142,12 +142,12 @@ impl SampleTransformToken {
                     StackItem::Constant(c) => StackItem::Constant(op.apply(c, bounds)),
                     StackItem::ImageItem(item_idx) => {
                         if extra_inputs[item_idx].depth == 8 {
-                            let row8 = extra_inputs[item_idx].row_exact(plane, y)?;
+                            let row8 = extra_inputs[item_idx].row(plane, y)?;
                             StackItem::Values(
                                 row8.iter().map(|v| op.apply(*v as i64, bounds)).collect(),
                             )
                         } else {
-                            let row16 = extra_inputs[item_idx].row16_exact(plane, y)?;
+                            let row16 = extra_inputs[item_idx].row16(plane, y)?;
                             StackItem::Values(
                                 row16.iter().map(|v| op.apply(*v as i64, bounds)).collect(),
                             )
@@ -170,14 +170,14 @@ impl SampleTransformToken {
                     ),
                     (StackItem::Values(left), StackItem::ImageItem(right_idx)) => {
                         if extra_inputs[right_idx].depth == 8 {
-                            let row8 = extra_inputs[right_idx].row_exact(plane, y)?;
+                            let row8 = extra_inputs[right_idx].row(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left[i], row8[i] as i64, bounds))
                                     .collect(),
                             )
                         } else {
-                            let row16 = extra_inputs[right_idx].row16_exact(plane, y)?;
+                            let row16 = extra_inputs[right_idx].row16(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left[i], row16[i] as i64, bounds))
@@ -193,14 +193,14 @@ impl SampleTransformToken {
                     }
                     (StackItem::Constant(left), StackItem::ImageItem(right_idx)) => {
                         if extra_inputs[right_idx].depth == 8 {
-                            let row8 = extra_inputs[right_idx].row_exact(plane, y)?;
+                            let row8 = extra_inputs[right_idx].row(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left, row8[i] as i64, bounds))
                                     .collect(),
                             )
                         } else {
-                            let row16 = extra_inputs[right_idx].row16_exact(plane, y)?;
+                            let row16 = extra_inputs[right_idx].row16(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left, row16[i] as i64, bounds))
@@ -210,14 +210,14 @@ impl SampleTransformToken {
                     }
                     (StackItem::ImageItem(left_idx), StackItem::Values(right)) => {
                         if extra_inputs[left_idx].depth == 8 {
-                            let row8 = extra_inputs[left_idx].row_exact(plane, y)?;
+                            let row8 = extra_inputs[left_idx].row(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(row8[i] as i64, right[i], bounds))
                                     .collect(),
                             )
                         } else {
-                            let row16 = extra_inputs[left_idx].row16_exact(plane, y)?;
+                            let row16 = extra_inputs[left_idx].row16(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(row16[i] as i64, right[i], bounds))
@@ -227,14 +227,14 @@ impl SampleTransformToken {
                     }
                     (StackItem::ImageItem(left_idx), StackItem::Constant(right)) => {
                         if extra_inputs[left_idx].depth == 8 {
-                            let row8 = extra_inputs[left_idx].row_exact(plane, y)?;
+                            let row8 = extra_inputs[left_idx].row(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(row8[i] as i64, right, bounds))
                                     .collect(),
                             )
                         } else {
-                            let row16 = extra_inputs[left_idx].row16_exact(plane, y)?;
+                            let row16 = extra_inputs[left_idx].row16(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(row16[i] as i64, right, bounds))
@@ -244,8 +244,8 @@ impl SampleTransformToken {
                     }
                     (StackItem::ImageItem(left_idx), StackItem::ImageItem(right_idx)) => {
                         if extra_inputs[left_idx].depth == 8 && extra_inputs[right_idx].depth == 8 {
-                            let left8 = extra_inputs[left_idx].row_exact(plane, y)?;
-                            let right8 = extra_inputs[right_idx].row_exact(plane, y)?;
+                            let left8 = extra_inputs[left_idx].row(plane, y)?;
+                            let right8 = extra_inputs[right_idx].row(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left8[i] as i64, right8[i] as i64, bounds))
@@ -254,8 +254,8 @@ impl SampleTransformToken {
                         } else if extra_inputs[left_idx].depth == 8
                             && extra_inputs[right_idx].depth > 8
                         {
-                            let left8 = extra_inputs[left_idx].row_exact(plane, y)?;
-                            let right16 = extra_inputs[right_idx].row16_exact(plane, y)?;
+                            let left8 = extra_inputs[left_idx].row(plane, y)?;
+                            let right16 = extra_inputs[right_idx].row16(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left8[i] as i64, right16[i] as i64, bounds))
@@ -264,16 +264,16 @@ impl SampleTransformToken {
                         } else if extra_inputs[left_idx].depth > 8
                             && extra_inputs[right_idx].depth == 8
                         {
-                            let left16 = extra_inputs[left_idx].row16_exact(plane, y)?;
-                            let right8 = extra_inputs[right_idx].row_exact(plane, y)?;
+                            let left16 = extra_inputs[left_idx].row16(plane, y)?;
+                            let right8 = extra_inputs[right_idx].row(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left16[i] as i64, right8[i] as i64, bounds))
                                     .collect(),
                             )
                         } else {
-                            let left16 = extra_inputs[left_idx].row16_exact(plane, y)?;
-                            let right16 = extra_inputs[right_idx].row16_exact(plane, y)?;
+                            let left16 = extra_inputs[left_idx].row16(plane, y)?;
+                            let right16 = extra_inputs[right_idx].row16(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left16[i] as i64, right16[i] as i64, bounds))
@@ -360,13 +360,13 @@ impl SampleTransform {
             match result {
                 StackItem::Values(values) => {
                     if output.depth == 8 {
-                        let output_row8 = output.row_exact_mut(plane, y)?;
+                        let output_row8 = output.row_mut(plane, y)?;
                         for x in 0..width {
                             let v = values[x].clamp(output_min as i64, output_max as i64);
                             output_row8[x] = v as u8;
                         }
                     } else {
-                        let output_row16 = output.row16_exact_mut(plane, y)?;
+                        let output_row16 = output.row16_mut(plane, y)?;
                         for x in 0..width {
                             let v = values[x].clamp(output_min as i64, output_max as i64);
                             output_row16[x] = v as u16;
@@ -375,13 +375,13 @@ impl SampleTransform {
                 }
                 StackItem::Constant(c) => {
                     if output.depth == 8 {
-                        let output_row8 = output.row_exact_mut(plane, y)?;
+                        let output_row8 = output.row_mut(plane, y)?;
                         let c8 = c.clamp(output_min as i64, output_max as i64) as u8;
                         for v in output_row8.iter_mut() {
                             *v = c8;
                         }
                     } else {
-                        let output_row16 = output.row16_exact_mut(plane, y)?;
+                        let output_row16 = output.row16_mut(plane, y)?;
                         let c16 = c.clamp(output_min as i64, output_max as i64) as u16;
                         for v in output_row16.iter_mut() {
                             *v = c16;
@@ -392,29 +392,29 @@ impl SampleTransform {
                     if output.depth == extra_inputs[item_idx].depth {
                         if output.depth == 8 {
                             output
-                                .row_exact_mut(plane, y)?
-                                .copy_from_slice(extra_inputs[item_idx].row_exact(plane, y)?);
+                                .row_mut(plane, y)?
+                                .copy_from_slice(extra_inputs[item_idx].row(plane, y)?);
                         } else {
                             output
-                                .row16_exact_mut(plane, y)?
-                                .copy_from_slice(extra_inputs[item_idx].row16_exact(plane, y)?);
+                                .row16_mut(plane, y)?
+                                .copy_from_slice(extra_inputs[item_idx].row16(plane, y)?);
                         }
                     } else if output.depth == 8 && extra_inputs[item_idx].depth > 8 {
-                        let input_row16 = extra_inputs[item_idx].row16_exact(plane, y)?;
-                        let output_row8 = output.row_exact_mut(plane, y)?;
+                        let input_row16 = extra_inputs[item_idx].row16(plane, y)?;
+                        let output_row8 = output.row_mut(plane, y)?;
                         for x in 0..width {
                             output_row8[x] = input_row16[x].clamp(output_min, output_max) as u8;
                         }
                     } else if output.depth > 8 && extra_inputs[item_idx].depth == 8 {
-                        let input_row8 = extra_inputs[item_idx].row_exact(plane, y)?;
-                        let output_row16 = output.row16_exact_mut(plane, y)?;
+                        let input_row8 = extra_inputs[item_idx].row(plane, y)?;
+                        let output_row16 = output.row16_mut(plane, y)?;
                         for x in 0..width {
                             output_row16[x] = input_row8[x] as u16;
                         }
                     } else {
                         // Both are high bit depth.
-                        let input_row16 = extra_inputs[item_idx].row16_exact(plane, y)?;
-                        let output_row16 = output.row16_exact_mut(plane, y)?;
+                        let input_row16 = extra_inputs[item_idx].row16(plane, y)?;
+                        let output_row16 = output.row16_mut(plane, y)?;
                         for x in 0..width {
                             output_row16[x] = input_row16[x].clamp(output_min, output_max);
                         }
@@ -605,12 +605,14 @@ mod tests {
             });
             extra_inputs[i].allocate_planes(Category::Color)?;
             if input_depth == 8 {
-                extra_inputs[i]
-                    .row_exact_mut(Plane::Y, 0)?
-                    .copy_from_slice(&vec![input_image_values[i] as u8; width as usize]);
+                extra_inputs[i].row_mut(Plane::Y, 0)?.copy_from_slice(&vec![
+                    input_image_values[i]
+                        as u8;
+                    width as usize
+                ]);
             } else {
                 extra_inputs[i]
-                    .row16_exact_mut(Plane::Y, 0)?
+                    .row16_mut(Plane::Y, 0)?
                     .copy_from_slice(&vec![input_image_values[i]; width as usize]);
             }
         }
@@ -629,12 +631,12 @@ mod tests {
 
         if output_depth == 8 {
             assert_eq!(
-                output.row_exact(Plane::Y, 0)?.first(),
+                output.row(Plane::Y, 0)?.first(),
                 Some(&(expected_value as u8))
             );
         } else {
             assert_eq!(
-                output.row16_exact(Plane::Y, 0)?.first(),
+                output.row16(Plane::Y, 0)?.first(),
                 Some(&(expected_value as u16))
             );
         }
@@ -678,18 +680,10 @@ mod tests {
         };
         input_image.allocate_planes(Category::Color)?;
         input_image.allocate_planes(Category::Alpha)?;
-        input_image
-            .row_exact_mut(Plane::Y, 0)?
-            .copy_from_slice(&[10, 20]);
-        input_image
-            .row_exact_mut(Plane::U, 0)?
-            .copy_from_slice(&[30, 40]);
-        input_image
-            .row_exact_mut(Plane::V, 0)?
-            .copy_from_slice(&[50, 60]);
-        input_image
-            .row_exact_mut(Plane::A, 0)?
-            .copy_from_slice(&[1, 80]);
+        input_image.row_mut(Plane::Y, 0)?.copy_from_slice(&[10, 20]);
+        input_image.row_mut(Plane::U, 0)?.copy_from_slice(&[30, 40]);
+        input_image.row_mut(Plane::V, 0)?.copy_from_slice(&[50, 60]);
+        input_image.row_mut(Plane::A, 0)?.copy_from_slice(&[1, 80]);
         extra_inputs.push(input_image);
         let mut input_image = Image {
             width,
@@ -701,27 +695,19 @@ mod tests {
         };
         input_image.allocate_planes(Category::Color)?;
         input_image.allocate_planes(Category::Alpha)?;
-        input_image
-            .row_exact_mut(Plane::Y, 0)?
-            .copy_from_slice(&[1, 2]);
-        input_image
-            .row_exact_mut(Plane::U, 0)?
-            .copy_from_slice(&[3, 4]);
-        input_image
-            .row_exact_mut(Plane::V, 0)?
-            .copy_from_slice(&[5, 6]);
-        input_image
-            .row_exact_mut(Plane::A, 0)?
-            .copy_from_slice(&[7, 8]);
+        input_image.row_mut(Plane::Y, 0)?.copy_from_slice(&[1, 2]);
+        input_image.row_mut(Plane::U, 0)?.copy_from_slice(&[3, 4]);
+        input_image.row_mut(Plane::V, 0)?.copy_from_slice(&[5, 6]);
+        input_image.row_mut(Plane::A, 0)?.copy_from_slice(&[7, 8]);
         extra_inputs.push(input_image);
 
         sample_transform.apply(&extra_inputs, &mut output)?;
 
-        assert_eq!(output.row_exact(Plane::Y, 0), Ok::<&[u8], _>(&[21, 42]));
-        assert_eq!(output.row_exact(Plane::U, 0), Ok::<&[u8], _>(&[63, 84]));
-        assert_eq!(output.row_exact(Plane::V, 0), Ok::<&[u8], _>(&[105, 126]));
+        assert_eq!(output.row(Plane::Y, 0), Ok::<&[u8], _>(&[21, 42]));
+        assert_eq!(output.row(Plane::U, 0), Ok::<&[u8], _>(&[63, 84]));
+        assert_eq!(output.row(Plane::V, 0), Ok::<&[u8], _>(&[105, 126]));
         // Second value capped at 127 because of "bit_depth: 8" in SampleTransform.
-        assert_eq!(output.row_exact(Plane::A, 0), Ok::<&[u8], _>(&[9, 127]));
+        assert_eq!(output.row(Plane::A, 0), Ok::<&[u8], _>(&[9, 127]));
         Ok(())
     }
 
@@ -776,15 +762,15 @@ mod tests {
         sample_transform.apply(&extra_inputs, &mut output)?;
 
         if output_bit_depth == 8 {
-            assert_eq!(output.row_exact(Plane::Y, 0), Ok::<&[u8], _>(&[10, 20]));
-            assert_eq!(output.row_exact(Plane::U, 0), Ok::<&[u8], _>(&[30, 40]));
-            assert_eq!(output.row_exact(Plane::V, 0), Ok::<&[u8], _>(&[50, 60]));
-            assert_eq!(output.row_exact(Plane::A, 0), Ok::<&[u8], _>(&[1, 80]));
+            assert_eq!(output.row(Plane::Y, 0), Ok::<&[u8], _>(&[10, 20]));
+            assert_eq!(output.row(Plane::U, 0), Ok::<&[u8], _>(&[30, 40]));
+            assert_eq!(output.row(Plane::V, 0), Ok::<&[u8], _>(&[50, 60]));
+            assert_eq!(output.row(Plane::A, 0), Ok::<&[u8], _>(&[1, 80]));
         } else {
-            assert_eq!(output.row16_exact(Plane::Y, 0), Ok::<&[u16], _>(&[10, 20]));
-            assert_eq!(output.row16_exact(Plane::U, 0), Ok::<&[u16], _>(&[30, 40]));
-            assert_eq!(output.row16_exact(Plane::V, 0), Ok::<&[u16], _>(&[50, 60]));
-            assert_eq!(output.row16_exact(Plane::A, 0), Ok::<&[u16], _>(&[1, 80]));
+            assert_eq!(output.row16(Plane::Y, 0), Ok::<&[u16], _>(&[10, 20]));
+            assert_eq!(output.row16(Plane::U, 0), Ok::<&[u16], _>(&[30, 40]));
+            assert_eq!(output.row16(Plane::V, 0), Ok::<&[u16], _>(&[50, 60]));
+            assert_eq!(output.row16(Plane::A, 0), Ok::<&[u16], _>(&[1, 80]));
         }
         Ok(())
     }

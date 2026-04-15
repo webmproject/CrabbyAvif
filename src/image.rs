@@ -233,7 +233,7 @@ impl Image {
         })
     }
 
-    pub fn row_exact(&self, plane: Plane, row: u32) -> AvifResult<&[u8]> {
+    pub fn row(&self, plane: Plane, row: u32) -> AvifResult<&[u8]> {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let start = checked_mul!(row, plane_data.row_bytes)?;
         self.planes[plane.as_usize()]
@@ -241,7 +241,7 @@ impl Image {
             .slice(start, plane_data.width)
     }
 
-    pub fn row_exact_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u8]> {
+    pub fn row_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u8]> {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let start = checked_mul!(row, plane_data.row_bytes)?;
         self.planes[plane.as_usize()]
@@ -249,7 +249,7 @@ impl Image {
             .slice_mut(start, plane_data.width)
     }
 
-    pub fn row16_exact(&self, plane: Plane, row: u32) -> AvifResult<&[u16]> {
+    pub fn row16(&self, plane: Plane, row: u32) -> AvifResult<&[u16]> {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let start = checked_mul!(row, plane_data.row_bytes / 2)?;
         self.planes[plane.as_usize()]
@@ -257,7 +257,7 @@ impl Image {
             .slice16(start, plane_data.width)
     }
 
-    pub fn row16_exact_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u16]> {
+    pub fn row16_mut(&mut self, plane: Plane, row: u32) -> AvifResult<&mut [u16]> {
         let plane_data = self.plane_data(plane).ok_or(AvifError::NoContent)?;
         let start = checked_mul!(row, plane_data.row_bytes / 2)?;
         self.planes[plane.as_usize()]
@@ -289,13 +289,13 @@ impl Image {
                                 )
                             };
                             let ptr = if image.depth == 8 {
-                                let row = self.row_exact(plane, y)?;
+                                let row = self.row(plane, y)?;
                                 // SAFETY: rect is a valid rectangle that is guaranteed to be
                                 // within the image bounds. So this pointer is pointing to a valid
                                 // buffer.
                                 unsafe { row.as_ptr().add(x) as *mut u8 }
                             } else {
-                                let row = self.row16_exact(plane, y)?;
+                                let row = self.row16(plane, y)?;
                                 // SAFETY: rect is a valid rectangle that is guaranteed to be
                                 // within the image bounds. So this pointer is pointing to a valid
                                 // buffer.
@@ -422,8 +422,8 @@ impl Image {
             };
             if self.depth == 8 {
                 for y in 0..src_plane.height {
-                    let src_row = image.row_exact(plane, y)?;
-                    let dst_row = self.row_exact_mut(plane, y)?;
+                    let src_row = image.row(plane, y)?;
+                    let dst_row = self.row_mut(plane, y)?;
                     let dst_slice = &mut dst_row[0..src_row.len()];
                     dst_slice.copy_from_slice(src_row);
                     let dst_slice = &mut dst_row[src_row.len()..];
@@ -431,8 +431,8 @@ impl Image {
                 }
             } else {
                 for y in 0..src_plane.height {
-                    let src_row = image.row16_exact(plane, y)?;
-                    let dst_row = self.row16_exact_mut(plane, y)?;
+                    let src_row = image.row16(plane, y)?;
+                    let dst_row = self.row16_mut(plane, y)?;
                     let dst_slice = &mut dst_row[0..src_row.len()];
                     dst_slice.copy_from_slice(src_row);
                     let dst_slice = &mut dst_row[src_row.len()..];
@@ -467,14 +467,14 @@ impl Image {
             let opaque_value = self.max_channel();
             if self.depth == 8 {
                 for y in 0..plane_data.height {
-                    let row = self.row_exact(Plane::A, y).unwrap();
+                    let row = self.row(Plane::A, y).unwrap();
                     if !row.iter().all(|pixel| *pixel == opaque_value as u8) {
                         return false;
                     }
                 }
             } else {
                 for y in 0..plane_data.height {
-                    let row = self.row16_exact(Plane::A, y).unwrap();
+                    let row = self.row16(Plane::A, y).unwrap();
                     if !row.iter().all(|pixel| *pixel == opaque_value) {
                         return false;
                     }
@@ -488,14 +488,12 @@ impl Image {
         if let Some(plane_data) = self.plane_data(plane) {
             if self.depth == 8 {
                 for y in 0..plane_data.height {
-                    let row =
-                        &mut self.row_exact_mut(plane, y).unwrap()[..plane_data.width as usize];
+                    let row = &mut self.row_mut(plane, y).unwrap()[..plane_data.width as usize];
                     row.fill(value as u8);
                 }
             } else {
                 for y in 0..plane_data.height {
-                    let row =
-                        &mut self.row16_exact_mut(plane, y).unwrap()[..plane_data.width as usize];
+                    let row = &mut self.row16_mut(plane, y).unwrap()[..plane_data.width as usize];
                     row.fill(value);
                 }
             }

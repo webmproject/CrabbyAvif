@@ -412,17 +412,17 @@ impl Image {
             let dst_x_offset_end = checked_add!(dst_x_offset, src_width_to_copy)?;
             if self.depth == 8 {
                 for y in 0..src_height_to_copy {
-                    let src_row = tile.row_exact(plane, y)?;
+                    let src_row = tile.row(plane, y)?;
                     let src_slice = &src_row[0..src_width_to_copy];
-                    let dst_row = self.row_exact_mut(plane, checked_add!(dst_y_start, y)?)?;
+                    let dst_row = self.row_mut(plane, checked_add!(dst_y_start, y)?)?;
                     let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset_end];
                     dst_slice.copy_from_slice(src_slice);
                 }
             } else {
                 for y in 0..src_height_to_copy {
-                    let src_row = tile.row16_exact(plane, y)?;
+                    let src_row = tile.row16(plane, y)?;
                     let src_slice = &src_row[0..src_width_to_copy];
-                    let dst_row = self.row16_exact_mut(plane, checked_add!(dst_y_start, y)?)?;
+                    let dst_row = self.row16_mut(plane, checked_add!(dst_y_start, y)?)?;
                     let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset_end];
                     dst_slice.copy_from_slice(src_slice);
                 }
@@ -527,18 +527,18 @@ impl Image {
             let mut dst_y = dst_y_start;
             if self.depth == 8 {
                 for src_y in src_y_range {
-                    let src_row = tile.row_exact(plane, src_y)?;
+                    let src_row = tile.row(plane, src_y)?;
                     let src_slice = &src_row[src_x_range.clone()];
-                    let dst_row = self.row_exact_mut(plane, dst_y)?;
+                    let dst_row = self.row_mut(plane, dst_y)?;
                     let dst_slice = &mut dst_row[dst_x_range.clone()];
                     dst_slice.copy_from_slice(src_slice);
                     checked_incr!(dst_y, 1);
                 }
             } else {
                 for src_y in src_y_range {
-                    let src_row = tile.row16_exact(plane, src_y)?;
+                    let src_row = tile.row16(plane, src_y)?;
                     let src_slice = &src_row[src_x_range.clone()];
-                    let dst_row = self.row16_exact_mut(plane, dst_y)?;
+                    let dst_row = self.row16_mut(plane, dst_y)?;
                     let dst_slice = &mut dst_row[dst_x_range.clone()];
                     dst_slice.copy_from_slice(src_slice);
                     checked_incr!(dst_y, 1);

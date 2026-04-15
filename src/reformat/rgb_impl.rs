@@ -71,9 +71,9 @@ fn identity_yuv8_to_rgb8_full_range(
     let b_offset = rgb.format.b_offset();
     let channel_count = rgb.channel_count() as usize;
     for i in 0..image.height {
-        let y = image.row_exact(Plane::Y, i)?;
-        let u = image.row_exact(Plane::U, i)?;
-        let v = image.row_exact(Plane::V, i)?;
+        let y = image.row(Plane::Y, i)?;
+        let u = image.row(Plane::U, i)?;
+        let v = image.row(Plane::V, i)?;
         let rgb_pixels = rgb.row_mut(i)?;
         for j in 0..image.width as usize {
             rgb_pixels[(j * channel_count) + r_offset] = v[j];
@@ -98,9 +98,9 @@ fn identity_yuv16_to_rgb16_full_range(
     let b_offset = rgb.format.b_offset();
     let channel_count = rgb.channel_count() as usize;
     for i in 0..image.height {
-        let y = image.row16_exact(Plane::Y, i)?;
-        let u = image.row16_exact(Plane::U, i)?;
-        let v = image.row16_exact(Plane::V, i)?;
+        let y = image.row16(Plane::Y, i)?;
+        let u = image.row16(Plane::U, i)?;
+        let v = image.row16(Plane::V, i)?;
         let rgb_pixels = rgb.row16_mut(i)?;
         for j in 0..image.width as usize {
             rgb_pixels[(j * channel_count) + r_offset] = v[j];
@@ -158,11 +158,11 @@ fn yuv8_to_rgb8_color(
     let chroma_shift = image.yuv_format.chroma_shift_x();
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
-        let y_row = image.row_exact(Plane::Y, j)?;
-        let u_row = image.row_exact(Plane::U, uv_j)?;
+        let y_row = image.row(Plane::Y, j)?;
+        let u_row = image.row(Plane::U, uv_j)?;
         // If V plane is missing, then the format is NV12. In that case, set V
         // as U plane but starting at offset 1.
-        let v_row = image.row_exact(Plane::V, uv_j).unwrap_or(&u_row[1..]);
+        let v_row = image.row(Plane::V, uv_j).unwrap_or(&u_row[1..]);
         let dst = rgb.row_mut(j)?;
         for i in 0..image.width as usize {
             let uv_i = if cfg!(feature = "android_mediacodec") {
@@ -219,11 +219,11 @@ fn yuv16_to_rgb16_color(
     let chroma_shift = image.yuv_format.chroma_shift_x();
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
-        let y_row = image.row16_exact(Plane::Y, j).unwrap();
-        let u_row = image.row16_exact(Plane::U, uv_j).unwrap();
+        let y_row = image.row16(Plane::Y, j).unwrap();
+        let u_row = image.row16(Plane::U, uv_j).unwrap();
         // If V plane is missing, then the format is P010. In that case, set V
         // as U plane but starting at offset 1.
-        let v_row = image.row16_exact(Plane::V, uv_j).unwrap_or(&u_row[1..]);
+        let v_row = image.row16(Plane::V, uv_j).unwrap_or(&u_row[1..]);
         let dst = rgb.row16_mut(j)?;
         for i in 0..image.width as usize {
             let uv_i = if cfg!(feature = "android_mediacodec") {
@@ -276,11 +276,11 @@ fn yuv16_to_rgb8_color(
     let chroma_shift = image.yuv_format.chroma_shift_x();
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
-        let y_row = image.row16_exact(Plane::Y, j)?;
-        let u_row = image.row16_exact(Plane::U, uv_j)?;
+        let y_row = image.row16(Plane::Y, j)?;
+        let u_row = image.row16(Plane::U, uv_j)?;
         // If V plane is missing, then the format is P010. In that case, set V
         // as U plane but starting at offset 1.
-        let v_row = image.row16_exact(Plane::V, uv_j).unwrap_or(&u_row[1..]);
+        let v_row = image.row16(Plane::V, uv_j).unwrap_or(&u_row[1..]);
         let dst = rgb.row_mut(j)?;
         for i in 0..image.width as usize {
             let uv_i = if cfg!(feature = "android_mediacodec") {
@@ -336,13 +336,11 @@ fn yuv8_to_rgb16_color(
     let chroma_shift = image.yuv_format.chroma_shift_x();
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
-        let y_row = image.row_exact(Plane::Y, j).unwrap();
-        let u_row = image.row_exact(Plane::U, uv_j).unwrap();
+        let y_row = image.row(Plane::Y, j).unwrap();
+        let u_row = image.row(Plane::U, uv_j).unwrap();
         // If V plane is missing, then the format is NV12. In that case, set V
         // as U plane but starting at offset 1.
-        let v_row = image
-            .row_exact(Plane::V, uv_j)
-            .unwrap_or_else(|_| &u_row[1..]);
+        let v_row = image.row(Plane::V, uv_j).unwrap_or_else(|_| &u_row[1..]);
         let dst = rgb.row16_mut(j)?;
         for i in 0..image.width as usize {
             let uv_i = if cfg!(feature = "android_mediacodec") {
@@ -388,7 +386,7 @@ fn yuv8_to_rgb8_monochrome(
     let rgb_channel_count = rgb.channel_count() as usize;
     let rgb_565 = rgb.format == rgb::Format::Rgb565;
     for j in 0..image.height {
-        let y_row = image.row_exact(Plane::Y, j)?;
+        let y_row = image.row(Plane::Y, j)?;
         let dst = rgb.row_mut(j)?;
         for i in 0..image.width as usize {
             let y = table_y[y_row[i] as usize];
@@ -425,7 +423,7 @@ fn yuv16_to_rgb16_monochrome(
     let b_offset = rgb.format.b_offset();
     let rgb_channel_count = rgb.channel_count() as usize;
     for j in 0..image.height {
-        let y_row = image.row16_exact(Plane::Y, j)?;
+        let y_row = image.row16(Plane::Y, j)?;
         let dst = rgb.row16_mut(j)?;
         for i in 0..image.width as usize {
             let y = table_y[min(y_row[i], yuv_max_channel) as usize];
@@ -454,7 +452,7 @@ fn yuv16_to_rgb8_monochrome(
     let rgb_channel_count = rgb.channel_count() as usize;
     let rgb_565 = rgb.format == rgb::Format::Rgb565;
     for j in 0..image.height {
-        let y_row = image.row16_exact(Plane::Y, j)?;
+        let y_row = image.row16(Plane::Y, j)?;
         let dst = rgb.row_mut(j)?;
         for i in 0..image.width as usize {
             let y = table_y[min(y_row[i], yuv_max_channel) as usize];
@@ -490,7 +488,7 @@ fn yuv8_to_rgb16_monochrome(
     let b_offset = rgb.format.b_offset();
     let rgb_channel_count = rgb.channel_count() as usize;
     for j in 0..image.height {
-        let y_row = image.row_exact(Plane::Y, j)?;
+        let y_row = image.row(Plane::Y, j)?;
         let dst = rgb.row16_mut(j)?;
         for i in 0..image.width as usize {
             let y = table_y[y_row[i] as usize];
@@ -666,10 +664,10 @@ fn yuv16_to_rgb_any(
     let image_width_minus_1 = (image.width - 1) as usize;
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
-        let y_row = image.row16_exact(Plane::Y, j)?;
-        let u_row = image.row16_exact(Plane::U, uv_j).ok();
-        let v_row = image.row16_exact(Plane::V, uv_j).ok();
-        let a_row = image.row16_exact(Plane::A, j).ok();
+        let y_row = image.row16(Plane::Y, j)?;
+        let u_row = image.row16(Plane::U, uv_j).ok();
+        let v_row = image.row16(Plane::V, uv_j).ok();
+        let a_row = image.row16(Plane::A, j).ok();
         let uv_adj_j = if j == 0
             || (j == image.height - 1 && (j % 2) != 0)
             || image.yuv_format == PixelFormat::Yuv422
@@ -680,8 +678,8 @@ fn yuv16_to_rgb_any(
         } else {
             uv_j - 1
         };
-        let u_adj_row = image.row16_exact(Plane::U, uv_adj_j).ok();
-        let v_adj_row = image.row16_exact(Plane::V, uv_adj_j).ok();
+        let u_adj_row = image.row16(Plane::U, uv_adj_j).ok();
+        let v_adj_row = image.row16(Plane::V, uv_adj_j).ok();
         let (dst, dst16) = if rgb.depth == 8 {
             (
                 rgb.row_mut(j).unwrap().as_mut_ptr(),
@@ -833,10 +831,10 @@ fn yuv8_to_rgb_any(
     let image_width_minus_1 = (image.width - 1) as usize;
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
-        let y_row = image.row_exact(Plane::Y, j)?;
-        let u_row = image.row_exact(Plane::U, uv_j).ok();
-        let v_row = image.row_exact(Plane::V, uv_j).ok();
-        let a_row = image.row_exact(Plane::A, j).ok();
+        let y_row = image.row(Plane::Y, j)?;
+        let u_row = image.row(Plane::U, uv_j).ok();
+        let v_row = image.row(Plane::V, uv_j).ok();
+        let a_row = image.row(Plane::A, j).ok();
         let uv_adj_j = if j == 0
             || (j == image.height - 1 && (j % 2) != 0)
             || image.yuv_format == PixelFormat::Yuv422
@@ -847,8 +845,8 @@ fn yuv8_to_rgb_any(
         } else {
             uv_j - 1
         };
-        let u_adj_row = image.row_exact(Plane::U, uv_adj_j).ok();
-        let v_adj_row = image.row_exact(Plane::V, uv_adj_j).ok();
+        let u_adj_row = image.row(Plane::U, uv_adj_j).ok();
+        let v_adj_row = image.row(Plane::V, uv_adj_j).ok();
         let (dst, dst16) = if rgb.depth == 8 {
             (
                 rgb.row_mut(j).unwrap().as_mut_ptr(),
@@ -1025,10 +1023,10 @@ pub(crate) fn rgb_gray_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> Avi
             // TODO: b/410088660 - handle alpha multiply/unmultiply.
             let gray_pixel = to_unorm(bias_y, range_y, yuv_max_channel, gray_pixel);
             if image.depth == 8 {
-                let dst_y = image.row_exact_mut(Plane::Y, j)?;
+                let dst_y = image.row_mut(Plane::Y, j)?;
                 dst_y[i] = gray_pixel as u8;
             } else {
-                let dst_y = image.row16_exact_mut(Plane::Y, j)?;
+                let dst_y = image.row16_mut(Plane::Y, j)?;
                 dst_y[i] = gray_pixel;
             }
         }
@@ -1138,10 +1136,10 @@ fn rgb_to_yuv_420(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
         let (dst_y16, dst_y16_1, dst_u16, dst_v16, dst_y, dst_y_1, dst_u, dst_v) =
             if image.depth > 8 {
                 (
-                    image.row16_exact_mut(Plane::Y, j).unwrap().as_mut_ptr(),
-                    image.row16_exact_mut(Plane::Y, j + 1).unwrap().as_mut_ptr(),
-                    image.row16_exact_mut(Plane::U, uv_j).unwrap().as_mut_ptr(),
-                    image.row16_exact_mut(Plane::V, uv_j).unwrap().as_mut_ptr(),
+                    image.row16_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                    image.row16_mut(Plane::Y, j + 1).unwrap().as_mut_ptr(),
+                    image.row16_mut(Plane::U, uv_j).unwrap().as_mut_ptr(),
+                    image.row16_mut(Plane::V, uv_j).unwrap().as_mut_ptr(),
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -1153,10 +1151,10 @@ fn rgb_to_yuv_420(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
-                    image.row_exact_mut(Plane::Y, j).unwrap().as_mut_ptr(),
-                    image.row_exact_mut(Plane::Y, j + 1).unwrap().as_mut_ptr(),
-                    image.row_exact_mut(Plane::U, uv_j).unwrap().as_mut_ptr(),
-                    image.row_exact_mut(Plane::V, uv_j).unwrap().as_mut_ptr(),
+                    image.row_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                    image.row_mut(Plane::Y, j + 1).unwrap().as_mut_ptr(),
+                    image.row_mut(Plane::U, uv_j).unwrap().as_mut_ptr(),
+                    image.row_mut(Plane::V, uv_j).unwrap().as_mut_ptr(),
                 )
             };
         let (src16, src16_1, src, src_1) = if rgb.depth > 8 {
@@ -1315,9 +1313,9 @@ fn rgb_to_yuv_420(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
         let uv_j = j >> 1;
         let (dst_y16, dst_u16, dst_v16, dst_y, dst_u, dst_v) = if image.depth > 8 {
             (
-                image.row16_exact_mut(Plane::Y, j).unwrap().as_mut_ptr(),
-                image.row16_exact_mut(Plane::U, uv_j).unwrap().as_mut_ptr(),
-                image.row16_exact_mut(Plane::V, uv_j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::U, uv_j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::V, uv_j).unwrap().as_mut_ptr(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -1327,9 +1325,9 @@ fn rgb_to_yuv_420(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                image.row_exact_mut(Plane::Y, j).unwrap().as_mut_ptr(),
-                image.row_exact_mut(Plane::U, uv_j).unwrap().as_mut_ptr(),
-                image.row_exact_mut(Plane::V, uv_j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::U, uv_j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::V, uv_j).unwrap().as_mut_ptr(),
             )
         };
         let (src16, src) = if rgb.depth > 8 {
@@ -1429,9 +1427,9 @@ fn rgb_to_yuv_422(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
         };
         let (dst_y16, dst_u16, dst_v16, dst_y, dst_u, dst_v) = if image.depth > 8 {
             (
-                image.row16_exact_mut(Plane::Y, j).unwrap().as_mut_ptr(),
-                image.row16_exact_mut(Plane::U, j).unwrap().as_mut_ptr(),
-                image.row16_exact_mut(Plane::V, j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::U, j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::V, j).unwrap().as_mut_ptr(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -1441,9 +1439,9 @@ fn rgb_to_yuv_422(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                image.row_exact_mut(Plane::Y, j).unwrap().as_mut_ptr(),
-                image.row_exact_mut(Plane::U, j).unwrap().as_mut_ptr(),
-                image.row_exact_mut(Plane::V, j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::U, j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::V, j).unwrap().as_mut_ptr(),
             )
         };
         for i in (0..width - 1).step_by(2) {
@@ -1555,9 +1553,9 @@ fn rgb_to_yuv_444(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
         };
         let (dst_y16, dst_u16, dst_v16, dst_y, dst_u, dst_v) = if image.depth > 8 {
             (
-                image.row16_exact_mut(Plane::Y, j).unwrap().as_mut_ptr(),
-                image.row16_exact_mut(Plane::U, j).unwrap().as_mut_ptr(),
-                image.row16_exact_mut(Plane::V, j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::U, j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::V, j).unwrap().as_mut_ptr(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -1567,9 +1565,9 @@ fn rgb_to_yuv_444(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                image.row_exact_mut(Plane::Y, j).unwrap().as_mut_ptr(),
-                image.row_exact_mut(Plane::U, j).unwrap().as_mut_ptr(),
-                image.row_exact_mut(Plane::V, j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::U, j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::V, j).unwrap().as_mut_ptr(),
             )
         };
         for i in 0..width {
@@ -1622,13 +1620,13 @@ fn rgb_to_yuv_400(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> 
         };
         let (dst_y16, dst_y) = if image.depth > 8 {
             (
-                image.row16_exact_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                image.row16_mut(Plane::Y, j).unwrap().as_mut_ptr(),
                 std::ptr::null_mut(),
             )
         } else {
             (
                 std::ptr::null_mut(),
-                image.row_exact_mut(Plane::Y, j).unwrap().as_mut_ptr(),
+                image.row_mut(Plane::Y, j).unwrap().as_mut_ptr(),
             )
         };
         for i in 0..width {
@@ -1711,7 +1709,7 @@ mod tests {
                 for y in 0..yuv.height(plane) {
                     assert_eq!(yuv.width(plane), samples[y].len());
                     for x in 0..yuv.width(plane) {
-                        yuv.row_exact_mut(plane, y as u32).unwrap()[x] = samples[y][x];
+                        yuv.row_mut(plane, y as u32).unwrap()[x] = samples[y][x];
                     }
                 }
             }
