@@ -26,13 +26,13 @@ jobs:
       CXX: clang++
 
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - uses: ./.github/actions/setup-deps
 
       - name: Cache external libjxl dependency
         id: cache-ext-libjxl
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: sys/libjxl-sys
           key: ${{ runner.os }}-${{ hashFiles('sys/libjxl-sys/build.rs', 'sys/libjxl-sys/Cargo.toml', 'sys/libjxl-sys/libjxl.cmd', 'sys/libjxl-sys/wrapper.h') }}
