@@ -370,7 +370,7 @@ impl Decoder for Libjxl {
         image: &mut Image,
         category: Category,
         item: Option<&Item>,
-        #[cfg(feature = "android_mediacodec")] _signal_eos: bool,
+        _signal_eos: bool,
     ) -> AvifResult<()> {
         // TODO: b/456440247 - Support tracks
         let item = if let Some(item) = item { item } else { return AvifError::not_implemented() };

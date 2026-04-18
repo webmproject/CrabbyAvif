@@ -358,6 +358,7 @@ impl Decoder for Dav1d {
         image: &mut Image,
         category: Category,
         _item: Option<&Item>,
+        _signal_eos: bool,
     ) -> AvifResult<()> {
         if self.context.is_none() {
             self.initialize_impl(true)?;

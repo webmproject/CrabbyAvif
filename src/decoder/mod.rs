@@ -1692,15 +1692,16 @@ impl Decoder {
         decoding_item: DecodingItem,
         tile_index: usize,
     ) -> AvifResult<()> {
-        #[cfg(feature = "android_mediacodec")]
-        let signal_eos = if self.image.image_sequence_track_present {
-            // Never signal EOS for sequences as nth_image can be used to get any frame.
-            false
-        } else {
-            // For non sequence images, signal EOS only if this is the last tile in the
-            // category.
-            tile_index == self.tiles[decoding_item.usize()].len() - 1
-        };
+        let signal_eos =
+            if !cfg!(feature = "android_mediacodec") || self.image.image_sequence_track_present {
+                // signal_eos is used only by Android MediaCodec. Never signal EOS for sequences as
+                // nth_image can be used to get any frame.
+                false
+            } else {
+                // For non sequence images, signal EOS only if this is the last tile in the
+                // category.
+                tile_index == self.tiles[decoding_item.usize()].len() - 1
+            };
         // Split the tiles array into two mutable arrays so that we can validate the
         // properties of tiles with index > 0 with that of the first tile.
         let (tiles_slice1, tiles_slice2) =
@@ -1729,7 +1730,6 @@ impl Decoder {
             &mut tile.image,
             category,
             item,
-            #[cfg(feature = "android_mediacodec")]
             signal_eos,
         );
         if next_image_result.is_err() {

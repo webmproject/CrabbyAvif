@@ -565,6 +565,7 @@ impl Decoder for Avm {
         image: &mut Image,
         category: Category,
         _item: Option<&Item>,
+        _signal_eos: bool,
     ) -> AvifResult<()> {
         if self.context.is_none() {
             // # Safety: Calling a C function.

@@ -69,7 +69,7 @@ pub(crate) trait Decoder {
         image: &mut Image,
         category: Category,
         item: Option<&Item>,
-        #[cfg(feature = "android_mediacodec")] signal_eos: bool,
+        signal_eos: bool,
     ) -> AvifResult<()>;
     // Decode a list of input images and outputs them into the |grid_image_helper|.
     fn get_next_image_grid(
