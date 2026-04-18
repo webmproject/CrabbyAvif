@@ -173,10 +173,8 @@ impl Y4MReader {
                 "F" => {
                     // TODO: Handle frame rate.
                 }
-                "X" => {
-                    if part[1..] == *"COLORRANGE=FULL" {
-                        y4m.range = YuvRange::Full;
-                    }
+                "X" if part[1..] == *"COLORRANGE=FULL" => {
+                    y4m.range = YuvRange::Full;
                 }
                 _ => {}
             }
