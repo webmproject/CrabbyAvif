@@ -945,7 +945,14 @@ fn avm_enc_dec_test() -> Result<(), AvifError> {
         category: Category::Color,
         android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat::default(),
     })?;
-    decoder.get_next_image(output_sample, 0xff, &mut decoded, Category::Color, None)?;
+    decoder.get_next_image(
+        output_sample,
+        0xff,
+        &mut decoded,
+        Category::Color,
+        None,
+        false,
+    )?;
 
     assert!(are_images_equal(&image, &decoded)?);
     Ok(())
