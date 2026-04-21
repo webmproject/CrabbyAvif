@@ -897,6 +897,7 @@ fn libjxl_enc_dec_test() -> Result<(), AvifError> {
         &mut decoded,
         Category::Color,
         Some(&item),
+        false,
     )?;
 
     assert!(are_images_equal(&image, &decoded)?);
