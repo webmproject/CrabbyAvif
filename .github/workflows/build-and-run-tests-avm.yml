@@ -36,8 +36,10 @@ jobs:
         id: cache-ext-avm
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: sys/avm-sys
-          key: ${{ runner.os }}-${{ hashFiles('.github/workflows/build-and-run-tests-avm.yml', 'sys/avm-sys/build.rs', 'sys/avm-sys/Cargo.toml', 'sys/avm-sys/avm.cmd', 'sys/avm-sys/wrapper.h') }}
+          path: |
+            sys/avm-sys/avm/avm
+            sys/avm-sys/avm/build.CrabbyAvif
+          key: cache-ext-avm-${{ runner.os }}-${{ hashFiles('.github/workflows/build-and-run-tests-avm.yml', 'sys/avm-sys/**') }}
       - uses: jwlawson/actions-setup-cmake@0d6a7d60b009d01c9e7523be22153ff8f19460d3 # v2.2.0
         if: steps.cache-ext-avm.outputs.cache-hit != 'true'
       - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2

@@ -34,8 +34,10 @@ jobs:
         id: cache-ext-libjxl
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: sys/libjxl-sys
-          key: ${{ runner.os }}-${{ hashFiles('sys/libjxl-sys/build.rs', 'sys/libjxl-sys/Cargo.toml', 'sys/libjxl-sys/libjxl.cmd', 'sys/libjxl-sys/wrapper.h') }}
+          path: |
+            sys/libjxl-sys/libjxl/build/lib
+            sys/libjxl-sys/libjxl/build/third_party
+          key: cache-ext-libjxl-${{ runner.os }}-${{ hashFiles('.github/workflows/build-and-run-tests-libjxl.yml', 'sys/libjxl-sys/**') }}
 
       - name: Download and build libjxl
         if: steps.cache-ext-libjxl.outputs.cache-hit != 'true'
