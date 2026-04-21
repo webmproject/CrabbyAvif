@@ -30,7 +30,7 @@ runs:
         sys/libsharpyuv-sys/libwebp/build
         external/googletest
         sys/libpng-sys
-      key: cache-ext-${{ runner.os }}-${{ hashFiles('.github/actions/setup-deps/action.yml', 'sys/dav1d-sys/**', 'sys/libyuv-sys/**', 'sys/aom-sys/**', 'sys/libsharpyuv-sys/**', 'external/googletest.cmd', 'sys/libpng-sys/**') }}
+      key: cache-ext-${{ github.job }}-${{ runner.os }}-${{ hashFiles('.github/actions/setup-deps/action.yml', 'sys/dav1d-sys/**', 'sys/libyuv-sys/**', 'sys/aom-sys/**', 'sys/libsharpyuv-sys/**', 'external/googletest.cmd', 'sys/libpng-sys/**') }}
 
   - name: Cache av1-avif testFiles
     id: cache-av1-avif-testfiles
