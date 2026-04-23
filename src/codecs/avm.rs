@@ -50,7 +50,7 @@ pub(crate) const AV2_BT709SDR: u32 = avm_color_description_AVM_COLOR_DESC_IDC_BT
 pub(crate) const AV2_BT2100PQ: u32 = avm_color_description_AVM_COLOR_DESC_IDC_BT2100PQ;
 pub(crate) const AV2_BT2100HLG: u32 = avm_color_description_AVM_COLOR_DESC_IDC_BT2100HLG;
 pub(crate) const AV2_SRGB: u32 = avm_color_description_AVM_COLOR_DESC_IDC_SRGB;
-pub(crate) const AV2_SRGBSYCC: u32 = avm_color_description_AVM_COLOR_DESC_IDC_SRGBSYCC;
+pub(crate) const AV2_SRGBSYCC: u32 = avm_color_description_AVM_COLOR_DESC_IDC_SYCC;
 
 #[derive(Default)]
 pub struct Avm {
@@ -84,16 +84,14 @@ fn avm_format(image: &Image, category: Category) -> AvifResult<avm_img_fmt_t> {
 }
 
 fn avm_seq_profile(image: &Image, category: Category) -> AvifResult<u32> {
-    if image.depth == 12 {
-        return Ok(2); // 12-bit is always profile 2.
-    }
+    // Based on AV2 spec Section A.3 Profiles.
     if category == Category::Alpha {
-        return Ok(0); // Alpha is monochrome, so it is always profile 0.
+        return Ok(1); // Main_420_10_IP1
     }
     match image.yuv_format {
-        PixelFormat::Yuv420 | PixelFormat::Yuv400 => Ok(0),
-        PixelFormat::Yuv422 => Ok(2),
-        PixelFormat::Yuv444 => Ok(1),
+        PixelFormat::Yuv420 | PixelFormat::Yuv400 => Ok(1), // Main_420_10_IP1
+        PixelFormat::Yuv422 => Ok(3),                       // Main_422_10_IP1
+        PixelFormat::Yuv444 => Ok(4),                       // Main_444_10_IP1
         _ => AvifError::invalid_argument(),
     }
 }
@@ -598,10 +596,6 @@ impl Decoder for Avm {
                 avm_dec_control_id_AV2D_SET_OUTPUT_ALL_LAYERS,
                 if self.decoder_config.unwrap_ref().all_layers { 1 } else { 0 },
             )?;
-            self.codec_control(
-                avm_dec_control_id_AV2D_SET_OPERATING_POINT,
-                self.decoder_config.unwrap_ref().operating_point as i32,
-            )?;
 
             self.decoder_iter = std::ptr::null();
         }
@@ -667,9 +661,9 @@ impl Decoder for Avm {
                 PixelFormat::Yuv400
             } else {
                 match avm_image.fmt {
-                    avm_img_fmt_AVM_IMG_FMT_I420
-                    | avm_img_fmt_AVM_IMG_FMT_AVMI420
-                    | avm_img_fmt_AVM_IMG_FMT_I42016 => PixelFormat::Yuv420,
+                    avm_img_fmt_AVM_IMG_FMT_I420 | avm_img_fmt_AVM_IMG_FMT_I42016 => {
+                        PixelFormat::Yuv420
+                    }
                     avm_img_fmt_AVM_IMG_FMT_I422 | avm_img_fmt_AVM_IMG_FMT_I42216 => {
                         PixelFormat::Yuv422
                     }
