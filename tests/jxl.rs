@@ -90,7 +90,7 @@ fn encode_decode(width: u32, height: u32, depth: u8, alpha: Alpha) -> AvifResult
 
     assert!(decoder.next_image().is_ok());
     let image = decoder.image().unwrap();
-    let psnr = psnr(image, &image)?;
+    let psnr = psnr(image, image)?;
     assert!(psnr >= 50.0);
     Ok(())
 }
