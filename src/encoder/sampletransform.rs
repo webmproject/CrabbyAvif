@@ -391,7 +391,6 @@ impl Encoder {
             };
         let mut decoded_base_image = original.shallow_clone();
         decoded_base_image.depth = num_bits;
-        decoded_base_image.allocate_planes(category)?;
         let is_single_image = self.duration_in_timescales.len() < 2;
         let is_lossless = self.settings.mutable.quality(item.category) == 100.0;
         let codec_config = encoder_codec.get_codec_config(
@@ -422,6 +421,9 @@ impl Encoder {
             None,
             false,
         )?;
+        // Copy the buffer allocated by dav1d and only then drop the dav1d instance.
+        let decoded_base_image = decoded_base_image.try_deep_clone()?;
+        std::mem::drop(decoder_codec);
         Ok(decoded_base_image)
     }
 
