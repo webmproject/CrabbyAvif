@@ -71,7 +71,7 @@ pub type GenericIO = Box<dyn IO>;
 pub(crate) type Codec = Box<dyn crate::codecs::Decoder>;
 
 impl CodecChoice {
-    fn get_decoder_codec(&self, compression_format: CompressionFormat) -> Option<Codec> {
+    pub(crate) fn get_decoder_codec(&self, compression_format: CompressionFormat) -> Option<Codec> {
         match compression_format {
             CompressionFormat::Avif => {
                 if matches!(self, CodecChoice::Aom) {
@@ -2088,7 +2088,7 @@ impl Decoder {
 
             self.tile_info[DecodingItem::COLOR.usize()]
                 .sample_transform
-                .allocate_planes_and_apply(&self.extra_inputs, &mut self.image)?;
+                .allocate_planes_and_apply(&self.extra_inputs.each_ref(), &mut self.image)?;
         }
 
         self.image_index = next_image_index;
