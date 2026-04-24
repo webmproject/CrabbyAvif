@@ -894,9 +894,11 @@ impl Avm {
 #[test]
 fn avm_enc_dec_test() -> Result<(), AvifError> {
     let mut encoder = Avm::default();
-    let mut config = EncoderConfig::default();
-    config.is_single_image = true;
-    config.quality = 100.0;
+    let config = EncoderConfig {
+        is_single_image: true,
+        quality: 100.0,
+        ..Default::default()
+    };
 
     let image = {
         let mut image = Image {
