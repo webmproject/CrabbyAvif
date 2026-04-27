@@ -39,15 +39,6 @@ pub struct Dav1d {
     config: Option<DecoderConfig>,
 }
 
-/// # Safety
-/// C-callback function that does not perform any unsafe operations.
-unsafe extern "C" fn avif_dav1d_free_callback(
-    _buf: *const u8,
-    _cookie: *mut ::std::os::raw::c_void,
-) {
-    // Do nothing. The buffers are owned by the decoder.
-}
-
 // See https://code.videolan.org/videolan/dav1d/-/blob/9849ede1304da1443cfb4a86f197765081034205/include/dav1d/common.h#L55-59
 const DAV1D_EAGAIN: i32 = if libc::EPERM > 0 { -libc::EAGAIN } else { libc::EAGAIN };
 
@@ -115,19 +106,18 @@ impl Dav1dDataWrapper {
     }
 
     fn wrap(&mut self, payload: &[u8]) -> AvifResult<()> {
-        // # Safety: Calling a C function with valid parameters.
-        match unsafe {
-            dav1d_data_wrap(
-                self.mut_ptr(),
-                payload.as_ptr(),
-                payload.len(),
-                Some(avif_dav1d_free_callback),
-                /*cookie=*/ std::ptr::null_mut(),
-            )
-        } {
-            0 => Ok(()),
-            res => AvifError::unknown_error(format!("dav1d_data_wrap returned {res}")),
+        let data = unsafe { dav1d_data_create((&mut self.data) as *mut _, payload.len() as _) };
+        if data.is_null() {
+            return Err(AvifError::UnknownError(
+                "dav1d_data_create returned nullptr".into(),
+            ));
         }
+        // # Safety: data was allocated in the successful call to dav1d_data_create and is
+        // guaranteed to be large enough to hold payload.len() bytes.
+        unsafe {
+            std::ptr::copy_nonoverlapping(payload.as_ptr(), data, payload.len());
+        }
+        Ok(())
     }
 }
 
