@@ -384,11 +384,9 @@ impl Encoder {
             .settings
             .codec_choice
             .get_item_type_and_encoder_codec()?;
-        let mut decoder_codec =
-            match CodecChoice::Auto.get_decoder_codec(decoder::CompressionFormat::Avif) {
-                Some(codec) => codec,
-                None => return AvifError::no_codec_available(),
-            };
+        let mut decoder_codec = CodecChoice::Auto
+            .get_decoder_codec(decoder::CompressionFormat::Avif)
+            .ok_or(AvifError::NoCodecAvailable)?;
         let mut decoded_base_image = original.shallow_clone();
         decoded_base_image.depth = num_bits;
         let is_single_image = self.duration_in_timescales.len() < 2;
@@ -423,6 +421,8 @@ impl Encoder {
         )?;
         // Copy the buffer allocated by dav1d and only then drop the dav1d instance.
         let decoded_base_image = decoded_base_image.try_deep_clone()?;
+        // Make sure that the decoder_codec and its internal buffer are released
+        // after the clone call above.
         std::mem::drop(decoder_codec);
         Ok(decoded_base_image)
     }
