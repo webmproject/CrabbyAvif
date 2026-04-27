@@ -841,6 +841,61 @@ TEST(DecoderTest, SetCustomIO) {
   }
 }
 
+struct NonPersistentIO {
+  std::vector<uint8_t> data;
+  avifROData ro_data;
+};
+
+// Every read call will explicitly invalidate the pointer returned by the
+// previous read call to ensure non-persistent IO.
+avifResult non_persistent_read(struct avifIO* io, uint32_t flags,
+                               uint64_t offset, size_t size, avifROData* out) {
+  NonPersistentIO* io_data = (NonPersistentIO*)io->data;
+  if (flags != 0 || offset > io_data->ro_data.size) {
+    return AVIF_RESULT_IO_ERROR;
+  }
+  uint64_t available_size = io_data->ro_data.size - offset;
+  if (size > available_size) {
+    size = static_cast<size_t>(available_size);
+  }
+  // Clear the existing vector.
+  std::vector<uint8_t>().swap(io_data->data);
+  // Copy new data into the vector.
+  io_data->data.reserve(size);
+  io_data->data.assign(io_data->ro_data.data + offset,
+                       io_data->ro_data.data + offset + size);
+  // Set the output.
+  out->data = io_data->data.data();
+  out->size = size;
+  return AVIF_RESULT_OK;
+}
+
+TEST(DecoderTest, NonPersistentIO_Bug506387278) {
+#ifdef __ANDROID__
+  // Android MediaCodec does not support decoding this constructed poc file.
+  GTEST_SKIP() << "Unsupported test on Android.";
+#endif
+  auto data = testutil::read_file(GetFilename("poc_b_506387278.avif").c_str());
+  NonPersistentIO io_data;
+  io_data.ro_data = {.data = data.data(), .size = data.size()};
+  avifIO io = {.destroy = nullptr,
+               .read = non_persistent_read,
+               .sizeHint = data.size(),
+               .persistent = false,
+               .data = static_cast<void*>(&io_data)};
+  // |io| must outlive the decoder.
+  DecoderPtr decoder(avifDecoderCreate());
+  ASSERT_NE(decoder, nullptr);
+  avifDecoderSetIO(decoder.get(), &io);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
+  EXPECT_EQ(decoder->imageSequenceTrackPresent, AVIF_TRUE);
+  EXPECT_EQ(decoder->imageCount, 2);
+  for (int i = 0; i < 2; ++i) {
+    EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  }
+}
+
 TEST(DecoderTest, IOMemoryReader) {
   auto data =
       testutil::read_file(GetFilename("colors-animated-8bpc.avif").c_str());
