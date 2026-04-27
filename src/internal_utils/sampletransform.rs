@@ -124,7 +124,7 @@ impl SampleTransformToken {
     pub(crate) fn apply(
         &self,
         stack: &mut Vec<StackItem>,
-        extra_inputs: &[Image],
+        extra_inputs: &[&Image],
         plane: Plane,
         y: u32,
         width: usize,
@@ -290,7 +290,7 @@ impl SampleTransformToken {
 }
 
 impl SampleTransform {
-    pub(crate) fn apply(&self, extra_inputs: &[Image], output: &mut Image) -> AvifResult<()> {
+    pub(crate) fn apply(&self, extra_inputs: &[&Image], output: &mut Image) -> AvifResult<()> {
         let max_stack_size = self.tokens.len().div_ceil(2);
         let mut stack: Vec<StackItem> = create_vec_exact(max_stack_size)?;
         for plane in if output.has_alpha() { ALL_PLANES.as_slice() } else { YUV_PLANES.as_slice() }
@@ -304,7 +304,7 @@ impl SampleTransform {
     pub(crate) fn apply_to_planes(
         &self,
         category: Category,
-        extra_inputs: &[Image],
+        extra_inputs: &[&Image],
         output: &mut Image,
     ) -> AvifResult<()> {
         let max_stack_size = self.tokens.len().div_ceil(2);
@@ -321,7 +321,7 @@ impl SampleTransform {
     fn apply_internal(
         &self,
         plane: Plane,
-        extra_inputs: &[Image],
+        extra_inputs: &[&Image],
         output: &mut Image,
         stack: &mut Vec<StackItem>,
     ) -> AvifResult<()> {
@@ -481,7 +481,7 @@ impl SampleTransform {
 
     pub(crate) fn allocate_planes_and_apply(
         &self,
-        extra_inputs: &[Image],
+        extra_inputs: &[&Image],
         output: &mut Image,
     ) -> AvifResult<()> {
         output.allocate_planes(Category::Color)?;
@@ -627,7 +627,7 @@ mod tests {
         };
         output.allocate_planes(Category::Color)?;
 
-        sample_transform.apply(&extra_inputs, &mut output)?;
+        sample_transform.apply(&extra_inputs.iter().collect::<Vec<&Image>>(), &mut output)?;
 
         if output_depth == 8 {
             assert_eq!(
@@ -701,7 +701,7 @@ mod tests {
         input_image.row_mut(Plane::A, 0)?.copy_from_slice(&[7, 8]);
         extra_inputs.push(input_image);
 
-        sample_transform.apply(&extra_inputs, &mut output)?;
+        sample_transform.apply(&extra_inputs.iter().collect::<Vec<&Image>>(), &mut output)?;
 
         assert_eq!(output.row(Plane::Y, 0), Ok::<&[u8], _>(&[21, 42]));
         assert_eq!(output.row(Plane::U, 0), Ok::<&[u8], _>(&[63, 84]));
@@ -759,7 +759,7 @@ mod tests {
         }
         extra_inputs.push(input_image);
 
-        sample_transform.apply(&extra_inputs, &mut output)?;
+        sample_transform.apply(&extra_inputs.iter().collect::<Vec<&Image>>(), &mut output)?;
 
         if output_bit_depth == 8 {
             assert_eq!(output.row(Plane::Y, 0), Ok::<&[u8], _>(&[10, 20]));

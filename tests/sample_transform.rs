@@ -26,10 +26,14 @@ use test_case::test_matrix;
 use utils::*;
 
 #[test_matrix(
-    [Recipe::BitDepthExtension8b8b, Recipe::BitDepthExtension12b4b]
+    [Recipe::BitDepthExtension8b8b, Recipe::BitDepthExtension12b4b, Recipe::BitDepthExtension12b8bOverlap4b]
 )]
 fn lossless_sample_transform_roundtrip(recipe: Recipe) -> AvifResult<()> {
     if !HAS_ENCODER {
+        return Ok(());
+    }
+    if recipe == Recipe::BitDepthExtension12b8bOverlap4b && !HAS_DECODER {
+        // This recipe decodes the primary image item at encoding.
         return Ok(());
     }
     let input_file = get_test_file("weld_16bit.png");
