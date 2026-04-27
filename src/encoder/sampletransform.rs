@@ -419,12 +419,9 @@ impl Encoder {
             None,
             false,
         )?;
-        // Copy the buffer allocated by dav1d and only then drop the dav1d instance.
-        let decoded_base_image = decoded_base_image.try_deep_clone()?;
-        // Make sure that the decoder_codec and its internal buffer are released
-        // after the clone call above.
-        std::mem::drop(decoder_codec);
-        Ok(decoded_base_image)
+        // Copy the buffer allocated by the underlying decoder_codec before
+        // it gets dropped.
+        decoded_base_image.try_deep_clone()
     }
 
     pub(crate) fn create_bit_depth_extension_12b8b_overlap4b_image(
