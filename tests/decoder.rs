@@ -205,6 +205,30 @@ fn animated_image_with_depth_and_metadata_source_set_to_primary_item() {
     assert!(decoder.next_image().is_err());
 }
 
+#[test]
+fn animated_image_seeking() {
+    let mut decoder = get_decoder("anim.avif");
+    let res = decoder.parse();
+    assert!(res.is_ok());
+    assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
+    let image = decoder.image().expect("image was none");
+    assert!(!image.alpha_present);
+    assert!(image.image_sequence_track_present);
+    assert_eq!(decoder.image_count(), 150);
+    assert_eq!(decoder.repetition_count(), RepetitionCount::Infinite);
+    if !HAS_DECODER {
+        return;
+    }
+    assert!(decoder.nth_image(150).is_err());
+
+    assert!(decoder.next_image().is_ok());
+    assert!(decoder.next_image().is_ok());
+
+    assert!(decoder.nth_image(0).is_ok());
+    let res = decoder.nth_image(1);
+    assert!(res.is_ok());
+}
+
 // From avifkeyframetest.cc
 #[test]
 fn keyframes() {
