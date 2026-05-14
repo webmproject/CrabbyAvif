@@ -857,6 +857,16 @@ impl Decoder for Avm {
     ) -> AvifResult<()> {
         AvifError::not_implemented() // TODO: b/437292541 - Implement
     }
+
+    fn get_last_image(
+        &mut self,
+        _payloads: &[Vec<u8>],
+        _spatial_id: u8,
+        _image: &mut Image,
+        _category: Category,
+    ) -> AvifResult<()> {
+        AvifError::not_implemented()
+    }
 }
 
 impl Drop for Avm {

@@ -274,6 +274,7 @@ TEST(DecoderTest, NthImage) {
   EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(decoder->imageCount, 5);
   EXPECT_EQ(avifDecoderNthImage(decoder.get(), 3), AVIF_RESULT_OK);
+  EXPECT_EQ(avifDecoderDecodedRowCount(decoder.get()), 150);
   EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
   EXPECT_NE(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
   EXPECT_EQ(avifDecoderNthImage(decoder.get(), 1), AVIF_RESULT_OK);
