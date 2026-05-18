@@ -121,6 +121,10 @@ impl Image {
     }
 
     fn scale_impl(&mut self, src: &Image, category: Category) -> AvifResult<()> {
+        if src.width < self.width || src.height < self.height {
+            // This function only supports scaling down.
+            return Err(AvifError::NotImplemented);
+        }
         if category != Category::Alpha
             && (self.yuv_format == PixelFormat::AndroidNv12
                 || self.yuv_format == PixelFormat::AndroidNv21)
