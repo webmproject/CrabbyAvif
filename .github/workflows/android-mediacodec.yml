@@ -71,14 +71,16 @@ jobs:
 
           # Build the tests with C API enabled.
           cmake -DCMAKE_TOOLCHAIN_FILE=${{ steps.setup-ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake -DANDROID_NDK=${{ steps.setup-ndk.outputs.ndk-path }} -DANDROID_ABI=x86_64 -DANDROID_PLATFORM=android-33 -DANDROID_STL=c++_static -S c_api_tests -B c_build_android
-          make -C c_build_android decoder_tests
+          make -C c_build_android decoder_tests sk_crabby_avif_codec_tests
 
-          # Push the test binary on to the emulator.
+          # Push the test binaries on to the emulator.
           adb push c_build_android/decoder_tests /data/local/tmp
+          adb push c_build_android/sk_crabby_avif_codec_tests /data/local/tmp
 
-          # Run the test (the test data has already been copied by dinghy when
+          # Run the tests (the test data has already been copied by dinghy when
           # running the rust tests).
           adb shell /data/local/tmp/decoder_tests /data/local/tmp/dinghy/crabby-avif/tests/data/
+          adb shell /data/local/tmp/sk_crabby_avif_codec_tests /data/local/tmp/dinghy/crabby-avif/tests/data/
 
         api-level: 34
         force-avd-creation: false
