@@ -35,6 +35,7 @@ pub struct avifDecoder {
     pub allowIncremental: avifBool,
     pub ignoreExif: avifBool,
     pub ignoreXMP: avifBool,
+    pub ignoreICC: avifBool,
     pub imageSizeLimit: u32,
     pub imageDimensionLimit: u32,
     pub imageCountLimit: u32,
@@ -80,6 +81,7 @@ impl Default for avifDecoder {
             allowProgressive: AVIF_FALSE,
             ignoreExif: AVIF_FALSE,
             ignoreXMP: AVIF_FALSE,
+            ignoreICC: AVIF_FALSE,
             imageSizeLimit: DEFAULT_IMAGE_SIZE_LIMIT,
             imageDimensionLimit: DEFAULT_IMAGE_DIMENSION_LIMIT,
             imageCountLimit: DEFAULT_IMAGE_COUNT_LIMIT,
@@ -216,6 +218,7 @@ impl From<&avifDecoder> for Settings {
             allow_incremental: decoder.allowIncremental == AVIF_TRUE,
             ignore_exif: decoder.ignoreExif == AVIF_TRUE,
             ignore_xmp: decoder.ignoreXMP == AVIF_TRUE,
+            ignore_icc: decoder.ignoreICC == AVIF_TRUE,
             image_content_to_decode: image_content_to_decode_flags,
             codec_choice: match decoder.codecChoice {
                 avifCodecChoice::Auto => CodecChoice::Auto,

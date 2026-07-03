@@ -408,22 +408,19 @@ fn decoder_parse_icc_exif_xmp() {
 
     decoder.settings.ignore_xmp = true;
     decoder.settings.ignore_exif = true;
+    decoder.settings.ignore_icc = true;
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
     let image = decoder.image().expect("image was none");
 
-    assert_eq!(image.icc.len(), 596);
-    assert_eq!(image.icc[0], 0);
-    assert_eq!(image.icc[1], 0);
-    assert_eq!(image.icc[2], 2);
-    assert_eq!(image.icc[3], 84);
-
     assert!(image.exif.is_empty());
     assert!(image.xmp.is_empty());
+    assert!(image.icc.is_empty());
 
     decoder.settings.ignore_xmp = false;
     decoder.settings.ignore_exif = false;
+    decoder.settings.ignore_icc = false;
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
@@ -440,6 +437,12 @@ fn decoder_parse_icc_exif_xmp() {
     assert_eq!(image.xmp[1], 63);
     assert_eq!(image.xmp[2], 120);
     assert_eq!(image.xmp[3], 112);
+
+    assert_eq!(image.icc.len(), 596);
+    assert_eq!(image.icc[0], 0);
+    assert_eq!(image.icc[1], 0);
+    assert_eq!(image.icc[2], 2);
+    assert_eq!(image.icc[3], 84);
 }
 
 #[test]

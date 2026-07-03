@@ -448,6 +448,7 @@ struct avifDecoder {
     avifBool allowIncremental;
     avifBool ignoreExif;
     avifBool ignoreXMP;
+    avifBool ignoreICC;
     uint32_t imageSizeLimit;
     uint32_t imageDimensionLimit;
     uint32_t imageCountLimit;

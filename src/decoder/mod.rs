@@ -149,6 +149,7 @@ pub struct Settings {
     pub source: Source,
     pub ignore_exif: bool,
     pub ignore_xmp: bool,
+    pub ignore_icc: bool,
     pub strictness: Strictness,
     pub allow_progressive: bool,
     pub allow_incremental: bool,
@@ -168,6 +169,7 @@ impl Default for Settings {
             source: Default::default(),
             ignore_exif: false,
             ignore_xmp: false,
+            ignore_icc: false,
             strictness: Default::default(),
             allow_progressive: false,
             allow_incremental: false,
@@ -605,7 +607,7 @@ impl Decoder {
             self.gainmap.alt_matrix_coefficients = nclx.matrix_coefficients;
             self.gainmap.alt_yuv_range = nclx.yuv_range;
         }
-        if let Some(icc) = find_icc(&tonemap_item.properties)? {
+        if let Some(icc) = find_icc(&tonemap_item.properties, self.settings.ignore_icc)? {
             self.gainmap.alt_icc.clone_from(icc);
         }
 
@@ -814,7 +816,7 @@ impl Decoder {
                     );
                 }
                 if first_icc.is_none() {
-                    first_icc = find_icc(&dimg_item.properties)?.cloned();
+                    first_icc = find_icc(&dimg_item.properties, self.settings.ignore_icc)?.cloned();
                 }
                 if first_nclx.is_none() {
                     first_nclx = find_nclx(&dimg_item.properties)?.cloned();
@@ -840,7 +842,7 @@ impl Decoder {
             // For grid and overlay items, adopt the icc color profile and the nclx of the first
             // tile if it is not explicitly specified for the overall grid.
             if let Some(first_icc) = first_icc {
-                if find_icc(&item.properties)?.is_none() {
+                if find_icc(&item.properties, self.settings.ignore_icc)?.is_none() {
                     item.properties
                         .push(ItemProperty::ColorInformation(ColorInformation::Icc(
                             first_icc,
@@ -1410,7 +1412,7 @@ impl Decoder {
                 self.image.yuv_range = nclx.yuv_range;
                 cicp_set = true;
             }
-            if let Some(icc) = find_icc(color_properties)? {
+            if let Some(icc) = find_icc(color_properties, self.settings.ignore_icc)? {
                 self.image.icc.clone_from(icc);
             }
 

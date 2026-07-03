@@ -115,7 +115,10 @@ pub(crate) fn find_nclx(properties: &[ItemProperty]) -> AvifResult<Option<&Nclx>
 }
 
 // Returns the colr icc property. Returns an error if there are multiple ones.
-pub(crate) fn find_icc(properties: &[ItemProperty]) -> AvifResult<Option<&Vec<u8>>> {
+pub(crate) fn find_icc(
+    properties: &[ItemProperty],
+    ignore_icc: bool,
+) -> AvifResult<Option<&Vec<u8>>> {
     let mut single_icc: Option<&Vec<u8>> = None;
     for property in properties {
         if let ItemProperty::ColorInformation(ColorInformation::Icc(icc)) = property {
@@ -124,6 +127,9 @@ pub(crate) fn find_icc(properties: &[ItemProperty]) -> AvifResult<Option<&Vec<u8
             }
             single_icc = Some(icc);
         }
+    }
+    if ignore_icc {
+        return Ok(None);
     }
     Ok(single_icc)
 }
