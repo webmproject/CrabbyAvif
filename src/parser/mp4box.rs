@@ -1086,6 +1086,9 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
         for _j in 0..num_nalus {
             // unsigned int(16) nalUnitLength;
             let nal_unit_length = stream.read_u16()?;
+            if nal_unit_length == 0 {
+                continue;
+            }
             let nal_unit = stream.get_slice(nal_unit_length as usize)?;
             let nal_unit_type = (nal_unit[0] >> 1) & 0x3f;
             match nal_unit_type {

@@ -36,3 +36,7 @@ ffmpeg -f lavfi -i color=c=blue@1.0:s=320x240:d=1 -frames:v 1 -pix_fmt rgb24 blu
 heif-enc -o blue_422.heic -p chroma=422 blue.png
 heif-enc -o blue_444.heic -p chroma=444 blue.png
 
+## b_506659035_hvcc_nal_zero_length.heic
+
+HEIC image poc file from b/506659035 which contains a hvcC box with a
+nal_unit_length of zero (which is allowed per the spec).

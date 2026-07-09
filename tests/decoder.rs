@@ -1326,6 +1326,7 @@ fn heic_peek() {
 #[test_case("heic/blue_alpha.heic", 320, 240)]
 #[test_case("heic/blue_gh_issue_692.heic", 320, 240)]
 #[test_case("heic/blue_grid_alpha.heic", 320, 240)]
+#[test_case("heic/b_506659035_hvcc_nal_zero_length.heic", 16, 16)]
 #[test_case("heic/nokiatech/autumn_1440x960.heic", 1440, 960)]
 #[test_case("heic/nokiatech/bothie_1440x960.heic", 1440, 960)]
 #[test_case("heic/nokiatech/cheers_1440x960.heic", 1440, 960)]
@@ -1354,7 +1355,8 @@ fn heic(filename: &str, expected_width: u32, expected_height: u32) {
         assert_eq!(image.width, expected_width);
         assert_eq!(image.height, expected_height);
         assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
-        if cfg!(feature = "android_mediacodec") {
+        if cfg!(feature = "android_mediacodec") && image.yuv_format == PixelFormat::Yuv420 {
+            // Ensure that decoding succeeds if Android MediaCodec can decode it.
             assert!(decoder.next_image().is_ok());
         }
     } else {
