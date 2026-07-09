@@ -1187,7 +1187,7 @@ fn white_2x2() -> AvifResult<()> {
 fn white_2x2_mdat_size0() -> AvifResult<()> {
     // Edit the file to simulate an 'mdat' box with size 0 (meaning it ends at EOF).
     let mut file_bytes = std::fs::read(get_test_file("white_2x2.avif")).unwrap();
-    let mdat = [b'm', b'd', b'a', b't'];
+    let mdat = *b"mdat";
     let mdat_size_pos = file_bytes.windows(4).position(|w| w == mdat).unwrap() - 4;
     file_bytes[mdat_size_pos + 3] = b'\0';
 
@@ -1202,7 +1202,7 @@ fn white_2x2_mdat_size0() -> AvifResult<()> {
 fn white_2x2_meta_size0() -> AvifResult<()> {
     // Edit the file to simulate a 'meta' box with size 0 (invalid).
     let mut file_bytes = std::fs::read(get_test_file("white_2x2.avif")).unwrap();
-    let meta = [b'm', b'e', b't', b'a'];
+    let meta = *b"meta";
     let meta_size_pos = file_bytes.windows(4).position(|w| w == meta).unwrap() - 4;
     file_bytes[meta_size_pos + 3] = b'\0';
 
