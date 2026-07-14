@@ -347,7 +347,7 @@ TEST(DecoderTest, GainMapGrid) {
   ASSERT_NE(decoded, nullptr);
 
   // Verify that the gain map is present and matches the input.
-  EXPECT_NE(decoder->image->gainMap, nullptr);
+  EXPECT_NE(decoded->gainMap, nullptr);
   // Color+alpha: 4x3 grid of 128x200 tiles.
   EXPECT_EQ(decoded->width, 128u * 4u);
   EXPECT_EQ(decoded->height, 200u * 3u);
@@ -415,7 +415,7 @@ TEST(DecoderTest, IgnoreGainMapButReadMetadata) {
   ASSERT_NE(decoded, nullptr);
 
   // Verify that the gain map was detected...
-  EXPECT_NE(decoder->image->gainMap, nullptr);
+  EXPECT_NE(decoded->gainMap, nullptr);
   // ... but not decoded because enableDecodingGainMap is false by default.
   EXPECT_EQ(decoded->gainMap->image, nullptr);
   // Check that the gain map metadata WAS populated.
@@ -445,7 +445,7 @@ TEST(DecoderTest, IgnoreColorAndAlpha) {
   EXPECT_EQ(decoded->yuvRowBytes[2], 0u);
   EXPECT_EQ(decoded->alphaRowBytes, 0u);
   // The gain map was decoded.
-  EXPECT_NE(decoder->image->gainMap, nullptr);
+  EXPECT_NE(decoded->gainMap, nullptr);
   ASSERT_NE(decoded->gainMap->image, nullptr);
   // Including pixels.
   EXPECT_GT(decoded->gainMap->image->yuvRowBytes[0], 0u);
@@ -461,8 +461,8 @@ TEST(DecoderTest, IgnoreAll) {
   avifImage* decoded = decoder->image;
   ASSERT_NE(decoded, nullptr);
 
-  EXPECT_NE(decoder->image->gainMap, nullptr);
-  ASSERT_EQ(decoder->image->gainMap->image, nullptr);
+  EXPECT_NE(decoded->gainMap, nullptr);
+  ASSERT_EQ(decoded->gainMap->image, nullptr);
 
   // But trying to access the next image should give an error because both
   // ignoreColorAndAlpha and enableDecodingGainMap are set.
