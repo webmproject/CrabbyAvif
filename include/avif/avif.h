@@ -45,9 +45,16 @@ constexpr static const uint32_t AVIF_STRICT_ENABLED = ((AVIF_STRICT_PIXI_REQUIRE
 
 constexpr static const uint32_t AVIF_IMAGE_CONTENT_NONE = 0;
 
-constexpr static const uint32_t AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA = ((1 << 0) | (1 << 1));
+constexpr static const uint32_t AVIF_IMAGE_CONTENT_COLOR = (1 << 0);
+
+/// Alpha only is not currently supported.
+constexpr static const uint32_t AVIF_IMAGE_CONTENT_ALPHA = (1 << 1);
+
+constexpr static const uint32_t AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA = (AVIF_IMAGE_CONTENT_COLOR | AVIF_IMAGE_CONTENT_ALPHA);
 
 constexpr static const uint32_t AVIF_IMAGE_CONTENT_GAIN_MAP = (1 << 2);
+
+constexpr static const uint32_t AVIF_IMAGE_CONTENT_COLOR_AND_GAIN_MAP = (AVIF_IMAGE_CONTENT_COLOR | AVIF_IMAGE_CONTENT_GAIN_MAP);
 
 constexpr static const uint32_t AVIF_IMAGE_CONTENT_ALL = (AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA | AVIF_IMAGE_CONTENT_GAIN_MAP);
 

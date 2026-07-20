@@ -72,6 +72,23 @@ TEST(DecoderTest, AlphaPremultiplied) {
   EXPECT_GT(decoder->image->alphaRowBytes, 0u);
 }
 
+TEST(DecoderTest, AlphaPremultipliedIgnoreAlpha) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  auto decoder = CreateDecoder("alpha_premultiplied.avif");
+  ASSERT_NE(decoder, nullptr);
+  decoder->imageContentToDecode &= ~AVIF_IMAGE_CONTENT_ALPHA;
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
+  EXPECT_EQ(decoder->alphaPresent, AVIF_TRUE);
+  ASSERT_NE(decoder->image, nullptr);
+  EXPECT_EQ(decoder->image->alphaPremultiplied, AVIF_TRUE);
+  EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->alphaPlane, nullptr);
+  EXPECT_EQ(decoder->image->alphaRowBytes, 0u);
+}
+
 TEST(DecoderTest, AnimatedImage) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
@@ -116,6 +133,20 @@ TEST(DecoderTest, AnimatedImageWithSourceSetToPrimaryItem) {
 TEST(DecoderTest, AnimatedImageWithAlphaAndMetadata) {
   auto decoder = CreateDecoder("colors-animated-8bpc-alpha-exif-xmp.avif");
   ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
+  EXPECT_EQ(decoder->alphaPresent, AVIF_TRUE);
+  EXPECT_EQ(decoder->imageSequenceTrackPresent, AVIF_TRUE);
+  EXPECT_EQ(decoder->imageCount, 5);
+  EXPECT_EQ(decoder->repetitionCount, AVIF_REPETITION_COUNT_INFINITE);
+  EXPECT_EQ(decoder->image->exif.size, 1126);
+  EXPECT_EQ(decoder->image->xmp.size, 3898);
+}
+
+TEST(DecoderTest, AnimatedImageWithAlphaAndMetadataIgnoreAlpha) {
+  auto decoder = CreateDecoder("colors-animated-8bpc-alpha-exif-xmp.avif");
+  ASSERT_NE(decoder, nullptr);
+  decoder->imageContentToDecode &= ~AVIF_IMAGE_CONTENT_ALPHA;
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
   EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(decoder->alphaPresent, AVIF_TRUE);
@@ -331,6 +362,23 @@ TEST(DecoderTest, ColorGridAlphaNoGrid) {
   EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
   EXPECT_NE(decoder->image->alphaPlane, nullptr);
   EXPECT_GT(decoder->image->alphaRowBytes, 0u);
+}
+
+TEST(DecoderTest, ColorGridAlphaNoGridIgnoreAlpha) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  // Test case from https://github.com/AOMediaCodec/libavif/issues/1203.
+  auto decoder = CreateDecoder("color_grid_alpha_nogrid.avif");
+  ASSERT_NE(decoder, nullptr);
+  decoder->imageContentToDecode &= ~AVIF_IMAGE_CONTENT_ALPHA;
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
+  EXPECT_EQ(decoder->alphaPresent, AVIF_TRUE);
+  EXPECT_EQ(decoder->imageSequenceTrackPresent, AVIF_FALSE);
+  EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->alphaPlane, nullptr);
+  EXPECT_EQ(decoder->image->alphaRowBytes, 0u);
 }
 
 TEST(DecoderTest, GainMapGrid) {

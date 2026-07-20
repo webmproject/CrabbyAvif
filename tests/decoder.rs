@@ -589,7 +589,7 @@ fn gainmap_oriented() {
         ("gainmap_oriented.avif", 34),
         ("color_grid_gainmap_different_grid.avif", 600)
     ],
-    [ImageContentType::ColorAndAlpha, ImageContentType::GainMap, ImageContentType::All]
+    [ImageContentType::Color, ImageContentType::ColorAndAlpha, ImageContentType::GainMap, ImageContentType::ColorAndGainMap, ImageContentType::All]
 )]
 fn decoded_row_count(
     filename_and_row_count: (&str, u32),

@@ -123,8 +123,10 @@ pub const DEFAULT_IMAGE_COUNT_LIMIT: u32 = 12 * 3600 * 60;
 #[derive(Debug, PartialEq)]
 pub enum ImageContentType {
     None,
+    Color,
     ColorAndAlpha,
     GainMap,
+    ColorAndGainMap,
     All,
 }
 
@@ -132,15 +134,17 @@ impl ImageContentType {
     pub(crate) fn decoding_items(&self) -> Vec<DecodingItem> {
         let categories = match self {
             Self::None => vec![],
+            Self::Color => vec![Category::Color],
             Self::ColorAndAlpha => vec![Category::Color, Category::Alpha],
             Self::GainMap => vec![Category::Gainmap],
+            Self::ColorAndGainMap => vec![Category::Color, Category::Gainmap],
             Self::All => Category::ALL.to_vec(),
         };
         DecodingItem::all_for_categories(&categories)
     }
 
     pub(crate) fn gainmap(&self) -> bool {
-        matches!(self, Self::GainMap | Self::All)
+        matches!(self, Self::GainMap | Self::ColorAndGainMap | Self::All)
     }
 }
 

@@ -206,7 +206,10 @@ impl From<&avifDecoder> for Settings {
         let image_content_to_decode_flags: ImageContentType = match decoder.imageContentToDecode {
             AVIF_IMAGE_CONTENT_ALL => ImageContentType::All,
             AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA => ImageContentType::ColorAndAlpha,
+            AVIF_IMAGE_CONTENT_COLOR_AND_GAIN_MAP => ImageContentType::ColorAndGainMap,
+            AVIF_IMAGE_CONTENT_COLOR => ImageContentType::Color,
             AVIF_IMAGE_CONTENT_GAIN_MAP => ImageContentType::GainMap,
+            // Alpha only is not currently supported and is mapped to ImageContentType::None.
             _ => ImageContentType::None,
         };
         Self {

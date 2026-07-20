@@ -203,8 +203,14 @@ pub const AVIF_STRICT_ENABLED: u32 =
 pub type avifStrictFlags = u32;
 
 pub const AVIF_IMAGE_CONTENT_NONE: u32 = 0;
-pub const AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA: u32 = (1 << 0) | (1 << 1);
+pub const AVIF_IMAGE_CONTENT_COLOR: u32 = 1 << 0;
+/// Alpha only is not currently supported.
+pub const AVIF_IMAGE_CONTENT_ALPHA: u32 = 1 << 1;
+pub const AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA: u32 =
+    AVIF_IMAGE_CONTENT_COLOR | AVIF_IMAGE_CONTENT_ALPHA;
 pub const AVIF_IMAGE_CONTENT_GAIN_MAP: u32 = 1 << 2;
+pub const AVIF_IMAGE_CONTENT_COLOR_AND_GAIN_MAP: u32 =
+    AVIF_IMAGE_CONTENT_COLOR | AVIF_IMAGE_CONTENT_GAIN_MAP;
 pub const AVIF_IMAGE_CONTENT_ALL: u32 =
     AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA | AVIF_IMAGE_CONTENT_GAIN_MAP;
 pub type avifImageContentTypeFlags = u32;
