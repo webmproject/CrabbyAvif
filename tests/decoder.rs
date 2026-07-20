@@ -1702,3 +1702,24 @@ fn identity_derivation_invalid(filename: &str) -> AvifResult<()> {
     assert!(decoder.parse().is_err());
     Ok(())
 }
+
+#[test]
+fn multiple_iloc_entries_for_same_item() {
+    let mut decoder = get_decoder("white_2x2_multiple_iloc_entries_for_same_item.avif");
+    // By default, non-strict files are refused.
+    assert!(matches!(
+        decoder.settings.strictness,
+        decoder::Strictness::All
+    ));
+    let res = decoder.parse();
+    assert!(matches!(res, Err(AvifError::BmffParseFailed(_))));
+    // Allow this kind of file specifically.
+    decoder.settings.strictness = decoder::Strictness::SpecificExclude(vec![
+        decoder::StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed,
+    ]);
+    assert!(decoder.parse().is_ok());
+    if !HAS_DECODER {
+        return;
+    }
+    assert!(decoder.next_image().is_ok());
+}

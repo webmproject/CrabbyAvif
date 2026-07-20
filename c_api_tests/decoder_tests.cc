@@ -1346,6 +1346,26 @@ TEST(DecoderTest, NullCases) {
   EXPECT_NE(avifDecoderReset(nullptr), AVIF_RESULT_OK);
 }
 
+TEST(DecoderTest, MultipleIlocExtentsForSameItem) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  auto decoder =
+      CreateDecoder("white_2x2_multiple_iloc_entries_for_same_item.avif");
+  ASSERT_NE(decoder, nullptr);
+  // By default, non-strict files are refused.
+  EXPECT_EQ(decoder->strictFlags, (avifStrictFlags)AVIF_STRICT_ENABLED);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_BMFF_PARSE_FAILED);
+  // Allow this kind of file specifically.
+  decoder->strictFlags =
+      (avifStrictFlags)AVIF_STRICT_ENABLED &
+      ~(avifStrictFlags)
+          AVIF_STRICT_MULTIPLE_ILOC_ENTRIES_FOR_SAME_ITEM_DISALLOWED;
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
+  EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+}
+
 }  // namespace
 }  // namespace avif
 

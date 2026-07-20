@@ -217,6 +217,7 @@ pub enum StrictnessFlag {
     PixiRequired,
     ClapValid,
     AlphaIspeRequired,
+    MultipleIlocEntriesForSameItemDisallowed,
 }
 
 #[derive(Debug, Default)]
@@ -251,6 +252,19 @@ impl Strictness {
             Strictness::SpecificExclude(flags) => !flags
                 .iter()
                 .any(|x| matches!(x, StrictnessFlag::AlphaIspeRequired)),
+            _ => false,
+        }
+    }
+
+    fn multiple_iloc_entries_for_same_item_disallowed(&self) -> bool {
+        match self {
+            Strictness::All => true,
+            Strictness::SpecificInclude(flags) => flags
+                .iter()
+                .any(|x| matches!(x, StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed)),
+            Strictness::SpecificExclude(flags) => !flags
+                .iter()
+                .any(|x| matches!(x, StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed)),
             _ => false,
         }
     }
@@ -1020,7 +1034,12 @@ impl Decoder {
                     }
                 }
             }
-            self.items = construct_items(&avif_boxes.meta)?;
+            self.items = construct_items(
+                &avif_boxes.meta,
+                self.settings
+                    .strictness
+                    .multiple_iloc_entries_for_same_item_disallowed(),
+            )?;
             if avif_boxes.ftyp.has_tmap() && !self.items.values().any(|x| x.item_type == "tmap") {
                 return AvifError::bmff_parse_failed("tmap was required but not found");
             }
@@ -1060,7 +1079,12 @@ impl Decoder {
                     .find(|x| x.is_color())
                     .ok_or(AvifError::NoContent)?;
                 if let Some(meta) = &color_track.meta {
-                    let mut color_track_items = construct_items(meta)?;
+                    let mut color_track_items = construct_items(
+                        meta,
+                        self.settings
+                            .strictness
+                            .multiple_iloc_entries_for_same_item_disallowed(),
+                    )?;
                     Self::search_exif_or_xmp_metadata(
                         &mut color_track_items,
                         None,
