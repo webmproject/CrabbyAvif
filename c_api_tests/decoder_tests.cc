@@ -427,8 +427,33 @@ TEST(DecoderTest, GainMapOriented) {
             AVIF_TRANSFORM_IROT | AVIF_TRANSFORM_IMIR);
   EXPECT_EQ(decoder->image->irot.angle, 1);
   EXPECT_EQ(decoder->image->imir.axis, 0);
+  EXPECT_EQ(decoder->alphaPresent, AVIF_TRUE);
   EXPECT_EQ(decoder->image->gainMap->image->transformFlags,
             AVIF_TRANSFORM_NONE);
+
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_NE(decoder->image->alphaPlane, nullptr);
+  EXPECT_GT(decoder->image->alphaRowBytes, 0u);
+}
+
+TEST(DecoderTest, GainMapOrientedIgnoreAlpha) {
+  auto decoder = CreateDecoder(("gainmap_oriented.avif"));
+  ASSERT_NE(decoder, nullptr);
+  decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_COLOR_AND_GAIN_MAP;
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+
+  // Verify that the transformative properties were kept.
+  EXPECT_EQ(decoder->image->transformFlags,
+            AVIF_TRANSFORM_IROT | AVIF_TRANSFORM_IMIR);
+  EXPECT_EQ(decoder->image->irot.angle, 1);
+  EXPECT_EQ(decoder->image->imir.axis, 0);
+  EXPECT_EQ(decoder->alphaPresent, AVIF_TRUE);
+  EXPECT_EQ(decoder->image->gainMap->image->transformFlags,
+            AVIF_TRANSFORM_NONE);
+
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->alphaPlane, nullptr);
+  EXPECT_EQ(decoder->image->alphaRowBytes, 0u);
 }
 
 TEST(DecoderTest, GainmapOnlyDecodedRowCount) {
