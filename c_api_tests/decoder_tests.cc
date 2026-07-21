@@ -519,6 +519,19 @@ TEST(DecoderTest, IgnoreAll) {
   ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_NO_CONTENT);
 }
 
+TEST(DecoderTest, GainMapReadMemoryFails) {
+  auto data =
+      testutil::read_file(GetFilename("seine_sdr_gainmap_srgb.avif").c_str());
+  ASSERT_GT(data.size(), 0);
+  DecoderPtr decoder(avifDecoderCreate());
+  ASSERT_NE(decoder, nullptr);
+  avifImage image;
+  // avifDecoderReadMemory does not support gainmaps.
+  EXPECT_NE(
+      avifDecoderReadMemory(decoder.get(), &image, data.data(), data.size()),
+      AVIF_RESULT_OK);
+}
+
 TEST(DecoderTest, KeyFrame) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";

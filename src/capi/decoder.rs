@@ -392,6 +392,8 @@ pub unsafe extern "C" fn crabby_avifDecoderDestroy(decoder: *mut avifDecoder) {
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 /// - if image is not null, it has to point to a valid avifImage object.
+///
+/// This function does not support decoding gainmaps.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifDecoderRead(
     decoder: *mut avifDecoder,
@@ -411,6 +413,9 @@ pub unsafe extern "C" fn crabby_avifDecoderRead(
         return res.into();
     }
     rust_decoder_to_avifDecoder(rust_decoder, deref_mut!(decoder));
+    if !deref_mut!(decoder).image_object.gainMap.is_null() {
+        return avifResult::NotImplemented;
+    }
     *deref_mut!(image) = deref_mut!(decoder).image_object.clone();
     avifResult::Ok
 }
@@ -420,6 +425,8 @@ pub unsafe extern "C" fn crabby_avifDecoderRead(
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 /// - if image is not null, it has to point to a valid avifImage object.
 /// - if data is not null, it has to be a valid buffer of size bytes.
+///
+/// This function does not support decoding gainmaps.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifDecoderReadMemory(
     decoder: *mut avifDecoder,
@@ -441,6 +448,8 @@ pub unsafe extern "C" fn crabby_avifDecoderReadMemory(
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 /// - if image is not null, it has to point to a valid avifImage object.
 /// - if filename is not null, it has to point to a valid C-style string.
+///
+/// This function does not support decoding gainmaps.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifDecoderReadFile(
     decoder: *mut avifDecoder,

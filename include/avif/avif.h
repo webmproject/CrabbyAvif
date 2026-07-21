@@ -669,6 +669,8 @@ void crabby_avifDecoderDestroy(avifDecoder *decoder);
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 /// - if image is not null, it has to point to a valid avifImage object.
+///
+/// This function does not support decoding gainmaps.
 avifResult crabby_avifDecoderRead(avifDecoder *decoder, avifImage *image);
 
 /// # Safety
@@ -676,6 +678,8 @@ avifResult crabby_avifDecoderRead(avifDecoder *decoder, avifImage *image);
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 /// - if image is not null, it has to point to a valid avifImage object.
 /// - if data is not null, it has to be a valid buffer of size bytes.
+///
+/// This function does not support decoding gainmaps.
 avifResult crabby_avifDecoderReadMemory(avifDecoder *decoder,
                                         avifImage *image,
                                         const uint8_t *data,
@@ -686,6 +690,8 @@ avifResult crabby_avifDecoderReadMemory(avifDecoder *decoder,
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 /// - if image is not null, it has to point to a valid avifImage object.
 /// - if filename is not null, it has to point to a valid C-style string.
+///
+/// This function does not support decoding gainmaps.
 avifResult crabby_avifDecoderReadFile(avifDecoder *decoder, avifImage *image, const char *filename);
 
 /// # Safety
