@@ -417,7 +417,7 @@ TEST(DecoderTest, GainMapGrid) {
 }
 
 TEST(DecoderTest, GainMapOriented) {
-  auto decoder = CreateDecoder(("gainmap_oriented.avif"));
+  auto decoder = CreateDecoder("gainmap_oriented.avif");
   ASSERT_NE(decoder, nullptr);
   decoder->imageContentToDecode |= AVIF_IMAGE_CONTENT_GAIN_MAP;
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
@@ -437,7 +437,7 @@ TEST(DecoderTest, GainMapOriented) {
 }
 
 TEST(DecoderTest, GainMapOrientedIgnoreAlpha) {
-  auto decoder = CreateDecoder(("gainmap_oriented.avif"));
+  auto decoder = CreateDecoder("gainmap_oriented.avif");
   ASSERT_NE(decoder, nullptr);
   decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_COLOR_AND_GAIN_MAP;
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
@@ -481,7 +481,7 @@ TEST(DecoderTest, GainmapOnlyDecodedRowCount) {
 }
 
 TEST(DecoderTest, IgnoreGainMapButReadMetadata) {
-  auto decoder = CreateDecoder(("seine_sdr_gainmap_srgb.avif"));
+  auto decoder = CreateDecoder("seine_sdr_gainmap_srgb.avif");
   ASSERT_NE(decoder, nullptr);
   auto result = avifDecoderParse(decoder.get());
   ASSERT_EQ(result, AVIF_RESULT_OK)
@@ -499,7 +499,7 @@ TEST(DecoderTest, IgnoreGainMapButReadMetadata) {
 }
 
 TEST(DecoderTest, IgnoreColorAndAlpha) {
-  auto decoder = CreateDecoder(("seine_sdr_gainmap_srgb.avif"));
+  auto decoder = CreateDecoder("seine_sdr_gainmap_srgb.avif");
   ASSERT_NE(decoder, nullptr);
   decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_GAIN_MAP;
   auto result = avifDecoderParse(decoder.get());
@@ -527,7 +527,7 @@ TEST(DecoderTest, IgnoreColorAndAlpha) {
 }
 
 TEST(DecoderTest, IgnoreAll) {
-  auto decoder = CreateDecoder(("seine_sdr_gainmap_srgb.avif"));
+  auto decoder = CreateDecoder("seine_sdr_gainmap_srgb.avif");
   ASSERT_NE(decoder, nullptr);
   decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_NONE;
   auto result = avifDecoderParse(decoder.get());
@@ -631,7 +631,7 @@ TEST(DecoderTest, Progressive) {
 // A test for https://github.com/AOMediaCodec/libavif/issues/1086 to prevent
 // regression.
 TEST(DecoderTest, ParseICC) {
-  auto decoder = CreateDecoder(("paris_icc_exif_xmp.avif"));
+  auto decoder = CreateDecoder("paris_icc_exif_xmp.avif");
   ASSERT_NE(decoder, nullptr);
 
   decoder->ignoreXMP = AVIF_TRUE;
@@ -667,7 +667,7 @@ TEST(DecoderTest, ParseICC) {
 }
 
 TEST(DecoderTest, ParseExifNonZeroTiffOffset) {
-  auto decoder = CreateDecoder(("paris_exif_non_zero_tiff_offset.avif"));
+  auto decoder = CreateDecoder("paris_exif_non_zero_tiff_offset.avif");
   ASSERT_NE(decoder, nullptr);
 
   EXPECT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
