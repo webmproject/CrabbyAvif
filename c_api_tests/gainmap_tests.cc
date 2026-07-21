@@ -71,10 +71,9 @@ ImagePtr CreateTestImageWithGainMap(bool base_rendition_is_hdr) {
   }
   image->colorPrimaries = AVIF_COLOR_PRIMARIES_BT2020;
   image->matrixCoefficients = AVIF_MATRIX_COEFFICIENTS_BT601;
-  image->transferCharacteristics =
-      (avifTransferCharacteristics)(base_rendition_is_hdr
-                                        ? AVIF_TRANSFER_CHARACTERISTICS_PQ
-                                        : AVIF_TRANSFER_CHARACTERISTICS_SRGB);
+  image->transferCharacteristics = static_cast<avifTransferCharacteristics>(
+      base_rendition_is_hdr ? AVIF_TRANSFER_CHARACTERISTICS_PQ
+                            : AVIF_TRANSFER_CHARACTERISTICS_SRGB);
   testutil::FillImageGradient(image.get(), /*offset=*/0);
   ImagePtr gain_map = testutil::CreateImage(
       /*width=*/6, /*height=*/17, /*depth=*/8, AVIF_PIXEL_FORMAT_YUV420,
