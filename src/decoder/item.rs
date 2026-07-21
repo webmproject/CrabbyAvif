@@ -33,7 +33,7 @@ pub struct Item {
     pub extents: Vec<Extent>,
     pub thumbnail_for_id: u32,
     pub aux_for_id: u32,
-    pub desc_for_id: u32,
+    pub desc_for_id: Vec<u32>,
     pub dimg_for_id: u32,
     pub dimg_index: u32,
     pub prem_by_id: u32,
@@ -432,7 +432,7 @@ impl Item {
     fn is_metadata(&self, item_type: &str, color_id: Option<u32>) -> bool {
         self.size != 0
             && !self.has_unsupported_essential_property
-            && (color_id.is_none() || self.desc_for_id == color_id.unwrap())
+            && (color_id.is_none() || self.desc_for_id.contains(&color_id.unwrap()))
             && self.item_type == *item_type
     }
 
@@ -737,7 +737,7 @@ pub(crate) fn construct_items(
         match reference.reference_type.as_str() {
             "thmb" => item.thumbnail_for_id = reference.to_item_id,
             "auxl" => item.aux_for_id = reference.to_item_id,
-            "cdsc" => item.desc_for_id = reference.to_item_id,
+            "cdsc" => item.desc_for_id.push(reference.to_item_id),
             "prem" => item.prem_by_id = reference.to_item_id,
             "dimg" => {
                 // derived images refer in the opposite direction.
