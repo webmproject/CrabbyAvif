@@ -433,6 +433,41 @@ TEST(GainMapTest, InvalidGrid) {
       cells[0]->gainMap->gainMapGamma[0].n;  // Revert.
 }
 
+// TODO(wtc): Fix the test failure.
+TEST(GainMapTest, DISABLED_SequenceNotSupported) {
+  ImagePtr image = testutil::CreateImage(/*width=*/64, /*height=*/100,
+                                         /*depth=*/10, AVIF_PIXEL_FORMAT_YUV444,
+                                         AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+  ASSERT_NE(image, nullptr);
+  image->transferCharacteristics = AVIF_TRANSFER_CHARACTERISTICS_PQ;
+  testutil::FillImageGradient(image.get(), 0);
+  ImagePtr gain_map = testutil::CreateImage(
+      /*width=*/64, /*height=*/100, /*depth=*/8, AVIF_PIXEL_FORMAT_YUV420,
+      AVIF_PLANES_YUV, AVIF_RANGE_FULL);
+  ASSERT_NE(gain_map, nullptr);
+  testutil::FillImageGradient(gain_map.get(), 0);
+  // 'image' now owns the gain map.
+  image->gainMap = avifGainMapCreate();
+  ASSERT_NE(image->gainMap, nullptr);
+  image->gainMap->image = gain_map.release();
+  EncoderPtr encoder(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  AvifRwData encoded;
+  // Add a first frame.
+  avifResult result =
+      avifEncoderAddImage(encoder.get(), image.get(),
+                          /*durationInTimescales=*/2, AVIF_ADD_IMAGE_FLAG_NONE);
+  ASSERT_EQ(result, AVIF_RESULT_OK)
+      << avifResultToString(result) << ": " << encoder->diag.error;
+  // Add a second frame.
+  result =
+      avifEncoderAddImage(encoder.get(), image.get(),
+                          /*durationInTimescales=*/2, AVIF_ADD_IMAGE_FLAG_NONE);
+  // Image sequences with gain maps are not supported.
+  ASSERT_EQ(result, AVIF_RESULT_NOT_IMPLEMENTED)
+      << avifResultToString(result) << ": " << encoder->diag.error;
+}
+
 TEST(GainMapTest, NoGainMap) {
   ImagePtr image = testutil::CreateImage(/*width=*/12, /*height=*/34,
                                          /*depth=*/10, AVIF_PIXEL_FORMAT_YUV420,
