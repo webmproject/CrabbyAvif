@@ -34,4 +34,4 @@ jobs:
 
     - name: Build and run the Rust tests
       # Enable encoder and C API for better coverage.
-      run: cargo test --features aom,capi
+      run: cargo test --features aom,capi,satofloat

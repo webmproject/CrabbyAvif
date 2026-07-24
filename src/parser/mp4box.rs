@@ -808,8 +808,9 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
             pixi.planes[i].channel_idc = Some(ChannelIdc::from(stream.read_bits(3)?)); // unsigned int(3) channel_idc;
             stream.skip_bits(1)?; // unsigned int(1) reserved = 0;
             let component_format = stream.read_bits(2)?; // unsigned int(2) component_format;
-            if component_format != 0 {
-                // Only unsigned integer samples are supported. Float and complex types are not.
+            if component_format != 0 && (!cfg!(feature = "satofloat") || component_format != 3) {
+                // Only unsigned integer samples are supported (and floating point samples if the
+                // "satofloat" feature is enabled). Signed integer and complex samples are not.
                 return AvifError::not_implemented();
             }
 
