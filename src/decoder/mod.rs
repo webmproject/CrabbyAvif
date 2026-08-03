@@ -215,7 +215,7 @@ impl Extent {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum StrictnessFlag {
     PixiRequired,
     ClapValid,
@@ -234,56 +234,29 @@ pub enum Strictness {
 }
 
 impl Strictness {
-    pub(crate) fn pixi_required(&self) -> bool {
+    fn contains(&self, flag: StrictnessFlag) -> bool {
         match self {
             Strictness::All => true,
-            Strictness::SpecificInclude(flags) => flags
-                .iter()
-                .any(|x| matches!(x, StrictnessFlag::PixiRequired)),
-            Strictness::SpecificExclude(flags) => !flags
-                .iter()
-                .any(|x| matches!(x, StrictnessFlag::PixiRequired)),
+            Strictness::SpecificInclude(flags) => flags.contains(&flag),
+            Strictness::SpecificExclude(flags) => !flags.contains(&flag),
             _ => false,
         }
+    }
+
+    pub(crate) fn pixi_required(&self) -> bool {
+        self.contains(StrictnessFlag::PixiRequired)
     }
 
     pub(crate) fn alpha_ispe_required(&self) -> bool {
-        match self {
-            Strictness::All => true,
-            Strictness::SpecificInclude(flags) => flags
-                .iter()
-                .any(|x| matches!(x, StrictnessFlag::AlphaIspeRequired)),
-            Strictness::SpecificExclude(flags) => !flags
-                .iter()
-                .any(|x| matches!(x, StrictnessFlag::AlphaIspeRequired)),
-            _ => false,
-        }
+        self.contains(StrictnessFlag::AlphaIspeRequired)
     }
 
     pub(crate) fn exif_valid(&self) -> bool {
-        match self {
-            Strictness::All => true,
-            Strictness::SpecificInclude(flags) => {
-                flags.iter().any(|x| matches!(x, StrictnessFlag::ExifValid))
-            }
-            Strictness::SpecificExclude(flags) => {
-                !flags.iter().any(|x| matches!(x, StrictnessFlag::ExifValid))
-            }
-            _ => false,
-        }
+        self.contains(StrictnessFlag::ExifValid)
     }
 
     fn multiple_iloc_entries_for_same_item_disallowed(&self) -> bool {
-        match self {
-            Strictness::All => true,
-            Strictness::SpecificInclude(flags) => flags
-                .iter()
-                .any(|x| matches!(x, StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed)),
-            Strictness::SpecificExclude(flags) => !flags
-                .iter()
-                .any(|x| matches!(x, StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed)),
-            _ => false,
-        }
+        self.contains(StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed)
     }
 }
 
