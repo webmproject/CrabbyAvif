@@ -201,6 +201,9 @@ impl From<&avifDecoder> for Settings {
             if (decoder.strictFlags & AVIF_STRICT_ALPHA_ISPE_REQUIRED) != 0 {
                 flags.push(StrictnessFlag::AlphaIspeRequired);
             }
+            if (decoder.strictFlags & AVIF_STRICT_EXIF_VALID) != 0 {
+                flags.push(StrictnessFlag::ExifValid);
+            }
             if (decoder.strictFlags & AVIF_STRICT_MULTIPLE_ILOC_ENTRIES_FOR_SAME_ITEM_DISALLOWED)
                 != 0
             {

@@ -221,6 +221,7 @@ pub enum StrictnessFlag {
     ClapValid,
     AlphaIspeRequired,
     MultipleIlocEntriesForSameItemDisallowed,
+    ExifValid, // Fail if the exif payload is invalid.
 }
 
 #[derive(Debug, Default)]
@@ -255,6 +256,19 @@ impl Strictness {
             Strictness::SpecificExclude(flags) => !flags
                 .iter()
                 .any(|x| matches!(x, StrictnessFlag::AlphaIspeRequired)),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn exif_valid(&self) -> bool {
+        match self {
+            Strictness::All => true,
+            Strictness::SpecificInclude(flags) => {
+                flags.iter().any(|x| matches!(x, StrictnessFlag::ExifValid))
+            }
+            Strictness::SpecificExclude(flags) => {
+                !flags.iter().any(|x| matches!(x, StrictnessFlag::ExifValid))
+            }
             _ => false,
         }
     }
@@ -679,10 +693,19 @@ impl Decoder {
         if !settings.ignore_exif {
             if let Some(exif) = items.iter_mut().rfind(|x| x.1.is_exif(color_item_index)) {
                 let mut stream = exif.1.stream(io)?;
-                exif::parse(&mut stream)?;
-                image
-                    .exif
-                    .extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
+                match exif::parse(&mut stream) {
+                    Ok(()) => {
+                        image
+                            .exif
+                            .extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
+                    }
+                    Err(AvifError::InvalidExifPayload) => {
+                        if settings.strictness.exif_valid() {
+                            return Err(AvifError::InvalidExifPayload);
+                        }
+                    }
+                    Err(err) => return Err(err),
+                }
             }
         }
         if !settings.ignore_xmp {

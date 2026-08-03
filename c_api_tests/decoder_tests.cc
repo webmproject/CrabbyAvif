@@ -1386,26 +1386,40 @@ TEST(DecoderTest, NullCases) {
   EXPECT_NE(avifDecoderReset(nullptr), AVIF_RESULT_OK);
 }
 
-TEST(DecoderTest, MultipleIlocExtentsForSameItem) {
+struct StrictnessTestParams {
+  const char* filename;
+  avifStrictFlags strict_flag;
+};
+
+using StrictnessTest = ::testing::TestWithParam<StrictnessTestParams>;
+
+TEST_P(StrictnessTest, StrictnessFlagDisabledAllowsDecode) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
-  auto decoder =
-      CreateDecoder("white_2x2_multiple_iloc_entries_for_same_item.avif");
+  const StrictnessTestParams& param = GetParam();
+  auto decoder = CreateDecoder(param.filename);
   ASSERT_NE(decoder, nullptr);
   // By default, non-strict files are refused.
   EXPECT_EQ(decoder->strictFlags,
             static_cast<avifStrictFlags>(AVIF_STRICT_ENABLED));
-  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_BMFF_PARSE_FAILED);
+  ASSERT_NE(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
   // Allow this kind of file specifically.
   decoder->strictFlags =
-      static_cast<avifStrictFlags>(AVIF_STRICT_ENABLED) &
-      ~static_cast<avifStrictFlags>(
-          AVIF_STRICT_MULTIPLE_ILOC_ENTRIES_FOR_SAME_ITEM_DISALLOWED);
+      static_cast<avifStrictFlags>(AVIF_STRICT_ENABLED) & ~param.strict_flag;
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
   EXPECT_EQ(decoder->compressionFormat, COMPRESSION_FORMAT_AVIF);
   EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    DecoderTest, StrictnessTest,
+    ::testing::Values(
+        StrictnessTestParams{
+            "white_2x2_multiple_iloc_entries_for_same_item.avif",
+            AVIF_STRICT_MULTIPLE_ILOC_ENTRIES_FOR_SAME_ITEM_DISALLOWED},
+        StrictnessTestParams{"white_2x2_invalid_exif.avif",
+                             AVIF_STRICT_EXIF_VALID}));
 
 }  // namespace
 }  // namespace avif
