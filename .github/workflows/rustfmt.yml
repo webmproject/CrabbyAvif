@@ -11,11 +11,8 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
-      - uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af # v1.0.7
-        with:
-          toolchain: nightly
-          override: true
-          components: rustfmt
+      - name: Configure the Rust toolchain and target using rustup
+        run: rustup toolchain install nightly --component rustfmt
       - uses: LoliGothick/rustfmt-check@995f4ad3416208c983ed97d4d4b66b33446a7bc3 # v0.5.0
         with:
             token: ${{ secrets.GITHUB_TOKEN }}
