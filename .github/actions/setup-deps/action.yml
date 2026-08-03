@@ -3,7 +3,7 @@ description: "Build all the necessary external dependencies"
 runs:
   using: "composite"
   steps:
-  - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+  - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
   - name: Set globals
     id: globals
@@ -16,7 +16,7 @@ runs:
 
   - name: Cache external dependencies
     id: cache-ext
-    uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+    uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
     with:
       path: |
         sys/dav1d-sys/dav1d/include
@@ -34,7 +34,7 @@ runs:
 
   - name: Cache av1-avif testFiles
     id: cache-av1-avif-testfiles
-    uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+    uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
     with:
       path: external/av1-avif/testFiles
       key: cache-av1-avif-testfiles-${{ steps.globals.outputs.AV1_AVIF_COMMIT_HASH }}
