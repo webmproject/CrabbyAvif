@@ -40,3 +40,14 @@ heif-enc -o blue_444.heic -p chroma=444 blue.png
 
 HEIC image poc file from b/506659035 which contains a hvcC box with a
 nal_unit_length of zero (which is allowed per the spec).
+
+## blue_hevc_brand_without_moov.heic
+
+HEIC image with hevc brand inserted into the list of compatible brands (but
+without a moov box).
+
+ffmpeg -f lavfi -i color=c=blue@1.0:s=320x240:d=1 -frames:v 1 -pix_fmt rgb24 blue.png
+
+heif-enc -o blue_hevc_brand_without_moov.heic -p blue.png
+
+MP4Box -ab hevc blue_hevc_brand_without_moov.heic

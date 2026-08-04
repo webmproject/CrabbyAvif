@@ -1708,7 +1708,14 @@ fn identity_derivation_invalid(filename: &str) -> AvifResult<()> {
     decoder::StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed
 )]
 #[test_case("white_2x2_invalid_exif.avif", decoder::StrictnessFlag::ExifValid)]
+#[test_case(
+    "heic/blue_hevc_brand_without_moov.heic",
+    decoder::StrictnessFlag::HevcBrandRequiresMoov
+)]
 fn strictness(filename: &str, strictness_flag: decoder::StrictnessFlag) {
+    if filename.contains("heic") && !cfg!(feature = "heic") {
+        return;
+    }
     let mut decoder = get_decoder(filename);
     // By default, non-strict files are refused.
     assert!(matches!(
@@ -1719,7 +1726,7 @@ fn strictness(filename: &str, strictness_flag: decoder::StrictnessFlag) {
     // Allow this kind of file specifically.
     decoder.settings.strictness = decoder::Strictness::SpecificExclude(vec![strictness_flag]);
     assert!(decoder.parse().is_ok());
-    if !HAS_DECODER {
+    if !HAS_DECODER || decoder.compression_format() == CompressionFormat::Heic {
         return;
     }
     assert!(decoder.next_image().is_ok());

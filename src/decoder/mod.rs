@@ -222,6 +222,7 @@ pub enum StrictnessFlag {
     AlphaIspeRequired,
     MultipleIlocEntriesForSameItemDisallowed,
     ExifValid, // Fail if the exif payload is invalid.
+    HevcBrandRequiresMoov,
 }
 
 #[derive(Debug, Default)]
@@ -257,6 +258,10 @@ impl Strictness {
 
     fn multiple_iloc_entries_for_same_item_disallowed(&self) -> bool {
         self.contains(StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed)
+    }
+
+    pub(crate) fn hevc_brand_requires_moov(&self) -> bool {
+        self.contains(StrictnessFlag::HevcBrandRequiresMoov)
     }
 }
 
@@ -1018,7 +1023,7 @@ impl Decoder {
 
         if self.parse_state == ParseState::None {
             self.reset();
-            let avif_boxes = mp4box::parse(self.io.unwrap_mut())?;
+            let avif_boxes = mp4box::parse(self.io.unwrap_mut(), &self.settings.strictness)?;
             self.tracks = avif_boxes.tracks;
             if !self.tracks.is_empty() {
                 self.image.image_sequence_track_present = true;

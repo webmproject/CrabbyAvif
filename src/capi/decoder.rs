@@ -209,6 +209,9 @@ impl From<&avifDecoder> for Settings {
             {
                 flags.push(StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed);
             }
+            if (decoder.strictFlags & AVIF_STRICT_HEVC_BRAND_REQUIRES_MOOV) != 0 {
+                flags.push(StrictnessFlag::HevcBrandRequiresMoov);
+            }
             Strictness::SpecificInclude(flags)
         };
         let image_content_to_decode_flags: ImageContentType = match decoder.imageContentToDecode {

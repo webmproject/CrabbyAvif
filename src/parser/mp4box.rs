@@ -16,6 +16,7 @@ use crate::decoder::track::*;
 use crate::decoder::CompressionFormat;
 use crate::decoder::Extent;
 use crate::decoder::GenericIO;
+use crate::decoder::Strictness;
 use crate::gainmap::GainMapMetadata;
 use crate::image::YuvRange;
 use crate::image::MAX_PLANE_COUNT;
@@ -2161,7 +2162,7 @@ fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
     Ok(tracks)
 }
 
-pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
+pub(crate) fn parse(io: &mut GenericIO, strictness: &Strictness) -> AvifResult<AvifBoxes> {
     let mut ftyp: Option<FileTypeBox> = None;
     let mut meta: Option<MetaBox> = None;
     let mut seen_mini = false;
@@ -2256,7 +2257,9 @@ pub(crate) fn parse(io: &mut GenericIO) -> AvifResult<AvifBoxes> {
         return AvifError::invalid_ftyp();
     }
     if (ftyp.needs_meta() && meta.is_none())
-        || (ftyp.needs_moov() && tracks.is_none())
+        || (ftyp.needs_moov()
+            && tracks.is_none()
+            && (strictness.hevc_brand_requires_moov() || !ftyp.needs_meta() || meta.is_none()))
         || (ftyp.needs_mini() && !seen_mini)
     {
         return AvifError::truncated_data();
