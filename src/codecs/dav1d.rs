@@ -190,6 +190,7 @@ impl Dav1d {
         dav1d_picture: &Dav1dPicture,
         image: &mut Image,
         category: Category,
+        overwrite_alpha_plane_yuv_range: bool,
     ) -> AvifResult<()> {
         match category {
             Category::Alpha => {
@@ -212,10 +213,12 @@ impl Dav1d {
                     image.height,
                     image.row_bytes[3],
                 )?);
-                // # Safety: seq_hdr is popualated by dav1d and is guaranteed to be valid.
-                let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
-                image.yuv_range =
-                    if seq_hdr.color_range == 0 { YuvRange::Limited } else { YuvRange::Full };
+                if overwrite_alpha_plane_yuv_range {
+                    // # Safety: seq_hdr is populated by dav1d and is guaranteed to be valid.
+                    let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
+                    image.yuv_range =
+                        if seq_hdr.color_range == 0 { YuvRange::Limited } else { YuvRange::Full };
+                }
             }
             _ => {
                 image.width = dav1d_picture.p.w as u32;
@@ -291,7 +294,12 @@ impl Dav1d {
                 return AvifError::unknown_error(format!("dav1d_get_picture returned {res}"));
             } else if res == 0 && picture.use_layer(spatial_id) {
                 let mut cell_image = Image::default();
-                self.picture_to_image(picture.get(), &mut cell_image, grid_image_helper.category)?;
+                self.picture_to_image(
+                    picture.get(),
+                    &mut cell_image,
+                    grid_image_helper.category,
+                    true,
+                )?;
                 grid_image_helper.copy_from_cell_image(&mut cell_image)?;
                 retries = 0;
             } else {
@@ -389,7 +397,7 @@ impl Decoder for Dav1d {
         } else {
             return AvifError::unknown_error("");
         }
-        self.picture_to_image(self.picture.unwrap_ref().get(), image, category)?;
+        self.picture_to_image(self.picture.unwrap_ref().get(), image, category, true)?;
         Ok(())
     }
 
@@ -464,7 +472,9 @@ impl Decoder for Dav1d {
         } else {
             return AvifError::unknown_error("");
         }
-        self.picture_to_image(self.picture.unwrap_ref().get(), image, category)?;
+        // In this case, the source image from the caller is used for both color and alpha planes,
+        // so do not overwrite the yuv_range field when processing the alpha plane.
+        self.picture_to_image(self.picture.unwrap_ref().get(), image, category, false)?;
         Ok(())
     }
 }

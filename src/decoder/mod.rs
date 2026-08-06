@@ -2123,6 +2123,19 @@ impl Decoder {
             return AvifError::no_content();
         }
 
+        let next_image_index = checked_add!(self.image_index, 1)?;
+        if self.can_use_decode_until() {
+            // If decode_until can be used, always prefer that since we cannot conflate calls
+            // between get_last_image and get_next_image.
+            match self.decode_until(next_image_index) {
+                Ok(_) => return Ok(()),
+                Err(AvifError::NotImplemented) => {
+                    // If decode_until is not implemented, fallback to next_image.
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
         // Android MediaCodec does not support monochrome gainmaps for HEIC. So when decoding only
         // such Gainmaps on Android, return an error instead of unnecessarily creating the codec.
         #[cfg(feature = "android_mediacodec")]
@@ -2139,7 +2152,6 @@ impl Decoder {
             }
         }
 
-        let next_image_index = checked_add!(self.image_index, 1)?;
         self.create_codecs()?;
         match (
             self.settings.allow_progressive,
@@ -2247,6 +2259,9 @@ impl Decoder {
     fn decode_until(&mut self, requested_index: i32) -> AvifResult<()> {
         if self.io.is_none() {
             return AvifError::io_not_set();
+        }
+        if requested_index < 0 || requested_index >= i32_from_u32(self.image_count)? {
+            return AvifError::no_images_remaining();
         }
         self.create_codecs()?;
         for decoding_item in DecodingItem::ALL_USIZE {

@@ -1077,9 +1077,11 @@ fn progressive_partial_data() -> AvifResult<()> {
     Ok(())
 }
 
-#[test]
-fn nth_image() {
+#[allow(clippy::zero_prefixed_literal)]
+#[test_matrix(1u32..=2)]
+fn nth_image(max_threads: u32) {
     let mut decoder = get_decoder("colors-animated-8bpc.avif");
+    decoder.settings.max_threads = max_threads;
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
@@ -1092,6 +1094,8 @@ fn nth_image() {
     assert!(decoder.next_image().is_err());
     assert!(decoder.nth_image(1).is_ok());
     assert!(decoder.nth_image(4).is_ok());
+    assert!(decoder.nth_image(1).is_ok());
+    assert!(decoder.nth_image(2).is_ok());
     assert!(decoder.nth_image(50).is_err());
 }
 
