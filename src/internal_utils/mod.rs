@@ -414,6 +414,25 @@ impl<T: Clone> TryClone for Vec<T> {
     }
 }
 
+// Same as [].to_vec() but returns an error if the allocation fails.
+#[allow(dead_code)]
+pub(crate) trait SliceExtension<T> {
+    fn try_to_vec(self) -> AvifResult<Vec<T>>
+    where
+        T: Clone;
+}
+
+impl<T> SliceExtension<T> for &[T] {
+    fn try_to_vec(self) -> AvifResult<Vec<T>>
+    where
+        T: Clone,
+    {
+        let mut vec: Vec<T> = create_vec_exact(self.len())?;
+        vec.try_extend_from_slice(self)?;
+        Ok(vec)
+    }
+}
+
 // Same as Vec.push() and Vec.extend_from_slice() but returns an error if the allocation fails.
 pub(crate) trait VecExtension<T> {
     fn try_push(&mut self, value: T) -> AvifResult<()>;

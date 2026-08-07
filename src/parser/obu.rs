@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "avm")]
+use crate::codecs::avm::*;
+#[cfg(feature = "avm")]
+use std::ops::Range;
+
 use crate::image::YuvRange;
 use crate::internal_utils::stream::*;
 use crate::internal_utils::*;
@@ -318,259 +323,311 @@ impl Av1SequenceHeader {
 }
 
 #[cfg(feature = "avm")]
-#[derive(Debug, Default)]
-pub struct Av2SequenceHeader {
-    reduced_still_picture_header: bool,
-    max_width: u32,
-    max_height: u32,
-    pub color_primaries: ColorPrimaries,
-    pub transfer_characteristics: TransferCharacteristics,
-    pub matrix_coefficients: MatrixCoefficients,
-    pub yuv_range: YuvRange,
-    pub config: Av2CodecConfiguration,
+// Returns the OBU type on success.
+fn parse_av2_obu_header(stream: &mut IStream) -> AvifResult<u8> {
+    // https://av2.aomedia.org/v1.0.0/index.html#obu_header_syntax
+    let obu_header_extension_flag = stream.read_bits(1)? as usize;
+    let obu_type = stream.read_bits(5)? as u8;
+    let _obu_tlayer_id = stream.read_bits(2)?;
+    if obu_header_extension_flag == 1 {
+        let _obu_mlayer_id = stream.read_bits(3)?;
+        let _obu_xlayer_id = stream.read_bits(5)?;
+    }
+    Ok(obu_type)
 }
 
 #[cfg(feature = "avm")]
-impl Av2SequenceHeader {
-    fn parse_profile(&mut self, stream: &mut IStream) -> AvifResult<()> {
-        self.config.seq_profile = stream.read_bits(5)? as u8;
-        if self.config.seq_profile >= 32 {
-            return AvifError::bmff_parse_failed(format!(
-                "invalid seq_profile {}",
-                self.config.seq_profile
-            ));
-        }
-        self.reduced_still_picture_header = stream.read_bool()?;
-        self.config.seq_level_idx0 = stream.read_bits(5)? as u8;
-        self.config.seq_tier_0 =
-            if self.config.seq_level_idx0 >= 4 && !self.reduced_still_picture_header {
-                stream.read_bits(1)? as u8
-            } else {
-                0
-            };
-        Ok(())
-    }
-
-    fn parse_frame_max_dimensions(&mut self, stream: &mut IStream) -> AvifResult<()> {
-        let frame_width_bits_minus_1 = stream.read_bits(4)?;
-        let frame_height_bits_minus_1 = stream.read_bits(4)?;
-        let max_frame_width_minus_1 = stream.read_bits(frame_width_bits_minus_1 as usize + 1)?;
-        let max_frame_height_minus_1 = stream.read_bits(frame_height_bits_minus_1 as usize + 1)?;
-        self.max_width = checked_add!(max_frame_width_minus_1, 1)?;
-        self.max_height = checked_add!(max_frame_height_minus_1, 1)?;
-        Ok(())
-    }
-
-    fn parse_chroma_format_bitdepth(&mut self, stream: &mut IStream) -> AvifResult<()> {
-        let chroma_format_idc = stream.read_uvlc()?;
-        (
-            self.config.monochrome,
-            self.config.chroma_subsampling_x,
-            self.config.chroma_subsampling_y,
-        ) = match chroma_format_idc {
-            0 => (false, 1, 1), // 4:2:0
-            1 => (true, 1, 1),  // 4:0:0
-            2 => (false, 0, 0), // 4:4:4
-            3 => (false, 1, 0), // 4:2:2
-            _ => {
-                return AvifError::bmff_parse_failed(format!(
-                    "invalid chroma_format_idc {chroma_format_idc}",
-                ))
-            }
+// Returns the profile, pixel format and depth on success.
+fn parse_av2_sequence_header_obu(stream: &mut IStream) -> AvifResult<(u8, PixelFormat, u8)> {
+    // https://av2.aomedia.org/v1.0.0/index.html#general_sequence_header_obu_syntax
+    let _seq_header_id = stream.read_uvlc()?;
+    let seq_profile_idc = stream.read_bits(5)?;
+    let single_picture_header_flag = stream.read_bool()?;
+    let seq_level_idx = stream.read_bits(5)?;
+    let _seq_tier = if seq_level_idx > 3 && !single_picture_header_flag {
+        stream.read_bits(1)?
+    } else {
+        0
+    };
+    let chroma_format_idc = stream.read_uvlc()?;
+    let pixel_format = match chroma_format_idc {
+            // https://av2.aomedia.org/v1.0.0/index.html#table-chroma-format
+            0 => PixelFormat::Yuv420,
+            1 => PixelFormat::Yuv400,
+            2 => PixelFormat::Yuv444,
+            3 => PixelFormat::Yuv422,
+            _ => return AvifError::bmff_parse_failed("It is a requirement of bitstream conformance that chroma_format_idc is less than or equal to 3."),
         };
-        self.config.bitdepth_idx = stream
-            .read_uvlc()?
-            .try_into()
-            .map_err(AvifError::map_unknown_error)?;
-        if self.config.bitdepth_idx > 2 {
-            return AvifError::bmff_parse_failed(format!(
-                "invalid bitdepth_idx {}",
-                self.config.bitdepth_idx
-            ));
+    let bit_depth_idc = stream.read_uvlc()?;
+    let depth = match bit_depth_idc {
+            // https://av2.aomedia.org/v1.0.0/index.html#table-bit-depth
+            0 => 10,
+            1 => 8,
+            _ => return AvifError::bmff_parse_failed("It is a requirement of bitstream conformance that bit_depth_idc is less than or equal to 1."),
+        };
+
+    // TODO(b/437292541): Parse all other fields of sequence_header_obu()?
+    Ok((seq_profile_idc as u8, pixel_format, depth))
+}
+
+#[cfg(feature = "avm")]
+// Returns the chroma sample position on success.
+fn parse_av2_content_interpretation_obu(stream: &mut IStream) -> AvifResult<ChromaSamplePosition> {
+    // https://av2.aomedia.org/v1.0.0/index.html#content_interpretation_obu_syntax
+    let ci_scan_type_idc = stream.read_bits(2)?;
+    let ci_color_description_present_flag = stream.read_bool()?;
+    let ci_chroma_sample_position_present_flag = stream.read_bool()?;
+    let _ci_aspect_ratio_info_present_flag = stream.read_bool()?;
+    let _ci_timing_info_present_flag = stream.read_bool()?;
+    let _ci_reserved_2bit = stream.read_bits(2)?;
+
+    if ci_color_description_present_flag {
+        let ci_color_description_idc = stream.read_rg(2)?;
+        if ci_color_description_idc == 0 {
+            let _ci_color_primaries = stream.read_bits(8)?;
+            let _ci_transfer_characteristics = stream.read_bits(8)?;
+            let _ci_matrix_coefficients = stream.read_bits(8)?;
         }
-        Ok(())
+        let _ci_full_range_flag = stream.read_bool()?;
     }
 
-    fn parse_non_reduced_still_picture_header(&self, stream: &mut IStream) -> AvifResult<()> {
-        if !self.reduced_still_picture_header {
-            stream.skip_bits(3)?; // seq_lcr_id
-            stream.skip_bits(1)?; // still_picture
-            stream.skip_bits(2)?; // max_tlayer_id
-            let max_mlayer_id = stream.read_bits(2)?;
-            if max_mlayer_id > 0 {
-                let n = (max_mlayer_id as f32 + 1.).log2().ceil() as usize;
-                stream.skip_bits(n)?; // seq_max_mlayer_cnt_minus_1
-            }
-            stream.skip_bits(1)?; // monotonic_output_order_flag
-        }
-        Ok(())
-    }
-
-    fn parse_content_interpretation(&mut self, stream: &mut IStream) -> AvifResult<()> {
-        stream.read_bits(2)?; // ci_scan_type_idc
-        let color_description_present = stream.read_bool()?; // ci_color_description_present_flag
-        let chroma_sample_position_present = stream.read_bool()?; // ci_chroma_sample_position_present_flag
-        stream.read_bool()?; // ci_aspect_ratio_info_present_flag
-        stream.read_bool()?; // ci_timing_info_present_flag
-        stream.read_bool()?; // ci_extension_present_flag
-        stream.read_bool()?; // reserved_bit
-
-        if color_description_present {
-            // Override the default CICP values.
-
-            use crate::codecs::avm::*;
-            let color_description_idc = stream.read_rg(2)?; // color_description_idc
-            if color_description_idc == 0xFFFFFFFF {
-                return AvifError::bmff_parse_failed(format!(
-                    "invalid color_description_idc {color_description_idc}",
-                ));
-            }
-            (
-                self.color_primaries,
-                self.transfer_characteristics,
-                self.matrix_coefficients,
-            ) = match color_description_idc {
-                AV2_IDC_EXPLICIT => (
-                    // Explicitly signaled
-                    ColorPrimaries::from(stream.read_bits(8)? as u16),
-                    TransferCharacteristics::from(stream.read_bits(8)? as u16),
-                    MatrixCoefficients::from(stream.read_bits(8)? as u16),
-                ),
-                AV2_BT709SDR => (
-                    // BT.709 SDR
-                    ColorPrimaries::Bt709,          // 1
-                    TransferCharacteristics::Bt709, // 1
-                    MatrixCoefficients::Bt470bg,    // 5
-                ),
-                AV2_BT2100PQ => (
-                    // BT.2100 PQ
-                    ColorPrimaries::Bt2100,        // 9
-                    TransferCharacteristics::Pq,   // 16
-                    MatrixCoefficients::Bt2020Ncl, // 9
-                ),
-                AV2_BT2100HLG => (
-                    // BT.2100 HLG
-                    ColorPrimaries::Bt2100,                // 9
-                    TransferCharacteristics::Bt2020_10bit, // 14
-                    MatrixCoefficients::Bt2020Ncl,         // 9
-                ),
-                AV2_SRGB => (
-                    // sRGB
-                    ColorPrimaries::Bt709,         // 1
-                    TransferCharacteristics::Srgb, // 13
-                    MatrixCoefficients::Identity,  // 0
-                ),
-                AV2_SRGBSYCC => (
-                    // sYCC
-                    ColorPrimaries::Bt709,         // 1
-                    TransferCharacteristics::Srgb, // 13
-                    MatrixCoefficients::Bt470bg,   // 5
-                ),
-                _ => (
-                    // Reserved
-                    ColorPrimaries::Unspecified,          // 2
-                    TransferCharacteristics::Unspecified, // 2
-                    MatrixCoefficients::Unspecified,      // 2
-                ),
-            };
-            self.yuv_range = if stream.read_bool()? { YuvRange::Full } else { YuvRange::Limited };
-        // color_range
+    if ci_chroma_sample_position_present_flag {
+        let ci_chroma_sample_position_top = stream.read_uvlc()?;
+        let _ci_chroma_sample_position_bottom = if ci_scan_type_idc != 1 {
+            stream.read_uvlc()?
         } else {
-            // Keep the default CICP values.
-        }
-
-        if chroma_sample_position_present {
-            use crate::codecs::avm::AV2_CSP_CENTER;
-            use crate::codecs::avm::AV2_CSP_LEFT;
-            use crate::codecs::avm::AV2_CSP_TOPLEFT;
-
-            let chroma_sample_position = stream.read_uvlc()?; // ci_chroma_sample_position_0
-            self.config.chroma_sample_position = match chroma_sample_position {
-                // Horizontal offset 0, vertical offset 0.5
-                AV2_CSP_LEFT => ChromaSamplePosition::Vertical,
-                // Horizontal offset 0.5, vertical offset 0.5
-                AV2_CSP_CENTER => ChromaSamplePosition::Unknown,
-                // Horizontal offset 0, vertical offset 0
-                AV2_CSP_TOPLEFT => ChromaSamplePosition::Colocated,
-                _ => ChromaSamplePosition::Unknown,
-            }
-        }
-        Ok(())
+            ci_chroma_sample_position_top
+        };
+        return Ok(match ci_chroma_sample_position_top {
+            // Horizontal offset 0, vertical offset 0.5
+            AV2_CSP_LEFT => ChromaSamplePosition::Vertical,
+            // Horizontal offset 0.5, vertical offset 0.5
+            AV2_CSP_CENTER => ChromaSamplePosition::Unknown,
+            // Horizontal offset 0, vertical offset 0
+            AV2_CSP_TOPLEFT => ChromaSamplePosition::Colocated,
+            // TODO(b/437292541): Implement other values in CrabbyAvif?
+            _ => ChromaSamplePosition::Unknown,
+        });
+        // TODO(b/437292541): What to do with _ci_chroma_sample_position_bottom?
     }
 
-    fn parse_obu_header(stream: &mut IStream) -> AvifResult<ObuHeader> {
-        let obu_size = stream.read_uleb128()?;
-        let obu_header_extension_flag = stream.read_bool()?;
-        let obu_type = stream.read_bits(5)? as u8;
-        stream.skip_bits(2)?; // obu_tlayer_id
-        if obu_header_extension_flag {
-            stream.skip_bits(8)?; // obu_mlayer_id, obu_xlayer_id
+    // TODO(b/437292541): Parse all other fields of content_interpretation_obu()?
+    Ok(ChromaSamplePosition::Unknown)
+}
+
+#[cfg(feature = "avm")]
+fn parse_av2_num_bytes_in_obu(stream: &mut IStream) -> AvifResult<usize> {
+    // https://av2.aomedia.org/v1.0.0/index.html#length_delimited_bitstream_syntax
+    let num_bytes_in_obu = stream.read_leb128()? as usize; // At most (1 << 32) - 1.
+    if num_bytes_in_obu > stream.bytes_left()? {
+        return AvifError::bmff_parse_failed(format!(
+            "AV2 num_bytes_in_obu {} exceeds the {} bytes left",
+            num_bytes_in_obu,
+            stream.bytes_left()?
+        ));
+    }
+    Ok(num_bytes_in_obu)
+}
+
+#[cfg(feature = "avm")]
+fn get_one_av2_obu(obus: &[u8], offset: usize) -> AvifResult<(usize, u8)> {
+    let mut stream = IStream::create(&obus[offset..]);
+    let num_bytes_in_obu = parse_av2_num_bytes_in_obu(&mut stream)?;
+    let num_bytes_in_obu_length = stream.offset;
+    let obu_type =
+        parse_av2_obu_header(&mut stream.sub_stream(&BoxSize::FixedSize(num_bytes_in_obu))?)?;
+    Ok((num_bytes_in_obu_length + num_bytes_in_obu, obu_type))
+}
+
+#[cfg(feature = "avm")]
+fn is_config_av2_obu(obu_type: u8) -> bool {
+    matches!(
+        obu_type,
+        AV2_OBU_SEQUENCE_HEADER
+            | AV2_OBU_CONTENT_INTERPRETATION
+            | AV2_OBU_LAYER_CONFIGURATION_RECORD
+    )
+}
+
+#[cfg(feature = "avm")]
+fn is_sample_av2_obu(obu_type: u8) -> bool {
+    matches!(
+        obu_type,
+        // These are explicitly forbidden in the AV2CodecConfigurationBox config_obus.
+        // TODO(b/437292541): What is a switch-eligible OBU? See
+        //                    https://aomediacodec.github.io/av2-isobmff/main#configobus
+        AV2_OBU_CLOSED_LOOP_KEY
+            | AV2_OBU_OPEN_LOOP_KEY
+            | AV2_OBU_LEADING_TILE_GROUP
+            | AV2_OBU_REGULAR_TILE_GROUP
+            | AV2_OBU_SWITCH
+            | AV2_OBU_LEADING_TIP
+            | AV2_OBU_REGULAR_TIP
+            | AV2_OBU_BRIDGE_FRAME
+    )
+}
+
+#[cfg(feature = "avm")]
+pub(crate) struct RangeAndCount {
+    pub range: Range<usize>,
+    pub count: usize,
+}
+#[cfg(feature = "avm")]
+struct Av2ObusRangesAndCounts {
+    pub config_obus: RangeAndCount,
+    pub sample_obus: RangeAndCount,
+}
+
+#[cfg(feature = "avm")]
+fn get_config_and_sample_av2_obus_ranges_and_counts(
+    obus: &[u8],
+) -> AvifResult<Av2ObusRangesAndCounts> {
+    let mut offset = 0;
+
+    // Skip any Temporal Delimiter OBU.
+    // A temporal delimiter cannot be part of the AV2CodecConfigurationBox config_obus
+    // and cannot be part of any sample data.
+    // TODO(b/437292541): Are all TD OBUs mandatorily here? Is there at least one? At most one?
+    while offset < obus.len() {
+        let (obu_length, obu_type) = get_one_av2_obu(obus, offset)?;
+        if obu_type != AV2_OBU_TEMPORAL_DELIMITER {
+            break;
         }
-        let obu_header_size = if obu_header_extension_flag { 2 } else { 1 };
-        if obu_size < obu_header_size {
-            return AvifError::bmff_parse_failed(format!("invalid obu_size {obu_size}",));
-        }
-        let obu_payload_size = obu_size - obu_header_size;
-        if obu_payload_size as usize > stream.bytes_left()? {
-            return AvifError::bmff_parse_failed(format!("invalid obu_size {obu_size}",));
-        }
-        Ok(ObuHeader {
-            obu_type,
-            size: obu_payload_size,
-        })
+        offset += obu_length;
     }
 
-    pub(crate) fn parse_from_obus(data: &[u8]) -> AvifResult<Self> {
-        // TODO: b/437292541 - Match AV2 specification once finalized.
+    // Iterate over the OBUs that will go into the AV2CodecConfigurationBox config_obus.
+    let config_obus_start = offset;
+    let mut config_obus_count = 0;
+    while offset < obus.len() {
+        let (obu_length, obu_type) = get_one_av2_obu(obus, offset)?;
+        if is_sample_av2_obu(obu_type) {
+            break;
+        }
+        // TODO(b/437292541): What is expected here besides AV2_OBU_SEQUENCE_HEADER,
+        //                    AV2_OBU_CONTENT_INTERPRETATION, AV2_OBU_LAYER_CONFIGURATION_RECORD?
+        if obu_type == AV2_OBU_TEMPORAL_DELIMITER || obu_type == AV2_OBU_PADDING {
+            return AvifError::unknown_error(format!("Unexpected obu_type {}", obu_type));
+        }
+        offset += obu_length;
+        config_obus_count += 1;
+    }
+    let config_obus_range = config_obus_start..offset;
+
+    // Everything else. See https://aomediacodec.github.io/av2-isobmff/main#sample-obus
+    let sample_obus_start = offset;
+    let mut sample_obus_count = 0;
+    while offset < obus.len() {
+        let (obu_length, obu_type) = get_one_av2_obu(obus, offset)?;
+        if obu_type == AV2_OBU_TEMPORAL_DELIMITER || is_config_av2_obu(obu_type) {
+            return AvifError::unknown_error(format!("Unexpected obu_type {}", obu_type));
+        }
+        if obu_type == AV2_OBU_PADDING {
+            break;
+        }
+        offset += obu_length;
+        sample_obus_count += 1;
+    }
+    let sample_obus_range = sample_obus_start..offset;
+
+    // Maybe some trailing Padding OBUs.
+    while offset < obus.len() {
+        let (obu_length, obu_type) = get_one_av2_obu(obus, offset)?;
+        if obu_type != AV2_OBU_PADDING {
+            return AvifError::unknown_error(format!("Unexpected obu_type {}", obu_type));
+        }
+        offset += obu_length;
+    }
+    Ok(Av2ObusRangesAndCounts {
+        config_obus: RangeAndCount {
+            range: config_obus_range,
+            count: config_obus_count,
+        },
+        sample_obus: RangeAndCount {
+            range: sample_obus_range,
+            count: sample_obus_count,
+        },
+    })
+}
+
+#[cfg(feature = "avm")]
+impl Av2CodecConfiguration {
+    pub(crate) fn get_config_obus_range_and_count(obus: &[u8]) -> AvifResult<RangeAndCount> {
+        Ok(get_config_and_sample_av2_obus_ranges_and_counts(obus)?.config_obus)
+    }
+
+    pub(crate) fn get_sample_obus_range(obus: &[u8]) -> AvifResult<Range<usize>> {
+        Ok(get_config_and_sample_av2_obus_ranges_and_counts(obus)?
+            .sample_obus
+            .range)
+    }
+
+    pub(crate) fn from_av2_config_obus(config_obus_count: usize, data: &[u8]) -> AvifResult<Self> {
+        assert_ne!(config_obus_count, 0);
+        assert!(config_obus_count <= 256);
         let mut stream = IStream::create(data);
-        let mut sequence_header = None;
 
-        while stream.has_bytes_left()? {
-            let obu = Self::parse_obu_header(&mut stream)?;
-            if obu.obu_type == crate::codecs::avm::AV2_OBU_SEQUENCE_HEADER {
-                if sequence_header.is_some() {
-                    return AvifError::bmff_parse_failed("Multiple Sequence Header OBUs");
+        let (seq_profile, pixel_format, depth) = {
+            let num_bytes_in_obu = parse_av2_num_bytes_in_obu(&mut stream)?;
+            let mut stream = stream.sub_stream(&BoxSize::FixedSize(num_bytes_in_obu))?;
+            let first_obu_type = parse_av2_obu_header(&mut stream)?;
+            if first_obu_type != AV2_OBU_SEQUENCE_HEADER {
+                // https://aomediacodec.github.io/av2-isobmff/main#configobus
+                return AvifError::bmff_parse_failed(
+                    "configOBUs shall contain a Sequence Header OBU as its first OBU",
+                );
+            }
+            parse_av2_sequence_header_obu(&mut stream)?
+        };
+
+        let mut chroma_sample_position = ChromaSamplePosition::Unknown;
+        for _ in 1..config_obus_count {
+            let num_bytes_in_obu = parse_av2_num_bytes_in_obu(&mut stream)?;
+            let mut stream = stream.sub_stream(&BoxSize::FixedSize(num_bytes_in_obu))?;
+            // https://av2.aomedia.org/v1.0.0/index.html#general_obu_syntax
+            let obu_type = parse_av2_obu_header(&mut stream)?;
+            match obu_type {
+                AV2_OBU_SEQUENCE_HEADER => {
+                    // TODO(b/437292541): Reject, parse, or skip?
                 }
-                sequence_header = Some({
-                    let mut stream =
-                        stream.sub_stream(&BoxSize::FixedSize(usize_from_u32(obu.size)?))?;
-                    let mut sequence_header = Av2SequenceHeader::default();
-                    let seq_header_id = stream.read_uvlc()?;
-                    if seq_header_id >= 16 {
-                        return AvifError::bmff_parse_failed(format!(
-                            "invalid seq_header_id {seq_header_id}",
-                        ));
-                    }
-                    sequence_header.parse_profile(&mut stream)?;
-                    sequence_header.parse_chroma_format_bitdepth(&mut stream)?;
-                    sequence_header.parse_non_reduced_still_picture_header(&mut stream)?;
-                    sequence_header.parse_frame_max_dimensions(&mut stream)?;
-                    sequence_header.color_primaries = ColorPrimaries::Unspecified;
-                    sequence_header.transfer_characteristics = TransferCharacteristics::Unspecified;
-                    sequence_header.matrix_coefficients = MatrixCoefficients::Unspecified;
-                    sequence_header.yuv_range = YuvRange::Limited;
-                    sequence_header.config.chroma_sample_position = ChromaSamplePosition::Unknown;
-                    sequence_header
-                });
-            } else if obu.obu_type == crate::codecs::avm::AV2_OBU_CONTENT_INTERPRETATION {
-                if let Some(sequence_header) = &mut sequence_header {
-                    sequence_header.parse_content_interpretation(
-                        &mut stream.sub_stream(&BoxSize::FixedSize(usize_from_u32(obu.size)?))?,
-                    )?;
-                } else {
+                AV2_OBU_CONTENT_INTERPRETATION => {
+                    // TODO(b/437292541): Reject, parse, or skip if multiple ones?
+                    chroma_sample_position = parse_av2_content_interpretation_obu(&mut stream)?;
+                }
+                AV2_OBU_LAYER_CONFIGURATION_RECORD => {
+                    // Allowed as mentioned at
+                    // https://aomediacodec.github.io/av2-isobmff/main#sample-obus
+                }
+                AV2_OBU_TEMPORAL_DELIMITER
+                | AV2_OBU_CLOSED_LOOP_KEY
+                | AV2_OBU_OPEN_LOOP_KEY
+                | AV2_OBU_LEADING_TILE_GROUP
+                | AV2_OBU_REGULAR_TILE_GROUP
+                | AV2_OBU_SWITCH
+                | AV2_OBU_LEADING_TIP
+                | AV2_OBU_REGULAR_TIP
+                | AV2_OBU_BRIDGE_FRAME => {
                     return AvifError::bmff_parse_failed(
-                        "Content Interpretation OBU found before Sequence Header OBU",
+                        "configOBUs shall NOT contain any of the following:
+a Temporal Delimiter OBU;
+any OBU carrying coded frame data, including Closed Loop Key OBUs, Open Loop Key OBUs, Switch OBUs,
+Bridge Frame OBUs, regular or leading tile-group OBUs, and switch-eligible or TIP frame OBUs;",
                     );
+                    // TODO(b/437292541): What is a "switch-eligible" OBU?
                 }
-            } else {
-                // Skip this OBU.
-                stream.skip(usize_from_u32(obu.size)?)?;
-                continue;
+                _ => {
+                    // TODO(b/437292541): How to check what is expected here?
+                }
             }
         }
-        if let Some(sequence_header) = sequence_header {
-            return Ok(sequence_header);
-        }
-        AvifError::bmff_parse_failed("missing AV2 Sequence Header OBU")
+
+        Ok(Av2CodecConfiguration {
+            config_obus_count,
+            config_obus: data.try_to_vec()?,
+            seq_profile,
+            pixel_format,
+            depth,
+            chroma_sample_position,
+        })
     }
 }

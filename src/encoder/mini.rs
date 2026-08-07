@@ -24,9 +24,14 @@ pub fn is_mini_compatible(enc: &Encoder) -> bool {
         return false;
     }
 
-    // TODO: b/456440247 - Implement with JPEG XL.
-    if enc.settings.codec_choice.actual() != CodecChoice::Aom {
-        return false;
+    match enc.settings.codec_choice.actual() {
+        // Supported codecs and formats:
+        CodecChoice::Aom => {}
+        #[cfg(feature = "avm")]
+        CodecChoice::Avm => {}
+
+        // TODO: b/456440247 - Implement with JPEG XL.
+        _ => return false,
     }
 
     // TODO: b/434944440 - Return false if there is any sample transform recipe.
@@ -120,8 +125,11 @@ pub fn is_mini_compatible(enc: &Encoder) -> bool {
             if item.samples.len() != 1 || item.samples[0].sample_data().len() > (1 << 28) {
                 return false;
             }
-            if !matches!(item.codec_configuration, Some(CodecConfiguration::Av1(_))) {
-                return false;
+            match item.codec_configuration {
+                Some(CodecConfiguration::Av1(_)) => {}
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(_)) => {}
+                _ => return false,
             }
             continue; // The primary item can be stored in the MinimizedImageBox.
         }
@@ -130,8 +138,11 @@ pub fn is_mini_compatible(enc: &Encoder) -> bool {
             if item.samples.len() != 1 || item.samples[0].sample_data().len() >= (1 << 28) {
                 return false;
             }
-            if !matches!(item.codec_configuration, Some(CodecConfiguration::Av1(_))) {
-                return false;
+            match item.codec_configuration {
+                Some(CodecConfiguration::Av1(_)) => {}
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(_)) => {}
+                _ => return false,
             }
             continue; // The alpha auxiliary item can be stored in the MinimizedImageBox.
         }
@@ -140,8 +151,11 @@ pub fn is_mini_compatible(enc: &Encoder) -> bool {
             if item.samples.len() != 1 || item.samples[0].sample_data().len() >= (1 << 28) {
                 return false;
             }
-            if !matches!(item.codec_configuration, Some(CodecConfiguration::Av1(_))) {
-                return false;
+            match item.codec_configuration {
+                Some(CodecConfiguration::Av1(_)) => {}
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(_)) => {}
+                _ => return false,
             }
             continue; // The gainmap input image item can be stored in the MinimizedImageBox.
         }
@@ -186,7 +200,12 @@ impl Encoder {
     pub(crate) fn write_ftyp_and_mini(&self, stream: &mut OStream) -> AvifResult<()> {
         stream.start_box("ftyp")?;
         stream.write_string(&String::from("mif3"))?; // unsigned int(32) major_brand;
-        stream.write_string(&String::from("avif"))?; // unsigned int(32) minor_version;
+        stream.write_string(&String::from(match self.settings.codec_choice.actual() {
+            CodecChoice::Aom => "avif",
+            #[cfg(feature = "avm")]
+            CodecChoice::Avm => "av2f",
+            _ => return AvifError::not_implemented(),
+        }))?; // unsigned int(32) minor_version;
         stream.finish_box()?;
         self.write_mini(stream)
     }
@@ -256,15 +275,23 @@ impl Encoder {
 
         let orientation_minus1 = image_irot_imir_to_exif_orientation(image)? - 1;
 
-        let (infe_type, codec_config_type, has_explicit_codec_types) = if matches!(
-            color_item.codec_configuration,
-            Some(CodecConfiguration::Av1(_))
-        ) {
-            ("av01", "av1C", false)
-        } else {
-            // TODO: b/437292541 - Support AVM (av02/av2C)
-            return AvifError::not_implemented();
-        };
+        let (infe_type, codec_config_type, has_explicit_codec_types, codec_config) =
+            match &color_item.codec_configuration {
+                Some(CodecConfiguration::Av1(config)) => ("av01", "av1C", false, {
+                    let mut codec_config_stream = OStream::default();
+                    codec_config_stream.try_reserve(4)?;
+                    Item::write_av1_codec_config(config, &mut codec_config_stream)?;
+                    assert_eq!(codec_config_stream.offset(), 4); // 'av1C' is always 4 byte long.
+                    codec_config_stream.data
+                }),
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(config)) => ("av02", "av2C", false, {
+                    let mut codec_config_stream = OStream::default();
+                    Item::write_av2_codec_config(config, &mut codec_config_stream)?;
+                    codec_config_stream.data
+                }),
+                _ => return AvifError::not_implemented(),
+            };
 
         // _minus1 is encoded for these fields.
         assert_ne!(image.width, 0);
@@ -272,7 +299,7 @@ impl Encoder {
         assert_ne!(color_data.len(), 0);
 
         let mut large_dimensions_flag = image.width > (1 << 7) || image.height > (1 << 7);
-        let codec_config_size = 4; // 'av1_c' always uses 4 bytes.
+        let codec_config_size = u32::try_from(codec_config.len()).unwrap();
         let mut alpha_codec_config_size = 0; // 0 if same codec config as main. Equal to codec_config_size otherwise.
         let mut gainmap_codec_config_size = 0; // 0 if same codec config as main. Equal to codec_config_size otherwise.
         let mut gainmap_metadata_size = 0;
@@ -536,36 +563,42 @@ impl Encoder {
 
         // Chunks
         if codec_config_size > 0 {
-            if let Some(CodecConfiguration::Av1(config)) = &color_item.codec_configuration {
-                Item::write_av1_codec_config(config, stream)?; // unsigned int(8) main_item_codec_config[main_item_codec_config_size];
-            } else {
-                return AvifError::unknown_error("Unexpected codec configuration");
-            }
+            // unsigned int(8) main_item_codec_config[main_item_codec_config_size];
+            stream.write_slice(&codec_config)?;
         }
         if has_alpha && !alpha_data.unwrap().is_empty() && alpha_codec_config_size != 0 {
-            if let Some(CodecConfiguration::Av1(config)) = &alpha_item.unwrap().codec_configuration
-            {
-                Item::write_av1_codec_config(config, stream)?; // unsigned int(8) alpha_item_codec_config[alpha_item_codec_config_size];
-            } else {
-                return AvifError::unknown_error("Unexpected codec configuration");
+            // unsigned int(8) alpha_item_codec_config[alpha_item_codec_config_size];
+            match &alpha_item.unwrap().codec_configuration {
+                Some(CodecConfiguration::Av1(config)) => {
+                    Item::write_av1_codec_config(config, stream)?;
+                }
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(config)) => {
+                    Item::write_av2_codec_config(config, stream)?;
+                }
+                _ => return AvifError::unknown_error("Unexpected codec configuration"),
             }
         }
         if has_hdr && has_gainmap && gainmap_codec_config_size != 0 {
-            if let Some(CodecConfiguration::Av1(config)) =
-                &gainmap_item.unwrap().codec_configuration
-            {
-                Item::write_av1_codec_config(config, stream)?; // unsigned int(8) gainmap_item_codec_config[gainmap_item_codec_config_size];
-            } else {
-                return AvifError::unknown_error("Unexpected codec configuration");
+            // unsigned int(8) gainmap_item_codec_config[gainmap_item_codec_config_size];
+            match &gainmap_item.unwrap().codec_configuration {
+                Some(CodecConfiguration::Av1(config)) => {
+                    Item::write_av1_codec_config(config, stream)?;
+                }
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(config)) => {
+                    Item::write_av2_codec_config(config, stream)?;
+                }
+                _ => return AvifError::unknown_error("Unexpected codec configuration"),
             }
         }
 
         if has_icc {
-            stream.write_slice(image.icc.as_slice())?; // unsigned int(8) icc_data[icc_data_size_minus1 + 1];
+            stream.write_slice(&image.icc)?; // unsigned int(8) icc_data[icc_data_size_minus1 + 1];
         }
         if has_hdr && has_gainmap && tmap_icc_size != 0 {
             assert_eq!(self.alt_image_metadata.icc.len(), tmap_icc_size);
-            stream.write_slice(self.alt_image_metadata.icc.as_slice())?; // unsigned int(8) tmap_icc_data[tmap_icc_data_size_minus1 + 1];
+            stream.write_slice(&self.alt_image_metadata.icc)?; // unsigned int(8) tmap_icc_data[tmap_icc_data_size_minus1 + 1];
         }
         if has_hdr && has_gainmap && gainmap_metadata_size != 0 {
             // Minus one because of the prepended version field which is not part of the MinimizedImageBox syntax.
@@ -574,8 +607,7 @@ impl Encoder {
                 .iter()
                 .find(|item| item.item_type == "tmap")
                 .unwrap()
-                .metadata_payload
-                .as_slice()[1..];
+                .metadata_payload[1..];
             assert_eq!(gainmap_metadata.len(), gainmap_metadata_size);
             stream.write_slice(gainmap_metadata)?; // unsigned int(8) gainmap_metadata[gainmap_metadata_size];
         }
@@ -590,10 +622,10 @@ impl Encoder {
         stream.write_slice(color_data)?; // unsigned int(8) main_item_data[main_item_data_size_minus1 + 1];
 
         if !image.exif.is_empty() {
-            stream.write_slice(image.exif.as_slice())?; // unsigned int(8) exif_data[exif_data_size_minus1 + 1];
+            stream.write_slice(&image.exif)?; // unsigned int(8) exif_data[exif_data_size_minus1 + 1];
         }
         if !image.xmp.is_empty() {
-            stream.write_slice(image.xmp.as_slice())?; // unsigned int(8) xmp_data[xmp_data_size_minus1 + 1];
+            stream.write_slice(&image.xmp)?; // unsigned int(8) xmp_data[xmp_data_size_minus1 + 1];
         }
 
         let expected_chunk_bytes = codec_config_size as usize
