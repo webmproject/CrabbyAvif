@@ -32,12 +32,62 @@ use test_case::test_matrix;
     [false, true],
     [false, true]
 )]
-fn encode_decode(
+fn encode_decode_av1(
     depth: u8,
     yuv_format: PixelFormat,
     yuv_range: YuvRange,
     alpha: bool,
     gainmap: bool,
+) -> AvifResult<()> {
+    encode_decode(
+        CodecChoice::Aom,
+        depth,
+        yuv_format,
+        yuv_range,
+        alpha,
+        gainmap,
+        "avif",
+        CompressionFormat::Avif,
+    )
+}
+
+#[cfg(feature = "avm")]
+#[test_matrix(
+    [8, 10],
+    [PixelFormat::Yuv420],
+    [YuvRange::Full],
+    [false],
+    [false]
+)]
+fn encode_decode_av2(
+    depth: u8,
+    yuv_format: PixelFormat,
+    yuv_range: YuvRange,
+    alpha: bool,
+    gainmap: bool,
+) -> AvifResult<()> {
+    encode_decode(
+        CodecChoice::Avm,
+        depth,
+        yuv_format,
+        yuv_range,
+        alpha,
+        gainmap,
+        "av2f",
+        CompressionFormat::Avif2,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_decode(
+    codec: CodecChoice,
+    depth: u8,
+    yuv_format: PixelFormat,
+    yuv_range: YuvRange,
+    alpha: bool,
+    gainmap: bool,
+    expected_minor_version: &str,
+    expected_format: CompressionFormat,
 ) -> AvifResult<()> {
     if !HAS_ENCODER {
         return Ok(());
@@ -77,6 +127,7 @@ fn encode_decode(
     };
 
     let settings = encoder::Settings {
+        codec_choice: codec,
         speed: Some(10),
         header_format: HeaderFormat::Mini,
         mutable: encoder::MutableSettings {
@@ -96,13 +147,18 @@ fn encode_decode(
     let edata = encoder.finish()?;
     assert!(!edata.is_empty());
     // Make sure a MinimizedImageBox was written and not just a regular MetaBox.
-    assert_eq!(&edata.as_slice()[4..16], "ftypmif3avif".as_bytes());
+    assert_eq!(str::from_utf8(&edata.as_slice()[4..8]).unwrap(), "ftyp");
+    assert_eq!(str::from_utf8(&edata.as_slice()[8..12]).unwrap(), "mif3");
+    assert_eq!(
+        str::from_utf8(&edata.as_slice()[12..16]).unwrap(),
+        expected_minor_version
+    );
 
     let mut decoder = decoder::Decoder::default();
     decoder.settings.image_content_to_decode = ImageContentType::All;
     decoder.set_io_vec(edata);
     assert_eq!(decoder.parse(), Ok(()));
-    assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
+    assert_eq!(decoder.compression_format(), expected_format);
     assert_eq!(decoder.image_count(), 1);
 
     let image = decoder.image().expect("image was none");

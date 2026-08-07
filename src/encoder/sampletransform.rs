@@ -423,14 +423,14 @@ impl Encoder {
             depth: num_bits,
             max_threads: self.settings.threads,
             image_size_limit: NonZero::new(DEFAULT_IMAGE_SIZE_LIMIT),
-            max_input_size: item.samples[0].data.len(),
+            max_input_size: item.samples[0].data().len(),
             codec_config,
             category,
             android_mediacodec_output_color_format: Default::default(),
         };
         decoder_codec.initialize(&config)?;
         decoder_codec.get_next_image(
-            &item.samples[0].data,
+            item.samples[0].data(),
             0xff,
             &mut decoded_base_image,
             category,

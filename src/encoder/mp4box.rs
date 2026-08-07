@@ -288,7 +288,7 @@ impl Encoder {
                     // unsigned int(offset_size*8) extent_offset;
                     stream.write_u32(0)?;
                     // unsigned int(length_size*8) extent_length;
-                    stream.write_u32(u32_from_usize(item.samples[i].data.len())?)?;
+                    stream.write_u32(u32_from_usize(item.samples[i].data().len())?)?;
                 }
             } else {
                 // unsigned int(16) extent_count;
@@ -299,7 +299,7 @@ impl Encoder {
                 let extent_length = if item.samples.is_empty() {
                     u32_from_usize(item.metadata_payload.len())?
                 } else {
-                    u32_from_usize(item.samples[0].data.len())?
+                    u32_from_usize(item.samples[0].data().len())?
                 };
                 // unsigned int(length_size*8) extent_length;
                 stream.write_u32(extent_length)?;
@@ -725,11 +725,11 @@ impl Encoder {
                     if item.samples.len() > 1 {
                         // If there is more than 1 sample, then we do not de-duplicate the chunks.
                         for sample in &item.samples {
-                            stream.write_slice(&sample.data)?;
+                            stream.write_slice(sample.data())?;
                         }
                     } else {
                         chunk_offset =
-                            stream.write_slice_dedupe(mdat_start_offset, &item.samples[0].data)?;
+                            stream.write_slice_dedupe(mdat_start_offset, item.samples[0].data())?;
                     }
                 } else if !item.metadata_payload.is_empty() {
                     chunk_offset =
@@ -765,7 +765,7 @@ impl Encoder {
                     }
 
                     let chunk_offset = stream.offset();
-                    stream.write_slice(&item.samples[layer_index].data)?;
+                    stream.write_slice(item.samples[layer_index].data())?;
                     stream.write_u32_at_offset(
                         u32_from_usize(chunk_offset)?,
                         item.mdat_offset_locations[layer_index],
