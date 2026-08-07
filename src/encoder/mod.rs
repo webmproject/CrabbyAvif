@@ -256,20 +256,32 @@ impl Settings {
 
 #[derive(Debug, Default)]
 pub(crate) struct Sample {
-    pub data: Vec<u8>,
+    // All the bytes output by the codecs::Encoder instance.
+    pub data_output_by_codec: Vec<u8>,
+    // The range of data_output_by_codec bytes that correspond to sample data
+    // (parts of data_output_by_codec may be moved to codec configuration fields or stripped).
+    pub sample_data_range: (usize, usize),
+    // Each codec has its own definition of a sync sample. Sometimes means a key frame.
     pub sync: bool,
 }
 
 impl Sample {
     // This function is not used in all configurations.
     #[allow(dead_code)]
-    pub(crate) fn create_from(data: &[u8], sync: bool) -> AvifResult<Self> {
+    pub(crate) fn create_from(data: &[u8], range: (usize, usize), sync: bool) -> AvifResult<Self> {
         let mut copied_data: Vec<u8> = create_vec_exact(data.len())?;
         copied_data.extend_from_slice(data);
         Ok(Sample {
-            data: copied_data,
+            data_output_by_codec: copied_data,
+            sample_data_range: range,
             sync,
         })
+    }
+
+    // The range of data_output_by_codec bytes that correspond to sample data
+    // (in opposition to codec configuration fields or other codec-agnostic container boxes).
+    pub(crate) fn data(&self) -> &[u8] {
+        &self.data_output_by_codec[self.sample_data_range.0..self.sample_data_range.1]
     }
 }
 

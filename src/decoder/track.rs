@@ -163,6 +163,8 @@ impl SampleDescription {
     pub(crate) fn is_supported_format(&self) -> bool {
         [
             "av01",
+            #[cfg(feature = "avm")]
+            "av02",
             #[cfg(feature = "heic")]
             "hvc1",
             #[cfg(feature = "jpegxl")]

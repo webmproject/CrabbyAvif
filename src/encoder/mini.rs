@@ -24,9 +24,14 @@ pub fn is_mini_compatible(enc: &Encoder) -> bool {
         return false;
     }
 
-    // TODO: b/456440247 - Implement with JPEG XL.
-    if enc.settings.codec_choice.actual() != CodecChoice::Aom {
-        return false;
+    match enc.settings.codec_choice.actual() {
+        // Supported codecs and formats:
+        CodecChoice::Aom => {}
+        #[cfg(feature = "avm")]
+        CodecChoice::Avm => {}
+
+        // TODO: b/456440247 - Implement with JPEG XL.
+        _ => return false,
     }
 
     // TODO: b/434944440 - Return false if there is any sample transform recipe.
@@ -117,31 +122,40 @@ pub fn is_mini_compatible(enc: &Encoder) -> bool {
             assert!(color_item.is_none());
             color_item = Some(item);
             // main_item_data_size_minus1
-            if item.samples.len() != 1 || item.samples[0].data.len() > (1 << 28) {
+            if item.samples.len() != 1 || item.samples[0].data().len() > (1 << 28) {
                 return false;
             }
-            if !matches!(item.codec_configuration, Some(CodecConfiguration::Av1(_))) {
-                return false;
+            match item.codec_configuration {
+                Some(CodecConfiguration::Av1(_)) => {}
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(_)) => {}
+                _ => return false,
             }
             continue; // The primary item can be stored in the MinimizedImageBox.
         }
         if item.category == Category::Alpha && item.iref_to_id == Some(enc.primary_item_id) {
             // alpha_item_data_size
-            if item.samples.len() != 1 || item.samples[0].data.len() >= (1 << 28) {
+            if item.samples.len() != 1 || item.samples[0].data().len() >= (1 << 28) {
                 return false;
             }
-            if !matches!(item.codec_configuration, Some(CodecConfiguration::Av1(_))) {
-                return false;
+            match item.codec_configuration {
+                Some(CodecConfiguration::Av1(_)) => {}
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(_)) => {}
+                _ => return false,
             }
             continue; // The alpha auxiliary item can be stored in the MinimizedImageBox.
         }
         if item.category == Category::Gainmap {
             // gainmap_item_data_size
-            if item.samples.len() != 1 || item.samples[0].data.len() >= (1 << 28) {
+            if item.samples.len() != 1 || item.samples[0].data().len() >= (1 << 28) {
                 return false;
             }
-            if !matches!(item.codec_configuration, Some(CodecConfiguration::Av1(_))) {
-                return false;
+            match item.codec_configuration {
+                Some(CodecConfiguration::Av1(_)) => {}
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(_)) => {}
+                _ => return false,
             }
             continue; // The gainmap input image item can be stored in the MinimizedImageBox.
         }
@@ -205,9 +219,9 @@ impl Encoder {
             .iter()
             .find(|item| item.category == Category::Gainmap);
 
-        let color_data = &color_item.samples.first().unwrap().data;
-        let alpha_data = alpha_item.map(|item| &item.samples.first().unwrap().data);
-        let gainmap_data = gainmap_item.map(|item| &item.samples.first().unwrap().data);
+        let color_data = color_item.samples.first().unwrap().data();
+        let alpha_data = alpha_item.map(|item| item.samples.first().unwrap().data());
+        let gainmap_data = gainmap_item.map(|item| item.samples.first().unwrap().data());
 
         let image = &self.image_metadata;
         let gainmap_image = &self.gainmap_image_metadata;
@@ -259,16 +273,19 @@ impl Encoder {
         let infe_type;
         let codec_config_type;
         let has_explicit_codec_types;
-        if matches!(
-            color_item.codec_configuration,
-            Some(CodecConfiguration::Av1(_))
-        ) {
-            infe_type = "av01";
-            codec_config_type = "av1C";
-            has_explicit_codec_types = false;
-        } else {
-            // TODO: b/437292541 - Support AVM (av02/av2C)
-            return AvifError::not_implemented();
+        match color_item.codec_configuration {
+            Some(CodecConfiguration::Av1(_)) => {
+                infe_type = "av01";
+                codec_config_type = "av1C";
+                has_explicit_codec_types = false;
+            }
+            #[cfg(feature = "avm")]
+            Some(CodecConfiguration::Av2(_)) => {
+                infe_type = "av02";
+                codec_config_type = "av2C";
+                has_explicit_codec_types = false;
+            }
+            _ => return AvifError::not_implemented(),
         }
 
         // _minus1 is encoded for these fields.
@@ -541,36 +558,51 @@ impl Encoder {
 
         // Chunks
         if codec_config_size > 0 {
-            if let Some(CodecConfiguration::Av1(config)) = &color_item.codec_configuration {
-                Item::write_av1_codec_config(config, stream)?; // unsigned int(8) main_item_codec_config[main_item_codec_config_size];
-            } else {
-                return AvifError::unknown_error("Unexpected codec configuration");
+            // unsigned int(8) main_item_codec_config[main_item_codec_config_size];
+            match &color_item.codec_configuration {
+                Some(CodecConfiguration::Av1(config)) => {
+                    Item::write_av1_codec_config(config, stream)?;
+                }
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(config)) => {
+                    Item::write_av2_codec_config(config, stream)?;
+                }
+                _ => return AvifError::unknown_error("Unexpected codec configuration"),
             }
         }
         if has_alpha && !alpha_data.unwrap().is_empty() && alpha_codec_config_size != 0 {
-            if let Some(CodecConfiguration::Av1(config)) = &alpha_item.unwrap().codec_configuration
-            {
-                Item::write_av1_codec_config(config, stream)?; // unsigned int(8) alpha_item_codec_config[alpha_item_codec_config_size];
-            } else {
-                return AvifError::unknown_error("Unexpected codec configuration");
+            // unsigned int(8) alpha_item_codec_config[alpha_item_codec_config_size];
+            match &alpha_item.unwrap().codec_configuration {
+                Some(CodecConfiguration::Av1(config)) => {
+                    Item::write_av1_codec_config(config, stream)?;
+                }
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(config)) => {
+                    Item::write_av2_codec_config(config, stream)?;
+                }
+                _ => return AvifError::unknown_error("Unexpected codec configuration"),
             }
         }
         if has_hdr && has_gainmap && gainmap_codec_config_size != 0 {
-            if let Some(CodecConfiguration::Av1(config)) =
-                &gainmap_item.unwrap().codec_configuration
-            {
-                Item::write_av1_codec_config(config, stream)?; // unsigned int(8) gainmap_item_codec_config[gainmap_item_codec_config_size];
-            } else {
-                return AvifError::unknown_error("Unexpected codec configuration");
+            // unsigned int(8) gainmap_item_codec_config[gainmap_item_codec_config_size];
+            match &gainmap_item.unwrap().codec_configuration {
+                Some(CodecConfiguration::Av1(config)) => {
+                    Item::write_av1_codec_config(config, stream)?;
+                }
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(config)) => {
+                    Item::write_av2_codec_config(config, stream)?;
+                }
+                _ => return AvifError::unknown_error("Unexpected codec configuration"),
             }
         }
 
         if has_icc {
-            stream.write_slice(image.icc.as_slice())?; // unsigned int(8) icc_data[icc_data_size_minus1 + 1];
+            stream.write_slice(&image.icc)?; // unsigned int(8) icc_data[icc_data_size_minus1 + 1];
         }
         if has_hdr && has_gainmap && tmap_icc_size != 0 {
             assert_eq!(self.alt_image_metadata.icc.len(), tmap_icc_size);
-            stream.write_slice(self.alt_image_metadata.icc.as_slice())?; // unsigned int(8) tmap_icc_data[tmap_icc_data_size_minus1 + 1];
+            stream.write_slice(&self.alt_image_metadata.icc)?; // unsigned int(8) tmap_icc_data[tmap_icc_data_size_minus1 + 1];
         }
         if has_hdr && has_gainmap && gainmap_metadata_size != 0 {
             // Minus one because of the prepended version field which is not part of the MinimizedImageBox syntax.
@@ -579,26 +611,25 @@ impl Encoder {
                 .iter()
                 .find(|item| item.item_type == "tmap")
                 .unwrap()
-                .metadata_payload
-                .as_slice()[1..];
+                .metadata_payload[1..];
             assert_eq!(gainmap_metadata.len(), gainmap_metadata_size);
             stream.write_slice(gainmap_metadata)?; // unsigned int(8) gainmap_metadata[gainmap_metadata_size];
         }
 
         if has_alpha && !alpha_data.unwrap().is_empty() {
-            stream.write_slice(alpha_data.unwrap().as_slice())?; // unsigned int(8) alpha_item_data[alpha_item_data_size];
+            stream.write_slice(alpha_data.unwrap())?; // unsigned int(8) alpha_item_data[alpha_item_data_size];
         }
         if has_hdr && has_gainmap && !gainmap_data.unwrap().is_empty() {
-            stream.write_slice(gainmap_data.unwrap().as_slice())?; // unsigned int(8) gainmap_item_data[gainmap_item_data_size];
+            stream.write_slice(gainmap_data.unwrap())?; // unsigned int(8) gainmap_item_data[gainmap_item_data_size];
         }
 
-        stream.write_slice(color_data.as_slice())?; // unsigned int(8) main_item_data[main_item_data_size_minus1 + 1];
+        stream.write_slice(color_data)?; // unsigned int(8) main_item_data[main_item_data_size_minus1 + 1];
 
         if !image.exif.is_empty() {
-            stream.write_slice(image.exif.as_slice())?; // unsigned int(8) exif_data[exif_data_size_minus1 + 1];
+            stream.write_slice(&image.exif)?; // unsigned int(8) exif_data[exif_data_size_minus1 + 1];
         }
         if !image.xmp.is_empty() {
-            stream.write_slice(image.xmp.as_slice())?; // unsigned int(8) xmp_data[xmp_data_size_minus1 + 1];
+            stream.write_slice(&image.xmp)?; // unsigned int(8) xmp_data[xmp_data_size_minus1 + 1];
         }
 
         let expected_chunk_bytes = codec_config_size as usize

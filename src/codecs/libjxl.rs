@@ -278,14 +278,14 @@ impl Encoder for Libjxl {
                 *expected_header
             ));
         }
-        let mut encoded_bytes_without_header = encoded_bytes_with_header;
-        encoded_bytes_without_header.drain(..expected_header.len());
+        let encoded_bytes_without_header = (expected_header.len(), encoded_bytes_with_header.len());
 
         output_samples
             .try_reserve_exact(1)
             .map_err(AvifError::map_out_of_memory)?;
         output_samples.push(Sample {
-            data: encoded_bytes_without_header,
+            data_output_by_codec: encoded_bytes_with_header,
+            sample_data_range: encoded_bytes_without_header,
             sync: true,
         });
 
@@ -904,7 +904,7 @@ fn libjxl_enc_dec_test() -> Result<(), AvifError> {
         android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat::default(),
     })?;
     decoder.get_next_image(
-        &output_samples[0].data,
+        output_samples[0].data(),
         0xff,
         &mut decoded,
         Category::Color,
