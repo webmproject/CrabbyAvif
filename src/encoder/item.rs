@@ -67,6 +67,8 @@ impl Item {
     pub(crate) fn is_metadata(&self) -> bool {
         match self.item_type.as_str() {
             "av01" => false,
+            #[cfg(feature = "avm")]
+            "av02" => false,
             "hvc1" => false, // Should not happen.
             #[cfg(feature = "jpegxl")]
             "hxlI" => false,
@@ -280,33 +282,11 @@ impl Item {
         config: &Av2CodecConfiguration,
         stream: &mut OStream,
     ) -> AvifResult<()> {
-        // TODO: b/437292541 - Match AV2-ISOBMFF once finalized.
-        // unsigned int (1) marker = 1;
-        stream.write_bits(1, 1)?;
-        // unsigned int (7) version = 1;
-        stream.write_bits(1, 7)?;
-        // unsigned int(3) seq_profile;
-        stream.write_bits(config.seq_profile.into(), 3)?;
-        // unsigned int(5) seq_level_idx_0;
-        stream.write_bits(config.seq_level_idx0.into(), 5)?;
-        // unsigned int(1) seq_tier_0;
-        stream.write_bits(config.seq_tier_0.into(), 1)?;
-        // unsigned int(2) bitdepth_idx;
-        stream.write_bits(config.bitdepth_idx.into(), 2)?;
-        // unsigned int(1) monochrome;
-        stream.write_bool(config.monochrome)?;
-        // unsigned int(1) chroma_subsampling_x;
-        stream.write_bits(config.chroma_subsampling_x.into(), 1)?;
-        // unsigned int(1) chroma_subsampling_y;
-        stream.write_bits(config.chroma_subsampling_y.into(), 1)?;
-        // unsigned int(3) chroma_sample_position;
-        stream.write_bits(config.chroma_sample_position as u32, 3)?;
-        // unsigned int (2) reserved = 0;
-        stream.write_bits(0, 2)?;
-        // unsigned int (1) initial_presentation_delay_present;
-        stream.write_bits(0, 1)?;
-        // unsigned int (4) reserved = 0;
-        stream.write_bits(0, 4)?;
+        // https://aomediacodec.github.io/av2-isobmff/pr/40/index.html#av2c
+        // unsigned int (8) reserved1 = 0;
+        stream.write_u8(0)?;
+        // unsigned int (8) configOBUs[];
+        stream.write_slice(&config.config_obus)?;
         Ok(())
     }
 
@@ -321,7 +301,7 @@ impl Item {
     fn write_a1lx(&mut self, stream: &mut OStream) -> AvifResult<()> {
         let layer_sizes: Vec<_> = self.samples[0..self.extra_layer_count as usize]
             .iter()
-            .map(|x| x.data.len())
+            .map(|x| x.data().len())
             .collect();
         let has_large_size = layer_sizes.iter().any(|x| *x > 0xffff);
         stream.start_box("a1lx")?;
@@ -853,7 +833,7 @@ impl Item {
         stream.write_u32(u32_from_usize(self.samples.len())?)?;
         for sample in &self.samples {
             // unsigned int(32) entry_size;
-            stream.write_u32(u32_from_usize(sample.data.len())?)?;
+            stream.write_u32(u32_from_usize(sample.data().len())?)?;
         }
         stream.finish_box()
     }
