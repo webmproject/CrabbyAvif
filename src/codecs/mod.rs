@@ -102,6 +102,7 @@ pub(crate) struct EncoderConfig {
     pub speed: Option<u32>,
     pub extra_layer_count: u32,
     pub threads: u32,
+    pub keyframe_interval: i32,
     pub scaling_mode: ScalingMode,
     pub codec_specific_options: CodecSpecificOptions,
 }

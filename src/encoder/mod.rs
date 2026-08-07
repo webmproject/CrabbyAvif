@@ -779,6 +779,7 @@ impl Encoder {
                 speed: self.settings.speed,
                 extra_layer_count: self.settings.extra_layer_count,
                 threads: self.settings.threads,
+                keyframe_interval: self.settings.keyframe_interval,
                 scaling_mode: self.settings.mutable.scaling_mode,
                 codec_specific_options: self.codec_specific_options.clone(),
             };
