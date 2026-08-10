@@ -62,6 +62,7 @@ pub struct avifDecoder {
     pub androidMediaCodecOutputColorFormat: AndroidMediaCodecOutputColorFormat,
     pub compressionFormat: CompressionFormat,
     pub allowSampleTransform: avifBool,
+    pub hasNalUnitWithZeroSize: avifBool,
 
     // Rust specific fields that are not accessed from the C/C++ layer.
     rust_decoder: Box<Decoder>,
@@ -101,6 +102,7 @@ impl Default for avifDecoder {
             imageSequenceTrackPresent: AVIF_FALSE,
             androidMediaCodecOutputColorFormat: AndroidMediaCodecOutputColorFormat::default(),
             allowSampleTransform: AVIF_TRUE,
+            hasNalUnitWithZeroSize: AVIF_FALSE,
             compressionFormat: CompressionFormat::default(),
             rust_decoder: Box::<Decoder>::default(),
             image_object: avifImage::default(),
@@ -270,6 +272,7 @@ fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
     dst.duration = src.duration();
     dst.ioStats = src.io_stats();
     dst.compressionFormat = src.compression_format();
+    dst.hasNalUnitWithZeroSize = to_avifBool(src.has_zero_size_nal);
 
     if src.gainmap_present() {
         dst.gainmap_image_object = (&src.gainmap().image).into();

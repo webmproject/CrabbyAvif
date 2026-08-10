@@ -379,6 +379,7 @@ pub struct Decoder {
     parse_state: ParseState,
     io_stats: IOStats,
     compression_format: CompressionFormat,
+    pub has_zero_size_nal: bool,
 }
 
 #[repr(C)]
@@ -492,6 +493,9 @@ impl Decoder {
     }
     pub fn compression_format(&self) -> CompressionFormat {
         self.compression_format
+    }
+    pub fn has_zero_size_nal(&self) -> bool {
+        self.has_zero_size_nal
     }
 
     fn parsing_complete(&self) -> bool {
@@ -1517,6 +1521,11 @@ impl Decoder {
             self.image.yuv_format = pixel_format_from_properties(color_properties, "color")?;
             self.image.chroma_sample_position = codec_config.chroma_sample_position();
             self.compression_format = codec_config.compression_format();
+            self.has_zero_size_nal = self
+                .items
+                .values()
+                .filter_map(|item| item.codec_config())
+                .any(|config| config.has_zero_size_nal());
 
             if cicp_set {
                 self.parse_state = ParseState::Complete;

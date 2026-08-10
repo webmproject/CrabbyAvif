@@ -1326,28 +1326,33 @@ fn heic_peek() {
     );
 }
 
-#[test_case("heic/blue.heic", 320, 240)]
-#[test_case("heic/blue_alpha.heic", 320, 240)]
-#[test_case("heic/blue_gh_issue_692.heic", 320, 240)]
-#[test_case("heic/blue_grid_alpha.heic", 320, 240)]
-#[test_case("heic/b_506659035_hvcc_nal_zero_length.heic", 16, 16)]
-#[test_case("heic/nokiatech/autumn_1440x960.heic", 1440, 960)]
-#[test_case("heic/nokiatech/bothie_1440x960.heic", 1440, 960)]
-#[test_case("heic/nokiatech/cheers_1440x960.heic", 1440, 960)]
-#[test_case("heic/nokiatech/crowd_1440x960.heic", 1440, 960)]
-#[test_case("heic/nokiatech/grid_960x640.heic", 960, 640)]
-#[test_case("heic/nokiatech/lights_1440x960.heic", 1440, 960)]
-#[test_case("heic/nokiatech/old_bridge_1440x960.heic", 1440, 960)]
-#[test_case("heic/nokiatech/overlay_1000x680.heic", 1000, 680)]
-#[test_case("heic/nokiatech/random_collection_1440x960.heic", 1440, 960)]
-#[test_case("heic/nokiatech/season_collection_1440x960.heic", 1440, 960)]
-#[test_case("heic/nokiatech/ski_jump_1440x960.heic", 1440, 960)]
-#[test_case("heic/nokiatech/spring_1440x960.heic", 1440, 960)]
-#[test_case("heic/nokiatech/stereo_1200x800.heic", 1200, 800)]
-#[test_case("heic/nokiatech/summer_1440x960.heic", 1440, 960)]
-#[test_case("heic/nokiatech/surfer_1440x960.heic", 1440, 960)]
-#[test_case("heic/nokiatech/winter_1440x960.heic", 1440, 960)]
-fn heic(filename: &str, expected_width: u32, expected_height: u32) {
+#[test_case("heic/blue.heic", 320, 240, false)]
+#[test_case("heic/blue_alpha.heic", 320, 240, false)]
+#[test_case("heic/blue_gh_issue_692.heic", 320, 240, false)]
+#[test_case("heic/blue_grid_alpha.heic", 320, 240, false)]
+#[test_case("heic/b_506659035_hvcc_nal_zero_length.heic", 16, 16, true)]
+#[test_case("heic/nokiatech/autumn_1440x960.heic", 1440, 960, false)]
+#[test_case("heic/nokiatech/bothie_1440x960.heic", 1440, 960, false)]
+#[test_case("heic/nokiatech/cheers_1440x960.heic", 1440, 960, false)]
+#[test_case("heic/nokiatech/crowd_1440x960.heic", 1440, 960, false)]
+#[test_case("heic/nokiatech/grid_960x640.heic", 960, 640, false)]
+#[test_case("heic/nokiatech/lights_1440x960.heic", 1440, 960, false)]
+#[test_case("heic/nokiatech/old_bridge_1440x960.heic", 1440, 960, false)]
+#[test_case("heic/nokiatech/overlay_1000x680.heic", 1000, 680, false)]
+#[test_case("heic/nokiatech/random_collection_1440x960.heic", 1440, 960, false)]
+#[test_case("heic/nokiatech/season_collection_1440x960.heic", 1440, 960, false)]
+#[test_case("heic/nokiatech/ski_jump_1440x960.heic", 1440, 960, false)]
+#[test_case("heic/nokiatech/spring_1440x960.heic", 1440, 960, false)]
+#[test_case("heic/nokiatech/stereo_1200x800.heic", 1200, 800, false)]
+#[test_case("heic/nokiatech/summer_1440x960.heic", 1440, 960, false)]
+#[test_case("heic/nokiatech/surfer_1440x960.heic", 1440, 960, false)]
+#[test_case("heic/nokiatech/winter_1440x960.heic", 1440, 960, false)]
+fn heic(
+    filename: &str,
+    expected_width: u32,
+    expected_height: u32,
+    expected_has_zero_size_nal: bool,
+) {
     let mut decoder = get_decoder(filename);
     decoder.settings.strictness = decoder::Strictness::None;
     decoder.settings.ignore_exif = true;
@@ -1359,6 +1364,7 @@ fn heic(filename: &str, expected_width: u32, expected_height: u32) {
         assert_eq!(image.width, expected_width);
         assert_eq!(image.height, expected_height);
         assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
+        assert_eq!(decoder.has_zero_size_nal(), expected_has_zero_size_nal);
         if cfg!(feature = "android_mediacodec") && image.yuv_format == PixelFormat::Yuv420 {
             // Ensure that decoding succeeds if Android MediaCodec can decode it.
             assert!(decoder.next_image().is_ok());
@@ -1392,6 +1398,7 @@ fn heic_sequence(
         assert_eq!(image.height, expected_height);
         assert_eq!(decoder.image_count(), expected_frame_count);
         assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
+        assert!(!decoder.has_zero_size_nal());
         if cfg!(feature = "android_mediacodec") {
             // Decode all frames in order.
             for _ in 0..expected_frame_count {
@@ -1418,6 +1425,7 @@ fn heic_monochrome_gainmap() {
     if cfg!(feature = "heic") {
         assert!(res.is_ok());
         assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
+        assert!(!decoder.has_zero_size_nal());
         if cfg!(feature = "android_mediacodec") {
             // Android MediaCodec does not support monochrome HEIC images.
             assert!(matches!(decoder.next_image(), Err(AvifError::NoContent)));

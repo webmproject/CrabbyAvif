@@ -483,6 +483,7 @@ struct avifDecoder {
     AndroidMediaCodecOutputColorFormat androidMediaCodecOutputColorFormat;
     CompressionFormat compressionFormat;
     avifBool allowSampleTransform;
+    avifBool hasNalUnitWithZeroSize;
     Box<Decoder> rust_decoder;
     avifImage image_object;
     avifGainMap gainmap_object;
