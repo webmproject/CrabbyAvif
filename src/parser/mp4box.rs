@@ -280,6 +280,7 @@ pub struct HevcCodecConfiguration {
     pub vps: Vec<u8>,
     pub sps: Vec<u8>,
     pub pps: Vec<u8>,
+    pub has_zero_size_nal: bool,
 }
 
 #[cfg(feature = "jpegxl")]
@@ -438,6 +439,13 @@ impl CodecConfiguration {
             Self::Hevc(_) => CompressionFormat::Heic,
             #[cfg(feature = "jpegxl")]
             Self::JpegXl(_) => CompressionFormat::JpegXl,
+        }
+    }
+
+    pub(crate) fn has_zero_size_nal(&self) -> bool {
+        match self {
+            Self::Hevc(config) => config.has_zero_size_nal,
+            _ => false,
         }
     }
 }
@@ -1078,6 +1086,7 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
     let mut vps: Vec<u8> = Vec::new();
     let mut sps: Vec<u8> = Vec::new();
     let mut pps: Vec<u8> = Vec::new();
+    let mut has_zero_size_nal = false;
     for _i in 0..num_of_arrays {
         // unsigned int(1) array_completeness;
         // bit(1) reserved = 0;
@@ -1089,6 +1098,7 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
             // unsigned int(16) nalUnitLength;
             let nal_unit_length = stream.read_u16()?;
             if nal_unit_length == 0 {
+                has_zero_size_nal = true;
                 continue;
             }
             let nal_unit = stream.get_slice(nal_unit_length as usize)?;
@@ -1109,6 +1119,7 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
             vps,
             pps,
             sps,
+            has_zero_size_nal,
         },
     )))
 }
