@@ -1506,25 +1506,26 @@ fn parse_iref(stream: &mut IStream) -> AvifResult<Vec<ItemReference>> {
     }
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
+        let mut sub_stream = stream.sub_stream(&header.size)?;
         let from_item_id: u32 = if version == 0 {
             // unsigned int(16) from_item_ID;
-            stream.read_u16()? as u32
+            sub_stream.read_u16()? as u32
         } else {
             // unsigned int(32) from_item_ID;
-            stream.read_u32()?
+            sub_stream.read_u32()?
         };
         if from_item_id == 0 {
             return AvifError::bmff_parse_failed("invalid from_item_id (0) in iref");
         }
         // unsigned int(16) reference_count;
-        let reference_count = stream.read_u16()?;
+        let reference_count = sub_stream.read_u16()?;
         for index in 0..reference_count {
             let to_item_id: u32 = if version == 0 {
                 // unsigned int(16) to_item_ID;
-                stream.read_u16()? as u32
+                sub_stream.read_u16()? as u32
             } else {
                 // unsigned int(32) to_item_ID;
-                stream.read_u32()?
+                sub_stream.read_u32()?
             };
             if to_item_id == 0 {
                 return AvifError::bmff_parse_failed("invalid to_item_id (0) in iref");
@@ -1554,13 +1555,17 @@ fn parse_grpl(stream: &mut IStream) -> AvifResult<Vec<EntityGroup>> {
     let mut grpl: Vec<EntityGroup> = Vec::new();
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
-        let (_version, _flags) = stream.read_version_and_flags()?;
+        // Section 8.15.3.2 of ISO/IEC 14496-12 lets the grouping type define further fields
+        // after the entity_id array, for example 'pymd' in ISO/IEC 23008-12, so the box can
+        // carry bytes past the ones parsed here.
+        let mut sub_stream = stream.sub_stream(&header.size)?;
+        let (_version, _flags) = sub_stream.read_version_and_flags()?;
         // unsigned int(32) group_id;
-        stream.skip_u32()?;
-        let num_entities_in_group = stream.read_u32()?;
+        sub_stream.skip_u32()?;
+        let num_entities_in_group = sub_stream.read_u32()?;
         let mut entity_ids: Vec<u32> = create_vec_exact(usize_from_u32(num_entities_in_group)?)?;
         for _ in 0..num_entities_in_group {
-            let entity_id = stream.read_u32()?;
+            let entity_id = sub_stream.read_u32()?;
             entity_ids.push(entity_id);
         }
         grpl.push(EntityGroup {

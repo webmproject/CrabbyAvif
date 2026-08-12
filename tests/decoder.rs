@@ -1257,6 +1257,41 @@ fn white_2x2_unknown_top_level_box_size0() -> AvifResult<()> {
 }
 
 #[test]
+fn grpl_group_with_grouping_type_specific_data() {
+    // The 'pymd' EntityToGroupBox of this file carries the grouping type specific fields defined
+    // in Section 6.9.2 of ISO/IEC 23008-12 after the entity_id array. Section 8.15.3.2 of
+    // ISO/IEC 14496-12 allows that, so the file has to parse.
+    let mut decoder = get_decoder("pyramid_pymd.avif");
+    assert_eq!(decoder.parse(), Ok(()));
+}
+
+// The 'iref' box of color_grid_alpha_nogrid.avif holds three children: a 16 byte 'dimg' box
+// followed by two 'auxl' boxes. color_grid_alpha_no_grid() above is the control that the
+// unmodified file parses.
+#[test_case(15; "one_byte_too_small")]
+#[test_case(17; "one_byte_too_large")]
+fn iref_child_box_size_mismatch(declared_size: u8) {
+    let mut file_bytes = std::fs::read(get_test_file("color_grid_alpha_nogrid.avif")).unwrap();
+    let iref = *b"iref";
+    let iref_pos = file_bytes.windows(4).position(|w| w == iref).unwrap();
+    // 4 bytes of box type, then 4 bytes of version and flags, then the first child box header.
+    let child_size_pos = iref_pos + 8;
+    assert_eq!(
+        file_bytes[child_size_pos..child_size_pos + 8],
+        *b"\0\0\0\x10dimg"
+    );
+    file_bytes[child_size_pos + 3] = declared_size;
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(file_bytes);
+    // Without the box size bound, the first child is parsed as if its size field still said 16.
+    assert!(matches!(
+        decoder.parse(),
+        Err(AvifError::BmffParseFailed(_))
+    ));
+}
+
+#[test]
 fn dimg_repetition() {
     let mut decoder = get_decoder("sofa_grid1x5_420_dimg_repeat.avif");
     assert_eq!(
