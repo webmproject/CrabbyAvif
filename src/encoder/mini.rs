@@ -117,7 +117,7 @@ pub fn is_mini_compatible(enc: &Encoder) -> bool {
             assert!(color_item.is_none());
             color_item = Some(item);
             // main_item_data_size_minus1
-            if item.samples.len() != 1 || item.samples[0].data.len() > (1 << 28) {
+            if item.samples.len() != 1 || item.samples[0].sample_data().len() > (1 << 28) {
                 return false;
             }
             if !matches!(item.codec_configuration, Some(CodecConfiguration::Av1(_))) {
@@ -127,7 +127,7 @@ pub fn is_mini_compatible(enc: &Encoder) -> bool {
         }
         if item.category == Category::Alpha && item.iref_to_id == Some(enc.primary_item_id) {
             // alpha_item_data_size
-            if item.samples.len() != 1 || item.samples[0].data.len() >= (1 << 28) {
+            if item.samples.len() != 1 || item.samples[0].sample_data().len() >= (1 << 28) {
                 return false;
             }
             if !matches!(item.codec_configuration, Some(CodecConfiguration::Av1(_))) {
@@ -137,7 +137,7 @@ pub fn is_mini_compatible(enc: &Encoder) -> bool {
         }
         if item.category == Category::Gainmap {
             // gainmap_item_data_size
-            if item.samples.len() != 1 || item.samples[0].data.len() >= (1 << 28) {
+            if item.samples.len() != 1 || item.samples[0].sample_data().len() >= (1 << 28) {
                 return false;
             }
             if !matches!(item.codec_configuration, Some(CodecConfiguration::Av1(_))) {
@@ -205,9 +205,9 @@ impl Encoder {
             .iter()
             .find(|item| item.category == Category::Gainmap);
 
-        let color_data = &color_item.samples.first().unwrap().data;
-        let alpha_data = alpha_item.map(|item| &item.samples.first().unwrap().data);
-        let gainmap_data = gainmap_item.map(|item| &item.samples.first().unwrap().data);
+        let color_data = color_item.samples.first().unwrap().sample_data();
+        let alpha_data = alpha_item.map(|item| item.samples.first().unwrap().sample_data());
+        let gainmap_data = gainmap_item.map(|item| item.samples.first().unwrap().sample_data());
 
         let image = &self.image_metadata;
         let gainmap_image = &self.gainmap_image_metadata;
@@ -586,13 +586,13 @@ impl Encoder {
         }
 
         if has_alpha && !alpha_data.unwrap().is_empty() {
-            stream.write_slice(alpha_data.unwrap().as_slice())?; // unsigned int(8) alpha_item_data[alpha_item_data_size];
+            stream.write_slice(alpha_data.unwrap())?; // unsigned int(8) alpha_item_data[alpha_item_data_size];
         }
         if has_hdr && has_gainmap && !gainmap_data.unwrap().is_empty() {
-            stream.write_slice(gainmap_data.unwrap().as_slice())?; // unsigned int(8) gainmap_item_data[gainmap_item_data_size];
+            stream.write_slice(gainmap_data.unwrap())?; // unsigned int(8) gainmap_item_data[gainmap_item_data_size];
         }
 
-        stream.write_slice(color_data.as_slice())?; // unsigned int(8) main_item_data[main_item_data_size_minus1 + 1];
+        stream.write_slice(color_data)?; // unsigned int(8) main_item_data[main_item_data_size_minus1 + 1];
 
         if !image.exif.is_empty() {
             stream.write_slice(image.exif.as_slice())?; // unsigned int(8) exif_data[exif_data_size_minus1 + 1];

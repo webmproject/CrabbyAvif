@@ -321,7 +321,7 @@ impl Item {
     fn write_a1lx(&mut self, stream: &mut OStream) -> AvifResult<()> {
         let layer_sizes: Vec<_> = self.samples[0..self.extra_layer_count as usize]
             .iter()
-            .map(|x| x.data.len())
+            .map(|x| x.sample_data().len())
             .collect();
         let has_large_size = layer_sizes.iter().any(|x| *x > 0xffff);
         stream.start_box("a1lx")?;
@@ -853,7 +853,7 @@ impl Item {
         stream.write_u32(u32_from_usize(self.samples.len())?)?;
         for sample in &self.samples {
             // unsigned int(32) entry_size;
-            stream.write_u32(u32_from_usize(sample.data.len())?)?;
+            stream.write_u32(u32_from_usize(sample.sample_data().len())?)?;
         }
         stream.finish_box()
     }

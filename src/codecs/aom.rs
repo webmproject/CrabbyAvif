@@ -137,7 +137,11 @@ fn add_aom_pkt_to_output_samples(
     // that pkt.data.frame is the active field of the union (per libaom API contract).
     // So this access is safe.
     let sync = (unsafe { pkt.data.frame.flags } & AOM_FRAME_IS_KEY) != 0;
-    output_samples.push(Sample::create_from(encoded_data, sync)?);
+    output_samples.push(Sample::create_from(
+        encoded_data,
+        0..encoded_data.len(),
+        sync,
+    )?);
     Ok(true)
 }
 
@@ -584,7 +588,7 @@ impl Encoder for Aom {
     ) -> AvifResult<CodecConfiguration> {
         // Harvest codec configuration from AV1 sequence header.
         Ok(CodecConfiguration::Av1(
-            Av1SequenceHeader::parse_from_obus(&output_samples[0].data)?.config,
+            Av1SequenceHeader::parse_from_obus(output_samples[0].sample_data())?.config,
         ))
     }
 }

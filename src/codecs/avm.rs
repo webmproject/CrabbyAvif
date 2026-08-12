@@ -139,7 +139,11 @@ fn add_avm_pkt_to_output_samples(
     output_samples
         .try_reserve(1)
         .map_err(AvifError::map_out_of_memory)?;
-    output_samples.push(Sample::create_from(encoded_data, sync)?);
+    output_samples.push(Sample::create_from(
+        encoded_data,
+        0..encoded_data.len(),
+        sync,
+    )?);
     Ok(true)
 }
 
@@ -541,7 +545,7 @@ impl Encoder for Avm {
     ) -> AvifResult<CodecConfiguration> {
         // Harvest codec configuration from AV2 sequence header.
         Ok(CodecConfiguration::Av2(
-            Av2SequenceHeader::parse_from_obus(&output_samples[0].data)?.config,
+            Av2SequenceHeader::parse_from_obus(output_samples[0].sample_data())?.config,
         ))
     }
 }
@@ -933,7 +937,7 @@ fn avm_enc_dec_test() -> Result<(), AvifError> {
     encoder.encode_image(&image, Category::Color, &config, &mut output_samples)?;
     encoder.finish(&mut output_samples)?;
     assert_eq!(output_samples.len(), 1);
-    let output_sample = &output_samples[0].data;
+    let output_sample = &output_samples[0].sample_data();
     let codec_config = Av2SequenceHeader::parse_from_obus(output_sample)?.config;
 
     let mut decoder = Avm::default();
