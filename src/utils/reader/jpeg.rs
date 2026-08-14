@@ -183,7 +183,7 @@ fn extract_aux_images(mpf_data: &[u8], mpf_offset: u32) -> AvifResult<Vec<(u32, 
         let offset = read_u32(&mut stream)?;
         stream.skip_u32()?; // dep
         if offset != 0 {
-            aux_images.push((checked_add!(mpf_offset, offset)?, size));
+            aux_images.try_push((checked_add!(mpf_offset, offset)?, size))?;
         }
     }
     Ok(aux_images)
@@ -197,7 +197,7 @@ fn get_gainmap(
     for &(offset, size) in aux_images {
         file.seek(SeekFrom::Start(offset as u64))
             .map_err(AvifError::map_unknown_error)?;
-        let mut data = vec![0u8; size as usize];
+        let mut data = try_vec_exact![0u8; size as usize]?;
         if file.read_exact(&mut data).is_err() {
             continue;
         }

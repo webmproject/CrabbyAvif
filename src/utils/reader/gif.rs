@@ -14,6 +14,7 @@
 
 use crate::gainmap::GainMap;
 use crate::reformat::*;
+use crate::utils::create_vec_exact;
 use crate::utils::pixels::Pixels;
 use crate::AvifError;
 use crate::AvifResult;
@@ -67,7 +68,7 @@ impl Reader for GifReader {
                 "width/height mismatch between gif decoder and screen",
             );
         }
-        let mut rgba_buffer: Vec<u8> = Vec::new();
+        let mut rgba_buffer: Vec<u8> = create_vec_exact(checked_mul!(rgba_pixels.len(), 4)?)?;
         for rgba in rgba_pixels.iter() {
             rgba_buffer.extend_from_slice(&[rgba.r, rgba.g, rgba.b, rgba.a]);
         }

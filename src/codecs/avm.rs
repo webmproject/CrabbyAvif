@@ -136,14 +136,11 @@ fn add_avm_pkt_to_output_samples(
     // that pkt.data.frame is the active field of the union (per libavm API contract).
     // So this access is safe.
     let sync = (unsafe { pkt.data.frame.flags } & AVM_FRAME_IS_KEY) != 0;
-    output_samples
-        .try_reserve(1)
-        .map_err(AvifError::map_out_of_memory)?;
-    output_samples.push(Sample::create_from(
+    output_samples.try_push(Sample::create_from(
         encoded_data,
         0..encoded_data.len(),
         sync,
-    )?);
+    )?)?;
     Ok(true)
 }
 

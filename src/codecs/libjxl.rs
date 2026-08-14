@@ -17,9 +17,8 @@
 use crate::codecs::*;
 use crate::encoder::Sample;
 use crate::image::Image;
-use crate::internal_utils::are_images_equal;
 use crate::internal_utils::stream::OStreamLittleEndian;
-use crate::internal_utils::u32_from_usize;
+use crate::internal_utils::*;
 #[cfg(test)]
 use crate::parser::mp4box::ColorInformation;
 use crate::parser::mp4box::ItemProperty;
@@ -280,14 +279,11 @@ impl Encoder for Libjxl {
         }
         let encoded_bytes_without_header = expected_header.len()..encoded_bytes_with_header.len();
 
-        output_samples
-            .try_reserve_exact(1)
-            .map_err(AvifError::map_out_of_memory)?;
-        output_samples.push(Sample::create_from(
+        output_samples.try_push(Sample::create_from(
             &encoded_bytes_with_header,
             encoded_bytes_without_header,
             true,
-        )?);
+        )?)?;
 
         Ok(())
     }
@@ -328,9 +324,7 @@ impl Libjxl {
             // that were passed to JxlEncoderProcessOutput().
             let written_bytes = &chunk[..chunk.len() - avail_out];
 
-            data.try_reserve(written_bytes.len())
-                .map_err(AvifError::map_out_of_memory)?;
-            data.extend_from_slice(written_bytes);
+            data.try_extend_from_slice(written_bytes)?;
             if status != JxlEncoderStatus_JXL_ENC_NEED_MORE_OUTPUT {
                 status.map_enc_err(encoder)?; // JxlEncoderStatus_JXL_ENC_SUCCESS is expected.
                 return Ok(data);
@@ -443,7 +437,7 @@ impl Decoder for Libjxl {
             // header and the signaled payload but JxlDecoderReleaseInput() does not return 0.
             self.reconstructed_jxl
                 .unwrap_mut()
-                .extend_from_slice(payload);
+                .try_extend_from_slice(payload)?;
             let reconstructed_len = self.reconstructed_jxl.unwrap_ref().len();
             // # Safety: Calling a C function with valid parameters.
             unsafe {
@@ -842,9 +836,9 @@ fn libjxl_enc_dec_test() -> Result<(), AvifError> {
     let item = Item {
         width: image.width,
         height: image.height,
-        properties: vec![
+        properties: try_vec_exact![
             ItemProperty::PixelInformation(PixelInformation {
-                planes: vec![
+                planes: try_vec_exact![
                     PlanePixelInformation {
                         depth: image.depth,
                         channel_idc: Some(ChannelIdc::FirstColorChannel),
@@ -863,7 +857,7 @@ fn libjxl_enc_dec_test() -> Result<(), AvifError> {
                         subsampling_type: Some(image.yuv_format),
                         subsampling_location: None,
                     },
-                ],
+                ]?,
             }),
             ItemProperty::ColorInformation(ColorInformation::Nclx(Nclx {
                 color_primaries: image.color_primaries,
@@ -878,7 +872,7 @@ fn libjxl_enc_dec_test() -> Result<(), AvifError> {
                     config.quality == 100.0,
                 ),
             )),
-        ],
+        ]?,
         is_made_up: true,
         ..Default::default()
     };

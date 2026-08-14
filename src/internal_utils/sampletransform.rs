@@ -496,7 +496,7 @@ impl SampleTransform {
         Self::create_from(
             64, // bit_depth
             3,  // num_inputs
-            vec![
+            try_vec_exact![
                 // Postfix (or Reverse Polish) notation.
 
                 // The sign bit and the 7 most significant bits of the exponent.
@@ -514,7 +514,7 @@ impl SampleTransform {
                 // Add the 12 least significant bits of the mantissa.
                 SampleTransformToken::ImageItem(2),
                 SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Or),
-            ],
+            ]?,
         )
     }
 }

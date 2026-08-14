@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::internal_utils::stream::*;
+use crate::internal_utils::*;
 use crate::parser::mp4box::*;
 use crate::utils::pixels::ChannelIdc;
 use crate::*;
@@ -358,7 +359,7 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
     // be contiguous, whereas property indices shall be 1, 2, 3, 4, 5 etc.
 
     // Start with the properties.
-    meta.iprp.properties = vec![
+    meta.iprp.properties = try_vec_exact![
         // entry 1
         if main_item_codec_config_size != 0 {
             ItemProperty::CodecConfiguration(CodecConfiguration::Av1(main_item_codec_config))
@@ -407,7 +408,7 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
         // entry 8
         if alpha_item_data_size != 0 {
             ItemProperty::PixelInformation(PixelInformation {
-                planes: vec![PlanePixelInformation {
+                planes: try_vec_exact![PlanePixelInformation {
                     depth: bit_depth as u8,
                     channel_idc: Some(ChannelIdc::Alpha),
                     // Note that alpha's av1C is_monochrome may be false.
@@ -417,7 +418,7 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
                     // entry as "subsampling_type set to 0", meaning 4:4:4.
                     subsampling_type: Some(PixelFormat::Yuv444),
                     subsampling_location: Some(ChromaSamplePosition::Colocated),
-                }],
+                }]?,
             })
         } else {
             ItemProperty::Unused
@@ -556,7 +557,7 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
         ItemProperty::Unused, // reserved
         // entry 32
         ItemProperty::Unused, // reserved
-    ];
+    ]?;
 
     // Color item
     let color_item_id = 1;
@@ -568,7 +569,7 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
     });
     meta.iprp.associations.push(ItemPropertyAssociation {
         item_id: color_item_id,
-        associations: vec![(1, true), (2, false), (3, false), (4, true), (5, true)],
+        associations: try_vec_exact![(1, true), (2, false), (3, false), (4, true), (5, true)]?,
     });
     if has_alpha && alpha_item_data_size == 0 {
         meta.iprp
@@ -576,7 +577,7 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
             .last_mut()
             .unwrap()
             .associations
-            .push((30, true));
+            .try_push((30, true))?;
     }
     if has_hdr {
         meta.iprp
@@ -584,14 +585,14 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
             .last_mut()
             .unwrap()
             .associations
-            .extend_from_slice(&[
+            .try_extend_from_slice(&[
                 (11, false),
                 (12, false),
                 (13, false),
                 (14, false),
                 (15, false),
                 (16, false),
-            ]);
+            ])?;
     }
     // ISO/IEC 23008-12 Section 6.5.1:
     //   Writers should arrange the descriptive properties specified in 6.5 prior to any other properties in the
@@ -603,7 +604,7 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
         .last_mut()
         .unwrap()
         .associations
-        .extend_from_slice(&[(9, true), (10, true)]);
+        .try_extend_from_slice(&[(9, true), (10, true)])?;
 
     // Alpha item
     let alpha_item_id = 2;
@@ -634,7 +635,7 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
         assert_ne!(alpha_item_data_size, 0);
         meta.iprp.associations.push(ItemPropertyAssociation {
             item_id: alpha_item_id,
-            associations: vec![
+            associations: try_vec_exact![
                 (6, true),
                 (2, false),
                 (7, true),
@@ -646,7 +647,7 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
                 // irot and imir are transformative properties, so associate them last.
                 (9, true),
                 (10, true),
-            ],
+            ]?,
         });
     }
 
@@ -655,26 +656,26 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
     let gainmap_item_id = 4;
     let _alternative_group_id = 5;
     if has_gainmap {
-        meta.iinf.push(ItemInfo {
+        meta.iinf.try_push(ItemInfo {
             item_id: tmap_item_id,
             item_type: "tmap".into(),
             ..Default::default()
-        });
-        meta.iref.push(ItemReference {
+        })?;
+        meta.iref.try_push(ItemReference {
             from_item_id: tmap_item_id,
             to_item_id: color_item_id,
             reference_type: "dimg".into(),
             index: meta.iref.len() as u32,
-        });
-        meta.grpl.push(EntityGroup {
+        })?;
+        meta.grpl.try_push(EntityGroup {
             // id: _alternative_group_id
             grouping_type: "altr".into(),
-            entity_ids: vec![tmap_item_id, color_item_id],
-        });
+            entity_ids: try_vec_exact![tmap_item_id, color_item_id]?,
+        })?;
 
-        meta.iprp.associations.push(ItemPropertyAssociation {
+        meta.iprp.associations.try_push(ItemPropertyAssociation {
             item_id: tmap_item_id,
-            associations: vec![
+            associations: try_vec_exact![
                 (21, false),
                 (22, true),
                 (23, true),
@@ -684,25 +685,25 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
                 (27, false),
                 (28, false),
                 (29, false),
-            ],
-        });
+            ]?,
+        })?;
     }
     if gainmap_item_data_size != 0 {
-        meta.iinf.push(ItemInfo {
+        meta.iinf.try_push(ItemInfo {
             item_id: gainmap_item_id,
             item_type: infe_type.clone(),
             ..Default::default()
-        });
-        meta.iref.push(ItemReference {
+        })?;
+        meta.iref.try_push(ItemReference {
             from_item_id: tmap_item_id,
             to_item_id: gainmap_item_id,
             reference_type: "dimg".into(),
             index: meta.iref.len() as u32,
-        });
+        })?;
 
-        meta.iprp.associations.push(ItemPropertyAssociation {
+        meta.iprp.associations.try_push(ItemPropertyAssociation {
             item_id: gainmap_item_id,
-            associations: vec![
+            associations: try_vec_exact![
                 (17, true),
                 (18, false),
                 (19, false),
@@ -714,8 +715,8 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
                 // irot and imir are transformative properties, so associate them last.
                 (9, true),
                 (10, true),
-            ],
-        });
+            ]?,
+        })?;
     }
 
     // Extents.
@@ -725,117 +726,117 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
         //   unsigned int(8) version = 0;
         // Copy the GainMapMetadata bytes to a virtual 'idat' box to that end.
         assert!(meta.idat.is_empty());
-        meta.idat = vec![0]; // unsigned int(8) version = 0;
-        meta.idat.extend_from_slice(
+        meta.idat = try_vec_exact![0]?; // unsigned int(8) version = 0;
+        meta.idat.try_extend_from_slice(
             &remaining_bytes
                 [remaining_bytes_offset..(remaining_bytes_offset + gainmap_metadata_size as usize)],
-        ); // GainMapMetadata
+        )?; // GainMapMetadata
         remaining_bytes_offset += gainmap_metadata_size as usize;
-        meta.iloc.items.push(ItemLocationEntry {
+        meta.iloc.items.try_push(ItemLocationEntry {
             item_id: tmap_item_id,
             construction_method: 1, // idat
             base_offset: 0,
             extent_count: 0,
-            extents: vec![decoder::Extent {
+            extents: try_vec_exact![decoder::Extent {
                 offset: 0,
-                size: meta.idat.len(),
-            }],
-        });
+                size: meta.idat.len()
+            }]?,
+        })?;
     }
 
     if has_alpha {
-        meta.iloc.items.push(ItemLocationEntry {
+        meta.iloc.items.try_push(ItemLocationEntry {
             item_id: alpha_item_id,
             construction_method: 0,
             base_offset: 0,
             extent_count: 0,
-            extents: vec![decoder::Extent {
+            extents: try_vec_exact![decoder::Extent {
                 offset: (offset_till_remaining_bytes + remaining_bytes_offset) as u64,
                 size: alpha_item_data_size as usize,
-            }],
-        });
+            }]?,
+        })?;
         remaining_bytes_offset += alpha_item_data_size as usize;
     }
 
     if gainmap_item_data_size != 0 {
-        meta.iloc.items.push(ItemLocationEntry {
+        meta.iloc.items.try_push(ItemLocationEntry {
             item_id: gainmap_item_id,
             construction_method: 0,
             base_offset: 0,
             extent_count: 0,
-            extents: vec![decoder::Extent {
+            extents: try_vec_exact![decoder::Extent {
                 offset: (offset_till_remaining_bytes + remaining_bytes_offset) as u64,
                 size: gainmap_item_data_size as usize,
-            }],
-        });
+            }]?,
+        })?;
         remaining_bytes_offset += gainmap_item_data_size as usize;
     }
 
-    meta.iloc.items.push(ItemLocationEntry {
+    meta.iloc.items.try_push(ItemLocationEntry {
         item_id: color_item_id,
         construction_method: 0,
         base_offset: 0,
         extent_count: 0,
-        extents: vec![decoder::Extent {
+        extents: try_vec_exact![decoder::Extent {
             offset: (offset_till_remaining_bytes + remaining_bytes_offset) as u64,
             size: main_item_data_size as usize,
-        }],
-    });
+        }]?,
+    })?;
     remaining_bytes_offset += main_item_data_size as usize;
 
     let exif_item_id = 6;
     if has_exif {
-        meta.iinf.push(ItemInfo {
+        meta.iinf.try_push(ItemInfo {
             item_id: exif_item_id,
             item_type: "Exif".into(),
             ..Default::default()
-        });
-        meta.iref.push(ItemReference {
+        })?;
+        meta.iref.try_push(ItemReference {
             from_item_id: exif_item_id,
             to_item_id: color_item_id,
             reference_type: "cdsc".into(),
             index: meta.iref.len() as u32,
-        });
+        })?;
 
-        meta.iloc.items.push(ItemLocationEntry {
+        meta.iloc.items.try_push(ItemLocationEntry {
             item_id: exif_item_id,
             construction_method: 0,
             base_offset: 0,
             extent_count: 0,
-            extents: vec![decoder::Extent {
+            extents: try_vec_exact![decoder::Extent {
                 // Does not include unsigned int(32) exif_tiff_header_offset;
                 offset: (offset_till_remaining_bytes + remaining_bytes_offset) as u64,
                 size: exif_data_size as usize,
-            }],
-        });
+            }]?,
+        })?;
         remaining_bytes_offset += exif_data_size as usize;
     }
 
     let xmp_item_id = 7;
     if has_xmp {
-        meta.iinf.push(ItemInfo {
+        meta.iinf.try_push(ItemInfo {
             item_id: xmp_item_id,
             item_type: "mime".into(),
             content_type: "application/rdf+xml".into(),
             ..Default::default()
-        });
-        meta.iref.push(ItemReference {
+        })?;
+        meta.iref.try_push(ItemReference {
             from_item_id: xmp_item_id,
             to_item_id: color_item_id,
             reference_type: "cdsc".into(),
             index: meta.iref.len() as u32,
-        });
+        })?;
 
-        meta.iloc.items.push(ItemLocationEntry {
+        meta.iloc.items.try_push(ItemLocationEntry {
             item_id: xmp_item_id,
             construction_method: 0,
             base_offset: 0,
             extent_count: 0,
-            extents: vec![decoder::Extent {
+            extents: try_vec_exact![decoder::Extent {
                 offset: (offset_till_remaining_bytes + remaining_bytes_offset) as u64,
                 size: xmp_data_size as usize,
-            }],
-        });
+            }]?,
+        })?;
     }
 
     Ok(meta)
@@ -991,12 +992,12 @@ fn create_extended_pixi(
     chroma_is_vertically_centered: bool,
 ) -> Result<PixelInformation, AvifError> {
     let mut pixi = PixelInformation {
-        planes: vec![PlanePixelInformation {
+        planes: try_vec_exact![PlanePixelInformation {
             depth: bit_depth as u8,
             channel_idc: Some(ChannelIdc::FirstColorChannel),
             subsampling_type: Some(PixelFormat::Yuv444),
             subsampling_location: Some(ChromaSamplePosition::Colocated),
-        }],
+        }]?,
     };
     let pixel_format = chroma_subsampling_to_pixel_format(chroma_subsampling);
     match pixel_format {

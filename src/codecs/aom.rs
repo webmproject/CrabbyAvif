@@ -19,6 +19,7 @@ use crate::encoder::Sample;
 use crate::encoder::ScalingMode;
 use crate::image::Image;
 use crate::image::YuvRange;
+use crate::internal_utils::*;
 use crate::parser::obu::Av1SequenceHeader;
 use crate::utils::IFraction;
 use crate::*;
@@ -137,11 +138,11 @@ fn add_aom_pkt_to_output_samples(
     // that pkt.data.frame is the active field of the union (per libaom API contract).
     // So this access is safe.
     let sync = (unsafe { pkt.data.frame.flags } & AOM_FRAME_IS_KEY) != 0;
-    output_samples.push(Sample::create_from(
+    output_samples.try_push(Sample::create_from(
         encoded_data,
         0..encoded_data.len(),
         sync,
-    )?);
+    )?)?;
     Ok(true)
 }
 

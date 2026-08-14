@@ -141,12 +141,9 @@ impl Image {
                 }
             }
         }
-        image.exif = self
-            .exif
-            .try_clone()
-            .map_err(AvifError::map_out_of_memory)?;
-        image.icc = self.icc.try_clone().map_err(AvifError::map_out_of_memory)?;
-        image.xmp = self.xmp.try_clone().map_err(AvifError::map_out_of_memory)?;
+        image.exif = self.exif.try_clone()?;
+        image.icc = self.icc.try_clone()?;
+        image.xmp = self.xmp.try_clone()?;
         Ok(image)
     }
 

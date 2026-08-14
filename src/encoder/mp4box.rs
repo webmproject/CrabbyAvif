@@ -130,26 +130,27 @@ pub(crate) fn write_tmap(metadata: &GainMapMetadata) -> AvifResult<Vec<u8>> {
 
 impl Encoder {
     pub(crate) fn write_avif_ftyp(&self, stream: &mut OStream) -> AvifResult<()> {
-        let mut compatible_brands = vec![
+        let mut compatible_brands = vec![];
+        compatible_brands.try_extend_from_slice(&[
             String::from("avif"),
             String::from("mif1"),
             String::from("miaf"),
-        ];
+        ])?;
         // TODO: check if avio brand is necessary.
         if self.is_sequence() {
-            compatible_brands.extend_from_slice(&[
+            compatible_brands.try_extend_from_slice(&[
                 String::from("avis"),
                 String::from("msf1"),
                 String::from("iso8"),
-            ]);
+            ])?;
         }
         if self.items.iter().any(|x| x.is_tmap()) {
-            compatible_brands.push(String::from("tmap"));
+            compatible_brands.try_push(String::from("tmap"))?;
         }
         match self.image_metadata.depth {
             8 | 10 => match self.image_metadata.yuv_format {
-                PixelFormat::Yuv420 => compatible_brands.push(String::from("MA1B")),
-                PixelFormat::Yuv444 => compatible_brands.push(String::from("MA1A")),
+                PixelFormat::Yuv420 => compatible_brands.try_push(String::from("MA1B"))?,
+                PixelFormat::Yuv444 => compatible_brands.try_push(String::from("MA1A"))?,
                 _ => {}
             },
             _ => {}
@@ -174,25 +175,26 @@ impl Encoder {
     #[cfg(feature = "avm")]
     pub(crate) fn write_avif2_ftyp(&self, stream: &mut OStream) -> AvifResult<()> {
         // TODO: b/437292541 - Adapt once AVIF2 is finalized.
-        let mut compatible_brands = vec![
+        let mut compatible_brands = vec![];
+        compatible_brands.try_extend_from_slice(&[
             String::from("av2f"),
             String::from("mif1"),
             String::from("miaf"),
-        ];
+        ])?;
         if self.is_sequence() {
-            compatible_brands.extend_from_slice(&[
+            compatible_brands.try_extend_from_slice(&[
                 String::from("av2s"),
                 String::from("msf1"),
                 String::from("iso8"),
-            ]);
+            ])?;
         }
         if self.items.iter().any(|x| x.is_tmap()) {
-            compatible_brands.push(String::from("tmap"));
+            compatible_brands.try_push(String::from("tmap"))?;
         }
         match self.image_metadata.depth {
             8 | 10 => match self.image_metadata.yuv_format {
-                PixelFormat::Yuv420 => compatible_brands.push(String::from("MA1B")),
-                PixelFormat::Yuv444 => compatible_brands.push(String::from("MA1A")),
+                PixelFormat::Yuv420 => compatible_brands.try_push(String::from("MA1B"))?,
+                PixelFormat::Yuv444 => compatible_brands.try_push(String::from("MA1A"))?,
                 _ => {}
             },
             _ => {}

@@ -441,19 +441,17 @@ impl<const LITTLE_ENDIAN: bool> OStreamImpl<LITTLE_ENDIAN> {
 
     pub(crate) fn write_u8(&mut self, value: u8) -> AvifResult<()> {
         assert_eq!(self.num_bits, 0);
-        self.try_reserve(1)?;
-        self.data.push(value);
+        self.data.try_push(value)?;
         Ok(())
     }
 
     pub(crate) fn write_u16(&mut self, value: u16) -> AvifResult<()> {
         assert_eq!(self.num_bits, 0);
-        self.try_reserve(2)?;
-        self.data.extend_from_slice(&if LITTLE_ENDIAN {
+        self.data.try_extend_from_slice(&if LITTLE_ENDIAN {
             value.to_le_bytes()
         } else {
             value.to_be_bytes()
-        });
+        })?;
         Ok(())
     }
 
@@ -462,23 +460,21 @@ impl<const LITTLE_ENDIAN: bool> OStreamImpl<LITTLE_ENDIAN> {
         if value > 0xFFFFFF {
             return AvifError::invalid_argument();
         }
-        self.try_reserve(3)?;
         if LITTLE_ENDIAN {
-            self.data.extend_from_slice(&value.to_le_bytes()[..3]);
+            self.data.try_extend_from_slice(&value.to_le_bytes()[..3])?;
         } else {
-            self.data.extend_from_slice(&value.to_be_bytes()[1..]);
+            self.data.try_extend_from_slice(&value.to_be_bytes()[1..])?;
         };
         Ok(())
     }
 
     pub(crate) fn write_u32(&mut self, value: u32) -> AvifResult<()> {
         assert_eq!(self.num_bits, 0);
-        self.try_reserve(4)?;
-        self.data.extend_from_slice(&if LITTLE_ENDIAN {
+        self.data.try_extend_from_slice(&if LITTLE_ENDIAN {
             value.to_le_bytes()
         } else {
             value.to_be_bytes()
-        });
+        })?;
         Ok(())
     }
 
@@ -496,20 +492,18 @@ impl<const LITTLE_ENDIAN: bool> OStreamImpl<LITTLE_ENDIAN> {
 
     pub(crate) fn write_u64(&mut self, value: u64) -> AvifResult<()> {
         assert_eq!(self.num_bits, 0);
-        self.try_reserve(8)?;
-        self.data.extend_from_slice(&if LITTLE_ENDIAN {
+        self.data.try_extend_from_slice(&if LITTLE_ENDIAN {
             value.to_le_bytes()
         } else {
             value.to_be_bytes()
-        });
+        })?;
         Ok(())
     }
 
     pub(crate) fn write_str(&mut self, value: &str) -> AvifResult<()> {
         assert_eq!(self.num_bits, 0);
         let bytes = value.as_bytes();
-        self.try_reserve(bytes.len())?;
-        self.data.extend_from_slice(bytes);
+        self.data.try_extend_from_slice(bytes)?;
         Ok(())
     }
 
@@ -523,8 +517,7 @@ impl<const LITTLE_ENDIAN: bool> OStreamImpl<LITTLE_ENDIAN> {
     pub(crate) fn write_string(&mut self, value: &String) -> AvifResult<()> {
         assert_eq!(self.num_bits, 0);
         let bytes = value.as_bytes();
-        self.try_reserve(bytes.len())?;
-        self.data.extend_from_slice(bytes);
+        self.data.try_extend_from_slice(bytes)?;
         Ok(())
     }
 

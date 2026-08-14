@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::image::*;
+use crate::internal_utils::*;
 use crate::*;
 
 use std::fs::File;
@@ -132,10 +133,9 @@ impl Writer for Y4MWriter {
                     let mut pixels: Vec<u8> = Vec::new();
                     // y4m is always little endian.
                     for &pixel16 in pixels16 {
-                        pixels.extend_from_slice(&pixel16.to_le_bytes());
+                        pixels.try_extend_from_slice(&pixel16.to_le_bytes())?;
                     }
-                    file.write_all(&pixels[..])
-                        .map_err(AvifError::map_io_error)?;
+                    file.write_all(&pixels).map_err(AvifError::map_io_error)?;
                 }
             }
         }

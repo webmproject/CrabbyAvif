@@ -134,16 +134,16 @@ pub enum ImageContentType {
 }
 
 impl ImageContentType {
-    pub(crate) fn decoding_items(&self) -> Vec<DecodingItem> {
-        let categories = match self {
-            Self::None => vec![],
-            Self::Color => vec![Category::Color],
-            Self::ColorAndAlpha => vec![Category::Color, Category::Alpha],
-            Self::GainMap => vec![Category::Gainmap],
-            Self::ColorAndGainMap => vec![Category::Color, Category::Gainmap],
-            Self::All => Category::ALL.to_vec(),
+    pub(crate) fn decoding_items(&self) -> impl Iterator<Item = DecodingItem> {
+        let categories: &[Category] = match self {
+            Self::None => &[],
+            Self::Color => &[Category::Color],
+            Self::ColorAndAlpha => &[Category::Color, Category::Alpha],
+            Self::GainMap => &[Category::Gainmap],
+            Self::ColorAndGainMap => &[Category::Color, Category::Gainmap],
+            Self::All => &Category::ALL,
         };
-        DecodingItem::all_for_categories(&categories)
+        DecodingItem::all_for_categories(categories)
     }
 
     pub(crate) fn gainmap(&self) -> bool {
@@ -335,12 +335,10 @@ impl DecodingItem {
         }
     }
 
-    fn all_for_categories(categories: &[Category]) -> Vec<DecodingItem> {
+    fn all_for_categories(categories: &'static [Category]) -> impl Iterator<Item = DecodingItem> {
         Self::ALL
-            .iter()
+            .into_iter()
             .filter(|x| categories.contains(&x.category))
-            .cloned()
-            .collect()
     }
 
     fn usize(self) -> usize {
@@ -675,7 +673,7 @@ impl Decoder {
                     Ok(()) => {
                         image
                             .exif
-                            .extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
+                            .try_extend_from_slice(stream.get_slice(stream.bytes_left()?)?)?;
                     }
                     Err(AvifError::InvalidExifPayload) => {
                         if settings.strictness.exif_valid() {
@@ -691,7 +689,7 @@ impl Decoder {
                 let mut stream = xmp.1.stream(io)?;
                 image
                     .xmp
-                    .extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
+                    .try_extend_from_slice(stream.get_slice(stream.bytes_left()?)?)?;
             }
         }
         Ok(())

@@ -105,7 +105,7 @@ fn recipe_to_expression(recipe: Recipe) -> Result<SampleTransform, AvifError> {
                 // once combined use 16-bit unsigned values, but intermediate results are stored in signed integers.
                 SampleTransformBitDepth::Signed32bits.to_bits(),
                 2, // num_inputs
-                vec![
+                try_vec_exact![
                     // The base image represents the 8 most significant bits of the reconstructed, bit-depth-extended output image.
                     // Left shift the base image (which is also the primary item, or the auxiliary alpha item of the primary item)
                     // by 8 bits. This is equivalent to multiplying by 2^8.
@@ -116,7 +116,7 @@ fn recipe_to_expression(recipe: Recipe) -> Result<SampleTransform, AvifError> {
                     SampleTransformToken::ImageItem(1),
                     // Combine the two.
                     SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Or),
-                ],
+                ]?,
             )
         }
         Recipe::BitDepthExtension12b4b => {
@@ -128,7 +128,7 @@ fn recipe_to_expression(recipe: Recipe) -> Result<SampleTransform, AvifError> {
                 // once combined use 16-bit unsigned values, but intermediate results are stored in signed integers.
                 SampleTransformBitDepth::Signed32bits.to_bits(),
                 2, // num_inputs
-                vec![
+                try_vec_exact![
                     // The base image represents the 12 most significant bits of the reconstructed, bit-depth-extended output image.
                     // Left shift the base image (which is also the primary item, or the auxiliary alpha item of the primary item)
                     // by 4 bits. This is equivalent to multiplying by 2^4.
@@ -141,7 +141,7 @@ fn recipe_to_expression(recipe: Recipe) -> Result<SampleTransform, AvifError> {
                     SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Quotient),
                     // Combine the two.
                     SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Sum),
-                ],
+                ]?,
             )
         }
         Recipe::BitDepthExtension12b8bOverlap4b => {
@@ -154,7 +154,7 @@ fn recipe_to_expression(recipe: Recipe) -> Result<SampleTransform, AvifError> {
                 // once combined use 16-bit unsigned values, but intermediate results are stored in signed integers.
                 SampleTransformBitDepth::Signed32bits.to_bits(),
                 2, // num_inputs
-                vec![
+                try_vec_exact![
                     // The base image represents the 12 most significant bits of the reconstructed, bit-depth-extended output image.
                     // Left shift the base image (which is also the primary item, or the auxiliary alpha item of the primary item)
                     // by 4 bits. This is equivalent to multiplying by 2^4.
@@ -170,7 +170,7 @@ fn recipe_to_expression(recipe: Recipe) -> Result<SampleTransform, AvifError> {
                     SampleTransformToken::Constant(128),
                     SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Difference),
                     // Sample values are clamped to [0:1<<depth[ at that point.
-                ],
+                ]?,
             )
         }
         #[cfg(feature = "satofloat")]
@@ -312,12 +312,12 @@ impl Encoder {
             SampleTransform::create_from(
                 /*bit_depth=*/ 32, // Signed so 16 is not enough.
                 /*num_inputs=*/ 1,
-                vec![
+                try_vec_exact![
                     // Postfix notation.
                     SampleTransformToken::ImageItem(0),
                     SampleTransformToken::Constant(256),
                     SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Quotient),
-                ],
+                ]?,
             )?
             .apply_to_planes(item.category, &[full_depth_image], &mut msb)?;
             Ok(msb)
@@ -374,12 +374,12 @@ impl Encoder {
             SampleTransform::create_from(
                 /*bit_depth=*/ 32, // Signed so 16 is not enough.
                 /*num_inputs=*/ 1,
-                vec![
+                try_vec_exact![
                     // Postfix notation.
                     SampleTransformToken::ImageItem(0),
                     SampleTransformToken::Constant(16),
                     SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Quotient),
-                ],
+                ]?,
             )?
             .apply_to_planes(item.category, &[full_depth_image], &mut msb)?;
             Ok(msb)

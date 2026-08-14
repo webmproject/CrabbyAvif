@@ -83,6 +83,7 @@ impl Item {
                     // Decoder::prepare_sample() will merge the extents the same way but only for
                     // image items. It may be necessary here for Exif/XMP metadata for example.
                     let mut data_buffer: Vec<u8> = create_vec_exact(self.size)?;
+                    assert_eq!(self.size, self.extents.iter().map(|e| e.size).sum());
                     for extent in &self.extents {
                         data_buffer.extend_from_slice(io.read_exact(extent.offset, extent.size)?);
                     }

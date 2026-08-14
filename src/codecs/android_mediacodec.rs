@@ -330,7 +330,7 @@ fn prefer_hardware_decoder(config: &DecoderConfig) -> bool {
     }
 }
 
-fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {
+fn get_codec_initializers(config: &DecoderConfig) -> AvifResult<Vec<CodecInitializer>> {
     #[cfg(android_soong)]
     {
         // Use a specific decoder if it is requested.
@@ -338,7 +338,7 @@ fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {
             rustutils::android::system_properties::read("media.crabbyavif.debug.decoder")
         {
             if !decoder.is_empty() {
-                return vec![CodecInitializer::ByName(decoder)];
+                return try_vec_exact![CodecInitializer::ByName(decoder)];
             }
         }
     }
@@ -354,19 +354,19 @@ fn get_codec_initializers(config: &DecoderConfig) -> Vec<CodecInitializer> {
     #[cfg(android_soong)]
     let prefer_hw = prefer_hardware_decoder(config);
     match (prefer_hw, config.codec_config.compression_format()) {
-        (true, CompressionFormat::Heic) => vec![
+        (true, CompressionFormat::Heic) => try_vec_exact![
             CodecInitializer::ByMimeType(mime_type.to_string()),
             CodecInitializer::ByName(hevc),
         ],
-        (false, CompressionFormat::Heic) => vec![
+        (false, CompressionFormat::Heic) => try_vec_exact![
             CodecInitializer::ByName(hevc),
             CodecInitializer::ByMimeType(mime_type.to_string()),
         ],
-        (true, CompressionFormat::Avif) => vec![
+        (true, CompressionFormat::Avif) => try_vec_exact![
             CodecInitializer::ByMimeType(mime_type.to_string()),
             CodecInitializer::ByName(dav1d),
         ],
-        (false, CompressionFormat::Avif) => vec![
+        (false, CompressionFormat::Avif) => try_vec_exact![
             CodecInitializer::ByName(dav1d),
             CodecInitializer::ByMimeType(mime_type.to_string()),
         ],
@@ -443,7 +443,7 @@ impl MediaCodec {
                 AMEDIAFORMAT_KEY_MAX_INPUT_SIZE,
                 i32_from_usize(config.max_input_size)?,
             );
-            let codec_specific_data = config.codec_config.raw_data();
+            let codec_specific_data = config.codec_config.raw_data()?;
             if !codec_specific_data.is_empty() {
                 AMediaFormat_setBuffer(
                     format,
@@ -919,7 +919,7 @@ impl Decoder for MediaCodec {
     }
 
     fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
-        self.codec_initializers = get_codec_initializers(config);
+        self.codec_initializers = get_codec_initializers(config)?;
         self.config = Some(config.clone());
         // Actual codec initialization will be performed in get_next_image since we may try
         // multiple codecs.
@@ -1002,9 +1002,9 @@ impl MediaCodec {
             let nal_unit_range = nal_length_size..nal_unit_end;
             check_slice_range(payload_slice.len(), &nal_unit_range)?;
             // Start code.
-            hevc_payload.extend_from_slice(&[0, 0, 0, 1]);
+            hevc_payload.try_extend_from_slice(&[0, 0, 0, 1])?;
             // NAL Unit.
-            hevc_payload.extend_from_slice(&payload_slice[nal_unit_range]);
+            hevc_payload.try_extend_from_slice(&payload_slice[nal_unit_range])?;
             offset = checked_add!(offset, nal_unit_end)?;
         }
         Ok(Some(hevc_payload))

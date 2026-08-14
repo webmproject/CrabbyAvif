@@ -383,9 +383,9 @@ impl CodecConfiguration {
     }
 
     #[cfg(feature = "android_mediacodec")]
-    pub(crate) fn raw_data(&self) -> Vec<u8> {
+    pub(crate) fn raw_data(&self) -> AvifResult<Vec<u8>> {
         match self {
-            Self::Av1(config) => config.raw_data.clone(),
+            Self::Av1(config) => config.raw_data.try_clone(),
             #[cfg(feature = "avm")]
             Self::Av2(config) => unreachable!(),
             Self::Hevc(config) => {
@@ -396,11 +396,11 @@ impl CodecConfiguration {
                 let mut data: Vec<u8> = Vec::new();
                 for nal_unit in [&config.vps, &config.sps, &config.pps] {
                     // Start code.
-                    data.extend_from_slice(&[0, 0, 0, 1]);
+                    data.try_extend_from_slice(&[0, 0, 0, 1])?;
                     // Data.
-                    data.extend_from_slice(&nal_unit[..]);
+                    data.try_extend_from_slice(&nal_unit[..])?;
                 }
-                data
+                Ok(data)
             }
             #[cfg(feature = "jpegxl")]
             Self::JpegXl(_) => unreachable!(),

@@ -12,6 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Same as vec![] but returns an error if the allocation fails.
+macro_rules! try_vec_exact {
+    () => {
+        Ok::<_, AvifError>(Vec::new())
+    };
+    ($elem:expr; $n:expr) => {{
+        let n = $n;
+        let mut vec = Vec::new();
+        vec.try_reserve_exact(n)
+            .map_err(AvifError::map_out_of_memory)?;
+        vec.resize(n, $elem);
+        Ok::<_, AvifError>(vec)
+    }};
+    ($($x:expr),+ $(,)?) => {{
+        let items = [$($x),+];
+        let mut vec = Vec::new();
+        vec.try_reserve_exact(items.len())
+            .map_err(AvifError::map_out_of_memory)?;
+        vec.extend(items);
+        Ok::<_, AvifError>(vec)
+    }};
+}
+
 pub mod io;
 pub mod sampletransform;
 pub mod stream;
@@ -391,5 +414,31 @@ impl<T: Clone> TryClone for Vec<T> {
             .map_err(AvifError::map_out_of_memory)?;
         vec.extend_from_slice(self.as_slice());
         Ok(vec)
+    }
+}
+
+// Same as Vec.push() and Vec.extend_from_slice() but returns an error if the allocation fails.
+pub(crate) trait VecExtension<T> {
+    fn try_push(&mut self, value: T) -> AvifResult<()>;
+    fn try_extend_from_slice(&mut self, value: &[T]) -> AvifResult<()>
+    where
+        T: Clone;
+}
+
+impl<T> VecExtension<T> for Vec<T> {
+    fn try_push(&mut self, value: T) -> AvifResult<()> {
+        self.try_reserve(1).map_err(AvifError::map_out_of_memory)?;
+        self.push(value);
+        Ok(())
+    }
+
+    fn try_extend_from_slice(&mut self, value: &[T]) -> AvifResult<()>
+    where
+        T: Clone,
+    {
+        self.try_reserve(value.len())
+            .map_err(AvifError::map_out_of_memory)?;
+        self.extend_from_slice(value);
+        Ok(())
     }
 }
