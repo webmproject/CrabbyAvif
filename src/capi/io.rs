@@ -24,35 +24,17 @@ use crate::internal_utils::io::DecoderRawIO;
 use crate::*;
 
 #[repr(C)]
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct avifROData {
     pub data: *const u8,
     pub size: usize,
 }
 
-impl Default for avifROData {
-    fn default() -> Self {
-        avifROData {
-            data: std::ptr::null(),
-            size: 0,
-        }
-    }
-}
-
 #[repr(C)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct avifRWData {
     pub data: *mut u8,
     pub size: usize,
-}
-
-impl Default for avifRWData {
-    fn default() -> Self {
-        avifRWData {
-            data: std::ptr::null_mut(),
-            size: 0,
-        }
-    }
 }
 
 impl From<&Vec<u8>> for avifRWData {

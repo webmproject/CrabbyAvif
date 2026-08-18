@@ -204,18 +204,10 @@ fn extract_exif_and_xmp(
     Ok(())
 }
 
+#[derive(Default)]
 struct PngReaderNative {
     png: png_structp,
     info: png_infop,
-}
-
-impl Default for PngReaderNative {
-    fn default() -> Self {
-        Self {
-            png: ptr::null_mut(),
-            info: ptr::null_mut(),
-        }
-    }
 }
 
 impl Drop for PngReaderNative {

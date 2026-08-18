@@ -31,18 +31,10 @@ pub struct PngWriter {
     pub compression_level: Option<i32>,
 }
 
+#[derive(Default)]
 struct PngWriterNative {
     png: png_structp,
     info: png_infop,
-}
-
-impl Default for PngWriterNative {
-    fn default() -> Self {
-        Self {
-            png: ptr::null_mut(),
-            info: ptr::null_mut(),
-        }
-    }
 }
 
 impl Drop for PngWriterNative {
