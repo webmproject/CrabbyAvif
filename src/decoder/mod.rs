@@ -803,7 +803,7 @@ impl Decoder {
             return Ok(());
         }
 
-        let mut source_item_ids: Vec<u32> = vec![];
+        let mut source_item_ids: Vec<u32> = Vec::new();
         let mut first_codec_config: Option<CodecConfiguration> = None;
         let mut first_icc: Option<Vec<u8>> = None;
         let mut first_nclx: Option<Nclx> = None;
@@ -956,9 +956,10 @@ impl Decoder {
             .grpl
             .iter()
             .find(|g| g.grouping_type == "altr" && g.entity_ids.contains(&item_id));
-        let item_ids = match altr_group {
+        let single_item_id = [item_id];
+        let item_ids: &[u32] = match altr_group {
             Some(altr_group) => &altr_group.entity_ids,
-            None => &vec![item_id],
+            None => &single_item_id,
         };
         for item_id in item_ids {
             if let Some(item) = self.items.get(item_id) {
@@ -1971,7 +1972,7 @@ impl Decoder {
         }
         let previous_decoded_tile_count =
             self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
-        let mut payloads = vec![];
+        let mut payloads = Vec::new();
         let mut pending_read = false;
         for tile_index in previous_decoded_tile_count..tile_count {
             let tile = &self.tiles[decoding_item.usize()][tile_index];
@@ -2269,7 +2270,7 @@ impl Decoder {
             if self.tiles[decoding_item.usize()].is_empty() {
                 continue;
             }
-            let mut payloads = vec![];
+            let mut payloads = Vec::new();
             let mut spatial_id: Option<u8> = None;
             for image_index in (self.image_index + 1)..=requested_index {
                 let tile_index = 0;

@@ -409,7 +409,7 @@ pub(crate) trait TryClone: Sized {
 
 impl<T: Clone> TryClone for Vec<T> {
     fn try_clone(&self) -> AvifResult<Vec<T>> {
-        let mut vec: Vec<T> = vec![];
+        let mut vec: Vec<T> = Vec::new();
         vec.try_reserve_exact(self.len())
             .map_err(AvifError::map_out_of_memory)?;
         vec.extend_from_slice(self.as_slice());

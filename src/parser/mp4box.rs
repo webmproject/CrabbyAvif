@@ -680,7 +680,7 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
             stream.skip_bits(4)?;
             0
         },
-        items: vec![],
+        items: Vec::new(),
     };
 
     // Section 8.11.3.3 of ISO/IEC 14496-12.

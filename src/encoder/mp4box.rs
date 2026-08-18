@@ -130,7 +130,7 @@ pub(crate) fn write_tmap(metadata: &GainMapMetadata) -> AvifResult<Vec<u8>> {
 
 impl Encoder {
     pub(crate) fn write_avif_ftyp(&self, stream: &mut OStream) -> AvifResult<()> {
-        let mut compatible_brands = vec![];
+        let mut compatible_brands = Vec::new();
         compatible_brands.try_extend_from_slice(&[
             String::from("avif"),
             String::from("mif1"),

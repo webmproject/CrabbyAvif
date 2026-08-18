@@ -114,9 +114,9 @@ impl Image {
             // Fields requiring dynamic allocation.
             row_bytes: [0; MAX_PLANE_COUNT],
             planes: [const { None }; MAX_PLANE_COUNT],
-            exif: vec![],
-            icc: vec![],
-            xmp: vec![],
+            exif: Vec::new(),
+            icc: Vec::new(),
+            xmp: Vec::new(),
 
             // All other field values can be copied.
             ..*self
