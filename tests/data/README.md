@@ -65,3 +65,20 @@ $ MP4Box -add-derived-image :type=iden:ref=dimg,2:image-size=2x2 -add-derived-im
 
 $ MP4Box -set-primary 2 white_iden_self.avif
 ```
+
+## pyramid_pymd.avif
+
+- Item 1, 2 and 3: AV1 items of 128x128, 256x256 and 512x512 pixels.
+- A 'grpl' box with one 'pymd' EntityToGroupBox listing the three items.
+
+The 'pymd' box carries the grouping type specific fields tile_size_x, tile_size_y and the per layer
+data after the entity_id array, so the child box is 22 bytes longer than the generic
+EntityToGroupBox fields alone.
+
+Created from three gradient PNG layers with libheif built from source at commit 1a3583b with
+`ENABLE_EXPERIMENTAL_FEATURES=ON`:
+```bash
+$ heif-enc --add-pyramid-group -A layer0.png layer1.png layer2.png -o pyramid_pymd.avif
+```
+
+Byte for byte the same file as tests/data/pyramid_pymd.avif in libavif.
