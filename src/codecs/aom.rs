@@ -111,7 +111,10 @@ macro_rules! codec_control {
         if unsafe { aom_codec_control($self.encoder.unwrap_mut() as *mut _, $key as _, $value) }
             != aom_codec_err_t_AOM_CODEC_OK
         {
-            return AvifError::unknown_error("");
+            return AvifError::unknown_error(format!(
+                "aom_codec_control failed: {}",
+                $self.error_string()
+            ));
         }
     };
 }
@@ -170,7 +173,9 @@ impl Encoder for Aom {
                 aom_codec_enc_config_default(encoder_iface, cfg_uninit.as_mut_ptr(), aom_usage)
             };
             if err != aom_codec_err_t_AOM_CODEC_OK {
-                return AvifError::unknown_error("");
+                return AvifError::unknown_error(format!(
+                    "aom_codec_enc_config_default failed. err: {err}"
+                ));
             }
             // # Safety: cfg_uninit was initialized in the C function call above.
             let mut aom_config = unsafe { cfg_uninit.assume_init() };
@@ -246,7 +251,10 @@ impl Encoder for Aom {
                 )
             };
             if err != aom_codec_err_t_AOM_CODEC_OK {
-                return AvifError::unknown_error(format!("aom_codec_enc_init failed. err: {err}"));
+                return AvifError::unknown_error(format!(
+                    "aom_codec_enc_init failed: {}",
+                    self.error_string()
+                ));
             }
             // # Safety: encoder_uninit was initialized in the C function call above.
             self.encoder = Some(unsafe { encoder_uninit.assume_init() });
@@ -348,7 +356,8 @@ impl Encoder for Aom {
                 } != aom_codec_err_t_AOM_CODEC_OK
                 {
                     return AvifError::unknown_error(format!(
-                        "Unable to set codec specific option: {key} to {value}"
+                        "Unable to set codec specific option: {key} to {value}: {}",
+                        self.error_string()
                     ));
                 }
             }
@@ -389,7 +398,8 @@ impl Encoder for Aom {
                     };
                     if err != aom_codec_err_t_AOM_CODEC_OK {
                         return AvifError::unknown_error(format!(
-                            "aom_codec_enc_config_set failed. err: {err}"
+                            "aom_codec_enc_config_set failed: {}",
+                            self.error_string()
                         ));
                     }
                 } else if aom_config.rc_end_usage == aom_rc_mode_AOM_CQ
@@ -505,7 +515,10 @@ impl Encoder for Aom {
             )
         };
         if err != aom_codec_err_t_AOM_CODEC_OK {
-            return AvifError::unknown_error(format!("err: {err}"));
+            return AvifError::unknown_error(format!(
+                "aom_codec_encode failed: {}",
+                self.error_string()
+            ));
         }
         let mut iter: aom_codec_iter_t = std::ptr::null_mut();
         loop {
@@ -553,7 +566,10 @@ impl Encoder for Aom {
                 )
             };
             if err != aom_codec_err_t_AOM_CODEC_OK {
-                return AvifError::unknown_error("");
+                return AvifError::unknown_error(format!(
+                    "aom_codec_encode with null img failed: {}",
+                    self.error_string()
+                ));
             }
             let mut got_packet = false;
             let mut iter: aom_codec_iter_t = std::ptr::null_mut();
@@ -608,5 +624,20 @@ impl Aom {
             Err(_) => String::new(),
         };
         format!("aom: {version}")
+    }
+
+    fn error_string(&self) -> String {
+        let ctx = self.encoder.unwrap_ref();
+        // # Safety: Calling aom_codec_error() with valid parameters is guaranteed to return a valid char* pointer.
+        let err = unsafe { CStr::from_ptr(aom_codec_error(ctx)).to_string_lossy() };
+        // # Safety: Calling aom_codec_error_detail() with valid parameters is guaranteed to return a null pointer or a valid char* pointer.
+        let detail_ptr = unsafe { aom_codec_error_detail(ctx) };
+        if detail_ptr.is_null() {
+            format!("{err}: no error detail")
+        } else {
+            // # Safety: detail_ptr is a valid char* pointer.
+            let detail = unsafe { CStr::from_ptr(detail_ptr).to_string_lossy() };
+            format!("{err}: {detail}")
+        }
     }
 }
