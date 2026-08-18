@@ -4,6 +4,8 @@ runs:
   using: "composite"
   steps:
   - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    with:
+      persist-credentials: false
 
   - name: Set globals
     id: globals
@@ -90,8 +92,10 @@ runs:
     run: |
       git clone https://github.com/AOMediaCodec/av1-avif.git
       cd av1-avif
-      git checkout ${{ steps.globals.outputs.AV1_AVIF_COMMIT_HASH }}
+      git checkout ${STEPS_GLOBALS_OUTPUTS_AV1_AVIF_COMMIT_HASH}
     shell: bash
+    env:
+      STEPS_GLOBALS_OUTPUTS_AV1_AVIF_COMMIT_HASH: ${{ steps.globals.outputs.AV1_AVIF_COMMIT_HASH }}
   - name: Configure the Rust toolchain and target using rustup
     run: rustup default stable
     shell: bash
