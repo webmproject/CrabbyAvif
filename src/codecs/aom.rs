@@ -186,13 +186,9 @@ impl Encoder for Aom {
 
             if config.is_single_image {
                 aom_config.g_limit = 1;
-                aom_config.g_lag_in_frames = 0;
-                aom_config.kf_mode = aom_kf_mode_AOM_KF_DISABLED;
-                aom_config.kf_max_dist = 0;
-            } else {
-                if config.keyframe_interval > 0 {
-                    aom_config.kf_max_dist = config.keyframe_interval as u32;
-                }
+            }
+            if aom_usage != AOM_USAGE_ALL_INTRA && config.keyframe_interval > 0 {
+                aom_config.kf_max_dist = config.keyframe_interval as u32;
             }
             if config.disable_lagged_output {
                 aom_config.g_lag_in_frames = 0;
