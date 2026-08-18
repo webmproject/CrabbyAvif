@@ -85,7 +85,7 @@ fn lossless_sample_transform_roundtrip(allow_sample_transform: bool) -> AvifResu
     decoder.parse()?;
 
     assert!(are_images_equal(
-        &decoder.image().unwrap(),
+        decoder.image().unwrap(),
         &Image {
             depth: if allow_sample_transform { 32 } else { 8 },
             planes: [const { None }; MAX_PLANE_COUNT],
