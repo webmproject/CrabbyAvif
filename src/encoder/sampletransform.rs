@@ -607,7 +607,7 @@ impl Encoder {
             let float_plane = float_planes[plane.as_usize()].ok_or(AvifError::NoContent)?;
             let width = sign_exponent_msb.width(plane);
             let height = sign_exponent_msb.height(plane);
-            if float_plane.len() != width.checked_mul(height).unwrap() as usize {
+            if float_plane.len() != width.checked_mul(height).unwrap() {
                 return AvifError::invalid_argument();
             }
             for y in 0..height as u32 {
