@@ -256,20 +256,15 @@ impl Encoder {
 
         let orientation_minus1 = image_irot_imir_to_exif_orientation(image)? - 1;
 
-        let infe_type;
-        let codec_config_type;
-        let has_explicit_codec_types;
-        if matches!(
+        let (infe_type, codec_config_type, has_explicit_codec_types) = if matches!(
             color_item.codec_configuration,
             Some(CodecConfiguration::Av1(_))
         ) {
-            infe_type = "av01";
-            codec_config_type = "av1C";
-            has_explicit_codec_types = false;
+            ("av01", "av1C", false)
         } else {
             // TODO: b/437292541 - Support AVM (av02/av2C)
             return AvifError::not_implemented();
-        }
+        };
 
         // _minus1 is encoded for these fields.
         assert_ne!(image.width, 0);

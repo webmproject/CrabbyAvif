@@ -194,18 +194,10 @@ impl Tile {
                 layer_sizes[3] = remaining_size;
             }
         }
-        let lsel;
-        let has_lsel;
-        match item.lsel() {
-            Some(x) => {
-                lsel = *x;
-                has_lsel = true;
-            }
-            None => {
-                lsel = 0;
-                has_lsel = false;
-            }
-        }
+        let (lsel, has_lsel) = match item.lsel() {
+            Some(x) => (*x, true),
+            None => (0, false),
+        };
         // Progressive images offer layers via the a1lxProp, but don't specify a layer selection with
         // lsel.
         item.progressive = has_a1lx && (!has_lsel || lsel == 0xFFFF);

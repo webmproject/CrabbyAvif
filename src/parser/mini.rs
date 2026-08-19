@@ -82,38 +82,37 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
     };
 
     // Colour properties
-    let color_primaries;
-    let transfer_characteristics;
-    let matrix_coefficients;
-    if has_explicit_cicp {
-        color_primaries = ColorPrimaries::from(stream.read_bits(8)? as u16); // bit(8) colour_primaries;
-        transfer_characteristics = TransferCharacteristics::from(stream.read_bits(8)? as u16); // bit(8) transfer_characteristics;
-        matrix_coefficients = if chroma_subsampling != 0 {
-            MatrixCoefficients::from(stream.read_bits(8)? as u16) // bit(8) matrix_coefficients;
-        } else {
-            MatrixCoefficients::Unspecified // 2
-        };
+    let (color_primaries, transfer_characteristics, matrix_coefficients) = if has_explicit_cicp {
+        (
+            ColorPrimaries::from(stream.read_bits(8)? as u16), // bit(8) colour_primaries;
+            TransferCharacteristics::from(stream.read_bits(8)? as u16), // bit(8) transfer_characteristics;
+            if chroma_subsampling != 0 {
+                MatrixCoefficients::from(stream.read_bits(8)? as u16) // bit(8) matrix_coefficients;
+            } else {
+                MatrixCoefficients::Unspecified // 2
+            },
+        )
     } else {
-        color_primaries = if has_icc {
-            ColorPrimaries::Unspecified // 2
-        } else {
-            ColorPrimaries::Bt709
-        }; // 1
-        transfer_characteristics = if has_icc {
-            TransferCharacteristics::Unspecified // 2
-        } else {
-            TransferCharacteristics::Srgb
-        }; // 13
-        matrix_coefficients = if chroma_subsampling == 0 {
-            MatrixCoefficients::Unspecified // 2
-        } else {
-            MatrixCoefficients::Bt601
-        }; // 6
-    }
+        (
+            if has_icc {
+                ColorPrimaries::Unspecified // 2
+            } else {
+                ColorPrimaries::Bt709
+            }, // 1
+            if has_icc {
+                TransferCharacteristics::Unspecified // 2
+            } else {
+                TransferCharacteristics::Srgb
+            }, // 13
+            if chroma_subsampling == 0 {
+                MatrixCoefficients::Unspecified // 2
+            } else {
+                MatrixCoefficients::Bt601
+            }, // 6
+        )
+    };
 
-    let infe_type;
-    let _codec_config_type;
-    if has_explicit_codec_types {
+    let infe_type = if has_explicit_codec_types {
         // bit(32) infe_type;
         let infe = [
             stream.read_bits(8)? as u8,
@@ -136,12 +135,10 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
                 "Unsupported infe_type {infe:?} or codec_config_type {codec_config:?}"
             ));
         }
-        infe_type = infe.unwrap();
-        _codec_config_type = codec_config.unwrap();
+        infe.unwrap()
     } else {
-        infe_type = "av01".into();
-        _codec_config_type = "av1C".into();
-    }
+        "av01".into()
+    };
 
     // High Dynamic Range properties
     let mut has_gainmap = false;
