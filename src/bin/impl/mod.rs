@@ -941,12 +941,10 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
             }
         } else {
             // TODO: b/403090413 - validate encoding args.
-            if let Some(quality) = args.quality {
-                if !(0.0..=100.0).contains(&quality) {
-                    return Err(AvifError::UnknownError(
-                        "quality must be between 0 and 100 inclusive".into(),
-                    ));
-                }
+            if matches!(args.quality, Some(quality) if !(0.0..=100.0).contains(&quality)) {
+                return Err(AvifError::UnknownError(
+                    "quality must be between 0 and 100 inclusive".into(),
+                ));
             }
         }
     } else if !args.version {
