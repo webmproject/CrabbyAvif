@@ -152,6 +152,8 @@ impl Encoder for Avm {
         config: &EncoderConfig,
         output_samples: &mut Vec<Sample>,
     ) -> AvifResult<()> {
+        let quantizer = config.quantizer();
+
         if self.context.is_none() {
             // # Safety: Calling a C function.
             let encoder_iface = unsafe { avm_codec_av2_cx() };
@@ -235,9 +237,9 @@ impl Encoder for Avm {
             if avm_config.rc_end_usage == avm_rc_mode_AVM_CQ
                 || avm_config.rc_end_usage == avm_rc_mode_AVM_Q
             {
-                self.codec_control(avme_enc_control_id_AVME_SET_QP, config.quantizer())?;
+                self.codec_control(avme_enc_control_id_AVME_SET_QP, quantizer)?;
             }
-            if config.quantizer() == 0 {
+            if quantizer == 0 {
                 self.codec_control(avme_enc_control_id_AV2E_SET_LOSSLESS, 1)?;
             }
             if config.tile_rows_log2 != 0 {
@@ -334,7 +336,7 @@ impl Encoder for Avm {
                 // Dimension changes are forbidden.
                 return AvifError::invalid_argument();
             }
-            if self.encoder_config.unwrap_ref().quantizer() != config.quantizer() {
+            if self.encoder_config.unwrap_ref().quality != config.quality {
                 if avm_config.rc_end_usage == avm_rc_mode_AVM_VBR
                     || avm_config.rc_end_usage == avm_rc_mode_AVM_CBR
                 {
@@ -356,11 +358,11 @@ impl Encoder for Avm {
                 } else if avm_config.rc_end_usage == avm_rc_mode_AVM_CQ
                     || avm_config.rc_end_usage == avm_rc_mode_AVM_Q
                 {
-                    self.codec_control(avme_enc_control_id_AVME_SET_QP, config.quantizer())?;
+                    self.codec_control(avme_enc_control_id_AVME_SET_QP, quantizer)?;
                 }
                 self.codec_control(
                     avme_enc_control_id_AV2E_SET_LOSSLESS,
-                    if config.quantizer() == 0 { 1 } else { 0 },
+                    if quantizer == 0 { 1 } else { 0 },
                 )?;
             }
             if self.encoder_config.unwrap_ref().tile_rows_log2 != config.tile_rows_log2 {
