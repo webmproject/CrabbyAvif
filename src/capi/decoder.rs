@@ -184,8 +184,9 @@ pub unsafe extern "C" fn crabby_avifDecoderSetSource(
     avifResult::Ok
 }
 
-impl From<&avifDecoder> for Settings {
-    fn from(decoder: &avifDecoder) -> Self {
+impl TryFrom<&avifDecoder> for Settings {
+    type Error = AvifError;
+    fn try_from(decoder: &avifDecoder) -> AvifResult<Self> {
         let strictness = if decoder.strictFlags == AVIF_STRICT_DISABLED {
             Strictness::None
         } else if decoder.strictFlags == AVIF_STRICT_ENABLED {
@@ -193,24 +194,24 @@ impl From<&avifDecoder> for Settings {
         } else {
             let mut flags: Vec<StrictnessFlag> = Vec::new();
             if (decoder.strictFlags & AVIF_STRICT_PIXI_REQUIRED) != 0 {
-                flags.push(StrictnessFlag::PixiRequired);
+                flags.try_push(StrictnessFlag::PixiRequired)?;
             }
             if (decoder.strictFlags & AVIF_STRICT_CLAP_VALID) != 0 {
-                flags.push(StrictnessFlag::ClapValid);
+                flags.try_push(StrictnessFlag::ClapValid)?;
             }
             if (decoder.strictFlags & AVIF_STRICT_ALPHA_ISPE_REQUIRED) != 0 {
-                flags.push(StrictnessFlag::AlphaIspeRequired);
+                flags.try_push(StrictnessFlag::AlphaIspeRequired)?;
             }
             if (decoder.strictFlags & AVIF_STRICT_EXIF_VALID) != 0 {
-                flags.push(StrictnessFlag::ExifValid);
+                flags.try_push(StrictnessFlag::ExifValid)?;
             }
             if (decoder.strictFlags & AVIF_STRICT_MULTIPLE_ILOC_ENTRIES_FOR_SAME_ITEM_DISALLOWED)
                 != 0
             {
-                flags.push(StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed);
+                flags.try_push(StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed)?;
             }
             if (decoder.strictFlags & AVIF_STRICT_HEVC_BRAND_REQUIRES_MOOV) != 0 {
-                flags.push(StrictnessFlag::HevcBrandRequiresMoov);
+                flags.try_push(StrictnessFlag::HevcBrandRequiresMoov)?;
             }
             Strictness::SpecificInclude(flags)
         };
@@ -223,7 +224,7 @@ impl From<&avifDecoder> for Settings {
             // Alpha only is not currently supported and is mapped to ImageContentType::None.
             _ => ImageContentType::None,
         };
-        Self {
+        Ok(Self {
             source: decoder.requestedSource,
             strictness,
             allow_progressive: decoder.allowProgressive == AVIF_TRUE,
@@ -243,7 +244,7 @@ impl From<&avifDecoder> for Settings {
             max_threads: u32::try_from(decoder.maxThreads).unwrap_or(0),
             android_mediacodec_output_color_format: decoder.androidMediaCodecOutputColorFormat,
             allow_sample_transform: decoder.allowSampleTransform == AVIF_TRUE,
-        }
+        })
     }
 }
 
@@ -289,7 +290,12 @@ fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
 pub unsafe extern "C" fn crabby_avifDecoderParse(decoder: *mut avifDecoder) -> avifResult {
     check_pointer!(decoder);
     let rust_decoder = rust_decoder(decoder);
-    rust_decoder.settings = deref_const!(decoder).into();
+    let res = deref_const!(decoder).try_into();
+    deref_mut!(decoder).diag.set_from_result(&res);
+    if res.is_err() {
+        return res.into();
+    }
+    rust_decoder.settings = res.unwrap();
     let res = rust_decoder.parse();
     deref_mut!(decoder).diag.set_from_result(&res);
     if res.is_err() {
@@ -306,7 +312,12 @@ pub unsafe extern "C" fn crabby_avifDecoderParse(decoder: *mut avifDecoder) -> a
 pub unsafe extern "C" fn crabby_avifDecoderNextImage(decoder: *mut avifDecoder) -> avifResult {
     check_pointer!(decoder);
     let rust_decoder = rust_decoder(decoder);
-    rust_decoder.settings = deref_const!(decoder).into();
+    let res = deref_const!(decoder).try_into();
+    deref_mut!(decoder).diag.set_from_result(&res);
+    if res.is_err() {
+        return res.into();
+    }
+    rust_decoder.settings = res.unwrap();
 
     let previous_decoded_row_count = rust_decoder.decoded_row_count();
 
@@ -338,7 +349,12 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImage(
 ) -> avifResult {
     check_pointer!(decoder);
     let rust_decoder = rust_decoder(decoder);
-    rust_decoder.settings = deref_const!(decoder).into();
+    let res = deref_const!(decoder).try_into();
+    deref_mut!(decoder).diag.set_from_result(&res);
+    if res.is_err() {
+        return res.into();
+    }
+    rust_decoder.settings = res.unwrap();
 
     let previous_decoded_row_count = rust_decoder.decoded_row_count();
     let image_index = (rust_decoder.image_index() + 1) as u32;
@@ -408,7 +424,12 @@ pub unsafe extern "C" fn crabby_avifDecoderRead(
     check_pointer!(decoder);
     check_pointer!(image);
     let rust_decoder = rust_decoder(decoder);
-    rust_decoder.settings = deref_const!(decoder).into();
+    let res = deref_const!(decoder).try_into();
+    deref_mut!(decoder).diag.set_from_result(&res);
+    if res.is_err() {
+        return res.into();
+    }
+    rust_decoder.settings = res.unwrap();
 
     let res = rust_decoder.parse();
     if res.is_err() {
