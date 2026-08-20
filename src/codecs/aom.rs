@@ -206,6 +206,9 @@ impl Encoder for Aom {
                 aom_config.g_threads = cmp::min(config.threads, 64);
             }
 
+            // Encode alpha as 4:0:0.
+            // AVIF specification, Section 4 "Auxiliary Image Items and Sequences":
+            //   The mono_chrome field in the Sequence Header OBU shall be set to 1
             aom_config.monochrome =
                 (category == Category::Alpha || image.yuv_format == PixelFormat::Yuv400).into();
             // end-usage is the only codec specific option that has to be set before initializing
@@ -317,6 +320,13 @@ impl Encoder for Aom {
                 _ => {
                     // libaom's defaults are AOM_CSP_UNKNOWN and 0 (studio/limited range).
                     // Call aom_codec_control() only if the values are not the defaults.
+                    if image.chroma_sample_position != ChromaSamplePosition::Unknown {
+                        codec_control!(
+                            self,
+                            aome_enc_control_id_AV1E_SET_CHROMA_SAMPLE_POSITION,
+                            image.chroma_sample_position as i32
+                        );
+                    }
                     // AV1-ISOBMFF specification, Section 2.3.4:
                     //   The value of full_range_flag in the 'colr' box SHALL match the color_range
                     //   flag in the Sequence Header OBU.
@@ -467,23 +477,18 @@ impl Encoder for Aom {
         aom_image.y_chroma_shift = image.yuv_format.chroma_shift_y();
         match category {
             Category::Alpha => {
-                aom_image.range = aom_color_range_AOM_CR_FULL_RANGE;
-                aom_image.monochrome = 1;
                 aom_image.x_chroma_shift = 1;
                 aom_image.y_chroma_shift = 1;
                 aom_image.planes[0] = image.planes[3].unwrap_ref().ptr_generic() as *mut _;
                 aom_image.stride[0] = image.row_bytes[3] as i32;
             }
             _ => {
-                aom_image.range = image.yuv_range as u32;
                 if image.yuv_format == PixelFormat::Yuv400 {
-                    aom_image.monochrome = 1;
                     aom_image.x_chroma_shift = 1;
                     aom_image.y_chroma_shift = 1;
                     aom_image.planes[0] = image.planes[0].unwrap_ref().ptr_generic() as *mut _;
                     aom_image.stride[0] = image.row_bytes[0] as i32;
                 } else {
-                    aom_image.monochrome = 0;
                     for i in 0..=2 {
                         aom_image.planes[i] = image.planes[i].unwrap_ref().ptr_generic() as *mut _;
                         aom_image.stride[i] = image.row_bytes[i] as i32;
@@ -491,9 +496,6 @@ impl Encoder for Aom {
                 }
             }
         }
-        aom_image.cp = image.color_primaries as u32;
-        aom_image.tc = image.transfer_characteristics as u32;
-        aom_image.mc = image.matrix_coefficients as u32;
         // TODO: b/392112497 - force keyframes when necessary.
         let mut encode_flags = 0i64;
         if self.current_layer > 0 {
