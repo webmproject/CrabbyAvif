@@ -37,6 +37,7 @@ pub struct Aom {
     aom_config: Option<aom_codec_enc_cfg>,
     config: Option<EncoderConfig>,
     current_layer: u32,
+    previous_frame_used_tune_iq: bool,
 }
 
 fn aom_format(image: &Image, category: Category) -> AvifResult<aom_img_fmt_t> {
@@ -126,6 +127,79 @@ macro_rules! c_str {
     };
 }
 
+// Quality (q) to quantizer (qp) formula for tune=iq (Image Quality), expressed as a look-up table for more clarity.
+// The formula below is a piecewise linear function. Each segment was empirically selected to correct for the
+// non-linear bitrate increase from encoding content with tune=iq relative to tune=ssim with the same qp.
+//
+// | Quality | Quantizer                          | Step size |
+// |---------|------------------------------------|-----------|
+// |  0 -  6 | 63 - floor(quality / 3)            |         3 |
+// |  7 - 28 | 61 - round((quality - 7) / 2)      |         2 |
+// | 29 - 53 | 50 - round((quality - 29) * 3 / 5) |      1.66 |
+// | 54 - 99 | 35 - round((quality - 54) * 3 / 4) |      1.33 |
+// |     100 | 0 (lossless)                       |         1 |
+//
+// The formula has these properties, in addition to the general conversion formula properties described in avif.h:
+// - Encoding and decoding time with tune=iq are closer to tune=ssim's at a given quality level, with an
+//   overall smaller (but still predictable) file size and a similar to better quality
+// - The qp of tune=ssim <= qp of tune=iq for all quality values
+// - Quality 60 (the default in avifenc) = qp 30
+// - The step size of the quantizers monotonically decreases as quality increases (from 3 to 1)
+//
+// The x axis of the table represents the ones digit, while the y axis represents the tens digit
+// of the q value [0-100], which is then mapped to a qp value [0-63].
+#[rustfmt::skip]
+static TUNE_IQ_QUALITY_TO_QUANTIZER: [i32; 101] = [
+// 1s digit: *0  *1  *2  *3  *4  *5  *6  *7  *8  *9     10s digit:
+             63, 63, 63, 62, 62, 62, 61, 61, 60, 60, // 0*
+             59, 59, 58, 58, 57, 57, 56, 56, 55, 55, // 1*
+             54, 54, 53, 53, 52, 52, 51, 51, 50, 50, // 2*
+             49, 49, 48, 48, 47, 46, 46, 45, 45, 44, // 3*
+             43, 43, 42, 42, 41, 40, 40, 39, 39, 38, // 4*
+             37, 37, 36, 36, 35, 34, 33, 33, 32, 31, // 5*
+             30, 30, 29, 28, 27, 27, 26, 25, 24, 24, // 6*
+             23, 22, 21, 21, 20, 19, 18, 18, 17, 16, // 7*
+             15, 15, 14, 13, 12, 12, 11, 10,  9,  9, // 8*
+              8,  7,  6,  6,  5,  4,  3,  3,  2,  1, // 9*
+              0  // quality 100
+];
+
+fn aom_quality_to_quantizer(quality: i32, is_tune_iq: bool) -> i32 {
+    if is_tune_iq {
+        TUNE_IQ_QUALITY_TO_QUANTIZER[quality as usize]
+    } else {
+        ((100 - quality) * 63 + 50) / 100
+    }
+}
+
+fn aom_min_max_quantizers(quantizer: i32) -> (u32, u32) {
+    if quantizer == 0 {
+        (0, 0)
+    } else {
+        (
+            cmp::max(quantizer - 4, 0) as u32,
+            cmp::min(quantizer + 4, 63) as u32,
+        )
+    }
+}
+
+// Returns a pair of booleans. The first boolean is true if codec-specific
+// options for AOM contain a tune metric setting, otherwise it is false. The
+// second boolean is true if codec-specific options for AOM contain
+// AOM_TUNE_IQ, otherwise it is false.
+// Note: If the first boolean is false, the second boolean is also false.
+fn aom_options_contain_explicit_tuning(config: &EncoderConfig, category: Category) -> (bool, bool) {
+    // If there are multiple "tune" options specified, honor the last one. For
+    // consistent behavior, handle both cases where tune was either specified
+    // as a string (e.g. tune=iq), or as an enum value (e.g. tune=10).
+    let options = config.codec_specific_options(category);
+    if let Some((_, value)) = options.iter().rfind(|&(k, _)| k == "tune") {
+        (true, matches!(value.as_str(), "iq" | "10"))
+    } else {
+        (false, false)
+    }
+}
+
 fn add_aom_pkt_to_output_samples(
     pkt: &aom_codec_cx_pkt,
     output_samples: &mut Vec<Sample>,
@@ -157,18 +231,82 @@ impl Encoder for Aom {
         config: &EncoderConfig,
         output_samples: &mut Vec<Sample>,
     ) -> AvifResult<()> {
-        let quantizer = config.quantizer();
+        let aom_usage = if config.is_single_image {
+            AOM_USAGE_ALL_INTRA
+        } else if config.speed.unwrap_or(0) >= 7 {
+            AOM_USAGE_REALTIME
+        } else {
+            AOM_USAGE_GOOD_QUALITY
+        };
+
+        let quality = config.quality.clamp(0.0, 100.0) as i32;
+
+        // If true, override libaom's default tune option.
+        let mut use_crabbyavif_default_tune_metric = false;
+        // Meaningless unless use_crabbyavif_default_tune_metric.
+        let mut crabbyavif_default_tune_metric = aom_tune_metric_AOM_TUNE_PSNR;
+        // use_tune_iq: True if CrabbyAvif knows that tune=iq is used, either set by
+        // CrabbyAvif by default, or set by the user explicitly. False
+        // otherwise (including if libaom uses tune=iq by default, which is not
+        // the case as of v3.14.1 and earlier versions).
+        let (is_any_tune_defined, mut use_tune_iq) =
+            aom_options_contain_explicit_tuning(config, category);
+        if is_any_tune_defined {
+            // aom_options_contain_explicit_tuning() has returned use_tune_iq.
+        } else if self.encoder.is_none() {
+            // CrabbyAvif only needs to set the default tune metric for the
+            // first frame, because libaom will persist that setting until
+            // explicitly changed.
+
+            if quality == 100 {
+                // AOM_TUNE_IQ is not libaom's default tune option as of
+                // v3.14.1. Even if it was, it does not matter for lossless.
+                use_tune_iq = false;
+            } else {
+                use_crabbyavif_default_tune_metric = true;
+                crabbyavif_default_tune_metric = if category == Category::Alpha {
+                    // Minimize ringing for alpha.
+                    aom_tune_metric_AOM_TUNE_PSNR
+                } else if image.matrix_coefficients != MatrixCoefficients::Identity
+                    && (config.is_single_image || config.extra_layer_count > 0)
+                {
+                    // AOM_TUNE_IQ has been tuned for the YCbCr family of color
+                    // spaces, and is favored for its low perceptual
+                    // distortion. AOM_TUNE_IQ partially generalizes to, and
+                    // benefits from other "YUV-like" spaces (e.g. YCgCo and
+                    // ICtCp) including monochrome (luma only).
+                    //
+                    // AOM_TUNE_IQ supports all-intra, good-quality and
+                    // realtime modes (for single and layered images).
+                    aom_tune_metric_AOM_TUNE_IQ
+                } else {
+                    aom_tune_metric_AOM_TUNE_SSIM
+                };
+                use_tune_iq = crabbyavif_default_tune_metric == aom_tune_metric_AOM_TUNE_IQ;
+            }
+        } else {
+            // The tune option persists across frames in libaom until
+            // explicitly set to another value.
+            use_tune_iq = self.previous_frame_used_tune_iq;
+        }
+        // Remember the current tune option for the next frame.
+        self.previous_frame_used_tune_iq = use_tune_iq;
+
+        let quantizer = aom_quality_to_quantizer(quality, use_tune_iq);
 
         if self.encoder.is_none() {
+            // Require libaom v3.14.0 or later.
+            // # Safety: Calling a C function.
+            let aom_version = unsafe { aom_codec_version() };
+            // aom_codec.h says: aom_codec_version() == (major<<16 | minor<<8 | patch)
+            if aom_version < (3 << 16) | (14 << 8) {
+                return AvifError::unknown_error(format!(
+                    "{} is older than v3.14.0",
+                    Aom::version()
+                ));
+            }
             // # Safety: Calling a C function.
             let encoder_iface = unsafe { aom_codec_av1_cx() };
-            let aom_usage = if config.is_single_image {
-                AOM_USAGE_ALL_INTRA
-            } else if config.speed.unwrap_or(0) >= 7 {
-                AOM_USAGE_REALTIME
-            } else {
-                AOM_USAGE_GOOD_QUALITY
-            };
             let mut cfg_uninit: MaybeUninit<aom_codec_enc_cfg> = MaybeUninit::uninit();
             // # Safety: Calling a C function with valid parameters.
             let err = unsafe {
@@ -201,8 +339,14 @@ impl Encoder for Aom {
                 aom_config.g_lag_in_frames = 0;
             }
             if config.extra_layer_count > 0 {
+                // For layered image, disable lagged encoding to always get output
+                // frame for each input frame.
                 aom_config.g_lag_in_frames = 0;
                 aom_config.g_limit = config.extra_layer_count + 1;
+                // Disable QP offsets, so CQ level = frame QP for every frame.
+                if aom_config.rc_end_usage == aom_rc_mode_AOM_Q {
+                    aom_config.use_fixed_qp_offsets = 2;
+                }
             }
             if config.threads > 1 {
                 aom_config.g_threads = cmp::min(config.threads, 64);
@@ -241,7 +385,7 @@ impl Encoder for Aom {
             {
                 // cq-level is unused in these modes, so set the min and max quantizer instead.
                 (aom_config.rc_min_quantizer, aom_config.rc_max_quantizer) =
-                    config.min_max_quantizers();
+                    aom_min_max_quantizers(quantizer);
             }
 
             let mut encoder_uninit: MaybeUninit<aom_codec_ctx_t> = MaybeUninit::uninit();
@@ -350,6 +494,13 @@ impl Encoder for Aom {
                     1
                 );
             }
+            if use_crabbyavif_default_tune_metric {
+                codec_control!(
+                    self,
+                    aome_enc_control_id_AOME_SET_TUNING,
+                    crabbyavif_default_tune_metric
+                );
+            }
             let codec_specific_options = config.codec_specific_options(category);
             for (key, value) in &codec_specific_options {
                 if key == "end-usage" {
@@ -368,13 +519,6 @@ impl Encoder for Aom {
                         self.error_string()
                     ));
                 }
-            }
-            if !codec_specific_options.iter().any(|(key, _)| key == "tune") {
-                codec_control!(
-                    self,
-                    aome_enc_control_id_AOME_SET_TUNING,
-                    aom_tune_metric_AOM_TUNE_SSIM
-                );
             }
             if image.depth == 12 {
                 // libaom may produce integer overflows with 12-bit input when loop restoration is
@@ -396,7 +540,7 @@ impl Encoder for Aom {
                     || aom_config.rc_end_usage == aom_rc_mode_AOM_CBR
                 {
                     (aom_config.rc_min_quantizer, aom_config.rc_max_quantizer) =
-                        config.min_max_quantizers();
+                        aom_min_max_quantizers(quantizer);
                     // # Safety: Calling a C function with valid parameters.
                     let err = unsafe {
                         aom_codec_enc_config_set(

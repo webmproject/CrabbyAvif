@@ -120,6 +120,18 @@ fn avm_scaling_mode(scaling_mode: &ScalingMode) -> AvifResult<avm_scaling_mode_t
     })
 }
 
+fn avm_quality_to_quantizer(quality: i32) -> i32 {
+    ((100 - quality) * 63 + 50) / 100
+}
+
+fn avm_min_max_quantizers(quantizer: i32) -> (i32, i32) {
+    if quantizer == 0 {
+        (0, 0)
+    } else {
+        (cmp::max(quantizer - 4, 0), cmp::min(quantizer + 4, 63))
+    }
+}
+
 // Returns true if the packet was added. Returns false if the packet was skipped.
 fn add_avm_pkt_to_output_samples(
     pkt: &avm_codec_cx_pkt,
@@ -152,7 +164,8 @@ impl Encoder for Avm {
         config: &EncoderConfig,
         output_samples: &mut Vec<Sample>,
     ) -> AvifResult<()> {
-        let quantizer = config.quantizer();
+        let quality = config.quality.clamp(0.0, 100.0) as i32;
+        let quantizer = avm_quality_to_quantizer(quality);
 
         if self.context.is_none() {
             // # Safety: Calling a C function.
@@ -211,9 +224,9 @@ impl Encoder for Avm {
                 || avm_config.rc_end_usage == avm_rc_mode_AVM_CBR
             {
                 // cq-level is unused in these modes, so set the min and max quantizer instead.
-                let (min, max) = config.min_max_quantizers();
-                avm_config.rc_min_quantizer = min as i32;
-                avm_config.rc_max_quantizer = max as i32;
+                let (min, max) = avm_min_max_quantizers(quantizer);
+                avm_config.rc_min_quantizer = min;
+                avm_config.rc_max_quantizer = max;
             }
 
             let mut encoder_uninit: MaybeUninit<avm_codec_ctx_t> = MaybeUninit::uninit();
@@ -340,9 +353,9 @@ impl Encoder for Avm {
                 if avm_config.rc_end_usage == avm_rc_mode_AVM_VBR
                     || avm_config.rc_end_usage == avm_rc_mode_AVM_CBR
                 {
-                    let (min, max) = config.min_max_quantizers();
-                    avm_config.rc_min_quantizer = min as i32;
-                    avm_config.rc_max_quantizer = max as i32;
+                    let (min, max) = avm_min_max_quantizers(quantizer);
+                    avm_config.rc_min_quantizer = min;
+                    avm_config.rc_max_quantizer = max;
                     // # Safety: Calling a C function with valid parameters.
                     let err = unsafe {
                         avm_codec_enc_config_set(

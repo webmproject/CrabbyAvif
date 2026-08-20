@@ -133,7 +133,7 @@ fn encode_decode(
     let image = decoder.image().expect("image was none");
     assert!(psnr(image, &input_image)? >= 50.0);
     if let Some(input_gainmap) = &input_gainmap {
-        assert!(psnr(&decoder.gainmap().image, &input_gainmap.image)? >= 50.0);
+        assert!(psnr(&decoder.gainmap().image, &input_gainmap.image)? >= 48.1);
     };
     Ok(())
 }

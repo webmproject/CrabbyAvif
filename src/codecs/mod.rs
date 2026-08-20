@@ -141,22 +141,6 @@ impl EncoderConfig {
             .collect();
         options
     }
-
-    pub(crate) fn quantizer(&self) -> i32 {
-        ((100 - (self.quality.clamp(0.0, 100.0) as i32)) * 63 + 50) / 100
-    }
-
-    pub(crate) fn min_max_quantizers(&self) -> (u32, u32) {
-        let quantizer = self.quantizer();
-        if quantizer == 0 {
-            (0, 0)
-        } else {
-            (
-                std::cmp::max(quantizer - 4, 0) as u32,
-                std::cmp::min(quantizer + 4, 63) as u32,
-            )
-        }
-    }
 }
 
 #[cfg(feature = "encoder")]

@@ -636,10 +636,37 @@ TEST_F(ProgressiveTest, LayeredGrid) {
                                     AVIF_ADD_IMAGE_FLAG_NONE),
             AVIF_RESULT_OK);
 
-  encoder_->quality = 100;
+  // Do not set quality to 100 (lossless) because lossless is incompatible with
+  // tune=iq. See libaom bug crbug.com/aomedia/383595066.
+  encoder_->quality = 99;
+  ASSERT_EQ(avifEncoderAddImageGrid(encoder_.get(), 2, 1, image_grid,
+                                    AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK)
+      << encoder_->diag.error;
+
+  ASSERT_EQ(avifEncoderFinish(encoder_.get(), &encoded_avif_), AVIF_RESULT_OK);
+
+  TestDecode(2 * kImageSize, kImageSize, /*is_grid=*/true, /*check_psnr=*/true);
+}
+
+TEST_F(ProgressiveTest, LayeredGridTuneSsim) {
+  ASSERT_EQ(avifEncoderSetCodecSpecificOption(encoder_.get(), "tune", "ssim"),
+            AVIF_RESULT_OK);
+
+  encoder_->extraLayerCount = 1;
+  encoder_->quality = 2;
+
+  avifImage* image_grid[2] = {image_.get(), image_.get()};
   ASSERT_EQ(avifEncoderAddImageGrid(encoder_.get(), 2, 1, image_grid,
                                     AVIF_ADD_IMAGE_FLAG_NONE),
             AVIF_RESULT_OK);
+
+  // Can set quality to 100 (lossless) with tune=ssim.
+  encoder_->quality = 100;
+  ASSERT_EQ(avifEncoderAddImageGrid(encoder_.get(), 2, 1, image_grid,
+                                    AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK)
+      << encoder_->diag.error;
 
   ASSERT_EQ(avifEncoderFinish(encoder_.get(), &encoded_avif_), AVIF_RESULT_OK);
 
