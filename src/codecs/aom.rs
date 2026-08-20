@@ -157,6 +157,8 @@ impl Encoder for Aom {
         config: &EncoderConfig,
         output_samples: &mut Vec<Sample>,
     ) -> AvifResult<()> {
+        let quantizer = config.quantizer();
+
         if self.encoder.is_none() {
             // # Safety: Calling a C function.
             let encoder_iface = unsafe { aom_codec_av1_cx() };
@@ -265,13 +267,9 @@ impl Encoder for Aom {
             if aom_config.rc_end_usage == aom_rc_mode_AOM_CQ
                 || aom_config.rc_end_usage == aom_rc_mode_AOM_Q
             {
-                codec_control!(
-                    self,
-                    aome_enc_control_id_AOME_SET_CQ_LEVEL,
-                    config.quantizer()
-                );
+                codec_control!(self, aome_enc_control_id_AOME_SET_CQ_LEVEL, quantizer);
             }
-            if config.quantizer() == 0 {
+            if quantizer == 0 {
                 codec_control!(self, aome_enc_control_id_AV1E_SET_LOSSLESS, 1);
             }
             if config.tile_rows_log2 != 0 {
@@ -393,7 +391,7 @@ impl Encoder for Aom {
                 return AvifError::not_implemented();
             }
             let last_config = self.config.unwrap_ref();
-            if last_config.quantizer() != config.quantizer() {
+            if last_config.quality != config.quality {
                 if aom_config.rc_end_usage == aom_rc_mode_AOM_VBR
                     || aom_config.rc_end_usage == aom_rc_mode_AOM_CBR
                 {
@@ -415,16 +413,12 @@ impl Encoder for Aom {
                 } else if aom_config.rc_end_usage == aom_rc_mode_AOM_CQ
                     || aom_config.rc_end_usage == aom_rc_mode_AOM_Q
                 {
-                    codec_control!(
-                        self,
-                        aome_enc_control_id_AOME_SET_CQ_LEVEL,
-                        config.quantizer()
-                    );
+                    codec_control!(self, aome_enc_control_id_AOME_SET_CQ_LEVEL, quantizer);
                 }
                 codec_control!(
                     self,
                     aome_enc_control_id_AV1E_SET_LOSSLESS,
-                    if config.quantizer() == 0 { 1 } else { 0 }
+                    if quantizer == 0 { 1 } else { 0 }
                 );
             }
             if last_config.tile_rows_log2 != config.tile_rows_log2 {
