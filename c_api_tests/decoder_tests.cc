@@ -1386,6 +1386,26 @@ TEST(DecoderTest, NullCases) {
   EXPECT_NE(avifDecoderReset(nullptr), AVIF_RESULT_OK);
 }
 
+TEST(DecoderTest, SampleTransformDecoderReset) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  const std::vector<uint8_t> encoded =
+      testutil::read_file(GetFilename("weld_sato_12plus4bit.avif").c_str());
+
+  DecoderPtr decoder(avifDecoderCreate());
+  ASSERT_NE(decoder, nullptr);
+  decoder->allowSampleTransform = AVIF_TRUE;
+  ASSERT_EQ(
+      avifDecoderSetIOMemory(decoder.get(), encoded.data(), encoded.size()),
+      AVIF_RESULT_OK);
+
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderReset(decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->depth, 16u);
+}
+
 struct StrictnessTestParams {
   const char* filename;
   avifStrictFlags strict_flag;
