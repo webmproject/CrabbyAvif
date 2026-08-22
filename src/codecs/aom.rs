@@ -26,7 +26,6 @@ use crate::*;
 
 use aom_sys::bindings::*;
 
-use std::cmp;
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
@@ -177,8 +176,8 @@ fn aom_min_max_quantizers(quantizer: i32) -> (u32, u32) {
         (0, 0)
     } else {
         (
-            cmp::max(quantizer - 4, 0) as u32,
-            cmp::min(quantizer + 4, 63) as u32,
+            (quantizer - 4).max(0) as u32,
+            (quantizer + 4).min(63) as u32,
         )
     }
 }
@@ -349,7 +348,7 @@ impl Encoder for Aom {
                 }
             }
             if config.threads > 1 {
-                aom_config.g_threads = cmp::min(config.threads, 64);
+                aom_config.g_threads = config.threads.min(64);
             }
 
             // Encode alpha as 4:0:0.
@@ -438,11 +437,7 @@ impl Encoder for Aom {
                 );
             }
             if let Some(speed) = config.speed {
-                codec_control!(
-                    self,
-                    aome_enc_control_id_AOME_SET_CPUUSED,
-                    cmp::min(speed, 9)
-                );
+                codec_control!(self, aome_enc_control_id_AOME_SET_CPUUSED, speed.min(9));
             }
             match category {
                 Category::Alpha => {
