@@ -29,7 +29,6 @@ use crate::*;
 
 use avm_sys::bindings::*;
 
-use std::cmp;
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
@@ -128,7 +127,7 @@ fn avm_min_max_quantizers(quantizer: i32) -> (i32, i32) {
     if quantizer == 0 {
         (0, 0)
     } else {
-        (cmp::max(quantizer - 4, 0), cmp::min(quantizer + 4, 63))
+        ((quantizer - 4).max(0), (quantizer + 4).min(63))
     }
 }
 
@@ -204,7 +203,7 @@ impl Encoder for Avm {
                 avm_config.g_limit = config.extra_layer_count + 1;
             }
             if config.threads > 1 {
-                avm_config.g_threads = cmp::min(config.threads, 64);
+                avm_config.g_threads = config.threads.min(64);
             }
 
             avm_config.monochrome =
@@ -274,7 +273,7 @@ impl Encoder for Avm {
                 )?;
             }
             if let Some(speed) = config.speed {
-                self.codec_control(avme_enc_control_id_AVME_SET_CPUUSED, cmp::min(speed, 9))?;
+                self.codec_control(avme_enc_control_id_AVME_SET_CPUUSED, speed.min(9))?;
             }
             match category {
                 Category::Alpha => {

@@ -160,7 +160,7 @@ impl Dav1d {
         // a message, so we set frame_size_limit to at most 8192 * 8192 to avoid the dav1d_log
         // message.
         settings.frame_size_limit = if cfg!(target_pointer_width = "32") {
-            std::cmp::min(frame_size_limit, 8192 * 8192)
+            frame_size_limit.min(8192 * 8192)
         } else {
             frame_size_limit
         };
