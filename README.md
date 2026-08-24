@@ -89,14 +89,13 @@ CRABBYAVIF_CONFORMANCE_TEST_DATA_DIR=<path> CRABBYAVIF_CONFORMANCE_TEST_AVIFDEC=
 cd external
 ./googletest.cmd
 cd ..
-# Build the library with C API enabled
-cargo build --features capi --release
-# Build and run the C/C++ Tests
-mkdir c_build
-cd c_build
-cmake ../c_api_tests/
-make
-make test
+# Build the library with the C API enabled and a codec
+cargo build --features aom,capi --release
+# Build the C/C++ Tests
+cmake -S c_api_tests -B c_build
+cmake --build c_build --parallel
+# Run the C/C++ Tests (conformance_tests exclusive)
+ctest --test-dir c_build --output-on-failure -E conformance_tests
 ```
 
 ### Android Tests
