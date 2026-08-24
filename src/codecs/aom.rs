@@ -183,23 +183,6 @@ fn aom_min_max_quantizers(quantizer: i32) -> (u32, u32) {
     }
 }
 
-// Returns a pair of booleans. The first boolean is true if codec-specific
-// options for AOM contain a tune metric setting, otherwise it is false. The
-// second boolean is true if codec-specific options for AOM contain
-// AOM_TUNE_IQ, otherwise it is false.
-// Note: If the first boolean is false, the second boolean is also false.
-fn aom_options_contain_explicit_tuning(config: &EncoderConfig, category: Category) -> (bool, bool) {
-    // If there are multiple "tune" options specified, honor the last one. For
-    // consistent behavior, handle both cases where tune was either specified
-    // as a string (e.g. tune=iq), or as an enum value (e.g. tune=10).
-    let options = config.codec_specific_options(category);
-    if let Some((_, value)) = options.iter().rfind(|&(k, _)| k == "tune") {
-        (true, matches!(value.as_str(), "iq" | "10"))
-    } else {
-        (false, false)
-    }
-}
-
 fn add_aom_pkt_to_output_samples(
     pkt: &aom_codec_cx_pkt,
     output_samples: &mut Vec<Sample>,
@@ -245,14 +228,20 @@ impl Encoder for Aom {
         let mut use_crabbyavif_default_tune_metric = false;
         // Meaningless unless use_crabbyavif_default_tune_metric.
         let mut crabbyavif_default_tune_metric = aom_tune_metric_AOM_TUNE_PSNR;
-        // use_tune_iq: True if CrabbyAvif knows that tune=iq is used, either set by
+        // True if CrabbyAvif knows that tune=iq is used, either set by
         // CrabbyAvif by default, or set by the user explicitly. False
         // otherwise (including if libaom uses tune=iq by default, which is not
         // the case as of v3.14.1 and earlier versions).
-        let (is_any_tune_defined, mut use_tune_iq) =
-            aom_options_contain_explicit_tuning(config, category);
-        if is_any_tune_defined {
-            // aom_options_contain_explicit_tuning() has returned use_tune_iq.
+        let use_tune_iq: bool;
+        // Check if codec-specific options for libaom contain a tune metric
+        // setting. If there are multiple "tune" options specified, honor the
+        // last one.
+        let options = config.codec_specific_options(category);
+        if let Some((_, value)) = options.iter().rfind(|&(k, _)| k == "tune") {
+            // Check if the tune metric setting is AOM_TUNE_IQ. For consistent
+            // behavior, handle both cases where tune was either specified as a
+            // string (e.g. tune=iq) or as an enum value (e.g. tune=10).
+            use_tune_iq = matches!(value.as_str(), "iq" | "10");
         } else if self.encoder.is_none() {
             // CrabbyAvif only needs to set the default tune metric for the
             // first frame, because libaom will persist that setting until
@@ -296,7 +285,7 @@ impl Encoder for Aom {
 
         if self.encoder.is_none() {
             // Require libaom v3.14.0 or later.
-            // # Safety: Calling a C function.
+            // # Safety: aom_codec_version() has no safety prerequisites.
             let aom_version = unsafe { aom_codec_version() };
             // aom_codec.h says: aom_codec_version() == (major<<16 | minor<<8 | patch)
             if aom_version < (3 << 16) | (14 << 8) {
