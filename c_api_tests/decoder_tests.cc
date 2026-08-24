@@ -1421,6 +1421,53 @@ INSTANTIATE_TEST_SUITE_P(
         StrictnessTestParams{"white_2x2_invalid_exif.avif",
                              AVIF_STRICT_EXIF_VALID}));
 
+struct SatoTestParams {
+  const char* filename;
+  bool allow_sample_transform;
+  uint32_t expected_depth;
+};
+
+using SatoTest = ::testing::TestWithParam<SatoTestParams>;
+
+TEST_P(SatoTest, SampleTransform) {
+  const std::string path = GetFilename(GetParam().filename);
+  DecoderPtr decoder(avifDecoderCreate());
+  ASSERT_NE(decoder, nullptr);
+  decoder->allowSampleTransform =
+      static_cast<crabbyavif::avifBool>(GetParam().allow_sample_transform);
+  ASSERT_EQ(avifDecoderSetIOFile(decoder.get(), path.c_str()), AVIF_RESULT_OK);
+
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+#ifdef __ANDROID__
+  if (decoder->allowSampleTransform) {
+    // Android MediaCodec does not support re-use of the same decoder instance
+    // for multiple images, which is the case with Sample Transforms.
+    ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_UNKNOWN_ERROR);
+  } else if (GetParam().expected_depth > 10) {
+    // Android MediaCodec does not support 12-bit.
+    ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_UNKNOWN_ERROR);
+  } else {
+    // When allowSampleTransform is false, the decoder outputs a
+    // backward-compatible single-frame image.
+    ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+    EXPECT_EQ(decoder->image->depth, GetParam().expected_depth);
+  }
+#else
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->depth, GetParam().expected_depth);
+#endif
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    DecoderTest, SatoTest,
+    ::testing::Values(SatoTestParams{"weld_sato_8plus8bit.avif", false, 8},
+                      SatoTestParams{"weld_sato_8plus8bit.avif", true, 16},
+                      SatoTestParams{"weld_sato_12plus4bit.avif", false, 12},
+                      SatoTestParams{"weld_sato_12plus4bit.avif", true, 16}));
+
 }  // namespace
 }  // namespace avif
 

@@ -42,7 +42,7 @@ jobs:
         cargo build --features capi,aom --release
         cmake -S c_api_tests -B c_build
         make -C c_build
-        ctest --test-dir c_build
+        ctest --test-dir c_build --output-on-failure
 
 
     - name: Build and run the heic tests with heic feature enabled
