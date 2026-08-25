@@ -32,11 +32,14 @@ pub struct Item {
     pub properties: Vec<ItemProperty>,
     pub extents: Vec<Extent>,
     pub thumbnail_for_id: u32,
-    pub aux_for_id: u32,
+    // ISO/IEC 14496-12 section 8.11.12.1 represents the items linked to as an array of
+    // to_item_IDs, so one item can be the auxiliary of several items.
+    pub aux_for_id: Vec<u32>,
     pub desc_for_id: Vec<u32>,
     pub dimg_for_id: u32,
     pub dimg_index: u32,
-    pub prem_by_id: u32,
+    // Several items can be premultiplied by this one, see aux_for_id.
+    pub prem_by_id: Vec<u32>,
     pub has_unsupported_essential_property: bool,
     pub progressive: bool,
     pub idat: Vec<u8>,
@@ -737,9 +740,9 @@ pub(crate) fn construct_items(
         let item = items.get_mut(&reference.from_item_id).unwrap();
         match reference.reference_type.as_str() {
             "thmb" => item.thumbnail_for_id = reference.to_item_id,
-            "auxl" => item.aux_for_id = reference.to_item_id,
+            "auxl" => item.aux_for_id.push(reference.to_item_id),
             "cdsc" => item.desc_for_id.push(reference.to_item_id),
-            "prem" => item.prem_by_id = reference.to_item_id,
+            "prem" => item.prem_by_id.push(reference.to_item_id),
             "dimg" => {
                 // derived images refer in the opposite direction.
                 insert_item_if_not_exists(reference.to_item_id, &mut items);

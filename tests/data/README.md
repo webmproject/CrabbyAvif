@@ -82,3 +82,15 @@ $ heif-enc --add-pyramid-group -A layer0.png layer1.png layer2.png -o pyramid_py
 ```
 
 Byte for byte the same file as tests/data/pyramid_pymd.avif in libavif.
+
+## circle_auxl_two_targets.avif
+
+- Item 1 (primary): AV1 color item.
+- Item 2: AV1 alpha item, with an `auxl` item reference listing two targets: item 1 and item 3.
+- Item 3: Exif item.
+
+Section 8.11.12.1 of ISO/IEC 14496-12 represents the items linked to as an array of
+to_item_IDs, so one `auxl` box can name several targets.
+
+Taken from libavif, where it was added in
+https://github.com/AOMediaCodec/libavif/pull/3331 for the same defect.

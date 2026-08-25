@@ -525,7 +525,9 @@ impl Decoder {
     fn find_alpha_item(&mut self, color_item_index: u32) -> AvifResult<Option<u32>> {
         let color_item = self.items.get(&color_item_index).unwrap();
         if let Some(item) = self.items.iter().find(|x| {
-            !x.1.should_skip() && x.1.aux_for_id == color_item.id && x.1.is_auxiliary_alpha()
+            !x.1.should_skip()
+                && x.1.aux_for_id.contains(&color_item.id)
+                && x.1.is_auxiliary_alpha()
         }) {
             return Ok(Some(*item.0));
         }
@@ -539,7 +541,7 @@ impl Decoder {
             match self
                 .items
                 .iter()
-                .find(|x| x.1.aux_for_id == *color_grid_item_id && x.1.is_auxiliary_alpha())
+                .find(|x| x.1.aux_for_id.contains(color_grid_item_id) && x.1.is_auxiliary_alpha())
             {
                 Some(item) => alpha_item_indices.push(*item.0),
                 None => {
@@ -1234,8 +1236,12 @@ impl Decoder {
                                 self.read_and_parse_item(alpha_item_id, alpha_decoding_item)?;
                             }
                             item_ids[alpha_decoding_item.usize()] = alpha_item_id;
-                            let is_premultiplied =
-                                self.items.get(item_id).unwrap().prem_by_id == alpha_item_id;
+                            let is_premultiplied = self
+                                .items
+                                .get(item_id)
+                                .unwrap()
+                                .prem_by_id
+                                .contains(&alpha_item_id);
                             if idx > 0 && !alpha_present {
                                 return AvifError::invalid_image_grid("input images for sato derived image item must either all have alpha or all not have alpha");
                             }
@@ -1286,7 +1292,7 @@ impl Decoder {
                         .get(&item_ids[DecodingItem::COLOR.usize()])
                         .unwrap()
                         .prem_by_id
-                        == alpha_item_id
+                        .contains(&alpha_item_id)
                 }
 
                 self.image_index = -1;

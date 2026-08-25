@@ -1291,6 +1291,26 @@ fn iref_child_box_size_mismatch(declared_size: u8) {
     ));
 }
 
+// The 'auxl' item reference of circle_auxl_two_targets.avif lists two targets: the primary
+// color item 1 and the Exif item 3. Section 8.11.12.1 of ISO/IEC 14496-12 represents the items
+// linked to as an array of to_item_IDs. Keeping only the last one dropped item 1, and with it
+// the alpha channel.
+#[test]
+fn auxl_with_two_targets() {
+    let mut decoder = get_decoder("circle_auxl_two_targets.avif");
+    assert_eq!(decoder.parse(), Ok(()));
+    let image = decoder.image().expect("image was none");
+    assert!(image.alpha_present);
+    if !HAS_DECODER {
+        return;
+    }
+    assert!(decoder.next_image().is_ok());
+    let image = decoder.image().expect("image was none");
+    let alpha_plane = image.plane_data(Plane::A);
+    assert!(alpha_plane.is_some());
+    assert!(alpha_plane.unwrap().row_bytes > 0);
+}
+
 #[test]
 fn dimg_repetition() {
     let mut decoder = get_decoder("sofa_grid1x5_420_dimg_repeat.avif");
