@@ -255,8 +255,18 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImage(
     if res != avifResult::Ok {
         return res;
     }
-    let gainmap = deref_const!(image).gainmap();
-    let image: image::Image = deref_const!(image).into();
+    let res = deref_const!(image).gainmap();
+    encoder_ref.diag.set_from_result(&res);
+    if res.is_err() {
+        return res.into();
+    }
+    let gainmap = res.unwrap();
+    let res = deref_const!(image).try_into();
+    encoder_ref.diag.set_from_result(&res);
+    if res.is_err() {
+        return res.into();
+    }
+    let image = res.unwrap();
     let res =
         if (addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) != 0 || encoder_ref.extraLayerCount != 0 {
             match &gainmap {
@@ -304,32 +314,46 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
         Some(value) => value as usize,
         None => return avifResult::InvalidArgument,
     };
-    let mut images: Vec<image::Image> = match create_vec_exact(cell_count) {
-        Ok(x) => x,
-        Err(_) => return avifResult::OutOfMemory,
-    };
-    // SAFETY: Pre-condition of this function ensures that |cellImages| contains |cell_count|
-    // avifImage objects. So this operation is safe.
-    let image_ptrs: &[*const avifImage] =
-        unsafe { std::slice::from_raw_parts(cellImages, cell_count) };
-    for image_ptr in image_ptrs {
-        check_pointer!(image_ptr);
-    }
-    let mut gainmaps: Vec<Option<GainMap>> = Vec::new();
-    for image_ptr in image_ptrs {
-        gainmaps.push(deref_const!(*image_ptr).gainmap());
-        images.push(deref_const!(*image_ptr).into());
-    }
-    let image_refs: Vec<&Image> = images.iter().collect();
-    let res = if gainmaps.iter().all(|x| x.is_some()) {
-        let gainmap_refs: Vec<&GainMap> = gainmaps.iter().map(|x| x.unwrap_ref()).collect();
-        rust_encoder(encoder).add_image_gainmap_grid(gridCols, gridRows, &image_refs, &gainmap_refs)
-    } else if gainmaps.iter().all(|x| x.is_none()) {
-        rust_encoder(encoder).add_image_grid(gridCols, gridRows, &image_refs)
-    } else {
-        // Some cells had GainMap and some did not. This is invalid.
-        AvifError::invalid_argument()
-    };
+
+    let res = || -> AvifResult<()> {
+        let mut images: Vec<image::Image> = create_vec_exact(cell_count)?;
+        // SAFETY: Pre-condition of this function ensures that |cellImages| contains |cell_count|
+        // avifImage objects. So this operation is safe.
+        let image_ptrs: &[*const avifImage] =
+            unsafe { std::slice::from_raw_parts(cellImages, cell_count) };
+        for image_ptr in image_ptrs {
+            if image_ptr.is_null() {
+                return AvifError::invalid_argument();
+            }
+            images.try_push(deref_const!(*image_ptr).try_into()?)?;
+        }
+        let mut gainmaps: Vec<Option<GainMap>> = create_vec_exact(cell_count)?;
+        for image_ptr in image_ptrs {
+            gainmaps.try_push(deref_const!(*image_ptr).gainmap()?)?;
+        }
+        let mut image_refs: Vec<&image::Image> = create_vec_exact(images.len())?;
+        for image in &images {
+            image_refs.try_push(image)?;
+        }
+        if gainmaps.iter().all(|x| x.is_some()) {
+            let mut gainmap_refs: Vec<&GainMap> = create_vec_exact(gainmaps.len())?;
+            for gainmap in &gainmaps {
+                gainmap_refs.try_push(gainmap.unwrap_ref())?;
+            }
+            rust_encoder(encoder).add_image_gainmap_grid(
+                gridCols,
+                gridRows,
+                &image_refs,
+                &gainmap_refs,
+            )
+        } else if gainmaps.iter().all(|x| x.is_none()) {
+            rust_encoder(encoder).add_image_grid(gridCols, gridRows, &image_refs)
+        } else {
+            // Some cells had GainMap and some did not. This is invalid.
+            AvifError::invalid_argument()
+        }
+    }();
+
     encoder_ref.diag.set_from_result(&res);
     res.into()
 }

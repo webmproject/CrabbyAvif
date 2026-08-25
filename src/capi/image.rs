@@ -221,66 +221,75 @@ impl From<&Image> for avifImage {
     }
 }
 
-impl From<&avifImage> for image::Image {
-    fn from(image: &avifImage) -> image::Image {
+impl avifImage {
+    pub(crate) fn as_rust_image_no_metadata(&self) -> image::Image {
         image::Image {
-            width: image.width,
-            height: image.height,
-            depth: image.depth as u8,
-            yuv_format: image.yuvFormat,
-            yuv_range: image.yuvRange,
-            chroma_sample_position: image.yuvChromaSamplePosition,
-            alpha_present: !image.alphaPlane.is_null(),
-            alpha_premultiplied: image.alphaPremultiplied == AVIF_TRUE,
+            width: self.width,
+            height: self.height,
+            depth: self.depth as u8,
+            yuv_format: self.yuvFormat,
+            yuv_range: self.yuvRange,
+            chroma_sample_position: self.yuvChromaSamplePosition,
+            alpha_present: !self.alphaPlane.is_null(),
+            alpha_premultiplied: self.alphaPremultiplied == AVIF_TRUE,
             planes: [
                 Pixels::from_raw_pointer(
-                    image.yuvPlanes[0],
-                    image.depth,
-                    image.height,
-                    image.yuvRowBytes[0],
+                    self.yuvPlanes[0],
+                    self.depth,
+                    self.height,
+                    self.yuvRowBytes[0],
                 )
                 .ok(),
                 Pixels::from_raw_pointer(
-                    image.yuvPlanes[1],
-                    image.depth,
-                    image.height,
-                    image.yuvRowBytes[1],
+                    self.yuvPlanes[1],
+                    self.depth,
+                    self.height,
+                    self.yuvRowBytes[1],
                 )
                 .ok(),
                 Pixels::from_raw_pointer(
-                    image.yuvPlanes[2],
-                    image.depth,
-                    image.height,
-                    image.yuvRowBytes[2],
+                    self.yuvPlanes[2],
+                    self.depth,
+                    self.height,
+                    self.yuvRowBytes[2],
                 )
                 .ok(),
                 Pixels::from_raw_pointer(
-                    image.alphaPlane,
-                    image.depth,
-                    image.height,
-                    image.alphaRowBytes,
+                    self.alphaPlane,
+                    self.depth,
+                    self.height,
+                    self.alphaRowBytes,
                 )
                 .ok(),
             ],
             row_bytes: [
-                image.yuvRowBytes[0],
-                image.yuvRowBytes[1],
-                image.yuvRowBytes[2],
-                image.alphaRowBytes,
+                self.yuvRowBytes[0],
+                self.yuvRowBytes[1],
+                self.yuvRowBytes[2],
+                self.alphaRowBytes,
             ],
-            color_primaries: image.colorPrimaries,
-            transfer_characteristics: image.transferCharacteristics,
-            matrix_coefficients: image.matrixCoefficients,
-            clli: image.clli(),
-            pasp: image.pasp(),
-            clap: image.clap(),
-            irot_angle: image.irot_angle(),
-            imir_axis: image.imir_axis(),
-            exif: (&image.exif).into(),
-            icc: (&image.icc).into(),
-            xmp: (&image.xmp).into(),
+            color_primaries: self.colorPrimaries,
+            transfer_characteristics: self.transferCharacteristics,
+            matrix_coefficients: self.matrixCoefficients,
+            clli: self.clli(),
+            pasp: self.pasp(),
+            clap: self.clap(),
+            irot_angle: self.irot_angle(),
+            imir_axis: self.imir_axis(),
             ..Default::default()
         }
+    }
+}
+
+impl TryFrom<&avifImage> for image::Image {
+    type Error = AvifError;
+    fn try_from(image: &avifImage) -> AvifResult<Self> {
+        Ok(Self {
+            exif: (&image.exif).try_into()?,
+            icc: (&image.icc).try_into()?,
+            xmp: (&image.xmp).try_into()?,
+            ..image.as_rust_image_no_metadata()
+        })
     }
 }
 
@@ -327,12 +336,12 @@ impl avifImage {
 
     // This function is not used in all configurations.
     #[allow(dead_code)]
-    pub(crate) fn gainmap(&self) -> Option<GainMap> {
-        if self.gainMap.is_null() {
+    pub(crate) fn gainmap(&self) -> AvifResult<Option<GainMap>> {
+        Ok(if self.gainMap.is_null() {
             None
         } else {
-            Some(deref_const!(self.gainMap).into())
-        }
+            Some(deref_const!(self.gainMap).try_into()?)
+        })
     }
 }
 

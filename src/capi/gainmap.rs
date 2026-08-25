@@ -95,10 +95,11 @@ impl From<&GainMap> for avifGainMap {
     }
 }
 
-impl From<&avifGainMap> for GainMap {
-    fn from(gainmap: &avifGainMap) -> Self {
-        Self {
-            image: deref_const!(gainmap.image).into(),
+impl TryFrom<&avifGainMap> for GainMap {
+    type Error = AvifError;
+    fn try_from(gainmap: &avifGainMap) -> AvifResult<Self> {
+        Ok(Self {
+            image: deref_const!(gainmap.image).try_into()?,
             metadata: GainMapMetadata {
                 min: gainmap.gainMapMin,
                 max: gainmap.gainMapMax,
@@ -109,7 +110,7 @@ impl From<&avifGainMap> for GainMap {
                 alternate_hdr_headroom: gainmap.alternateHdrHeadroom,
                 use_base_color_space: gainmap.useBaseColorSpace != 0,
             },
-            alt_icc: (&gainmap.altICC).into(),
+            alt_icc: (&gainmap.altICC).try_into()?,
             alt_color_primaries: gainmap.altColorPrimaries,
             alt_transfer_characteristics: gainmap.altTransferCharacteristics,
             alt_matrix_coefficients: gainmap.altMatrixCoefficients,
@@ -117,7 +118,7 @@ impl From<&avifGainMap> for GainMap {
             alt_plane_depth: gainmap.altDepth as u8,
             alt_plane_count: gainmap.altPlaneCount as u8,
             alt_clli: gainmap.altCLLI,
-        }
+        })
     }
 }
 

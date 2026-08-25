@@ -195,7 +195,7 @@ pub(crate) fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
     let mut v = Vec::<T>::new();
     let allocation_size = size
         .checked_mul(std::mem::size_of::<T>())
-        .ok_or(AvifError::OutOfMemory)?;
+        .ok_or_else(|| AvifError::map_out_of_memory(()))?;
     // TODO: b/342251590 - Do not request allocations of more than what is allowed in Chromium's
     // partition allocator. This is the allowed limit in the chromium fuzzers. The value comes
     // from:
@@ -205,9 +205,8 @@ pub(crate) fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
     if u64_from_usize(allocation_size)? >= 2_145_386_496 {
         return AvifError::out_of_memory();
     }
-    if v.try_reserve_exact(size).is_err() {
-        return AvifError::out_of_memory();
-    }
+    v.try_reserve_exact(size)
+        .map_err(AvifError::map_out_of_memory)?;
     Ok(v)
 }
 
@@ -409,9 +408,7 @@ pub(crate) trait TryClone: Sized {
 
 impl<T: Clone> TryClone for Vec<T> {
     fn try_clone(&self) -> AvifResult<Vec<T>> {
-        let mut vec: Vec<T> = Vec::new();
-        vec.try_reserve_exact(self.len())
-            .map_err(AvifError::map_out_of_memory)?;
+        let mut vec: Vec<T> = create_vec_exact(self.len())?;
         vec.extend_from_slice(self.as_slice());
         Ok(vec)
     }

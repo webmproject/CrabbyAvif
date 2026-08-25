@@ -106,7 +106,7 @@ pub unsafe extern "C" fn crabby_avifRGBImageSetDefaults(
 ) {
     check_pointer_or_return!(rgb);
     check_pointer_or_return!(image);
-    let image: image::Image = deref_const!(image).into();
+    let image: image::Image = deref_const!(image).as_rust_image_no_metadata();
     *deref_mut!(rgb) = rgb::Image::create_from_yuv(&image).into();
 }
 
@@ -125,7 +125,7 @@ pub unsafe extern "C" fn crabby_avifImageYUVToRGB(
         return avifResult::Ok;
     }
     let mut rgb: rgb::Image = deref_const!(rgb).into();
-    let image: image::Image = deref_const!(image).into();
+    let image: image::Image = deref_const!(image).as_rust_image_no_metadata();
     rgb.convert_from_yuv(&image).into()
 }
 
@@ -141,7 +141,7 @@ pub unsafe extern "C" fn crabby_avifImageRGBToYUV(
     check_pointer!(image);
     check_pointer!(rgb);
     let rgb: rgb::Image = deref_const!(rgb).into();
-    let mut tmp_image: image::Image = deref_const!(image).into();
+    let mut tmp_image: image::Image = deref_const!(image).as_rust_image_no_metadata();
     let res = rgb.convert_to_yuv(&mut tmp_image);
     if res.is_err() {
         return res.into();
@@ -257,7 +257,7 @@ pub unsafe extern "C" fn crabby_avifImageScale(
         return avifResult::Ok;
     }
 
-    let mut rust_image: image::Image = deref_const!(image).into();
+    let mut rust_image: image::Image = deref_const!(image).as_rust_image_no_metadata();
     let res = rust_image.scale(dstWidth, dstHeight, Category::Color);
     if res.is_err() {
         return res.into();

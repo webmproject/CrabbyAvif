@@ -19,6 +19,7 @@ use std::os::raw::c_char;
 use std::os::raw::c_void;
 
 use crate::decoder::GenericIO;
+use crate::internal_utils::create_vec_exact;
 use crate::internal_utils::io::DecoderFileIO;
 use crate::internal_utils::io::DecoderRawIO;
 use crate::*;
@@ -46,12 +47,16 @@ impl From<&Vec<u8>> for avifRWData {
     }
 }
 
-impl From<&avifRWData> for Vec<u8> {
-    fn from(data: &avifRWData) -> Vec<u8> {
+impl TryFrom<&avifRWData> for Vec<u8> {
+    type Error = AvifError;
+    fn try_from(data: &avifRWData) -> AvifResult<Vec<u8>> {
         if data.size == 0 {
-            Vec::new()
+            Ok(Vec::new())
         } else {
-            unsafe { std::slice::from_raw_parts(data.data, data.size).to_vec() }
+            let slice = unsafe { std::slice::from_raw_parts(data.data, data.size) };
+            let mut vec = create_vec_exact(data.size)?;
+            vec.extend_from_slice(slice);
+            Ok(vec)
         }
     }
 }
