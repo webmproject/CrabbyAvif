@@ -259,7 +259,7 @@ impl Writer for PngWriter {
         let xmp_key = CString::new("XML:com.adobe.xmp").unwrap();
         let mut xmp = image.xmp.clone();
         if !xmp.is_empty() {
-            xmp.push(0);
+            xmp.try_push(0)?;
             text = png_text {
                 compression: PNG_ITXT_COMPRESSION_NONE as _,
                 key: xmp_key.as_ptr() as _,
@@ -295,17 +295,17 @@ impl Writer for PngWriter {
         if copy_y_plane {
             for y in 0..height {
                 if image.depth == 8 {
-                    row_pointers.push(image.row(Plane::Y, y)?.as_ptr() as _);
+                    row_pointers.try_push(image.row(Plane::Y, y)?.as_ptr() as _)?;
                 } else {
-                    row_pointers.push(image.row16(Plane::Y, y)?.as_ptr() as _);
+                    row_pointers.try_push(image.row16(Plane::Y, y)?.as_ptr() as _)?;
                 }
             }
         } else {
             for y in 0..height {
                 if rgb.depth == 8 {
-                    row_pointers.push(rgb.row(y)?.as_ptr() as _);
+                    row_pointers.try_push(rgb.row(y)?.as_ptr() as _)?;
                 } else {
-                    row_pointers.push(rgb.row16(y)?.as_ptr() as _);
+                    row_pointers.try_push(rgb.row16(y)?.as_ptr() as _)?;
                 }
             }
         }

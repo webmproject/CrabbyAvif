@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::internal_utils::VecExtension;
 use crate::utils::create_vec_exact;
 use crate::AvifError;
 use crate::AvifResult;
@@ -38,7 +39,7 @@ pub fn hex_string_to_bytes(hex_string: &[u8], num_expected_bytes: usize) -> Avif
         .map_err(|_| {
             AvifError::UnknownError(format!("Invalid hex character at byte {}", bytes.len()))
         })?;
-        bytes.push(byte);
+        bytes.try_push(byte)?;
     }
     Ok(bytes)
 }
@@ -309,7 +310,7 @@ pub fn generate_icc(format: PixelFormat, gamma: f32, primaries: &[f32; 8]) -> Av
     let mut icc;
     if format == PixelFormat::Yuv400 {
         icc = create_vec_exact(ICC_GRAY_TEMPLATE.len())?;
-        icc.extend_from_slice(&ICC_GRAY_TEMPLATE);
+        icc.try_extend_from_slice(&ICC_GRAY_TEMPLATE)?;
         let mut offset = GRAY_WHITE_OFFSET;
         for white_xyz in xy_to_xyz(primaries[6], primaries[7])? {
             vec_offset_write(&mut icc, offset, &s15_fixed16(white_xyz)?);
@@ -318,7 +319,7 @@ pub fn generate_icc(format: PixelFormat, gamma: f32, primaries: &[f32; 8]) -> Av
         vec_offset_write(&mut icc, GRAY_GAMMA_OFFSET, &u8_fixed8(gamma)?);
     } else {
         icc = create_vec_exact(ICC_COLOR_TEMPLATE.len())?;
-        icc.extend_from_slice(&ICC_COLOR_TEMPLATE);
+        icc.try_extend_from_slice(&ICC_COLOR_TEMPLATE)?;
         let mut offset = COLOR_WHITE_OFFSET;
         let white_xyz = xy_to_xyz(primaries[6], primaries[7])?;
         for val in &white_xyz {

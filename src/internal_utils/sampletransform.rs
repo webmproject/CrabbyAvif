@@ -284,7 +284,7 @@ impl SampleTransformToken {
                 }
             }
         };
-        stack.push(result);
+        stack.try_push(result)?;
         Ok(())
     }
 }

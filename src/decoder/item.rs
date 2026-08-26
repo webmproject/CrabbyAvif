@@ -89,7 +89,8 @@ impl Item {
                     let mut data_buffer: Vec<u8> = create_vec_exact(self.size)?;
                     assert_eq!(self.size, self.extents.iter().map(|e| e.size).sum());
                     for extent in &self.extents {
-                        data_buffer.extend_from_slice(io.read_exact(extent.offset, extent.size)?);
+                        data_buffer
+                            .try_extend_from_slice(io.read_exact(extent.offset, extent.size)?)?;
                     }
                     self.data_buffer = Some(data_buffer);
                 }

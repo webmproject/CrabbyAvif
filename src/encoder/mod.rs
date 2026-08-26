@@ -272,7 +272,7 @@ impl Sample {
     #[allow(dead_code)]
     pub(crate) fn create_from(data: &[u8], range: Range<usize>, sync: bool) -> AvifResult<Self> {
         let mut copied_data: Vec<u8> = create_vec_exact(data.len())?;
-        copied_data.extend_from_slice(data);
+        copied_data.try_extend_from_slice(data)?;
         Ok(Sample {
             data_output_by_codec: copied_data,
             sample_data_range: range,
@@ -348,7 +348,7 @@ impl Encoder {
             ..Default::default()
         };
         let item_id = item.id;
-        self.items.push(item);
+        self.items.try_push(item)?;
         Ok(item_id)
     }
 
@@ -369,7 +369,7 @@ impl Encoder {
                 ..Default::default()
             };
             top_level_item_id = grid_item.id;
-            self.items.push(grid_item);
+            self.items.try_push(grid_item)?;
         }
         for cell_index in 0..cell_count {
             let (item_type, codec) = self
@@ -391,7 +391,7 @@ impl Encoder {
             if cell_count == 1 {
                 top_level_item_id = item.id;
             }
-            self.items.push(item);
+            self.items.try_push(item)?;
         }
         Ok(top_level_item_id)
     }
@@ -403,9 +403,9 @@ impl Encoder {
         let mut stream = IStream::create(&self.image_metadata.exif);
         let tiff_header_offset = exif::parse_exif_tiff_header_offset(&mut stream)?;
         let mut metadata_payload: Vec<u8> = create_vec_exact(4 + self.image_metadata.exif.len())?;
-        metadata_payload.extend_from_slice(&tiff_header_offset.to_be_bytes());
-        metadata_payload.extend_from_slice(&self.image_metadata.exif);
-        self.items.push(Item {
+        metadata_payload.try_extend_from_slice(&tiff_header_offset.to_be_bytes())?;
+        metadata_payload.try_extend_from_slice(&self.image_metadata.exif)?;
+        self.items.try_push(Item {
             id: u16_from_usize(self.items.len() + 1)?,
             item_type: "Exif".into(),
             infe_name: "Exif".into(),
@@ -413,7 +413,7 @@ impl Encoder {
             iref_type: Some("cdsc".into()),
             metadata_payload,
             ..Default::default()
-        });
+        })?;
         Ok(())
     }
 
@@ -421,7 +421,7 @@ impl Encoder {
         if self.image_metadata.xmp.is_empty() {
             return Ok(());
         }
-        self.items.push(Item {
+        self.items.try_push(Item {
             id: u16_from_usize(self.items.len() + 1)?,
             item_type: "mime".into(),
             infe_name: "XMP".into(),
@@ -430,7 +430,7 @@ impl Encoder {
             iref_type: Some("cdsc".into()),
             metadata_payload: self.image_metadata.xmp.clone(),
             ..Default::default()
-        });
+        })?;
         Ok(())
     }
 
@@ -634,8 +634,8 @@ impl Encoder {
                 if !self.alternative_item_ids.is_empty() {
                     return AvifError::unknown_error("");
                 }
-                self.alternative_item_ids.push(tonemap_item_id);
-                self.alternative_item_ids.push(color_item_id);
+                self.alternative_item_ids.try_push(tonemap_item_id)?;
+                self.alternative_item_ids.try_push(color_item_id)?;
                 let gainmap_item_id =
                     self.add_items(&gainmap_grid, Category::Gainmap, /*hidden=*/ true)?;
                 for item_id in [color_item_id, gainmap_item_id] {
@@ -805,7 +805,7 @@ impl Encoder {
                 &mut item.samples,
             )?;
         }
-        self.duration_in_timescales.push(duration);
+        self.duration_in_timescales.try_push(duration)?;
         Ok(())
     }
 

@@ -436,22 +436,22 @@ impl Item {
         metadata: &Image,
     ) -> AvifResult<()> {
         if let Some(clap) = metadata.clap {
-            streams.push(OStream::default());
+            streams.try_push(OStream::default())?;
             self.write_clap(streams.last_mut().unwrap(), &clap)?;
             self.associations
-                .push((u8_from_usize(streams.len())?, true));
+                .try_push((u8_from_usize(streams.len())?, true))?;
         }
         if let Some(angle) = metadata.irot_angle {
-            streams.push(OStream::default());
+            streams.try_push(OStream::default())?;
             self.write_irot(streams.last_mut().unwrap(), angle)?;
             self.associations
-                .push((u8_from_usize(streams.len())?, true));
+                .try_push((u8_from_usize(streams.len())?, true))?;
         }
         if let Some(axis) = metadata.imir_axis {
-            streams.push(OStream::default());
+            streams.try_push(OStream::default())?;
             self.write_imir(streams.last_mut().unwrap(), axis)?;
             self.associations
-                .push((u8_from_usize(streams.len())?, true));
+                .try_push((u8_from_usize(streams.len())?, true))?;
         }
         Ok(())
     }
@@ -468,13 +468,13 @@ impl Item {
             return Ok(());
         }
 
-        streams.push(OStream::default());
+        streams.try_push(OStream::default())?;
         self.write_ispe(streams.last_mut().unwrap(), item_metadata)?;
         self.associations
-            .push((u8_from_usize(streams.len())?, false));
+            .try_push((u8_from_usize(streams.len())?, false))?;
 
         // TODO: check for is_tmap and alt_plane_depth.
-        streams.push(OStream::default());
+        streams.try_push(OStream::default())?;
         self.write_pixi(
             streams.last_mut().unwrap(),
             item_metadata,
@@ -482,24 +482,24 @@ impl Item {
             codec_supports_native_alpha_channel,
         )?;
         self.associations
-            .push((u8_from_usize(streams.len())?, false));
+            .try_push((u8_from_usize(streams.len())?, false))?;
 
         let force_write_alpi = force_write_extended_pixi; // Assumed.
         if codec_supports_native_alpha_channel
             && item_metadata.alpha_present
             && (item_metadata.alpha_premultiplied || force_write_alpi)
         {
-            streams.push(OStream::default());
+            streams.try_push(OStream::default())?;
             self.write_alpi(streams.last_mut().unwrap(), item_metadata)?;
             self.associations
-                .push((u8_from_usize(streams.len())?, false));
+                .try_push((u8_from_usize(streams.len())?, false))?;
         }
 
         if self.codec.is_some() {
-            streams.push(OStream::default());
+            streams.try_push(OStream::default())?;
             self.write_codec_config_box(streams.last_mut().unwrap())?;
             self.associations
-                .push((u8_from_usize(streams.len())?, true));
+                .try_push((u8_from_usize(streams.len())?, true))?;
         }
 
         match self.category {
@@ -509,45 +509,45 @@ impl Item {
                 // Category::Color.
                 // Note a derived 'grid' or 'sato' item can have any category.
                 if !item_metadata.icc.is_empty() {
-                    streams.push(OStream::default());
+                    streams.try_push(OStream::default())?;
                     self.write_icc(streams.last_mut().unwrap(), item_metadata)?;
                     self.associations
-                        .push((u8_from_usize(streams.len())?, false));
+                        .try_push((u8_from_usize(streams.len())?, false))?;
                 }
-                streams.push(OStream::default());
+                streams.try_push(OStream::default())?;
                 self.write_nclx(streams.last_mut().unwrap(), item_metadata)?;
                 self.associations
-                    .push((u8_from_usize(streams.len())?, false));
+                    .try_push((u8_from_usize(streams.len())?, false))?;
                 if let Some(pasp) = item_metadata.pasp {
-                    streams.push(OStream::default());
+                    streams.try_push(OStream::default())?;
                     self.write_pasp(streams.last_mut().unwrap(), &pasp)?;
                     self.associations
-                        .push((u8_from_usize(streams.len())?, false));
+                        .try_push((u8_from_usize(streams.len())?, false))?;
                 }
                 // HDR properties.
                 if let Some(clli) = item_metadata.clli {
-                    streams.push(OStream::default());
+                    streams.try_push(OStream::default())?;
                     self.write_clli(streams.last_mut().unwrap(), &clli)?;
                     self.associations
-                        .push((u8_from_usize(streams.len())?, false));
+                        .try_push((u8_from_usize(streams.len())?, false))?;
                 }
             }
             Category::Alpha => {
-                streams.push(OStream::default());
+                streams.try_push(OStream::default())?;
                 self.write_auxC(streams.last_mut().unwrap())?;
                 self.associations
-                    .push((u8_from_usize(streams.len())?, false));
+                    .try_push((u8_from_usize(streams.len())?, false))?;
             }
             Category::Gainmap => {
-                streams.push(OStream::default());
+                streams.try_push(OStream::default())?;
                 self.write_nclx(streams.last_mut().unwrap(), item_metadata)?;
                 self.associations
-                    .push((u8_from_usize(streams.len())?, false));
+                    .try_push((u8_from_usize(streams.len())?, false))?;
                 if let Some(pasp) = image_metadata.pasp {
-                    streams.push(OStream::default());
+                    streams.try_push(OStream::default())?;
                     self.write_pasp(streams.last_mut().unwrap(), &pasp)?;
                     self.associations
-                        .push((u8_from_usize(streams.len())?, false));
+                        .try_push((u8_from_usize(streams.len())?, false))?;
                 }
                 if item_metadata.pasp.is_some() {
                     return AvifError::unknown_error(
@@ -557,10 +557,10 @@ impl Item {
             }
         }
         if self.extra_layer_count > 0 {
-            streams.push(OStream::default());
+            streams.try_push(OStream::default())?;
             self.write_a1lx(streams.last_mut().unwrap())?;
             self.associations
-                .push((u8_from_usize(streams.len())?, false));
+                .try_push((u8_from_usize(streams.len())?, false))?;
             // We don't write 'lsel' property since many decoders do not support it and will reject
             // the image, see https://github.com/AOMediaCodec/libavif/pull/2429
         }
@@ -807,7 +807,7 @@ impl Item {
                 if *duration == current {
                     current_count += 1;
                 } else {
-                    stts.push((current, current_count));
+                    stts.try_push((current, current_count))?;
                     current_value = Some(*duration);
                     current_count = 1;
                 }
@@ -817,7 +817,7 @@ impl Item {
             }
         }
         if let Some(current) = current_value {
-            stts.push((current, current_count));
+            stts.try_push((current, current_count))?;
         }
 
         stream.start_full_box("stts", (0, 0))?;
@@ -863,7 +863,7 @@ impl Item {
         // unsigned int(32) entry_count;
         stream.write_u32(1)?;
         // unsigned int(32) chunk_offset;
-        self.mdat_offset_locations.push(stream.offset());
+        self.mdat_offset_locations.try_push(stream.offset())?;
         stream.write_u32(0)?;
         stream.finish_box()
     }

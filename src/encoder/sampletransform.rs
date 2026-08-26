@@ -238,14 +238,14 @@ impl Encoder {
             ..Default::default()
         };
         let sato_item_id = item.id;
-        self.items.push(item);
+        self.items.try_push(item)?;
 
         // 'altr' group
         if !self.alternative_item_ids.is_empty() {
             return AvifError::not_implemented();
         }
-        self.alternative_item_ids.push(sato_item_id);
-        self.alternative_item_ids.push(self.primary_item_id);
+        self.alternative_item_ids.try_push(sato_item_id)?;
+        self.alternative_item_ids.try_push(self.primary_item_id)?;
 
         let bit_depth_extension_item_id =
             self.add_items(grid, Category::Color, /*hidden=*/ true)?;
@@ -295,12 +295,12 @@ impl Encoder {
             SampleTransform::create_from(
                 /*bit_depth=*/ 32, // Signed so 16 is not enough.
                 /*num_inputs=*/ 1,
-                vec![
+                try_vec_exact![
                     // Postfix notation.
                     SampleTransformToken::ImageItem(0),
                     SampleTransformToken::Constant(255),
                     SampleTransformToken::BinaryOp(SampleTransformBinaryOp::And),
-                ],
+                ]?,
             )?
             .apply_to_planes(item.category, &[full_depth_image], &mut lsb)?;
             Ok(lsb)
@@ -335,30 +335,30 @@ impl Encoder {
             let mut lsb = full_depth_image.shallow_clone();
             lsb.depth = 8;
             lsb.allocate_planes(item.category)?;
-            let mut tokens = vec![
+            let mut tokens = try_vec_exact![
                 // Postfix notation.
                 SampleTransformToken::ImageItem(0),
                 SampleTransformToken::Constant(15),
                 SampleTransformToken::BinaryOp(SampleTransformBinaryOp::And),
-            ];
+            ]?;
             // AVIF only supports 8, 10 or 12-bit image items. Scale the samples to fit the range.
             // Note: The samples could be encoded as is without being shifted left before encoding,
             //       but they would not be shifted right after decoding either. Right shifting after
             //       decoding provides a guarantee on the range of values and on the lack of integer
             //       overflow, so it is safer to do these extra steps.
             //       It also makes more sense from a compression point-of-view to use the full range.
-            tokens.push(SampleTransformToken::Constant(16));
-            tokens.push(SampleTransformToken::BinaryOp(
+            tokens.try_push(SampleTransformToken::Constant(16))?;
+            tokens.try_push(SampleTransformToken::BinaryOp(
                 SampleTransformBinaryOp::Product,
-            ));
+            ))?;
             if !item_will_be_encoded_losslessly {
                 // Small loss at encoding could be amplified by the truncation caused by the right
                 // shift after decoding. Offset sample values now, before encoding, to round rather
                 // than floor the samples shifted after decoding.
                 // Note: Samples were just left shifted by numShiftedBits, so adding less than
                 //       (1<<numShiftedBits) will not trigger any integer overflow.
-                tokens.push(SampleTransformToken::Constant(7));
-                tokens.push(SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Sum));
+                tokens.try_push(SampleTransformToken::Constant(7))?;
+                tokens.try_push(SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Sum))?;
             }
             SampleTransform::create_from(
                 /*bit_depth=*/ 32, // Signed so 16 is not enough.
@@ -460,7 +460,7 @@ impl Encoder {
             lsb.depth = 8;
             lsb.allocate_planes(item.category)?;
             // decoded = main*16+hidden-128 so hidden = clamp_8b(original-main*16+128). Postfix notation.
-            let tokens = vec![
+            let tokens = try_vec_exact![
                 // Postfix notation.
                 SampleTransformToken::ImageItem(0),
                 SampleTransformToken::ImageItem(1),
@@ -469,7 +469,7 @@ impl Encoder {
                 SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Difference),
                 SampleTransformToken::Constant(128),
                 SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Sum),
-            ];
+            ]?;
             // image is "original" (index 0) and decodedBaseImage is "main" (index 1) in the formula above.
             SampleTransform::create_from(
                 /*bit_depth=*/ 32, // Signed so 16 is not enough.
@@ -489,12 +489,12 @@ impl Encoder {
             SampleTransform::create_from(
                 /*bit_depth=*/ 32, // Signed so 16 is not enough.
                 /*num_inputs=*/ 1,
-                vec![
+                try_vec_exact![
                     // Postfix notation.
                     SampleTransformToken::ImageItem(0),
                     SampleTransformToken::Constant(16),
                     SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Quotient),
-                ],
+                ]?,
             )?
             .apply_to_planes(item.category, &[full_depth_image], &mut msb)?;
             Ok(msb)
@@ -517,14 +517,14 @@ impl Encoder {
             ..Default::default()
         };
         let sato_item_id = sato_item.id;
-        self.items.push(sato_item);
+        self.items.try_push(sato_item)?;
 
         // 'altr' group
         if !self.alternative_item_ids.is_empty() {
             return AvifError::not_implemented();
         }
-        self.alternative_item_ids.push(sato_item_id);
-        self.alternative_item_ids.push(self.primary_item_id);
+        self.alternative_item_ids.try_push(sato_item_id)?;
+        self.alternative_item_ids.try_push(self.primary_item_id)?;
 
         let sign_exponent_msb_item_id = self.primary_item_id;
         let exponent_msb_mantissa_msb_item_id =

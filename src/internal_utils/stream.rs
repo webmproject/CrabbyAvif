@@ -554,7 +554,7 @@ impl<const LITTLE_ENDIAN: bool> OStreamImpl<LITTLE_ENDIAN> {
     pub(crate) fn write_slice(&mut self, data: &[u8]) -> AvifResult<()> {
         assert_eq!(self.num_bits, 0);
         self.try_reserve(data.len())?;
-        self.data.extend_from_slice(data);
+        self.data.try_extend_from_slice(data)?;
         Ok(())
     }
 
@@ -578,7 +578,7 @@ impl<const LITTLE_ENDIAN: bool> OStreamImpl<LITTLE_ENDIAN> {
         version_and_flags: Option<(u8, u32)>,
     ) -> AvifResult<()> {
         assert_eq!(self.num_bits, 0);
-        self.box_marker_offsets.push(self.offset());
+        self.box_marker_offsets.try_push(self.offset())?;
         // 4 bytes for size to be filled out later.
         self.write_u32(0)?;
         self.write_str(box_type)?;

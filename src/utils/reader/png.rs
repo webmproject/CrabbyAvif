@@ -129,7 +129,7 @@ fn extract_exif_and_xmp(
                 }
                 let exif_slice = slice::from_raw_parts(exif, usize_from_u32(exif_size)?);
                 image.exif = create_vec_exact(exif_slice.len())?;
-                image.exif.extend_from_slice(exif_slice);
+                image.exif.try_extend_from_slice(exif_slice)?;
                 let _ = exif::set_orientation(&mut image.exif, 1);
                 *ignore_exif = true;
             }
@@ -156,7 +156,7 @@ fn extract_exif_and_xmp(
                 let exif =
                     icc::copy_raw_profile(slice::from_raw_parts(text.text as *const u8, length))?;
                 image.exif = create_vec_exact(exif.len())?;
-                image.exif.extend_from_slice(&exif);
+                image.exif.try_extend_from_slice(&exif)?;
                 if image.exif.starts_with(exif_prefix) {
                     image.exif.drain(..exif_prefix.len());
                 }
@@ -166,7 +166,7 @@ fn extract_exif_and_xmp(
                 let xmp =
                     icc::copy_raw_profile(slice::from_raw_parts(text.text as *const u8, length))?;
                 image.xmp = create_vec_exact(xmp.len())?;
-                image.xmp.extend_from_slice(&xmp);
+                image.xmp.try_extend_from_slice(&xmp)?;
                 if image.xmp.starts_with(xmp_prefix) {
                     image.xmp.drain(..xmp_prefix.len());
                 }
@@ -179,12 +179,14 @@ fn extract_exif_and_xmp(
                     icc::copy_raw_profile(slice::from_raw_parts(text.text as *const u8, length))?;
                 if !*ignore_exif && data.starts_with(exif_prefix) {
                     image.exif = create_vec_exact(data.len() - exif_prefix.len())?;
-                    image.exif.extend_from_slice(&data[exif_prefix.len()..]);
+                    image
+                        .exif
+                        .try_extend_from_slice(&data[exif_prefix.len()..])?;
                     let _ = exif::set_orientation(&mut image.exif, 1);
                     *ignore_exif = true;
                 } else if !*ignore_xmp && data.starts_with(xmp_prefix) {
                     image.xmp = create_vec_exact(data.len() - xmp_prefix.len())?;
-                    image.xmp.extend_from_slice(&data[xmp_prefix.len()..]);
+                    image.xmp.try_extend_from_slice(&data[xmp_prefix.len()..])?;
                     *ignore_xmp = true;
                 }
             } else if !*ignore_xmp && compare_c_str(text.key, "XML:com.adobe.xmp") {
@@ -195,7 +197,7 @@ fn extract_exif_and_xmp(
                 }
                 let xmp = slice::from_raw_parts(text.text as *const u8, length);
                 image.xmp = create_vec_exact(xmp.len())?;
-                image.xmp.extend_from_slice(xmp);
+                image.xmp.try_extend_from_slice(xmp)?;
                 *ignore_xmp = true;
             }
         }
@@ -438,7 +440,7 @@ impl Reader for PngReader {
                     let icc_slice =
                         slice::from_raw_parts(iccp_data, usize_from_u32(iccp_data_len)?);
                     yuv.icc = create_vec_exact(icc_slice.len())?;
-                    yuv.icc.extend_from_slice(icc_slice);
+                    yuv.icc.try_extend_from_slice(icc_slice)?;
                 } else if png_get_sRGB(png.png, png.info, (&mut srgb_intent) as *mut _)
                     == PNG_INFO_sRGB
                 {
@@ -519,7 +521,7 @@ impl Reader for PngReader {
             let mut row_pointer = rgb.pixels_mut();
             let row_bytes = usize_from_u32(rgb.row_bytes)?;
             for _ in 0..rgb.height {
-                row_pointers.push(row_pointer);
+                row_pointers.try_push(row_pointer)?;
                 row_pointer = row_pointer.add(row_bytes);
             }
             png_read_image(png.png, row_pointers.as_mut_ptr());

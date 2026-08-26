@@ -1546,8 +1546,8 @@ fn parse_idat(stream: &mut IStream) -> AvifResult<Vec<u8>> {
     if !stream.has_bytes_left()? {
         return AvifError::bmff_parse_failed("Invalid idat size (0)");
     }
-    let mut idat: Vec<u8> = Vec::with_capacity(stream.bytes_left()?);
-    idat.extend_from_slice(stream.get_slice(stream.bytes_left()?)?);
+    let mut idat: Vec<u8> = create_vec_exact(stream.bytes_left()?)?;
+    idat.try_extend_from_slice(stream.get_slice(stream.bytes_left()?)?)?;
     Ok(idat)
 }
 

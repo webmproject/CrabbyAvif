@@ -565,7 +565,7 @@ impl Decoder {
         };
         let first_item = self.items.get(&alpha_item_indices[0]).unwrap();
         let properties = match first_item.codec_config() {
-            Some(config) => vec![ItemProperty::CodecConfiguration(config.clone())],
+            Some(config) => try_vec_exact![ItemProperty::CodecConfiguration(config.clone())]?,
             None => return Ok(None),
         };
         let alpha_item = Item {
@@ -1548,7 +1548,7 @@ impl Decoder {
         )?;
         self.validate_source_items(item_id, &self.tile_info[decoding_item.usize()])?;
         let mut item = self.items.get(&item_id).unwrap();
-        let mut parsed_item_ids = vec![item_id];
+        let mut parsed_item_ids = try_vec_exact![item_id]?;
         loop {
             if !item.is_identity_item() {
                 break;
@@ -1725,13 +1725,13 @@ impl Decoder {
             }
             if item.idat.is_empty() {
                 let io = self.io.unwrap_mut();
-                data.extend_from_slice(io.read_exact(extent.offset, extent.size)?);
+                data.try_extend_from_slice(io.read_exact(extent.offset, extent.size)?)?;
             } else {
                 let offset = usize_from_u64(extent.offset)?;
                 let end_offset = checked_add!(offset, extent.size)?;
                 let range = offset..end_offset;
                 check_slice_range(item.idat.len(), &range)?;
-                data.extend_from_slice(&item.idat[range]);
+                data.try_extend_from_slice(&item.idat[range])?;
             }
             if max_num_bytes.is_some_and(|max_num_bytes| data.len() >= max_num_bytes) {
                 return Ok(()); // There are enough merged extents to satisfy max_num_bytes.
@@ -2338,7 +2338,7 @@ impl Decoder {
             }
             let width = self.extra_inputs[0].width(plane);
             let height = self.extra_inputs[0].height(plane);
-            let mut float_plane = Vec::with_capacity(width.checked_mul(height).unwrap());
+            let mut float_plane = create_vec_exact(checked_mul!(width, height)?)?;
 
             for y in 0..height as u32 {
                 let sign_exponent_msb_row = self.extra_inputs[0].row(plane, y)?;

@@ -286,7 +286,7 @@ impl Encoder {
                 // unsigned int(16) extent_count;
                 stream.write_u16(layer_count)?;
                 for i in 0..layer_count as usize {
-                    item.mdat_offset_locations.push(stream.offset());
+                    item.mdat_offset_locations.try_push(stream.offset())?;
                     // unsigned int(offset_size*8) extent_offset;
                     stream.write_u32(0)?;
                     // unsigned int(length_size*8) extent_length;
@@ -295,7 +295,7 @@ impl Encoder {
             } else {
                 // unsigned int(16) extent_count;
                 stream.write_u16(1)?;
-                item.mdat_offset_locations.push(stream.offset());
+                item.mdat_offset_locations.try_push(stream.offset())?;
                 // unsigned int(offset_size*8) extent_offset;
                 stream.write_u32(0)?;
                 let extent_length = if item.samples.is_empty() {
@@ -509,13 +509,13 @@ impl Encoder {
                 Some(property_index) => {
                     // A duplicate stream was already written. Simply store the index of that
                     // stream.
-                    property_index_map.push(property_index_map[property_index]);
+                    property_index_map.try_push(property_index_map[property_index])?;
                 }
                 None => {
                     // No duplicate streams were found. Write this stream and store its index.
                     stream.write_slice(current_data)?;
                     last_written_property_index += 1;
-                    property_index_map.push(last_written_property_index);
+                    property_index_map.try_push(last_written_property_index)?;
                 }
             }
         }
@@ -715,9 +715,9 @@ impl Encoder {
                 }
                 if self.settings.extra_layer_count > 0 && !item.samples.is_empty() {
                     if item.category == Category::Color {
-                        layered_item_ids[1].push(item.id);
+                        layered_item_ids[1].try_push(item.id)?;
                     } else if item.category == Category::Alpha {
-                        layered_item_ids[0].push(item.id);
+                        layered_item_ids[0].try_push(item.id)?;
                     }
                     continue;
                 }

@@ -566,7 +566,7 @@ fn unorm_lookup_tables(
     let mut table_y: Vec<f32> = create_vec_exact(count)?;
     let (bias_y, range_y) = bias_and_range_y(image);
     for cp in 0..count {
-        table_y.push(((cp as f32) - bias_y) / range_y);
+        table_y.try_push(((cp as f32) - bias_y) / range_y)?;
     }
     if mode == Mode::Identity {
         Ok((table_y, None))
@@ -574,7 +574,7 @@ fn unorm_lookup_tables(
         let (bias_uv, range_uv) = bias_and_range_uv(image);
         let mut table_uv: Vec<f32> = create_vec_exact(count)?;
         for cp in 0..count {
-            table_uv.push(((cp as f32) - bias_uv) / range_uv);
+            table_uv.try_push(((cp as f32) - bias_uv) / range_uv)?;
         }
         Ok((table_y, Some(table_uv)))
     }
