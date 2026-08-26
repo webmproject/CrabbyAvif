@@ -1424,6 +1424,7 @@ INSTANTIATE_TEST_SUITE_P(
 struct SatoTestParams {
   const char* filename;
   bool allow_sample_transform;
+  bool reset_decoder;
   uint32_t expected_depth;
 };
 
@@ -1438,6 +1439,9 @@ TEST_P(SatoTest, SampleTransform) {
   ASSERT_EQ(avifDecoderSetIOFile(decoder.get(), path.c_str()), AVIF_RESULT_OK);
 
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  if (GetParam().reset_decoder) {
+    ASSERT_EQ(avifDecoderReset(decoder.get()), AVIF_RESULT_OK);
+  }
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
@@ -1463,10 +1467,15 @@ TEST_P(SatoTest, SampleTransform) {
 
 INSTANTIATE_TEST_SUITE_P(
     DecoderTest, SatoTest,
-    ::testing::Values(SatoTestParams{"weld_sato_8plus8bit.avif", false, 8},
-                      SatoTestParams{"weld_sato_8plus8bit.avif", true, 16},
-                      SatoTestParams{"weld_sato_12plus4bit.avif", false, 12},
-                      SatoTestParams{"weld_sato_12plus4bit.avif", true, 16}));
+    ::testing::Values(
+        SatoTestParams{"weld_sato_8plus8bit.avif", false, false, 8},
+        SatoTestParams{"weld_sato_8plus8bit.avif", true, false, 16},
+        SatoTestParams{"weld_sato_12plus4bit.avif", false, false, 12},
+        SatoTestParams{"weld_sato_12plus4bit.avif", true, false, 16},
+        SatoTestParams{"weld_sato_8plus8bit.avif", false, true, 8},
+        SatoTestParams{"weld_sato_8plus8bit.avif", true, true, 16},
+        SatoTestParams{"weld_sato_12plus4bit.avif", false, true, 12},
+        SatoTestParams{"weld_sato_12plus4bit.avif", true, true, 16}));
 
 }  // namespace
 }  // namespace avif

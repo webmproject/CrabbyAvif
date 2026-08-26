@@ -1706,6 +1706,23 @@ fn sato_disabled() {
 }
 
 #[test]
+fn sato_16bit_decoder_reset() {
+    let mut decoder = get_decoder("weld_sato_12plus4bit.avif");
+    decoder.settings.allow_sample_transform = true;
+    assert_eq!(decoder.parse(), Ok(()));
+    if !HAS_NON_ANDROID_DECODER {
+        return;
+    }
+    assert_eq!(decoder.next_image(), Ok(()));
+    assert_eq!(16, decoder.image().unwrap().depth);
+
+    // Call parse again to reset the decoder.
+    assert_eq!(decoder.parse(), Ok(()));
+    assert_eq!(decoder.next_image(), Ok(()));
+    assert_eq!(16, decoder.image().unwrap().depth);
+}
+
+#[test]
 fn b_497926602() -> AvifResult<()> {
     // The file has two cells with the mdat payloads (offset, size) at (424, 36) and (460, 35).
     let data =
