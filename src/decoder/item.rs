@@ -14,6 +14,7 @@
 
 use crate::decoder::*;
 use crate::internal_utils::stream::*;
+use crate::internal_utils::*;
 use crate::parser::mp4box::*;
 use crate::utils::pixels::ChannelIdc;
 use crate::*;
@@ -186,14 +187,18 @@ impl Item {
             for _ in 0..reference_count {
                 if (flags & 1) == 1 {
                     // unsigned int(32) horizontal_offset;
-                    overlay.horizontal_offsets.push(stream.read_i32()?);
+                    overlay.horizontal_offsets.try_push(stream.read_i32()?)?;
                     // unsigned int(32) vertical_offset;
-                    overlay.vertical_offsets.push(stream.read_i32()?);
+                    overlay.vertical_offsets.try_push(stream.read_i32()?)?;
                 } else {
                     // unsigned int(16) horizontal_offset;
-                    overlay.horizontal_offsets.push(stream.read_i16()? as i32);
+                    overlay
+                        .horizontal_offsets
+                        .try_push(stream.read_i16()? as i32)?;
                     // unsigned int(16) vertical_offset;
-                    overlay.vertical_offsets.push(stream.read_i16()? as i32);
+                    overlay
+                        .vertical_offsets
+                        .try_push(stream.read_i16()? as i32)?;
                 }
             }
             if stream.has_bytes_left()? {
@@ -514,13 +519,15 @@ impl Item {
         });
         // Copy new ones (if any).
         if let Some(irot) = find_property!(properties, ImageRotation) {
-            self.properties.push(ItemProperty::ImageRotation(*irot));
+            self.properties
+                .try_push(ItemProperty::ImageRotation(*irot))?;
         }
         if let Some(imir) = find_property!(properties, ImageMirror) {
-            self.properties.push(ItemProperty::ImageMirror(*imir));
+            self.properties.try_push(ItemProperty::ImageMirror(*imir))?;
         }
         if let Some(clap) = find_property!(properties, CleanAperture) {
-            self.properties.push(ItemProperty::CleanAperture(*clap));
+            self.properties
+                .try_push(ItemProperty::CleanAperture(*clap))?;
         }
         Ok(())
     }
@@ -672,10 +679,10 @@ pub(crate) fn construct_items(
         }
 
         for extent in &iloc.extents {
-            item.extents.push(Extent {
+            item.extents.try_push(Extent {
                 offset: checked_add!(iloc.base_offset, extent.offset)?,
                 size: extent.size,
-            });
+            })?;
             checked_incr!(item.size, extent.size);
         }
     }
@@ -730,7 +737,7 @@ pub(crate) fn construct_items(
                         "required essential property not marked as essential"
                     );
                 }
-                (property, _) => item.properties.push(property.clone()),
+                (property, _) => item.properties.try_push(property.clone())?,
             }
         }
     }
@@ -740,9 +747,9 @@ pub(crate) fn construct_items(
         let item = items.get_mut(&reference.from_item_id).unwrap();
         match reference.reference_type.as_str() {
             "thmb" => item.thumbnail_for_id = reference.to_item_id,
-            "auxl" => item.aux_for_id.push(reference.to_item_id),
-            "cdsc" => item.desc_for_id.push(reference.to_item_id),
-            "prem" => item.prem_by_id.push(reference.to_item_id),
+            "auxl" => item.aux_for_id.try_push(reference.to_item_id)?,
+            "cdsc" => item.desc_for_id.try_push(reference.to_item_id)?,
+            "prem" => item.prem_by_id.try_push(reference.to_item_id)?,
             "dimg" => {
                 // derived images refer in the opposite direction.
                 insert_item_if_not_exists(reference.to_item_id, &mut items);

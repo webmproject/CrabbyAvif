@@ -578,35 +578,35 @@ fn parse_header(stream: &mut IStream, top_level: bool) -> AvifResult<BoxHeader> 
 }
 
 // Reads a truncated ftyp box. Populates as many brands as it can read.
-fn parse_truncated_ftyp(stream: &mut IStream) -> FileTypeBox {
+fn parse_truncated_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
     // Section 4.3.2 of ISO/IEC 14496-12.
     // unsigned int(32) major_brand;
     let major_brand = match stream.read_string(4) {
         Ok(major_brand) => major_brand,
-        Err(_) => return FileTypeBox::default(),
+        Err(_) => return Ok(FileTypeBox::default()),
     };
     let minor_version = match stream.read_string(4) {
         Ok(minor_version) => minor_version,
         Err(_) => {
-            return FileTypeBox {
+            return Ok(FileTypeBox {
                 major_brand,
                 ..Default::default()
-            }
+            })
         }
     };
     let mut compatible_brands: Vec<String> = Vec::new();
     // unsigned int(32) compatible_brands[];  // to end of the box
     while stream.has_bytes_left().unwrap_or_default() {
         match stream.read_string(4) {
-            Ok(brand) => compatible_brands.push(brand),
+            Ok(brand) => compatible_brands.try_push(brand)?,
             Err(_) => break,
         }
     }
-    FileTypeBox {
+    Ok(FileTypeBox {
         major_brand,
         minor_version,
         compatible_brands,
-    }
+    })
 }
 
 fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
@@ -624,7 +624,7 @@ fn parse_ftyp(stream: &mut IStream) -> AvifResult<FileTypeBox> {
     let mut compatible_brands: Vec<String> = create_vec_exact(stream.bytes_left()? / 4)?;
     // unsigned int(32) compatible_brands[];  // to end of the box
     while stream.has_bytes_left()? {
-        compatible_brands.push(stream.read_string(4)?);
+        compatible_brands.try_push(stream.read_string(4)?)?;
     }
     Ok(FileTypeBox {
         major_brand,
@@ -749,9 +749,9 @@ fn parse_iloc(stream: &mut IStream) -> AvifResult<ItemLocationBox> {
                 // unsigned int(length_size*8) extent_length;
                 size: usize_from_u64(stream.read_uxx(iloc.length_size)?)?,
             };
-            entry.extents.push(extent);
+            entry.extents.try_push(extent)?;
         }
-        iloc.items.push(entry);
+        iloc.items.try_push(entry)?;
     }
     Ok(iloc)
 }
@@ -795,10 +795,10 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
         planes: create_vec_exact(num_channels)?,
     };
     for _ in 0..num_channels {
-        pixi.planes.push(PlanePixelInformation {
+        pixi.planes.try_push(PlanePixelInformation {
             depth: stream.read_u8()?, // unsigned int (8) bits_per_channel;
             ..Default::default()
-        });
+        })?;
         if pixi.planes.last().unwrap().depth != pixi.planes.first().unwrap().depth {
             return AvifError::unsupported_depth();
         }
@@ -1319,28 +1319,28 @@ fn parse_ipco(stream: &mut IStream, is_track: bool) -> AvifResult<Vec<ItemProper
         let header = parse_header(stream, /*top_level=*/ false)?;
         let mut sub_stream = stream.sub_stream(&header.size)?;
         match header.box_type.as_str() {
-            "ispe" => properties.push(parse_ispe(&mut sub_stream)?),
-            "pixi" => properties.push(parse_pixi(&mut sub_stream)?),
-            "alpi" => properties.push(parse_alpi(&mut sub_stream)?),
-            "av1C" => properties.push(parse_av1C(&mut sub_stream)?),
+            "ispe" => properties.try_push(parse_ispe(&mut sub_stream)?)?,
+            "pixi" => properties.try_push(parse_pixi(&mut sub_stream)?)?,
+            "alpi" => properties.try_push(parse_alpi(&mut sub_stream)?)?,
+            "av1C" => properties.try_push(parse_av1C(&mut sub_stream)?)?,
             #[cfg(feature = "avm")]
-            "av2C" => properties.push(parse_av2C(&mut sub_stream)?),
-            "colr" => properties.push(parse_colr(&mut sub_stream)?),
-            "pasp" => properties.push(parse_pasp(&mut sub_stream)?),
-            "auxC" if !is_track => properties.push(parse_auxC(&mut sub_stream)?),
-            "auxi" if is_track => properties.push(parse_auxC(&mut sub_stream)?),
-            "clap" => properties.push(parse_clap(&mut sub_stream)?),
-            "irot" => properties.push(parse_irot(&mut sub_stream)?),
-            "imir" => properties.push(parse_imir(&mut sub_stream)?),
-            "a1op" => properties.push(parse_a1op(&mut sub_stream)?),
-            "lsel" => properties.push(parse_lsel(&mut sub_stream)?),
-            "a1lx" => properties.push(parse_a1lx(&mut sub_stream)?),
-            "clli" => properties.push(parse_clli(&mut sub_stream)?),
+            "av2C" => properties.try_push(parse_av2C(&mut sub_stream)?)?,
+            "colr" => properties.try_push(parse_colr(&mut sub_stream)?)?,
+            "pasp" => properties.try_push(parse_pasp(&mut sub_stream)?)?,
+            "auxC" if !is_track => properties.try_push(parse_auxC(&mut sub_stream)?)?,
+            "auxi" if is_track => properties.try_push(parse_auxC(&mut sub_stream)?)?,
+            "clap" => properties.try_push(parse_clap(&mut sub_stream)?)?,
+            "irot" => properties.try_push(parse_irot(&mut sub_stream)?)?,
+            "imir" => properties.try_push(parse_imir(&mut sub_stream)?)?,
+            "a1op" => properties.try_push(parse_a1op(&mut sub_stream)?)?,
+            "lsel" => properties.try_push(parse_lsel(&mut sub_stream)?)?,
+            "a1lx" => properties.try_push(parse_a1lx(&mut sub_stream)?)?,
+            "clli" => properties.try_push(parse_clli(&mut sub_stream)?)?,
             #[cfg(feature = "heic")]
-            "hvcC" => properties.push(parse_hvcC(&mut sub_stream)?),
+            "hvcC" => properties.try_push(parse_hvcC(&mut sub_stream)?)?,
             #[cfg(feature = "jpegxl")]
-            "hxlC" => properties.push(parse_hxlC(&mut sub_stream)?),
-            _ => properties.push(ItemProperty::Unknown(header.box_type)),
+            "hxlC" => properties.try_push(parse_hxlC(&mut sub_stream)?)?,
+            _ => properties.try_push(ItemProperty::Unknown(header.box_type))?,
         }
     }
     Ok(properties)
@@ -1388,15 +1388,15 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
                 // unsigned int(15) property_index;
                 entry
                     .associations
-                    .push((stream.read_bits(15)? as u16, essential));
+                    .try_push((stream.read_bits(15)? as u16, essential))?;
             } else {
                 //unsigned int(7) property_index;
                 entry
                     .associations
-                    .push((stream.read_bits(7)? as u16, essential));
+                    .try_push((stream.read_bits(7)? as u16, essential))?;
             }
         }
-        ipma.push(entry);
+        ipma.try_push(entry)?;
     }
     Ok(ipma)
 }
@@ -1491,7 +1491,7 @@ fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
             return AvifError::bmff_parse_failed("Found non infe box in iinf");
         }
         let mut sub_stream = stream.sub_stream(&header.size)?;
-        iinf.push(parse_infe(&mut sub_stream)?);
+        iinf.try_push(parse_infe(&mut sub_stream)?)?;
     }
     Ok(iinf)
 }
@@ -1530,12 +1530,12 @@ fn parse_iref(stream: &mut IStream) -> AvifResult<Vec<ItemReference>> {
             if to_item_id == 0 {
                 return AvifError::bmff_parse_failed("invalid to_item_id (0) in iref");
             }
-            iref.push(ItemReference {
+            iref.try_push(ItemReference {
                 from_item_id,
                 to_item_id,
                 reference_type: header.box_type.clone(),
                 index: index as u32,
-            });
+            })?;
         }
     }
     Ok(iref)
@@ -1566,12 +1566,12 @@ fn parse_grpl(stream: &mut IStream) -> AvifResult<Vec<EntityGroup>> {
         let mut entity_ids: Vec<u32> = create_vec_exact(usize_from_u32(num_entities_in_group)?)?;
         for _ in 0..num_entities_in_group {
             let entity_id = sub_stream.read_u32()?;
-            entity_ids.push(entity_id);
+            entity_ids.try_push(entity_id)?;
         }
-        grpl.push(EntityGroup {
+        grpl.try_push(EntityGroup {
             grouping_type: header.box_type.clone(),
             entity_ids,
-        })
+        })?;
     }
     Ok(grpl)
 }
@@ -1742,7 +1742,7 @@ fn parse_stco(
             // unsigned int(32) chunk_offset;
             stream.read_u32()? as u64
         };
-        sample_table.chunk_offsets.push(chunk_offset);
+        sample_table.chunk_offsets.try_push(chunk_offset)?;
     }
     Ok(())
 }
@@ -1775,7 +1775,7 @@ fn parse_stsc(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
                 stsc.sample_description_index
             ));
         }
-        sample_table.sample_to_chunk.push(stsc);
+        sample_table.sample_to_chunk.try_push(stsc)?;
     }
     Ok(())
 }
@@ -1795,7 +1795,7 @@ fn parse_stsz(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
     let mut sample_sizes: Vec<u32> = create_vec_exact(sample_count)?;
     for _ in 0..sample_count {
         // unsigned int(32) entry_size;
-        sample_sizes.push(stream.read_u32()?);
+        sample_sizes.try_push(stream.read_u32()?)?;
     }
     sample_table.sample_size = SampleSize::Sizes(sample_sizes);
     Ok(())
@@ -1809,7 +1809,7 @@ fn parse_stss(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
     sample_table.sync_samples = create_vec_exact(entry_count)?;
     for _ in 0..entry_count {
         // unsigned int(32) sample_number;
-        sample_table.sync_samples.push(stream.read_u32()?);
+        sample_table.sync_samples.try_push(stream.read_u32()?)?;
     }
     Ok(())
 }
@@ -1827,7 +1827,7 @@ fn parse_stts(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
             // unsigned int(32) sample_delta;
             sample_delta: stream.read_u32()?,
         };
-        sample_table.time_to_sample.push(stts);
+        sample_table.time_to_sample.try_push(stts)?;
     }
     Ok(())
 }
@@ -1938,7 +1938,7 @@ fn parse_stsd(stream: &mut IStream, sample_table: &mut SampleTable) -> AvifResul
         let header = parse_header(stream, /*top_level=*/ false)?;
         let sample_entry =
             parse_sample_entry(&mut stream.sub_stream(&header.size)?, header.box_type)?;
-        sample_table.sample_descriptions.push(sample_entry);
+        sample_table.sample_descriptions.try_push(sample_entry)?;
     }
     Ok(())
 }
@@ -2158,7 +2158,7 @@ fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
             if track.is_video_handler() && (track.width == 0 || track.height == 0) {
                 return AvifError::bmff_parse_failed("invalid track dimensions");
             }
-            tracks.push(track);
+            tracks.try_push(track)?;
         }
     }
     if tracks.is_empty() {
@@ -2222,7 +2222,9 @@ pub(crate) fn parse(io: &mut GenericIO, strictness: &Strictness) -> AvifResult<A
                             // Decoder::parse() requires the 'tmap' brand to
                             // be registered for the tone mapping derived
                             // image item to be parsed.
-                            ftyp.unwrap_mut().compatible_brands.push("tmap".into());
+                            ftyp.unwrap_mut()
+                                .compatible_brands
+                                .try_push("tmap".into())?;
                         }
                     }
                     _ => {} // Not reached.
@@ -2293,7 +2295,7 @@ pub(crate) fn peek_compatible_file_type(data: &[u8]) -> AvifResult<bool> {
     };
     let ftyp = if header_size > stream.bytes_left()? {
         let mut header_stream = stream.sub_stream(&BoxSize::FixedSize(stream.bytes_left()?))?;
-        parse_truncated_ftyp(&mut header_stream)
+        parse_truncated_ftyp(&mut header_stream)?
     } else {
         let mut header_stream = stream.sub_stream(&header.size)?;
         parse_ftyp(&mut header_stream)?
@@ -2417,7 +2419,7 @@ pub(crate) fn parse_sato(stream: &mut IStream, num_inputs: usize) -> AvifResult<
             137 => SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Max),
             _ => return AvifError::invalid_image_grid("invalid token in sato"),
         };
-        tokens.push(sato_token);
+        tokens.try_push(sato_token)?;
     }
 
     if stream.has_bytes_left()? {

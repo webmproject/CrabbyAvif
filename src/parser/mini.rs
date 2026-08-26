@@ -559,15 +559,15 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
     // Color item
     let color_item_id = 1;
     meta.primary_item_id = color_item_id;
-    meta.iinf.push(ItemInfo {
+    meta.iinf.try_push(ItemInfo {
         item_id: color_item_id,
         item_type: infe_type.clone(),
         ..Default::default()
-    });
-    meta.iprp.associations.push(ItemPropertyAssociation {
+    })?;
+    meta.iprp.associations.try_push(ItemPropertyAssociation {
         item_id: color_item_id,
         associations: try_vec_exact![(1, true), (2, false), (3, false), (4, true), (5, true)]?,
-    });
+    })?;
     if has_alpha && alpha_item_data_size == 0 {
         meta.iprp
             .associations
@@ -606,31 +606,31 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
     // Alpha item
     let alpha_item_id = 2;
     if has_alpha {
-        meta.iinf.push(ItemInfo {
+        meta.iinf.try_push(ItemInfo {
             item_id: alpha_item_id,
             item_type: infe_type.clone(),
             ..Default::default()
-        });
-        meta.iref.push(ItemReference {
+        })?;
+        meta.iref.try_push(ItemReference {
             from_item_id: alpha_item_id,
             to_item_id: color_item_id,
             reference_type: "auxl".into(),
             index: meta.iref.len() as u32,
-        });
+        })?;
         if alpha_is_premultiplied {
-            meta.iref.push(ItemReference {
+            meta.iref.try_push(ItemReference {
                 from_item_id: color_item_id,
                 to_item_id: alpha_item_id,
                 reference_type: "prem".into(),
                 index: meta.iref.len() as u32,
-            });
+            })?;
         }
 
         // Subsampling is not checked. Alpha is only interesting for its luma
         // plane. The other planes are ignored if any.
 
         assert_ne!(alpha_item_data_size, 0);
-        meta.iprp.associations.push(ItemPropertyAssociation {
+        meta.iprp.associations.try_push(ItemPropertyAssociation {
             item_id: alpha_item_id,
             associations: try_vec_exact![
                 (6, true),
@@ -645,7 +645,7 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
                 (9, true),
                 (10, true),
             ]?,
-        });
+        })?;
     }
 
     // HDR items
@@ -1005,18 +1005,18 @@ fn create_extended_pixi(
                 chroma_is_horizontally_centered,
                 chroma_is_vertically_centered,
             )?;
-            pixi.planes.push(PlanePixelInformation {
+            pixi.planes.try_push(PlanePixelInformation {
                 depth: bit_depth as u8,
                 channel_idc: Some(ChannelIdc::SecondColorChannel),
                 subsampling_type: Some(pixel_format),
                 subsampling_location: Some(subsampling_location),
-            });
-            pixi.planes.push(PlanePixelInformation {
+            })?;
+            pixi.planes.try_push(PlanePixelInformation {
                 depth: bit_depth as u8,
                 channel_idc: Some(ChannelIdc::ThirdColorChannel),
                 subsampling_type: Some(pixel_format),
                 subsampling_location: Some(subsampling_location),
-            });
+            })?;
         }
         _ => unreachable!(),
     }

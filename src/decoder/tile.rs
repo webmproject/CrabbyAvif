@@ -14,6 +14,7 @@
 
 use crate::decoder::*;
 use crate::internal_utils::sampletransform::*;
+use crate::internal_utils::*;
 use crate::*;
 
 use std::num::NonZero;
@@ -230,7 +231,7 @@ impl Tile {
                 spatial_id: lsel as u8,
                 sync: true,
             };
-            tile.input.samples.push(sample);
+            tile.input.samples.try_push(sample)?;
         } else if item.progressive && allow_progressive {
             // Progressive image. Decode all layers and expose them all to the
             // user.
@@ -251,7 +252,7 @@ impl Tile {
                     spatial_id: 0xff,
                     sync: i == 0, // Assume all layers depend on the first layer.
                 };
-                tile.input.samples.push(sample);
+                tile.input.samples.try_push(sample)?;
                 offset = checked_add!(offset, *layer_size as u64)?;
             }
         } else {
@@ -265,7 +266,7 @@ impl Tile {
                 spatial_id: 0xff,
                 sync: true,
             };
-            tile.input.samples.push(sample);
+            tile.input.samples.try_push(sample)?;
         }
         Ok(tile)
     }
@@ -336,7 +337,7 @@ impl Tile {
                     // Assume first sample is always sync (in case stss box was missing).
                     sync: tile.input.samples.is_empty(),
                 };
-                tile.input.samples.push(sample);
+                tile.input.samples.try_push(sample)?;
                 checked_incr!(sample_offset, sample_size as u64);
                 checked_incr!(sample_size_index, 1);
             }

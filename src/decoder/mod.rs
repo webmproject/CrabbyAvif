@@ -543,7 +543,7 @@ impl Decoder {
                 .iter()
                 .find(|x| x.1.aux_for_id.contains(color_grid_item_id) && x.1.is_auxiliary_alpha())
             {
-                Some(item) => alpha_item_indices.push(*item.0),
+                Some(item) => alpha_item_indices.try_push(*item.0)?,
                 None => {
                     if alpha_item_indices.is_empty() {
                         return Ok(None);
@@ -721,7 +721,7 @@ impl Decoder {
                 self.io.unwrap_ref().size_hint(),
             )?;
             tile.input.decoding_item = decoding_item;
-            tiles.push(tile);
+            tiles.try_push(tile)?;
         } else {
             if !self.tile_info[decoding_item.usize()].is_derived_image() {
                 return AvifError::invalid_image_grid(
@@ -741,7 +741,7 @@ impl Decoder {
                     self.io.unwrap_ref().size_hint(),
                 )?;
                 tile.input.decoding_item = decoding_item;
-                tiles.push(tile);
+                tiles.try_push(tile)?;
                 progressive = progressive && derived_item.progressive;
             }
 
@@ -842,7 +842,7 @@ impl Decoder {
                     first_nclx = find_nclx(&dimg_item.properties)?.cloned();
                 }
             }
-            source_item_ids.push(*dimg_item_id);
+            source_item_ids.try_push(*dimg_item_id)?;
         }
         if source_item_ids.is_empty() {
             return Ok(());
@@ -856,25 +856,23 @@ impl Decoder {
             // Adopt the configuration property of the first tile.
             // validate_properties() later makes sure they are all equal.
             item.properties
-                .push(ItemProperty::CodecConfiguration(first_codec_config));
+                .try_push(ItemProperty::CodecConfiguration(first_codec_config))?;
         }
         if item.is_grid_item() || item.is_overlay_item() {
             // For grid and overlay items, adopt the icc color profile and the nclx of the first
             // tile if it is not explicitly specified for the overall grid.
             if let Some(first_icc) = first_icc {
                 if find_icc(&item.properties)?.is_none() {
-                    item.properties
-                        .push(ItemProperty::ColorInformation(ColorInformation::Icc(
-                            first_icc,
-                        )));
+                    item.properties.try_push(ItemProperty::ColorInformation(
+                        ColorInformation::Icc(first_icc),
+                    ))?;
                 }
             }
             if let Some(first_nclx) = first_nclx {
                 if find_nclx(&item.properties)?.is_none() {
-                    item.properties
-                        .push(ItemProperty::ColorInformation(ColorInformation::Nclx(
-                            first_nclx,
-                        )));
+                    item.properties.try_push(ItemProperty::ColorInformation(
+                        ColorInformation::Nclx(first_nclx),
+                    ))?;
                 }
             }
         }
@@ -1104,12 +1102,12 @@ impl Decoder {
                     .ok_or(AvifError::BmffParseFailed("".into()))?;
                 gainmap_properties = None;
 
-                self.tiles[DecodingItem::COLOR.usize()].push(Tile::create_from_track(
+                self.tiles[DecodingItem::COLOR.usize()].try_push(Tile::create_from_track(
                     color_track,
                     self.settings.image_count_limit,
                     self.io.unwrap_ref().size_hint(),
                     DecodingItem::COLOR,
-                )?);
+                )?)?;
                 self.tile_info[DecodingItem::COLOR.usize()].tile_count = 1;
 
                 if let Some(alpha_track) = self
@@ -1117,12 +1115,12 @@ impl Decoder {
                     .iter()
                     .find(|x| x.is_aux(color_track.id) && x.is_auxiliary_alpha())
                 {
-                    self.tiles[DecodingItem::ALPHA.usize()].push(Tile::create_from_track(
+                    self.tiles[DecodingItem::ALPHA.usize()].try_push(Tile::create_from_track(
                         alpha_track,
                         self.settings.image_count_limit,
                         self.io.unwrap_ref().size_hint(),
                         DecodingItem::ALPHA,
-                    )?);
+                    )?)?;
                     self.tile_info[DecodingItem::ALPHA.usize()].tile_count = 1;
                     self.image.alpha_present = true;
                     self.image.alpha_premultiplied = color_track.prem_by_id == Some(alpha_track.id);
@@ -1561,7 +1559,7 @@ impl Decoder {
             }
             self.populate_source_item_ids(sub_item_id)?;
             self.validate_source_items(sub_item_id, &self.tile_info[decoding_item.usize()])?;
-            parsed_item_ids.push(sub_item_id);
+            parsed_item_ids.try_push(sub_item_id)?;
             item = self.items.get(&sub_item_id).unwrap();
         }
         Ok(())
@@ -1634,7 +1632,7 @@ impl Decoder {
                 .android_mediacodec_output_color_format,
         };
         codec.initialize(&config)?;
-        self.codecs.push(codec);
+        self.codecs.try_push(codec)?;
         Ok(())
     }
 
@@ -2007,7 +2005,7 @@ impl Decoder {
                 }
                 Err(err) => return Err(err),
             };
-            payloads.push(data.to_vec());
+            payloads.try_push(data.to_vec())?;
         }
         let grid = &self.tile_info[decoding_item.usize()].grid;
         // If we are not doing incremental decode, all the cells must have been read.
@@ -2292,7 +2290,7 @@ impl Decoder {
                 };
                 let io = &mut self.io.unwrap_mut();
                 let data = sample.data(io, item_data_buffer)?;
-                payloads.push(data.to_vec());
+                payloads.try_push(data.to_vec())?;
             }
             if payloads.is_empty() {
                 continue;
@@ -2351,7 +2349,7 @@ impl Decoder {
                     let b2 = exponent_lsb_mantissa_msb_row[x] as u32;
                     let b3 = mantissa_lsb_row[x] as u32;
                     let bits = (b1 << 24) | (b2 << 12) | b3;
-                    float_plane.push(f32::from_bits(bits));
+                    float_plane.try_push(f32::from_bits(bits))?;
                 }
             }
             float_planes[plane.as_usize()] = Some(float_plane);
