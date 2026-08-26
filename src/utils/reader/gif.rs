@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::gainmap::GainMap;
+use crate::internal_utils::VecExtension;
 use crate::reformat::*;
 use crate::utils::create_vec_exact;
 use crate::utils::pixels::Pixels;
@@ -70,7 +71,7 @@ impl Reader for GifReader {
         }
         let mut rgba_buffer: Vec<u8> = create_vec_exact(checked_mul!(rgba_pixels.len(), 4)?)?;
         for rgba in rgba_pixels.iter() {
-            rgba_buffer.extend_from_slice(&[rgba.r, rgba.g, rgba.b, rgba.a]);
+            rgba_buffer.try_extend_from_slice(&[rgba.r, rgba.g, rgba.b, rgba.a])?;
         }
         let rgb = rgb::Image {
             width: self.decoder.width() as u32,

@@ -22,6 +22,7 @@ use crate::decoder::GenericIO;
 use crate::internal_utils::create_vec_exact;
 use crate::internal_utils::io::DecoderFileIO;
 use crate::internal_utils::io::DecoderRawIO;
+use crate::internal_utils::VecExtension;
 use crate::*;
 
 #[repr(C)]
@@ -55,7 +56,7 @@ impl TryFrom<&avifRWData> for Vec<u8> {
         } else {
             let slice = unsafe { std::slice::from_raw_parts(data.data, data.size) };
             let mut vec = create_vec_exact(data.size)?;
-            vec.extend_from_slice(slice);
+            vec.try_extend_from_slice(slice)?;
             Ok(vec)
         }
     }

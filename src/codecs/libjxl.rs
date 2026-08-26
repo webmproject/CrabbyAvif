@@ -310,7 +310,7 @@ impl Libjxl {
         // # Safety: Calling a C function with valid parameters.
         unsafe { JxlEncoderCloseInput(encoder) };
 
-        let mut data: Vec<u8> = vec![]; // Vector of encoded bytes, growing by chunks.
+        let mut data: Vec<u8> = Vec::new(); // Vector of encoded bytes, growing by chunks.
         let mut chunk = [0; 64]; // Arbitrary chunk size.
         loop {
             let mut avail_out = chunk.len();
