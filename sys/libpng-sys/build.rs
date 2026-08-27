@@ -14,6 +14,8 @@
 
 // Build rust library and bindings for libpng.
 
+#![allow(clippy::disallowed_methods, clippy::disallowed_macros)]
+
 use std::env;
 use std::path::Path;
 use std::path::PathBuf;

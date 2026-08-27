@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(clippy::disallowed_methods, clippy::disallowed_macros)]
 #![cfg(feature = "jpeg")]
 
 use crabby_avif::utils::reader::jpeg::JpegReader;

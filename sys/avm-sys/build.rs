@@ -43,7 +43,7 @@ fn main() -> Result<(), String> {
     println!("cargo:rustc-link-search={}", abs_object_dir.display());
     println!("cargo:rustc-link-lib=static=avm");
 
-    let include_paths = vec![
+    let include_paths = [
         format!("-I{}", PathBuf::from(&abs_library_dir).display()),
         // For config/avm_config.h, located in sys/avm-sys/avm/build.CrabbyAvif,
         // included by sys/avm-sys/avm/avm/avm_codec.h.

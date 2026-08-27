@@ -50,6 +50,7 @@ impl decoder::IO for DecoderFileIO {
             {
                 return AvifError::out_of_memory();
             }
+            #[allow(clippy::disallowed_methods)]
             self.buffer.resize(size_to_read, 0);
             if self
                 .file

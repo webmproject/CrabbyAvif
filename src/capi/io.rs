@@ -85,8 +85,10 @@ pub unsafe extern "C" fn crabby_avifRWDataRealloc(
         // free()'ing the manually managed memory.
         let oldData = unsafe { Box::from_raw(std::slice::from_raw_parts_mut(raw.data, raw.size)) };
         let sizeToCopy = std::cmp::min(newSize, oldData.len());
+        #[allow(clippy::disallowed_methods)]
         newData.extend_from_slice(&oldData[..sizeToCopy]);
     }
+    #[allow(clippy::disallowed_methods)]
     newData.resize(newSize, 0);
     let mut b = newData.into_boxed_slice();
     raw.data = b.as_mut_ptr();
@@ -258,6 +260,7 @@ unsafe extern "C" fn cioRead(
             if cio.buf.try_reserve_exact(data.len()).is_err() {
                 return avifResult::OutOfMemory;
             }
+            #[allow(clippy::disallowed_methods)]
             cio.buf.extend_from_slice(data);
         }
         Err(_) => return avifResult::IoError,

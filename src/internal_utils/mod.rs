@@ -22,6 +22,7 @@ macro_rules! try_vec_exact {
         let mut vec = Vec::new();
         vec.try_reserve_exact(n)
             .map_err(AvifError::map_out_of_memory)?;
+        #[allow(clippy::disallowed_methods)]
         vec.resize(n, $elem);
         Ok::<_, AvifError>(vec)
     }};
@@ -409,7 +410,7 @@ pub(crate) trait TryClone: Sized {
 impl<T: Clone> TryClone for Vec<T> {
     fn try_clone(&self) -> AvifResult<Vec<T>> {
         let mut vec: Vec<T> = create_vec_exact(self.len())?;
-        vec.extend_from_slice(self.as_slice());
+        vec.try_extend_from_slice(self.as_slice())?;
         Ok(vec)
     }
 }
@@ -425,6 +426,7 @@ pub(crate) trait VecExtension<T> {
 impl<T> VecExtension<T> for Vec<T> {
     fn try_push(&mut self, value: T) -> AvifResult<()> {
         self.try_reserve(1).map_err(AvifError::map_out_of_memory)?;
+        #[allow(clippy::disallowed_methods)]
         self.push(value);
         Ok(())
     }
@@ -435,6 +437,7 @@ impl<T> VecExtension<T> for Vec<T> {
     {
         self.try_reserve(value.len())
             .map_err(AvifError::map_out_of_memory)?;
+        #[allow(clippy::disallowed_methods)]
         self.extend_from_slice(value);
         Ok(())
     }

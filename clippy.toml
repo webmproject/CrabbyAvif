@@ -1,1 +1,13 @@
 check-private-items = true
+
+disallowed-methods = [
+  { path = "std::vec::Vec::push", replacement = "try_push" },
+  { path = "std::vec::Vec::extend_from_slice", replacement = "try_extend_from_slice" },
+  { path = "std::vec::Vec::resize", replacement = "try_vec_exact!" },
+  { path = "std::vec::Vec::resize_with", replacement = "try_vec_exact!" },
+  { path = "std::vec::Vec::reserve", replacement = "try_reserve" },
+  { path = "std::vec::Vec::reserve_exact", replacement = "try_reserve_exact" },
+  { path = "std::vec::Vec::insert", replacement = "try_push" },
+]
+
+disallowed-macros = [{ path = "std::vec", replacement = "try_vec_exact!" }]

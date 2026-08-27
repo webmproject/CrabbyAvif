@@ -102,6 +102,10 @@ unexpected_cfgs = { level = "warn", check-cfg = [
   'cfg(android_soong)',
 ] }
 
+[lints.clippy]
+disallowed_methods = "deny"
+disallowed_macros = "deny"
+
 # As of Feb 2026, there is no way to enable dependencies only with cargo --bin
 # and with cargo run. To avoid the dependencies used only for the crabbyavif
 # binary to be built even when generating only the library, rely on the

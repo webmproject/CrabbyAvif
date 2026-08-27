@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(clippy::disallowed_methods, clippy::disallowed_macros)]
+
 use crabby_avif::image::*;
 use crabby_avif::*;
 

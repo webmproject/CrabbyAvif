@@ -14,6 +14,7 @@
 
 #![cfg(feature = "encoder")]
 #![cfg(feature = "satofloat")]
+#![allow(clippy::disallowed_methods, clippy::disallowed_macros)]
 
 mod utils;
 use crabby_avif::encoder::Recipe;

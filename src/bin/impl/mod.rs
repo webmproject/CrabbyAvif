@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(clippy::disallowed_methods)]
+#![allow(clippy::disallowed_macros)]
+
 #[cfg(test)]
 mod crabbyavif_test;
 

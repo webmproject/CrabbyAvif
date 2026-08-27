@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(clippy::disallowed_methods, clippy::disallowed_macros)]
 #![cfg(any(feature = "dav1d", feature = "android_mediacodec"))]
 
 use crabby_avif::*;

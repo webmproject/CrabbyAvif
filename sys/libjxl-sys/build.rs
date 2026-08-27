@@ -71,7 +71,7 @@ fn main() -> Result<(), String> {
         println!("cargo:rustc-link-lib=static={}{}", prefix, object[0]);
         println!("cargo:rustc-link-search={}", object_dir(&object).display());
     }
-    let include_paths = vec![format!(
+    let include_paths = [format!(
         "-I{}",
         abs_build_dir.join("lib").join("include").display()
     )];
@@ -86,7 +86,7 @@ fn main() -> Result<(), String> {
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .layout_tests(false)
         .generate_comments(false);
-    let allowlist = vec![
+    let allowlist = [
         "JxlBasicInfo",
         "JxlColorEncodingSetToSRGB",
         "JxlDecoder",
