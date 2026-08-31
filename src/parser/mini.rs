@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::decoder::CompressionFormat;
 use crate::internal_utils::stream::*;
 use crate::internal_utils::*;
 use crate::parser::mp4box::*;
@@ -22,7 +23,12 @@ use crate::*;
 // See drafts at https://www.mpeg.org/standards/MPEG-H/12/.
 
 // Parses a MinimizedImageBox and returns a virtually reconstructed MetaBox.
-pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<MetaBox> {
+pub(crate) fn parse_mini(
+    major_brand: &str,
+    minor_version: &str,
+    stream: &mut IStream,
+    offset: usize,
+) -> AvifResult<MetaBox> {
     let mut meta = MetaBox::default();
 
     let version = stream.read_bits(2)?; // bit(2) version = 0;
@@ -65,7 +71,7 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
 
     let bit_depth = if float_flag {
         // bit(2) bit_depth_log2_minus4;
-        return AvifError::not_implemented(); // Either invalid AVIF or unsupported non-AVIF.
+        return AvifError::not_implemented(); // Either invalid AVIF/AV2F or unsupported non-AVIF/AV2F.
     } else {
         let high_bit_depth_flag = stream.read_bool()?; // bit(1) high_bit_depth_flag;
         if high_bit_depth_flag {
@@ -112,7 +118,7 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
         )
     };
 
-    let infe_type = if has_explicit_codec_types {
+    let format = if has_explicit_codec_types {
         // bit(32) infe_type;
         let infe = [
             stream.read_bits(8)? as u8,
@@ -120,7 +126,12 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
             stream.read_bits(8)? as u8,
             stream.read_bits(8)? as u8,
         ];
-        let infe = String::from_utf8(infe.into());
+        let infe = match String::from_utf8(infe.into()) {
+            Ok(str) => str,
+            Err(err) => {
+                return AvifError::bmff_parse_failed(format!("Unsupported infe_type: {err:?}"))
+            }
+        };
         // bit(32) codec_config_type;
         let codec_config = [
             stream.read_bits(8)? as u8,
@@ -128,16 +139,49 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
             stream.read_bits(8)? as u8,
             stream.read_bits(8)? as u8,
         ];
-        let codec_config = String::from_utf8(codec_config.into());
-        // TODO: b/437292541 - Support AVM
-        if infe != Ok("av01".into()) || codec_config != Ok("av1C".into()) {
+        let codec_config = match String::from_utf8(codec_config.into()) {
+            Ok(str) => str,
+            Err(err) => {
+                return AvifError::bmff_parse_failed(format!(
+                    "Unsupported codec_config_type: {err:?}"
+                ))
+            }
+        };
+        match (infe.as_str(), codec_config.as_str()) {
+            ("av01", "av1C") => CompressionFormat::Avif,
+            #[cfg(feature = "avm")]
+            ("av02", "av2C") => CompressionFormat::Avif2,
+            _ => {
+                return AvifError::bmff_parse_failed(format!(
+                    "Unsupported infe_type {infe:?} or codec_config_type {codec_config:?}"
+                ))
+            }
+        }
+    } else {
+        if major_brand != "mif3" {
+            // Section O.3.1 of ISO/IEC 23008-12 4th edition Image file format
+            // (https://www.mpeg.org/wp-content/uploads/mpeg_meetings/154_SantaEularia/w26186.zip):
+            //   When MinimizedImageBox is present in a file, the 'mif3' brand or a derived brand
+            //   that implies the 'mif3' brand shall be the major brand or present among the
+            //   compatible brands in the FileTypeBox.
+            // There is no way to know if the major_brand is a derived brand that implies the
+            // 'mif3' brand. This box could be skipped, but there should be no other box besides
+            // a FileTypeBox in a file containing a MinimizedImageBox, so an error can be returned
+            // now.
             return AvifError::bmff_parse_failed(format!(
-                "Unsupported infe_type {infe:?} or codec_config_type {codec_config:?}"
+                "MinimizedImageBox found but major_brand is {major_brand} instead of mif3"
             ));
         }
-        infe.unwrap()
-    } else {
-        "av01".into()
+        match minor_version {
+            "avif" => CompressionFormat::Avif,
+            #[cfg(feature = "avm")]
+            "av2f" => CompressionFormat::Avif2,
+            _ => {
+                return AvifError::bmff_parse_failed(format!(
+                    "Unsupported 'ftyp' minor_version {minor_version} with 'mini' explicit_codec_types_flag=0"
+                ))
+            }
+        }
     };
 
     // High Dynamic Range properties
@@ -177,8 +221,11 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
             let gainmap_float_flag = stream.read_bool()?; // bit(1) gainmap_float_flag;
             gainmap_bit_depth = if gainmap_float_flag {
                 // bit(2) gainmap_bit_depth_log2_minus4;
-                // Either invalid AVIF or unsupported non-AVIF.
-                return AvifError::bmff_parse_failed("gainmap_float_flag cannot be 1 for AV1");
+                // Either invalid AVIF/AV2F or unsupported non-AVIF/AV2F.
+                return AvifError::bmff_parse_failed(format!(
+                    "gainmap_float_flag cannot be 1 for {}",
+                    format.codec_name()
+                ));
             } else {
                 let gainmap_high_bit_depth_flag = stream.read_bool()?; // bit(1) gainmap_high_bit_depth_flag;
                 if gainmap_high_bit_depth_flag {
@@ -281,18 +328,16 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
     // trailing_bits(); // bit padding till byte alignment
     stream.pad()?;
 
-    let main_item_codec_config = Av1CodecConfiguration::parse(
-        &mut stream.sub_stream(&BoxSize::FixedSize(main_item_codec_config_size as usize))?,
-    )?; // unsigned int(8) main_item_codec_config[main_item_codec_config_size];
+    // unsigned int(8) main_item_codec_config[main_item_codec_config_size];
+    let main_item_codec_config =
+        format.parse_codec_configuration(stream, main_item_codec_config_size)?;
     let alpha_item_codec_config = if has_alpha && alpha_item_data_size != 0 {
         Some(if alpha_item_codec_config_size == 0 {
             alpha_item_codec_config_size = main_item_codec_config_size;
             main_item_codec_config.clone()
         } else {
-            Av1CodecConfiguration::parse(
-                &mut stream
-                    .sub_stream(&BoxSize::FixedSize(alpha_item_codec_config_size as usize))?,
-            )? // unsigned int(8) alpha_item_codec_config[alpha_item_codec_config_size];
+            // unsigned int(8) alpha_item_codec_config[alpha_item_codec_config_size];
+            format.parse_codec_configuration(stream, alpha_item_codec_config_size)?
         })
     } else {
         None
@@ -302,10 +347,8 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
             gainmap_item_codec_config_size = main_item_codec_config_size;
             main_item_codec_config.clone()
         } else {
-            Av1CodecConfiguration::parse(
-                &mut stream
-                    .sub_stream(&BoxSize::FixedSize(gainmap_item_codec_config_size as usize))?,
-            )? // unsigned int(8) gainmap_item_codec_config[gainmap_item_codec_config_size];
+            // unsigned int(8) gainmap_item_codec_config[gainmap_item_codec_config_size];
+            format.parse_codec_configuration(stream, gainmap_item_codec_config_size)?
         })
     } else {
         None
@@ -356,212 +399,213 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
     // be contiguous, whereas property indices shall be 1, 2, 3, 4, 5 etc.
 
     // Start with the properties.
-    meta.iprp.properties = try_vec_exact![
-        // entry 1
-        if main_item_codec_config_size != 0 {
-            ItemProperty::CodecConfiguration(CodecConfiguration::Av1(main_item_codec_config))
-        } else {
-            ItemProperty::Unused
-        },
-        // entry 2
-        ItemProperty::ImageSpatialExtents(ImageSpatialExtents { width, height }),
-        // entry 3
-        ItemProperty::PixelInformation(create_extended_pixi(
-            bit_depth,
-            chroma_subsampling,
-            chroma_is_horizontally_centered,
-            chroma_is_vertically_centered,
-        )?),
-        // entry 4
-        ItemProperty::ColorInformation(ColorInformation::Nclx(Nclx {
-            color_primaries,
-            transfer_characteristics,
-            matrix_coefficients,
-            yuv_range: if full_range { YuvRange::Full } else { YuvRange::Limited },
-        })),
-        // entry 5
-        if has_icc {
-            let icc = &remaining_bytes
-                [remaining_bytes_offset..(remaining_bytes_offset + icc_data_size as usize)];
-            remaining_bytes_offset += icc_data_size as usize;
-            ItemProperty::ColorInformation(ColorInformation::Icc(icc.into()))
-        } else {
-            ItemProperty::Unused
-        },
-        // entry 6
-        if alpha_item_codec_config_size != 0 {
-            ItemProperty::CodecConfiguration(CodecConfiguration::Av1(
-                alpha_item_codec_config.unwrap(),
-            ))
-        } else {
-            ItemProperty::Unused
-        },
-        // entry 7
-        if alpha_item_data_size != 0 {
-            ItemProperty::AuxiliaryType("urn:mpeg:mpegB:cicp:systems:auxiliary:alpha".into())
-        } else {
-            ItemProperty::Unused
-        },
-        // entry 8
-        if alpha_item_data_size != 0 {
-            ItemProperty::PixelInformation(PixelInformation {
-                planes: try_vec_exact![PlanePixelInformation {
-                    depth: bit_depth as u8,
-                    channel_idc: Some(ChannelIdc::Alpha),
-                    // Note that alpha's av1C is_monochrome may be false.
-                    // Some encoders do not support 4:0:0 and encode alpha with
-                    // placeholder chroma planes to be ignored at decoding.
-                    // ISO/IEC 23008-12/DAM 2 also reconstructs the alpha pixi
-                    // entry as "subsampling_type set to 0", meaning 4:4:4.
-                    subsampling_type: Some(PixelFormat::Yuv444),
-                    subsampling_location: Some(ChromaSamplePosition::Colocated),
-                }]?,
-            })
-        } else {
-            ItemProperty::Unused
-        },
-        // entry 9
-        match orientation {
-            3 => ItemProperty::ImageRotation(2),
-            5 => ItemProperty::ImageRotation(1),
-            6 => ItemProperty::ImageRotation(3),
-            7 => ItemProperty::ImageRotation(1),
-            8 => ItemProperty::ImageRotation(1),
-            _ => ItemProperty::Unused,
-        },
-        // entry 10
-        match orientation {
-            2 => ItemProperty::ImageMirror(1),
-            4 => ItemProperty::ImageMirror(0),
-            5 => ItemProperty::ImageMirror(0),
-            7 => ItemProperty::ImageMirror(1),
-            _ => ItemProperty::Unused,
-        },
-        // entry 11
-        if let Some(clli) = clli {
-            ItemProperty::ContentLightLevelInformation(clli)
-        } else {
-            ItemProperty::Unused
-        },
-        // entry 12
-        ItemProperty::Unused, // mdcv
-        // entry 13
-        ItemProperty::Unused, // cclv
-        // entry 14
-        ItemProperty::Unused, // amve
-        // entry 15
-        ItemProperty::Unused, // reve
-        // entry 16
-        ItemProperty::Unused, // ndwt
-        // entry 17
-        if gainmap_item_codec_config_size != 0 {
-            ItemProperty::CodecConfiguration(CodecConfiguration::Av1(
-                gainmap_item_codec_config.unwrap(),
-            ))
-        } else {
-            ItemProperty::Unused
-        },
-        // entry 18
-        if gainmap_item_data_size != 0 {
-            ItemProperty::ImageSpatialExtents(ImageSpatialExtents {
-                width: gainmap_width,
-                height: gainmap_height,
-            })
-        } else {
-            ItemProperty::Unused
-        },
-        // entry 19
-        if gainmap_item_data_size != 0 {
+    meta.iprp.properties =
+        try_vec_exact![
+            // entry 1
+            if main_item_codec_config_size != 0 {
+                ItemProperty::CodecConfiguration(main_item_codec_config)
+            } else {
+                ItemProperty::Unused
+            },
+            // entry 2
+            ItemProperty::ImageSpatialExtents(ImageSpatialExtents { width, height }),
+            // entry 3
             ItemProperty::PixelInformation(create_extended_pixi(
-                gainmap_bit_depth,
-                gainmap_chroma_subsampling,
-                gainmap_chroma_is_horizontally_centered,
-                gainmap_chroma_is_vertically_centered,
-            )?)
-        } else {
-            ItemProperty::Unused
-        },
-        // entry 20
-        if gainmap_item_data_size != 0 {
+                bit_depth,
+                chroma_subsampling,
+                chroma_is_horizontally_centered,
+                chroma_is_vertically_centered,
+            )?),
+            // entry 4
             ItemProperty::ColorInformation(ColorInformation::Nclx(Nclx {
-                color_primaries: ColorPrimaries::Unspecified,
-                transfer_characteristics: TransferCharacteristics::Unspecified,
-                matrix_coefficients: gainmap_matrix_coefficients,
-                yuv_range: if gainmap_full_range { YuvRange::Full } else { YuvRange::Limited },
-            }))
-        } else {
-            ItemProperty::Unused
-        },
-        // entry 21
-        if has_gainmap {
-            ItemProperty::ImageSpatialExtents(ImageSpatialExtents {
-                width: match orientation {
-                    0..3 => width,
-                    _ => height,
-                },
-                height: match orientation {
-                    0..3 => height,
-                    _ => width,
-                },
-            })
-        } else {
-            ItemProperty::Unused
-        },
-        // entry 22
-        if has_gainmap && (tmap_has_explicit_cicp || !tmap_has_icc) {
-            ItemProperty::ColorInformation(ColorInformation::Nclx(Nclx {
-                color_primaries: tmap_color_primaries,
-                transfer_characteristics: tmap_transfer_characteristics,
-                matrix_coefficients: tmap_matrix_coefficients,
-                yuv_range: if tmap_full_range { YuvRange::Full } else { YuvRange::Limited },
-            }))
-        } else {
-            ItemProperty::Unused
-        },
-        // entry 23
-        if has_gainmap && tmap_has_icc {
-            let tmap_icc = &remaining_bytes
-                [remaining_bytes_offset..(remaining_bytes_offset + tmap_icc_data_size as usize)];
-            remaining_bytes_offset += tmap_icc_data_size as usize;
-            ItemProperty::ColorInformation(ColorInformation::Icc(tmap_icc.into()))
-        } else {
-            ItemProperty::Unused
-        },
-        // entry 24
-        match (has_gainmap, tmap_clli) {
-            (true, Some(tmap_clli)) => ItemProperty::ContentLightLevelInformation(tmap_clli),
-            _ => ItemProperty::Unused,
-        },
-        // entry 25
-        ItemProperty::Unused, // tmap_mdcv
-        // entry 26
-        ItemProperty::Unused, // tmap_cclv
-        // entry 27
-        ItemProperty::Unused, // tmap_amve
-        // entry 28
-        ItemProperty::Unused, // tmap_reve
-        // entry 29
-        ItemProperty::Unused, // tmap_ndwt
-        // entry 30
-        if has_alpha && alpha_item_data_size == 0 {
-            ItemProperty::AlphaInformation(AlphaInformation {
-                is_premultiplied: alpha_is_premultiplied,
-            })
-        } else {
-            ItemProperty::Unused
-        },
-        // entry 31
-        ItemProperty::Unused, // reserved
-        // entry 32
-        ItemProperty::Unused, // reserved
-    ]?;
+                color_primaries,
+                transfer_characteristics,
+                matrix_coefficients,
+                yuv_range: if full_range { YuvRange::Full } else { YuvRange::Limited },
+            })),
+            // entry 5
+            if has_icc {
+                let icc = &remaining_bytes
+                    [remaining_bytes_offset..(remaining_bytes_offset + icc_data_size as usize)];
+                remaining_bytes_offset += icc_data_size as usize;
+                ItemProperty::ColorInformation(ColorInformation::Icc(icc.into()))
+            } else {
+                ItemProperty::Unused
+            },
+            // entry 6
+            if alpha_item_codec_config_size != 0 {
+                ItemProperty::CodecConfiguration(alpha_item_codec_config.ok_or_else(|| {
+                    AvifError::map_unknown_error("alpha_item_codec_config is none")
+                })?)
+            } else {
+                ItemProperty::Unused
+            },
+            // entry 7
+            if alpha_item_data_size != 0 {
+                ItemProperty::AuxiliaryType("urn:mpeg:mpegB:cicp:systems:auxiliary:alpha".into())
+            } else {
+                ItemProperty::Unused
+            },
+            // entry 8
+            if alpha_item_data_size != 0 {
+                ItemProperty::PixelInformation(PixelInformation {
+                    planes: try_vec_exact![PlanePixelInformation {
+                        depth: bit_depth as u8,
+                        channel_idc: Some(ChannelIdc::Alpha),
+                        // Note that alpha's av1C is_monochrome may be false.
+                        // Some encoders do not support 4:0:0 and encode alpha with
+                        // placeholder chroma planes to be ignored at decoding.
+                        // ISO/IEC 23008-12/DAM 2 also reconstructs the alpha pixi
+                        // entry as "subsampling_type set to 0", meaning 4:4:4.
+                        subsampling_type: Some(PixelFormat::Yuv444),
+                        subsampling_location: Some(ChromaSamplePosition::Colocated),
+                    }]?,
+                })
+            } else {
+                ItemProperty::Unused
+            },
+            // entry 9
+            match orientation {
+                3 => ItemProperty::ImageRotation(2),
+                5 => ItemProperty::ImageRotation(1),
+                6 => ItemProperty::ImageRotation(3),
+                7 => ItemProperty::ImageRotation(1),
+                8 => ItemProperty::ImageRotation(1),
+                _ => ItemProperty::Unused,
+            },
+            // entry 10
+            match orientation {
+                2 => ItemProperty::ImageMirror(1),
+                4 => ItemProperty::ImageMirror(0),
+                5 => ItemProperty::ImageMirror(0),
+                7 => ItemProperty::ImageMirror(1),
+                _ => ItemProperty::Unused,
+            },
+            // entry 11
+            if let Some(clli) = clli {
+                ItemProperty::ContentLightLevelInformation(clli)
+            } else {
+                ItemProperty::Unused
+            },
+            // entry 12
+            ItemProperty::Unused, // mdcv
+            // entry 13
+            ItemProperty::Unused, // cclv
+            // entry 14
+            ItemProperty::Unused, // amve
+            // entry 15
+            ItemProperty::Unused, // reve
+            // entry 16
+            ItemProperty::Unused, // ndwt
+            // entry 17
+            if gainmap_item_codec_config_size != 0 {
+                ItemProperty::CodecConfiguration(gainmap_item_codec_config.ok_or_else(|| {
+                    AvifError::map_unknown_error("gainmap_item_codec_config is none")
+                })?)
+            } else {
+                ItemProperty::Unused
+            },
+            // entry 18
+            if gainmap_item_data_size != 0 {
+                ItemProperty::ImageSpatialExtents(ImageSpatialExtents {
+                    width: gainmap_width,
+                    height: gainmap_height,
+                })
+            } else {
+                ItemProperty::Unused
+            },
+            // entry 19
+            if gainmap_item_data_size != 0 {
+                ItemProperty::PixelInformation(create_extended_pixi(
+                    gainmap_bit_depth,
+                    gainmap_chroma_subsampling,
+                    gainmap_chroma_is_horizontally_centered,
+                    gainmap_chroma_is_vertically_centered,
+                )?)
+            } else {
+                ItemProperty::Unused
+            },
+            // entry 20
+            if gainmap_item_data_size != 0 {
+                ItemProperty::ColorInformation(ColorInformation::Nclx(Nclx {
+                    color_primaries: ColorPrimaries::Unspecified,
+                    transfer_characteristics: TransferCharacteristics::Unspecified,
+                    matrix_coefficients: gainmap_matrix_coefficients,
+                    yuv_range: if gainmap_full_range { YuvRange::Full } else { YuvRange::Limited },
+                }))
+            } else {
+                ItemProperty::Unused
+            },
+            // entry 21
+            if has_gainmap {
+                ItemProperty::ImageSpatialExtents(ImageSpatialExtents {
+                    width: match orientation {
+                        0..3 => width,
+                        _ => height,
+                    },
+                    height: match orientation {
+                        0..3 => height,
+                        _ => width,
+                    },
+                })
+            } else {
+                ItemProperty::Unused
+            },
+            // entry 22
+            if has_gainmap && (tmap_has_explicit_cicp || !tmap_has_icc) {
+                ItemProperty::ColorInformation(ColorInformation::Nclx(Nclx {
+                    color_primaries: tmap_color_primaries,
+                    transfer_characteristics: tmap_transfer_characteristics,
+                    matrix_coefficients: tmap_matrix_coefficients,
+                    yuv_range: if tmap_full_range { YuvRange::Full } else { YuvRange::Limited },
+                }))
+            } else {
+                ItemProperty::Unused
+            },
+            // entry 23
+            if has_gainmap && tmap_has_icc {
+                let tmap_icc = &remaining_bytes[remaining_bytes_offset
+                    ..(remaining_bytes_offset + tmap_icc_data_size as usize)];
+                remaining_bytes_offset += tmap_icc_data_size as usize;
+                ItemProperty::ColorInformation(ColorInformation::Icc(tmap_icc.into()))
+            } else {
+                ItemProperty::Unused
+            },
+            // entry 24
+            match (has_gainmap, tmap_clli) {
+                (true, Some(tmap_clli)) => ItemProperty::ContentLightLevelInformation(tmap_clli),
+                _ => ItemProperty::Unused,
+            },
+            // entry 25
+            ItemProperty::Unused, // tmap_mdcv
+            // entry 26
+            ItemProperty::Unused, // tmap_cclv
+            // entry 27
+            ItemProperty::Unused, // tmap_amve
+            // entry 28
+            ItemProperty::Unused, // tmap_reve
+            // entry 29
+            ItemProperty::Unused, // tmap_ndwt
+            // entry 30
+            if has_alpha && alpha_item_data_size == 0 {
+                ItemProperty::AlphaInformation(AlphaInformation {
+                    is_premultiplied: alpha_is_premultiplied,
+                })
+            } else {
+                ItemProperty::Unused
+            },
+            // entry 31
+            ItemProperty::Unused, // reserved
+            // entry 32
+            ItemProperty::Unused, // reserved
+        ]?;
 
     // Color item
     let color_item_id = 1;
     meta.primary_item_id = color_item_id;
     meta.iinf.try_push(ItemInfo {
         item_id: color_item_id,
-        item_type: infe_type.clone(),
+        item_type: format.infe_type().to_string(),
         ..Default::default()
     })?;
     meta.iprp.associations.try_push(ItemPropertyAssociation {
@@ -608,7 +652,7 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
     if has_alpha {
         meta.iinf.try_push(ItemInfo {
             item_id: alpha_item_id,
-            item_type: infe_type.clone(),
+            item_type: format.infe_type().to_string(),
             ..Default::default()
         })?;
         meta.iref.try_push(ItemReference {
@@ -688,7 +732,7 @@ pub(crate) fn parse_mini(stream: &mut IStream, offset: usize) -> AvifResult<Meta
     if gainmap_item_data_size != 0 {
         meta.iinf.try_push(ItemInfo {
             item_id: gainmap_item_id,
-            item_type: infe_type.clone(),
+            item_type: format.infe_type().to_string(),
             ..Default::default()
         })?;
         meta.iref.try_push(ItemReference {
@@ -961,6 +1005,7 @@ fn pixel_format_and_centered_to_chroma_sample_position(
         // chroma_is_vertically_centered is ignored unless chroma_subsampling is 1.
         // In AV1, the chroma_sample_position syntax element is not present for the YUV 4:2:2 format.
         // Assume that AV1 uses the same 4:2:2 chroma sample location as HEVC and VVC (colocated).
+        // TODO(b/437292541): Check what happens with AV2.
         (PixelFormat::Yuv422, false, _) => Ok(ChromaSamplePosition::Unknown),
         (PixelFormat::Yuv422, true, _) => {
             AvifError::bmff_parse_failed("chroma_is_horizontally_centered should be false")
@@ -1027,7 +1072,7 @@ fn check_subsampling(
     chroma_subsampling: u32,
     chroma_is_horizontally_centered: bool,
     chroma_is_vertically_centered: bool,
-    codec_config: &Av1CodecConfiguration,
+    codec_config: &CodecConfiguration,
 ) -> Result<(), AvifError> {
     let pixel_format = chroma_subsampling_to_pixel_format(chroma_subsampling);
     let chroma_sample_position = pixel_format_and_centered_to_chroma_sample_position(
@@ -1035,10 +1080,53 @@ fn check_subsampling(
         chroma_is_horizontally_centered,
         chroma_is_vertically_centered,
     )?;
-    if pixel_format != codec_config.pixel_format()
-        || chroma_sample_position != codec_config.chroma_sample_position
+    if Some(pixel_format) != codec_config.pixel_format()
+        || chroma_sample_position != codec_config.chroma_sample_position()
     {
-        return AvifError::bmff_parse_failed("Mismatch between mini and AV1 codec config");
+        return AvifError::bmff_parse_failed("Mismatch between mini and codec config");
     }
     Ok(())
+}
+
+impl CompressionFormat {
+    fn codec_name(self) -> &'static str {
+        match self {
+            CompressionFormat::Avif => "AV1",
+            #[cfg(feature = "avm")]
+            CompressionFormat::Avif2 => "AV2",
+            CompressionFormat::Heic => unreachable!(),
+            #[cfg(feature = "jpegxl")]
+            CompressionFormat::JpegXl => unreachable!(),
+        }
+    }
+
+    fn infe_type(self) -> &'static str {
+        match self {
+            CompressionFormat::Avif => "av01",
+            #[cfg(feature = "avm")]
+            CompressionFormat::Avif2 => "av02",
+            CompressionFormat::Heic => unreachable!(),
+            #[cfg(feature = "jpegxl")]
+            CompressionFormat::JpegXl => unreachable!(),
+        }
+    }
+
+    fn parse_codec_configuration(
+        self,
+        stream: &mut IStream,
+        codec_config_size: u32,
+    ) -> AvifResult<CodecConfiguration> {
+        Ok(match self {
+            CompressionFormat::Avif => CodecConfiguration::Av1(Av1CodecConfiguration::parse(
+                &mut stream.sub_stream(&BoxSize::FixedSize(codec_config_size as usize))?,
+            )?),
+            #[cfg(feature = "avm")]
+            CompressionFormat::Avif2 => CodecConfiguration::Av2(Av2CodecConfiguration::parse(
+                &mut stream.sub_stream(&BoxSize::FixedSize(codec_config_size as usize))?,
+            )?),
+            CompressionFormat::Heic => unreachable!(),
+            #[cfg(feature = "jpegxl")]
+            CompressionFormat::JpegXl => unreachable!(),
+        })
+    }
 }

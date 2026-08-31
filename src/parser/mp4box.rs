@@ -131,7 +131,12 @@ impl FileTypeBox {
     }
 
     pub(crate) fn needs_mini(&self) -> bool {
-        self.major_brand.as_str() == "mif3" && self.minor_version == "avif"
+        match (self.major_brand.as_str(), self.minor_version.as_str()) {
+            ("mif3", "avif") => true,
+            #[cfg(feature = "avm")]
+            ("mif3", "av2f") => true,
+            _ => false,
+        }
     }
 
     pub(crate) fn has_tmap(&self) -> bool {
@@ -258,18 +263,18 @@ pub struct Av1CodecConfiguration {
 #[cfg(feature = "avm")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Av2CodecConfiguration {
-    // TODO: b/437292541 - Match AV2-ISOBMFF once finalized.
+    // The AV2CodecConfigurationBox only contains a configOBUs array, see
+    // https://aomediacodec.github.io/av2-isobmff/pr/40/index.html#av2c
+    pub config_obus_count: usize, // Number of OBUs.
+    pub config_obus: Vec<u8>,     // Byte array containing the OBUs.
+    // The values below were extracted from config_obus.
+
+    // https://av2.aomedia.org/v1.0.0/index.html#table-profile-values
     pub seq_profile: u8,
-    pub seq_level_idx0: u8,
-    pub seq_tier_0: u8,
-    pub bitdepth_idx: u8,
-    pub monochrome: bool,
-    pub chroma_subsampling_x: u8,
-    pub chroma_subsampling_y: u8,
-    // conf_win
+
+    pub pixel_format: PixelFormat,
+    pub depth: u8,
     pub chroma_sample_position: ChromaSamplePosition,
-    // initial_presentation_delay and other fields
-    pub raw_data: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -314,37 +319,12 @@ impl Av1CodecConfiguration {
     }
 }
 
-#[cfg(feature = "avm")]
-impl Av2CodecConfiguration {
-    pub(crate) fn depth(&self) -> u8 {
-        match self.bitdepth_idx {
-            0 => 10,
-            1 => 8,
-            2 => 12,
-            _ => unreachable!(),
-        }
-    }
-    pub(crate) fn pixel_format(&self) -> PixelFormat {
-        match (
-            self.monochrome,
-            self.chroma_subsampling_x,
-            self.chroma_subsampling_y,
-        ) {
-            (true, 1, 1) => PixelFormat::Yuv400,
-            (false, 1, 1) => PixelFormat::Yuv420,
-            (false, 1, 0) => PixelFormat::Yuv422,
-            (false, 0, 0) => PixelFormat::Yuv444,
-            _ => unreachable!(),
-        }
-    }
-}
-
 impl CodecConfiguration {
     pub(crate) fn depth(&self) -> Option<u8> {
         match self {
             Self::Av1(config) => Some(config.depth()),
             #[cfg(feature = "avm")]
-            Self::Av2(config) => Some(config.depth()),
+            Self::Av2(config) => Some(config.depth),
             Self::Hevc(config) => Some(config.bitdepth),
             #[cfg(feature = "jpegxl")]
             Self::JpegXl(_) => None,
@@ -355,7 +335,7 @@ impl CodecConfiguration {
         match self {
             Self::Av1(config) => Some(config.pixel_format()),
             #[cfg(feature = "avm")]
-            Self::Av2(config) => Some(config.pixel_format()),
+            Self::Av2(config) => Some(config.pixel_format),
             Self::Hevc(config) => Some(config.pixel_format),
             #[cfg(feature = "jpegxl")]
             Self::JpegXl(_) => None,
@@ -977,54 +957,17 @@ fn parse_av2C(stream: &mut IStream) -> AvifResult<ItemProperty> {
 
 #[cfg(feature = "avm")]
 impl Av2CodecConfiguration {
-    #[allow(non_snake_case)]
     pub(crate) fn parse(stream: &mut IStream) -> AvifResult<Av2CodecConfiguration> {
-        // TODO: b/437292541 - Match write_av2_codec_config() once AV2-ISOBMFF is finalized.
-        let raw_data = stream.get_immutable_vec(stream.bytes_left()?)?;
-        // unsigned int (1) marker = 1;
-        let marker = stream.read_bits(1)?;
-        if marker != 1 {
-            return AvifError::bmff_parse_failed(format!("Invalid marker {marker} in av2C"));
-        }
-        // unsigned int (7) version = 1;
-        let version = stream.read_bits(7)?;
-        if version != 1 {
-            return AvifError::bmff_parse_failed(format!("Invalid version {version} in av2C"));
-        }
-        let av2C = Av2CodecConfiguration {
-            seq_profile: stream.read_bits(3)? as u8,
-            seq_level_idx0: stream.read_bits(5)? as u8,
-            seq_tier_0: stream.read_bits(1)? as u8,
-            bitdepth_idx: stream.read_bits(2)? as u8,
-            monochrome: stream.read_bool()?,
-            chroma_subsampling_x: stream.read_bits(1)? as u8,
-            chroma_subsampling_y: stream.read_bits(1)? as u8,
-            chroma_sample_position: stream.read_bits(3)?.into(),
-            raw_data,
-        };
-        if av2C.bitdepth_idx > 2 {
-            return AvifError::bmff_parse_failed(format!(
-                "Invalid bitdepth_idx {} in av2C",
-                av2C.bitdepth_idx
-            ));
-        }
-
-        // unsigned int(2) reserved = 0;
-        if stream.read_bits(2)? != 0 {
-            return AvifError::bmff_parse_failed("Invalid reserved bits in av2C");
-        }
-        // unsigned int(1) initial_presentation_delay_present;
-        if stream.read_bits(1)? == 1 {
-            // unsigned int(4) initial_presentation_delay_minus_one;
-            stream.skip_bits(4)?;
-        } else {
-            // unsigned int(4) reserved = 0;
-            if stream.read_bits(4)? != 0 {
-                return AvifError::bmff_parse_failed("Invalid reserved bits in av2C");
-            }
-        }
-
-        Ok(av2C)
+        // https://aomediacodec.github.io/av2-isobmff/pr/40/index.html#av2c
+        // unsigned int (8) reserved1 = 0;
+        stream.skip_bits(8)?;
+        // unsigned int(8) config_obus_count_minus1;
+        let config_obus_count = stream.read_u8()? as usize + 1;
+        // unsigned int(8) config_obu[];
+        Av2CodecConfiguration::from_av2_config_obus(
+            config_obus_count,
+            stream.get_slice(stream.bytes_left()?)?,
+        )
     }
 }
 
@@ -2217,7 +2160,12 @@ pub(crate) fn parse(io: &mut GenericIO, strictness: &Strictness) -> AvifResult<A
                         // The MinimizedImageBox is mapped to a virtually
                         // reconstructed MetaBox.
                         let offset = parse_offset as usize;
-                        meta = Some(parser::mini::parse_mini(&mut box_stream, offset)?);
+                        meta = Some(parser::mini::parse_mini(
+                            &ftyp.unwrap_ref().major_brand,
+                            &ftyp.unwrap_ref().minor_version,
+                            &mut box_stream,
+                            offset,
+                        )?);
                         if meta.unwrap_ref().iinf.iter().any(|i| i.item_type == "tmap") {
                             // Decoder::parse() requires the 'tmap' brand to
                             // be registered for the tone mapping derived

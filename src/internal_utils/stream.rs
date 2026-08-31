@@ -264,6 +264,13 @@ impl IStream<'_> {
         AvifError::bmff_parse_failed("uleb value did not terminate after 8 bytes")
     }
 
+    #[cfg(feature = "avm")]
+    pub(crate) fn read_leb128(&mut self) -> AvifResult<u32> {
+        // AV2's leb128() has the same implementation as AV1's uleb128. See
+        // https://av2.aomedia.org/v1.0.0/index.html#conventions-descriptors-leb128
+        self.read_uleb128()
+    }
+
     fn read_bit(&mut self) -> AvifResult<u8> {
         Ok(self.read_bits(1)? as u8)
     }

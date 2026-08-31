@@ -280,6 +280,12 @@ impl Sample {
         })
     }
 
+    // This function is not used in all configurations.
+    #[allow(dead_code)]
+    pub(crate) fn data_output_by_codec(&self) -> &[u8] {
+        &self.data_output_by_codec
+    }
+
     // The range of data_output_by_codec bytes that correspond to sample data
     // (in opposition to codec configuration fields or other codec-agnostic container boxes).
     pub(crate) fn sample_data(&self) -> &[u8] {

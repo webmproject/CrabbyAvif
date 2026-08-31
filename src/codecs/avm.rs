@@ -20,7 +20,7 @@ use crate::encoder::ScalingMode;
 use crate::image::Image;
 use crate::image::YuvRange;
 use crate::internal_utils::*;
-use crate::parser::obu::Av2SequenceHeader;
+use crate::parser::mp4box::Av2CodecConfiguration;
 #[cfg(test)]
 use crate::reformat::rgb::Format;
 use crate::utils::pixels::Pixels;
@@ -36,20 +36,23 @@ use std::slice;
 
 // OBU types
 pub(crate) const AV2_OBU_SEQUENCE_HEADER: u8 = OBU_TYPE_OBU_SEQUENCE_HEADER;
+pub(crate) const AV2_OBU_TEMPORAL_DELIMITER: u8 = OBU_TYPE_OBU_TEMPORAL_DELIMITER;
+pub(crate) const AV2_OBU_CLOSED_LOOP_KEY: u8 = OBU_TYPE_OBU_CLOSED_LOOP_KEY;
+pub(crate) const AV2_OBU_OPEN_LOOP_KEY: u8 = OBU_TYPE_OBU_OPEN_LOOP_KEY;
+pub(crate) const AV2_OBU_LEADING_TILE_GROUP: u8 = OBU_TYPE_OBU_LEADING_TILE_GROUP;
+pub(crate) const AV2_OBU_REGULAR_TILE_GROUP: u8 = OBU_TYPE_OBU_REGULAR_TILE_GROUP;
+pub(crate) const AV2_OBU_SWITCH: u8 = OBU_TYPE_OBU_SWITCH;
+pub(crate) const AV2_OBU_LEADING_TIP: u8 = OBU_TYPE_OBU_LEADING_TIP;
+pub(crate) const AV2_OBU_REGULAR_TIP: u8 = OBU_TYPE_OBU_REGULAR_TIP;
+pub(crate) const AV2_OBU_LAYER_CONFIGURATION_RECORD: u8 = OBU_TYPE_OBU_LAYER_CONFIGURATION_RECORD;
+pub(crate) const AV2_OBU_BRIDGE_FRAME: u8 = OBU_TYPE_OBU_BRIDGE_FRAME;
 pub(crate) const AV2_OBU_CONTENT_INTERPRETATION: u8 = OBU_TYPE_OBU_CONTENT_INTERPRETATION;
+pub(crate) const AV2_OBU_PADDING: u8 = OBU_TYPE_OBU_PADDING;
 
 // Chroma sample position
 pub(crate) const AV2_CSP_LEFT: u32 = avm_chroma_sample_position_AVM_CSP_LEFT;
 pub(crate) const AV2_CSP_CENTER: u32 = avm_chroma_sample_position_AVM_CSP_CENTER;
 pub(crate) const AV2_CSP_TOPLEFT: u32 = avm_chroma_sample_position_AVM_CSP_TOPLEFT;
-
-// Color description
-pub(crate) const AV2_IDC_EXPLICIT: u32 = avm_color_description_AVM_COLOR_DESC_IDC_EXPLICIT;
-pub(crate) const AV2_BT709SDR: u32 = avm_color_description_AVM_COLOR_DESC_IDC_BT709SDR;
-pub(crate) const AV2_BT2100PQ: u32 = avm_color_description_AVM_COLOR_DESC_IDC_BT2100PQ;
-pub(crate) const AV2_BT2100HLG: u32 = avm_color_description_AVM_COLOR_DESC_IDC_BT2100HLG;
-pub(crate) const AV2_SRGB: u32 = avm_color_description_AVM_COLOR_DESC_IDC_SRGB;
-pub(crate) const AV2_SRGBSYCC: u32 = avm_color_description_AVM_COLOR_DESC_IDC_SYCC;
 
 #[derive(Default)]
 pub struct Avm {
@@ -143,15 +146,14 @@ fn add_avm_pkt_to_output_samples(
     // it is safe to construct a slice from it.
     let encoded_data =
         unsafe { std::slice::from_raw_parts(pkt.data.frame.buf as *const u8, pkt.data.frame.sz) };
+    // TODO(b/437292541): Make sure the sync definition below matches
+    //                    https://aomediacodec.github.io/av2-isobmff/main#sync-sample
     // # Safety: pkt.data is a union. pkt.kind == AVM_CODEC_CX_FRAME_PKT guarantees
     // that pkt.data.frame is the active field of the union (per libavm API contract).
     // So this access is safe.
     let sync = (unsafe { pkt.data.frame.flags } & AVM_FRAME_IS_KEY) != 0;
-    output_samples.try_push(Sample::create_from(
-        encoded_data,
-        0..encoded_data.len(),
-        sync,
-    )?)?;
+    let sample_data_range = Av2CodecConfiguration::get_sample_obus_range(encoded_data)?;
+    output_samples.try_push(Sample::create_from(encoded_data, sample_data_range, sync)?)?;
     Ok(true)
 }
 
@@ -554,10 +556,14 @@ impl Encoder for Avm {
         _is_lossless: bool,
         output_samples: &[crate::encoder::Sample],
     ) -> AvifResult<CodecConfiguration> {
-        // Harvest codec configuration from AV2 sequence header.
-        Ok(CodecConfiguration::Av2(
-            Av2SequenceHeader::parse_from_obus(output_samples[0].sample_data())?.config,
-        ))
+        // Harvest codec configuration (av2C) from AV2 OBUs.
+        let all_obus = output_samples[0].data_output_by_codec();
+        let config_obus = Av2CodecConfiguration::get_config_obus_range_and_count(all_obus)?;
+        let codec_config = Av2CodecConfiguration::from_av2_config_obus(
+            config_obus.count,
+            &all_obus[config_obus.range],
+        )?;
+        Ok(CodecConfiguration::Av2(codec_config))
     }
 }
 
@@ -580,7 +586,8 @@ impl Decoder for Avm {
         _item: Option<&Item>,
         _signal_eos: bool,
     ) -> AvifResult<()> {
-        if self.context.is_none() {
+        let mut first_time = self.context.is_none();
+        if first_time {
             // # Safety: Calling a C function.
             let decoder_iface = unsafe { avm_codec_av2_dx() };
             let avm_config = avm_codec_dec_cfg {
@@ -639,6 +646,31 @@ impl Decoder for Avm {
                     break;
                 }
             } else if av2_payload_can_be_used {
+                // Prepend the AV2CodecConfigurationBox config_obus to the
+                // sample data OBUs.
+                // TODO(b/437292541): Calling avm_codec_decode() twice fails.
+                //                    Add an API to avoid allocating a buffer.
+                let mut config_obus_then_av2_payload = vec![];
+                let av2_payload = if first_time {
+                    first_time = false;
+                    let config_obus = match &self.decoder_config.unwrap_ref().codec_config {
+                        CodecConfiguration::Av2(av2c) => &av2c.config_obus,
+                        _ => unreachable!(),
+                    };
+                    let config_obus_then_av2_payload_len = config_obus
+                        .len()
+                        .checked_add(av2_payload.len())
+                        .ok_or_else(|| AvifError::map_out_of_memory(()))?;
+                    config_obus_then_av2_payload
+                        .try_reserve_exact(config_obus_then_av2_payload_len)
+                        .map_err(AvifError::map_out_of_memory)?;
+                    config_obus_then_av2_payload.try_extend_from_slice(config_obus)?;
+                    config_obus_then_av2_payload.try_extend_from_slice(av2_payload)?;
+                    &config_obus_then_av2_payload
+                } else {
+                    av2_payload
+                };
+
                 self.decoder_iter = std::ptr::null();
                 let user_priv = std::ptr::null_mut();
                 // # Safety: Calling a C function with valid parameters.
@@ -948,8 +980,12 @@ fn avm_enc_dec_test() -> Result<(), AvifError> {
     encoder.encode_image(&image, Category::Color, &config, &mut output_samples)?;
     encoder.finish(&mut output_samples)?;
     assert_eq!(output_samples.len(), 1);
-    let output_sample = &output_samples[0].sample_data();
-    let codec_config = Av2SequenceHeader::parse_from_obus(output_sample)?.config;
+    let all_obus = output_samples[0].data_output_by_codec();
+    let config_obus = Av2CodecConfiguration::get_config_obus_range_and_count(all_obus)?;
+    let codec_config = Av2CodecConfiguration::from_av2_config_obus(
+        config_obus.count,
+        &all_obus[config_obus.range],
+    )?;
 
     let mut decoder = Avm::default();
     let mut decoded = Image::default();
@@ -967,7 +1003,7 @@ fn avm_enc_dec_test() -> Result<(), AvifError> {
         android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat::default(),
     })?;
     decoder.get_next_image(
-        output_sample,
+        output_samples[0].sample_data(),
         0xff,
         &mut decoded,
         Category::Color,
