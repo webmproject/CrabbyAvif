@@ -282,7 +282,7 @@ impl Item {
         config: &Av2CodecConfiguration,
         stream: &mut OStream,
     ) -> AvifResult<()> {
-        if config.config_obus_count < 1 || config.config_obus_count > 256 {
+        if !(1..=256).contains(&config.config_obus_count) {
             return AvifError::unknown_error("Bad config_obus_count");
         }
 

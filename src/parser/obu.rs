@@ -563,8 +563,9 @@ impl Av2CodecConfiguration {
     }
 
     pub(crate) fn from_av2_config_obus(config_obus_count: usize, data: &[u8]) -> AvifResult<Self> {
-        assert_ne!(config_obus_count, 0);
-        assert!(config_obus_count <= 256);
+        if !(1..=256).contains(&config_obus_count) {
+            return AvifError::unknown_error("config_obus_count is not in [1:256]");
+        }
         let mut stream = IStream::create(data);
 
         let (seq_profile, pixel_format, depth) = {

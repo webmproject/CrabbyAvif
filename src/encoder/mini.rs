@@ -299,7 +299,7 @@ impl Encoder {
         assert_ne!(color_data.len(), 0);
 
         let mut large_dimensions_flag = image.width > (1 << 7) || image.height > (1 << 7);
-        let codec_config_size = u32::try_from(codec_config.len()).unwrap();
+        let codec_config_size = u32_from_usize(codec_config.len())?;
         let mut alpha_codec_config_size = 0; // 0 if same codec config as main. Equal to codec_config_size otherwise.
         let mut gainmap_codec_config_size = 0; // 0 if same codec config as main. Equal to codec_config_size otherwise.
         let mut gainmap_metadata_size = 0;

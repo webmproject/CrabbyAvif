@@ -280,6 +280,7 @@ impl Sample {
         })
     }
 
+    // This function is not used in all configurations.
     #[allow(dead_code)]
     pub(crate) fn data_output_by_codec(&self) -> &[u8] {
         &self.data_output_by_codec

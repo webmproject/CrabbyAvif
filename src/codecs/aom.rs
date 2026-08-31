@@ -723,10 +723,10 @@ impl Encoder for Aom {
         _is_lossless: bool,
         output_samples: &[crate::encoder::Sample],
     ) -> AvifResult<CodecConfiguration> {
-        // Harvest codec configuration (av1C) from AV1 OBUs.
-        let all_obus = output_samples[0].sample_data(); // Equivalent to data_output_by_codec() for AV1.
-        let sequence_header = Av1SequenceHeader::parse_from_obus(all_obus)?;
-        Ok(CodecConfiguration::Av1(sequence_header.config))
+        // Harvest codec configuration from AV1 sequence header.
+        Ok(CodecConfiguration::Av1(
+            Av1SequenceHeader::parse_from_obus(output_samples[0].sample_data())?.config,
+        ))
     }
 }
 
