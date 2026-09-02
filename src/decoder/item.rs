@@ -37,8 +37,6 @@ pub struct Item {
     // to_item_IDs, so one item can be the auxiliary of several items.
     pub aux_for_id: Vec<u32>,
     pub desc_for_id: Vec<u32>,
-    pub dimg_for_id: u32,
-    pub dimg_index: u32,
     // Several items can be premultiplied by this one, see aux_for_id.
     pub prem_by_id: Vec<u32>,
     pub has_unsupported_essential_property: bool,
@@ -744,6 +742,11 @@ pub(crate) fn construct_items(
     }
 
     for reference in &meta.iref {
+        if reference.reference_type == "dimg" {
+            // Derived images refer in the opposite direction, so make sure the input
+            // item exists before the derived item is borrowed below.
+            insert_item_if_not_exists(reference.to_item_id, &mut items);
+        }
         insert_item_if_not_exists(reference.from_item_id, &mut items);
         let item = items.get_mut(&reference.from_item_id).unwrap();
         match reference.reference_type.as_str() {
@@ -752,24 +755,16 @@ pub(crate) fn construct_items(
             "cdsc" => item.desc_for_id.try_push(reference.to_item_id)?,
             "prem" => item.prem_by_id.try_push(reference.to_item_id)?,
             "dimg" => {
-                // derived images refer in the opposite direction.
-                insert_item_if_not_exists(reference.to_item_id, &mut items);
-                let dimg_item = items.get_mut(&reference.to_item_id).unwrap();
-                if dimg_item.dimg_for_id != 0 {
-                    return Err(if dimg_item.dimg_for_id == reference.from_item_id {
-                        // Section 8.11.12.1 of ISO/IEC 14496-12:
-                        //   The items linked to are then represented by an array of to_item_IDs;
-                        //   within a given array, a given value shall occur at most once.
-                        AvifError::BmffParseFailed(format!(
-                            "multiple dimg references for item ID {}",
-                            dimg_item.dimg_for_id
-                        ))
-                    } else {
-                        AvifError::NotImplemented
-                    });
+                // Section 8.11.12.1 of ISO/IEC 14496-12:
+                //   The items linked to are then represented by an array of to_item_IDs;
+                //   within a given array, a given value shall occur at most once.
+                if item.source_item_ids.contains(&reference.to_item_id) {
+                    return AvifError::bmff_parse_failed(format!(
+                        "multiple dimg references for item ID {}",
+                        reference.from_item_id
+                    ));
                 }
-                dimg_item.dimg_for_id = reference.from_item_id;
-                dimg_item.dimg_index = reference.index;
+                item.source_item_ids.try_push(reference.to_item_id)?;
             }
             _ => {
                 // unknown reference type, ignore.
