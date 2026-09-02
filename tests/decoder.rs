@@ -1326,8 +1326,33 @@ fn dimg_repetition() {
 
 #[test]
 fn dimg_shared() {
+    // Item 10 is a cell of both the color grid and the alpha grid. Sharing a cell
+    // between two derived items is allowed, so this file now reaches the codec
+    // configuration check and is refused there: the av1C of a color tile cannot
+    // match the av1C of the alpha tiles it stands among.
     let mut decoder = get_decoder("color_grid_alpha_grid_tile_shared_in_dimg.avif");
-    assert_eq!(decoder.parse(), Err(AvifError::NotImplemented));
+    assert_eq!(
+        decoder.parse(),
+        Err(AvifError::BmffParseFailed(
+            "codec config of derived items do not match".into()
+        ))
+    );
+}
+
+#[test]
+fn dimg_shared_between_grids() {
+    if !HAS_DECODER {
+        return;
+    }
+    // The color grid and the alpha grid are built from the same four cells, so each
+    // of the items 2 to 5 is an input of two derived items. The ordered 'dimg' list
+    // can express that, and the tiles stay consistent because both grids use the
+    // same ones.
+    let mut decoder = get_decoder("color_grid_alpha_grid_shared_tiles.avif");
+    assert!(decoder.parse().is_ok());
+    assert!(decoder.next_image().is_ok());
+    let image = decoder.image().expect("image was none");
+    assert!(image.alpha_present);
 }
 
 #[test]
