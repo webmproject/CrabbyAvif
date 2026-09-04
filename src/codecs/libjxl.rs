@@ -84,9 +84,14 @@ fn rgb_image_to_jxl_pixel_format(
         9..16 => JxlDataType_JXL_TYPE_UINT16,
         _ => return AvifError::unknown_error(format!("Unexpected depth {}", rgb.depth)),
     };
-    let min_row_bytes = checked_mul!(rgb.width, rgb.channel_count() * rgb.pixel_size())?;
+    let min_row_bytes = checked_mul!(rgb.width, rgb.pixel_size())?;
+    assert!(min_row_bytes <= rgb.row_bytes);
     let size = checked_add!(
-        checked_mul!(rgb.row_bytes as usize, rgb.height as usize - 1)?,
+        checked_mul!(
+            rgb.row_bytes as usize,
+            checked_sub!(rgb.height as usize, 1)?
+        )?,
+        // The last row does not need rgb.row_bytes but only min_row_bytes.
         min_row_bytes as usize
     )?;
     Ok((
@@ -152,7 +157,7 @@ impl Encoder for Libjxl {
             Category::Alpha => unreachable!(), // Should be a channel, not an auxiliary item.
             Category::Gainmap => return AvifError::not_implemented(),
         }
-        let num_channels = rgb.pixel_size();
+        let num_channels = rgb.channel_count();
         let num_alpha_channels = if rgb.has_alpha() { 1 } else { 0 };
 
         if self.encoder.is_null() {
