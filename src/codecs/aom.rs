@@ -189,19 +189,16 @@ fn add_aom_pkt_to_output_samples(
     if pkt.kind != aom_codec_cx_pkt_kind_AOM_CODEC_CX_FRAME_PKT {
         return Ok(false);
     }
-    // # Safety: buf and sz are guaranteed to be valid as per libaom API contract. So
-    // it is safe to construct a slice from it.
-    let encoded_data =
-        unsafe { std::slice::from_raw_parts(pkt.data.frame.buf as *const u8, pkt.data.frame.sz) };
     // # Safety: pkt.data is a union. pkt.kind == AOM_CODEC_CX_FRAME_PKT guarantees
     // that pkt.data.frame is the active field of the union (per libaom API contract).
     // So this access is safe.
-    let sync = (unsafe { pkt.data.frame.flags } & AOM_FRAME_IS_KEY) != 0;
-    output_samples.try_push(Sample::create_from(
-        encoded_data,
-        0..encoded_data.len(),
-        sync,
-    )?)?;
+    let frame = unsafe { &pkt.data.frame };
+    // # Safety: buf and sz are guaranteed to be valid as per libaom API contract. So
+    // it is safe to construct a slice from it.
+    let encoded_data = unsafe { std::slice::from_raw_parts(frame.buf as *const u8, frame.sz) };
+    let sync = (frame.flags & AOM_FRAME_IS_KEY) != 0;
+    let sample_data_range = 0..encoded_data.len();
+    output_samples.try_push(Sample::create_from(encoded_data, sample_data_range, sync)?)?;
     Ok(true)
 }
 

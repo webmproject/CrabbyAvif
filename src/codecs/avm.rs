@@ -142,16 +142,16 @@ fn add_avm_pkt_to_output_samples(
     if pkt.kind != avm_codec_cx_pkt_kind_AVM_CODEC_CX_FRAME_PKT {
         return Ok(false);
     }
-    // # Safety: buf and sz are guaranteed to be valid as per libavm API contract. So
-    // it is safe to construct a slice from it.
-    let encoded_data =
-        unsafe { std::slice::from_raw_parts(pkt.data.frame.buf as *const u8, pkt.data.frame.sz) };
-    // TODO(b/437292541): Make sure the sync definition below matches
-    //                    https://aomediacodec.github.io/av2-isobmff/main#sync-sample
     // # Safety: pkt.data is a union. pkt.kind == AVM_CODEC_CX_FRAME_PKT guarantees
     // that pkt.data.frame is the active field of the union (per libavm API contract).
     // So this access is safe.
-    let sync = (unsafe { pkt.data.frame.flags } & AVM_FRAME_IS_KEY) != 0;
+    let frame = unsafe { &pkt.data.frame };
+    // # Safety: buf and sz are guaranteed to be valid as per libavm API contract. So
+    // it is safe to construct a slice from it.
+    let encoded_data = unsafe { std::slice::from_raw_parts(frame.buf as *const u8, frame.sz) };
+    // TODO(b/437292541): Make sure the sync definition below matches
+    //                    https://aomediacodec.github.io/av2-isobmff/main#sync-sample
+    let sync = (frame.flags & AVM_FRAME_IS_KEY) != 0;
     let sample_data_range = Av2CodecConfiguration::get_sample_obus_range(encoded_data)?;
     output_samples.try_push(Sample::create_from(encoded_data, sample_data_range, sync)?)?;
     Ok(true)
