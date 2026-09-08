@@ -38,7 +38,8 @@ enum Alpha {
     [8], // TODO: b/437292541 - Test 10-bit and 12-bit
     [PixelFormat::Yuv420, PixelFormat::Yuv444],
     [YuvRange::Limited, YuvRange::Full],
-    [Alpha::None, Alpha::Unpremultiplied, Alpha::Premultiplied]
+    [Alpha::None, Alpha::Unpremultiplied, Alpha::Premultiplied],
+    [1, 2]
 )]
 fn encode_decode(
     width: u32,
@@ -47,13 +48,23 @@ fn encode_decode(
     format: PixelFormat,
     range: YuvRange,
     alpha: Alpha,
+    image_count: usize,
 ) -> AvifResult<()> {
     let mut image =
         generate_gradient_image(width, height, depth, format, range, alpha != Alpha::None)?;
     // This may result in invalid premultiplied color samples but CrabbyAvif
     // does not reject that for now.
     image.alpha_premultiplied = alpha == Alpha::Premultiplied;
-    let image = image;
+    let image = &image;
+
+    // Generate different frames for sequence encoding.
+    let mut next_frames = Vec::new();
+    for i in 1..image_count {
+        let mut image = image.try_deep_clone()?;
+        image.fill_plane_with_value((i % image.yuv_format.plane_count()).into(), i as u16)?;
+        next_frames.push(image);
+    }
+    let next_frames = &next_frames;
 
     let encoded = {
         let settings = encoder::Settings {
@@ -67,7 +78,14 @@ fn encode_decode(
             ..Default::default()
         };
         let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
-        encoder.add_image(&image)?;
+        if next_frames.is_empty() {
+            encoder.add_image(image)?;
+        } else {
+            encoder.add_image_for_sequence(image, 1)?;
+            for image in next_frames {
+                encoder.add_image_for_sequence(image, 1)?;
+            }
+        }
         encoder.finish()?
     };
     assert!(!encoded.is_empty());
@@ -78,7 +96,7 @@ fn encode_decode(
     decoder.set_io_vec(encoded);
     assert!(decoder.parse().is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif2);
-    assert_eq!(decoder.image_count(), 1);
+    assert_eq!(decoder.image_count(), image_count as u32);
 
     let decoded = decoder.image().unwrap();
     assert!(decoded.has_same_properties_and_cicp(&image));
@@ -86,13 +104,18 @@ fn encode_decode(
     if decoded.alpha_present {
         assert_eq!(decoded.alpha_premultiplied, image.alpha_premultiplied);
     }
-    assert!(!decoded.image_sequence_track_present);
+    assert_eq!(decoded.image_sequence_track_present, image_count > 1);
 
     assert!(decoder.next_image().is_ok());
     let decoded = decoder.image().unwrap();
-    let psnr = psnr(decoded, &image)?;
-    assert!(psnr >= 50.0, "PSNR: {psnr}");
+    let frame_psnr = psnr(decoded, image)?;
+    assert!(frame_psnr >= 50.0, "PSNR: {frame_psnr}");
+
+    for frame in next_frames {
+        assert!(decoder.next_image().is_ok());
+        let decoded = decoder.image().unwrap();
+        let frame_psnr = psnr(decoded, frame)?;
+        assert!(frame_psnr >= 50.0, "PSNR: {frame_psnr}");
+    }
     Ok(())
 }
-
-// TODO: b/437292541 - Test image sequences

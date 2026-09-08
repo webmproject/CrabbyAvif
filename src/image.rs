@@ -133,7 +133,7 @@ impl Image {
         }
     }
 
-    pub(crate) fn try_deep_clone(&self) -> AvifResult<Self> {
+    pub fn try_deep_clone(&self) -> AvifResult<Self> {
         let mut image = self.shallow_clone();
         for plane in ALL_PLANES.iter().filter(|p| self.has_plane(**p)) {
             // Allocate and copy row by row to avoid carrying large row padding
@@ -543,7 +543,7 @@ impl Image {
         true
     }
 
-    pub(crate) fn fill_plane_with_value(&mut self, plane: Plane, value: u16) -> AvifResult<()> {
+    pub fn fill_plane_with_value(&mut self, plane: Plane, value: u16) -> AvifResult<()> {
         if let Some(plane_data) = self.plane_data(plane) {
             if self.depth == 8 {
                 for y in 0..plane_data.height {
