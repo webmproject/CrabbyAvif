@@ -66,35 +66,45 @@ pub enum YuvRange {
 
 #[derive(Default)]
 pub struct Image {
+    // Image dimensions in pixels.
     pub width: u32,
     pub height: u32,
+    // Bit depth of the image per channel (8, 10, 12, 16, or 32).
     pub depth: u8,
 
+    // Format of the luma and chroma planes.
     pub yuv_format: PixelFormat,
     pub yuv_range: YuvRange,
     pub chroma_sample_position: ChromaSamplePosition,
 
+    // Presence and format of the alpha plane.
     pub alpha_present: bool,
     pub alpha_premultiplied: bool,
 
+    // Number of bytes per row for each plane.
     pub row_bytes: [u32; MAX_PLANE_COUNT],
 
+    // Luma, chroma, and alpha planes.
     pub planes: [Option<Pixels>; MAX_PLANE_COUNT],
 
+    // CICP triplet.
     pub color_primaries: ColorPrimaries,
     pub transfer_characteristics: TransferCharacteristics,
     pub matrix_coefficients: MatrixCoefficients,
 
+    // Render-related metadata.
     pub clli: Option<ContentLightLevelInformation>,
     pub pasp: Option<PixelAspectRatio>,
     pub clap: Option<CleanAperture>,
     pub irot_angle: Option<u8>,
     pub imir_axis: Option<u8>,
 
+    // Sequences of metadata bytes.
     pub exif: Vec<u8>,
     pub icc: Vec<u8>,
     pub xmp: Vec<u8>,
 
+    // These fields are only filled by the decoder and are ignored by the encoder.
     pub image_sequence_track_present: bool,
     pub progressive_state: ProgressiveState,
 }
