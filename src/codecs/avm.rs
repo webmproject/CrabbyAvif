@@ -820,7 +820,8 @@ impl Decoder for Avm {
                 }
             }
         } else {
-            // Alpha plane as an auxiliary image item
+            // Alpha plane as an auxiliary image item: map AVM's luma plane (0)
+            // to CrabbyAvif's alpha plane (3).
 
             if image.width != 0
                 && image.height != 0
@@ -888,7 +889,7 @@ impl Decoder for Avm {
                     avm_image.planes[0],
                     image.depth.into(),
                     image.height,
-                    image.row_bytes[0],
+                    image.row_bytes[Plane::A.as_usize()],
                 )?);
             }
         }
