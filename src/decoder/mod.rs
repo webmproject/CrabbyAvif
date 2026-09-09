@@ -2005,7 +2005,7 @@ impl Decoder {
                 }
                 Err(err) => return Err(err),
             };
-            payloads.try_push(data.to_vec())?;
+            payloads.try_push(data.try_to_vec()?)?;
         }
         let grid = &self.tile_info[decoding_item.usize()].grid;
         // If we are not doing incremental decode, all the cells must have been read.
@@ -2290,7 +2290,7 @@ impl Decoder {
                 };
                 let io = &mut self.io.unwrap_mut();
                 let data = sample.data(io, item_data_buffer)?;
-                payloads.try_push(data.to_vec())?;
+                payloads.try_push(data.try_to_vec()?)?;
             }
             if payloads.is_empty() {
                 continue;

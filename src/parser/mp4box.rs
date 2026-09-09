@@ -1037,9 +1037,9 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
             let nal_unit = stream.get_slice(nal_unit_length as usize)?;
             let nal_unit_type = (nal_unit[0] >> 1) & 0x3f;
             match nal_unit_type {
-                32 => vps = nal_unit.to_vec(),
-                33 => sps = nal_unit.to_vec(),
-                34 => pps = nal_unit.to_vec(),
+                32 => vps = nal_unit.try_to_vec()?,
+                33 => sps = nal_unit.try_to_vec()?,
+                34 => pps = nal_unit.try_to_vec()?,
                 _ => {}
             }
         }
@@ -1104,7 +1104,7 @@ fn parse_colr(stream: &mut IStream) -> AvifResult<ItemProperty> {
         }
         // ICC_profile; // restricted ("rICC") or unrestricted ("prof") ICC profile
         return Ok(ItemProperty::ColorInformation(ColorInformation::Icc(
-            stream.get_slice(stream.bytes_left()?)?.to_vec(),
+            stream.get_slice(stream.bytes_left()?)?.try_to_vec()?,
         )));
     }
     if color_type == "nclx" {

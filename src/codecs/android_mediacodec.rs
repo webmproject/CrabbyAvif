@@ -865,7 +865,7 @@ impl MediaCodec {
         // Create a thread to enqueue the input frames.
         let codec_config = self.config.unwrap_ref().codec_config.clone();
         let codec = MediaCodecThreadWrapper(self.codec.unwrap());
-        let payloads_vec = payloads.to_vec();
+        let payloads_vec = payloads.try_to_vec()?;
         let enqueue_payloads_thread = thread::spawn(|| {
             Self::enqueue_payloads(
                 codec,

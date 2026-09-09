@@ -84,12 +84,12 @@ impl IStream<'_> {
     pub(crate) fn get_immutable_vec(&self, num_bytes: usize) -> AvifResult<Vec<u8>> {
         assert_eq!(self.num_bits, 0);
         self.check(num_bytes)?;
-        Ok(self.data[self.offset..self.offset + num_bytes].to_vec())
+        self.data[self.offset..self.offset + num_bytes].try_to_vec()
     }
 
     fn get_vec(&mut self, num_bytes: usize) -> AvifResult<Vec<u8>> {
         assert_eq!(self.num_bits, 0);
-        Ok(self.get_slice(num_bytes)?.to_vec())
+        self.get_slice(num_bytes)?.try_to_vec()
     }
 
     pub(crate) fn read_u8(&mut self) -> AvifResult<u8> {
@@ -207,7 +207,7 @@ impl IStream<'_> {
             .ok_or(AvifError::BmffParseFailed("".into()))?;
         let range = self.offset..self.offset + null_position;
         self.offset += null_position + 1;
-        Ok(String::from_utf8(self.data[range].to_vec()).unwrap_or("".into()))
+        Ok(String::from_utf8(self.data[range].try_to_vec()?).unwrap_or("".into()))
     }
 
     pub(crate) fn read_version_and_flags(&mut self) -> AvifResult<(u8, u32)> {

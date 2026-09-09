@@ -390,7 +390,7 @@ mod tests {
                     PointerSlice::create(values.as_mut_ptr(), values.len()).unwrap()
                 })
             } else {
-                Pixels::Buffer(values.to_vec())
+                Pixels::Buffer(values.try_to_vec().unwrap())
             });
             yuv.row_bytes[plane.as_usize()] = 2;
         }
