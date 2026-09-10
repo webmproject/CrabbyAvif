@@ -85,17 +85,69 @@ fn avm_format(image: &Image, category: Category) -> AvifResult<avm_img_fmt_t> {
     Ok(if image.depth > 8 { format | AVM_IMG_FMT_HIGHBITDEPTH } else { format })
 }
 
-fn avm_seq_profile(image: &Image, category: Category) -> AvifResult<u32> {
-    // Based on AV2 spec Section A.3 Profiles.
-    if category == Category::Alpha {
-        return Ok(1); // Main_420_10_IP1
+struct Av2Profile {
+    seq_profile: u32,
+    depths: &'static [u8],
+    formats: &'static [PixelFormat],
+}
+
+fn av2_profile(image: &Image, category: Category) -> AvifResult<&Av2Profile> {
+    // Based on AV2 spec Table A.1: AV2 profile definitions.
+    // https://av2.aomedia.org/v1.0.0/index.html#table-profile-values
+
+    // In increasing seq_profile order.
+    let profiles = &[
+        // Main_420_10_IP0 is the same as Main_420_10_IP1 except for the interoperability point.
+        // An interoperability point specifies the number of extended and embedded layers a decoder
+        // is capable of decoding simultaneously. Only keep Main_420_10_IP1 as IP1 should be
+        // widespread enough; there is no need to get down to IP0.
+
+        // Main_420_10_IP2 is the same as Main_420_10_IP1 except for the interoperability point.
+        // Only keep Main_420_10_IP1 as there is no need for more than 2 mlayers in CrabbyAvif.
+
+        // Main_420_10_IP1
+        Av2Profile {
+            seq_profile: 1,
+            depths: &[8, 10], // bit_depth_idc 1 or 0
+            formats: &[PixelFormat::Yuv400, PixelFormat::Yuv420],
+        },
+        // Main_422_10_IP1
+        Av2Profile {
+            seq_profile: 3,
+            depths: &[8, 10], // bit_depth_idc 1 or 0
+            formats: &[
+                PixelFormat::Yuv400,
+                PixelFormat::Yuv420,
+                PixelFormat::Yuv422,
+            ],
+        },
+        // Main_444_10_IP1
+        Av2Profile {
+            seq_profile: 4,
+            depths: &[8, 10], // bit_depth_idc 1 or 0
+            formats: &[
+                PixelFormat::Yuv400,
+                PixelFormat::Yuv420,
+                PixelFormat::Yuv422,
+                PixelFormat::Yuv444,
+            ],
+        },
+        // TODO(b/437292541): Support Main_444C_12_IP2 from
+        //                    https://github.com/AOMediaCodec/avm/pull/5112. Not part of 1.0.0 spec.
+    ];
+    let yuv_format = match category {
+        Category::Color => image.yuv_format,
+        Category::Alpha => PixelFormat::Yuv400,
+        // TODO(b/437292541): Support AVM gainmaps.
+        Category::Gainmap => return AvifError::not_implemented(),
+    };
+    // Return the smallest compatible seq_profile to maximize interoperability.
+    for profile in profiles {
+        if profile.depths.contains(&image.depth) && profile.formats.contains(&yuv_format) {
+            return Ok(profile);
+        }
     }
-    match image.yuv_format {
-        PixelFormat::Yuv420 | PixelFormat::Yuv400 => Ok(1), // Main_420_10_IP1
-        PixelFormat::Yuv422 => Ok(3),                       // Main_422_10_IP1
-        PixelFormat::Yuv444 => Ok(4),                       // Main_444_10_IP1
-        _ => AvifError::invalid_argument(),
-    }
+    AvifError::invalid_argument()
 }
 
 fn avm_scaling_mode(scaling_mode: &ScalingMode) -> AvifResult<avm_scaling_mode_t> {
@@ -185,7 +237,7 @@ impl Encoder for Avm {
             // # Safety: cfg_uninit was initialized in the C function call above.
             let mut avm_config = unsafe { cfg_uninit.assume_init() };
             avm_config.rc_end_usage = avm_rc_mode_AVM_Q;
-            avm_config.g_profile = avm_seq_profile(image, category)?;
+            avm_config.g_profile = av2_profile(image, category)?.seq_profile;
             avm_config.g_bit_depth = image.depth.into();
             avm_config.g_input_bit_depth = image.depth.into();
             avm_config.g_w = image.width;
