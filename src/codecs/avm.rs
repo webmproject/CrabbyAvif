@@ -132,8 +132,18 @@ fn av2_profile(image: &Image, category: Category) -> AvifResult<&Av2Profile> {
                 PixelFormat::Yuv444,
             ],
         },
-        // TODO(b/437292541): Support Main_444C_12_IP2 from
-        //                    https://github.com/AOMediaCodec/avm/pull/5112. Not part of 1.0.0 spec.
+        // Main_444C_12_IP2
+        // Added in https://github.com/AOMediaCodec/avm/pull/5112. Not part of AV2 v1.0.0.
+        Av2Profile {
+            seq_profile: 5,       // Main_444C_12_IP2
+            depths: &[8, 10, 12], // bit_depth_idc 1, 0, or 2
+            formats: &[
+                PixelFormat::Yuv400,
+                PixelFormat::Yuv420,
+                PixelFormat::Yuv422,
+                PixelFormat::Yuv444,
+            ],
+        },
     ];
     let yuv_format = match category {
         Category::Color => image.yuv_format,

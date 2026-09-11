@@ -35,7 +35,7 @@ enum Alpha {
     // TODO(b/437292541): 1x1 does not pass (PSNR < 15dB). Investigate.
     [2],
     [2],
-    [8], // TODO: b/437292541 - Test 10-bit and 12-bit
+    [8, 10, 12],
     [PixelFormat::Yuv420, PixelFormat::Yuv444],
     [YuvRange::Limited, YuvRange::Full],
     [Alpha::None, Alpha::Unpremultiplied, Alpha::Premultiplied],

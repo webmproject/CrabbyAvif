@@ -360,11 +360,17 @@ fn parse_av2_sequence_header_obu(stream: &mut IStream) -> AvifResult<(u8, PixelF
         };
     let bit_depth_idc = stream.read_uvlc()?;
     let depth = match bit_depth_idc {
-            // https://av2.aomedia.org/v1.0.0/index.html#table-bit-depth
-            0 => 10,
-            1 => 8,
-            _ => return AvifError::bmff_parse_failed("It is a requirement of bitstream conformance that bit_depth_idc is less than or equal to 1."),
-        };
+        // https://av2.aomedia.org/v1.0.0/index.html#table-bit-depth
+        0 => 10,
+        1 => 8,
+        // https://github.com/AOMediaCodec/avm/pull/5112
+        2 => 12,
+        _ => {
+            return AvifError::bmff_parse_failed(
+                "It is a requirement of bitstream conformance that bit_depth_idc is less than or equal to 2.",
+            )
+        }
+    };
 
     // TODO(b/437292541): Parse all other fields of sequence_header_obu()?
     Ok((seq_profile_idc as u8, pixel_format, depth))
