@@ -611,18 +611,27 @@ impl Encoder for Aom {
             Category::Alpha => {
                 aom_image.x_chroma_shift = 1;
                 aom_image.y_chroma_shift = 1;
-                aom_image.planes[0] = image.planes[3].unwrap_ref().ptr_generic() as *mut _;
+                aom_image.planes[0] = image.planes[3]
+                    .as_ref()
+                    .ok_or(AvifError::NoContent)?
+                    .ptr_generic() as *mut _;
                 aom_image.stride[0] = image.row_bytes[3] as i32;
             }
             _ => {
                 if image.yuv_format == PixelFormat::Yuv400 {
                     aom_image.x_chroma_shift = 1;
                     aom_image.y_chroma_shift = 1;
-                    aom_image.planes[0] = image.planes[0].unwrap_ref().ptr_generic() as *mut _;
+                    aom_image.planes[0] = image.planes[0]
+                        .as_ref()
+                        .ok_or(AvifError::NoContent)?
+                        .ptr_generic() as *mut _;
                     aom_image.stride[0] = image.row_bytes[0] as i32;
                 } else {
                     for i in 0..=2 {
-                        aom_image.planes[i] = image.planes[i].unwrap_ref().ptr_generic() as *mut _;
+                        aom_image.planes[i] = image.planes[i]
+                            .as_ref()
+                            .ok_or(AvifError::NoContent)?
+                            .ptr_generic() as *mut _;
                         aom_image.stride[i] = image.row_bytes[i] as i32;
                     }
                 }

@@ -217,12 +217,15 @@ impl Reader for Y4MReader {
         if self.has_alpha {
             image.allocate_planes(Category::Alpha)?;
         }
-        let reader = self.reader.as_mut().unwrap();
+        let reader = self
+            .reader
+            .as_mut()
+            .ok_or(AvifError::UnknownError("reader not initialized".into()))?;
         for plane in ALL_PLANES {
             if !image.has_plane(plane) {
                 continue;
             }
-            let plane_data = image.plane_data(plane).unwrap();
+            let plane_data = image.plane_data(plane).ok_or(AvifError::NoContent)?;
             for y in 0..plane_data.height {
                 if self.depth == 8 {
                     let row = image.row_mut(plane, y)?;
@@ -246,7 +249,10 @@ impl Reader for Y4MReader {
     }
 
     fn has_more_frames(&mut self) -> bool {
-        let buffer = match self.reader.as_mut().unwrap().fill_buf() {
+        let Some(reader) = self.reader.as_mut() else {
+            return false;
+        };
+        let buffer = match reader.fill_buf() {
             Ok(buffer) => buffer,
             Err(_) => return false,
         };

@@ -508,7 +508,10 @@ impl Encoder for Avm {
                 avm_image.monochrome = 1;
                 avm_image.x_chroma_shift = 1;
                 avm_image.y_chroma_shift = 1;
-                avm_image.planes[0] = image.planes[3].unwrap_ref().ptr_generic() as *mut _;
+                avm_image.planes[0] = image.planes[3]
+                    .as_ref()
+                    .ok_or(AvifError::NoContent)?
+                    .ptr_generic() as *mut _;
                 avm_image.stride[0] = image.row_bytes[3] as i32;
             }
             _ => {
@@ -517,12 +520,18 @@ impl Encoder for Avm {
                     avm_image.monochrome = 1;
                     avm_image.x_chroma_shift = 1;
                     avm_image.y_chroma_shift = 1;
-                    avm_image.planes[0] = image.planes[0].unwrap_ref().ptr_generic() as *mut _;
+                    avm_image.planes[0] = image.planes[0]
+                        .as_ref()
+                        .ok_or(AvifError::NoContent)?
+                        .ptr_generic() as *mut _;
                     avm_image.stride[0] = image.row_bytes[0] as i32;
                 } else {
                     avm_image.monochrome = 0;
                     for i in 0..=2 {
-                        avm_image.planes[i] = image.planes[i].unwrap_ref().ptr_generic() as *mut _;
+                        avm_image.planes[i] = image.planes[i]
+                            .as_ref()
+                            .ok_or(AvifError::NoContent)?
+                            .ptr_generic() as *mut _;
                         avm_image.stride[i] = image.row_bytes[i] as i32;
                     }
                 }

@@ -241,8 +241,15 @@ fn u8_fixed8(value: f32) -> AvifResult<[u8; 2]> {
     Ok((value as u16).to_be_bytes())
 }
 
-fn vec_offset_write(data: &mut [u8], offset: usize, data_to_write: &[u8]) {
-    data[offset..offset + data_to_write.len()].copy_from_slice(data_to_write);
+fn vec_offset_write(data: &mut [u8], offset: usize, data_to_write: &[u8]) -> AvifResult<()> {
+    let end = offset
+        .checked_add(data_to_write.len())
+        .ok_or(AvifError::InvalidArgument)?;
+    let dst = data
+        .get_mut(offset..end)
+        .ok_or(AvifError::InvalidArgument)?;
+    dst.copy_from_slice(data_to_write);
+    Ok(())
 }
 
 type Matrix3x3 = [[f64; 3]; 3];
@@ -313,17 +320,17 @@ pub fn generate_icc(format: PixelFormat, gamma: f32, primaries: &[f32; 8]) -> Av
         icc.try_extend_from_slice(&ICC_GRAY_TEMPLATE)?;
         let mut offset = GRAY_WHITE_OFFSET;
         for white_xyz in xy_to_xyz(primaries[6], primaries[7])? {
-            vec_offset_write(&mut icc, offset, &s15_fixed16(white_xyz)?);
+            vec_offset_write(&mut icc, offset, &s15_fixed16(white_xyz)?)?;
             offset += 4;
         }
-        vec_offset_write(&mut icc, GRAY_GAMMA_OFFSET, &u8_fixed8(gamma)?);
+        vec_offset_write(&mut icc, GRAY_GAMMA_OFFSET, &u8_fixed8(gamma)?)?;
     } else {
         icc = create_vec_exact(ICC_COLOR_TEMPLATE.len())?;
         icc.try_extend_from_slice(&ICC_COLOR_TEMPLATE)?;
         let mut offset = COLOR_WHITE_OFFSET;
         let white_xyz = xy_to_xyz(primaries[6], primaries[7])?;
         for val in &white_xyz {
-            vec_offset_write(&mut icc, offset, &s15_fixed16(*val)?);
+            vec_offset_write(&mut icc, offset, &s15_fixed16(*val)?)?;
             offset += 4;
         }
 
@@ -382,26 +389,26 @@ pub fn generate_icc(format: PixelFormat, gamma: f32, primaries: &[f32; 8]) -> Av
 
         offset = COLOR_RED_OFFSET;
         for value in rgb_xyz_d50_t[0] {
-            vec_offset_write(&mut icc, offset, &s15_fixed16(value)?);
+            vec_offset_write(&mut icc, offset, &s15_fixed16(value)?)?;
             offset += 4;
         }
 
         offset = COLOR_GREEN_OFFSET;
         for value in rgb_xyz_d50_t[1] {
-            vec_offset_write(&mut icc, offset, &s15_fixed16(value)?);
+            vec_offset_write(&mut icc, offset, &s15_fixed16(value)?)?;
             offset += 4;
         }
 
         offset = COLOR_BLUE_OFFSET;
         for value in rgb_xyz_d50_t[2] {
-            vec_offset_write(&mut icc, offset, &s15_fixed16(value)?);
+            vec_offset_write(&mut icc, offset, &s15_fixed16(value)?)?;
             offset += 4;
         }
 
-        vec_offset_write(&mut icc, COLOR_GAMMA_OFFSET, &u8_fixed8(gamma)?);
+        vec_offset_write(&mut icc, COLOR_GAMMA_OFFSET, &u8_fixed8(gamma)?)?;
     }
     let hash = Md5::digest(&icc);
-    vec_offset_write(&mut icc, CHECKSUM_OFFSET, &hash);
+    vec_offset_write(&mut icc, CHECKSUM_OFFSET, &hash)?;
     Ok(icc)
 }
 

@@ -277,14 +277,18 @@ impl Encoder for Libjxl {
         }
         let encoded_bytes_with_header = self.encode()?;
 
-        let expected_header = self.expected_header.as_ref().unwrap();
+        let expected_header = self
+            .expected_header
+            .as_ref()
+            .ok_or(AvifError::InvalidArgument)?;
         if encoded_bytes_with_header.len() <= expected_header.len()
-            || encoded_bytes_with_header[..expected_header.len()] != *expected_header
+            || encoded_bytes_with_header.get(..expected_header.len())
+                != Some(expected_header.as_slice())
         {
             return AvifError::unknown_error(format!(
                 "Unexpected JPEG XL header {:?} vs {:?}",
-                &encoded_bytes_with_header[..expected_header.len()],
-                *expected_header
+                encoded_bytes_with_header.get(..expected_header.len()),
+                expected_header
             ));
         }
         let encoded_bytes_without_header = expected_header.len()..encoded_bytes_with_header.len();
@@ -445,19 +449,15 @@ impl Decoder for Libjxl {
             })?);
             // JxlDecoderSetInput() could be called twice to avoid concatenating the reconstructed
             // header and the signaled payload but JxlDecoderReleaseInput() does not return 0.
-            self.reconstructed_jxl
-                .unwrap_mut()
-                .try_extend_from_slice(payload)?;
-            let reconstructed_len = self.reconstructed_jxl.unwrap_ref().len();
+            let reconstructed = self
+                .reconstructed_jxl
+                .as_mut()
+                .ok_or(AvifError::UnknownError("reconstructed jxl missing".into()))?;
+            reconstructed.try_extend_from_slice(payload)?;
+            let reconstructed_len = reconstructed.len();
             // # Safety: Calling a C function with valid parameters.
-            unsafe {
-                JxlDecoderSetInput(
-                    decoder,
-                    self.reconstructed_jxl.unwrap_ref().as_ptr(),
-                    reconstructed_len,
-                )
-            }
-            .map_dec_err()?;
+            unsafe { JxlDecoderSetInput(decoder, reconstructed.as_ptr(), reconstructed_len) }
+                .map_dec_err()?;
             // # Safety: Calling a C function with valid parameters.
             unsafe { JxlDecoderCloseInput(decoder) };
 
@@ -469,7 +469,9 @@ impl Decoder for Libjxl {
                 ));
             }
         }
-        assert!(self.reconstructed_jxl.is_some());
+        if self.reconstructed_jxl.is_none() {
+            return AvifError::unknown_error("reconstructed jxl missing");
+        }
 
         let decoder = self.decoder;
         let mut basic_info: MaybeUninit<JxlBasicInfo> = MaybeUninit::uninit();
@@ -486,10 +488,15 @@ impl Decoder for Libjxl {
             ));
         }
 
-        assert_eq!(image.width, 0);
+        if image.width != 0 {
+            return AvifError::invalid_argument();
+        }
         image.width = basic_info.xsize;
         image.height = basic_info.ysize;
-        image.depth = basic_info.bits_per_sample.try_into().unwrap();
+        image.depth = basic_info
+            .bits_per_sample
+            .try_into()
+            .map_err(|_| AvifError::InvalidArgument)?;
 
         // TODO: b/456440247 - Use information from pixi with px_flags&1=1 to fill these values?
         image.yuv_format = PixelFormat::Yuv444; // Expect RGB for now.
