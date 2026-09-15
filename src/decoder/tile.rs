@@ -295,7 +295,10 @@ impl Tile {
             codec_index: 0,
             codec_config,
         };
-        let sample_table = &track.sample_table.unwrap_ref();
+        let sample_table = track
+            .sample_table
+            .as_ref()
+            .ok_or(AvifError::BmffParseFailed("missing sample table".into()))?;
 
         if let Some(limit) = image_count_limit {
             let mut limit = limit.get();
@@ -406,17 +409,25 @@ impl Image {
             if self.depth == 8 {
                 for y in 0..src_height_to_copy {
                     let src_row = tile.row(plane, y)?;
-                    let src_slice = &src_row[0..src_width_to_copy];
+                    let src_slice = src_row
+                        .get(0..src_width_to_copy)
+                        .ok_or(AvifError::InvalidArgument)?;
                     let dst_row = self.row_mut(plane, checked_add!(dst_y_start, y)?)?;
-                    let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset_end];
+                    let dst_slice = dst_row
+                        .get_mut(dst_x_offset..dst_x_offset_end)
+                        .ok_or(AvifError::InvalidArgument)?;
                     dst_slice.copy_from_slice(src_slice);
                 }
             } else {
                 for y in 0..src_height_to_copy {
                     let src_row = tile.row16(plane, y)?;
-                    let src_slice = &src_row[0..src_width_to_copy];
+                    let src_slice = src_row
+                        .get(0..src_width_to_copy)
+                        .ok_or(AvifError::InvalidArgument)?;
                     let dst_row = self.row16_mut(plane, checked_add!(dst_y_start, y)?)?;
-                    let dst_slice = &mut dst_row[dst_x_offset..dst_x_offset_end];
+                    let dst_slice = dst_row
+                        .get_mut(dst_x_offset..dst_x_offset_end)
+                        .ok_or(AvifError::InvalidArgument)?;
                     dst_slice.copy_from_slice(src_slice);
                 }
             }
@@ -440,16 +451,18 @@ impl Image {
         // This function is used only when |tile| contains pointers and self contains buffers.
         for plane in category.planes() {
             let plane = *plane;
-            let src_plane = tile.plane_data(plane);
-            let dst_plane = self.plane_data(plane);
-            if src_plane.is_none() || dst_plane.is_none() {
+            let (Some(_), Some(dst_plane)) = (tile.plane_data(plane), self.plane_data(plane))
+            else {
                 continue;
-            }
-            let dst_plane = dst_plane.unwrap();
+            };
             let tile_index = usize_from_u32(tile_index)?;
 
-            let vertical_offset = tile_info.overlay.vertical_offsets[tile_index] as i128;
-            let horizontal_offset = tile_info.overlay.horizontal_offsets[tile_index] as i128;
+            let vertical_offset = *tile_info.overlay.vertical_offsets.get(tile_index).ok_or(
+                AvifError::InvalidImageGrid("overlay tile index out of bounds".into()),
+            )? as i128;
+            let horizontal_offset = *tile_info.overlay.horizontal_offsets.get(tile_index).ok_or(
+                AvifError::InvalidImageGrid("overlay tile index out of bounds".into()),
+            )? as i128;
             let src_height = tile.height as i128;
             let src_width = tile.width as i128;
             let dst_height = dst_plane.height as i128;
@@ -521,18 +534,26 @@ impl Image {
             if self.depth == 8 {
                 for src_y in src_y_range {
                     let src_row = tile.row(plane, src_y)?;
-                    let src_slice = &src_row[src_x_range.clone()];
+                    let src_slice = src_row
+                        .get(src_x_range.clone())
+                        .ok_or(AvifError::InvalidArgument)?;
                     let dst_row = self.row_mut(plane, dst_y)?;
-                    let dst_slice = &mut dst_row[dst_x_range.clone()];
+                    let dst_slice = dst_row
+                        .get_mut(dst_x_range.clone())
+                        .ok_or(AvifError::InvalidArgument)?;
                     dst_slice.copy_from_slice(src_slice);
                     checked_incr!(dst_y, 1);
                 }
             } else {
                 for src_y in src_y_range {
                     let src_row = tile.row16(plane, src_y)?;
-                    let src_slice = &src_row[src_x_range.clone()];
+                    let src_slice = src_row
+                        .get(src_x_range.clone())
+                        .ok_or(AvifError::InvalidArgument)?;
                     let dst_row = self.row16_mut(plane, dst_y)?;
-                    let dst_slice = &mut dst_row[dst_x_range.clone()];
+                    let dst_slice = dst_row
+                        .get_mut(dst_x_range.clone())
+                        .ok_or(AvifError::InvalidArgument)?;
                     dst_slice.copy_from_slice(src_slice);
                     checked_incr!(dst_y, 1);
                 }

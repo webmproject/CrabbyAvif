@@ -270,7 +270,11 @@ impl Item {
         ))?;
         if self.is_derived_image_item() {
             for derived_item_id in &self.source_item_ids {
-                let source_item = items.get(derived_item_id).unwrap();
+                let source_item = items
+                    .get(derived_item_id)
+                    .ok_or(AvifError::BmffParseFailed(
+                        "missing derived source item".into(),
+                    ))?;
                 let source_codec_config =
                     source_item
                         .codec_config()
