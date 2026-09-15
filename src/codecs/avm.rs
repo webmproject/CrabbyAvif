@@ -196,27 +196,36 @@ fn avm_min_max_quantizers(quantizer: i32) -> (i32, i32) {
     }
 }
 
-// Returns true if the packet was added. Returns false if the packet was skipped.
-fn add_avm_pkt_to_output_samples(
-    pkt: &avm_codec_cx_pkt,
-    output_samples: &mut Vec<Sample>,
-) -> AvifResult<bool> {
-    if pkt.kind != avm_codec_cx_pkt_kind_AVM_CODEC_CX_FRAME_PKT {
-        return Ok(false);
-    }
-    // # Safety: pkt.data is a union. pkt.kind == AVM_CODEC_CX_FRAME_PKT guarantees
-    // that pkt.data.frame is the active field of the union (per libavm API contract).
-    // So this access is safe.
-    let frame = unsafe { &pkt.data.frame };
-    // # Safety: buf and sz are guaranteed to be valid as per libavm API contract. So
-    // it is safe to construct a slice from it.
-    let encoded_data = unsafe { std::slice::from_raw_parts(frame.buf as *const u8, frame.sz) };
-    // TODO(b/437292541): Make sure the sync definition below matches
-    //                    https://aomediacodec.github.io/av2-isobmff/main#sync-sample
-    let sync = (frame.flags & AVM_FRAME_IS_KEY) != 0;
-    let sample_data_range = Av2CodecConfiguration::get_sample_obus_range(encoded_data)?;
-    output_samples.try_push(Sample::create_from(encoded_data, sample_data_range, sync)?)?;
-    Ok(true)
+// Convenience iterable wrapper for avm_codec_get_cx_data(). Skips non-frame packets.
+fn avm_codec_get_sample(ctx: *mut avm_codec_ctx_t) -> impl Iterator<Item = AvifResult<Sample>> {
+    let mut iter: avm_codec_iter_t = std::ptr::null_mut();
+    std::iter::from_fn(move || loop {
+        // # Safety: Calling a C function with valid parameters.
+        let pkt = unsafe { avm_codec_get_cx_data(ctx, &mut iter as *mut _) };
+        if pkt.is_null() {
+            return None;
+        }
+        // # Safety: pkt is guaranteed to be valid and not null (libavm API contract).
+        let pkt = unsafe { *pkt };
+        if pkt.kind != avm_codec_cx_pkt_kind_AVM_CODEC_CX_FRAME_PKT {
+            continue;
+        }
+        // # Safety: pkt.data is a union. pkt.kind == AVM_CODEC_CX_FRAME_PKT guarantees
+        // that pkt.data.frame is the active field of the union (per libavm API contract).
+        // So this access is safe.
+        let frame = unsafe { &pkt.data.frame };
+        // # Safety: buf and sz are guaranteed to be valid as per libavm API contract. So
+        // it is safe to construct a slice from it.
+        let encoded_data = unsafe { std::slice::from_raw_parts(frame.buf as *const u8, frame.sz) };
+        // TODO(b/437292541): Make sure the sync definition below matches
+        //                    https://aomediacodec.github.io/av2-isobmff/main#sync-sample
+        let sync = (frame.flags & AVM_FRAME_IS_KEY) != 0;
+        return Some(
+            Av2CodecConfiguration::get_sample_obus_range(encoded_data).and_then(
+                |sample_data_range| Sample::create_from(encoded_data, sample_data_range, sync),
+            ),
+        );
+    })
 }
 
 impl Encoder for Avm {
@@ -541,18 +550,8 @@ impl Encoder for Avm {
         if err != avm_codec_err_t_AVM_CODEC_OK {
             return AvifError::unknown_error(format!("avm_codec_encode() failed: {err}"));
         }
-        let mut iter: avm_codec_iter_t = std::ptr::null_mut();
-        loop {
-            // # Safety: Calling a C function with valid parameters.
-            let pkt = unsafe {
-                avm_codec_get_cx_data(self.context.unwrap_mut() as *mut _, &mut iter as *mut _)
-            };
-            if pkt.is_null() {
-                break;
-            }
-            // # Safety: pkt is guaranteed to be valid and not null (libavm API contract).
-            let pkt = unsafe { *pkt };
-            add_avm_pkt_to_output_samples(&pkt, output_samples)?;
+        for sample in avm_codec_get_sample(self.context.unwrap_mut() as *mut _) {
+            output_samples.try_push(sample?)?;
         }
         if config.is_single_image
             || (config.extra_layer_count > 0 && config.extra_layer_count == self.current_layer)
@@ -590,21 +589,12 @@ impl Encoder for Avm {
             if err != avm_codec_err_t_AVM_CODEC_OK {
                 return AvifError::unknown_error(format!("Flush avm_codec_encode() failed: {err}"));
             }
-            let mut got_packet = false;
-            let mut iter: avm_codec_iter_t = std::ptr::null_mut();
-            loop {
-                // # Safety: Calling a C function with valid parameters.
-                let pkt = unsafe {
-                    avm_codec_get_cx_data(self.context.unwrap_mut() as *mut _, &mut iter as *mut _)
-                };
-                if pkt.is_null() {
-                    break;
-                }
-                // # Safety: pkt is guaranteed to be valid and not null (libavm API contract).
-                let pkt = unsafe { *pkt };
-                got_packet = add_avm_pkt_to_output_samples(&pkt, output_samples)?;
+            let mut got_sample = false;
+            for sample in avm_codec_get_sample(self.context.unwrap_mut() as *mut _) {
+                output_samples.try_push(sample?)?;
+                got_sample = true;
             }
-            if !got_packet {
+            if !got_sample {
                 break;
             }
         }
