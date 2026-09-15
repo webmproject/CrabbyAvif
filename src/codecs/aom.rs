@@ -182,24 +182,37 @@ fn aom_min_max_quantizers(quantizer: i32) -> (u32, u32) {
     }
 }
 
-fn add_aom_pkt_to_output_samples(
-    pkt: &aom_codec_cx_pkt,
+// Adds frame packets to output_samples. Returns true if at least one sample was added.
+fn add_aom_pkts_to_output_samples(
+    ctx: &mut aom_codec_ctx_t,
     output_samples: &mut Vec<Sample>,
 ) -> AvifResult<bool> {
-    if pkt.kind != aom_codec_cx_pkt_kind_AOM_CODEC_CX_FRAME_PKT {
-        return Ok(false);
+    let mut got_frame = false;
+    let mut iter: aom_codec_iter_t = std::ptr::null_mut();
+    loop {
+        // # Safety: Calling a C function with valid parameters.
+        let pkt = unsafe { aom_codec_get_cx_data(ctx as *mut _, &mut iter as *mut _) };
+        if pkt.is_null() {
+            break;
+        }
+        // # Safety: pkt is guaranteed to be not null (checked) and valid (libaom API contract).
+        let pkt = unsafe { *pkt };
+        if pkt.kind != aom_codec_cx_pkt_kind_AOM_CODEC_CX_FRAME_PKT {
+            continue;
+        }
+        // # Safety: pkt.data is a union. pkt.kind == AOM_CODEC_CX_FRAME_PKT guarantees
+        // that pkt.data.frame is the active field of the union (per libaom API contract).
+        // So this access is safe.
+        let frame = unsafe { &pkt.data.frame };
+        // # Safety: buf and sz are guaranteed to be valid as per libaom API contract. So
+        // it is safe to construct a slice from it.
+        let encoded_data = unsafe { std::slice::from_raw_parts(frame.buf as *const u8, frame.sz) };
+        let sync = (frame.flags & AOM_FRAME_IS_KEY) != 0;
+        let sample_data_range = 0..encoded_data.len();
+        output_samples.try_push(Sample::create_from(encoded_data, sample_data_range, sync)?)?;
+        got_frame = true;
     }
-    // # Safety: pkt.data is a union. pkt.kind == AOM_CODEC_CX_FRAME_PKT guarantees
-    // that pkt.data.frame is the active field of the union (per libaom API contract).
-    // So this access is safe.
-    let frame = unsafe { &pkt.data.frame };
-    // # Safety: buf and sz are guaranteed to be valid as per libaom API contract. So
-    // it is safe to construct a slice from it.
-    let encoded_data = unsafe { std::slice::from_raw_parts(frame.buf as *const u8, frame.sz) };
-    let sync = (frame.flags & AOM_FRAME_IS_KEY) != 0;
-    let sample_data_range = 0..encoded_data.len();
-    output_samples.try_push(Sample::create_from(encoded_data, sample_data_range, sync)?)?;
-    Ok(true)
+    Ok(got_frame)
 }
 
 impl Encoder for Aom {
@@ -641,19 +654,7 @@ impl Encoder for Aom {
                 self.error_string()
             ));
         }
-        let mut iter: aom_codec_iter_t = std::ptr::null_mut();
-        loop {
-            // # Safety: Calling a C function with valid parameters.
-            let pkt = unsafe {
-                aom_codec_get_cx_data(self.encoder.unwrap_mut() as *mut _, &mut iter as *mut _)
-            };
-            if pkt.is_null() {
-                break;
-            }
-            // # Safety: pkt is guaranteed to be valid and not null (libaom API contract).
-            let pkt = unsafe { *pkt };
-            add_aom_pkt_to_output_samples(&pkt, output_samples)?;
-        }
+        add_aom_pkts_to_output_samples(self.encoder.unwrap_mut(), output_samples)?;
         if config.is_single_image
             || (config.extra_layer_count > 0 && config.extra_layer_count == self.current_layer)
         {
@@ -692,21 +693,7 @@ impl Encoder for Aom {
                     self.error_string()
                 ));
             }
-            let mut got_packet = false;
-            let mut iter: aom_codec_iter_t = std::ptr::null_mut();
-            loop {
-                // # Safety: Calling a C function with valid parameters.
-                let pkt = unsafe {
-                    aom_codec_get_cx_data(self.encoder.unwrap_mut() as *mut _, &mut iter as *mut _)
-                };
-                if pkt.is_null() {
-                    break;
-                }
-                // # Safety: pkt is guaranteed to be valid and not null (libaom API contract).
-                let pkt = unsafe { *pkt };
-                got_packet = add_aom_pkt_to_output_samples(&pkt, output_samples)?;
-            }
-            if !got_packet {
+            if !add_aom_pkts_to_output_samples(self.encoder.unwrap_mut(), output_samples)? {
                 break;
             }
         }
