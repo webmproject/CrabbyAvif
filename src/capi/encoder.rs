@@ -338,7 +338,7 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
         if gainmaps.iter().all(|x| x.is_some()) {
             let mut gainmap_refs: Vec<&GainMap> = create_vec_exact(gainmaps.len())?;
             for gainmap in &gainmaps {
-                gainmap_refs.try_push(gainmap.unwrap_ref())?;
+                gainmap_refs.try_push(gainmap.as_ref().ok_or(AvifError::InvalidArgument)?)?;
             }
             rust_encoder(encoder).add_image_gainmap_grid(
                 gridCols,
@@ -399,41 +399,22 @@ pub unsafe extern "C" fn crabby_avifEncoderSetCodecSpecificOption(
     // SAFETY: Pointers are guaranteed to be not-null and contain a valid c-string as per the
     // pre-conditions of this function.
     let (key, value) = unsafe { (CStr::from_ptr(key), CStr::from_ptr(value)) };
-    let (key, value) = (key.to_str(), value.to_str());
-    if key.is_err() || value.is_err() {
+    let (Ok(key), Ok(value)) = (key.to_str(), value.to_str()) else {
         return avifResult::InvalidArgument;
-    }
-    let (key, value) = (key.unwrap().to_owned(), value.unwrap().to_owned());
-    let (key, category) = if key.starts_with("c:") {
-        (
-            key.strip_prefix("c:").unwrap().to_string(),
-            Some(Category::Color),
-        )
-    } else if key.starts_with("color:") {
-        (
-            key.strip_prefix("color:").unwrap().to_string(),
-            Some(Category::Color),
-        )
-    } else if key.starts_with("a:") {
-        (
-            key.strip_prefix("a:").unwrap().to_string(),
-            Some(Category::Alpha),
-        )
-    } else if key.starts_with("alpha:") {
-        (
-            key.strip_prefix("alpha:").unwrap().to_string(),
-            Some(Category::Alpha),
-        )
-    } else if key.starts_with("g:") {
-        (
-            key.strip_prefix("g:").unwrap().to_string(),
-            Some(Category::Gainmap),
-        )
-    } else if key.starts_with("gainmap:") {
-        (
-            key.strip_prefix("gainmap:").unwrap().to_string(),
-            Some(Category::Gainmap),
-        )
+    };
+    let (key, value) = (key.to_owned(), value.to_owned());
+    let (key, category) = if let Some(suffix) = key.strip_prefix("c:") {
+        (suffix.to_string(), Some(Category::Color))
+    } else if let Some(suffix) = key.strip_prefix("color:") {
+        (suffix.to_string(), Some(Category::Color))
+    } else if let Some(suffix) = key.strip_prefix("a:") {
+        (suffix.to_string(), Some(Category::Alpha))
+    } else if let Some(suffix) = key.strip_prefix("alpha:") {
+        (suffix.to_string(), Some(Category::Alpha))
+    } else if let Some(suffix) = key.strip_prefix("g:") {
+        (suffix.to_string(), Some(Category::Gainmap))
+    } else if let Some(suffix) = key.strip_prefix("gainmap:") {
+        (suffix.to_string(), Some(Category::Gainmap))
     } else {
         (key, None)
     };

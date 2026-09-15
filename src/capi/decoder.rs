@@ -250,13 +250,14 @@ impl TryFrom<&avifDecoder> for Settings {
 
 fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
     // Copy image.
-    let image = src.image().unwrap();
-    dst.image_object = image.into();
+    if let Some(image) = src.image() {
+        dst.image_object = image.into();
 
-    // Copy decoder properties.
-    dst.alphaPresent = to_avifBool(image.alpha_present);
-    dst.imageSequenceTrackPresent = to_avifBool(image.image_sequence_track_present);
-    dst.progressiveState = image.progressive_state;
+        // Copy decoder properties.
+        dst.alphaPresent = to_avifBool(image.alpha_present);
+        dst.imageSequenceTrackPresent = to_avifBool(image.image_sequence_track_present);
+        dst.progressiveState = image.progressive_state;
+    }
 
     dst.imageTiming = src.image_timing();
     dst.imageCount = src.image_count() as i32;
@@ -280,7 +281,11 @@ fn rust_decoder_to_avifDecoder(src: &Decoder, dst: &mut avifDecoder) {
         }
         dst.image_object.gainMap = (&mut dst.gainmap_object) as *mut avifGainMap;
     }
-    dst.image = (&mut dst.image_object) as *mut avifImage;
+    dst.image = if src.image().is_some() {
+        (&mut dst.image_object) as *mut avifImage
+    } else {
+        std::ptr::null_mut()
+    };
 }
 
 /// # Safety
@@ -324,11 +329,9 @@ pub unsafe extern "C" fn crabby_avifDecoderNextImage(decoder: *mut avifDecoder) 
     let res = rust_decoder.next_image();
     deref_mut!(decoder).diag.set_from_result(&res);
     let mut early_return = false;
-    if res.is_err() {
+    if let Err(err) = &res {
         early_return = true;
-        if rust_decoder.settings.allow_incremental
-            && matches!(res.as_ref().err().unwrap(), AvifError::WaitingOnIo)
-        {
+        if rust_decoder.settings.allow_incremental && matches!(err, AvifError::WaitingOnIo) {
             early_return = previous_decoded_row_count == rust_decoder.decoded_row_count();
         }
     }
@@ -362,11 +365,9 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImage(
     let res = rust_decoder.nth_image(frameIndex);
     deref_mut!(decoder).diag.set_from_result(&res);
     let mut early_return = false;
-    if res.is_err() {
+    if let Err(err) = &res {
         early_return = true;
-        if rust_decoder.settings.allow_incremental
-            && matches!(res.as_ref().err().unwrap(), AvifError::WaitingOnIo)
-        {
+        if rust_decoder.settings.allow_incremental && matches!(err, AvifError::WaitingOnIo) {
             if image_index != frameIndex {
                 early_return = false;
             } else {

@@ -183,12 +183,18 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
                 dst.yuvRowBytes[2],
                 dst.alphaRowBytes,
             ];
+            let dst_ptr = dst_planes[plane.as_usize()];
+            if dst_ptr.is_null() {
+                return AvifError::invalid_argument();
+            }
             for y in 0..plane_data.height {
                 let src_slice = src.row(plane, y)?;
+                let row_offset = checked_mul!(y, dst_row_bytes[plane.as_usize()])?;
+                // SAFETY: dst_ptr was verified to be non-null, row_offset arithmetic is checked,
+                // and the slice length does not exceed the allocated plane row bounds.
                 let dst_slice = unsafe {
                     std::slice::from_raw_parts_mut(
-                        dst_planes[plane.as_usize()]
-                            .offset(isize_from_u32(y * dst_row_bytes[plane.as_usize()])?),
+                        dst_ptr.offset(isize_from_u32(row_offset)?),
                         usize_from_u32(plane_data.width)?,
                     )
                 };
@@ -200,13 +206,16 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
             // it here. It is safe to do so since it will be free'd with the other plane buffers
             // when the image object is destroyed.
             if plane == Plane::V && dst.yuvPlanes[2].is_null() {
-                let plane_size = usize_from_u32(plane_data.width * plane_data.height * 2)?;
+                let plane_size = usize_from_u32(checked_mul!(
+                    checked_mul!(plane_data.width, plane_data.height)?,
+                    2
+                )?)?;
                 // SAFETY: Pre-conditions are met to call these two functions.
                 dst.yuvPlanes[2] = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
                 if dst.yuvPlanes[2].is_null() {
                     return AvifError::out_of_memory();
                 }
-                dst.yuvRowBytes[2] = plane_data.width * 2;
+                dst.yuvRowBytes[2] = checked_mul!(plane_data.width, 2)?;
             }
             let dst_planes = [
                 dst.yuvPlanes[0] as *mut u16,
@@ -220,12 +229,18 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
                 dst.yuvRowBytes[2] / 2,
                 dst.alphaRowBytes / 2,
             ];
+            let dst_ptr = dst_planes[plane.as_usize()];
+            if dst_ptr.is_null() {
+                return AvifError::invalid_argument();
+            }
             for y in 0..plane_data.height {
                 let src_slice = src.row16(plane, y)?;
+                let row_offset = checked_mul!(y, dst_row_bytes[plane.as_usize()])?;
+                // SAFETY: dst_ptr was verified to be non-null, row_offset arithmetic is checked,
+                // and the slice length does not exceed the allocated plane row bounds.
                 let dst_slice = unsafe {
                     std::slice::from_raw_parts_mut(
-                        dst_planes[plane.as_usize()]
-                            .offset(isize_from_u32(y * dst_row_bytes[plane.as_usize()])?),
+                        dst_ptr.offset(isize_from_u32(row_offset)?),
                         usize_from_u32(plane_data.width)?,
                     )
                 };
