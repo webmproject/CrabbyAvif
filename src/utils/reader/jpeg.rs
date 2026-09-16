@@ -73,7 +73,7 @@ impl Reader for JpegReader {
             depth: 8,
             format: rgb::Format::Rgb,
             pixels: Some(Pixels::Buffer(rgb_bytes)),
-            row_bytes: width * 3,
+            row_bytes: checked_mul!(width, 3)?,
             ..Default::default()
         };
         let mut yuv = Image {
@@ -148,7 +148,10 @@ fn extract_aux_images(mpf_data: &[u8], mpf_offset: u32) -> AvifResult<Vec<(u32, 
         return Err(AvifError::UnknownError("Invalid MPF magic number".into()));
     }
     let first_ifd_offset = usize_from_u32(read_u32(&mut stream)?)?;
-    stream = IStream::create(&mpf_data[first_ifd_offset..]);
+    let first_ifd_slice = mpf_data
+        .get(first_ifd_offset..)
+        .ok_or_else(|| AvifError::UnknownError("Invalid MPF first IFD offset".into()))?;
+    stream = IStream::create(first_ifd_slice);
     let num_entries = read_u16(&mut stream)?;
     let mut num_images = 0;
     let mut mp_entry_offset = 0;
@@ -175,7 +178,10 @@ fn extract_aux_images(mpf_data: &[u8], mpf_offset: u32) -> AvifResult<Vec<(u32, 
     if num_images < 2 || mp_entry_offset == 0 {
         return Ok(Vec::new());
     }
-    stream = IStream::create(&mpf_data[mp_entry_offset..]);
+    let mp_entry_slice = mpf_data
+        .get(mp_entry_offset..)
+        .ok_or_else(|| AvifError::UnknownError("Invalid MPF MP entry offset".into()))?;
+    stream = IStream::create(mp_entry_slice);
     let mut aux_images = Vec::new();
     for _ in 0..num_images {
         stream.skip_u32()?; // attr
@@ -238,7 +244,7 @@ fn get_gainmap(
                     depth: 8,
                     format,
                     pixels: Some(Pixels::Buffer(rgb_bytes)),
-                    row_bytes: width * format.channel_count(),
+                    row_bytes: checked_mul!(width, format.channel_count())?,
                     ..Default::default()
                 };
                 let mut image = Image {
