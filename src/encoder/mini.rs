@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::encoder::*;
+use crate::internal_utils::u32_from_usize;
 
 // Implementation for ISO/IEC 23008-12 3rd edition AMD 2 Low-overhead image file format.
 // See drafts at https://www.mpeg.org/standards/MPEG-H/12/.
@@ -62,7 +63,9 @@ pub fn is_mini_compatible(enc: &Encoder) -> bool {
     let tmap = &enc.items.iter().find(|item| item.item_type == "tmap");
     if let Some(tmap) = tmap {
         // Minus one because of the prepended version field which is not part of the MinimizedImageBox syntax.
-        let metadata_payload_size = tmap.metadata_payload.len().checked_sub(1).unwrap();
+        let Some(metadata_payload_size) = tmap.metadata_payload.len().checked_sub(1) else {
+            return false;
+        };
         if metadata_payload_size >= (1 << 20) {
             return false;
         }
@@ -215,7 +218,7 @@ impl Encoder {
             .items
             .iter()
             .find(|item| item.id == self.primary_item_id)
-            .unwrap();
+            .ok_or(AvifError::UnknownError("primary item not found".into()))?;
         let alpha_item = self.items.iter().find(|item| {
             item.category == Category::Alpha && item.iref_to_id == Some(self.primary_item_id)
         });
@@ -224,9 +227,29 @@ impl Encoder {
             .iter()
             .find(|item| item.category == Category::Gainmap);
 
-        let color_data = color_item.samples.first().unwrap().sample_data();
-        let alpha_data = alpha_item.map(|item| item.samples.first().unwrap().sample_data());
-        let gainmap_data = gainmap_item.map(|item| item.samples.first().unwrap().sample_data());
+        let color_data = color_item
+            .samples
+            .first()
+            .ok_or(AvifError::UnknownError("color item has no sample".into()))?
+            .sample_data();
+        let alpha_data = match alpha_item {
+            Some(item) => Some(
+                item.samples
+                    .first()
+                    .ok_or(AvifError::UnknownError("alpha item has no sample".into()))?
+                    .sample_data(),
+            ),
+            None => None,
+        };
+        let gainmap_data = match gainmap_item {
+            Some(item) => Some(
+                item.samples
+                    .first()
+                    .ok_or(AvifError::UnknownError("gainmap item has no sample".into()))?
+                    .sample_data(),
+            ),
+            None => None,
+        };
 
         let image = &self.image_metadata;
         let gainmap_image = &self.gainmap_image_metadata;
@@ -316,15 +339,18 @@ impl Encoder {
                 .items
                 .iter()
                 .find(|item| item.item_type == "tmap")
-                .unwrap()
+                .ok_or(AvifError::UnknownError("tmap item not found".into()))?
                 .metadata_payload
                 .len()
                 .checked_sub(1)
-                .unwrap();
+                .ok_or(AvifError::UnknownError(
+                    "tmap metadata payload is empty".into(),
+                ))?;
 
             // _minus1 is encoded for these fields.
-            assert_ne!(gainmap_image.width, 0);
-            assert_ne!(gainmap_image.height, 0);
+            if gainmap_image.width == 0 || gainmap_image.height == 0 {
+                return AvifError::invalid_argument();
+            }
 
             large_dimensions_flag = large_dimensions_flag
                 || gainmap_image.width > (1 << 7)
@@ -475,31 +501,49 @@ impl Encoder {
 
         if has_icc {
             stream.write_bits(
-                (image.icc.len() - 1).try_into().unwrap(),
+                u32_from_usize(
+                    image
+                        .icc
+                        .len()
+                        .checked_sub(1)
+                        .ok_or(AvifError::InvalidArgument)?,
+                )?,
                 if large_metadata_flag { 20 } else { 10 },
             )?; // unsigned int(large_metadata_flag ? 20 : 10) icc_data_size_minus1;
         }
         if has_hdr && has_gainmap && tmap_icc_size != 0 {
             stream.write_bits(
-                (tmap_icc_size - 1).try_into().unwrap(),
+                u32_from_usize(
+                    tmap_icc_size
+                        .checked_sub(1)
+                        .ok_or(AvifError::InvalidArgument)?,
+                )?,
                 if large_metadata_flag { 20 } else { 10 },
             )?; // unsigned int(large_metadata_flag ? 20 : 10) tmap_icc_data_size_minus1;
         }
 
         if has_hdr && has_gainmap {
             stream.write_bits(
-                gainmap_metadata_size.try_into().unwrap(),
+                u32_from_usize(gainmap_metadata_size)?,
                 if large_metadata_flag { 20 } else { 10 },
             )?; // unsigned int(large_metadata_flag ? 20 : 10) gainmap_metadata_size;
         }
         if has_hdr && has_gainmap {
             stream.write_bits(
-                gainmap_data.unwrap().len().try_into().unwrap(),
+                u32_from_usize(
+                    gainmap_data
+                        .ok_or(AvifError::UnknownError("gainmap data missing".into()))?
+                        .len(),
+                )?,
                 if large_item_data_flag { 28 } else { 15 },
             )?; // unsigned int(large_item_data_flag ? 28 : 15) gainmap_item_data_size;
         }
-        if has_hdr && has_gainmap && !gainmap_data.unwrap().is_empty() {
-            if gainmap_item.unwrap().codec_configuration == color_item.codec_configuration {
+        if has_hdr && has_gainmap && !gainmap_data.unwrap_or(&[]).is_empty() {
+            if gainmap_item
+                .ok_or(AvifError::UnknownError("gainmap item not found".into()))?
+                .codec_configuration
+                == color_item.codec_configuration
+            {
                 // The gainmap codec config is copied from the main codec config.
                 // This is signaled by a size of 0.
                 gainmap_codec_config_size = 0;
@@ -517,18 +561,31 @@ impl Encoder {
             if large_codec_config_flag { 12 } else { 3 },
         )?; // unsigned int(large_codec_config_flag ? 12 : 3) main_item_codec_config_size;
         stream.write_bits(
-            (color_data.len() - 1).try_into().unwrap(),
+            u32_from_usize(
+                color_data
+                    .len()
+                    .checked_sub(1)
+                    .ok_or(AvifError::InvalidArgument)?,
+            )?,
             if large_item_data_flag { 28 } else { 15 },
         )?; // unsigned int(large_item_data_flag ? 28 : 15) main_item_data_size_minus1;
 
         if has_alpha {
             stream.write_bits(
-                alpha_data.unwrap().len().try_into().unwrap(),
+                u32_from_usize(
+                    alpha_data
+                        .ok_or(AvifError::UnknownError("alpha data missing".into()))?
+                        .len(),
+                )?,
                 if large_item_data_flag { 28 } else { 15 },
             )?; // unsigned int(large_item_data_flag ? 28 : 15) alpha_item_data_size;
         }
-        if has_alpha && !alpha_data.unwrap().is_empty() {
-            if alpha_item.unwrap().codec_configuration == color_item.codec_configuration {
+        if has_alpha && !alpha_data.unwrap_or(&[]).is_empty() {
+            if alpha_item
+                .ok_or(AvifError::UnknownError("alpha item not found".into()))?
+                .codec_configuration
+                == color_item.codec_configuration
+            {
                 // The alpha codec config is copied from the main codec config.
                 // This is signaled by a size of 0.
                 alpha_codec_config_size = 0;
@@ -546,13 +603,25 @@ impl Encoder {
         }
         if !image.exif.is_empty() {
             stream.write_bits(
-                (image.exif.len() - 1).try_into().unwrap(),
+                u32_from_usize(
+                    image
+                        .exif
+                        .len()
+                        .checked_sub(1)
+                        .ok_or(AvifError::InvalidArgument)?,
+                )?,
                 if large_metadata_flag { 20 } else { 10 },
             )?; // unsigned int(large_metadata_flag ? 20 : 10) exif_data_size_minus_one;
         }
         if !image.xmp.is_empty() {
             stream.write_bits(
-                (image.xmp.len() - 1).try_into().unwrap(),
+                u32_from_usize(
+                    image
+                        .xmp
+                        .len()
+                        .checked_sub(1)
+                        .ok_or(AvifError::InvalidArgument)?,
+                )?,
                 if large_metadata_flag { 20 } else { 10 },
             )?; // unsigned int(large_metadata_flag ? 20 : 10) xmp_data_size_minus_one;
         }
@@ -566,9 +635,12 @@ impl Encoder {
             // unsigned int(8) main_item_codec_config[main_item_codec_config_size];
             stream.write_slice(&codec_config)?;
         }
-        if has_alpha && !alpha_data.unwrap().is_empty() && alpha_codec_config_size != 0 {
+        if has_alpha && !alpha_data.unwrap_or(&[]).is_empty() && alpha_codec_config_size != 0 {
             // unsigned int(8) alpha_item_codec_config[alpha_item_codec_config_size];
-            match &alpha_item.unwrap().codec_configuration {
+            match &alpha_item
+                .ok_or(AvifError::UnknownError("alpha item not found".into()))?
+                .codec_configuration
+            {
                 Some(CodecConfiguration::Av1(config)) => {
                     Item::write_av1_codec_config(config, stream)?;
                 }
@@ -581,7 +653,10 @@ impl Encoder {
         }
         if has_hdr && has_gainmap && gainmap_codec_config_size != 0 {
             // unsigned int(8) gainmap_item_codec_config[gainmap_item_codec_config_size];
-            match &gainmap_item.unwrap().codec_configuration {
+            match &gainmap_item
+                .ok_or(AvifError::UnknownError("gainmap item not found".into()))?
+                .codec_configuration
+            {
                 Some(CodecConfiguration::Av1(config)) => {
                     Item::write_av1_codec_config(config, stream)?;
                 }
@@ -597,26 +672,39 @@ impl Encoder {
             stream.write_slice(&image.icc)?; // unsigned int(8) icc_data[icc_data_size_minus1 + 1];
         }
         if has_hdr && has_gainmap && tmap_icc_size != 0 {
-            assert_eq!(self.alt_image_metadata.icc.len(), tmap_icc_size);
+            if self.alt_image_metadata.icc.len() != tmap_icc_size {
+                return AvifError::unknown_error("tmap icc size mismatch");
+            }
             stream.write_slice(&self.alt_image_metadata.icc)?; // unsigned int(8) tmap_icc_data[tmap_icc_data_size_minus1 + 1];
         }
         if has_hdr && has_gainmap && gainmap_metadata_size != 0 {
             // Minus one because of the prepended version field which is not part of the MinimizedImageBox syntax.
-            let gainmap_metadata = &self
+            let gainmap_metadata = self
                 .items
                 .iter()
                 .find(|item| item.item_type == "tmap")
-                .unwrap()
-                .metadata_payload[1..];
-            assert_eq!(gainmap_metadata.len(), gainmap_metadata_size);
+                .ok_or(AvifError::UnknownError("tmap item not found".into()))?
+                .metadata_payload
+                .get(1..)
+                .ok_or(AvifError::UnknownError(
+                    "tmap metadata payload missing".into(),
+                ))?;
+            if gainmap_metadata.len() != gainmap_metadata_size {
+                return AvifError::unknown_error("gainmap metadata size mismatch");
+            }
             stream.write_slice(gainmap_metadata)?; // unsigned int(8) gainmap_metadata[gainmap_metadata_size];
         }
 
-        if has_alpha && !alpha_data.unwrap().is_empty() {
-            stream.write_slice(alpha_data.unwrap())?; // unsigned int(8) alpha_item_data[alpha_item_data_size];
+        if has_alpha && !alpha_data.unwrap_or(&[]).is_empty() {
+            stream.write_slice(
+                alpha_data.ok_or(AvifError::UnknownError("alpha data missing".into()))?,
+            )?; // unsigned int(8) alpha_item_data[alpha_item_data_size];
         }
-        if has_hdr && has_gainmap && !gainmap_data.unwrap().is_empty() {
-            stream.write_slice(gainmap_data.unwrap())?; // unsigned int(8) gainmap_item_data[gainmap_item_data_size];
+        if has_hdr && has_gainmap && !gainmap_data.unwrap_or(&[]).is_empty() {
+            stream.write_slice(
+                gainmap_data.ok_or(AvifError::UnknownError("gainmap data missing".into()))?,
+            )?;
+            // unsigned int(8) gainmap_item_data[gainmap_item_data_size];
         }
 
         stream.write_slice(color_data)?; // unsigned int(8) main_item_data[main_item_data_size_minus1 + 1];
@@ -634,12 +722,14 @@ impl Encoder {
             + image.icc.len()
             + tmap_icc_size
             + gainmap_metadata_size
-            + if has_alpha { alpha_data.unwrap().len() } else { 0 }
-            + if has_gainmap { gainmap_data.unwrap().len() } else { 0 }
+            + alpha_data.map_or(0, |d| d.len())
+            + gainmap_data.map_or(0, |d| d.len())
             + color_data.len()
             + image.exif.len()
             + image.xmp.len();
-        assert_eq!(stream.offset(), header_bytes + expected_chunk_bytes);
+        if stream.offset() != header_bytes + expected_chunk_bytes {
+            return AvifError::unknown_error("offset mismatch");
+        }
         stream.finish_box()?;
 
         Ok(())

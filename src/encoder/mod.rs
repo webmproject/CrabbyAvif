@@ -463,8 +463,8 @@ impl Encoder {
     }
 
     fn validate_image_grid(grid: &Grid, images: &[&Image], recipe: Recipe) -> AvifResult<()> {
-        let first_image = images[0];
-        let last_image = images.last().unwrap();
+        let first_image = *images.first().ok_or(AvifError::InvalidArgument)?;
+        let last_image = *images.last().ok_or(AvifError::InvalidArgument)?;
         for (index, image) in images.iter().enumerate() {
             match (image.depth, recipe) {
                 (8 | 10 | 12, Recipe::None)
@@ -519,15 +519,16 @@ impl Encoder {
     }
 
     fn validate_gainmap_grid(grid: &Grid, gainmaps: &[&GainMap]) -> AvifResult<()> {
-        for gainmap in &gainmaps[1..] {
-            if gainmaps[0] != *gainmap {
+        let first_gainmap = gainmaps.first().ok_or(AvifError::InvalidArgument)?;
+        for gainmap in gainmaps.get(1..).unwrap_or(&[]) {
+            if *first_gainmap != *gainmap {
                 return AvifError::invalid_image_grid(
                     "all cells should have the same gain map metadata",
                 );
             }
         }
-        if gainmaps[0].image.color_primaries != ColorPrimaries::Unspecified
-            || gainmaps[0].image.transfer_characteristics != TransferCharacteristics::Unspecified
+        if first_gainmap.image.color_primaries != ColorPrimaries::Unspecified
+            || first_gainmap.image.transfer_characteristics != TransferCharacteristics::Unspecified
         {
             return AvifError::invalid_argument();
         }
@@ -536,7 +537,7 @@ impl Encoder {
         // Ensure that the gainmap image does not have alpha. validate_image_grid() ensures that
         // either all the cell images have alpha or all of them don't. So it is sufficient to check
         // if the first cell image does not have alpha.
-        if gainmap_images[0].has_alpha() {
+        if gainmap_images.first().is_some_and(|img| img.has_alpha()) {
             return AvifError::invalid_argument();
         }
         Ok(())
@@ -551,8 +552,8 @@ impl Encoder {
         is_single_image: bool,
         gainmaps: Option<&[&GainMap]>,
     ) -> AvifResult<()> {
-        let cell_count: usize = usize_from_u32(grid_rows * grid_columns)?;
-        let first_image = images[0];
+        let cell_count = usize_from_u32(checked_mul!(grid_rows, grid_columns)?)?;
+        let first_image = *images.first().ok_or(AvifError::InvalidArgument)?;
         let final_recipe = self
             .settings
             .recipe
@@ -563,7 +564,11 @@ impl Encoder {
             Recipe::Float32b => {
                 // Expect three images per cell (sign+exponent_msb,
                 // exponent_lsb+mantissa_msb, mantissa_lsb).
-                if images.len() != cell_count.checked_mul(3).unwrap() {
+                if images.len()
+                    != cell_count
+                        .checked_mul(3)
+                        .ok_or(AvifError::InvalidArgument)?
+                {
                     return AvifError::invalid_argument();
                 }
                 // Keep the sign+exponent_msb cells as the primary item (cell_images).
@@ -581,7 +586,7 @@ impl Encoder {
         if self.items.is_empty() {
             assert!(self.final_recipe.is_none());
             self.final_recipe = Some(final_recipe);
-            let last_image = cell_images.last().unwrap();
+            let last_image = cell_images.last().ok_or(AvifError::InvalidArgument)?;
             let grid = Grid {
                 rows: grid_rows,
                 columns: grid_columns,
@@ -594,8 +599,12 @@ impl Encoder {
             self.image_metadata.xmp = first_image.xmp.try_clone()?;
             self.image_metadata.icc = first_image.icc.try_clone()?;
             if let Some(gainmaps) = gainmaps {
-                self.gainmap_image_metadata = gainmaps[0].image.shallow_clone();
-                self.copy_alt_image_metadata(gainmaps[0], &grid)?;
+                if gainmaps.len() != cell_images.len() {
+                    return AvifError::invalid_image_grid("invalid number of gainmap images");
+                }
+                let first_gainmap = *gainmaps.first().ok_or(AvifError::InvalidArgument)?;
+                self.gainmap_image_metadata = first_gainmap.image.shallow_clone();
+                self.copy_alt_image_metadata(first_gainmap, &grid)?;
             }
             let color_item_id = self.add_items(&grid, Category::Color, /*hidden=*/ false)?;
             self.primary_item_id = color_item_id;
@@ -622,11 +631,9 @@ impl Encoder {
                 }
             }
             if let Some(gainmaps) = gainmaps {
-                if gainmaps.len() != cell_images.len() {
-                    return AvifError::invalid_image_grid("invalid number of gainmap images");
-                }
-                let first_gainmap_image = &gainmaps[0].image;
-                let last_gainmap_image = &gainmaps.last().unwrap().image;
+                let first_gainmap = *gainmaps.first().ok_or(AvifError::InvalidArgument)?;
+                let first_gainmap_image = &first_gainmap.image;
+                let last_gainmap_image = &gainmaps.last().ok_or(AvifError::InvalidArgument)?.image;
                 let gainmap_grid = Grid {
                     rows: grid_rows,
                     columns: grid_columns,
@@ -636,7 +643,7 @@ impl Encoder {
                         + last_gainmap_image.height,
                 };
                 Self::validate_gainmap_grid(&gainmap_grid, gainmaps)?;
-                let tonemap_item_id = self.add_tmap_item(gainmaps[0])?;
+                let tonemap_item_id = self.add_tmap_item(first_gainmap)?;
                 if !self.alternative_item_ids.is_empty() {
                     return AvifError::unknown_error("");
                 }
@@ -682,7 +689,7 @@ impl Encoder {
                 return AvifError::not_implemented();
             }
             // Another frame in an image sequence, or layer in a layered image.
-            let first_image = cell_images[0];
+            let first_image = *cell_images.first().ok_or(AvifError::InvalidArgument)?;
             if !first_image.has_same_cicp(&self.image_metadata)
                 || first_image.alpha_premultiplied != self.image_metadata.alpha_premultiplied
                 // If the previously added image had an alpha channel, then this image should have
@@ -697,11 +704,12 @@ impl Encoder {
             }
         }
 
+        let first_cell_image = cell_images.first().ok_or(AvifError::InvalidArgument)?;
         let (tile_rows_log2, tile_columns_log2) = self
             .settings
             .mutable
             .tiling_mode
-            .log2(cell_images[0].width, cell_images[0].height);
+            .log2(first_cell_image.width, first_cell_image.height);
         // Encode the AV1 OBUs.
         let num_items = self.items.len();
         for i in 0..num_items {
@@ -710,12 +718,26 @@ impl Encoder {
                 continue;
             }
             let mut image = match item.category {
-                Category::Gainmap => &gainmaps.unwrap()[item.cell_index].image,
-                _ => cell_images[item.cell_index],
+                Category::Gainmap => {
+                    &gainmaps
+                        .ok_or(AvifError::InvalidArgument)?
+                        .get(item.cell_index)
+                        .ok_or(AvifError::InvalidArgument)?
+                        .image
+                }
+                _ => *cell_images
+                    .get(item.cell_index)
+                    .ok_or(AvifError::InvalidArgument)?,
             };
             let first_image = match item.category {
-                Category::Gainmap => &gainmaps.unwrap()[0].image,
-                _ => cell_images[0],
+                Category::Gainmap => {
+                    &gainmaps
+                        .ok_or(AvifError::InvalidArgument)?
+                        .first()
+                        .ok_or(AvifError::InvalidArgument)?
+                        .image
+                }
+                _ => *cell_images.first().ok_or(AvifError::InvalidArgument)?,
             };
             let mut padded_image;
             if image.width != first_image.width || image.height != first_image.height {
@@ -804,12 +826,10 @@ impl Encoder {
                 codec_specific_options: self.codec_specific_options.clone(),
             };
             let item = &mut self.items[i];
-            item.codec.unwrap_mut().encode_image(
-                image,
-                item.category,
-                &encoder_config,
-                &mut item.samples,
-            )?;
+            item.codec
+                .as_mut()
+                .ok_or(AvifError::NoCodecAvailable)?
+                .encode_image(image, item.category, &encoder_config, &mut item.samples)?;
         }
         self.duration_in_timescales.try_push(duration)?;
         Ok(())
@@ -909,7 +929,10 @@ impl Encoder {
             if item.codec.is_none() {
                 continue;
             }
-            item.codec.unwrap_mut().finish(&mut item.samples)?;
+            item.codec
+                .as_mut()
+                .ok_or(AvifError::NoCodecAvailable)?
+                .finish(&mut item.samples)?;
             if item.extra_layer_count > 0
                 && item.samples.len() != 1 + item.extra_layer_count as usize
             {
@@ -921,12 +944,17 @@ impl Encoder {
                 assert_eq!(item.codec_configuration, None);
                 let is_single_image = self.duration_in_timescales.len() < 2;
                 let is_lossless = self.settings.mutable.quality(item.category) == 100.0;
-                item.codec_configuration = Some(item.codec.unwrap_ref().get_codec_config(
-                    &self.image_metadata,
-                    is_single_image,
-                    is_lossless,
-                    &item.samples,
-                )?);
+                item.codec_configuration = Some(
+                    item.codec
+                        .as_ref()
+                        .ok_or(AvifError::NoCodecAvailable)?
+                        .get_codec_config(
+                            &self.image_metadata,
+                            is_single_image,
+                            is_lossless,
+                            &item.samples,
+                        )?,
+                );
             }
         }
         let mut stream = OStream::default();

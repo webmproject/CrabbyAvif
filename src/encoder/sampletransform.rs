@@ -64,28 +64,29 @@ impl SampleTransformBitDepth {
 }
 
 impl SampleTransformToken {
-    fn to_type(&self) -> u8 {
+    fn to_type(&self) -> AvifResult<u8> {
         match self {
-            SampleTransformToken::Constant(_) => 0,
+            SampleTransformToken::Constant(_) => Ok(0),
             SampleTransformToken::ImageItem(index) => {
                 // SampleTransformToken::ImageItem is 0-based.
                 // Image item indices are 1-based.
-                (*index).checked_add(1).unwrap().try_into().unwrap()
+                let val = (*index).checked_add(1).ok_or(AvifError::InvalidArgument)?;
+                u8::try_from(val).map_err(|_| AvifError::InvalidArgument)
             }
-            SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Negation) => 64,
-            SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Absolute) => 65,
-            SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Not) => 66,
-            SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Bsr) => 67,
-            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Sum) => 128,
-            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Difference) => 129,
-            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Product) => 130,
-            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Quotient) => 131,
-            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::And) => 132,
-            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Or) => 133,
-            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Xor) => 134,
-            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Pow) => 135,
-            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Min) => 136,
-            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Max) => 137,
+            SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Negation) => Ok(64),
+            SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Absolute) => Ok(65),
+            SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Not) => Ok(66),
+            SampleTransformToken::UnaryOp(SampleTransformUnaryOp::Bsr) => Ok(67),
+            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Sum) => Ok(128),
+            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Difference) => Ok(129),
+            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Product) => Ok(130),
+            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Quotient) => Ok(131),
+            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::And) => Ok(132),
+            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Or) => Ok(133),
+            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Xor) => Ok(134),
+            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Pow) => Ok(135),
+            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Min) => Ok(136),
+            SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Max) => Ok(137),
         }
     }
 }
@@ -187,12 +188,15 @@ fn write_sato(recipe: Recipe) -> AvifResult<Vec<u8>> {
     stream.write_bits(0, 4)?; // unsigned int(4) reserved;
     stream.write_bits(bit_depth as u32, 2)?; // unsigned int(2) bit_depth;
 
-    stream.write_u8(expression.tokens.len().try_into().unwrap())?; // unsigned int(8) token_count;
+    stream
+        .write_u8(u8::try_from(expression.tokens.len()).map_err(|_| AvifError::InvalidArgument)?)?; // unsigned int(8) token_count;
     for token in &expression.tokens {
-        stream.write_u8(token.to_type())?; // unsigned int(8) token;
+        stream.write_u8(token.to_type()?)?; // unsigned int(8) token;
         if let SampleTransformToken::Constant(constant) = token {
             let mut write_constant = |be_bytes: &[u8]| -> AvifResult<()> {
-                assert_eq!(be_bytes.len() * 8, bit_depth.to_bits().into());
+                if be_bytes.len() * 8 != usize::from(bit_depth.to_bits()) {
+                    return AvifError::invalid_argument();
+                }
                 stream.write_slice(be_bytes) // signed int(1<<(bit_depth+3)) constant;
             };
             match bit_depth {
@@ -200,9 +204,11 @@ fn write_sato(recipe: Recipe) -> AvifResult<Vec<u8>> {
                 SampleTransformBitDepth::Signed8bits => unreachable!(),
                 SampleTransformBitDepth::Signed16bits => unreachable!(),
 
-                SampleTransformBitDepth::Signed32bits => {
-                    write_constant(&i32::try_from(*constant).unwrap().to_be_bytes())?
-                }
+                SampleTransformBitDepth::Signed32bits => write_constant(
+                    &i32::try_from(*constant)
+                        .map_err(|_| AvifError::InvalidArgument)?
+                        .to_be_bytes(),
+                )?,
 
                 #[cfg(not(feature = "satofloat"))]
                 SampleTransformBitDepth::Signed64bits => unreachable!(),
@@ -233,7 +239,7 @@ impl Encoder {
             id: u16_from_usize(self.items.len() + 1)?,
             item_type: "sato".into(),
             category: Category::Color,
-            metadata_payload: write_sato(self.final_recipe.unwrap())?,
+            metadata_payload: write_sato(self.final_recipe.ok_or(AvifError::InvalidArgument)?)?,
             hidden_image: false,
             ..Default::default()
         };
@@ -397,7 +403,7 @@ impl Encoder {
         let mut iter = self.items.iter().filter(|item| {
             item.codec.is_some() && item.category == category && item.cell_index == cell_index
         });
-        let item = iter.next().unwrap();
+        let item = iter.next().ok_or(AvifError::InvalidArgument)?;
         let (_, encoder_codec) = self
             .settings
             .codec_choice
@@ -512,7 +518,7 @@ impl Encoder {
             id: u16_from_usize(self.items.len() + 1)?,
             item_type: "sato".into(),
             category: Category::Color,
-            metadata_payload: write_sato(self.final_recipe.unwrap())?,
+            metadata_payload: write_sato(self.final_recipe.ok_or(AvifError::InvalidArgument)?)?,
             hidden_image: false,
             ..Default::default()
         };
@@ -607,7 +613,8 @@ impl Encoder {
             let float_plane = float_planes[plane.as_usize()].ok_or(AvifError::NoContent)?;
             let width = sign_exponent_msb.width(plane);
             let height = sign_exponent_msb.height(plane);
-            if float_plane.len() != width.checked_mul(height).unwrap() {
+            let expected_len = checked_mul!(width, height)?;
+            if float_plane.len() != expected_len {
                 return AvifError::invalid_argument();
             }
             for y in 0..height as u32 {
