@@ -220,7 +220,7 @@ pub(crate) fn assert_eq_f32_array(a: &[f32], b: &[f32]) {
 }
 
 pub(crate) fn check_slice_range(len: usize, range: &Range<usize>) -> AvifResult<()> {
-    if range.start >= len || range.end > len {
+    if range.start > range.end || range.end > len {
         return AvifError::no_content();
     }
     Ok(())
@@ -459,5 +459,32 @@ impl<T> VecExtension<T> for Vec<T> {
         #[allow(clippy::disallowed_methods)]
         self.extend_from_slice(value);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[allow(clippy::reversed_empty_ranges)]
+    fn test_check_slice_range() {
+        assert!(check_slice_range(10, &(0..0)).is_ok());
+        assert!(check_slice_range(10, &(0..5)).is_ok());
+        assert!(check_slice_range(10, &(0..10)).is_ok());
+        assert!(check_slice_range(10, &(5..10)).is_ok());
+        assert!(check_slice_range(10, &(10..10)).is_ok());
+        assert!(check_slice_range(0, &(0..0)).is_ok());
+
+        // Inverted ranges (start > end) must fail.
+        assert!(check_slice_range(10, &(5..2)).is_err());
+        assert!(check_slice_range(10, &(10..0)).is_err());
+        assert!(check_slice_range(0, &(1..0)).is_err());
+
+        // Out of bounds ranges must fail.
+        assert!(check_slice_range(10, &(0..11)).is_err());
+        assert!(check_slice_range(10, &(10..11)).is_err());
+        assert!(check_slice_range(10, &(11..12)).is_err());
+        assert!(check_slice_range(0, &(0..1)).is_err());
     }
 }
