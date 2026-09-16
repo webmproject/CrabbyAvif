@@ -543,8 +543,14 @@ impl<const LITTLE_ENDIAN: bool> OStreamImpl<LITTLE_ENDIAN> {
         start_offset: usize,
         data: &[u8],
     ) -> AvifResult<usize> {
+        let Some(search_slice) = self.data.get(start_offset..) else {
+            return AvifError::no_content();
+        };
+        if data.is_empty() {
+            return Ok(start_offset);
+        }
         Ok(
-            match self.data[start_offset..]
+            match search_slice
                 .windows(data.len())
                 .position(|window| window == data)
             {
@@ -834,6 +840,13 @@ mod tests {
         // offset.
         assert_eq!(stream.write_slice_dedupe(4, &[3, 4, 5]), Ok(9));
         assert_eq!(stream.offset(), 12);
+
+        // Empty slice should not panic and return start_offset.
+        assert_eq!(stream.write_slice_dedupe(0, &[]), Ok(0));
+        assert_eq!(stream.offset(), 12);
+
+        // Start offset out of bounds should return error.
+        assert!(stream.write_slice_dedupe(100, &[1, 2, 3]).is_err());
     }
 
     #[cfg(feature = "encoder")]
