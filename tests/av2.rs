@@ -100,7 +100,7 @@ fn encode_decode(
 
     let decoded = decoder.image().unwrap();
     assert!(decoded.has_same_properties_and_cicp(&image));
-    assert_eq!(decoded.alpha_present, !image.is_opaque());
+    assert_eq!(decoded.alpha_present, !image.is_opaque()?);
     if decoded.alpha_present {
         assert_eq!(decoded.alpha_premultiplied, image.alpha_premultiplied);
     }

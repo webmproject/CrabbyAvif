@@ -613,7 +613,14 @@ impl Encoder {
                     // When encoding a single image in which the alpha plane exists but is entirely
                     // opaque, skip writing an alpha AV1 payload. This does not apply to image
                     // sequences since subsequent frames may have a non-opaque alpha channel.
-                    !cell_images.iter().all(|image| image.is_opaque())
+                    let mut all_opaque = true;
+                    for image in cell_images {
+                        if !image.is_opaque()? {
+                            all_opaque = false;
+                            break;
+                        }
+                    }
+                    !all_opaque
                 } else {
                     true
                 };

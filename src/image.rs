@@ -395,13 +395,13 @@ impl Image {
 
     #[cfg(any(feature = "libyuv", feature = "jpegxl"))]
     pub(crate) fn plane_row_bytes(&self) -> AvifResult<[i32; 4]> {
-        Ok(ALL_PLANES.map(|x| {
-            if self.has_plane(x) {
-                i32_from_u32(self.plane_data(x).unwrap().row_bytes).unwrap()
-            } else {
-                0
+        let mut row_bytes = [0i32; 4];
+        for plane in ALL_PLANES {
+            if self.has_plane(plane) {
+                row_bytes[plane.as_usize()] = i32_from_u32(self.row_bytes[plane.as_usize()])?;
             }
-        }))
+        }
+        Ok(row_bytes)
     }
 
     #[cfg(any(feature = "dav1d", feature = "avm"))]
@@ -482,19 +482,31 @@ impl Image {
                 for y in 0..src_plane.height {
                     let src_row = image.row(plane, y)?;
                     let dst_row = self.row_mut(plane, y)?;
-                    let dst_slice = &mut dst_row[0..src_row.len()];
+                    let src_len = src_row.len();
+                    let dst_slice = dst_row
+                        .get_mut(0..src_len)
+                        .ok_or(AvifError::UnknownError("".into()))?;
                     dst_slice.copy_from_slice(src_row);
-                    let dst_slice = &mut dst_row[src_row.len()..];
-                    dst_slice.fill(*src_row.last().unwrap());
+                    let last_pixel = *src_row.last().ok_or(AvifError::UnknownError("".into()))?;
+                    let dst_slice = dst_row
+                        .get_mut(src_len..)
+                        .ok_or(AvifError::UnknownError("".into()))?;
+                    dst_slice.fill(last_pixel);
                 }
             } else {
                 for y in 0..src_plane.height {
                     let src_row = image.row16(plane, y)?;
                     let dst_row = self.row16_mut(plane, y)?;
-                    let dst_slice = &mut dst_row[0..src_row.len()];
+                    let src_len = src_row.len();
+                    let dst_slice = dst_row
+                        .get_mut(0..src_len)
+                        .ok_or(AvifError::UnknownError("".into()))?;
                     dst_slice.copy_from_slice(src_row);
-                    let dst_slice = &mut dst_row[src_row.len()..];
-                    dst_slice.fill(*src_row.last().unwrap());
+                    let last_pixel = *src_row.last().ok_or(AvifError::UnknownError("".into()))?;
+                    let dst_slice = dst_row
+                        .get_mut(src_len..)
+                        .ok_or(AvifError::UnknownError("".into()))?;
+                    dst_slice.fill(last_pixel);
                 }
             }
         }
@@ -521,38 +533,45 @@ impl Image {
 
     // This function is not used in all configurations.
     #[allow(dead_code)]
-    pub fn is_opaque(&self) -> bool {
+    pub fn is_opaque(&self) -> AvifResult<bool> {
         if let Some(plane_data) = self.plane_data(Plane::A) {
             let opaque_value = self.max_channel();
             if self.depth == 8 {
                 for y in 0..plane_data.height {
-                    let row = self.row(Plane::A, y).unwrap();
+                    let row = self.row(Plane::A, y)?;
                     if !row.iter().all(|pixel| *pixel == opaque_value as u8) {
-                        return false;
+                        return Ok(false);
                     }
                 }
             } else {
                 for y in 0..plane_data.height {
-                    let row = self.row16(Plane::A, y).unwrap();
+                    let row = self.row16(Plane::A, y)?;
                     if !row.iter().all(|pixel| *pixel == opaque_value) {
-                        return false;
+                        return Ok(false);
                     }
                 }
             }
         }
-        true
+        Ok(true)
     }
 
     pub fn fill_plane_with_value(&mut self, plane: Plane, value: u16) -> AvifResult<()> {
         if let Some(plane_data) = self.plane_data(plane) {
+            let width = plane_data.width as usize;
             if self.depth == 8 {
                 for y in 0..plane_data.height {
-                    let row = &mut self.row_mut(plane, y).unwrap()[..plane_data.width as usize];
+                    let row = self
+                        .row_mut(plane, y)?
+                        .get_mut(..width)
+                        .ok_or(AvifError::NoContent)?;
                     row.fill(value as u8);
                 }
             } else {
                 for y in 0..plane_data.height {
-                    let row = &mut self.row16_mut(plane, y).unwrap()[..plane_data.width as usize];
+                    let row = self
+                        .row16_mut(plane, y)?
+                        .get_mut(..width)
+                        .ok_or(AvifError::NoContent)?;
                     row.fill(value);
                 }
             }

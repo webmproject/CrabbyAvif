@@ -121,7 +121,7 @@ impl Writer for PngWriter {
                 }
                 (_, true) => {
                     // TODO - b/479429854: Support specifying chroma upsampling.
-                    color_type = if image.is_opaque() {
+                    color_type = if image.is_opaque()? {
                         rgb.format = rgb::Format::Rgb;
                         PNG_COLOR_TYPE_RGB
                     } else {
