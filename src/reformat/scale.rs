@@ -20,6 +20,9 @@ use crate::*;
 use libyuv_sys::bindings::*;
 
 fn fixed_div(num: u32, div: u32) -> u32 {
+    if div == 0 {
+        return 0;
+    }
     (((num as u64) << 16) / div as u64) as u32
 }
 
@@ -37,9 +40,12 @@ fn scale_slope(
 }
 
 fn scale_cols(dst: &mut [u8], src: &[u8], dst_width: u32, mut x: u32, dx: u32) {
+    if dst_width == 0 {
+        return;
+    }
     let mut j = 0;
     let mut dst_idx = 0;
-    while j < dst_width - 1 {
+    while j + 1 < dst_width {
         dst[dst_idx] = src[(x >> 16) as usize];
         x += dx;
         dst[dst_idx + 1] = src[(x >> 16) as usize];
@@ -53,9 +59,12 @@ fn scale_cols(dst: &mut [u8], src: &[u8], dst_width: u32, mut x: u32, dx: u32) {
 }
 
 fn scale_cols16(dst: &mut [u16], src: &[u16], dst_width: u32, mut x: u32, dx: u32) {
+    if dst_width == 0 {
+        return;
+    }
     let mut j = 0;
     let mut dst_idx = 0;
-    while j < dst_width - 1 {
+    while j + 1 < dst_width {
         dst[dst_idx] = src[(x >> 16) as usize];
         x += dx;
         dst[dst_idx + 1] = src[(x >> 16) as usize];
@@ -69,9 +78,12 @@ fn scale_cols16(dst: &mut [u16], src: &[u16], dst_width: u32, mut x: u32, dx: u3
 }
 
 fn scale_uv_cols(dst: &mut [u8], src: &[u8], dst_width: u32, mut x: u64, dx: u32) {
+    if dst_width == 0 {
+        return;
+    }
     let mut j = 0;
     let mut dst_idx = 0;
-    while j < dst_width - 1 {
+    while j + 1 < dst_width {
         let src_idx = ((x >> 16) as usize) * 2;
         dst[dst_idx] = src[src_idx];
         dst[dst_idx + 1] = src[src_idx + 1];
@@ -96,6 +108,9 @@ impl Image {
     fn scale_plane_impl(&mut self, src: &Image, plane: Plane) -> AvifResult<()> {
         let dst_width = self.width(plane);
         let dst_height = self.height(plane);
+        if dst_width == 0 || dst_height == 0 {
+            return Ok(());
+        }
         let (x, mut y, dx, dy) = scale_slope(
             src.width(plane) as u32,
             src.height(plane) as u32,
@@ -181,16 +196,31 @@ impl Image {
                 ..image::Image::default()
             };
             i010.allocate_planes(Category::Color)?;
-            let src_y_pd = self.plane_data(Plane::Y).unwrap();
-            let src_uv_pd = self.plane_data(Plane::U).unwrap();
-            let src_y = self.planes[Plane::Y.as_usize()].unwrap_ref().ptr16();
-            let src_uv = self.planes[Plane::U.as_usize()].unwrap_ref().ptr16();
-            let dst_y_pd = i010.plane_data(Plane::Y).unwrap();
-            let dst_u_pd = i010.plane_data(Plane::U).unwrap();
-            let dst_v_pd = i010.plane_data(Plane::V).unwrap();
-            let dst_y = i010.planes[Plane::Y.as_usize()].unwrap_mut().ptr16_mut();
-            let dst_u = i010.planes[Plane::U.as_usize()].unwrap_mut().ptr16_mut();
-            let dst_v = i010.planes[Plane::V.as_usize()].unwrap_mut().ptr16_mut();
+            let src_y_pd = self.plane_data(Plane::Y).ok_or(AvifError::NoContent)?;
+            let src_uv_pd = self.plane_data(Plane::U).ok_or(AvifError::NoContent)?;
+            let src_y = self.planes[Plane::Y.as_usize()]
+                .as_ref()
+                .ok_or(AvifError::NoContent)?
+                .ptr16();
+            let src_uv = self.planes[Plane::U.as_usize()]
+                .as_ref()
+                .ok_or(AvifError::NoContent)?
+                .ptr16();
+            let dst_y_pd = i010.plane_data(Plane::Y).ok_or(AvifError::NoContent)?;
+            let dst_u_pd = i010.plane_data(Plane::U).ok_or(AvifError::NoContent)?;
+            let dst_v_pd = i010.plane_data(Plane::V).ok_or(AvifError::NoContent)?;
+            let dst_y = i010.planes[Plane::Y.as_usize()]
+                .as_mut()
+                .ok_or(AvifError::NoContent)?
+                .ptr16_mut();
+            let dst_u = i010.planes[Plane::U.as_usize()]
+                .as_mut()
+                .ok_or(AvifError::NoContent)?
+                .ptr16_mut();
+            let dst_v = i010.planes[Plane::V.as_usize()]
+                .as_mut()
+                .ok_or(AvifError::NoContent)?
+                .ptr16_mut();
             // SAFETY: This function calls into libyuv which is a C++ library. We pass in
             // pointers and strides to rust slices that are guaranteed to be valid.
             let ret = unsafe {
@@ -259,14 +289,26 @@ impl Image {
             && (self.yuv_format == PixelFormat::AndroidNv12
                 || self.yuv_format == PixelFormat::AndroidNv21)
         {
-            let src_y_pd = src.plane_data(Plane::Y).unwrap();
-            let src_uv_pd = src.plane_data(Plane::U).unwrap();
-            let src_y = src.planes[Plane::Y.as_usize()].unwrap_ref().ptr();
-            let src_uv = src.planes[Plane::U.as_usize()].unwrap_ref().ptr();
-            let dst_y_pd = self.plane_data(Plane::Y).unwrap();
-            let dst_uv_pd = self.plane_data(Plane::U).unwrap();
-            let dst_y = self.planes[Plane::Y.as_usize()].unwrap_mut().ptr_mut();
-            let dst_uv = self.planes[Plane::U.as_usize()].unwrap_mut().ptr_mut();
+            let src_y_pd = src.plane_data(Plane::Y).ok_or(AvifError::NoContent)?;
+            let src_uv_pd = src.plane_data(Plane::U).ok_or(AvifError::NoContent)?;
+            let src_y = src.planes[Plane::Y.as_usize()]
+                .as_ref()
+                .ok_or(AvifError::NoContent)?
+                .ptr();
+            let src_uv = src.planes[Plane::U.as_usize()]
+                .as_ref()
+                .ok_or(AvifError::NoContent)?
+                .ptr();
+            let dst_y_pd = self.plane_data(Plane::Y).ok_or(AvifError::NoContent)?;
+            let dst_uv_pd = self.plane_data(Plane::U).ok_or(AvifError::NoContent)?;
+            let dst_y = self.planes[Plane::Y.as_usize()]
+                .as_mut()
+                .ok_or(AvifError::NoContent)?
+                .ptr_mut();
+            let dst_uv = self.planes[Plane::U.as_usize()]
+                .as_mut()
+                .ok_or(AvifError::NoContent)?
+                .ptr_mut();
             // SAFETY: This function calls into libyuv which is a C++ library. We pass in pointers
             // and strides to rust slices that are guaranteed to be valid.
             let ret = unsafe {
