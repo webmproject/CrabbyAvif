@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::internal_utils::IteratorExtension;
 use crate::internal_utils::VecExtension;
 use crate::utils::create_vec_exact;
 use crate::AvifError;
@@ -64,7 +65,7 @@ pub fn copy_raw_profile(profile: &[u8]) -> AvifResult<Vec<u8>> {
         .trim()
         .parse()
         .map_err(|_| AvifError::UnknownError("Invalid length format".into()))?;
-    let hex_payload: Vec<u8> = parts.flatten().copied().collect();
+    let hex_payload: Vec<u8> = parts.flatten().copied().try_collect()?;
     if expected_length == 0 || hex_payload.len() < expected_length * 2 {
         return Err(AvifError::UnknownError(
             "Invalid length or truncated hex payload".into(),

@@ -27,6 +27,9 @@ pub mod avm;
 #[cfg(feature = "jpegxl")]
 pub mod libjxl;
 
+#[cfg(feature = "encoder")]
+use crate::internal_utils::*;
+
 use crate::decoder::item::Item;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
@@ -123,9 +126,11 @@ impl EncoderConfig {
         }
     }
 
-    pub(crate) fn codec_specific_options(&self, category: Category) -> Vec<(String, String)> {
-        let options: Vec<(String, String)> = self
-            .codec_specific_options
+    pub(crate) fn codec_specific_options(
+        &self,
+        category: Category,
+    ) -> AvifResult<Vec<(String, String)>> {
+        self.codec_specific_options
             .iter()
             .filter(|(key, _value)| {
                 // If there is a key in a requested category, return it. Otherwise, return the
@@ -138,8 +143,7 @@ impl EncoderConfig {
                             .contains_key(&(Some(category), key.1.clone())))
             })
             .map(|(key, value)| (key.1.clone(), value.clone()))
-            .collect();
-        options
+            .try_collect()
     }
 }
 
@@ -205,7 +209,7 @@ mod tests {
             Some(String::from("generic_value2")),
         );
 
-        let mut actual = config.codec_specific_options(Category::Color);
+        let mut actual = config.codec_specific_options(Category::Color).unwrap();
         actual.sort();
         let mut expected = vec![
             (String::from("hjkl"), String::from("generic_value2")),
@@ -214,7 +218,7 @@ mod tests {
         expected.sort();
         assert_eq!(expected, actual);
 
-        actual = config.codec_specific_options(Category::Alpha);
+        actual = config.codec_specific_options(Category::Alpha).unwrap();
         actual.sort();
         expected = vec![
             (String::from("hjkl"), String::from("generic_value2")),

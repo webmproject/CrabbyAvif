@@ -310,7 +310,7 @@ impl Item {
         let layer_sizes: Vec<_> = self.samples[0..self.extra_layer_count as usize]
             .iter()
             .map(|x| x.sample_data().len())
-            .collect();
+            .try_collect()?;
         let has_large_size = layer_sizes.iter().any(|x| *x > 0xffff);
         stream.start_box("a1lx")?;
         // unsigned int(7) reserved = 0;

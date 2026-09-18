@@ -885,7 +885,7 @@ impl Decoder {
             .source_item_ids
             .iter()
             .map(|id| self.items.get(id).unwrap())
-            .collect();
+            .try_collect()?;
         if item.is_grid_item() {
             let tile_count = tile_info.grid_tile_count()? as usize;
             if source_items.len() != tile_count {

@@ -14,6 +14,7 @@
 
 use crate::gainmap::GainMap;
 use crate::image::*;
+use crate::internal_utils::*;
 use crate::*;
 
 use std::fs::File;
@@ -157,7 +158,7 @@ impl Y4MReader {
             return AvifError::unknown_error("no bytes in y4m line");
         }
         y4m_line.pop();
-        let parts: Vec<&str> = y4m_line.split(" ").collect();
+        let parts: Vec<&str> = y4m_line.split(" ").try_collect()?;
         if parts[0] != "YUV4MPEG2" {
             return AvifError::unknown_error("Not a Y4M file");
         }

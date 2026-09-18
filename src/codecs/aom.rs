@@ -245,7 +245,7 @@ impl Encoder for Aom {
         // Check if codec-specific options for libaom contain a tune metric
         // setting. If there are multiple "tune" options specified, honor the
         // last one.
-        let options = config.codec_specific_options(category);
+        let options = config.codec_specific_options(category)?;
         if let Some((_, value)) = options.iter().rfind(|&(k, _)| k == "tune") {
             // Check if the tune metric setting is AOM_TUNE_IQ. For consistent
             // behavior, handle both cases where tune was either specified as a
@@ -495,7 +495,7 @@ impl Encoder for Aom {
                     crabbyavif_default_tune_metric
                 );
             }
-            let codec_specific_options = config.codec_specific_options(category);
+            let codec_specific_options = config.codec_specific_options(category)?;
             for (key, value) in &codec_specific_options {
                 if key == "end-usage" {
                     // This key is already processed before initialization of the encoder.

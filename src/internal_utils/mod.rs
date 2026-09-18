@@ -434,6 +434,21 @@ impl<T> SliceExtension<T> for &[T] {
     }
 }
 
+// Same as Iterator::collect() into a Vec<T> but returns an error if the allocation fails.
+pub(crate) trait IteratorExtension<T> {
+    fn try_collect(self) -> AvifResult<Vec<T>>;
+}
+
+impl<T, I: Iterator<Item = T>> IteratorExtension<T> for I {
+    fn try_collect(self) -> AvifResult<Vec<T>> {
+        let mut vec: Vec<T> = create_vec_exact(self.size_hint().0)?;
+        for item in self {
+            vec.try_push(item)?;
+        }
+        Ok(vec)
+    }
+}
+
 // Same as Vec.push() and Vec.extend_from_slice() but returns an error if the allocation fails.
 pub(crate) trait VecExtension<T> {
     fn try_push(&mut self, value: T) -> AvifResult<()>;

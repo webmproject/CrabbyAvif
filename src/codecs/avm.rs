@@ -386,7 +386,7 @@ impl Encoder for Avm {
                 }
             }
 
-            let codec_specific_options = config.codec_specific_options(category);
+            let codec_specific_options = config.codec_specific_options(category)?;
             for (key, value) in &codec_specific_options {
                 if key == "end-usage" {
                     // This key is already processed before initialization of the encoder.
@@ -707,7 +707,7 @@ impl Decoder for Avm {
                 // sample data OBUs.
                 // TODO(b/437292541): Calling avm_codec_decode() twice fails.
                 //                    Add an API to avoid allocating a buffer.
-                let mut config_obus_then_av2_payload = vec![];
+                let mut config_obus_then_av2_payload = Vec::new();
                 let av2_payload = if first_time {
                     first_time = false;
                     let config_obus = match &self.decoder_config.unwrap_ref().codec_config {

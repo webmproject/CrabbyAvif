@@ -532,7 +532,7 @@ impl Encoder {
         {
             return AvifError::invalid_argument();
         }
-        let gainmap_images: Vec<_> = gainmaps.iter().map(|x| &x.image).collect();
+        let gainmap_images: Vec<_> = gainmaps.iter().map(|x| &x.image).try_collect()?;
         Self::validate_image_grid(grid, &gainmap_images, Recipe::None)?;
         // Ensure that the gainmap image does not have alpha. validate_image_grid() ensures that
         // either all the cell images have alpha or all of them don't. So it is sufficient to check

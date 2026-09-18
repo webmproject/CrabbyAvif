@@ -355,7 +355,7 @@ impl Encoder {
                 .iter()
                 .filter(|dimg_item| dimg_item.dimg_from_id.unwrap_or_default() == item.id)
                 .map(|dimg_item| dimg_item.id)
-                .collect();
+                .try_collect()?;
             if !dimg_item_ids.is_empty() {
                 if !box_started {
                     stream.start_full_box("iref", (0, 0))?;
@@ -597,8 +597,11 @@ impl Encoder {
     }
 
     pub(crate) fn write_track_meta(&mut self, stream: &mut OStream) -> AvifResult<()> {
-        let mut metadata_items: Vec<_> =
-            self.items.iter_mut().filter(|x| x.is_metadata()).collect();
+        let mut metadata_items: Vec<_> = self
+            .items
+            .iter_mut()
+            .filter(|x| x.is_metadata())
+            .try_collect()?;
         if metadata_items.is_empty() {
             return Ok(());
         }
@@ -787,7 +790,7 @@ impl Encoder {
         stream.start_full_box("meta", (0, 0))?;
         write_hdlr(stream, "pict")?;
         write_pitm(stream, self.primary_item_id)?;
-        let mut items_ref: Vec<_> = self.items.iter_mut().collect();
+        let mut items_ref: Vec<_> = self.items.iter_mut().try_collect()?;
         Self::write_iloc(stream, &mut items_ref)?;
         Self::write_iinf(stream, &items_ref)?;
         self.write_iref(stream)?;

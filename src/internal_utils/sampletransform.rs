@@ -136,20 +136,25 @@ impl SampleTransformToken {
             SampleTransformToken::UnaryOp(op) => {
                 let value = stack.pop().unwrap();
                 match value {
-                    StackItem::Values(values) => {
-                        StackItem::Values(values.iter().map(|v| op.apply(*v, bounds)).collect())
-                    }
+                    StackItem::Values(values) => StackItem::Values(
+                        values.iter().map(|v| op.apply(*v, bounds)).try_collect()?,
+                    ),
                     StackItem::Constant(c) => StackItem::Constant(op.apply(c, bounds)),
                     StackItem::ImageItem(item_idx) => {
                         if extra_inputs[item_idx].depth == 8 {
                             let row8 = extra_inputs[item_idx].row(plane, y)?;
                             StackItem::Values(
-                                row8.iter().map(|v| op.apply(*v as i64, bounds)).collect(),
+                                row8.iter()
+                                    .map(|v| op.apply(*v as i64, bounds))
+                                    .try_collect()?,
                             )
                         } else {
                             let row16 = extra_inputs[item_idx].row16(plane, y)?;
                             StackItem::Values(
-                                row16.iter().map(|v| op.apply(*v as i64, bounds)).collect(),
+                                row16
+                                    .iter()
+                                    .map(|v| op.apply(*v as i64, bounds))
+                                    .try_collect()?,
                             )
                         }
                     }
@@ -163,10 +168,12 @@ impl SampleTransformToken {
                         left.iter()
                             .zip(right.iter())
                             .map(|(l, r)| op.apply(*l, *r, bounds))
-                            .collect(),
+                            .try_collect()?,
                     ),
                     (StackItem::Values(left), StackItem::Constant(right)) => StackItem::Values(
-                        left.iter().map(|l| op.apply(*l, right, bounds)).collect(),
+                        left.iter()
+                            .map(|l| op.apply(*l, right, bounds))
+                            .try_collect()?,
                     ),
                     (StackItem::Values(left), StackItem::ImageItem(right_idx)) => {
                         if extra_inputs[right_idx].depth == 8 {
@@ -174,19 +181,22 @@ impl SampleTransformToken {
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left[i], row8[i] as i64, bounds))
-                                    .collect(),
+                                    .try_collect()?,
                             )
                         } else {
                             let row16 = extra_inputs[right_idx].row16(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left[i], row16[i] as i64, bounds))
-                                    .collect(),
+                                    .try_collect()?,
                             )
                         }
                     }
                     (StackItem::Constant(left), StackItem::Values(right)) => StackItem::Values(
-                        right.iter().map(|r| op.apply(left, *r, bounds)).collect(),
+                        right
+                            .iter()
+                            .map(|r| op.apply(left, *r, bounds))
+                            .try_collect()?,
                     ),
                     (StackItem::Constant(left), StackItem::Constant(right)) => {
                         StackItem::Constant(op.apply(left, right, bounds))
@@ -197,14 +207,14 @@ impl SampleTransformToken {
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left, row8[i] as i64, bounds))
-                                    .collect(),
+                                    .try_collect()?,
                             )
                         } else {
                             let row16 = extra_inputs[right_idx].row16(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left, row16[i] as i64, bounds))
-                                    .collect(),
+                                    .try_collect()?,
                             )
                         }
                     }
@@ -214,14 +224,14 @@ impl SampleTransformToken {
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(row8[i] as i64, right[i], bounds))
-                                    .collect(),
+                                    .try_collect()?,
                             )
                         } else {
                             let row16 = extra_inputs[left_idx].row16(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(row16[i] as i64, right[i], bounds))
-                                    .collect(),
+                                    .try_collect()?,
                             )
                         }
                     }
@@ -231,14 +241,14 @@ impl SampleTransformToken {
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(row8[i] as i64, right, bounds))
-                                    .collect(),
+                                    .try_collect()?,
                             )
                         } else {
                             let row16 = extra_inputs[left_idx].row16(plane, y)?;
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(row16[i] as i64, right, bounds))
-                                    .collect(),
+                                    .try_collect()?,
                             )
                         }
                     }
@@ -249,7 +259,7 @@ impl SampleTransformToken {
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left8[i] as i64, right8[i] as i64, bounds))
-                                    .collect(),
+                                    .try_collect()?,
                             )
                         } else if extra_inputs[left_idx].depth == 8
                             && extra_inputs[right_idx].depth > 8
@@ -259,7 +269,7 @@ impl SampleTransformToken {
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left8[i] as i64, right16[i] as i64, bounds))
-                                    .collect(),
+                                    .try_collect()?,
                             )
                         } else if extra_inputs[left_idx].depth > 8
                             && extra_inputs[right_idx].depth == 8
@@ -269,7 +279,7 @@ impl SampleTransformToken {
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left16[i] as i64, right8[i] as i64, bounds))
-                                    .collect(),
+                                    .try_collect()?,
                             )
                         } else {
                             let left16 = extra_inputs[left_idx].row16(plane, y)?;
@@ -277,7 +287,7 @@ impl SampleTransformToken {
                             StackItem::Values(
                                 (0..width)
                                     .map(|i| op.apply(left16[i] as i64, right16[i] as i64, bounds))
-                                    .collect(),
+                                    .try_collect()?,
                             )
                         }
                     }

@@ -8,6 +8,10 @@ disallowed-methods = [
   { path = "std::vec::Vec::reserve", replacement = "try_reserve" },
   { path = "std::vec::Vec::reserve_exact", replacement = "try_reserve_exact" },
   { path = "std::vec::Vec::insert", replacement = "try_push" },
+  { path = "std::vec::Vec::with_capacity", replacement = "create_vec_exact" },
+  { path = "slice::to_vec", replacement = "try_to_vec" },
+  { path = "std::iter::Iterator::collect", replacement = "try_collect" },
+  { path = "std::iter::FromIterator::from_iter", replacement = "try_collect" },
 ]
 
 disallowed-macros = [{ path = "std::vec", replacement = "try_vec_exact!" }]
