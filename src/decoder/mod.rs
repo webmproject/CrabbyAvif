@@ -806,15 +806,15 @@ impl Decoder {
         }
 
         // The input items are recorded on the derived item in 'dimg' order while the
-        // 'iref' box is parsed, so nothing has to be collected or reordered here.
-        let source_item_ids = self.items.get(&item_id).unwrap().source_item_ids.clone();
+        // 'iref' box is parsed.
+        let source_item_ids = &self.items.get(&item_id).unwrap().source_item_ids;
         if source_item_ids.is_empty() {
             return Ok(());
         }
         let mut first_codec_config: Option<CodecConfiguration> = None;
         let mut first_icc: Option<Vec<u8>> = None;
         let mut first_nclx: Option<Nclx> = None;
-        for dimg_item_id in &source_item_ids {
+        for dimg_item_id in source_item_ids {
             let dimg_item = self
                 .items
                 .get(dimg_item_id)
