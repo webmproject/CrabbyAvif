@@ -807,7 +807,10 @@ impl Decoder {
 
         // The input items are recorded on the derived item in 'dimg' order while the
         // 'iref' box is parsed.
-        let source_item_ids = &self.items.get(&item_id).unwrap().source_item_ids;
+        let source_item_ids = match self.items.get(&item_id) {
+            Some(item) => &item.source_item_ids,
+            None => return AvifError::unknown_error(""),
+        };
         if source_item_ids.is_empty() {
             return Ok(());
         }
