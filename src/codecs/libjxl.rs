@@ -31,7 +31,14 @@ use crate::reformat::rgb::Format;
 use crate::utils::pixels::ChannelIdc;
 use crate::*;
 
+// Encoding relies on the libjxl C API.
 use libjxl_sys::bindings::*;
+
+// Decoding relies on jxl-rs, the pure Rust JPEG XL decoder. Its API module is aliased because
+// several of its type names (JxlDecoder, JxlPixelFormat etc.) collide with the libjxl C bindings
+// glob-imported above.
+use jxl::api as jxl_api;
+use jxl::headers::extra_channels::ExtraChannel;
 
 use std::mem::MaybeUninit;
 use std::ptr::null;
@@ -44,8 +51,10 @@ pub struct Libjxl {
     expected_header: Option<Vec<u8>>,
 
     // Decoding
-    decoder: *mut JxlDecoder,
+    decoder: Option<jxl_api::JxlDecoder<jxl_api::states::WithImageInfo>>,
     reconstructed_jxl: Option<Vec<u8>>,
+    // Number of bytes of |reconstructed_jxl| that were already consumed by |decoder|.
+    consumed_bytes: usize,
 }
 
 // Convenient error mapping.
@@ -64,16 +73,49 @@ impl JxlEncoderStatusTrait for JxlEncoderStatus {
         }
     }
 }
-trait JxlDecoderStatusTrait {
-    fn map_dec_err(self) -> Result<(), AvifError>;
+
+fn map_dec_err(error: jxl::error::Error) -> AvifError {
+    AvifError::UnknownError(format!("jxl-rs error: {error}"))
 }
-impl JxlDecoderStatusTrait for JxlDecoderStatus {
-    fn map_dec_err(self) -> Result<(), AvifError> {
-        match self {
-            JxlDecoderStatus_JXL_DEC_SUCCESS => Ok(()),
-            _ => AvifError::unknown_error(format!("Unexpected JxlDecoderStatus {self}")),
-        }
+
+// The whole bitstream is available when decoding starts, so any jxl-rs operation is expected to
+// complete without asking for more input. Anything else means the payload was truncated.
+fn expect_complete<T, U>(
+    result: jxl::error::Result<jxl_api::ProcessingResult<T, U>>,
+) -> AvifResult<T> {
+    match result.map_err(map_dec_err)? {
+        jxl_api::ProcessingResult::Complete { result } => Ok(result),
+        jxl_api::ProcessingResult::NeedsMoreInput { size_hint, .. } => AvifError::unknown_error(
+            format!("Truncated JPEG XL bitstream ({size_hint} more bytes needed)"),
+        ),
     }
+}
+
+// Returns the jxl-rs pixel format that makes the decoder output samples directly into |rgb|.
+fn rgb_image_to_jxl_rs_pixel_format(
+    rgb: &reformat::rgb::Image,
+    num_extra_channels: usize,
+) -> AvifResult<jxl_api::JxlPixelFormat> {
+    let color_data_format = match rgb.depth {
+        8 => jxl_api::JxlDataFormat::U8 { bit_depth: 8 },
+        10 | 12 | 16 => jxl_api::JxlDataFormat::U16 {
+            endianness: jxl_api::Endianness::native(),
+            bit_depth: rgb.depth,
+        },
+        _ => return AvifError::unknown_error(format!("Unexpected depth {}", rgb.depth)),
+    };
+    Ok(jxl_api::JxlPixelFormat {
+        color_type: match (rgb.format.is_gray(), rgb.has_alpha()) {
+            (false, false) => jxl_api::JxlColorType::Rgb,
+            (false, true) => jxl_api::JxlColorType::Rgba,
+            (true, false) => jxl_api::JxlColorType::Grayscale,
+            (true, true) => jxl_api::JxlColorType::GrayscaleAlpha,
+        },
+        color_data_format: Some(color_data_format),
+        // None means "do not output that extra channel to a dedicated buffer". The alpha channel,
+        // if any, is interleaved with the color channels instead.
+        extra_channel_format: try_vec_exact![None; num_extra_channels]?,
+    })
 }
 
 fn rgb_image_to_jxl_pixel_format(
@@ -126,6 +168,7 @@ impl Encoder for Libjxl {
             (PixelFormat::Yuv420 | PixelFormat::Yuv422 | PixelFormat::Yuv444, true) => Format::Rgba,
             _ => return AvifError::not_implemented(),
         };
+        rgb.premultiply_alpha = image.alpha_premultiplied;
         rgb.allocate()?;
         rgb.convert_from_yuv(image)?;
         let rgb = rgb;
@@ -394,156 +437,62 @@ impl Decoder for Libjxl {
             Category::Gainmap => return AvifError::not_implemented(),
         }
 
-        if self.decoder.is_null() {
-            // # Safety: Calling a C function.
-            let decoder = unsafe { JxlDecoderCreate(null()) };
-            if decoder.is_null() {
-                return AvifError::unknown_error("JxlDecoderCreate() failed.");
-            }
-            self.decoder = decoder;
+        let reconstructed = match &self.reconstructed_jxl {
+            Some(reconstructed) => reconstructed,
+            None => self.reconstructed_jxl.insert({
+                // Prepend the JPEG XL payload which is stripped from its header with a reconstructed header.
 
-            const EVENTS: i32 =
-                (JxlDecoderStatus_JXL_DEC_BASIC_INFO | JxlDecoderStatus_JXL_DEC_FULL_IMAGE) as i32;
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { JxlDecoderSubscribeEvents(decoder, EVENTS) }.map_dec_err()?;
-
-            // Prepend the JPEG XL payload which is stripped from its header with a reconstructed header.
-
-            let pixi = item.pixi().ok_or_else(|| {
-                AvifError::bmff_parse_failed::<(), _>("pixi is mandatory with hxlI").unwrap_err()
-            })?;
-            let premultiplied_alpha = item.alpi().is_some_and(|alpi| alpi.is_premultiplied);
-            let codec_config = item
-                .properties
-                .iter()
-                .find_map(|property| {
-                    if let ItemProperty::CodecConfiguration(CodecConfiguration::JpegXl(
-                        codec_config,
-                    )) = property
-                    {
-                        Some(codec_config)
-                    } else {
-                        None
-                    }
-                })
-                .ok_or_else(|| {
-                    AvifError::bmff_parse_failed::<(), _>("hxlC is mandatory with hxlI")
+                let pixi = item.pixi().ok_or_else(|| {
+                    AvifError::bmff_parse_failed::<(), _>("pixi is mandatory with hxlI")
                         .unwrap_err()
                 })?;
-            let _colr_nclx = item.colr_nclx().ok_or_else(|| {
-                AvifError::bmff_parse_failed::<(), _>("colr nclx is mandatory with hxlI")
-                    .unwrap_err()
-            })?;
-            self.reconstructed_jxl = Some(reconstruct_jxl_header(ContainerFeatures {
-                width: item.width,
-                height: item.height,
-                num_channels: pixi.num_color_channels()?,
-                num_extra: u32_from_usize(pixi.num_channels_with_idc(ChannelIdc::Alpha))?,
-                bit_depth: pixi.bit_depth()?,
-                float_sample: false, // TODO: b/456440247 - Support
-                premultiplied_alpha,
-                codec_config,
-                colr_nclx_colour_primaries: ColorPrimaries::Srgb as u32, // TODO: b/456440247 - Use colr_nclx.color_primaries
-                colr_nclx_transfer_characteristics: TransferCharacteristics::Srgb as u32, // TODO: b/456440247 - Use colr_nclx.transfer_characteristics
-                intensity_target: item.clli().map_or(0, |clli| clli.max_cll.into()),
-            })?);
-            // JxlDecoderSetInput() could be called twice to avoid concatenating the reconstructed
-            // header and the signaled payload but JxlDecoderReleaseInput() does not return 0.
-            let reconstructed = self
-                .reconstructed_jxl
-                .as_mut()
-                .ok_or(AvifError::UnknownError("reconstructed jxl missing".into()))?;
-            reconstructed.try_extend_from_slice(payload)?;
-            let reconstructed_len = reconstructed.len();
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { JxlDecoderSetInput(decoder, reconstructed.as_ptr(), reconstructed_len) }
-                .map_dec_err()?;
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { JxlDecoderCloseInput(decoder) };
-
-            // # Safety: Calling a C function with valid parameters.
-            let status = unsafe { JxlDecoderProcessInput(decoder) };
-            if status != JxlDecoderStatus_JXL_DEC_BASIC_INFO {
-                return AvifError::unknown_error(format!(
-                    "Unexpected JxlDecoderStatus {status} instead of BASIC_INFO"
-                ));
-            }
-        }
-        if self.reconstructed_jxl.is_none() {
-            return AvifError::unknown_error("reconstructed jxl missing");
-        }
-
-        let decoder = self.decoder;
-        let mut basic_info: MaybeUninit<JxlBasicInfo> = MaybeUninit::uninit();
-        // # Safety: Calling a C function with valid parameters.
-        unsafe { JxlDecoderGetBasicInfo(decoder, basic_info.as_mut_ptr()) }.map_dec_err()?;
-        // # Safety: basic_info was initialized in the C function above.
-        let basic_info = unsafe { basic_info.assume_init() };
-
-        // # Safety: Calling a C function with valid parameters.
-        let status = unsafe { JxlDecoderProcessInput(decoder) };
-        if status != JxlDecoderStatus_JXL_DEC_NEED_IMAGE_OUT_BUFFER {
-            return AvifError::unknown_error(format!(
-                "Unexpected JxlDecoderStatus {status} instead of NEED_IMAGE_OUT_BUFFER"
-            ));
-        }
-
-        if image.width != 0 {
-            return AvifError::invalid_argument();
-        }
-        image.width = basic_info.xsize;
-        image.height = basic_info.ysize;
-        image.depth = basic_info
-            .bits_per_sample
-            .try_into()
-            .map_err(|_| AvifError::InvalidArgument)?;
-
-        // TODO: b/456440247 - Use information from pixi with px_flags&1=1 to fill these values?
-        image.yuv_format = PixelFormat::Yuv444; // Expect RGB for now.
-        image.yuv_range = YuvRange::Full;
-        image.chroma_sample_position = ChromaSamplePosition::Unknown;
-        // TODO: b/456440247 - Use information from colr nclx to fill these values?
-        image.color_primaries = ColorPrimaries::Unspecified;
-        image.transfer_characteristics = TransferCharacteristics::Unspecified;
-        image.matrix_coefficients = MatrixCoefficients::Unspecified;
-
-        image.allocate_planes(Category::Color)?;
-        match basic_info.num_extra_channels {
-            0 => {}
-            1 => {
-                image.alpha_present = true;
-                image.allocate_planes(Category::Alpha)?
-            }
-            n => return AvifError::unknown_error(format!("Unexpected {n} extra JPEG XL channels")),
-        }
-
-        // TODO: b/456440247 - Remove RGB->YUV->RGB unnecessary conversion.
-        let mut rgb = reformat::rgb::Image::create_from_yuv(image);
-        rgb.format = match (image.yuv_format, image.alpha_present) {
-            (PixelFormat::Yuv420 | PixelFormat::Yuv422 | PixelFormat::Yuv444, false) => Format::Rgb,
-            (PixelFormat::Yuv420 | PixelFormat::Yuv422 | PixelFormat::Yuv444, true) => Format::Rgba,
-            _ => return AvifError::not_implemented(),
+                let premultiplied_alpha = item.alpi().is_some_and(|alpi| alpi.is_premultiplied);
+                let codec_config = item
+                    .properties
+                    .iter()
+                    .find_map(|property| {
+                        if let ItemProperty::CodecConfiguration(CodecConfiguration::JpegXl(
+                            codec_config,
+                        )) = property
+                        {
+                            Some(codec_config)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or_else(|| {
+                        AvifError::bmff_parse_failed::<(), _>("hxlC is mandatory with hxlI")
+                            .unwrap_err()
+                    })?;
+                let _colr_nclx = item.colr_nclx().ok_or_else(|| {
+                    AvifError::bmff_parse_failed::<(), _>("colr nclx is mandatory with hxlI")
+                        .unwrap_err()
+                })?;
+                let mut reconstructed = reconstruct_jxl_header(ContainerFeatures {
+                    width: item.width,
+                    height: item.height,
+                    num_channels: pixi.num_color_channels()?,
+                    num_extra: u32_from_usize(pixi.num_channels_with_idc(ChannelIdc::Alpha))?,
+                    bit_depth: pixi.bit_depth()?,
+                    float_sample: false, // TODO: b/456440247 - Support
+                    premultiplied_alpha,
+                    codec_config,
+                    colr_nclx_colour_primaries: ColorPrimaries::Srgb as u32, // TODO: b/456440247 - Use colr_nclx.color_primaries
+                    colr_nclx_transfer_characteristics: TransferCharacteristics::Srgb as u32, // TODO: b/456440247 - Use colr_nclx.transfer_characteristics
+                    intensity_target: item.clli().map_or(0, |clli| clli.max_cll.into()),
+                })?;
+                reconstructed.try_extend_from_slice(payload)?;
+                self.consumed_bytes = 0;
+                reconstructed
+            }),
         };
-        rgb.allocate()?;
 
-        let (pixel_format, size) = rgb_image_to_jxl_pixel_format(&rgb)?;
-        // # Safety: Calling a C function with valid parameters.
-        unsafe {
-            JxlDecoderSetImageOutBuffer(decoder, &pixel_format, rgb.pixels_mut().cast(), size)
-        }
-        .map_dec_err()?;
-
-        // # Safety: Calling a C function with valid parameters.
-        let status = unsafe { JxlDecoderProcessInput(decoder) };
-        if status != JxlDecoderStatus_JXL_DEC_FULL_IMAGE {
-            return AvifError::unknown_error(format!(
-                "Unexpected JxlDecoderStatus {status} instead of FULL_IMAGE"
-            ));
-        }
-        // Note that JxlDecoderProcessInput() could be called a final time, expecting SUCCESS.
-        // Whether this was the last frame or not is unknown here, so it is skipped.
-
-        rgb.convert_to_yuv(image)?;
+        self.decoder = Some(Self::decode_frame(
+            self.decoder.take(),
+            reconstructed,
+            &mut self.consumed_bytes,
+            image,
+        )?);
         Ok(())
     }
 
@@ -567,17 +516,124 @@ impl Decoder for Libjxl {
     }
 }
 
+impl Libjxl {
+    // Decodes the frame of |data| starting at |consumed_bytes| into |image|. |decoder| is None for
+    // the first frame of the bitstream. Returns the decoder, ready to decode the next frame, if
+    // any, and advances |consumed_bytes| accordingly.
+    fn decode_frame(
+        decoder: Option<jxl_api::JxlDecoder<jxl_api::states::WithImageInfo>>,
+        data: &[u8],
+        consumed_bytes: &mut usize,
+        image: &mut Image,
+    ) -> AvifResult<jxl_api::JxlDecoder<jxl_api::states::WithImageInfo>> {
+        // jxl-rs reads from |input| and leaves the bytes it did not consume in it.
+        let mut input = data.get(*consumed_bytes..).ok_or(AvifError::NoContent)?;
+
+        let mut decoder = match decoder {
+            Some(decoder) => decoder,
+            None => {
+                let decoder = jxl_api::JxlDecoder::<jxl_api::states::Initialized>::new(
+                    jxl_api::JxlDecoderOptions::default(),
+                );
+                expect_complete(decoder.process(&mut input, None))?
+            }
+        };
+
+        let basic_info = decoder.basic_info().clone();
+        let depth: u8 = match basic_info.bit_depth {
+            jxl_api::JxlBitDepth::Int { bits_per_sample } => bits_per_sample
+                .try_into()
+                .map_err(|_| AvifError::InvalidArgument)?,
+            // TODO: b/456440247 - Support floating point samples.
+            jxl_api::JxlBitDepth::Float { .. } => return AvifError::not_implemented(),
+        };
+        let alpha_channel = match basic_info.extra_channels.as_slice() {
+            [] => None,
+            [extra_channel] if extra_channel.ec_type == ExtraChannel::Alpha => Some(extra_channel),
+            extra_channels => {
+                return AvifError::unknown_error(format!(
+                    "Unexpected {} extra JPEG XL channels",
+                    extra_channels.len()
+                ))
+            }
+        };
+
+        if image.width != 0 {
+            return AvifError::invalid_argument();
+        }
+        image.width = u32_from_usize(basic_info.size.0)?;
+        image.height = u32_from_usize(basic_info.size.1)?;
+        image.depth = depth;
+
+        // TODO: b/456440247 - Use information from pixi with px_flags&1=1 to fill these values?
+        image.yuv_format = PixelFormat::Yuv444; // Expect RGB for now.
+        image.yuv_range = YuvRange::Full;
+        image.chroma_sample_position = ChromaSamplePosition::Unknown;
+        // TODO: b/456440247 - Use information from colr nclx to fill these values?
+        image.color_primaries = ColorPrimaries::Unspecified;
+        image.transfer_characteristics = TransferCharacteristics::Unspecified;
+        image.matrix_coefficients = MatrixCoefficients::Unspecified;
+
+        image.allocate_planes(Category::Color)?;
+        if let Some(alpha_channel) = alpha_channel {
+            image.alpha_present = true;
+            image.alpha_premultiplied = alpha_channel.alpha_associated;
+            image.allocate_planes(Category::Alpha)?;
+        }
+
+        // TODO: b/456440247 - Remove RGB->YUV->RGB unnecessary conversion.
+        let mut rgb = reformat::rgb::Image::create_from_yuv(image);
+        rgb.format = match (image.yuv_format, image.alpha_present) {
+            (PixelFormat::Yuv420 | PixelFormat::Yuv422 | PixelFormat::Yuv444, false) => Format::Rgb,
+            (PixelFormat::Yuv420 | PixelFormat::Yuv422 | PixelFormat::Yuv444, true) => Format::Rgba,
+            _ => return AvifError::not_implemented(),
+        };
+        rgb.premultiply_alpha = image.alpha_premultiplied;
+        rgb.allocate()?;
+
+        // The pixel format can only be set before the first frame header is decoded. Setting the
+        // same value again for the following frames is allowed and is a no-op.
+        decoder
+            .set_pixel_format(rgb_image_to_jxl_rs_pixel_format(
+                &rgb,
+                basic_info.extra_channels.len(),
+            )?)
+            .map_err(map_dec_err)?;
+
+        let decoder = expect_complete(decoder.process(&mut input, None))?;
+
+        let num_rows = usize_from_u32(rgb.height)?;
+        let bytes_per_row = usize_from_u32(checked_mul!(rgb.width, rgb.pixel_size())?)?;
+        let byte_stride = usize_from_u32(rgb.row_bytes)?;
+        if byte_stride < bytes_per_row {
+            return AvifError::unknown_error(format!(
+                "Invalid row_bytes {byte_stride} < min_row_bytes {bytes_per_row}"
+            ));
+        }
+        let decoder = {
+            let buffer = jxl_api::JxlOutputBuffer::new_with_stride(
+                rgb.pixel_mut_slice()?,
+                num_rows,
+                bytes_per_row,
+                byte_stride,
+            );
+            let mut buffers = [buffer];
+            expect_complete(decoder.process(&mut input, &mut buffers, None))?
+        };
+
+        *consumed_bytes = checked_sub!(data.len(), input.len())?;
+
+        rgb.convert_to_yuv(image)?;
+        Ok(decoder)
+    }
+}
+
 impl Drop for Libjxl {
     fn drop(&mut self) {
         if !self.encoder.is_null() {
             // # Safety: Calling a C function with valid parameters.
             unsafe { JxlEncoderDestroy(self.encoder) };
             self.encoder = null_mut();
-        }
-        if !self.decoder.is_null() {
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { JxlDecoderDestroy(self.decoder) };
-            self.decoder = null_mut();
         }
     }
 }

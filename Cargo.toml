@@ -50,6 +50,7 @@ avm-sys = { version = "0.1.0", path = "sys/avm-sys", features = [
 libjxl-sys = { version = "0.1.0", path = "sys/libjxl-sys", features = [
   "libjxl",
 ], optional = true }
+jxl = { version = "0.7", optional = true }
 libpng-sys = { version = "0.1.0", path = "sys/libpng-sys", features = [
   "png",
 ], optional = true }
@@ -89,7 +90,7 @@ png = ["dep:libpng-sys", "dep:md-5"]
 jpeg = ["dep:image", "dep:xml-rs", "dep:zune-jpeg"]
 gif = ["dep:gif", "dep:gif-dispose"]
 sharpyuv = ["dep:libsharpyuv-sys"]
-jpegxl = ["dep:libjxl-sys"]
+jpegxl = ["dep:libjxl-sys", "dep:jxl"]
 satofloat = []
 
 [package.metadata.capi.header]
