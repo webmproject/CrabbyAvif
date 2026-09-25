@@ -49,6 +49,20 @@ fn encode_decode(width: u32, height: u32, depth: u8, alpha: Alpha) -> AvifResult
     // This may result in invalid premultiplied color samples but CrabbyAvif
     // does not reject that for now.
     image.alpha_premultiplied = alpha == Alpha::Premultiplied;
+    {
+        // TODO: b/456440247 - Remove this, once the jxl encoder and decoder no longer translate
+        //                     to and from RGB (which already results in quality loss).
+        let mut rgb = reformat::rgb::Image::create_from_yuv(&image);
+        rgb.format = if alpha == Alpha::None {
+            reformat::rgb::Format::Rgb
+        } else {
+            reformat::rgb::Format::Rgba
+        };
+        rgb.premultiply_alpha = image.alpha_premultiplied;
+        rgb.allocate()?;
+        rgb.convert_from_yuv(&image)?;
+        rgb.convert_to_yuv(&mut image)?;
+    }
     let image = image;
 
     let encoded = {
@@ -90,8 +104,9 @@ fn encode_decode(width: u32, height: u32, depth: u8, alpha: Alpha) -> AvifResult
     assert_eq!(decoded.yuv_range, image.yuv_range);
 
     assert!(decoder.next_image().is_ok());
-    let image = decoder.image().unwrap();
-    let psnr = psnr(image, image)?;
-    assert!(psnr >= 50.0);
+    let image_out = decoder.image().unwrap();
+    assert_eq!(image_out.has_alpha(), alpha != Alpha::None);
+    let psnr = psnr(&image, image_out)?;
+    assert!(psnr >= 42.0);
     Ok(())
 }
