@@ -649,7 +649,10 @@ pub(crate) fn parse_mini(
 
     // Alpha item
     let alpha_item_id = 2;
-    if has_alpha {
+    // If alpha_item_data_size is 0, the alpha channel is embedded in the main item (signalled
+    // with the AlphaInformation property above) and there is no auxiliary alpha item.
+    let has_alpha_item = has_alpha && alpha_item_data_size != 0;
+    if has_alpha_item {
         meta.iinf.try_push(ItemInfo {
             item_id: alpha_item_id,
             item_type: format.infe_type().to_string(),
@@ -673,7 +676,6 @@ pub(crate) fn parse_mini(
         // Subsampling is not checked. Alpha is only interesting for its luma
         // plane. The other planes are ignored if any.
 
-        assert_ne!(alpha_item_data_size, 0);
         meta.iprp.associations.try_push(ItemPropertyAssociation {
             item_id: alpha_item_id,
             associations: try_vec_exact![
@@ -785,7 +787,7 @@ pub(crate) fn parse_mini(
         })?;
     }
 
-    if has_alpha {
+    if has_alpha_item {
         meta.iloc.items.try_push(ItemLocationEntry {
             item_id: alpha_item_id,
             construction_method: 0,
