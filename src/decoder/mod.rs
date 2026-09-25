@@ -805,22 +805,23 @@ impl Decoder {
             return Ok(());
         }
 
-        let mut source_item_ids: Vec<u32> = Vec::new();
+        // The input items are recorded on the derived item in 'dimg' order while the
+        // 'iref' box is parsed.
+        let source_item_ids = match self.items.get(&item_id) {
+            Some(item) => &item.source_item_ids,
+            None => return AvifError::unknown_error(""),
+        };
+        if source_item_ids.is_empty() {
+            return Ok(());
+        }
         let mut first_codec_config: Option<CodecConfiguration> = None;
         let mut first_icc: Option<Vec<u8>> = None;
         let mut first_nclx: Option<Nclx> = None;
-        // Collect all the dimg items.
-        for dimg_item_id in self.items.keys() {
-            if *dimg_item_id == item_id {
-                continue;
-            }
+        for dimg_item_id in source_item_ids {
             let dimg_item = self
                 .items
                 .get(dimg_item_id)
                 .ok_or(AvifError::InvalidImageGrid("".into()))?;
-            if dimg_item.dimg_for_id != item_id {
-                continue;
-            }
             if dimg_item.should_skip() {
                 return AvifError::not_implemented();
             }
@@ -842,16 +843,8 @@ impl Decoder {
                     first_nclx = find_nclx(&dimg_item.properties)?.cloned();
                 }
             }
-            source_item_ids.try_push(*dimg_item_id)?;
         }
-        if source_item_ids.is_empty() {
-            return Ok(());
-        }
-        // The order of derived item ids matters: sort them by dimg_index, which is the order that
-        // items appear in the 'iref' box.
-        source_item_ids.sort_by_key(|k| self.items.get(k).unwrap().dimg_index);
         let item = self.items.get_mut(&item_id).unwrap();
-        item.source_item_ids = source_item_ids;
         if let Some(first_codec_config) = first_codec_config {
             // Adopt the configuration property of the first tile.
             // validate_properties() later makes sure they are all equal.
