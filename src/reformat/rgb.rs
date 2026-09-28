@@ -240,6 +240,24 @@ impl Image {
         }
     }
 
+    // This function may not be used in some configurations.
+    #[allow(dead_code)]
+    pub fn pixel_slice(&self) -> AvifResult<&[u8]> {
+        self.pixels
+            .as_ref()
+            .ok_or(AvifError::NoContent)?
+            .slice(0, checked_mul!(self.height, self.row_bytes)?)
+    }
+
+    // This function may not be used in some configurations.
+    #[allow(dead_code)]
+    pub fn pixel_mut_slice(&mut self) -> AvifResult<&mut [u8]> {
+        self.pixels
+            .as_mut()
+            .ok_or(AvifError::NoContent)?
+            .slice_mut(0, checked_mul!(self.height, self.row_bytes)?)
+    }
+
     pub fn row(&self, row: u32) -> AvifResult<&[u8]> {
         self.pixels
             .as_ref()

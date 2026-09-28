@@ -713,3 +713,23 @@ fn b_496622631() -> AvifResult<()> {
     );
     Ok(())
 }
+
+#[test]
+fn pixel_slices() -> AvifResult<()> {
+    let mut rgb = rgb::Image::default();
+    assert!(rgb.pixel_slice().is_err());
+    assert!(rgb.pixel_mut_slice().is_err());
+
+    rgb.width = 4;
+    rgb.height = 4;
+    rgb.depth = 8;
+    rgb.format = rgb::Format::Rgba;
+    rgb.allocate()?;
+    assert_eq!(rgb.pixel_slice()?.len(), 4 * 4 * 4);
+    assert_eq!(rgb.pixel_mut_slice()?.len(), 4 * 4 * 4);
+    rgb.pixel_mut_slice()?[0] = 42;
+    assert_eq!(rgb.pixel_slice()?[0], 42);
+    assert_eq!(rgb.row(0)?[0], 42);
+
+    Ok(())
+}

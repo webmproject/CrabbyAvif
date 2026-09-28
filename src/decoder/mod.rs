@@ -1942,7 +1942,12 @@ impl Decoder {
                 }
             }
 
-            for plane in category.planes() {
+            let planes = if category == Category::Color && tile.image.has_plane(Plane::A) {
+                &ALL_PLANES
+            } else {
+                category.planes()
+            };
+            for plane in planes {
                 let plane = plane.as_usize();
                 if let Some(src_plane) = &tile.image.planes[plane] {
                     dst_image.planes[plane] = match src_plane {
