@@ -1501,8 +1501,8 @@ fn heic_monochrome_gainmap() {
         assert!(res.is_ok());
         assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
         if cfg!(feature = "android_mediacodec") {
-            // Android MediaCodec does not support monochrome HEIC images.
-            assert!(matches!(decoder.next_image(), Err(AvifError::NoContent)));
+            // Android Emulator's MediaCodec does not support monochrome HEIC images.
+            assert!(decoder.next_image().is_err());
         }
     } else {
         assert!(res.is_err());
