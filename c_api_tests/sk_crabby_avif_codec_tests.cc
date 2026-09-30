@@ -61,9 +61,9 @@ avifResult SkCrabbyAvifCodec::Decode(const Options& options) {
   decoder->strictFlags = AVIF_STRICT_DISABLED;
   decoder->allowSampleTransform = AVIF_FALSE;
 
-  if (options.gainmap_only) {
-    decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_GAIN_MAP;
-  }
+  decoder->imageContentToDecode = options.gainmap_only
+                                      ? AVIF_IMAGE_CONTENT_GAIN_MAP
+                                      : AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA;
 
   avifResult res =
       avifDecoderSetIOMemory(decoder.get(), data.data(), data.size());
