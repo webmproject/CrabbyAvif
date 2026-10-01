@@ -152,6 +152,7 @@ impl Item {
                 return AvifError::invalid_image_grid("found unknown extra bytes in the grid box");
             }
         } else if self.is_overlay_item() {
+            let (ispe_width, ispe_height) = (self.width, self.height);
             let overlay = &mut tile_info.overlay;
             let reference_count = self.source_item_ids.len();
             let mut stream = self.stream(io)?;
@@ -183,6 +184,13 @@ impl Item {
                 size_limit,
                 dimension_limit,
             )?;
+            if (ispe_width != 0 || ispe_height != 0)
+                && (ispe_width != overlay.width || ispe_height != overlay.height)
+            {
+                return AvifError::bmff_parse_failed(
+                    "derived image dimensions do not match ispe property",
+                );
+            }
             for _ in 0..reference_count {
                 if (flags & 1) == 1 {
                     // unsigned int(32) horizontal_offset;
