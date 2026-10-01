@@ -119,6 +119,7 @@ impl Item {
     ) -> AvifResult<()> {
         if self.is_grid_item() {
             let grid = &mut tile_info.grid;
+            let (ispe_width, ispe_height) = (self.width, self.height);
             let mut stream = self.stream(io)?;
             // unsigned int(8) version = 0;
             let version = stream.read_u8()?;
@@ -148,12 +149,20 @@ impl Item {
                 size_limit,
                 dimension_limit,
             )?;
+            if (ispe_width != 0 || ispe_height != 0)
+                && (ispe_width != grid.width || ispe_height != grid.height)
+            {
+                return AvifError::bmff_parse_failed(
+                    "derived image dimensions do not match ispe property",
+                );
+            }
             if stream.has_bytes_left()? {
                 return AvifError::invalid_image_grid("found unknown extra bytes in the grid box");
             }
         } else if self.is_overlay_item() {
             let overlay = &mut tile_info.overlay;
             let reference_count = self.source_item_ids.len();
+            let (ispe_width, ispe_height) = (self.width, self.height);
             let mut stream = self.stream(io)?;
             // unsigned int(8) version = 0;
             let version = stream.read_u8()?;
@@ -183,6 +192,13 @@ impl Item {
                 size_limit,
                 dimension_limit,
             )?;
+            if (ispe_width != 0 || ispe_height != 0)
+                && (ispe_width != overlay.width || ispe_height != overlay.height)
+            {
+                return AvifError::bmff_parse_failed(
+                    "derived image dimensions do not match ispe property",
+                );
+            }
             for _ in 0..reference_count {
                 if (flags & 1) == 1 {
                     // unsigned int(32) horizontal_offset;

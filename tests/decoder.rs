@@ -1314,6 +1314,24 @@ fn auxl_with_two_targets() {
 }
 
 #[test]
+fn grid_ispe_dimension_mismatch() {
+    let mut file_bytes = std::fs::read(get_test_file("sofa_grid1x5_420.avif")).unwrap();
+    let ispe = *b"ispe";
+    let ispe_pos = file_bytes.windows(4).position(|w| w == ispe).unwrap();
+    // 4 bytes type ("ispe"), 4 bytes version and flags, 4 bytes width, 4 bytes height.
+    let width_pos = ispe_pos + 8;
+    // Modify ispe width so it mismatches grid item width.
+    file_bytes[width_pos + 3] = file_bytes[width_pos + 3].wrapping_add(1);
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(file_bytes);
+    assert!(matches!(
+        decoder.parse(),
+        Err(AvifError::BmffParseFailed(_))
+    ));
+}
+
+#[test]
 fn dimg_repetition() {
     let mut decoder = get_decoder("sofa_grid1x5_420_dimg_repeat.avif");
     assert_eq!(

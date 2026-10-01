@@ -733,3 +733,35 @@ fn pixel_slices() -> AvifResult<()> {
 
     Ok(())
 }
+
+#[test]
+fn convert_from_yuv_invalid_buffer() -> AvifResult<()> {
+    let mut image = image::Image::default();
+    image.width = 10;
+    image.height = 10;
+    image.depth = 8;
+    image.yuv_format = PixelFormat::Yuv420;
+    image.allocate_planes(Category::Color)?;
+
+    let mut rgb = rgb::Image::create_from_yuv(&image);
+    rgb.allocate()?;
+    // Valid conversion succeeds.
+    assert_eq!(rgb.convert_from_yuv(&image), Ok(()));
+
+    // Row bytes smaller than required.
+    let pixel_size = rgb.format.pixel_size(u32::from(rgb.depth));
+    rgb.row_bytes = rgb.width * pixel_size - 1;
+    assert_eq!(rgb.convert_from_yuv(&image), Err(AvifError::ReformatFailed));
+
+    // Dimension mismatch.
+    rgb.row_bytes = rgb.width * pixel_size;
+    rgb.width = 5;
+    assert_eq!(rgb.convert_from_yuv(&image), Err(AvifError::ReformatFailed));
+
+    // Missing pixels.
+    rgb.width = 10;
+    rgb.pixels = None;
+    assert_eq!(rgb.convert_from_yuv(&image), Err(AvifError::NoContent));
+
+    Ok(())
+}
