@@ -366,8 +366,29 @@ impl Image {
     }
 
     pub fn convert_from_yuv(&mut self, image: &crate::image::Image) -> AvifResult<()> {
-        if !image.has_plane(Plane::Y) || !image.depth_valid() || !self.depth_valid() {
+        if !image.has_plane(Plane::Y)
+            || !image.depth_valid()
+            || !self.depth_valid()
+            || image.width != self.width
+            || image.height != self.height
+        {
             return AvifError::reformat_failed();
+        }
+        let min_row_bytes = checked_mul!(self.width, self.pixel_size())?;
+        if self.row_bytes < min_row_bytes {
+            return AvifError::reformat_failed();
+        }
+        if self.pixels.is_none() {
+            return AvifError::no_content();
+        }
+        if self.height > 0 {
+            if self.depth == 8 {
+                self.row(self.height - 1)?;
+            } else if self.row_bytes % 2 != 0 {
+                return AvifError::reformat_failed();
+            } else {
+                self.row16(self.height - 1)?;
+            }
         }
         if matches!(
             image.matrix_coefficients,
