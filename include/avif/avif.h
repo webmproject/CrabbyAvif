@@ -667,6 +667,16 @@ avifResult crabby_avifDecoderNthImageTiming(const avifDecoder *decoder,
 /// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
+/// - if outProperties is not null, it has to point to a valid avifImage object.
+///
+/// Only properties that do not require an allocation are populated.
+avifResult crabby_avifDecoderNthImageProperties(const avifDecoder *decoder,
+                                                uint32_t frameIndex,
+                                                avifImage *outProperties);
+
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if decoder is not null, it has to point to a valid avifDecoder object.
 void crabby_avifDecoderDestroy(avifDecoder *decoder);
 
 /// # Safety

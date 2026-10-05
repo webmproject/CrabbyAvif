@@ -31,6 +31,7 @@
 #define avifDecoderNextImage crabby_avifDecoderNextImage
 #define avifDecoderNthImage crabby_avifDecoderNthImage
 #define avifDecoderNthImageMaxExtent crabby_avifDecoderNthImageMaxExtent
+#define avifDecoderNthImageProperties crabby_avifDecoderNthImageProperties
 #define avifDecoderNthImageTiming crabby_avifDecoderNthImageTiming
 #define avifDecoderParse crabby_avifDecoderParse
 #define avifDecoderRead crabby_avifDecoderRead

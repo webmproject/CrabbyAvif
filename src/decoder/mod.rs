@@ -2358,6 +2358,18 @@ impl Decoder {
         color_track.image_timing(n)
     }
 
+    /// Returns the properties of the nth image. Only properties that do not require an allocation
+    /// (i.e. excluding pixel planes and `icc`, `exif`, and `xmp` metadata buffers) are populated.
+    pub fn nth_image_properties(&self, n: u32) -> AvifResult<Image> {
+        if !self.parsing_complete() {
+            return AvifError::no_content();
+        }
+        if n >= self.image_count {
+            return AvifError::no_images_remaining();
+        }
+        Ok(self.image.shallow_clone())
+    }
+
     // When next_image() or nth_image() returns AvifResult::WaitingOnIo, this function can be called
     // next to retrieve the number of top rows that can be immediately accessed from the luma plane
     // of decoder->image, and alpha if any. The corresponding rows from the chroma planes,
