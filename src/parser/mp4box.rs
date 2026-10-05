@@ -1973,20 +1973,26 @@ fn parse_tref(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         let header = parse_header(stream, /*top_level=*/ false)?;
         let mut sub_stream = stream.sub_stream(&header.size)?;
         match header.box_type.as_str() {
-            "auxl" => {
-                // unsigned int(32) track_IDs[];
-                // Use only the first one and skip the rest.
-                track.aux_for_id = Some(sub_stream.read_u32()?);
-            }
-            "prem" => {
-                // unsigned int(32) track_IDs[];
-                // Use only the first one and skip the rest.
-                track.prem_by_id = Some(sub_stream.read_u32()?);
-            }
+            "auxl" => parse_track_ids(&mut sub_stream, &mut track.aux_for_id)?,
+            "prem" => parse_track_ids(&mut sub_stream, &mut track.prem_by_id)?,
             _ => {}
         }
     }
     Ok(())
+}
+
+fn parse_track_ids(stream: &mut IStream, track_ids: &mut Vec<u32>) -> AvifResult<()> {
+    // unsigned int(32) track_IDs[];
+    // The number of track_IDs follows from the box size. A box holds at least one, and trailing
+    // bytes that do not make up a whole track_ID are skipped. Section 8.3.3.1 of ISO/IEC 14496-12
+    // says each reference type shall occur at most once, but that is not enforced for backward
+    // compatibility, so the track_IDs of all boxes of a type are kept.
+    loop {
+        track_ids.try_push(stream.read_u32()?)?;
+        if stream.bytes_left()? < 4 {
+            return Ok(());
+        }
+    }
 }
 
 fn parse_elst(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
