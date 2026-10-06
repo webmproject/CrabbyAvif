@@ -1477,6 +1477,35 @@ INSTANTIATE_TEST_SUITE_P(
         SatoTestParams{"weld_sato_12plus4bit.avif", false, true, 12},
         SatoTestParams{"weld_sato_12plus4bit.avif", true, true, 16}));
 
+TEST(DecoderTest, NthImageProperties) {
+  auto decoder = CreateDecoder("colors-animated-8bpc-alpha-exif-xmp.avif");
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->imageCount, 5);
+  ImagePtr props(avifImageCreateEmpty());
+  ASSERT_NE(props, nullptr);
+  for (uint32_t i = 0; i < 5; ++i) {
+    ASSERT_EQ(avifDecoderNthImageProperties(decoder.get(), i, props.get()),
+              AVIF_RESULT_OK);
+    EXPECT_EQ(props->width, decoder->image->width);
+    EXPECT_EQ(props->height, decoder->image->height);
+    EXPECT_EQ(props->depth, decoder->image->depth);
+    EXPECT_EQ(props->yuvFormat, decoder->image->yuvFormat);
+    EXPECT_EQ(props->icc.data, nullptr);
+    EXPECT_EQ(props->icc.size, 0u);
+    EXPECT_EQ(props->exif.data, nullptr);
+    EXPECT_EQ(props->exif.size, 0u);
+    EXPECT_EQ(props->xmp.data, nullptr);
+    EXPECT_EQ(props->xmp.size, 0u);
+    for (int plane = 0; plane < AVIF_PLANE_COUNT_YUV; ++plane) {
+      EXPECT_EQ(props->yuvPlanes[plane], nullptr);
+    }
+    EXPECT_EQ(props->alphaPlane, nullptr);
+  }
+  EXPECT_EQ(avifDecoderNthImageProperties(decoder.get(), 5, props.get()),
+            AVIF_RESULT_NO_IMAGES_REMAINING);
+}
+
 }  // namespace
 }  // namespace avif
 

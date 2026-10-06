@@ -375,6 +375,27 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImageTiming(
 /// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
+/// - if outProperties is not null, it has to point to a valid avifImage object.
+///
+/// Only properties that do not require an allocation are populated.
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifDecoderNthImageProperties(
+    decoder: *const avifDecoder,
+    frameIndex: u32,
+    outProperties: *mut avifImage,
+) -> avifResult {
+    check_pointer!(decoder);
+    check_pointer!(outProperties);
+    let image = rust_decoder_const(decoder).nth_image_properties(frameIndex);
+    if let Ok(image) = &image {
+        deref_mut!(outProperties).copy_properties_from(image);
+    }
+    image.into()
+}
+
+/// # Safety
+/// Used by the C API with the following pre-conditions:
+/// - if decoder is not null, it has to point to a valid avifDecoder object.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifDecoderDestroy(decoder: *mut avifDecoder) {
     check_pointer_or_return!(decoder);
