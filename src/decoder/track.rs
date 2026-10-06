@@ -23,7 +23,7 @@ use std::num::NonZero;
 pub struct Track {
     pub id: u32,
     pub aux_for_id: Vec<u32>,
-    pub prem_by_id: Vec<u32>,
+    pub prem_by_id: Option<u32>,
     pub media_timescale: u32,
     pub media_duration: u64,
     pub track_duration: u64,

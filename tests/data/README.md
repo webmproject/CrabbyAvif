@@ -94,3 +94,36 @@ to_item_IDs, so one `auxl` box can name several targets.
 
 Taken from libavif, where it was added in
 https://github.com/AOMediaCodec/libavif/pull/3331 for the same defect.
+
+## colors-animated-8bpc-alpha-auxl-two-boxes.avif
+
+Derived from colors-animated-8bpc-alpha-exif-xmp.avif. The alpha track 2 references the color
+track 1 in one 'auxl' box and track 3 in a second 'auxl' box of its 'tref' box. The 20 byte 'tref'
+box and the 44 byte 'edts' box of that track, at file offset 1586, were overwritten in place with
+these 64 bytes, so the file size and every offset stay the same:
+
+```
+00 00 00 20 't' 'r' 'e' 'f'  00 00 00 0c 'a' 'u' 'x' 'l'  00 00 00 01
+                             00 00 00 0c 'a' 'u' 'x' 'l'  00 00 00 03
+00 00 00 20 'f' 'r' 'e' 'e'  followed by 24 zero bytes
+```
+
+## colors-animated-8bpc-alpha-auxl-two-track-ids.avif
+
+Same as above, but with one 'auxl' box listing track 3 and then the color track 1:
+
+```
+00 00 00 18 't' 'r' 'e' 'f'  00 00 00 10 'a' 'u' 'x' 'l'  00 00 00 03  00 00 00 01
+00 00 00 28 'f' 'r' 'e' 'e'  followed by 32 zero bytes
+```
+
+## colors-animated-8bpc-alpha-prem-two-targets.avif
+
+Derived from colors-animated-8bpc-alpha-exif-xmp.avif. The 44 byte 'edts' box of the color track 1,
+at file offset 806, was overwritten in place with a 'tref' box whose 'prem' box names track 2 and
+track 3:
+
+```
+00 00 00 18 't' 'r' 'e' 'f'  00 00 00 10 'p' 'r' 'e' 'm'  00 00 00 02  00 00 00 03
+00 00 00 14 'f' 'r' 'e' 'e'  followed by 12 zero bytes
+```

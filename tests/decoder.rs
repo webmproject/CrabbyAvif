@@ -1293,34 +1293,13 @@ fn iref_child_box_size_mismatch(declared_size: u8) {
     ));
 }
 
-// The alpha track of colors-animated-8bpc-alpha-exif-xmp.avif holds a 20 byte 'tref' box with one
-// 'auxl' box naming the color track 1, directly followed by a 44 byte 'edts' box. These cases
-// rewrite those 64 bytes in place and pad with a 'free' box, so the file size and every absolute
-// offset in the file stay the same. The first case keeps the single reference and only turns
-// 'edts' into 'free', so the rewrite itself does not cost the alpha channel. The other two add
-// track 3 next to the color track: in a second 'auxl' box after the one naming track 1, and ahead
-// of track 1 in a single 'auxl' box. Section 8.3.3.2 of ISO/IEC 14496-12 represents the tracks
-// referenced as an array of track_IDs.
-#[test_case(b"\0\0\0\x14tref\0\0\0\x0cauxl\0\0\0\x01"; "single_auxl_box")]
-#[test_case(b"\0\0\0\x20tref\0\0\0\x0cauxl\0\0\0\x01\0\0\0\x0cauxl\0\0\0\x03"; "two_auxl_boxes")]
-#[test_case(b"\0\0\0\x18tref\0\0\0\x10auxl\0\0\0\x03\0\0\0\x01"; "auxl_with_two_track_ids")]
-fn alpha_track_auxl_reference(tref: &[u8]) {
-    let mut file_bytes =
-        std::fs::read(get_test_file("colors-animated-8bpc-alpha-exif-xmp.avif")).unwrap();
-    assert_eq!(file_bytes.windows(4).filter(|w| *w == b"tref").count(), 1);
-    let tref_pos = file_bytes.windows(4).position(|w| w == b"tref").unwrap() - 4;
-    assert_eq!(
-        file_bytes[tref_pos..tref_pos + 28],
-        *b"\0\0\0\x14tref\0\0\0\x0cauxl\0\0\0\x01\0\0\0\x2cedts"
-    );
-    let free_pos = tref_pos + tref.len();
-    let free_size = 64 - tref.len() as u32;
-    file_bytes[tref_pos..free_pos].copy_from_slice(tref);
-    file_bytes[free_pos..free_pos + 4].copy_from_slice(&free_size.to_be_bytes());
-    file_bytes[free_pos + 4..free_pos + 8].copy_from_slice(b"free");
-
-    let mut decoder = decoder::Decoder::default();
-    decoder.set_io_vec(file_bytes);
+// The alpha track of these files names the color track 1 next to track 3 in its 'tref' box: in a
+// second 'auxl' box after the one naming track 1, and ahead of track 1 in a single 'auxl' box.
+// Section 8.3.3.2 of ISO/IEC 14496-12 represents the tracks referenced as an array of track_IDs.
+#[test_case("colors-animated-8bpc-alpha-auxl-two-boxes.avif"; "two_auxl_boxes")]
+#[test_case("colors-animated-8bpc-alpha-auxl-two-track-ids.avif"; "auxl_with_two_track_ids")]
+fn alpha_track_auxl_reference(filename: &str) {
+    let mut decoder = get_decoder(filename);
     assert_eq!(decoder.parse(), Ok(()));
     let image = decoder.image().expect("image was none");
     assert!(image.alpha_present);
@@ -1333,6 +1312,17 @@ fn alpha_track_auxl_reference(tref: &[u8]) {
     let alpha_plane = image.plane_data(Plane::A);
     assert!(alpha_plane.is_some());
     assert!(alpha_plane.unwrap().row_bytes > 0);
+}
+
+// The 'prem' box of the color track of this file names two tracks. A track is premultiplied by at
+// most one alpha track.
+#[test]
+fn color_track_prem_two_targets() {
+    let mut decoder = get_decoder("colors-animated-8bpc-alpha-prem-two-targets.avif");
+    assert!(matches!(
+        decoder.parse(),
+        Err(AvifError::BmffParseFailed(_))
+    ));
 }
 
 // The 'auxl' item reference of circle_auxl_two_targets.avif lists two targets: the primary

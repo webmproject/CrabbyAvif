@@ -1974,7 +1974,17 @@ fn parse_tref(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         let mut sub_stream = stream.sub_stream(&header.size)?;
         match header.box_type.as_str() {
             "auxl" => parse_track_ids(&mut sub_stream, &mut track.aux_for_id)?,
-            "prem" => parse_track_ids(&mut sub_stream, &mut track.prem_by_id)?,
+            "prem" => {
+                // unsigned int(32) track_IDs[];
+                // A track is premultiplied by at most one alpha track, so a second target, in this
+                // box or in another 'prem' box, is rejected.
+                if track.prem_by_id.is_some() || sub_stream.bytes_left()? >= 8 {
+                    return AvifError::bmff_parse_failed(
+                        "more than one prem target was found for track",
+                    );
+                }
+                track.prem_by_id = Some(sub_stream.read_u32()?);
+            }
             _ => {}
         }
     }
