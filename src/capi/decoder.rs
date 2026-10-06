@@ -302,22 +302,8 @@ pub unsafe extern "C" fn crabby_avifDecoderNextImage(decoder: *mut avifDecoder) 
     let rust_decoder = rust_decoder(decoder);
     rust_decoder.settings = deref_const!(decoder).into();
 
-    let previous_decoded_row_count = rust_decoder.decoded_row_count();
-
     let res = rust_decoder.next_image();
     deref_mut!(decoder).diag.set_from_result(&res);
-    let mut early_return = false;
-    if res.is_err() {
-        early_return = true;
-        if rust_decoder.settings.allow_incremental
-            && matches!(res.as_ref().err().unwrap(), AvifError::WaitingOnIo)
-        {
-            early_return = previous_decoded_row_count == rust_decoder.decoded_row_count();
-        }
-    }
-    if early_return {
-        return res.into();
-    }
     rust_decoder_to_avifDecoder(rust_decoder, deref_mut!(decoder));
     res.into()
 }
@@ -334,27 +320,8 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImage(
     let rust_decoder = rust_decoder(decoder);
     rust_decoder.settings = deref_const!(decoder).into();
 
-    let previous_decoded_row_count = rust_decoder.decoded_row_count();
-    let image_index = (rust_decoder.image_index() + 1) as u32;
-
     let res = rust_decoder.nth_image(frameIndex);
     deref_mut!(decoder).diag.set_from_result(&res);
-    let mut early_return = false;
-    if res.is_err() {
-        early_return = true;
-        if rust_decoder.settings.allow_incremental
-            && matches!(res.as_ref().err().unwrap(), AvifError::WaitingOnIo)
-        {
-            if image_index != frameIndex {
-                early_return = false;
-            } else {
-                early_return = previous_decoded_row_count == rust_decoder.decoded_row_count();
-            }
-        }
-    }
-    if early_return {
-        return res.into();
-    }
     rust_decoder_to_avifDecoder(rust_decoder, deref_mut!(decoder));
     res.into()
 }
