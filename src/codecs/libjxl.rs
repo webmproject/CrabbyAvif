@@ -230,8 +230,6 @@ impl Encoder for Libjxl {
                 basic_info.num_extra_channels = 1;
                 basic_info.alpha_bits = basic_info.bits_per_sample;
                 basic_info.alpha_premultiplied = rgb.premultiply_alpha.into();
-                // JxlEncoderSetExtraChannelInfo() does not need to be called for alpha
-                // apparently.
             }
             if !config.is_single_image {
                 basic_info.have_animation = true.into();
@@ -239,6 +237,26 @@ impl Encoder for Libjxl {
             }
             // # Safety: Calling a C function with valid parameters.
             unsafe { JxlEncoderSetBasicInfo(encoder, &basic_info) }.map_enc_err(encoder)?;
+            if rgb.has_alpha() {
+                // Explicitly set extra_channel_info because JxlEncoderSetBasicInfo() in
+                // libjxl <= 0.11.2 did not copy basic_info.alpha_premultiplied.
+                let mut extra_channel_info: MaybeUninit<JxlExtraChannelInfo> =
+                    MaybeUninit::uninit();
+                // # Safety: Calling a C function with valid parameters.
+                unsafe {
+                    JxlEncoderInitExtraChannelInfo(
+                        JxlExtraChannelType_JXL_CHANNEL_ALPHA,
+                        extra_channel_info.as_mut_ptr(),
+                    );
+                }
+                // # Safety: extra_channel_info was initialized in the C function above.
+                let mut extra_channel_info = unsafe { extra_channel_info.assume_init() };
+                extra_channel_info.bits_per_sample = basic_info.alpha_bits;
+                extra_channel_info.alpha_premultiplied = basic_info.alpha_premultiplied;
+                // # Safety: Calling a C function with valid parameters.
+                unsafe { JxlEncoderSetExtraChannelInfo(encoder, 0, &extra_channel_info) }
+                    .map_enc_err(encoder)?;
+            }
 
             let mut color_encoding: MaybeUninit<JxlColorEncoding> = MaybeUninit::uninit();
             // # Safety: Calling a C function with valid parameters.
