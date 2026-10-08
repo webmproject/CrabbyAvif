@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+macro_rules! find_property {
+    ($properties:expr, $property_name:ident) => {
+        $properties.iter().find_map(|p| match p {
+            ItemProperty::$property_name(value) => Some(value),
+            _ => None,
+        })
+    };
+}
+
 pub mod item;
 pub mod tile;
 pub mod track;
@@ -1442,11 +1451,12 @@ impl Decoder {
                 self.image.icc.clone_from(icc);
             }
 
-            self.image.clli = find_property!(color_properties, ContentLightLevelInformation);
-            self.image.pasp = find_property!(color_properties, PixelAspectRatio);
-            self.image.clap = find_property!(color_properties, CleanAperture);
-            self.image.irot_angle = find_property!(color_properties, ImageRotation);
-            self.image.imir_axis = find_property!(color_properties, ImageMirror);
+            self.image.clli =
+                find_property!(color_properties, ContentLightLevelInformation).copied();
+            self.image.pasp = find_property!(color_properties, PixelAspectRatio).copied();
+            self.image.clap = find_property!(color_properties, CleanAperture).copied();
+            self.image.irot_angle = find_property!(color_properties, ImageRotation).copied();
+            self.image.imir_axis = find_property!(color_properties, ImageMirror).copied();
 
             if let Some(alpha_properties) = alpha_properties {
                 // The 'clap', 'irot' and 'imir' transformative properties should be applied to the
@@ -1462,9 +1472,9 @@ impl Decoder {
                     // However, libavif up to version 1.3.0 generated images lacking transformative
                     // property associations with alpha auxiliary image items, so be lenient on
                     // their absence for backward compatibility with previously generated images.
-                } else if self.image.clap != alpha_clap
-                    || self.image.irot_angle != alpha_irot
-                    || self.image.imir_axis != alpha_imir
+                } else if self.image.clap != alpha_clap.copied()
+                    || self.image.irot_angle != alpha_irot.copied()
+                    || self.image.imir_axis != alpha_imir.copied()
                 {
                     return AvifError::not_implemented();
                 }
@@ -1490,10 +1500,12 @@ impl Decoder {
             if let Some(gainmap_properties) = gainmap_properties {
                 // Ensure that the bitstream contains the same 'pasp', 'clap', 'irot and 'imir'
                 // properties for both the base and gain map image items.
-                if self.image.pasp != find_property!(gainmap_properties, PixelAspectRatio)
-                    || self.image.clap != find_property!(gainmap_properties, CleanAperture)
-                    || self.image.irot_angle != find_property!(gainmap_properties, ImageRotation)
-                    || self.image.imir_axis != find_property!(gainmap_properties, ImageMirror)
+                if self.image.pasp != find_property!(gainmap_properties, PixelAspectRatio).copied()
+                    || self.image.clap != find_property!(gainmap_properties, CleanAperture).copied()
+                    || self.image.irot_angle
+                        != find_property!(gainmap_properties, ImageRotation).copied()
+                    || self.image.imir_axis
+                        != find_property!(gainmap_properties, ImageMirror).copied()
                 {
                     return AvifError::decode_gain_map_failed();
                 }

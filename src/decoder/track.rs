@@ -68,7 +68,7 @@ impl Track {
 
     pub(crate) fn is_auxiliary_alpha(&self) -> bool {
         if let Some(properties) = self.get_properties() {
-            if let Some(aux_type) = &find_property!(properties, AuxiliaryType) {
+            if let Some(aux_type) = find_property!(properties, AuxiliaryType) {
                 return is_auxiliary_type_alpha(aux_type);
             }
         }

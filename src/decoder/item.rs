@@ -50,15 +50,6 @@ pub struct Item {
     pub is_made_up: bool, // Placeholder grid alpha item if true.
 }
 
-macro_rules! find_property {
-    ($properties:expr, $property_name:ident) => {
-        $properties.iter().find_map(|p| match p {
-            ItemProperty::$property_name(value) => Some(value),
-            _ => None,
-        })
-    };
-}
-
 impl Item {
     pub(crate) fn stream<'a>(&'a mut self, io: &'a mut GenericIO) -> AvifResult<IStream<'a>> {
         if !self.idat.is_empty() {

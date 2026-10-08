@@ -115,15 +115,6 @@ macro_rules! round2_function {
 round2_function!(round2_u32, u32);
 round2_function!(round2_usize, usize);
 
-macro_rules! find_property {
-    ($properties:expr, $property_name:ident) => {
-        $properties.iter().find_map(|p| match p {
-            ItemProperty::$property_name(value) => Some(value.clone()),
-            _ => None,
-        })
-    };
-}
-
 // Returns the colr nclx property. Returns an error if there are multiple ones.
 pub(crate) fn find_nclx(properties: &[ItemProperty]) -> AvifResult<Option<&Nclx>> {
     let mut single_nclx: Option<&Nclx> = None;
