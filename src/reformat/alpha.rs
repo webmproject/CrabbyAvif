@@ -340,9 +340,9 @@ impl image::Image {
     pub(crate) fn alpha_to_full_range(&mut self) -> AvifResult<()> {
         match self.planes[3] {
             // The pixels are not owned. Allocate a new buffer and scale values.
-            Some(Pixels::Pointer(slice)) => {
+            Some(Pixels::Pointer(ref slice)) => {
                 let mut src = self.shallow_clone();
-                src.planes[3] = Some(utils::pixels::Pixels::Pointer(slice));
+                src.planes[3] = Some(utils::pixels::Pixels::Pointer(slice.shallow_clone()));
                 src.row_bytes[3] = self.row_bytes[3];
                 self.allocate_planes(Category::Alpha)?;
                 for y in 0..self.height {
@@ -353,9 +353,9 @@ impl image::Image {
                     }
                 }
             }
-            Some(Pixels::Pointer16(slice)) => {
+            Some(Pixels::Pointer16(ref slice)) => {
                 let mut src = self.shallow_clone();
-                src.planes[3] = Some(utils::pixels::Pixels::Pointer16(slice));
+                src.planes[3] = Some(utils::pixels::Pixels::Pointer16(slice.shallow_clone()));
                 src.row_bytes[3] = self.row_bytes[3];
                 self.allocate_planes(Category::Alpha)?;
                 for y in 0..self.height {
