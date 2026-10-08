@@ -1975,12 +1975,28 @@ fn parse_tref(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         match header.box_type.as_str() {
             "auxl" => {
                 // unsigned int(32) track_IDs[];
-                // Use only the first one and skip the rest.
-                track.aux_for_id = Some(sub_stream.read_u32()?);
+                // The number of track_IDs follows from the box size. A box holds at least one,
+                // and trailing bytes that do not make up a whole track_ID are skipped. Section
+                // 8.3.3.1 of ISO/IEC 14496-12 says each reference type shall occur at most once,
+                // but that is not enforced for backward compatibility, so the track_IDs of all
+                // 'auxl' boxes are kept.
+                loop {
+                    track.aux_for_id.try_push(sub_stream.read_u32()?)?;
+                    if sub_stream.bytes_left()? < 4 {
+                        break;
+                    }
+                }
             }
             "prem" => {
                 // unsigned int(32) track_IDs[];
-                // Use only the first one and skip the rest.
+                // ISO/IEC 14496-12 does not limit the number of track_IDs, but the decoder pairs a
+                // color track with at most one alpha track, so a second target, in this box or in
+                // another 'prem' box, would be ambiguous and is rejected.
+                if track.prem_by_id.is_some() || sub_stream.bytes_left()? >= 8 {
+                    return AvifError::bmff_parse_failed(
+                        "more than one prem target was found for track",
+                    );
+                }
                 track.prem_by_id = Some(sub_stream.read_u32()?);
             }
             _ => {}

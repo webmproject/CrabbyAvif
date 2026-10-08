@@ -22,7 +22,7 @@ use std::num::NonZero;
 #[derive(Debug, Default)]
 pub struct Track {
     pub id: u32,
-    pub aux_for_id: Option<u32>,
+    pub aux_for_id: Vec<u32>,
     pub prem_by_id: Option<u32>,
     pub media_timescale: u32,
     pub media_duration: u64,
@@ -60,10 +60,10 @@ impl Track {
     pub(crate) fn is_aux(&self, primary_track_id: u32) -> bool {
         self.is_video_handler()
             && self.has_av1_samples()
-            && self.aux_for_id == Some(primary_track_id)
+            && self.aux_for_id.contains(&primary_track_id)
     }
     pub(crate) fn is_color(&self) -> bool {
-        self.is_video_handler() && self.has_av1_samples() && self.aux_for_id.is_none()
+        self.is_video_handler() && self.has_av1_samples() && self.aux_for_id.is_empty()
     }
 
     pub(crate) fn is_auxiliary_alpha(&self) -> bool {
