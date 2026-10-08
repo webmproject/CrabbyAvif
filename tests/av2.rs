@@ -32,9 +32,8 @@ enum Alpha {
 }
 
 #[test_matrix(
-    // TODO(b/437292541): 1x1 does not pass (PSNR < 15dB). Investigate.
-    [2],
-    [2],
+    [1, 2],
+    [1, 2],
     [8, 10, 12],
     [PixelFormat::Yuv420, PixelFormat::Yuv444],
     [YuvRange::Limited, YuvRange::Full],

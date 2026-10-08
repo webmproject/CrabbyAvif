@@ -16,7 +16,7 @@
 
 git clone https://github.com/AOMediaCodec/avm
 cd avm
-git checkout 1fa9495c2e88cb6f8cfcf127f776efb374136e31
+git checkout 01803db6afa5a0616702a3814fc5934ab9e99adf
 cd ..
 echo "build.CrabbyAvif" > avm/.git/info/exclude
 cmake -S avm -B avm/build.CrabbyAvif -G Ninja -DBUILD_SHARED_LIBS=OFF -DCONFIG_PIC=1 -DCMAKE_BUILD_TYPE=Release -DENABLE_DOCS=0 -DENABLE_EXAMPLES=0 -DENABLE_TESTDATA=0 -DENABLE_TESTS=0 -DENABLE_TOOLS=0 -DCMAKE_POLICY_VERSION_MINIMUM=3.5
