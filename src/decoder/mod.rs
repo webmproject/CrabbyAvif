@@ -1181,12 +1181,20 @@ impl Decoder {
                     if !primary_item.is_identity_item() {
                         break;
                     }
-                    let properties = primary_item.properties.clone();
+
+                    let mut transformative_properties = Vec::new();
+                    replace_transformative_properties(
+                        &primary_item.properties,
+                        &mut transformative_properties,
+                    )?;
                     // Set the primary item to that of the derived item and copy over the
                     // transformative properties.
                     primary_item_id = primary_item.source_item_ids[0];
                     let primary_item = self.items.get_mut(&primary_item_id).unwrap();
-                    primary_item.replace_transformative_properties_from(&properties)?;
+                    replace_transformative_properties(
+                        &transformative_properties,
+                        &mut primary_item.properties,
+                    )?;
                 }
 
                 item_ids[DecodingItem::COLOR.usize()] = primary_item_id;

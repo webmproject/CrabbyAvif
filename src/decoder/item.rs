@@ -497,34 +497,32 @@ impl Item {
             size: usize_from_u64(checked_sub!(max_offset, min_offset)?)?,
         })
     }
+}
 
-    pub(crate) fn replace_transformative_properties_from(
-        &mut self,
-        properties: &[ItemProperty],
-    ) -> AvifResult<()> {
-        // Clear existing transformative properties.
-        self.properties.retain(|p| {
-            !matches!(
-                p,
-                ItemProperty::ImageRotation(_)
-                    | ItemProperty::ImageMirror(_)
-                    | ItemProperty::CleanAperture(_)
-            )
-        });
-        // Copy new ones (if any).
-        if let Some(irot) = find_property!(properties, ImageRotation) {
-            self.properties
-                .try_push(ItemProperty::ImageRotation(*irot))?;
-        }
-        if let Some(imir) = find_property!(properties, ImageMirror) {
-            self.properties.try_push(ItemProperty::ImageMirror(*imir))?;
-        }
-        if let Some(clap) = find_property!(properties, CleanAperture) {
-            self.properties
-                .try_push(ItemProperty::CleanAperture(*clap))?;
-        }
-        Ok(())
+pub(crate) fn replace_transformative_properties(
+    src_properties: &[ItemProperty],
+    dst_properties: &mut Vec<ItemProperty>,
+) -> AvifResult<()> {
+    // Clear existing transformative properties (if any).
+    dst_properties.retain(|p| {
+        !matches!(
+            p,
+            ItemProperty::ImageRotation(_)
+                | ItemProperty::ImageMirror(_)
+                | ItemProperty::CleanAperture(_)
+        )
+    });
+    // Copy new ones (if any).
+    if let Some(irot) = find_property!(src_properties, ImageRotation) {
+        dst_properties.try_push(ItemProperty::ImageRotation(*irot))?;
     }
+    if let Some(imir) = find_property!(src_properties, ImageMirror) {
+        dst_properties.try_push(ItemProperty::ImageMirror(*imir))?;
+    }
+    if let Some(clap) = find_property!(src_properties, CleanAperture) {
+        dst_properties.try_push(ItemProperty::CleanAperture(*clap))?;
+    }
+    Ok(())
 }
 
 // Returns the depth information from either the codec configuration property or
