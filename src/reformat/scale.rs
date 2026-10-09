@@ -249,8 +249,8 @@ impl Image {
                 if let Some(self_plane) = &self.planes[plane.as_usize()] {
                     src.planes[plane.as_usize()] = Some(match self_plane {
                         // Pixel values are already stored elsewhere. Reuse the pointer.
-                        Pixels::Pointer(p) => Pixels::Pointer(*p),
-                        Pixels::Pointer16(p) => Pixels::Pointer16(*p),
+                        Pixels::Pointer(p) => Pixels::Pointer(p.shallow_clone()),
+                        Pixels::Pointer16(p) => Pixels::Pointer16(p.shallow_clone()),
                         // Pixel values must be duplicated.
                         // Note that a temporary destination instead of a
                         // temporary source would avoid this allocation.
