@@ -94,3 +94,24 @@ to_item_IDs, so one `auxl` box can name several targets.
 
 Taken from libavif, where it was added in
 https://github.com/AOMediaCodec/libavif/pull/3331 for the same defect.
+
+## chroma_vertical_10bit.avif
+
+A synthetic 16×16, 10-bit YUV420 image with vertical chroma positioning, limited range, and BT.2020/PQ signaling. Both chroma planes vary horizontally and vertically. Encoded losslessly with FFmpeg 8.1.2 and libaom 3.15.0:
+
+```bash
+$ python3 - <<'PYTHON'
+import struct
+from pathlib import Path
+
+y = [504] * 256
+u = [384 + 8 * x + 4 * y + x * y for y in range(8) for x in range(8)]
+v = [640 - 4 * x - 8 * y + x * y for y in range(8) for x in range(8)]
+Path("chroma_vertical_10bit.yuv").write_bytes(struct.pack("<384H", *y, *u, *v))
+PYTHON
+
+$ ffmpeg -f rawvideo -pixel_format yuv420p10le -video_size 16x16 \
+  -color_range tv -color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc \
+  -i chroma_vertical_10bit.yuv -frames:v 1 -c:v libaom-av1 -crf 0 -b:v 0 \
+  -still-picture 1 -cpu-used 6 -aom-params chroma-sample-position=1 chroma_vertical_10bit.avif
+```

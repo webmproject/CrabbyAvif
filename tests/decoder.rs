@@ -1139,6 +1139,52 @@ fn rgb_conversion_alpha_premultiply() -> AvifResult<()> {
 }
 
 #[test]
+fn rgb_conversion_chroma_position_half_float() -> AvifResult<()> {
+    let mut decoder = get_decoder("chroma_vertical_10bit.avif");
+    decoder.parse()?;
+    let image = decoder.image().expect("image was none");
+    assert_eq!((image.width, image.height, image.depth), (16, 16, 10));
+    assert_eq!(image.yuv_format, PixelFormat::Yuv420);
+    assert_eq!(image.yuv_range, YuvRange::Limited);
+    assert_eq!(image.color_primaries, ColorPrimaries::Bt2020);
+    assert_eq!(image.transfer_characteristics, TransferCharacteristics::Pq);
+    assert_eq!(image.matrix_coefficients, MatrixCoefficients::Bt2020Ncl);
+    if !HAS_NON_ANDROID_DECODER {
+        return Ok(());
+    }
+    decoder.next_image()?;
+    let image = decoder.image().expect("image was none");
+    assert_eq!(image.chroma_sample_position, ChromaSamplePosition::Vertical);
+    let mut rgb = rgb::Image::create_from_yuv(image);
+    rgb.depth = 16;
+    rgb.is_float = true;
+    rgb.chroma_upsampling = rgb::ChromaUpsampling::Bilinear;
+    rgb.allocate()?;
+    rgb.convert_from_yuv(image)?;
+    for (x, y, expected) in [
+        (0, 0, [0x39b4, 0x371b, 0x3379]),
+        (1, 1, [0x39a7, 0x3722, 0x33d1]),
+        (2, 2, [0x3995, 0x372b, 0x3422]),
+        (14, 14, [0x393f, 0x3714, 0x380e]),
+        (15, 15, [0x393e, 0x3713, 0x381a]),
+    ] {
+        let pixel = &rgb.row16(y)?[x * 4..x * 4 + 3];
+        for (actual, expected) in pixel.iter().zip(expected) {
+            assert!(
+                actual.abs_diff(expected) <= 1,
+                "({x}, {y}): {actual:#06x} != {expected:#06x}"
+            );
+        }
+    }
+    for y in 0..rgb.height {
+        for pixel in rgb.row16(y)?.as_chunks::<4>().0 {
+            assert_eq!(pixel[3], 0x3c00);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn white_1x1() -> AvifResult<()> {
     let mut decoder = get_decoder("white_1x1.avif");
     assert_eq!(decoder.parse(), Ok(()));
