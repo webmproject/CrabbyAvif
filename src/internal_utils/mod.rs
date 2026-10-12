@@ -334,7 +334,7 @@ pub(crate) fn check_slice_from_raw_parts_safety(data: *const u8, size: usize) ->
     !data.is_null() && size <= isize::MAX as usize
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct PointerSlice<T> {
     ptr: *mut [T],
 }
@@ -352,6 +352,9 @@ impl<T> PointerSlice<T> {
         Ok(Self {
             ptr: unsafe { std::slice::from_raw_parts_mut(ptr, size) },
         })
+    }
+    pub fn shallow_clone(&self) -> Self {
+        Self { ptr: self.ptr }
     }
 
     fn slice_impl(&self) -> &[T] {

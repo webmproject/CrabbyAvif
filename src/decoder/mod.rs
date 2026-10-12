@@ -1964,8 +1964,8 @@ impl Decoder {
                 let plane = plane.as_usize();
                 if let Some(src_plane) = &tile.image.planes[plane] {
                     dst_image.planes[plane] = match src_plane {
-                        Pixels::Pointer(p) => Some(Pixels::Pointer(*p)),
-                        Pixels::Pointer16(p) => Some(Pixels::Pointer16(*p)),
+                        Pixels::Pointer(p) => Some(Pixels::Pointer(p.shallow_clone())),
+                        Pixels::Pointer16(p) => Some(Pixels::Pointer16(p.shallow_clone())),
                         Pixels::Buffer(b) if b.is_empty() => None,
                         // SAFETY: Bounded lifetime and read-only access.
                         Pixels::Buffer(b) => Some(Pixels::Pointer(unsafe {
