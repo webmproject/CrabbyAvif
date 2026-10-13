@@ -157,47 +157,11 @@ impl Default for avifImage {
 
 impl From<&Image> for avifImage {
     fn from(image: &Image) -> Self {
-        let mut dst_image: avifImage = avifImage {
-            width: image.width,
-            height: image.height,
-            depth: image.depth as u32,
-            yuvFormat: image.yuv_format,
-            yuvRange: image.yuv_range,
-            yuvChromaSamplePosition: image.chroma_sample_position,
-            alphaPremultiplied: image.alpha_premultiplied as avifBool,
-            icc: (&image.icc).into(),
-            colorPrimaries: image.color_primaries,
-            transferCharacteristics: image.transfer_characteristics,
-            matrixCoefficients: image.matrix_coefficients,
-            clli: image.clli.unwrap_or_default(),
-            transformFlags: {
-                let mut flags = 0;
-                if image.pasp.is_some() {
-                    flags |= AVIF_TRANSFORM_PASP;
-                }
-                if image.clap.is_some() {
-                    flags |= AVIF_TRANSFORM_CLAP;
-                }
-                if image.irot_angle.is_some() {
-                    flags |= AVIF_TRANSFORM_IROT;
-                }
-                if image.imir_axis.is_some() {
-                    flags |= AVIF_TRANSFORM_IMIR;
-                }
-                flags
-            },
-            pasp: image.pasp.unwrap_or_default(),
-            clap: (&image.clap).into(),
-            irot: avifImageRotation {
-                angle: image.irot_angle.unwrap_or_default(),
-            },
-            imir: avifImageMirror {
-                axis: image.imir_axis.unwrap_or_default(),
-            },
-            exif: (&image.exif).into(),
-            xmp: (&image.xmp).into(),
-            ..Self::default()
-        };
+        let mut dst_image = avifImage::default();
+        dst_image.copy_properties_from(image);
+        dst_image.icc = (&image.icc).into();
+        dst_image.exif = (&image.exif).into();
+        dst_image.xmp = (&image.xmp).into();
         for i in 0usize..3 {
             if !image.has_plane(i.into()) {
                 continue;
@@ -222,6 +186,43 @@ impl From<&Image> for avifImage {
 }
 
 impl avifImage {
+    pub(crate) fn copy_properties_from(&mut self, image: &Image) {
+        self.width = image.width;
+        self.height = image.height;
+        self.depth = image.depth as u32;
+        self.yuvFormat = image.yuv_format;
+        self.yuvRange = image.yuv_range;
+        self.yuvChromaSamplePosition = image.chroma_sample_position;
+        self.alphaPremultiplied = image.alpha_premultiplied as avifBool;
+        self.colorPrimaries = image.color_primaries;
+        self.transferCharacteristics = image.transfer_characteristics;
+        self.matrixCoefficients = image.matrix_coefficients;
+        self.clli = image.clli.unwrap_or_default();
+        self.transformFlags = {
+            let mut flags = 0;
+            if image.pasp.is_some() {
+                flags |= AVIF_TRANSFORM_PASP;
+            }
+            if image.clap.is_some() {
+                flags |= AVIF_TRANSFORM_CLAP;
+            }
+            if image.irot_angle.is_some() {
+                flags |= AVIF_TRANSFORM_IROT;
+            }
+            if image.imir_axis.is_some() {
+                flags |= AVIF_TRANSFORM_IMIR;
+            }
+            flags
+        };
+        self.pasp = image.pasp.unwrap_or_default();
+        self.clap = (&image.clap).into();
+        self.irot = avifImageRotation {
+            angle: image.irot_angle.unwrap_or_default(),
+        };
+        self.imir = avifImageMirror {
+            axis: image.imir_axis.unwrap_or_default(),
+        };
+    }
     pub(crate) fn as_rust_image_no_metadata(&self) -> image::Image {
         image::Image {
             width: self.width,

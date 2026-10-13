@@ -1834,3 +1834,26 @@ fn strictness(filename: &str, strictness_flag: decoder::StrictnessFlag) {
     }
     assert!(decoder.next_image().is_ok());
 }
+
+#[test]
+fn nth_image_properties() {
+    let mut decoder = get_decoder("colors-animated-8bpc-alpha-exif-xmp.avif");
+    assert!(decoder.parse().is_ok());
+    assert_eq!(decoder.image_count(), 5);
+    for i in 0..5 {
+        let props = decoder.nth_image_properties(i).expect("props failed");
+        let image = decoder.image().unwrap();
+        assert_eq!(props.width, image.width);
+        assert_eq!(props.height, image.height);
+        assert_eq!(props.depth, image.depth);
+        assert_eq!(props.yuv_format, image.yuv_format);
+        assert!(props.icc.is_empty());
+        assert!(props.exif.is_empty());
+        assert!(props.xmp.is_empty());
+        assert!(props.planes.iter().all(|p| p.is_none()));
+    }
+    assert!(matches!(
+        decoder.nth_image_properties(5),
+        Err(AvifError::NoImagesRemaining)
+    ));
+}
