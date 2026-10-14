@@ -849,7 +849,7 @@ impl Decoder {
                     first_icc = find_icc(&dimg_item.properties)?.cloned();
                 }
                 if first_nclx.is_none() {
-                    first_nclx = find_nclx(&dimg_item.properties)?.cloned();
+                    first_nclx = find_nclx(&dimg_item.properties)?.copied();
                 }
             }
         }

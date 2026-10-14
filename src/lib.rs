@@ -520,7 +520,7 @@ pub struct ContentLightLevelInformation {
     pub max_pall: u16,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Nclx {
     pub color_primaries: ColorPrimaries,
     pub transfer_characteristics: TransferCharacteristics,
