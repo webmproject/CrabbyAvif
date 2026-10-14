@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::gainmap::GainMapMetadata;
+use crate::internal_utils::TryClone;
 use crate::utils::Fraction;
 use crate::utils::UFraction;
 use crate::AvifResult;
@@ -123,7 +124,7 @@ pub(crate) fn parse_gainmap_metadata(xmp_data: &[u8]) -> AvifResult<(GainMapMeta
                 } else if name.namespace.as_deref() == Some(XML_NAME_SPACE_GAIN_MAP)
                     || name.namespace.as_deref() == Some(XML_NAME_SPACE_APPLE_GAIN_MAP)
                 {
-                    current_prop = Some(name.local_name.clone());
+                    current_prop = Some(name.local_name.try_clone()?);
                     if name.namespace.as_deref() == Some(XML_NAME_SPACE_APPLE_GAIN_MAP) {
                         if !is_apple {
                             metadata = apple_default;
@@ -385,7 +386,7 @@ mod tests {
                 },
             ),
         ];
-        data[index].clone()
+        (data[index].0.try_clone().unwrap(), data[index].1)
     }
 
     #[allow(clippy::zero_prefixed_literal)]

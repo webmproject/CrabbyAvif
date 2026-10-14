@@ -1512,7 +1512,7 @@ fn parse_grpl(stream: &mut IStream) -> AvifResult<Vec<EntityGroup>> {
             entity_ids.try_push(entity_id)?;
         }
         grpl.try_push(EntityGroup {
-            grouping_type: header.box_type.clone(),
+            grouping_type: header.box_type.try_clone()?,
             entity_ids,
         })?;
     }
@@ -1930,7 +1930,7 @@ fn parse_stbl(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
         // For boxes that are skipped, we do not need to validate if they occur exactly once or
         // not.
         if !skipped_box {
-            boxes_seen.insert(header.box_type.clone());
+            boxes_seen.insert(header.box_type.try_clone()?);
         }
     }
     track.sample_table = Some(sample_table);

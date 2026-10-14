@@ -409,6 +409,17 @@ impl<T: Clone> TryClone for Vec<T> {
     }
 }
 
+impl TryClone for String {
+    fn try_clone(&self) -> AvifResult<String> {
+        let mut string: String = String::new();
+        string
+            .try_reserve_exact(self.len())
+            .map_err(AvifError::map_out_of_memory)?;
+        string.push_str(self);
+        Ok(string)
+    }
+}
+
 // Same as [].to_vec() but returns an error if the allocation fails.
 #[allow(dead_code)]
 pub(crate) trait SliceExtension<T> {
