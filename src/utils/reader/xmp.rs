@@ -117,7 +117,7 @@ pub(crate) fn parse_gainmap_metadata(xmp_data: &[u8]) -> AvifResult<(GainMapMeta
                             == Some(XML_NAME_SPACE_APPLE_GAIN_MAP)
                         {
                             is_apple = true;
-                            metadata = apple_default.clone();
+                            metadata = apple_default;
                         }
                     }
                 } else if name.namespace.as_deref() == Some(XML_NAME_SPACE_GAIN_MAP)
@@ -126,7 +126,7 @@ pub(crate) fn parse_gainmap_metadata(xmp_data: &[u8]) -> AvifResult<(GainMapMeta
                     current_prop = Some(name.local_name.clone());
                     if name.namespace.as_deref() == Some(XML_NAME_SPACE_APPLE_GAIN_MAP) {
                         if !is_apple {
-                            metadata = apple_default.clone();
+                            metadata = apple_default;
                         }
                         is_apple = true;
                     }

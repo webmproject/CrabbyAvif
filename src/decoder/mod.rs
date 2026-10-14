@@ -1217,9 +1217,8 @@ impl Decoder {
                         /*tonemap_id=*/ primary_item_id,
                         item_ids[DecodingItem::COLOR.usize()],
                     )?;
-                    self.gainmap.metadata = self.tile_info[DecodingItem::COLOR.usize()]
-                        .gainmap_metadata
-                        .clone();
+                    self.gainmap.metadata =
+                        self.tile_info[DecodingItem::COLOR.usize()].gainmap_metadata;
                     self.gainmap_present = true;
 
                     if self.settings.image_content_to_decode.gainmap() {

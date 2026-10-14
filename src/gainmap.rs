@@ -17,7 +17,7 @@ use crate::internal_utils::TryClone;
 use crate::utils::*;
 use crate::*;
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GainMapMetadata {
     pub min: [Fraction; 3],
     pub max: [Fraction; 3],
@@ -105,7 +105,7 @@ impl GainMap {
     pub(crate) fn try_deep_clone(&self) -> AvifResult<Self> {
         Ok(GainMap {
             image: self.image.try_deep_clone()?,
-            metadata: self.metadata.clone(),
+            metadata: self.metadata,
             alt_icc: self.alt_icc.try_clone()?,
             ..*self
         })
