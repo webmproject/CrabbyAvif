@@ -22,5 +22,11 @@ fn crabbyavif_test() -> AvifResult<()> {
         main_impl(["crabbyavif"].iter()),
         Err(AvifError::UnknownError("input_file is required".into()))
     );
+    assert_eq!(
+        main_impl(["crabbyavif", "--info", "--extract-thumbnail", "input.avif"].iter()),
+        Err(AvifError::UnknownError(
+            "--info contains unsupported extra arguments".into()
+        ))
+    );
     Ok(())
 }
