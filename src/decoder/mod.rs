@@ -858,10 +858,12 @@ impl Decoder {
         }
         let item = self.items.get_mut(&item_id).unwrap();
         if let Some(first_codec_config) = first_codec_config {
-            // Adopt the configuration property of the first tile.
-            // validate_properties() later makes sure they are all equal.
-            item.properties
-                .try_push(ItemProperty::CodecConfiguration(first_codec_config))?;
+            if item.codec_config().is_none() {
+                // Adopt the configuration property of the first tile.
+                // validate_properties() later makes sure they are all equal.
+                item.properties
+                    .try_push(ItemProperty::CodecConfiguration(first_codec_config))?;
+            }
         }
         if item.is_grid_item() || item.is_overlay_item() {
             // For grid and overlay items, adopt the icc color profile and the nclx of the first
