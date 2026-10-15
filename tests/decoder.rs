@@ -1293,6 +1293,38 @@ fn iref_child_box_size_mismatch(declared_size: u8) {
     ));
 }
 
+// The alpha track of these files names the color track 1 next to track 3 in its 'tref' box: in a
+// second 'auxl' box after the one naming track 1, and ahead of track 1 in a single 'auxl' box.
+// Section 8.3.3.2 of ISO/IEC 14496-12 represents the tracks referenced as an array of track_IDs.
+#[test_case("colors-animated-8bpc-alpha-auxl-two-boxes.avif"; "two_auxl_boxes")]
+#[test_case("colors-animated-8bpc-alpha-auxl-two-track-ids.avif"; "auxl_with_two_track_ids")]
+fn alpha_track_auxl_reference(filename: &str) {
+    let mut decoder = get_decoder(filename);
+    assert_eq!(decoder.parse(), Ok(()));
+    let image = decoder.image().expect("image was none");
+    assert!(image.alpha_present);
+    assert!(image.image_sequence_track_present);
+    if !HAS_DECODER {
+        return;
+    }
+    assert!(decoder.next_image().is_ok());
+    let image = decoder.image().expect("image was none");
+    let alpha_plane = image.plane_data(Plane::A);
+    assert!(alpha_plane.is_some());
+    assert!(alpha_plane.unwrap().row_bytes > 0);
+}
+
+// The 'prem' box of the color track of this file names two tracks. A track is premultiplied by at
+// most one alpha track.
+#[test]
+fn color_track_prem_two_targets() {
+    let mut decoder = get_decoder("colors-animated-8bpc-alpha-prem-two-targets.avif");
+    assert!(matches!(
+        decoder.parse(),
+        Err(AvifError::BmffParseFailed(_))
+    ));
+}
+
 // The 'auxl' item reference of circle_auxl_two_targets.avif lists two targets: the primary
 // color item 1 and the Exif item 3. Section 8.11.12.1 of ISO/IEC 14496-12 represents the items
 // linked to as an array of to_item_IDs. Keeping only the last one dropped item 1, and with it
