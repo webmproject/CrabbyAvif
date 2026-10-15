@@ -1377,13 +1377,15 @@ fn parse_ipco(stream: &mut IStream, is_track: bool) -> AvifResult<Vec<ItemProper
     Ok(properties)
 }
 
-fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> {
+fn parse_ipma(stream: &mut IStream, ipma: &mut Vec<ItemPropertyAssociation>) -> AvifResult<()> {
     // Section 8.11.14.2 of ISO/IEC 14496-12.
     let (version, flags) = stream.read_version_and_flags()?;
     // unsigned int(32) entry_count;
     let entry_count = stream.read_u32()?;
-    let mut ipma: Vec<ItemPropertyAssociation> = create_vec_exact(usize_from_u32(entry_count)?)?;
-    for _i in 0..entry_count {
+    ipma.try_reserve(usize_from_u32(entry_count)?)
+        .map_err(AvifError::map_out_of_memory)?;
+    let mut previous_item_id: Option<u32> = None;
+    for _ in 0..entry_count {
         let mut entry = ItemPropertyAssociation::default();
         if version < 1 {
             // unsigned int(16) item_ID;
@@ -1398,12 +1400,11 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
                 entry.item_id
             ));
         }
-        if !ipma.is_empty() {
+        if let Some(previous_item_id) = previous_item_id {
             // ISO/IEC 23008-12, First edition, 2017-12, Section 9.3.1:
             //   Each ItemPropertyAssociation box shall be ordered by increasing item_ID, and there
             //   shall be at most one association box for each item_ID, in any
             //   ItemPropertyAssociation box.
-            let previous_item_id = ipma.last().unwrap().item_id;
             if entry.item_id <= previous_item_id {
                 return AvifError::bmff_parse_failed(
                     "ipma item ids are not ordered by increasing id",
@@ -1412,7 +1413,11 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
         }
         // unsigned int(8) association_count;
         let association_count = stream.read_u8()?;
-        for _j in 0..association_count {
+        entry
+            .associations
+            .try_reserve(association_count as usize)
+            .map_err(AvifError::map_out_of_memory)?;
+        for _ in 0..association_count {
             // bit(1) essential;
             let essential = stream.read_bool()?;
             if flags & 0x1 == 1 {
@@ -1427,9 +1432,10 @@ fn parse_ipma(stream: &mut IStream) -> AvifResult<Vec<ItemPropertyAssociation>> 
                     .try_push((stream.read_bits(7)? as u16, essential))?;
             }
         }
+        previous_item_id = Some(entry.item_id);
         ipma.try_push(entry)?;
     }
-    Ok(ipma)
+    Ok(())
 }
 
 fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
@@ -1451,7 +1457,7 @@ fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
             return AvifError::bmff_parse_failed("Found non ipma box in iprp");
         }
         let mut sub_stream = stream.sub_stream(&header.size)?;
-        iprp.associations.append(&mut parse_ipma(&mut sub_stream)?);
+        parse_ipma(&mut sub_stream, &mut iprp.associations)?;
     }
     Ok(iprp)
 }
