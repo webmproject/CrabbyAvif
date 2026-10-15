@@ -1548,7 +1548,6 @@ fn clap_irot_imir_non_essential() {
     assert!(res.is_err());
 }
 
-#[derive(Clone)]
 struct ExpectedOverlayImageInfo<'a> {
     filename: &'a str,
     width: u32,

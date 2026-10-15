@@ -90,13 +90,13 @@ impl Item {
         image_metadata: &Image,
     ) -> AvifResult<()> {
         stream.start_full_box("ispe", (0, 0))?;
-        let width = match self.grid {
+        let width = match &self.grid {
             Some(grid) => grid.width,
             None => image_metadata.width,
         };
         // unsigned int(32) image_width;
         stream.write_u32(width)?;
-        let height = match self.grid {
+        let height = match &self.grid {
             Some(grid) => grid.height,
             None => image_metadata.height,
         };

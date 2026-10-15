@@ -43,7 +43,6 @@ fn get_test_file(filename: &str) -> String {
     format!("{base_path}/{filename}")
 }
 
-#[derive(Clone, Copy)]
 struct ExpectedImageInfo<'a> {
     filename: &'a str,
     width: u32,

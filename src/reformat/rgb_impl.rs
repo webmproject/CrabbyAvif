@@ -1002,7 +1002,7 @@ pub(crate) fn yuv_to_rgb_any(
     }
 }
 
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Default)]
 struct YUVBlock(f32, f32, f32);
 
 pub(crate) fn rgb_gray_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> {
