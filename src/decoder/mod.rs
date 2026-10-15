@@ -1131,7 +1131,11 @@ impl Decoder {
         Ok(cicp_set)
     }
 
-    fn prepare_still_image_item(&mut self, color_item_id: u32) -> AvifResult<bool> {
+    fn prepare_still_image_item(
+        &mut self,
+        color_item_id: u32,
+        allow_gainmap: bool,
+    ) -> AvifResult<bool> {
         self.tile_info = Default::default();
         self.tiles = Default::default();
         self.extra_inputs = Default::default();
@@ -1150,6 +1154,9 @@ impl Decoder {
 
         let primary_item = self.items.get(&color_item_id).unwrap();
         if primary_item.is_tone_mapped_item() {
+            if !allow_gainmap {
+                return AvifError::not_implemented();
+            }
             // validate_source_items() guarantees that tmap has two source item ids.
             let base_item_id = primary_item.source_item_ids[0];
             let gainmap_id = primary_item.source_item_ids[1];
@@ -1577,7 +1584,7 @@ impl Decoder {
                         &avif_boxes.meta,
                     )?;
                     let primary_item_id = self.resolve_identity_item(primary_item_id)?;
-                    self.prepare_still_image_item(primary_item_id)?
+                    self.prepare_still_image_item(primary_item_id, true)?
                 }
                 Source::Auto => unreachable!(),
             };
