@@ -557,7 +557,7 @@ impl Libjxl {
             }
         };
 
-        let basic_info = decoder.basic_info().clone();
+        let basic_info = decoder.basic_info();
         let depth: u8 = match basic_info.bit_depth {
             jxl_api::JxlBitDepth::Int { bits_per_sample } => bits_per_sample
                 .try_into()
@@ -611,11 +611,9 @@ impl Libjxl {
 
         // The pixel format can only be set before the first frame header is decoded. Setting the
         // same value again for the following frames is allowed and is a no-op.
+        let pixel_format = rgb_image_to_jxl_rs_pixel_format(&rgb, basic_info.extra_channels.len())?;
         decoder
-            .set_pixel_format(rgb_image_to_jxl_rs_pixel_format(
-                &rgb,
-                basic_info.extra_channels.len(),
-            )?)
+            .set_pixel_format(pixel_format)
             .map_err(map_dec_err)?;
 
         let decoder = expect_complete(decoder.process(&mut input, None))?;
