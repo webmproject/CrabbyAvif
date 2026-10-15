@@ -1220,11 +1220,7 @@ impl Decoder {
                 Source::PrimaryItem => Source::PrimaryItem,
             };
 
-            let color_properties: &Vec<ItemProperty>;
-            let alpha_properties: Option<&Vec<ItemProperty>>;
-            let gainmap_properties: Option<&Vec<ItemProperty>>;
-            let mut is_sample_transform = false;
-            if self.source == Source::Tracks {
+            let cicp_set = if self.source == Source::Tracks {
                 let color_track = self
                     .tracks
                     .iter()
@@ -1246,10 +1242,9 @@ impl Decoder {
                     )?;
                 }
                 self.color_track_id = Some(color_track.id);
-                color_properties = color_track
+                let color_properties = color_track
                     .get_properties()
                     .ok_or(AvifError::BmffParseFailed("".into()))?;
-                gainmap_properties = None;
 
                 self.tiles[DecodingItem::COLOR.usize()].try_push(Tile::create_from_track(
                     color_track,
@@ -1259,7 +1254,7 @@ impl Decoder {
                 )?)?;
                 self.tile_info[DecodingItem::COLOR.usize()].tile_count = 1;
 
-                if let Some(alpha_track) = self
+                let alpha_properties = if let Some(alpha_track) = self
                     .tracks
                     .iter()
                     .find(|x| x.is_aux(color_track.id) && x.is_auxiliary_alpha())
@@ -1273,14 +1268,14 @@ impl Decoder {
                     self.tile_info[DecodingItem::ALPHA.usize()].tile_count = 1;
                     self.image.alpha_present = true;
                     self.image.alpha_premultiplied = color_track.prem_by_id == Some(alpha_track.id);
-                    alpha_properties = Some(
+                    Some(
                         alpha_track
                             .get_properties()
                             .ok_or(AvifError::BmffParseFailed("".into()))?,
-                    );
+                    )
                 } else {
-                    alpha_properties = None;
-                }
+                    None
+                };
 
                 self.image_index = -1;
                 self.image_count = self.tiles[DecodingItem::COLOR.usize()][0]
@@ -1312,6 +1307,17 @@ impl Decoder {
 
                 self.image.width = color_track.width;
                 self.image.height = color_track.height;
+
+                Self::validate_samples_and_populate_image_properties(
+                    &self.tiles,
+                    color_properties,
+                    alpha_properties,
+                    None,
+                    false,
+                    &mut self.io_stats,
+                    &mut self.image,
+                    &mut self.compression_format,
+                )?
             } else {
                 assert_eq!(self.source, Source::PrimaryItem);
                 let mut item_ids: [u32; DecodingItem::COUNT] = [0; DecodingItem::COUNT];
@@ -1356,6 +1362,7 @@ impl Decoder {
 
                 let mut alpha_present = false;
                 let mut alpha_premultiplied = false;
+                let mut is_sample_transform = false;
 
                 let primary_item = self.items.get(&primary_item_id).unwrap();
                 if primary_item.is_sample_transform_item() {
@@ -1515,13 +1522,12 @@ impl Decoder {
                         codec_config.chroma_sample_position();
                 }
 
-                // This borrow has to be in the end of this branch.
-                color_properties = &self
+                let color_properties = &self
                     .items
                     .get(&item_ids[DecodingItem::COLOR.usize()])
                     .unwrap()
                     .properties;
-                alpha_properties = if item_ids[DecodingItem::ALPHA.usize()] != 0 {
+                let alpha_properties = if item_ids[DecodingItem::ALPHA.usize()] != 0 {
                     Some(
                         &self
                             .items
@@ -1532,7 +1538,7 @@ impl Decoder {
                 } else {
                     None
                 };
-                gainmap_properties = if item_ids[DecodingItem::GAINMAP.usize()] != 0 {
+                let gainmap_properties = if item_ids[DecodingItem::GAINMAP.usize()] != 0 {
                     Some(
                         &self
                             .items
@@ -1543,18 +1549,18 @@ impl Decoder {
                 } else {
                     None
                 };
-            }
 
-            let cicp_set = Self::validate_samples_and_populate_image_properties(
-                &self.tiles,
-                color_properties,
-                alpha_properties,
-                gainmap_properties,
-                is_sample_transform,
-                &mut self.io_stats,
-                &mut self.image,
-                &mut self.compression_format,
-            )?;
+                Self::validate_samples_and_populate_image_properties(
+                    &self.tiles,
+                    color_properties,
+                    alpha_properties,
+                    gainmap_properties,
+                    is_sample_transform,
+                    &mut self.io_stats,
+                    &mut self.image,
+                    &mut self.compression_format,
+                )?
+            };
 
             if cicp_set {
                 self.parse_state = ParseState::Complete;
