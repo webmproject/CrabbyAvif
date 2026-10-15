@@ -289,7 +289,7 @@ impl Sample {
     // The range of data_output_by_codec bytes that correspond to sample data
     // (in opposition to codec configuration fields or other codec-agnostic container boxes).
     pub(crate) fn sample_data(&self) -> &[u8] {
-        &self.data_output_by_codec[self.sample_data_range.clone()]
+        &self.data_output_by_codec[self.sample_data_range.start..self.sample_data_range.end]
     }
 }
 

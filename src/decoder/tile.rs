@@ -525,21 +525,22 @@ impl Image {
                 dst_x_start = tile.yuv_format.apply_chroma_shift_x(dst_x_start);
             }
 
+            let src_width_to_copy = usize_from_u32(src_width_to_copy)?;
             let src_y_range = src_y_start..checked_add!(src_y_start, src_height_to_copy)?;
-            let dst_x_range = usize_from_u32(dst_x_start)?
-                ..usize_from_u32(checked_add!(dst_x_start, src_width_to_copy)?)?;
-            let src_x_range = usize_from_u32(src_x_start)?
-                ..checked_add!(usize_from_u32(src_x_start)?, dst_x_range.len())?;
+            let dst_x_start = usize_from_u32(dst_x_start)?;
+            let dst_x_end = checked_add!(dst_x_start, src_width_to_copy)?;
+            let src_x_start = usize_from_u32(src_x_start)?;
+            let src_x_end = checked_add!(src_x_start, src_width_to_copy)?;
             let mut dst_y = dst_y_start;
             if self.depth == 8 {
                 for src_y in src_y_range {
                     let src_row = tile.row(plane, src_y)?;
                     let src_slice = src_row
-                        .get(src_x_range.clone())
+                        .get(src_x_start..src_x_end)
                         .ok_or(AvifError::InvalidArgument)?;
                     let dst_row = self.row_mut(plane, dst_y)?;
                     let dst_slice = dst_row
-                        .get_mut(dst_x_range.clone())
+                        .get_mut(dst_x_start..dst_x_end)
                         .ok_or(AvifError::InvalidArgument)?;
                     dst_slice.copy_from_slice(src_slice);
                     checked_incr!(dst_y, 1);
@@ -548,11 +549,11 @@ impl Image {
                 for src_y in src_y_range {
                     let src_row = tile.row16(plane, src_y)?;
                     let src_slice = src_row
-                        .get(src_x_range.clone())
+                        .get(src_x_start..src_x_end)
                         .ok_or(AvifError::InvalidArgument)?;
                     let dst_row = self.row16_mut(plane, dst_y)?;
                     let dst_slice = dst_row
-                        .get_mut(dst_x_range.clone())
+                        .get_mut(dst_x_start..dst_x_end)
                         .ok_or(AvifError::InvalidArgument)?;
                     dst_slice.copy_from_slice(src_slice);
                     checked_incr!(dst_y, 1);
