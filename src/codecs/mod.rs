@@ -46,7 +46,6 @@ use std::num::NonZero;
 
 // Not all fields of this struct are used in all the configurations.
 #[allow(dead_code)]
-#[derive(Clone)]
 pub(crate) struct DecoderConfig {
     pub operating_point: u8,
     pub all_layers: bool,

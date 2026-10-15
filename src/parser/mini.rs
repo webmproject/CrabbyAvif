@@ -334,7 +334,7 @@ pub(crate) fn parse_mini(
     let alpha_item_codec_config = if has_alpha && alpha_item_data_size != 0 {
         Some(if alpha_item_codec_config_size == 0 {
             alpha_item_codec_config_size = main_item_codec_config_size;
-            main_item_codec_config.clone()
+            main_item_codec_config.try_clone()?
         } else {
             // unsigned int(8) alpha_item_codec_config[alpha_item_codec_config_size];
             format.parse_codec_configuration(stream, alpha_item_codec_config_size)?
@@ -345,7 +345,7 @@ pub(crate) fn parse_mini(
     let gainmap_item_codec_config = if has_hdr && has_gainmap {
         Some(if gainmap_item_codec_config_size == 0 {
             gainmap_item_codec_config_size = main_item_codec_config_size;
-            main_item_codec_config.clone()
+            main_item_codec_config.try_clone()?
         } else {
             // unsigned int(8) gainmap_item_codec_config[gainmap_item_codec_config_size];
             format.parse_codec_configuration(stream, gainmap_item_codec_config_size)?

@@ -630,7 +630,10 @@ impl Decoder for Avm {
     }
 
     fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
-        self.decoder_config = Some(config.clone());
+        self.decoder_config = Some(DecoderConfig {
+            codec_config: config.codec_config.try_clone()?,
+            ..*config
+        });
         Ok(())
     }
 

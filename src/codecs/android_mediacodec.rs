@@ -863,7 +863,7 @@ impl MediaCodec {
         let (dequeue_to_enqueue_tx, dequeue_to_enqueue_rx) = channel::<()>();
 
         // Create a thread to enqueue the input frames.
-        let codec_config = self.config.unwrap_ref().codec_config.clone();
+        let codec_config = self.config.unwrap_ref().codec_config.try_clone()?;
         let codec = MediaCodecThreadWrapper(self.codec.unwrap());
         let payloads_vec = payloads.try_to_vec()?;
         let enqueue_payloads_thread = thread::spawn(|| {
@@ -920,7 +920,10 @@ impl Decoder for MediaCodec {
 
     fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
         self.codec_initializers = get_codec_initializers(config)?;
-        self.config = Some(config.clone());
+        self.config = Some(DecoderConfig {
+            codec_config: config.codec_config.try_clone()?,
+            ..*config
+        });
         // Actual codec initialization will be performed in get_next_image since we may try
         // multiple codecs.
         Ok(())

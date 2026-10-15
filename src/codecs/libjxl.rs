@@ -995,7 +995,7 @@ fn libjxl_enc_dec_test() -> Result<(), AvifError> {
         max_threads: 0,
         image_size_limit: None,
         max_input_size: 0,
-        codec_config: item.codec_config().unwrap().clone(),
+        codec_config: item.codec_config().unwrap().try_clone()?,
         category: Category::Color,
         android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat::default(),
     })?;

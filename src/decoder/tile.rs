@@ -164,7 +164,7 @@ impl Tile {
                 .ok_or(AvifError::BmffParseFailed(
                     "missing codec config property".into(),
                 ))?
-                .clone(),
+                .try_clone()?,
         };
         let mut layer_sizes: [usize; MAX_AV1_LAYER_COUNT] = [0; MAX_AV1_LAYER_COUNT];
         let mut layer_count: usize = 0;
@@ -282,7 +282,7 @@ impl Tile {
             .ok_or(AvifError::BmffParseFailed("".into()))?;
         let codec_config = find_property!(properties, CodecConfiguration)
             .ok_or(AvifError::BmffParseFailed("".into()))?
-            .clone();
+            .try_clone()?;
         let mut tile = Tile {
             width: track.width,
             height: track.height,

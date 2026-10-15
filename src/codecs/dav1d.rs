@@ -24,6 +24,7 @@ use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::image::YuvRange;
 use crate::internal_utils::u32_from_usize;
+use crate::internal_utils::TryClone;
 use crate::utils::pixels::*;
 use crate::*;
 
@@ -345,7 +346,10 @@ impl Decoder for Dav1d {
     }
 
     fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
-        self.config = Some(config.clone());
+        self.config = Some(DecoderConfig {
+            codec_config: config.codec_config.try_clone()?,
+            ..*config
+        });
         Ok(())
     }
 

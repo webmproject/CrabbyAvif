@@ -254,7 +254,7 @@ impl PixelInformation {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Av1CodecConfiguration {
     pub seq_profile: u8,
     pub seq_level_idx0: u8,
@@ -269,7 +269,7 @@ pub struct Av1CodecConfiguration {
 }
 
 #[cfg(feature = "avm")]
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Av2CodecConfiguration {
     // The AV2CodecConfigurationBox only contains a configOBUs array, see
     // https://aomediacodec.github.io/av2-isobmff/pr/40/index.html#av2c
@@ -285,7 +285,7 @@ pub struct Av2CodecConfiguration {
     pub chroma_sample_position: ChromaSamplePosition,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct HevcCodecConfiguration {
     pub bitdepth: u8,
     pub pixel_format: PixelFormat,
@@ -324,6 +324,36 @@ impl Av1CodecConfiguration {
         } else {
             PixelFormat::Yuv444
         }
+    }
+}
+
+impl TryClone for Av1CodecConfiguration {
+    fn try_clone(&self) -> AvifResult<Self> {
+        Ok(Av1CodecConfiguration {
+            raw_data: self.raw_data.try_clone()?,
+            ..*self
+        })
+    }
+}
+
+#[cfg(feature = "avm")]
+impl TryClone for Av2CodecConfiguration {
+    fn try_clone(&self) -> AvifResult<Self> {
+        Ok(Av2CodecConfiguration {
+            config_obus: self.config_obus.try_clone()?,
+            ..*self
+        })
+    }
+}
+
+impl TryClone for HevcCodecConfiguration {
+    fn try_clone(&self) -> AvifResult<Self> {
+        Ok(HevcCodecConfiguration {
+            vps: self.vps.try_clone()?,
+            sps: self.sps.try_clone()?,
+            pps: self.pps.try_clone()?,
+            ..*self
+        })
     }
 }
 
@@ -447,7 +477,7 @@ impl TryClone for ColorInformation {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum CodecConfiguration {
     Av1(Av1CodecConfiguration),
     #[cfg(feature = "avm")]
@@ -455,6 +485,19 @@ pub enum CodecConfiguration {
     Hevc(HevcCodecConfiguration),
     #[cfg(feature = "jpegxl")]
     JpegXl(JpegXlCodecConfiguration),
+}
+
+impl TryClone for CodecConfiguration {
+    fn try_clone(&self) -> AvifResult<Self> {
+        Ok(match self {
+            Self::Av1(value) => Self::Av1(value.try_clone()?),
+            #[cfg(feature = "avm")]
+            Self::Av2(value) => Self::Av2(value.try_clone()?),
+            Self::Hevc(value) => Self::Hevc(value.try_clone()?),
+            #[cfg(feature = "jpegxl")]
+            Self::JpegXl(value) => Self::JpegXl(JpegXlCodecConfiguration { ..*value }),
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -485,7 +528,7 @@ impl TryClone for ItemProperty {
             }
             Self::PixelInformation(value) => Self::PixelInformation(value.try_clone()?),
             Self::AlphaInformation(value) => Self::AlphaInformation(AlphaInformation { ..*value }),
-            Self::CodecConfiguration(value) => Self::CodecConfiguration(value.clone()),
+            Self::CodecConfiguration(value) => Self::CodecConfiguration(value.try_clone()?),
             Self::ColorInformation(value) => Self::ColorInformation(value.try_clone()?),
             Self::PixelAspectRatio(value) => Self::PixelAspectRatio(PixelAspectRatio { ..*value }),
             Self::AuxiliaryType(value) => Self::AuxiliaryType(value.try_clone()?),

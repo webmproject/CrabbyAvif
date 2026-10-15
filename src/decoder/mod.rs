@@ -574,7 +574,7 @@ impl Decoder {
         };
         let first_item = self.items.get(&alpha_item_indices[0]).unwrap();
         let properties = match first_item.codec_config() {
-            Some(config) => try_vec_exact![ItemProperty::CodecConfiguration(config.clone())]?,
+            Some(config) => try_vec_exact![ItemProperty::CodecConfiguration(config.try_clone()?)]?,
             None => return Ok(None),
         };
         let alpha_item = Item {
@@ -842,7 +842,7 @@ impl Decoder {
                             .ok_or(AvifError::BmffParseFailed(
                                 "missing codec config property".into(),
                             ))?
-                            .clone(),
+                            .try_clone()?,
                     );
                 }
                 if first_icc.is_none() {
@@ -1657,7 +1657,7 @@ impl Decoder {
             max_threads: self.settings.max_threads,
             image_size_limit: self.settings.image_size_limit,
             max_input_size: tile.max_sample_size(),
-            codec_config: tile.codec_config.clone(),
+            codec_config: tile.codec_config.try_clone()?,
             category: decoding_item.category,
             android_mediacodec_output_color_format: self
                 .settings
