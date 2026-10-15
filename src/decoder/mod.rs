@@ -982,6 +982,24 @@ impl Decoder {
         AvifError::no_content()
     }
 
+    fn resolve_identity_item(&mut self, mut item_id: u32) -> AvifResult<u32> {
+        loop {
+            let item = self.items.get(&item_id).unwrap();
+            if !item.is_identity_item() {
+                break;
+            }
+
+            let mut transformative_properties = Vec::new();
+            replace_transformative_properties(&item.properties, &mut transformative_properties)?;
+            // Set the item to that of the derived item and copy over the transformative
+            // properties.
+            item_id = item.source_item_ids[0];
+            let item = self.items.get_mut(&item_id).unwrap();
+            replace_transformative_properties(&transformative_properties, &mut item.properties)?;
+        }
+        Ok(item_id)
+    }
+
     fn reset(&mut self) {
         let decoder = Decoder::default();
         // Reset all fields to default except the following: settings, io, source.
@@ -1170,32 +1188,13 @@ impl Decoder {
                 let mut item_ids: [u32; DecodingItem::COUNT] = [0; DecodingItem::COUNT];
 
                 // Mandatory color item (primary item).
-                let mut primary_item_id = self.find_and_parse_item(
+                let primary_item_id = self.find_and_parse_item(
                     avif_boxes.meta.primary_item_id,
                     DecodingItem::COLOR,
                     &avif_boxes.ftyp,
                     &avif_boxes.meta,
                 )?;
-                loop {
-                    let primary_item = self.items.get(&primary_item_id).unwrap();
-                    if !primary_item.is_identity_item() {
-                        break;
-                    }
-
-                    let mut transformative_properties = Vec::new();
-                    replace_transformative_properties(
-                        &primary_item.properties,
-                        &mut transformative_properties,
-                    )?;
-                    // Set the primary item to that of the derived item and copy over the
-                    // transformative properties.
-                    primary_item_id = primary_item.source_item_ids[0];
-                    let primary_item = self.items.get_mut(&primary_item_id).unwrap();
-                    replace_transformative_properties(
-                        &transformative_properties,
-                        &mut primary_item.properties,
-                    )?;
-                }
+                let primary_item_id = self.resolve_identity_item(primary_item_id)?;
 
                 item_ids[DecodingItem::COLOR.usize()] = primary_item_id;
 
