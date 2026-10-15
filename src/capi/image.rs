@@ -86,7 +86,7 @@ pub struct avifImageMirror {
     pub axis: u8,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 #[repr(C)]
 pub struct avifImage {
     pub width: u32,

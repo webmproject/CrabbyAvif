@@ -26,14 +26,14 @@ use crate::internal_utils::VecExtension;
 use crate::*;
 
 #[repr(C)]
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct avifROData {
     pub data: *const u8,
     pub size: usize,
 }
 
 #[repr(C)]
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct avifRWData {
     pub data: *mut u8,
     pub size: usize,
@@ -159,7 +159,6 @@ pub type avifIOWriteFunc = unsafe extern "C" fn(
 ) -> avifResult;
 
 #[repr(C)]
-#[derive(Clone, Copy)]
 pub struct avifIO {
     destroy: avifIODestroyFunc,
     read: avifIOReadFunc,

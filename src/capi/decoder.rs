@@ -441,7 +441,22 @@ pub unsafe extern "C" fn crabby_avifDecoderRead(
     if !deref_mut!(decoder).image_object.gainMap.is_null() {
         return avifResult::NotImplemented;
     }
-    *deref_mut!(image) = deref_mut!(decoder).image_object.clone();
+    let src = &deref_mut!(decoder).image_object;
+    *deref_mut!(image) = avifImage {
+        icc: avifRWData {
+            data: src.icc.data,
+            size: src.icc.size,
+        },
+        exif: avifRWData {
+            data: src.exif.data,
+            size: src.exif.size,
+        },
+        xmp: avifRWData {
+            data: src.xmp.data,
+            size: src.xmp.size,
+        },
+        ..*src
+    };
     avifResult::Ok
 }
 
