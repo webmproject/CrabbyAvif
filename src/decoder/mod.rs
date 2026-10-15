@@ -1448,115 +1448,123 @@ impl Decoder {
                 Source::PrimaryItem => Source::PrimaryItem,
             };
 
-            let cicp_set = if self.source == Source::Tracks {
-                let color_track = self
-                    .tracks
-                    .iter()
-                    .find(|x| x.is_color())
-                    .ok_or(AvifError::NoContent)?;
-                if let Some(meta) = &color_track.meta {
-                    let mut color_track_items = construct_items(
-                        meta,
-                        self.settings
-                            .strictness
-                            .multiple_iloc_entries_for_same_item_disallowed(),
-                    )?;
-                    Self::search_exif_or_xmp_metadata(
-                        &mut color_track_items,
-                        None,
-                        &self.settings,
-                        self.io.unwrap_mut(),
-                        &mut self.image,
-                    )?;
-                }
-                self.color_track_id = Some(color_track.id);
-                let color_properties = color_track
-                    .get_properties()
-                    .ok_or(AvifError::BmffParseFailed("".into()))?;
+            let cicp_set = match self.source {
+                Source::Tracks => {
+                    let color_track = self
+                        .tracks
+                        .iter()
+                        .find(|x| x.is_color())
+                        .ok_or(AvifError::NoContent)?;
+                    if let Some(meta) = &color_track.meta {
+                        let mut color_track_items = construct_items(
+                            meta,
+                            self.settings
+                                .strictness
+                                .multiple_iloc_entries_for_same_item_disallowed(),
+                        )?;
+                        Self::search_exif_or_xmp_metadata(
+                            &mut color_track_items,
+                            None,
+                            &self.settings,
+                            self.io.unwrap_mut(),
+                            &mut self.image,
+                        )?;
+                    }
+                    self.color_track_id = Some(color_track.id);
+                    let color_properties = color_track
+                        .get_properties()
+                        .ok_or(AvifError::BmffParseFailed("".into()))?;
 
-                self.tiles[DecodingItem::COLOR.usize()].try_push(Tile::create_from_track(
-                    color_track,
-                    self.settings.image_count_limit,
-                    self.io.unwrap_ref().size_hint(),
-                    DecodingItem::COLOR,
-                )?)?;
-                self.tile_info[DecodingItem::COLOR.usize()].tile_count = 1;
-
-                let alpha_properties = if let Some(alpha_track) = self
-                    .tracks
-                    .iter()
-                    .find(|x| x.is_aux(color_track.id) && x.is_auxiliary_alpha())
-                {
-                    self.tiles[DecodingItem::ALPHA.usize()].try_push(Tile::create_from_track(
-                        alpha_track,
+                    self.tiles[DecodingItem::COLOR.usize()].try_push(Tile::create_from_track(
+                        color_track,
                         self.settings.image_count_limit,
                         self.io.unwrap_ref().size_hint(),
-                        DecodingItem::ALPHA,
+                        DecodingItem::COLOR,
                     )?)?;
-                    self.tile_info[DecodingItem::ALPHA.usize()].tile_count = 1;
-                    self.image.alpha_present = true;
-                    self.image.alpha_premultiplied = color_track.prem_by_id == Some(alpha_track.id);
-                    Some(
-                        alpha_track
-                            .get_properties()
-                            .ok_or(AvifError::BmffParseFailed("".into()))?,
-                    )
-                } else {
-                    None
-                };
+                    self.tile_info[DecodingItem::COLOR.usize()].tile_count = 1;
 
-                self.image_index = -1;
-                self.image_count = self.tiles[DecodingItem::COLOR.usize()][0]
-                    .input
-                    .samples
-                    .len() as u32;
-                // For image sequences, ensure that all the DecodingItems have the same number of
-                // samples. This check ensures that the image_count field set in the above line is
-                // correct.
-                if self.image.image_sequence_track_present
-                    && !self.tiles.iter().all(|tiles| {
-                        tiles.is_empty() || tiles[0].input.samples.len() as u32 == self.image_count
-                    })
-                {
-                    return AvifError::bmff_parse_failed(
-                        "not all items have the same number of samples",
-                    );
+                    let alpha_properties = if let Some(alpha_track) = self
+                        .tracks
+                        .iter()
+                        .find(|x| x.is_aux(color_track.id) && x.is_auxiliary_alpha())
+                    {
+                        self.tiles[DecodingItem::ALPHA.usize()].try_push(
+                            Tile::create_from_track(
+                                alpha_track,
+                                self.settings.image_count_limit,
+                                self.io.unwrap_ref().size_hint(),
+                                DecodingItem::ALPHA,
+                            )?,
+                        )?;
+                        self.tile_info[DecodingItem::ALPHA.usize()].tile_count = 1;
+                        self.image.alpha_present = true;
+                        self.image.alpha_premultiplied =
+                            color_track.prem_by_id == Some(alpha_track.id);
+                        Some(
+                            alpha_track
+                                .get_properties()
+                                .ok_or(AvifError::BmffParseFailed("".into()))?,
+                        )
+                    } else {
+                        None
+                    };
+
+                    self.image_index = -1;
+                    self.image_count = self.tiles[DecodingItem::COLOR.usize()][0]
+                        .input
+                        .samples
+                        .len() as u32;
+                    // For image sequences, ensure that all the DecodingItems have the same number
+                    // of samples. This check ensures that the image_count field set in the above
+                    // line is correct.
+                    if self.image.image_sequence_track_present
+                        && !self.tiles.iter().all(|tiles| {
+                            tiles.is_empty()
+                                || tiles[0].input.samples.len() as u32 == self.image_count
+                        })
+                    {
+                        return AvifError::bmff_parse_failed(
+                            "not all items have the same number of samples",
+                        );
+                    }
+
+                    self.timescale = color_track.media_timescale as u64;
+                    self.duration_in_timescales = color_track.media_duration;
+                    if self.timescale != 0 {
+                        self.duration =
+                            (self.duration_in_timescales as f64) / (self.timescale as f64);
+                    } else {
+                        self.duration = 0.0;
+                    }
+                    self.repetition_count = color_track.repetition_count()?;
+                    self.image_timing = Default::default();
+
+                    self.image.width = color_track.width;
+                    self.image.height = color_track.height;
+
+                    Self::validate_samples_and_populate_image_properties(
+                        &self.tiles,
+                        color_properties,
+                        alpha_properties,
+                        None,
+                        false,
+                        &mut self.io_stats,
+                        &mut self.image,
+                        &mut self.compression_format,
+                    )?
                 }
-
-                self.timescale = color_track.media_timescale as u64;
-                self.duration_in_timescales = color_track.media_duration;
-                if self.timescale != 0 {
-                    self.duration = (self.duration_in_timescales as f64) / (self.timescale as f64);
-                } else {
-                    self.duration = 0.0;
+                Source::PrimaryItem => {
+                    // Mandatory color item (primary item).
+                    let primary_item_id = self.find_and_parse_item(
+                        avif_boxes.meta.primary_item_id,
+                        DecodingItem::COLOR,
+                        &avif_boxes.ftyp,
+                        &avif_boxes.meta,
+                    )?;
+                    let primary_item_id = self.resolve_identity_item(primary_item_id)?;
+                    self.prepare_still_image_item(primary_item_id)?
                 }
-                self.repetition_count = color_track.repetition_count()?;
-                self.image_timing = Default::default();
-
-                self.image.width = color_track.width;
-                self.image.height = color_track.height;
-
-                Self::validate_samples_and_populate_image_properties(
-                    &self.tiles,
-                    color_properties,
-                    alpha_properties,
-                    None,
-                    false,
-                    &mut self.io_stats,
-                    &mut self.image,
-                    &mut self.compression_format,
-                )?
-            } else {
-                assert_eq!(self.source, Source::PrimaryItem);
-                // Mandatory color item (primary item).
-                let primary_item_id = self.find_and_parse_item(
-                    avif_boxes.meta.primary_item_id,
-                    DecodingItem::COLOR,
-                    &avif_boxes.ftyp,
-                    &avif_boxes.meta,
-                )?;
-                let primary_item_id = self.resolve_identity_item(primary_item_id)?;
-                self.prepare_still_image_item(primary_item_id)?
+                Source::Auto => unreachable!(),
             };
 
             if cicp_set {
