@@ -192,9 +192,17 @@ pub struct PlanePixelInformation {
     pub subsampling_location: Option<ChromaSamplePosition>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct PixelInformation {
     pub planes: Vec<PlanePixelInformation>,
+}
+
+impl TryClone for PixelInformation {
+    fn try_clone(&self) -> AvifResult<Self> {
+        Ok(PixelInformation {
+            planes: self.planes.try_clone()?,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -422,11 +430,21 @@ impl CodecConfiguration {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum ColorInformation {
     Icc(Vec<u8>),
     Nclx(Nclx),
     Unknown,
+}
+
+impl TryClone for ColorInformation {
+    fn try_clone(&self) -> AvifResult<Self> {
+        Ok(match self {
+            Self::Icc(value) => Self::Icc(value.try_clone()?),
+            Self::Nclx(value) => Self::Nclx(*value),
+            Self::Unknown => Self::Unknown,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -439,7 +457,7 @@ pub enum CodecConfiguration {
     JpegXl(JpegXlCodecConfiguration),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum ItemProperty {
     ImageSpatialExtents(ImageSpatialExtents),
     PixelInformation(PixelInformation),
@@ -457,6 +475,33 @@ pub enum ItemProperty {
     ContentLightLevelInformation(ContentLightLevelInformation),
     Unknown(String),
     Unused, // Such as a FreeBox 'free'.
+}
+
+impl TryClone for ItemProperty {
+    fn try_clone(&self) -> AvifResult<Self> {
+        Ok(match self {
+            Self::ImageSpatialExtents(value) => {
+                Self::ImageSpatialExtents(ImageSpatialExtents { ..*value })
+            }
+            Self::PixelInformation(value) => Self::PixelInformation(value.try_clone()?),
+            Self::AlphaInformation(value) => Self::AlphaInformation(AlphaInformation { ..*value }),
+            Self::CodecConfiguration(value) => Self::CodecConfiguration(value.clone()),
+            Self::ColorInformation(value) => Self::ColorInformation(value.try_clone()?),
+            Self::PixelAspectRatio(value) => Self::PixelAspectRatio(PixelAspectRatio { ..*value }),
+            Self::AuxiliaryType(value) => Self::AuxiliaryType(value.try_clone()?),
+            Self::CleanAperture(value) => Self::CleanAperture(CleanAperture { ..*value }),
+            Self::ImageRotation(value) => Self::ImageRotation(*value),
+            Self::ImageMirror(value) => Self::ImageMirror(*value),
+            Self::OperatingPointSelector(value) => Self::OperatingPointSelector(*value),
+            Self::LayerSelector(value) => Self::LayerSelector(*value),
+            Self::AV1LayeredImageIndexing(value) => Self::AV1LayeredImageIndexing(*value),
+            Self::ContentLightLevelInformation(value) => {
+                Self::ContentLightLevelInformation(ContentLightLevelInformation { ..*value })
+            }
+            Self::Unknown(value) => Self::Unknown(value.try_clone()?),
+            Self::Unused => Self::Unused,
+        })
+    }
 }
 
 // Section 8.11.14 of ISO/IEC 14496-12.

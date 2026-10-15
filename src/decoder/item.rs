@@ -729,7 +729,7 @@ pub(crate) fn construct_items(
                         "required essential property not marked as essential"
                     );
                 }
-                (property, _) => item.properties.try_push(property.clone())?,
+                (property, _) => item.properties.try_push(property.try_clone()?)?,
             }
         }
     }
