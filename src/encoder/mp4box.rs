@@ -131,26 +131,18 @@ pub(crate) fn write_tmap(metadata: &GainMapMetadata) -> AvifResult<Vec<u8>> {
 impl Encoder {
     pub(crate) fn write_avif_ftyp(&self, stream: &mut OStream) -> AvifResult<()> {
         let mut compatible_brands = Vec::new();
-        compatible_brands.try_extend_from_slice(&[
-            String::from("avif"),
-            String::from("mif1"),
-            String::from("miaf"),
-        ])?;
+        compatible_brands.try_extend_from_slice(&["avif", "mif1", "miaf"])?;
         // TODO: check if avio brand is necessary.
         if self.is_sequence() {
-            compatible_brands.try_extend_from_slice(&[
-                String::from("avis"),
-                String::from("msf1"),
-                String::from("iso8"),
-            ])?;
+            compatible_brands.try_extend_from_slice(&["avis", "msf1", "iso8"])?;
         }
         if self.items.iter().any(|x| x.is_tmap()) {
-            compatible_brands.try_push(String::from("tmap"))?;
+            compatible_brands.try_push("tmap")?;
         }
         match self.image_metadata.depth {
             8 | 10 => match self.image_metadata.yuv_format {
-                PixelFormat::Yuv420 => compatible_brands.try_push(String::from("MA1B"))?,
-                PixelFormat::Yuv444 => compatible_brands.try_push(String::from("MA1A"))?,
+                PixelFormat::Yuv420 => compatible_brands.try_push("MA1B")?,
+                PixelFormat::Yuv444 => compatible_brands.try_push("MA1A")?,
                 _ => {}
             },
             _ => {}
@@ -158,16 +150,12 @@ impl Encoder {
 
         stream.start_box("ftyp")?;
         // unsigned int(32) major_brand;
-        stream.write_string(&String::from(if self.is_sequence() {
-            "avis"
-        } else {
-            "avif"
-        }))?;
+        stream.write_str(if self.is_sequence() { "avis" } else { "avif" })?;
         // unsigned int(32) minor_version;
         stream.write_u32(0)?;
         // unsigned int(32) compatible_brands[];
         for compatible_brand in &compatible_brands {
-            stream.write_string(compatible_brand)?;
+            stream.write_str(compatible_brand)?;
         }
         stream.finish_box()
     }
@@ -176,25 +164,17 @@ impl Encoder {
     pub(crate) fn write_avif2_ftyp(&self, stream: &mut OStream) -> AvifResult<()> {
         // TODO: b/437292541 - Adapt once AVIF2 is finalized.
         let mut compatible_brands = Vec::new();
-        compatible_brands.try_extend_from_slice(&[
-            String::from("av2f"),
-            String::from("mif1"),
-            String::from("miaf"),
-        ])?;
+        compatible_brands.try_extend_from_slice(&["av2f", "mif1", "miaf"])?;
         if self.is_sequence() {
-            compatible_brands.try_extend_from_slice(&[
-                String::from("av2s"),
-                String::from("msf1"),
-                String::from("iso8"),
-            ])?;
+            compatible_brands.try_extend_from_slice(&["av2s", "msf1", "iso8"])?;
         }
         if self.items.iter().any(|x| x.is_tmap()) {
-            compatible_brands.try_push(String::from("tmap"))?;
+            compatible_brands.try_push("tmap")?;
         }
         match self.image_metadata.depth {
             8 | 10 => match self.image_metadata.yuv_format {
-                PixelFormat::Yuv420 => compatible_brands.try_push(String::from("MA1B"))?,
-                PixelFormat::Yuv444 => compatible_brands.try_push(String::from("MA1A"))?,
+                PixelFormat::Yuv420 => compatible_brands.try_push("MA1B")?,
+                PixelFormat::Yuv444 => compatible_brands.try_push("MA1A")?,
                 _ => {}
             },
             _ => {}
@@ -202,16 +182,12 @@ impl Encoder {
 
         stream.start_box("ftyp")?;
         // unsigned int(32) major_brand;
-        stream.write_string(&String::from(if self.is_sequence() {
-            "av2s"
-        } else {
-            "av2f"
-        }))?;
+        stream.write_str(if self.is_sequence() { "av2s" } else { "av2f" })?;
         // unsigned int(32) minor_version;
         stream.write_u32(0)?;
         // unsigned int(32) compatible_brands[];
         for compatible_brand in &compatible_brands {
-            stream.write_string(compatible_brand)?;
+            stream.write_str(compatible_brand)?;
         }
         stream.finish_box()
     }
@@ -221,35 +197,31 @@ impl Encoder {
         stream.start_box("ftyp")?;
         // No need to repeat the major_brand in the compatible_brands starting
         // with ISO/IEC 14496-12:2025/DAmd 1.
-        let (major_brand, compatible_brands): (String, &[std::string::String]) =
-            if self.is_sequence() {
-                (
-                    String::from("hxlS"),
-                    &[
-                        String::from("msf1"),
-                        String::from("iso8"),
-                        // Also contains an image item.
-                        String::from("hxlI"),
-                        String::from("mif1"),
-                        String::from("miaf"),
-                    ],
-                )
-            } else {
-                (
-                    String::from("hxlI"),
-                    &[String::from("mif1"), String::from("miaf")],
-                )
-            };
+        let (major_brand, compatible_brands): (&str, &[&str]) = if self.is_sequence() {
+            (
+                "hxlS",
+                &[
+                    "msf1", // HEIF
+                    "iso8", // ISOBMFF
+                    // Also contains an image item.
+                    "hxlI", // HEIF-JXL
+                    "mif1", // HEIF
+                    "miaf", // MIAF
+                ],
+            )
+        } else {
+            ("hxlI", &["mif1", "miaf"])
+        };
         // unsigned int(32) major_brand;
-        stream.write_string(&major_brand)?;
+        stream.write_str(major_brand)?;
         // unsigned int(32) minor_version;
         stream.write_u32(0)?;
         // unsigned int(32) compatible_brands[];
         for compatible_brand in compatible_brands {
-            stream.write_string(compatible_brand)?;
+            stream.write_str(compatible_brand)?;
         }
         if self.items.iter().any(|x| x.is_tmap()) {
-            stream.write_string(&String::from("tmap"))?;
+            stream.write_str("tmap")?;
         }
         stream.finish_box()
     }

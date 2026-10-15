@@ -162,7 +162,7 @@ pub struct ItemLocationBox {
     pub items: Vec<ItemLocationEntry>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ImageSpatialExtents {
     pub width: u32,
     pub height: u32,
@@ -184,7 +184,7 @@ impl ChannelIdc {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct PlanePixelInformation {
     pub depth: u8,
     pub channel_idc: Option<ChannelIdc>,
@@ -205,7 +205,7 @@ impl TryClone for PixelInformation {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct AlphaInformation {
     pub is_premultiplied: bool,
 }
@@ -296,7 +296,7 @@ pub struct HevcCodecConfiguration {
 }
 
 #[cfg(feature = "jpegxl")]
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct JpegXlCodecConfiguration {
     pub have_animation: bool,
     pub modular_16bit_buffers: bool,

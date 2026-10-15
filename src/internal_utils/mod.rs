@@ -401,7 +401,7 @@ pub(crate) trait TryClone: Sized {
     fn try_clone(&self) -> AvifResult<Self>;
 }
 
-impl<T: Clone> TryClone for Vec<T> {
+impl<T: Copy> TryClone for Vec<T> {
     fn try_clone(&self) -> AvifResult<Vec<T>> {
         let mut vec: Vec<T> = create_vec_exact(self.len())?;
         vec.try_extend_from_slice(self.as_slice())?;
@@ -425,13 +425,13 @@ impl TryClone for String {
 pub(crate) trait SliceExtension<T> {
     fn try_to_vec(self) -> AvifResult<Vec<T>>
     where
-        T: Clone;
+        T: Copy;
 }
 
 impl<T> SliceExtension<T> for &[T] {
     fn try_to_vec(self) -> AvifResult<Vec<T>>
     where
-        T: Clone,
+        T: Copy,
     {
         let mut vec: Vec<T> = create_vec_exact(self.len())?;
         vec.try_extend_from_slice(self)?;
@@ -459,7 +459,7 @@ pub(crate) trait VecExtension<T> {
     fn try_push(&mut self, value: T) -> AvifResult<()>;
     fn try_extend_from_slice(&mut self, value: &[T]) -> AvifResult<()>
     where
-        T: Clone;
+        T: Copy;
 }
 
 impl<T> VecExtension<T> for Vec<T> {
@@ -472,7 +472,7 @@ impl<T> VecExtension<T> for Vec<T> {
 
     fn try_extend_from_slice(&mut self, value: &[T]) -> AvifResult<()>
     where
-        T: Clone,
+        T: Copy,
     {
         self.try_reserve(value.len())
             .map_err(AvifError::map_out_of_memory)?;
