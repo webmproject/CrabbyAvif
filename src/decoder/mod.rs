@@ -1012,6 +1012,7 @@ impl Decoder {
         alpha_properties: Option<&Vec<ItemProperty>>,
         gainmap_properties: Option<&Vec<ItemProperty>>,
         is_sample_transform: bool,
+        update_io_stats: bool,
         io_stats: &mut IOStats,
         image: &mut Image,
         compression_format: &mut CompressionFormat,
@@ -1026,7 +1027,7 @@ impl Decoder {
                     // The item_idx checks is to try to mimic libavif's behavior
                     // which only takes into account the size of the item whose id
                     // is in the pitm box.
-                    if tile.input.decoding_item.item_idx <= 1 {
+                    if update_io_stats && tile.input.decoding_item.item_idx <= 1 {
                         match tile.input.decoding_item.category {
                             Category::Color => {
                                 checked_incr!(io_stats.color_obu_size, sample.size)
@@ -1135,6 +1136,7 @@ impl Decoder {
         &mut self,
         color_item_id: u32,
         allow_gainmap: bool,
+        update_io_stats: bool,
     ) -> AvifResult<bool> {
         self.tile_info = Default::default();
         self.tiles = Default::default();
@@ -1373,6 +1375,7 @@ impl Decoder {
             alpha_properties,
             gainmap_properties,
             is_sample_transform,
+            update_io_stats,
             &mut self.io_stats,
             &mut self.image,
             &mut self.compression_format,
@@ -1570,6 +1573,7 @@ impl Decoder {
                         alpha_properties,
                         None,
                         false,
+                        true,
                         &mut self.io_stats,
                         &mut self.image,
                         &mut self.compression_format,
@@ -1584,7 +1588,7 @@ impl Decoder {
                         &avif_boxes.meta,
                     )?;
                     let primary_item_id = self.resolve_identity_item(primary_item_id)?;
-                    self.prepare_still_image_item(primary_item_id, true)?
+                    self.prepare_still_image_item(primary_item_id, true, true)?
                 }
                 Source::Auto => unreachable!(),
             };
