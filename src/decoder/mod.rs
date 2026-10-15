@@ -846,7 +846,10 @@ impl Decoder {
                     );
                 }
                 if first_icc.is_none() {
-                    first_icc = find_icc(&dimg_item.properties)?.cloned();
+                    first_icc = match find_icc(&dimg_item.properties)? {
+                        Some(icc) => Some(icc.try_clone()?),
+                        None => None,
+                    };
                 }
                 if first_nclx.is_none() {
                     first_nclx = find_nclx(&dimg_item.properties)?.copied();

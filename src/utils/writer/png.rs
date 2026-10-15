@@ -257,7 +257,7 @@ impl Writer for PngWriter {
         }
         let text: png_text;
         let xmp_key = CString::new("XML:com.adobe.xmp").unwrap();
-        let mut xmp = image.xmp.clone();
+        let mut xmp = image.xmp.try_clone()?;
         if !xmp.is_empty() {
             xmp.try_push(0)?;
             text = png_text {
