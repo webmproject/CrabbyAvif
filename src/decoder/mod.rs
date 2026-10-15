@@ -1129,6 +1129,234 @@ impl Decoder {
         Ok(cicp_set)
     }
 
+    fn prepare_still_image_item(&mut self, color_item_id: u32) -> AvifResult<bool> {
+        let mut item_ids: [u32; DecodingItem::COUNT] = [0; DecodingItem::COUNT];
+        item_ids[DecodingItem::COLOR.usize()] = color_item_id;
+
+        let primary_item = self.items.get(&color_item_id).unwrap();
+        if primary_item.is_tone_mapped_item() {
+            // validate_source_items() guarantees that tmap has two source item ids.
+            let base_item_id = primary_item.source_item_ids[0];
+            let gainmap_id = primary_item.source_item_ids[1];
+
+            // Set the color item it to the base image and reparse it.
+            item_ids[DecodingItem::COLOR.usize()] = base_item_id;
+            self.read_and_parse_item(base_item_id, DecodingItem::COLOR)?;
+
+            // Parse the gainmap, making sure it's valid.
+            self.read_and_parse_item(gainmap_id, DecodingItem::GAINMAP)?;
+
+            self.harvest_and_validate_gainmap_properties(
+                gainmap_id,
+                /* tonemap_id= */ color_item_id,
+                item_ids[DecodingItem::COLOR.usize()],
+            )?;
+            self.gainmap.metadata = self.tile_info[DecodingItem::COLOR.usize()].gainmap_metadata;
+            self.gainmap_present = true;
+
+            if self.settings.image_content_to_decode.gainmap() {
+                item_ids[DecodingItem::GAINMAP.usize()] = gainmap_id;
+            }
+        }
+
+        let mut alpha_present = false;
+        let mut alpha_premultiplied = false;
+        let mut is_sample_transform = false;
+
+        let primary_item = self.items.get(&color_item_id).unwrap();
+        if primary_item.is_sample_transform_item() {
+            let source_item_ids = primary_item.source_item_ids.clone();
+            for (idx, item_id) in source_item_ids.iter().enumerate() {
+                let decoding_item = DecodingItem::color(idx + 1);
+                item_ids[decoding_item.usize()] = *item_id;
+                self.read_and_parse_item(*item_id, decoding_item)?;
+                // Optional alpha auxiliary item
+                if let Some(alpha_item_id) = self.find_alpha_item(*item_id)? {
+                    let alpha_decoding_item = DecodingItem::alpha(idx + 1);
+                    if !self.items.get(&alpha_item_id).unwrap().is_made_up {
+                        self.read_and_parse_item(alpha_item_id, alpha_decoding_item)?;
+                    }
+                    item_ids[alpha_decoding_item.usize()] = alpha_item_id;
+                    let is_premultiplied = self
+                        .items
+                        .get(item_id)
+                        .unwrap()
+                        .prem_by_id
+                        .contains(&alpha_item_id);
+                    if idx > 0 && !alpha_present {
+                        return AvifError::invalid_image_grid("input images for sato derived image item must either all have alpha or all not have alpha");
+                    }
+                    if alpha_present && alpha_premultiplied != is_premultiplied {
+                        return AvifError::invalid_image_grid(
+                            "alpha for sato input images must all have the same premultiplication",
+                        );
+                    }
+                    alpha_present = true;
+                    alpha_premultiplied = is_premultiplied;
+                } else if alpha_present {
+                    return AvifError::invalid_image_grid("input images for sato derived image item must either all have alpha or all not have alpha");
+                }
+                let item = self.items.get(item_id).unwrap();
+                self.extra_inputs[idx].width = item.width;
+                self.extra_inputs[idx].height = item.height;
+                let codec_config = item
+                    .codec_config()
+                    .ok_or(AvifError::BmffParseFailed("".into()))?;
+                self.extra_inputs[idx].depth =
+                    depth_from_properties(&item.properties, "sato input")?;
+                self.extra_inputs[idx].yuv_format =
+                    pixel_format_from_properties(&item.properties, "sato input")?;
+                self.extra_inputs[idx].chroma_sample_position =
+                    codec_config.chroma_sample_position();
+            }
+            is_sample_transform = true;
+        }
+
+        // Find exif/xmp from meta if any.
+        Self::search_exif_or_xmp_metadata(
+            &mut self.items,
+            Some(item_ids[DecodingItem::COLOR.usize()]),
+            &self.settings,
+            self.io.unwrap_mut(),
+            &mut self.image,
+        )?;
+
+        // Optional alpha auxiliary item
+        if let Some(alpha_item_id) = self.find_alpha_item(item_ids[DecodingItem::COLOR.usize()])? {
+            if !self.items.get(&alpha_item_id).unwrap().is_made_up {
+                self.read_and_parse_item(alpha_item_id, DecodingItem::ALPHA)?;
+            }
+            item_ids[DecodingItem::ALPHA.usize()] = alpha_item_id;
+            alpha_present = true;
+            alpha_premultiplied = self
+                .items
+                .get(&item_ids[DecodingItem::COLOR.usize()])
+                .unwrap()
+                .prem_by_id
+                .contains(&alpha_item_id)
+        }
+
+        self.image_index = -1;
+        self.image_count = 1;
+        self.timescale = 1;
+        self.duration = 1.0;
+        self.duration_in_timescales = 1;
+        self.image_timing.timescale = 1;
+        self.image_timing.duration = 1.0;
+        self.image_timing.duration_in_timescales = 1;
+
+        for decoding_item in DecodingItem::ALL {
+            let item_id = item_ids[decoding_item.usize()];
+            if item_id == 0 {
+                continue;
+            }
+
+            let item = self.items.get(&item_id).unwrap();
+            if decoding_item == DecodingItem::ALPHA && item.width == 0 && item.height == 0 {
+                // NON-STANDARD: Alpha subimage does not have an ispe property; adopt
+                // width/height from color item.
+                assert!(!self.settings.strictness.alpha_ispe_required());
+                let color_item = self
+                    .items
+                    .get(&item_ids[DecodingItem::COLOR.usize()])
+                    .unwrap();
+                let width = color_item.width;
+                let height = color_item.height;
+                let alpha_item = self.items.get_mut(&item_id).unwrap();
+                // Note: We cannot directly use color_item.width here because borrow
+                // checker won't allow that.
+                alpha_item.width = width;
+                alpha_item.height = height;
+            }
+
+            self.tiles[decoding_item.usize()] = self.generate_tiles(item_id, decoding_item)?;
+            let item = self.items.get(&item_id).unwrap();
+            // Made up alpha item does not contain the pixi property. So do not try to
+            // validate it.
+            // Sample transforms can modify the bit depth of an item so it must be
+            // explicitly signalled.
+            let pixi_required = self.settings.strictness.pixi_required() && !item.is_made_up
+                || item.is_sample_transform_item();
+            item.validate_properties(&self.items, pixi_required)?;
+        }
+
+        let color_item = self
+            .items
+            .get(&item_ids[DecodingItem::COLOR.usize()])
+            .unwrap();
+        self.image.width = color_item.width;
+        self.image.height = color_item.height;
+        self.image.alpha_present = alpha_present;
+        self.image.alpha_premultiplied = alpha_premultiplied;
+
+        if color_item.progressive {
+            self.image.progressive_state = ProgressiveState::Available;
+            let sample_count = self.tiles[DecodingItem::COLOR.usize()][0]
+                .input
+                .samples
+                .len();
+            if sample_count > 1 {
+                self.image.progressive_state = ProgressiveState::Active;
+                self.image_count = sample_count as u32;
+            }
+        }
+
+        if item_ids[DecodingItem::GAINMAP.usize()] != 0 {
+            let gainmap_item = self
+                .items
+                .get(&item_ids[DecodingItem::GAINMAP.usize()])
+                .unwrap();
+            self.gainmap.image.width = gainmap_item.width;
+            self.gainmap.image.height = gainmap_item.height;
+            let codec_config = gainmap_item
+                .codec_config()
+                .ok_or(AvifError::BmffParseFailed("".into()))?;
+            self.gainmap.image.depth = depth_from_properties(&gainmap_item.properties, "gain map")?;
+            self.gainmap.image.yuv_format =
+                pixel_format_from_properties(&gainmap_item.properties, "gain map")?;
+            self.gainmap.image.chroma_sample_position = codec_config.chroma_sample_position();
+        }
+
+        let color_properties = &self
+            .items
+            .get(&item_ids[DecodingItem::COLOR.usize()])
+            .unwrap()
+            .properties;
+        let alpha_properties = if item_ids[DecodingItem::ALPHA.usize()] != 0 {
+            Some(
+                &self
+                    .items
+                    .get(&item_ids[DecodingItem::ALPHA.usize()])
+                    .unwrap()
+                    .properties,
+            )
+        } else {
+            None
+        };
+        let gainmap_properties = if item_ids[DecodingItem::GAINMAP.usize()] != 0 {
+            Some(
+                &self
+                    .items
+                    .get(&item_ids[DecodingItem::GAINMAP.usize()])
+                    .unwrap()
+                    .properties,
+            )
+        } else {
+            None
+        };
+
+        Self::validate_samples_and_populate_image_properties(
+            &self.tiles,
+            color_properties,
+            alpha_properties,
+            gainmap_properties,
+            is_sample_transform,
+            &mut self.io_stats,
+            &mut self.image,
+            &mut self.compression_format,
+        )
+    }
+
     fn reset(&mut self) {
         let decoder = Decoder::default();
         // Reset all fields to default except the following: settings, io, source.
@@ -1320,8 +1548,6 @@ impl Decoder {
                 )?
             } else {
                 assert_eq!(self.source, Source::PrimaryItem);
-                let mut item_ids: [u32; DecodingItem::COUNT] = [0; DecodingItem::COUNT];
-
                 // Mandatory color item (primary item).
                 let primary_item_id = self.find_and_parse_item(
                     avif_boxes.meta.primary_item_id,
@@ -1330,236 +1556,7 @@ impl Decoder {
                     &avif_boxes.meta,
                 )?;
                 let primary_item_id = self.resolve_identity_item(primary_item_id)?;
-
-                item_ids[DecodingItem::COLOR.usize()] = primary_item_id;
-
-                let primary_item = self.items.get(&primary_item_id).unwrap();
-                if primary_item.is_tone_mapped_item() {
-                    // validate_source_items() guarantees that tmap has two source item ids.
-                    let base_item_id = primary_item.source_item_ids[0];
-                    let gainmap_id = primary_item.source_item_ids[1];
-
-                    // Set the color item it to the base image and reparse it.
-                    item_ids[DecodingItem::COLOR.usize()] = base_item_id;
-                    self.read_and_parse_item(base_item_id, DecodingItem::COLOR)?;
-
-                    // Parse the gainmap, making sure it's valid.
-                    self.read_and_parse_item(gainmap_id, DecodingItem::GAINMAP)?;
-
-                    self.harvest_and_validate_gainmap_properties(
-                        gainmap_id,
-                        /*tonemap_id=*/ primary_item_id,
-                        item_ids[DecodingItem::COLOR.usize()],
-                    )?;
-                    self.gainmap.metadata =
-                        self.tile_info[DecodingItem::COLOR.usize()].gainmap_metadata;
-                    self.gainmap_present = true;
-
-                    if self.settings.image_content_to_decode.gainmap() {
-                        item_ids[DecodingItem::GAINMAP.usize()] = gainmap_id;
-                    }
-                }
-
-                let mut alpha_present = false;
-                let mut alpha_premultiplied = false;
-                let mut is_sample_transform = false;
-
-                let primary_item = self.items.get(&primary_item_id).unwrap();
-                if primary_item.is_sample_transform_item() {
-                    let source_item_ids = primary_item.source_item_ids.clone();
-                    for (idx, item_id) in source_item_ids.iter().enumerate() {
-                        let decoding_item = DecodingItem::color(idx + 1);
-                        item_ids[decoding_item.usize()] = *item_id;
-                        self.read_and_parse_item(*item_id, decoding_item)?;
-                        // Optional alpha auxiliary item
-                        if let Some(alpha_item_id) = self.find_alpha_item(*item_id)? {
-                            let alpha_decoding_item = DecodingItem::alpha(idx + 1);
-                            if !self.items.get(&alpha_item_id).unwrap().is_made_up {
-                                self.read_and_parse_item(alpha_item_id, alpha_decoding_item)?;
-                            }
-                            item_ids[alpha_decoding_item.usize()] = alpha_item_id;
-                            let is_premultiplied = self
-                                .items
-                                .get(item_id)
-                                .unwrap()
-                                .prem_by_id
-                                .contains(&alpha_item_id);
-                            if idx > 0 && !alpha_present {
-                                return AvifError::invalid_image_grid("input images for sato derived image item must either all have alpha or all not have alpha");
-                            }
-                            if alpha_present && alpha_premultiplied != is_premultiplied {
-                                return AvifError::invalid_image_grid("alpha for sato input images must all have the same premultiplication");
-                            }
-                            alpha_present = true;
-                            alpha_premultiplied = is_premultiplied;
-                        } else if alpha_present {
-                            return AvifError::invalid_image_grid("input images for sato derived image item must either all have alpha or all not have alpha");
-                        }
-                        let item = self.items.get(item_id).unwrap();
-                        self.extra_inputs[idx].width = item.width;
-                        self.extra_inputs[idx].height = item.height;
-                        let codec_config = item
-                            .codec_config()
-                            .ok_or(AvifError::BmffParseFailed("".into()))?;
-                        self.extra_inputs[idx].depth =
-                            depth_from_properties(&item.properties, "sato input")?;
-                        self.extra_inputs[idx].yuv_format =
-                            pixel_format_from_properties(&item.properties, "sato input")?;
-                        self.extra_inputs[idx].chroma_sample_position =
-                            codec_config.chroma_sample_position();
-                    }
-                    is_sample_transform = true;
-                }
-
-                // Find exif/xmp from meta if any.
-                Self::search_exif_or_xmp_metadata(
-                    &mut self.items,
-                    Some(item_ids[DecodingItem::COLOR.usize()]),
-                    &self.settings,
-                    self.io.unwrap_mut(),
-                    &mut self.image,
-                )?;
-
-                // Optional alpha auxiliary item
-                if let Some(alpha_item_id) =
-                    self.find_alpha_item(item_ids[DecodingItem::COLOR.usize()])?
-                {
-                    if !self.items.get(&alpha_item_id).unwrap().is_made_up {
-                        self.read_and_parse_item(alpha_item_id, DecodingItem::ALPHA)?;
-                    }
-                    item_ids[DecodingItem::ALPHA.usize()] = alpha_item_id;
-                    alpha_present = true;
-                    alpha_premultiplied = self
-                        .items
-                        .get(&item_ids[DecodingItem::COLOR.usize()])
-                        .unwrap()
-                        .prem_by_id
-                        .contains(&alpha_item_id)
-                }
-
-                self.image_index = -1;
-                self.image_count = 1;
-                self.timescale = 1;
-                self.duration = 1.0;
-                self.duration_in_timescales = 1;
-                self.image_timing.timescale = 1;
-                self.image_timing.duration = 1.0;
-                self.image_timing.duration_in_timescales = 1;
-
-                for decoding_item in DecodingItem::ALL {
-                    let item_id = item_ids[decoding_item.usize()];
-                    if item_id == 0 {
-                        continue;
-                    }
-
-                    let item = self.items.get(&item_id).unwrap();
-                    if decoding_item == DecodingItem::ALPHA && item.width == 0 && item.height == 0 {
-                        // NON-STANDARD: Alpha subimage does not have an ispe property; adopt
-                        // width/height from color item.
-                        assert!(!self.settings.strictness.alpha_ispe_required());
-                        let color_item = self
-                            .items
-                            .get(&item_ids[DecodingItem::COLOR.usize()])
-                            .unwrap();
-                        let width = color_item.width;
-                        let height = color_item.height;
-                        let alpha_item = self.items.get_mut(&item_id).unwrap();
-                        // Note: We cannot directly use color_item.width here because borrow
-                        // checker won't allow that.
-                        alpha_item.width = width;
-                        alpha_item.height = height;
-                    }
-
-                    self.tiles[decoding_item.usize()] =
-                        self.generate_tiles(item_id, decoding_item)?;
-                    let item = self.items.get(&item_id).unwrap();
-                    // Made up alpha item does not contain the pixi property. So do not try to
-                    // validate it.
-                    // Sample transforms can modify the bit depth of an item so it must be
-                    // explicitly signalled.
-                    let pixi_required = self.settings.strictness.pixi_required()
-                        && !item.is_made_up
-                        || item.is_sample_transform_item();
-                    item.validate_properties(&self.items, pixi_required)?;
-                }
-
-                let color_item = self
-                    .items
-                    .get(&item_ids[DecodingItem::COLOR.usize()])
-                    .unwrap();
-                self.image.width = color_item.width;
-                self.image.height = color_item.height;
-                self.image.alpha_present = alpha_present;
-                self.image.alpha_premultiplied = alpha_premultiplied;
-
-                if color_item.progressive {
-                    self.image.progressive_state = ProgressiveState::Available;
-                    let sample_count = self.tiles[DecodingItem::COLOR.usize()][0]
-                        .input
-                        .samples
-                        .len();
-                    if sample_count > 1 {
-                        self.image.progressive_state = ProgressiveState::Active;
-                        self.image_count = sample_count as u32;
-                    }
-                }
-
-                if item_ids[DecodingItem::GAINMAP.usize()] != 0 {
-                    let gainmap_item = self
-                        .items
-                        .get(&item_ids[DecodingItem::GAINMAP.usize()])
-                        .unwrap();
-                    self.gainmap.image.width = gainmap_item.width;
-                    self.gainmap.image.height = gainmap_item.height;
-                    let codec_config = gainmap_item
-                        .codec_config()
-                        .ok_or(AvifError::BmffParseFailed("".into()))?;
-                    self.gainmap.image.depth =
-                        depth_from_properties(&gainmap_item.properties, "gain map")?;
-                    self.gainmap.image.yuv_format =
-                        pixel_format_from_properties(&gainmap_item.properties, "gain map")?;
-                    self.gainmap.image.chroma_sample_position =
-                        codec_config.chroma_sample_position();
-                }
-
-                let color_properties = &self
-                    .items
-                    .get(&item_ids[DecodingItem::COLOR.usize()])
-                    .unwrap()
-                    .properties;
-                let alpha_properties = if item_ids[DecodingItem::ALPHA.usize()] != 0 {
-                    Some(
-                        &self
-                            .items
-                            .get(&item_ids[DecodingItem::ALPHA.usize()])
-                            .unwrap()
-                            .properties,
-                    )
-                } else {
-                    None
-                };
-                let gainmap_properties = if item_ids[DecodingItem::GAINMAP.usize()] != 0 {
-                    Some(
-                        &self
-                            .items
-                            .get(&item_ids[DecodingItem::GAINMAP.usize()])
-                            .unwrap()
-                            .properties,
-                    )
-                } else {
-                    None
-                };
-
-                Self::validate_samples_and_populate_image_properties(
-                    &self.tiles,
-                    color_properties,
-                    alpha_properties,
-                    gainmap_properties,
-                    is_sample_transform,
-                    &mut self.io_stats,
-                    &mut self.image,
-                    &mut self.compression_format,
-                )?
+                self.prepare_still_image_item(primary_item_id)?
             };
 
             if cicp_set {
