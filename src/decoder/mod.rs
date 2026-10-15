@@ -1132,6 +1132,19 @@ impl Decoder {
     }
 
     fn prepare_still_image_item(&mut self, color_item_id: u32) -> AvifResult<bool> {
+        self.tile_info = Default::default();
+        self.tiles = Default::default();
+        self.extra_inputs = Default::default();
+        self.gainmap = Default::default();
+        self.gainmap_present = false;
+        let image_sequence_track_present = self.image.image_sequence_track_present;
+        self.image = Image {
+            image_sequence_track_present,
+            ..Image::default()
+        };
+
+        self.read_and_parse_item(color_item_id, DecodingItem::COLOR)?;
+
         let mut item_ids: [u32; DecodingItem::COUNT] = [0; DecodingItem::COUNT];
         item_ids[DecodingItem::COLOR.usize()] = color_item_id;
 
