@@ -51,6 +51,7 @@ impl Reader for GifReader {
     fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64, Option<GainMap>)> {
         if self.frame.is_none() {
             self.frame = Some(match self.decoder.read_next_frame() {
+                #[allow(clippy::disallowed_methods)]
                 Ok(Some(frame)) => frame.clone(),
                 _ => return AvifError::unknown_error("error reading gif frame"),
             });
@@ -105,6 +106,7 @@ impl Reader for GifReader {
             return true;
         }
         self.frame = Some(match self.decoder.read_next_frame() {
+            #[allow(clippy::disallowed_methods)]
             Ok(Some(frame)) => frame.clone(),
             _ => return false,
         });
