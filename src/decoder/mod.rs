@@ -1000,6 +1000,132 @@ impl Decoder {
         Ok(item_id)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn validate_samples_and_populate_image_properties(
+        tiles: &[Vec<Tile>; DecodingItem::COUNT],
+        color_properties: &[ItemProperty],
+        alpha_properties: Option<&Vec<ItemProperty>>,
+        gainmap_properties: Option<&Vec<ItemProperty>>,
+        is_sample_transform: bool,
+        io_stats: &mut IOStats,
+        image: &mut Image,
+        compression_format: &mut CompressionFormat,
+    ) -> AvifResult<bool> {
+        // Check validity of samples.
+        for tiles in tiles {
+            for tile in tiles {
+                for sample in &tile.input.samples {
+                    if sample.size == 0 {
+                        return AvifError::bmff_parse_failed("sample has invalid size.");
+                    }
+                    // The item_idx checks is to try to mimic libavif's behavior
+                    // which only takes into account the size of the item whose id
+                    // is in the pitm box.
+                    if tile.input.decoding_item.item_idx <= 1 {
+                        match tile.input.decoding_item.category {
+                            Category::Color => {
+                                checked_incr!(io_stats.color_obu_size, sample.size)
+                            }
+                            Category::Alpha => {
+                                checked_incr!(io_stats.alpha_obu_size, sample.size)
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        // Find and adopt all colr boxes "at most one for a given value of colour type"
+        // (HEIF 6.5.5.1, from Amendment 3) Accept one of each type, and bail out if more than one
+        // of a given type is provided.
+        let mut cicp_set = false;
+
+        if let Some(nclx) = find_nclx(color_properties)? {
+            image.color_primaries = nclx.color_primaries;
+            image.transfer_characteristics = nclx.transfer_characteristics;
+            image.matrix_coefficients = nclx.matrix_coefficients;
+            image.yuv_range = nclx.yuv_range;
+            cicp_set = true;
+        }
+        if let Some(icc) = find_icc(color_properties)? {
+            image.icc.clone_from(icc);
+        }
+
+        image.clli = find_property!(color_properties, ContentLightLevelInformation).copied();
+        image.pasp = find_property!(color_properties, PixelAspectRatio).copied();
+        image.clap = find_property!(color_properties, CleanAperture).copied();
+        image.irot_angle = find_property!(color_properties, ImageRotation).copied();
+        image.imir_axis = find_property!(color_properties, ImageMirror).copied();
+
+        if let Some(alpha_properties) = alpha_properties {
+            // The 'clap', 'irot' and 'imir' transformative properties should be applied to the
+            // alpha auxiliary image item before considering it a plane of the color image item.
+            // Alternatively, inequality with the transformative properties attached to the
+            // color image item should be treated as AVIF_RESULT_NOT_IMPLEMENTED.
+            // The latter is easier and is the behavior of libavif and CrabbyAvif.
+
+            let alpha_clap = find_property!(alpha_properties, CleanAperture);
+            let alpha_irot = find_property!(alpha_properties, ImageRotation);
+            let alpha_imir = find_property!(alpha_properties, ImageMirror);
+            if alpha_clap.is_none() && alpha_irot.is_none() && alpha_imir.is_none() {
+                // However, libavif up to version 1.3.0 generated images lacking transformative
+                // property associations with alpha auxiliary image items, so be lenient on
+                // their absence for backward compatibility with previously generated images.
+            } else if image.clap != alpha_clap.copied()
+                || image.irot_angle != alpha_irot.copied()
+                || image.imir_axis != alpha_imir.copied()
+            {
+                return AvifError::not_implemented();
+            }
+        }
+
+        if let Some(pixi) = find_property!(color_properties, PixelInformation) {
+            if pixi
+                .planes
+                .iter()
+                .any(|plane| plane.channel_idc == Some(ChannelIdc::Alpha))
+            {
+                if image.alpha_present {
+                    // TODO: b/456440247 - Handle multiple alpha planes.
+                    return AvifError::not_implemented();
+                }
+                image.alpha_present = true;
+                image.alpha_premultiplied = find_property!(color_properties, AlphaInformation)
+                    .map_or(false, |alpi| alpi.is_premultiplied);
+            }
+        }
+
+        if let Some(gainmap_properties) = gainmap_properties {
+            // Ensure that the bitstream contains the same 'pasp', 'clap', 'irot and 'imir'
+            // properties for both the base and gain map image items.
+            if image.pasp != find_property!(gainmap_properties, PixelAspectRatio).copied()
+                || image.clap != find_property!(gainmap_properties, CleanAperture).copied()
+                || image.irot_angle != find_property!(gainmap_properties, ImageRotation).copied()
+                || image.imir_axis != find_property!(gainmap_properties, ImageMirror).copied()
+            {
+                return AvifError::decode_gain_map_failed();
+            }
+        }
+
+        let codec_config = find_property!(color_properties, CodecConfiguration)
+            .ok_or(AvifError::BmffParseFailed("".into()))?;
+        image.depth = depth_from_properties(color_properties, "color")?;
+        // A sample transform item can have a depth different from its input images (which is where
+        // the codec config comes from). The depth from the pixi property should be used instead.
+        if is_sample_transform {
+            if let Some(pixi) = find_property!(color_properties, PixelInformation) {
+                image.depth = pixi.planes[0].depth;
+            }
+        }
+
+        image.yuv_format = pixel_format_from_properties(color_properties, "color")?;
+        image.chroma_sample_position = codec_config.chroma_sample_position();
+        *compression_format = codec_config.compression_format();
+
+        Ok(cicp_set)
+    }
+
     fn reset(&mut self) {
         let decoder = Decoder::default();
         // Reset all fields to default except the following: settings, io, source.
@@ -1416,121 +1542,16 @@ impl Decoder {
                 };
             }
 
-            // Check validity of samples.
-            for tiles in &self.tiles {
-                for tile in tiles {
-                    for sample in &tile.input.samples {
-                        if sample.size == 0 {
-                            return AvifError::bmff_parse_failed("sample has invalid size.");
-                        }
-                        // The item_idx checks is to try to mimic libavif's behavior
-                        // which only takes into account the size of the item whose id
-                        // is in the pitm box.
-                        if tile.input.decoding_item.item_idx <= 1 {
-                            match tile.input.decoding_item.category {
-                                Category::Color => {
-                                    checked_incr!(self.io_stats.color_obu_size, sample.size)
-                                }
-                                Category::Alpha => {
-                                    checked_incr!(self.io_stats.alpha_obu_size, sample.size)
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Find and adopt all colr boxes "at most one for a given value of colour type"
-            // (HEIF 6.5.5.1, from Amendment 3) Accept one of each type, and bail out if more than one
-            // of a given type is provided.
-            let mut cicp_set = false;
-
-            if let Some(nclx) = find_nclx(color_properties)? {
-                self.image.color_primaries = nclx.color_primaries;
-                self.image.transfer_characteristics = nclx.transfer_characteristics;
-                self.image.matrix_coefficients = nclx.matrix_coefficients;
-                self.image.yuv_range = nclx.yuv_range;
-                cicp_set = true;
-            }
-            if let Some(icc) = find_icc(color_properties)? {
-                self.image.icc.clone_from(icc);
-            }
-
-            self.image.clli =
-                find_property!(color_properties, ContentLightLevelInformation).copied();
-            self.image.pasp = find_property!(color_properties, PixelAspectRatio).copied();
-            self.image.clap = find_property!(color_properties, CleanAperture).copied();
-            self.image.irot_angle = find_property!(color_properties, ImageRotation).copied();
-            self.image.imir_axis = find_property!(color_properties, ImageMirror).copied();
-
-            if let Some(alpha_properties) = alpha_properties {
-                // The 'clap', 'irot' and 'imir' transformative properties should be applied to the
-                // alpha auxiliary image item before considering it a plane of the color image item.
-                // Alternatively, inequality with the transformative properties attached to the
-                // color image item should be treated as AVIF_RESULT_NOT_IMPLEMENTED.
-                // The latter is easier and is the behavior of libavif and CrabbyAvif.
-
-                let alpha_clap = find_property!(alpha_properties, CleanAperture);
-                let alpha_irot = find_property!(alpha_properties, ImageRotation);
-                let alpha_imir = find_property!(alpha_properties, ImageMirror);
-                if alpha_clap.is_none() && alpha_irot.is_none() && alpha_imir.is_none() {
-                    // However, libavif up to version 1.3.0 generated images lacking transformative
-                    // property associations with alpha auxiliary image items, so be lenient on
-                    // their absence for backward compatibility with previously generated images.
-                } else if self.image.clap != alpha_clap.copied()
-                    || self.image.irot_angle != alpha_irot.copied()
-                    || self.image.imir_axis != alpha_imir.copied()
-                {
-                    return AvifError::not_implemented();
-                }
-            }
-
-            if let Some(pixi) = find_property!(color_properties, PixelInformation) {
-                if pixi
-                    .planes
-                    .iter()
-                    .any(|plane| plane.channel_idc == Some(ChannelIdc::Alpha))
-                {
-                    if self.image.alpha_present {
-                        // TODO: b/456440247 - Handle multiple alpha planes.
-                        return AvifError::not_implemented();
-                    }
-                    self.image.alpha_present = true;
-                    self.image.alpha_premultiplied =
-                        find_property!(color_properties, AlphaInformation)
-                            .map_or(false, |alpi| alpi.is_premultiplied);
-                }
-            }
-
-            if let Some(gainmap_properties) = gainmap_properties {
-                // Ensure that the bitstream contains the same 'pasp', 'clap', 'irot and 'imir'
-                // properties for both the base and gain map image items.
-                if self.image.pasp != find_property!(gainmap_properties, PixelAspectRatio).copied()
-                    || self.image.clap != find_property!(gainmap_properties, CleanAperture).copied()
-                    || self.image.irot_angle
-                        != find_property!(gainmap_properties, ImageRotation).copied()
-                    || self.image.imir_axis
-                        != find_property!(gainmap_properties, ImageMirror).copied()
-                {
-                    return AvifError::decode_gain_map_failed();
-                }
-            }
-
-            let codec_config = find_property!(color_properties, CodecConfiguration)
-                .ok_or(AvifError::BmffParseFailed("".into()))?;
-            self.image.depth = depth_from_properties(color_properties, "color")?;
-            // A sample transform item can have a depth different from its input images (which is where
-            // the codec config comes from). The depth from the pixi property should be used instead.
-            if is_sample_transform {
-                if let Some(pixi) = find_property!(color_properties, PixelInformation) {
-                    self.image.depth = pixi.planes[0].depth;
-                }
-            }
-
-            self.image.yuv_format = pixel_format_from_properties(color_properties, "color")?;
-            self.image.chroma_sample_position = codec_config.chroma_sample_position();
-            self.compression_format = codec_config.compression_format();
+            let cicp_set = Self::validate_samples_and_populate_image_properties(
+                &self.tiles,
+                color_properties,
+                alpha_properties,
+                gainmap_properties,
+                is_sample_transform,
+                &mut self.io_stats,
+                &mut self.image,
+                &mut self.compression_format,
+            )?;
 
             if cicp_set {
                 self.parse_state = ParseState::Complete;
