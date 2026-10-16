@@ -32,7 +32,7 @@ pub struct Item {
     pub content_type: String,
     pub properties: Vec<ItemProperty>,
     pub extents: Vec<Extent>,
-    pub thumbnail_for_id: u32,
+    pub thumbnail_for_id: Vec<u32>,
     // ISO/IEC 14496-12 section 8.11.12.1 represents the items linked to as an array of
     // to_item_IDs, so one item can be the auxiliary of several items.
     pub aux_for_id: Vec<u32>,
@@ -298,8 +298,9 @@ impl Item {
                 for plane in &pixi.planes {
                     if let Some(codec_config_depth) = codec_config.depth() {
                         // Check that the depth in pixi matches the codec config.
-                        // For derived image items, the codec config comes from the first source item.
-                        // Sample transform items can have a depth different from their source items.
+                        // For derived image items, the codec config comes from the first source
+                        // item. Sample transform items can have a depth
+                        // different from their source items.
                         if plane.depth != codec_config_depth && !self.is_sample_transform_item() {
                             return AvifError::bmff_parse_failed(
                                 "pixi depth does not match codec config depth",
@@ -375,6 +376,7 @@ impl Item {
         matches!(find_property!(&self.properties, AuxiliaryType),
                  Some(aux_type) if is_auxiliary_type_alpha(aux_type))
             && !self.is_sample_transform_item()
+            && self.thumbnail_for_id.is_empty()
     }
 
     pub(crate) fn is_image_codec_item(&self) -> bool {
@@ -738,7 +740,7 @@ pub(crate) fn construct_items(
         insert_item_if_not_exists(reference.from_item_id, &mut items);
         let item = items.get_mut(&reference.from_item_id).unwrap();
         match reference.reference_type.as_str() {
-            "thmb" => item.thumbnail_for_id = reference.to_item_id,
+            "thmb" => item.thumbnail_for_id.try_push(reference.to_item_id)?,
             "auxl" => item.aux_for_id.try_push(reference.to_item_id)?,
             "cdsc" => item.desc_for_id.try_push(reference.to_item_id)?,
             "prem" => item.prem_by_id.try_push(reference.to_item_id)?,

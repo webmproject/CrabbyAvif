@@ -2693,3 +2693,72 @@ const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
         alpha_obu_size: 0,
     },
 ];
+
+#[test]
+fn test_conformance_thumbnails() {
+    let filename = get_test_file("Microsoft/Tomsk_with_thumbnails.avif");
+    let mut decoder = decoder::Decoder::default();
+    decoder.settings.strictness = decoder::Strictness::None;
+    decoder.settings.source = decoder::Source::Thumbnail;
+    decoder.set_io_file(&filename).expect("Failed to set IO");
+    assert!(decoder.parse().is_ok());
+    assert_eq!(decoder.image_count(), 2);
+
+    // Check properties of both thumbnails right after parse() via nth_image_properties().
+    let prop0 = decoder.nth_image_properties(0).expect("prop0 failed");
+    assert_eq!(prop0.width, 320);
+    assert_eq!(prop0.height, 180);
+    assert_eq!(prop0.depth, 8);
+    assert_eq!(prop0.yuv_format, PixelFormat::Yuv420);
+
+    let prop1 = decoder.nth_image_properties(1).expect("prop1 failed");
+    assert_eq!(prop1.width, 160);
+    assert_eq!(prop1.height, 90);
+    assert_eq!(prop1.depth, 8);
+    assert_eq!(prop1.yuv_format, PixelFormat::Yuv420);
+
+    assert!(matches!(
+        decoder.nth_image_properties(2),
+        Err(AvifError::NoImagesRemaining)
+    ));
+
+    let image = decoder.image().expect("image was none");
+    assert_eq!(image.width, 320);
+    assert_eq!(image.height, 180);
+    assert_eq!(image.depth, 8);
+    assert_eq!(image.yuv_format, PixelFormat::Yuv420);
+    assert!(!image.alpha_present);
+
+    if !HAS_DECODER {
+        return;
+    }
+
+    // Sequential decoding of both thumbnails via next_image().
+    assert!(decoder.next_image().is_ok());
+    let image = decoder.image().expect("image was none");
+    assert_eq!(image.width, 320);
+    assert_eq!(image.height, 180);
+    assert!(image.row_bytes[0] > 0);
+
+    assert!(decoder.next_image().is_ok());
+    let image = decoder.image().expect("image was none");
+    assert_eq!(image.width, 160);
+    assert_eq!(image.height, 90);
+    assert!(image.row_bytes[0] > 0);
+
+    assert!(matches!(
+        decoder.next_image(),
+        Err(AvifError::NoImagesRemaining)
+    ));
+
+    // Random access via nth_image().
+    assert!(decoder.nth_image(0).is_ok());
+    let image = decoder.image().expect("image was none");
+    assert_eq!(image.width, 320);
+    assert_eq!(image.height, 180);
+
+    assert!(decoder.nth_image(1).is_ok());
+    let image = decoder.image().expect("image was none");
+    assert_eq!(image.width, 160);
+    assert_eq!(image.height, 90);
+}

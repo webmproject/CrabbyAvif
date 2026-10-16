@@ -125,7 +125,7 @@ pub enum Source {
     Auto = 0,
     PrimaryItem = 1,
     Tracks = 2,
-    // TODO: Thumbnail,
+    Thumbnail = 3,
 }
 
 pub const DEFAULT_IMAGE_SIZE_LIMIT: u32 = 16384 * 16384;
@@ -386,6 +386,9 @@ pub struct Decoder {
     parse_state: ParseState,
     io_stats: IOStats,
     compression_format: CompressionFormat,
+    thumbnail_item_ids: Vec<u32>,
+    thumbnail_images: Vec<Image>,
+    active_thumbnail_index: Option<usize>,
 }
 
 #[repr(C)]
@@ -974,6 +977,7 @@ impl Decoder {
                     || !item.is_image_item()
                     || (item.is_tone_mapped_item() && !ftyp.has_tmap())
                     || (item.is_sample_transform_item() && !self.settings.allow_sample_transform)
+                    || (self.source != Source::Thumbnail && !item.thumbnail_for_id.is_empty())
                 {
                     continue;
                 }
@@ -1408,6 +1412,9 @@ impl Decoder {
         self.parse_state = decoder.parse_state;
         self.io_stats = decoder.io_stats;
         self.compression_format = decoder.compression_format;
+        self.thumbnail_item_ids = decoder.thumbnail_item_ids;
+        self.thumbnail_images = decoder.thumbnail_images;
+        self.active_thumbnail_index = decoder.active_thumbnail_index;
     }
 
     pub fn parse(&mut self) -> AvifResult<()> {
@@ -1471,6 +1478,7 @@ impl Decoder {
                 },
                 Source::Tracks => Source::Tracks,
                 Source::PrimaryItem => Source::PrimaryItem,
+                Source::Thumbnail => Source::Thumbnail,
             };
 
             let cicp_set = match self.source {
@@ -1588,7 +1596,79 @@ impl Decoder {
                         &avif_boxes.meta,
                     )?;
                     let primary_item_id = self.resolve_identity_item(primary_item_id)?;
-                    self.prepare_still_image_item(primary_item_id, true, true)?
+                    self.prepare_still_image_item(
+                        primary_item_id,
+                        /* allow_gainmap= */ true,
+                        /* update_io_stats= */ true,
+                    )?
+                }
+                Source::Thumbnail => {
+                    if avif_boxes.meta.primary_item_id == 0 {
+                        return AvifError::no_content();
+                    }
+                    let mut candidate_ids: Vec<u32> = Vec::new();
+                    for item in self.items.values() {
+                        if item
+                            .thumbnail_for_id
+                            .contains(&avif_boxes.meta.primary_item_id)
+                        {
+                            candidate_ids.try_push(item.id)?;
+                        }
+                    }
+                    for candidate_id in candidate_ids {
+                        let parsed_id = match self.find_and_parse_item(
+                            candidate_id,
+                            DecodingItem::COLOR,
+                            &avif_boxes.ftyp,
+                            &avif_boxes.meta,
+                        ) {
+                            Ok(id) => id,
+                            Err(AvifError::NoContent) => continue,
+                            Err(err) => return Err(err),
+                        };
+                        let resolved_id = self.resolve_identity_item(parsed_id)?;
+                        if !self.thumbnail_item_ids.contains(&resolved_id) {
+                            self.thumbnail_item_ids.try_push(resolved_id)?;
+                        }
+                    }
+                    if self.thumbnail_item_ids.is_empty() {
+                        return AvifError::no_content();
+                    }
+                    let thumbnail_count = u32_from_usize(self.thumbnail_item_ids.len())?;
+                    if let Some(limit) = self.settings.image_count_limit {
+                        if thumbnail_count > limit.get() {
+                            return AvifError::bmff_parse_failed("exceeded image_count_limit");
+                        }
+                    }
+                    // Prepare the thumbnails in reverse order so that the decoder state is left
+                    // set up for the first thumbnail. The images are reversed back into index
+                    // order afterwards.
+                    let mut thumbnail_images_rev: Vec<Image> =
+                        create_vec_exact(self.thumbnail_item_ids.len())?;
+                    let mut first_cicp_set = false;
+                    for idx in (0..self.thumbnail_item_ids.len()).rev() {
+                        let item_id = self.thumbnail_item_ids[idx];
+                        let item_cicp_set = self.prepare_still_image_item(
+                            item_id,
+                            /* allow_gainmap= */ false,
+                            /* update_io_stats= */ idx == 0,
+                        )?;
+                        if self.thumbnail_item_ids.len() > 1 {
+                            self.image_count = thumbnail_count;
+                            self.image.progressive_state = ProgressiveState::Unavailable;
+                        }
+                        if idx > 0 && !item_cicp_set {
+                            let _ = self.harvest_cicp_from_sequence_header();
+                        }
+                        if idx == 0 {
+                            first_cicp_set = item_cicp_set;
+                        }
+                        thumbnail_images_rev.try_push(self.image.shallow_clone())?;
+                    }
+                    thumbnail_images_rev.reverse();
+                    self.thumbnail_images = thumbnail_images_rev;
+                    self.active_thumbnail_index = Some(0);
+                    first_cicp_set
                 }
                 Source::Auto => unreachable!(),
             };
@@ -1602,6 +1682,9 @@ impl Decoder {
 
         // If cicp was not set, try to harvest it from the sequence header.
         self.harvest_cicp_from_sequence_header()?;
+        if self.source == Source::Thumbnail && !self.thumbnail_images.is_empty() {
+            self.thumbnail_images[0] = self.image.shallow_clone();
+        }
         self.parse_state = ParseState::Complete;
 
         Ok(())
@@ -1645,7 +1728,7 @@ impl Decoder {
         if total_tile_count == 1 {
             return Ok(true);
         }
-        if self.image_count != 1 {
+        if self.image_count != 1 && self.source != Source::Thumbnail {
             return Ok(false);
         }
         let mut image_buffers = 0;
@@ -2211,15 +2294,42 @@ impl Decoder {
             }
         }
 
+        let sample_index = if self.source == Source::Thumbnail && self.thumbnail_item_ids.len() > 1
+        {
+            if next_image_index < 0 || next_image_index as usize >= self.thumbnail_item_ids.len() {
+                return AvifError::no_images_remaining();
+            }
+            let thumbnail_idx = next_image_index as usize;
+            if self.active_thumbnail_index != Some(thumbnail_idx) {
+                let prev_image_index = self.image_index;
+                let cicp_set = self.prepare_still_image_item(
+                    self.thumbnail_item_ids[thumbnail_idx],
+                    /* allow_gainmap= */ false,
+                    /* update_io_stats= */ false,
+                )?;
+                self.image_index = prev_image_index;
+                self.image_count = u32_from_usize(self.thumbnail_item_ids.len())?;
+                self.image.progressive_state = ProgressiveState::Unavailable;
+                if !cicp_set {
+                    self.harvest_cicp_from_sequence_header()?;
+                }
+                self.codecs.clear();
+                self.active_thumbnail_index = Some(thumbnail_idx);
+            }
+            0
+        } else {
+            next_image_index as usize
+        };
+
         self.create_codecs()?;
         match (
             self.settings.allow_progressive,
-            self.prepare_samples(next_image_index as usize),
+            self.prepare_samples(sample_index),
         ) {
             (_, Ok(_)) | (true, Err(AvifError::WaitingOnIo)) => {}
             (_, Err(err)) => return Err(err),
         }
-        self.decode_tiles(next_image_index as usize)?;
+        self.decode_tiles(sample_index)?;
 
         if !self.tile_info[DecodingItem::COLOR.usize()]
             .sample_transform
@@ -2443,10 +2553,19 @@ impl Decoder {
         if !self.parsing_complete() {
             return AvifError::no_content();
         }
+        if let Some(limit) = self.settings.image_count_limit {
+            if n >= limit.get() {
+                return AvifError::no_images_remaining();
+            }
+        }
         if n >= self.image_count {
             return AvifError::no_images_remaining();
         }
-        Ok(self.image.shallow_clone())
+        if self.source == Source::Thumbnail {
+            Ok(self.thumbnail_images[n as usize].shallow_clone())
+        } else {
+            Ok(self.image.shallow_clone())
+        }
     }
 
     // When next_image() or nth_image() returns AvifResult::WaitingOnIo, this function can be called
@@ -2508,6 +2627,9 @@ impl Decoder {
         if !self.parsing_complete() {
             return false;
         }
+        if self.source == Source::Thumbnail && self.thumbnail_item_ids.len() > 1 {
+            return index < self.image_count;
+        }
         let index = index as usize;
         // All the tiles for the requested index must be a keyframe.
         for decoding_item in DecodingItem::ALL_USIZE {
@@ -2537,6 +2659,10 @@ impl Decoder {
     pub fn nth_image_max_extent(&self, index: u32) -> AvifResult<Extent> {
         if !self.parsing_complete() {
             return AvifError::no_content();
+        }
+        if self.source == Source::Thumbnail {
+            // TODO: b/568840641 - Support nth_image_max_extent for thumbnails.
+            return AvifError::not_implemented();
         }
         let mut extent = Extent::default();
         let start_index = self.nearest_keyframe(index) as usize;

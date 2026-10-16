@@ -2663,6 +2663,69 @@ TEST_P(ConformanceTest, ValidateDecode) {
   }
 }
 
+TEST(ThumbnailConformanceTest, ValidateDecode) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  DecoderPtr decoder(avifDecoderCreate());
+  ASSERT_NE(decoder, nullptr);
+  decoder->strictFlags = 0;
+  ASSERT_EQ(avifDecoderSetSource(decoder.get(), AVIF_DECODER_SOURCE_THUMBNAIL),
+            AVIF_RESULT_OK);
+  const std::string filename =
+      std::string(data_path) + "Microsoft/Tomsk_with_thumbnails.avif";
+  ASSERT_EQ(avifDecoderSetIOFile(decoder.get(), filename.c_str()),
+            AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->imageCount, 2);
+
+  ImagePtr prop0(avifImageCreateEmpty());
+  ASSERT_NE(prop0, nullptr);
+  ASSERT_EQ(avifDecoderNthImageProperties(decoder.get(), 0, prop0.get()),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(prop0->width, 320u);
+  EXPECT_EQ(prop0->height, 180u);
+  EXPECT_EQ(prop0->depth, 8u);
+  EXPECT_EQ(prop0->yuvFormat, AVIF_PIXEL_FORMAT_YUV420);
+
+  ImagePtr prop1(avifImageCreateEmpty());
+  ASSERT_NE(prop1, nullptr);
+  ASSERT_EQ(avifDecoderNthImageProperties(decoder.get(), 1, prop1.get()),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(prop1->width, 160u);
+  EXPECT_EQ(prop1->height, 90u);
+  EXPECT_EQ(prop1->depth, 8u);
+  EXPECT_EQ(prop1->yuvFormat, AVIF_PIXEL_FORMAT_YUV420);
+
+  EXPECT_EQ(avifDecoderNthImageProperties(decoder.get(), 2, prop1.get()),
+            AVIF_RESULT_NO_IMAGES_REMAINING);
+
+  ASSERT_NE(decoder->image, nullptr);
+  EXPECT_EQ(decoder->image->width, 320u);
+  EXPECT_EQ(decoder->image->height, 180u);
+
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->width, 320u);
+  EXPECT_EQ(decoder->image->height, 180u);
+  EXPECT_GT(decoder->image->yuvRowBytes[0], 0u);
+
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->width, 160u);
+  EXPECT_EQ(decoder->image->height, 90u);
+  EXPECT_GT(decoder->image->yuvRowBytes[0], 0u);
+
+  EXPECT_EQ(avifDecoderNextImage(decoder.get()),
+            AVIF_RESULT_NO_IMAGES_REMAINING);
+
+  ASSERT_EQ(avifDecoderNthImage(decoder.get(), 0), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->width, 320u);
+  EXPECT_EQ(decoder->image->height, 180u);
+
+  ASSERT_EQ(avifDecoderNthImage(decoder.get(), 1), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->width, 160u);
+  EXPECT_EQ(decoder->image->height, 90u);
+}
+
 }  // namespace
 }  // namespace avif
 

@@ -1477,6 +1477,16 @@ INSTANTIATE_TEST_SUITE_P(
         SatoTestParams{"weld_sato_12plus4bit.avif", false, true, 12},
         SatoTestParams{"weld_sato_12plus4bit.avif", true, true, 16}));
 
+TEST(DecoderTest, ThumbnailNotPresent) {
+  auto decoder = CreateDecoder("sofa_grid1x5_420.avif");
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderSetSource(decoder.get(), AVIF_DECODER_SOURCE_THUMBNAIL),
+            AVIF_RESULT_OK);
+  avifResult res = avifDecoderParse(decoder.get());
+  EXPECT_TRUE(res == AVIF_RESULT_NO_CONTENT ||
+              res == AVIF_RESULT_MISSING_IMAGE_ITEM);
+}
+
 TEST(DecoderTest, NthImageProperties) {
   auto decoder = CreateDecoder("colors-animated-8bpc-alpha-exif-xmp.avif");
   ASSERT_NE(decoder, nullptr);

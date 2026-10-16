@@ -1867,6 +1867,16 @@ fn strictness(filename: &str, strictness_flag: decoder::StrictnessFlag) {
 }
 
 #[test]
+fn thumbnail_not_present() {
+    let mut decoder = get_decoder("sofa_grid1x5_420.avif");
+    decoder.settings.source = decoder::Source::Thumbnail;
+    assert!(matches!(
+        decoder.parse(),
+        Err(AvifError::NoContent) | Err(AvifError::MissingImageItem)
+    ));
+}
+
+#[test]
 fn nth_image_properties() {
     let mut decoder = get_decoder("colors-animated-8bpc-alpha-exif-xmp.avif");
     assert!(decoder.parse().is_ok());
