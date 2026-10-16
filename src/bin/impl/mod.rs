@@ -254,11 +254,13 @@ struct CommandLineArgs {
     #[arg(long)]
     dimension_limit: Option<u32>,
 
-    /// AVIF Decode only: If the input file contains embedded Exif metadata, ignore it (no-op if absent)
+    /// AVIF Decode only: If the input file contains embedded Exif metadata, ignore it (no-op if
+    /// absent)
     #[arg(long, default_value = "false")]
     ignore_exif: bool,
 
-    /// AVIF Decode only: If the input file contains embedded XMP metadata, ignore it (no-op if absent)
+    /// AVIF Decode only: If the input file contains embedded XMP metadata, ignore it (no-op if
+    /// absent)
     #[arg(long, default_value = "false")]
     ignore_xmp: bool,
 
@@ -340,6 +342,10 @@ struct CommandLineArgs {
     /// AVIF Decode only: Decode and output only the gainmap.
     #[arg(long, default_value = "false")]
     extract_gainmap: bool,
+
+    /// AVIF Decode only: Decode and output only the thumbnail.
+    #[arg(long, default_value = "false")]
+    extract_thumbnail: bool,
 
     /// AVIF Encode only: CLLI information of the alternate image. Only used when encoding an image
     /// with gainmap. Ignored otherwise.
@@ -560,6 +566,11 @@ fn max_threads(jobs: &Option<u32>) -> u32 {
 
 fn create_decoder_and_parse(args: &CommandLineArgs, input_file: &String) -> AvifResult<Decoder> {
     let mut settings = decoder::Settings {
+        source: if args.extract_thumbnail {
+            decoder::Source::Thumbnail
+        } else {
+            decoder::Source::Auto
+        },
         strictness: if args.no_strict { Strictness::None } else { Strictness::All },
         image_content_to_decode: if args.extract_gainmap {
             ImageContentType::GainMap
@@ -908,6 +919,7 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                     || args.depth.is_some()
                     || args.index.is_some()
                     || args.extract_gainmap
+                    || args.extract_thumbnail
                 {
                     return Err(AvifError::UnknownError(
                         "--info contains unsupported extra arguments".into(),
