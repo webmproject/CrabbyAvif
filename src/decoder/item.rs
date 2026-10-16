@@ -634,8 +634,8 @@ pub(crate) fn construct_items(
             iinf.item_id,
             Item {
                 id: iinf.item_id,
-                item_type: iinf.item_type.clone(),
-                content_type: iinf.content_type.clone(),
+                item_type: iinf.item_type.try_clone()?,
+                content_type: iinf.content_type.try_clone()?,
                 ..Item::default()
             },
         );
@@ -650,7 +650,7 @@ pub(crate) fn construct_items(
 
         if iloc.construction_method == 1 {
             if item.extents.is_empty() {
-                item.idat.clone_from(&meta.idat);
+                item.idat = meta.idat.try_clone()?;
             } else {
                 // This is not the first iloc entry for this item. Make sure that the earlier
                 // entry's extent is also from idat.

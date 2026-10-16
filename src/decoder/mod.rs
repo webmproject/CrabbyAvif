@@ -628,7 +628,7 @@ impl Decoder {
             self.gainmap.alt_yuv_range = nclx.yuv_range;
         }
         if let Some(icc) = find_icc(&tonemap_item.properties)? {
-            self.gainmap.alt_icc.clone_from(icc);
+            self.gainmap.alt_icc = icc.try_clone()?;
         }
 
         if let Some(clli) = tonemap_item.clli() {
@@ -738,7 +738,7 @@ impl Decoder {
                 );
             }
             let mut progressive = true;
-            for derived_item_id in item.source_item_ids.clone() {
+            for derived_item_id in item.source_item_ids.try_clone()? {
                 let derived_item = self
                     .items
                     .get_mut(&derived_item_id)
@@ -1055,7 +1055,7 @@ impl Decoder {
             cicp_set = true;
         }
         if let Some(icc) = find_icc(color_properties)? {
-            image.icc.clone_from(icc);
+            image.icc = icc.try_clone()?;
         }
 
         image.clli = find_property!(color_properties, ContentLightLevelInformation).copied();
@@ -1189,7 +1189,7 @@ impl Decoder {
 
         let primary_item = self.items.get(&color_item_id).unwrap();
         if primary_item.is_sample_transform_item() {
-            let source_item_ids = primary_item.source_item_ids.clone();
+            let source_item_ids = primary_item.source_item_ids.try_clone()?;
             for (idx, item_id) in source_item_ids.iter().enumerate() {
                 let decoding_item = DecodingItem::color(idx + 1);
                 item_ids[decoding_item.usize()] = *item_id;
@@ -1772,7 +1772,7 @@ impl Decoder {
             .ok_or(AvifError::BmffParseFailed("".into()))?;
         if item.extents.len() == 1 {
             if !item.idat.is_empty() {
-                item.data_buffer = Some(item.idat.clone());
+                item.data_buffer = Some(item.idat.try_clone()?);
             }
             return Ok(());
         }

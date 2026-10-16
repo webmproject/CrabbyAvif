@@ -1570,7 +1570,7 @@ fn parse_iref(stream: &mut IStream) -> AvifResult<Vec<ItemReference>> {
             iref.try_push(ItemReference {
                 from_item_id,
                 to_item_id,
-                reference_type: header.box_type.clone(),
+                reference_type: header.box_type.try_clone()?,
                 index: index as u32,
             })?;
         }
@@ -1647,7 +1647,7 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
                         header.box_type
                     ));
                 }
-                boxes_seen.insert(header.box_type.clone());
+                boxes_seen.insert(header.box_type.try_clone()?);
             }
             _ => {}
         }
