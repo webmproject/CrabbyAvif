@@ -47,7 +47,7 @@ impl From<rgb::Image> for avifRGBImage {
             format: rgb.format,
             chroma_upsampling: rgb.chroma_upsampling,
             chroma_downsampling: rgb.chroma_downsampling,
-            ignore_alpha: false,
+            ignore_alpha: rgb.ignore_alpha,
             alpha_premultiplied: rgb.premultiply_alpha,
             is_float: rgb.is_float,
             max_threads: rgb.max_threads,
@@ -59,39 +59,20 @@ impl From<rgb::Image> for avifRGBImage {
 
 impl From<&avifRGBImage> for rgb::Image {
     fn from(rgb: &avifRGBImage) -> rgb::Image {
-        let dst = rgb::Image {
+        rgb::Image {
             width: rgb.width,
             height: rgb.height,
             depth: rgb.depth as u8,
             format: rgb.format,
             chroma_upsampling: rgb.chroma_upsampling,
             chroma_downsampling: rgb.chroma_downsampling,
+            ignore_alpha: rgb.ignore_alpha,
             premultiply_alpha: rgb.alpha_premultiplied,
             is_float: rgb.is_float,
             max_threads: rgb.max_threads,
             pixels: Pixels::from_raw_pointer(rgb.pixels, rgb.depth, rgb.height, rgb.row_bytes).ok(),
             row_bytes: rgb.row_bytes,
-        };
-        let format = match (rgb.format, rgb.ignore_alpha) {
-            (rgb::Format::Rgb, _) => rgb::Format::Rgb,
-            (rgb::Format::Rgba, true) => rgb::Format::Rgb,
-            (rgb::Format::Rgba, false) => rgb::Format::Rgba,
-            (rgb::Format::Argb, true) => rgb::Format::Rgb,
-            (rgb::Format::Argb, false) => rgb::Format::Argb,
-            (rgb::Format::Bgr, _) => rgb::Format::Bgr,
-            (rgb::Format::Bgra, true) => rgb::Format::Bgr,
-            (rgb::Format::Bgra, false) => rgb::Format::Bgra,
-            (rgb::Format::Abgr, true) => rgb::Format::Bgr,
-            (rgb::Format::Abgr, false) => rgb::Format::Abgr,
-            (rgb::Format::Rgb565, _) => rgb::Format::Rgb565,
-            (rgb::Format::Rgba1010102, _) => rgb::Format::Rgba1010102,
-            (rgb::Format::Gray, _) => rgb::Format::Gray,
-            (rgb::Format::GrayA, true) => rgb::Format::Gray,
-            (rgb::Format::GrayA, false) => rgb::Format::GrayA,
-            (rgb::Format::AGray, true) => rgb::Format::Gray,
-            (rgb::Format::AGray, false) => rgb::Format::AGray,
-        };
-        dst.shuffle_channels_to(format).unwrap()
+        }
     }
 }
 
