@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -295,6 +296,89 @@ INSTANTIATE_TEST_SUITE_P(GeneralDecodeTests,
                          ::testing::Combine(::testing::ValuesIn(kFiles),
                                             ::testing::ValuesIn(kScaleFactors),
                                             ::testing::ValuesIn(kRgbFormats)));
+
+TEST(SkCrabbyAvifCodecTest, OddWidthP010CopyAndScale) {
+  constexpr uint32_t kWidth = 17;
+  constexpr uint32_t kHeight = 16;
+  constexpr uint32_t kUvWidth = 18;
+  constexpr uint32_t kUvHeight = 8;
+
+  ImagePtr src(
+      avifImageCreate(kWidth, kHeight, 10, AVIF_PIXEL_FORMAT_ANDROID_P010));
+  ASSERT_NE(src, nullptr);
+  src->yuvRange = AVIF_RANGE_LIMITED;
+  src->colorPrimaries = AVIF_COLOR_PRIMARIES_SRGB;
+  src->transferCharacteristics = AVIF_TRANSFER_CHARACTERISTICS_SRGB;
+  src->matrixCoefficients = AVIF_MATRIX_COEFFICIENTS_BT709;
+  ASSERT_EQ(avifImageAllocatePlanes(src.get(), AVIF_PLANES_YUV),
+            AVIF_RESULT_OK);
+
+  EXPECT_EQ(avifImagePlaneWidth(src.get(), AVIF_CHAN_U), kUvWidth);
+
+  constexpr uint16_t kY = 184 << 6;
+  constexpr uint16_t kU = 340 << 6;
+  constexpr uint16_t kV = 960 << 6;
+  for (uint32_t y = 0; y < kHeight; ++y) {
+    auto* row = reinterpret_cast<uint16_t*>(src->yuvPlanes[AVIF_CHAN_Y] +
+                                            y * src->yuvRowBytes[AVIF_CHAN_Y]);
+    for (uint32_t x = 0; x < kWidth; ++x) {
+      row[x] = kY;
+    }
+  }
+  for (uint32_t y = 0; y < kUvHeight; ++y) {
+    auto* row = reinterpret_cast<uint16_t*>(src->yuvPlanes[AVIF_CHAN_U] +
+                                            y * src->yuvRowBytes[AVIF_CHAN_U]);
+    for (uint32_t x = 0; x < kUvWidth; x += 2) {
+      row[x] = kU;
+      row[x + 1] = kV;
+    }
+  }
+
+  // Prime the allocator free-list with zero-filled buffers of the UV plane size
+  // so any uninitialized tail bytes in avifImageCopy are deterministically 0.
+  const size_t uv_alloc_size = kUvWidth * kUvHeight * sizeof(uint16_t);
+  void* poison = avifAlloc(uv_alloc_size);
+  ASSERT_NE(poison, nullptr);
+  memset(poison, 0, uv_alloc_size);
+  avifFree(poison);
+
+  ImagePtr dst(avifImageCreateEmpty());
+  ASSERT_NE(dst, nullptr);
+  ASSERT_EQ(avifImageCopy(dst.get(), src.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+
+  for (uint32_t y = 0; y < kUvHeight; ++y) {
+    const auto* dst_row = reinterpret_cast<const uint16_t*>(
+        dst->yuvPlanes[AVIF_CHAN_U] + y * dst->yuvRowBytes[AVIF_CHAN_U]);
+    EXPECT_EQ(dst_row[kUvWidth - 2], kU) << "row " << y;
+    EXPECT_EQ(dst_row[kUvWidth - 1], kV) << "row " << y;
+  }
+
+  avifDiagnostics diag{};
+  ASSERT_EQ(avifImageScale(src.get(), 9, 8, &diag), AVIF_RESULT_OK);
+  ASSERT_EQ(avifImageScale(dst.get(), 9, 8, &diag), AVIF_RESULT_OK);
+
+  avifRGBImage src_rgb{};
+  avifRGBImageSetDefaults(&src_rgb, src.get());
+  src_rgb.format = AVIF_RGB_FORMAT_RGBA;
+  src_rgb.depth = 8;
+  ASSERT_EQ(avifRGBImageAllocatePixels(&src_rgb), AVIF_RESULT_OK);
+  ASSERT_EQ(avifImageYUVToRGB(src.get(), &src_rgb), AVIF_RESULT_OK);
+
+  avifRGBImage dst_rgb{};
+  avifRGBImageSetDefaults(&dst_rgb, dst.get());
+  dst_rgb.format = AVIF_RGB_FORMAT_RGBA;
+  dst_rgb.depth = 8;
+  ASSERT_EQ(avifRGBImageAllocatePixels(&dst_rgb), AVIF_RESULT_OK);
+  ASSERT_EQ(avifImageYUVToRGB(dst.get(), &dst_rgb), AVIF_RESULT_OK);
+
+  EXPECT_EQ(
+      memcmp(src_rgb.pixels, dst_rgb.pixels, src_rgb.rowBytes * src_rgb.height),
+      0);
+
+  avifRGBImageFreePixels(&src_rgb);
+  avifRGBImageFreePixels(&dst_rgb);
+}
 
 }  // namespace
 }  // namespace avif

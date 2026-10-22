@@ -710,10 +710,10 @@ pub unsafe extern "C" fn crabby_avifImagePlaneWidth(
     match channel {
         0 => image.width,
         1 => match image.yuvFormat {
-            PixelFormat::Yuv444
-            | PixelFormat::AndroidP010
-            | PixelFormat::AndroidNv12
-            | PixelFormat::AndroidNv21 => image.width,
+            PixelFormat::Yuv444 => image.width,
+            PixelFormat::AndroidP010 | PixelFormat::AndroidNv12 | PixelFormat::AndroidNv21 => {
+                image.width.div_ceil(2) * 2
+            }
             PixelFormat::Yuv420 | PixelFormat::Yuv422 => image.width.div_ceil(2),
             PixelFormat::None | PixelFormat::Yuv400 => 0,
         },
