@@ -171,10 +171,10 @@ impl Image {
     }
 
     pub fn max_channel(&self) -> u16 {
-        if !self.depth_valid() {
+        if !self.depth_valid() || self.depth > 16 {
             0
         } else {
-            ((1i32 << self.depth) - 1) as u16
+            ((1u32 << self.depth) - 1) as u16
         }
     }
 
