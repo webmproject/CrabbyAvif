@@ -389,6 +389,7 @@ pub struct Decoder {
     thumbnail_item_ids: Vec<u32>,
     thumbnail_images: Vec<Image>,
     active_thumbnail_index: Option<usize>,
+    android_mediacodec_output_color_format: Option<AndroidMediaCodecOutputColorFormat>,
 }
 
 #[repr(C)]
@@ -1415,6 +1416,8 @@ impl Decoder {
         self.thumbnail_item_ids = decoder.thumbnail_item_ids;
         self.thumbnail_images = decoder.thumbnail_images;
         self.active_thumbnail_index = decoder.active_thumbnail_index;
+        self.android_mediacodec_output_color_format =
+            decoder.android_mediacodec_output_color_format;
     }
 
     pub fn parse(&mut self) -> AvifResult<()> {
@@ -1772,11 +1775,13 @@ impl Decoder {
             all_layers: tile.input.all_layers,
             width: tile.width,
             height: tile.height,
-            depth: if decoding_item.category == Category::Gainmap {
-                self.gainmap.image.depth
-            } else {
-                self.image.depth
-            },
+            depth: tile.codec_config.depth().unwrap_or(
+                if decoding_item.category == Category::Gainmap {
+                    self.gainmap.image.depth
+                } else {
+                    self.image.depth
+                },
+            ),
             max_threads: self.settings.max_threads,
             image_size_limit: self.settings.image_size_limit,
             max_input_size: tile.max_sample_size(),
@@ -1792,8 +1797,28 @@ impl Decoder {
     }
 
     fn create_codecs(&mut self) -> AvifResult<()> {
-        if !self.codecs.is_empty() {
+        if !self.codecs.is_empty()
+            && self.android_mediacodec_output_color_format
+                == Some(self.settings.android_mediacodec_output_color_format)
+        {
             return Ok(());
+        }
+        if !self.codecs.is_empty() {
+            self.image.planes = Default::default();
+            self.image.row_bytes = Default::default();
+            self.gainmap.image.planes = Default::default();
+            self.gainmap.image.row_bytes = Default::default();
+            for extra_input in &mut self.extra_inputs {
+                extra_input.planes = Default::default();
+                extra_input.row_bytes = Default::default();
+            }
+        }
+        self.android_mediacodec_output_color_format = None;
+        for decoding_item in DecodingItem::ALL_USIZE {
+            self.tile_info[decoding_item].decoded_tile_count = 0;
+            for tile in &mut self.tiles[decoding_item] {
+                tile.image = Image::default();
+            }
         }
         if matches!(self.source, Source::Tracks) || cfg!(feature = "android_mediacodec") {
             // In this case, there are two possibilities in the following order:
@@ -1829,6 +1854,8 @@ impl Decoder {
                 }
             }
         }
+        self.android_mediacodec_output_color_format =
+            Some(self.settings.android_mediacodec_output_color_format);
         Ok(())
     }
 
@@ -2393,16 +2420,23 @@ impl Decoder {
             return AvifError::no_images_remaining();
         }
         let requested_index = i32_from_u32(index)?;
-        if requested_index == checked_add!(self.image_index, 1)? {
+        let color_format_changed = self
+            .android_mediacodec_output_color_format
+            .is_some_and(|format| format != self.settings.android_mediacodec_output_color_format);
+        if requested_index == checked_add!(self.image_index, 1)? && !color_format_changed {
             return self.next_image();
         }
-        if requested_index == self.image_index && self.is_current_frame_fully_decoded() {
+        if requested_index == self.image_index
+            && self.is_current_frame_fully_decoded()
+            && !color_format_changed
+        {
             // Current frame which is already fully decoded has been requested. Do nothing.
             return Ok(());
         }
         let nearest_keyframe = i32_from_u32(self.nearest_keyframe(index))?;
         if nearest_keyframe > checked_add!(self.image_index, 1)?
             || requested_index <= self.image_index
+            || color_format_changed
         {
             // Start decoding from the nearest keyframe.
             self.image_index = nearest_keyframe - 1;
