@@ -218,8 +218,8 @@ impl Image {
         match plane {
             Plane::Y | Plane::A => self.width as usize,
             Plane::U => match self.yuv_format {
-                PixelFormat::Yuv444 | PixelFormat::AndroidP010 => self.width as usize,
-                PixelFormat::AndroidNv12 | PixelFormat::AndroidNv21 => {
+                PixelFormat::Yuv444 => self.width as usize,
+                PixelFormat::AndroidP010 | PixelFormat::AndroidNv12 | PixelFormat::AndroidNv21 => {
                     (self.width as usize).div_ceil(2) * 2
                 }
                 PixelFormat::Yuv420 | PixelFormat::Yuv422 => (self.width as usize).div_ceil(2),

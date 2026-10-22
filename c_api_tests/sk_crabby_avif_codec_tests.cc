@@ -296,6 +296,44 @@ INSTANTIATE_TEST_SUITE_P(GeneralDecodeTests,
                                             ::testing::ValuesIn(kScaleFactors),
                                             ::testing::ValuesIn(kRgbFormats)));
 
+TEST(SkCrabbyAvifCodecTest, OddWidthAndroidP010) {
+  constexpr uint32_t kWidth = 99;
+  constexpr uint32_t kHeight = 49;
+  ImagePtr image(
+      avifImageCreate(kWidth, kHeight, 16, AVIF_PIXEL_FORMAT_ANDROID_P010));
+  ASSERT_NE(image, nullptr);
+  const uint32_t y_width = avifImagePlaneWidth(image.get(), AVIF_CHAN_Y);
+  const uint32_t y_height = avifImagePlaneHeight(image.get(), AVIF_CHAN_Y);
+  const uint32_t u_width = avifImagePlaneWidth(image.get(), AVIF_CHAN_U);
+  const uint32_t u_height = avifImagePlaneHeight(image.get(), AVIF_CHAN_U);
+  EXPECT_EQ(y_width, 99u);
+  EXPECT_EQ(y_height, 49u);
+  EXPECT_EQ(u_width, 100u);
+  EXPECT_EQ(u_height, 25u);
+
+  std::vector<uint16_t> y_plane(y_width * y_height, 512);
+  std::vector<uint16_t> u_plane(u_width * u_height, 512);
+  image->yuvPlanes[AVIF_CHAN_Y] = reinterpret_cast<uint8_t*>(y_plane.data());
+  image->yuvRowBytes[AVIF_CHAN_Y] = y_width * sizeof(uint16_t);
+  image->yuvPlanes[AVIF_CHAN_U] = reinterpret_cast<uint8_t*>(u_plane.data());
+  image->yuvRowBytes[AVIF_CHAN_U] = u_width * sizeof(uint16_t);
+
+  avifRGBImage rgb;
+  avifRGBImageSetDefaults(&rgb, image.get());
+  rgb.format = AVIF_RGB_FORMAT_RGBA1010102;
+  rgb.depth = 10;
+  ASSERT_EQ(avifRGBImageAllocatePixels(&rgb), AVIF_RESULT_OK);
+  EXPECT_EQ(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+  avifRGBImageFreePixels(&rgb);
+
+  ImagePtr scaled_image(avifImageCreateEmpty());
+  ASSERT_NE(scaled_image, nullptr);
+  ASSERT_EQ(avifImageCopy(scaled_image.get(), image.get(), AVIF_PLANES_YUV),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(avifImageScale(scaled_image.get(), 49, 24, nullptr),
+            AVIF_RESULT_OK);
+}
+
 }  // namespace
 }  // namespace avif
 
