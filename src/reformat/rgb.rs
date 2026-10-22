@@ -233,6 +233,8 @@ impl Image {
         }
     }
 
+    // This function may not be used in some configurations.
+    #[allow(dead_code)]
     pub(crate) fn pixels_mut(&mut self) -> *mut u8 {
         match &mut self.pixels {
             Some(pixels) => pixels.ptr_mut_generic(),
@@ -311,6 +313,23 @@ impl Image {
         }
     }
 
+    pub(crate) fn has_valid_pixels(&self) -> bool {
+        if self.width == 0 || self.height == 0 || !self.depth_valid() {
+            return false;
+        }
+        let Some(min_row_bytes) = self.width.checked_mul(self.pixel_size()) else {
+            return false;
+        };
+        if self.row_bytes < min_row_bytes {
+            return false;
+        }
+        if self.depth > 8 {
+            self.row_bytes % 2 == 0 && self.row16(self.height - 1).is_ok()
+        } else {
+            self.row(self.height - 1).is_ok()
+        }
+    }
+
     pub fn has_alpha(&self) -> bool {
         match self.format {
             Format::Rgba
@@ -366,7 +385,12 @@ impl Image {
     }
 
     pub fn convert_from_yuv(&mut self, image: &crate::image::Image) -> AvifResult<()> {
-        if !image.has_plane(Plane::Y) || !image.depth_valid() || !self.depth_valid() {
+        if self.width != image.width
+            || self.height != image.height
+            || !image.has_plane(Plane::Y)
+            || !image.depth_valid()
+            || !self.has_valid_pixels()
+        {
             return AvifError::reformat_failed();
         }
         if matches!(
@@ -483,6 +507,13 @@ impl Image {
         if self.format == Format::Rgb565 || self.is_float {
             return AvifError::not_implemented();
         }
+        if self.width != image.width
+            || self.height != image.height
+            || !image.depth_valid()
+            || !self.has_valid_pixels()
+        {
+            return AvifError::reformat_failed();
+        }
         image.allocate_planes(Category::Color)?;
         // TODO: b/410088660 - add a setting to ignore alpha channel.
         let has_alpha = self.has_alpha();
@@ -525,6 +556,9 @@ impl Image {
         }
         if self.format == Format::Rgb565 || format == Format::Rgb565 {
             return AvifError::not_implemented();
+        }
+        if !self.has_valid_pixels() {
+            return AvifError::reformat_failed();
         }
 
         let mut dst = Image {
