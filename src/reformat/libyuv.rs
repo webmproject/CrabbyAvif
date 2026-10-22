@@ -414,7 +414,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
         Some((matrix_yuv, matrix_yvu)) => (matrix_yuv, matrix_yvu),
         None => return Ok(None), // Not implemented.
     };
-    let alpha_preferred = rgb.has_alpha() && image.has_alpha();
+    let alpha_preferred = rgb.has_alpha() && image.has_alpha() && !rgb.ignore_alpha;
     let conversion_function =
         match find_conversion_function(image.yuv_format, image.depth, rgb, alpha_preferred) {
             Some(conversion_function) => conversion_function,
@@ -563,7 +563,9 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
         };
         if high_bd_matched {
             return if result == 0 {
-                Ok(Some(!image.has_alpha() || conversion_function.is_yuva()))
+                Ok(Some(
+                    !image.has_alpha() || rgb.ignore_alpha || conversion_function.is_yuva(),
+                ))
             } else {
                 AvifError::reformat_failed()
             };
@@ -659,7 +661,9 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
         };
     }
     if result == 0 {
-        Ok(Some(!image.has_alpha() || conversion_function.is_yuva()))
+        Ok(Some(
+            !image.has_alpha() || rgb.ignore_alpha || conversion_function.is_yuva(),
+        ))
     } else {
         AvifError::reformat_failed()
     }

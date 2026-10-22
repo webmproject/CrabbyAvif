@@ -160,17 +160,17 @@ fn yuv8_to_rgb8_color(
         let uv_j = j >> image.yuv_format.chroma_shift_y();
         let y_row = image.row(Plane::Y, j)?;
         let u_row = image.row(Plane::U, uv_j)?;
-        // If V plane is missing, then the format is NV12. In that case, set V
+        // If V plane is missing, then the format is NV12/NV21. In that case, set V
         // as U plane but starting at offset 1.
         let v_row = image.row(Plane::V, uv_j).unwrap_or(&u_row[1..]);
+        let (u_row, v_row) = if image.yuv_format == PixelFormat::AndroidNv21 {
+            (v_row, u_row)
+        } else {
+            (u_row, v_row)
+        };
         let dst = rgb.row_mut(j)?;
         for i in 0..image.width as usize {
-            let uv_i = if cfg!(feature = "android_mediacodec") {
-                (i >> chroma_shift.0) << chroma_shift.1
-            } else {
-                // chroma_shift.1 is always 0 in this case.
-                i >> chroma_shift.0
-            };
+            let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
             let y = unsafe { *table_y.get_unchecked(*y_row.get_unchecked(i) as usize) };
             let cb = unsafe { *table_uv.get_unchecked(*u_row.get_unchecked(uv_i) as usize) };
             let cr = unsafe { *table_uv.get_unchecked(*v_row.get_unchecked(uv_i) as usize) };
@@ -226,12 +226,7 @@ fn yuv16_to_rgb16_color(
         let v_row = image.row16(Plane::V, uv_j).unwrap_or(&u_row[1..]);
         let dst = rgb.row16_mut(j)?;
         for i in 0..image.width as usize {
-            let uv_i = if cfg!(feature = "android_mediacodec") {
-                (i >> chroma_shift.0) << chroma_shift.1
-            } else {
-                // chroma_shift.1 is always 0 in this case.
-                i >> chroma_shift.0
-            };
+            let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
             let y = unorm_value16!(y_row, i, yuv_max_channel, table_y);
             let cb = unorm_value16!(u_row, uv_i, yuv_max_channel, table_uv);
             let cr = unorm_value16!(v_row, uv_i, yuv_max_channel, table_uv);
@@ -283,12 +278,7 @@ fn yuv16_to_rgb8_color(
         let v_row = image.row16(Plane::V, uv_j).unwrap_or(&u_row[1..]);
         let dst = rgb.row_mut(j)?;
         for i in 0..image.width as usize {
-            let uv_i = if cfg!(feature = "android_mediacodec") {
-                (i >> chroma_shift.0) << chroma_shift.1
-            } else {
-                // chroma_shift.1 is always 0 in this case.
-                i >> chroma_shift.0
-            };
+            let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
             let y = table_y[min(y_row[i], yuv_max_channel) as usize];
             let cb = table_uv[min(u_row[uv_i], yuv_max_channel) as usize];
             let cr = table_uv[min(v_row[uv_i], yuv_max_channel) as usize];
@@ -338,17 +328,17 @@ fn yuv8_to_rgb16_color(
         let uv_j = j >> image.yuv_format.chroma_shift_y();
         let y_row = image.row(Plane::Y, j).unwrap();
         let u_row = image.row(Plane::U, uv_j).unwrap();
-        // If V plane is missing, then the format is NV12. In that case, set V
+        // If V plane is missing, then the format is NV12/NV21. In that case, set V
         // as U plane but starting at offset 1.
         let v_row = image.row(Plane::V, uv_j).unwrap_or_else(|_| &u_row[1..]);
+        let (u_row, v_row) = if image.yuv_format == PixelFormat::AndroidNv21 {
+            (v_row, u_row)
+        } else {
+            (u_row, v_row)
+        };
         let dst = rgb.row16_mut(j)?;
         for i in 0..image.width as usize {
-            let uv_i = if cfg!(feature = "android_mediacodec") {
-                (i >> chroma_shift.0) << chroma_shift.1
-            } else {
-                // chroma_shift.1 is always 0 in this case.
-                i >> chroma_shift.0
-            };
+            let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
             let y = unsafe { *table_y.get_unchecked(*y_row.get_unchecked(i) as usize) };
             let cb = unsafe { *table_uv.get_unchecked(*u_row.get_unchecked(uv_i) as usize) };
             let cr = unsafe { *table_uv.get_unchecked(*v_row.get_unchecked(uv_i) as usize) };
@@ -515,10 +505,6 @@ pub(crate) fn yuv_to_rgb_fast(
         },
         Mode::YuvCoefficients(kr, kg, kb) => {
             let has_color = image.yuv_format != PixelFormat::Yuv400;
-            if !cfg!(feature = "android_mediacodec") {
-                // In this case, P010 and NV12 formats are not supported.
-                assert_eq!(image.yuv_format.chroma_shift_x().1, 0);
-            }
             Some(match (image.depth == 8, rgb.depth == 8, has_color) {
                 (true, true, true) => yuv8_to_rgb8_color(image, rgb, kr, kg, kb),
                 (false, false, true) => yuv16_to_rgb16_color(image, rgb, kr, kg, kb),
@@ -654,7 +640,11 @@ fn yuv16_to_rgb_any(
     let b_offset = rgb.format.b_offset();
     let rgb_channel_count = rgb.channel_count() as usize;
     let yuv_has_color = image.has_plane(Plane::U)
-        && image.has_plane(Plane::V)
+        && (image.has_plane(Plane::V)
+            || matches!(
+                image.yuv_format,
+                PixelFormat::AndroidP010 | PixelFormat::AndroidNv12 | PixelFormat::AndroidNv21
+            ))
         && image.yuv_format != PixelFormat::Yuv400;
     let rgb_has_color = !rgb.format.is_gray();
     let yuv_max_channel = image.max_channel();
@@ -666,7 +656,10 @@ fn yuv16_to_rgb_any(
         let uv_j = j >> image.yuv_format.chroma_shift_y();
         let y_row = image.row16(Plane::Y, j)?;
         let u_row = image.row16(Plane::U, uv_j).ok();
-        let v_row = image.row16(Plane::V, uv_j).ok();
+        let v_row = image
+            .row16(Plane::V, uv_j)
+            .ok()
+            .or_else(|| u_row.map(|u| &u[1..]));
         let a_row = image.row16(Plane::A, j).ok();
         let uv_adj_j = if j == 0
             || (j == image.height - 1 && (j % 2) != 0)
@@ -679,7 +672,10 @@ fn yuv16_to_rgb_any(
             uv_j - 1
         };
         let u_adj_row = image.row16(Plane::U, uv_adj_j).ok();
-        let v_adj_row = image.row16(Plane::V, uv_adj_j).ok();
+        let v_adj_row = image
+            .row16(Plane::V, uv_adj_j)
+            .ok()
+            .or_else(|| u_adj_row.map(|u| &u[1..]));
         let (dst, dst16) = if rgb.depth == 8 {
             (
                 rgb.row_mut(j).unwrap().as_mut_ptr(),
@@ -710,9 +706,9 @@ fn yuv16_to_rgb_any(
                     let uv_adj_i = if i == 0 || (i == image_width_minus_1 && (i % 2) != 0) {
                         uv_i
                     } else if (i % 2) != 0 {
-                        uv_i + 1
+                        uv_i + (1 << chroma_shift.1)
                     } else {
-                        uv_i - 1
+                        uv_i - (1 << chroma_shift.1)
                     };
 
                     let u_adj_row = u_adj_row.unwrap();
@@ -821,7 +817,11 @@ fn yuv8_to_rgb_any(
     let b_offset = rgb.format.b_offset();
     let rgb_channel_count = rgb.channel_count() as usize;
     let yuv_has_color = image.has_plane(Plane::U)
-        && image.has_plane(Plane::V)
+        && (image.has_plane(Plane::V)
+            || matches!(
+                image.yuv_format,
+                PixelFormat::AndroidP010 | PixelFormat::AndroidNv12 | PixelFormat::AndroidNv21
+            ))
         && image.yuv_format != PixelFormat::Yuv400;
     let rgb_has_color = !rgb.format.is_gray();
     let yuv_max_channel = image.max_channel();
@@ -833,7 +833,15 @@ fn yuv8_to_rgb_any(
         let uv_j = j >> image.yuv_format.chroma_shift_y();
         let y_row = image.row(Plane::Y, j)?;
         let u_row = image.row(Plane::U, uv_j).ok();
-        let v_row = image.row(Plane::V, uv_j).ok();
+        let v_row = image
+            .row(Plane::V, uv_j)
+            .ok()
+            .or_else(|| u_row.map(|u| &u[1..]));
+        let (u_row, v_row) = if image.yuv_format == PixelFormat::AndroidNv21 {
+            (v_row, u_row)
+        } else {
+            (u_row, v_row)
+        };
         let a_row = image.row(Plane::A, j).ok();
         let uv_adj_j = if j == 0
             || (j == image.height - 1 && (j % 2) != 0)
@@ -846,7 +854,15 @@ fn yuv8_to_rgb_any(
             uv_j - 1
         };
         let u_adj_row = image.row(Plane::U, uv_adj_j).ok();
-        let v_adj_row = image.row(Plane::V, uv_adj_j).ok();
+        let v_adj_row = image
+            .row(Plane::V, uv_adj_j)
+            .ok()
+            .or_else(|| u_adj_row.map(|u| &u[1..]));
+        let (u_adj_row, v_adj_row) = if image.yuv_format == PixelFormat::AndroidNv21 {
+            (v_adj_row, u_adj_row)
+        } else {
+            (u_adj_row, v_adj_row)
+        };
         let (dst, dst16) = if rgb.depth == 8 {
             (
                 rgb.row_mut(j).unwrap().as_mut_ptr(),
@@ -876,9 +892,9 @@ fn yuv8_to_rgb_any(
                     let uv_adj_i = if i == 0 || (i == image_width_minus_1 && (i % 2) != 0) {
                         uv_i
                     } else if (i % 2) != 0 {
-                        uv_i + 1
+                        uv_i + (1 << chroma_shift.1)
                     } else {
-                        uv_i - 1
+                        uv_i - (1 << chroma_shift.1)
                     };
 
                     let u_adj_row = u_adj_row.unwrap();

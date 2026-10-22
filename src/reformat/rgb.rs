@@ -148,6 +148,7 @@ pub struct Image {
     pub format: Format,
     pub chroma_upsampling: ChromaUpsampling,
     pub chroma_downsampling: ChromaDownsampling,
+    pub ignore_alpha: bool,
     pub premultiply_alpha: bool,
     pub is_float: bool,
     pub max_threads: i32,
@@ -207,6 +208,7 @@ impl Image {
             format: Format::Rgba,
             chroma_upsampling: ChromaUpsampling::Automatic,
             chroma_downsampling: ChromaDownsampling::Automatic,
+            ignore_alpha: false,
             premultiply_alpha: false,
             is_float: false,
             max_threads: 1,
@@ -407,7 +409,7 @@ impl Image {
             return AvifError::not_implemented();
         }
 
-        let mut alpha_multiply_mode = if image.has_alpha() {
+        let mut alpha_multiply_mode = if image.has_alpha() && !self.ignore_alpha {
             if !self.has_alpha() && !image.alpha_premultiplied {
                 // If we are converting an image with alpha into a format without alpha, we should
                 // premultiply the alpha value before discarding the alpha plane. This has the same
@@ -435,7 +437,10 @@ impl Image {
         if image.yuv_format == PixelFormat::AndroidNv21 || self.format == Format::Rgba1010102 {
             // These conversions are only supported via libyuv.
             if converted_with_libyuv {
-                if image.has_alpha() && matches!(self.format, Format::Rgba1010102) {
+                if image.has_alpha()
+                    && !self.ignore_alpha
+                    && matches!(self.format, Format::Rgba1010102)
+                {
                     // If the source image has an alpha channel, scale them to 2 bits and fill it
                     // into the rgb image. Otherwise, libyuv writes them as opaque by default.
                     self.import_alpha_from(image)?;
@@ -446,7 +451,7 @@ impl Image {
             }
         }
         if self.has_alpha() && !alpha_reformatted_with_libyuv {
-            if image.has_alpha() {
+            if image.has_alpha() && !self.ignore_alpha {
                 self.import_alpha_from(image)?;
             } else {
                 self.set_opaque()?;
@@ -484,9 +489,8 @@ impl Image {
             return AvifError::not_implemented();
         }
         image.allocate_planes(Category::Color)?;
-        // TODO: b/410088660 - add a setting to ignore alpha channel.
-        let has_alpha = self.has_alpha();
-        if has_alpha {
+        let has_alpha = self.has_alpha() && !self.ignore_alpha;
+        if has_alpha || image.has_plane(Plane::A) {
             image.allocate_planes(Category::Alpha)?;
         }
         let alpha_multiply_mode =

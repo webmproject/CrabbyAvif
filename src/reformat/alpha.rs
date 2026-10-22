@@ -206,20 +206,21 @@ impl rgb::Image {
             return AvifError::not_implemented();
         }
         let alpha_offset = self.format.alpha_offset();
+        let channel_count = self.format.channel_count() as usize;
         let width = usize_from_u32(self.width)?;
         if self.depth > 8 {
             let max_channel = self.max_channel();
             for y in 0..self.height {
                 let row = self.row16_mut(y)?;
                 for x in 0..width {
-                    row[(x * 4) + alpha_offset] = max_channel;
+                    row[(x * channel_count) + alpha_offset] = max_channel;
                 }
             }
         } else {
             for y in 0..self.height {
                 let row = self.row_mut(y)?;
                 for x in 0..width {
-                    row[(x * 4) + alpha_offset] = 255;
+                    row[(x * channel_count) + alpha_offset] = 255;
                 }
             }
         }
