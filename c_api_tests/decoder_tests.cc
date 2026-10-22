@@ -1477,6 +1477,91 @@ INSTANTIATE_TEST_SUITE_P(
         SatoTestParams{"weld_sato_12plus4bit.avif", false, true, 12},
         SatoTestParams{"weld_sato_12plus4bit.avif", true, true, 16}));
 
+TEST(DecoderTest, SatoMismatchedInputFormatAndSingleInput) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  std::vector<uint8_t> base_data =
+      testutil::read_file(GetFilename("grid_cell0_444_cell1_420.avif").c_str());
+  ASSERT_EQ(base_data.size(), 495u);
+
+  // Convert item 1 from "grid" to "sato" with 64x64 ispe and 16-bit pixi.
+  base_data[0x00b3] = 's';
+  base_data[0x00b4] = 'a';
+  base_data[0x00b5] = 't';
+  base_data[0x00b6] = 'o';
+  base_data[0x012c] = 0x40;
+  base_data[0x013e] = 16;
+  base_data[0x013f] = 16;
+  base_data[0x0140] = 16;
+  base_data[0x018e] = 0;
+  base_data[0x0195] = 0;
+
+  // Case 1: BinaryOp with mismatched decoded chroma subsampling (YUV444 vs
+  // YUV420).
+  {
+    std::vector<uint8_t> data = base_data;
+    const uint8_t sato_payload[8] = {0x00, 0x05, 0x01, 0x02,
+                                     0x80, 0x00, 0x01, 0x80};
+    std::copy(std::begin(sato_payload), std::end(sato_payload),
+              data.begin() + 0x01a0);
+
+    DecoderPtr decoder(avifDecoderCreate());
+    ASSERT_NE(decoder, nullptr);
+    decoder->strictFlags = AVIF_STRICT_DISABLED;
+    decoder->allowSampleTransform = AVIF_TRUE;
+    ASSERT_EQ(avifDecoderSetIOMemory(decoder.get(), data.data(), data.size()),
+              AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+    EXPECT_NE(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  }
+
+  // Case 2: Single ImageItem token with mismatched decoded chroma subsampling
+  // (YUV420 vs sato YUV444).
+  {
+    std::vector<uint8_t> data = base_data;
+    data[0x0078] = 3;  // iloc size of item 1 = 3 bytes
+    data[0x01a0] = 0x00;
+    data[0x01a1] = 0x01;
+    data[0x01a2] = 0x02;  // ImageItem(1)
+
+    DecoderPtr decoder(avifDecoderCreate());
+    ASSERT_NE(decoder, nullptr);
+    decoder->strictFlags = AVIF_STRICT_DISABLED;
+    decoder->allowSampleTransform = AVIF_TRUE;
+    ASSERT_EQ(avifDecoderSetIOMemory(decoder.get(), data.data(), data.size()),
+              AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+    EXPECT_NE(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  }
+
+  // Case 3: Single dimg input item (reference_count = 1) with valid 64x64
+  // YUV444 8-bit input item (Item 2).
+  {
+    std::vector<uint8_t> data = base_data;
+    data[0x0078] = 3;     // iloc size of item 1 = 3 bytes
+    data[0x0108] = 1;     // dimg reference_count = 1
+    data[0x01a0] = 0x00;  // version=0, bit_depth=8
+    data[0x01a1] = 0x01;  // token_count = 1
+    data[0x01a2] = 0x01;  // ImageItem(0)
+
+    DecoderPtr decoder(avifDecoderCreate());
+    ASSERT_NE(decoder, nullptr);
+    decoder->strictFlags = AVIF_STRICT_DISABLED;
+    decoder->allowSampleTransform = AVIF_TRUE;
+    ASSERT_EQ(avifDecoderSetIOMemory(decoder.get(), data.data(), data.size()),
+              AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+#ifdef __ANDROID__
+    // Android MediaCodec decodes 8-bit AV1 into YUV 4:2:0, which does not match
+    // the YUV 4:4:4 sato output format.
+    EXPECT_NE(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+#else
+    EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+#endif
+  }
+}
+
 TEST(DecoderTest, ThumbnailNotPresent) {
   auto decoder = CreateDecoder("sofa_grid1x5_420.avif");
   ASSERT_NE(decoder, nullptr);

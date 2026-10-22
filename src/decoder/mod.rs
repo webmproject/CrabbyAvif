@@ -934,9 +934,9 @@ impl Decoder {
                 return AvifError::invalid_image_grid("invalid tmap items");
             }
         } else if item.is_sample_transform_item() {
-            if source_items.len() > 32 {
+            if source_items.is_empty() || source_items.len() > 32 {
                 return AvifError::invalid_image_grid(
-                    "expected sato to between 0 and 32 dimg items",
+                    "expected sato to have between 1 and 32 dimg items",
                 );
             }
             if source_items.len() > DecodingItem::MAX_EXTRA_INPUTS {
@@ -1722,9 +1722,16 @@ impl Decoder {
 
     fn can_use_single_codec(&self) -> AvifResult<bool> {
         let mut total_tile_count: usize = 0;
+        let mut first_tile: Option<&Tile> = None;
         for tiles in &self.tiles {
             total_tile_count = checked_add!(total_tile_count, tiles.len())?;
+            if first_tile.is_none() && !tiles.is_empty() {
+                first_tile = tiles.first();
+            }
         }
+        let Some(first_tile) = first_tile else {
+            return Ok(false);
+        };
         if total_tile_count == 1 {
             return Ok(true);
         }
@@ -1745,8 +1752,8 @@ impl Decoder {
             // Stealing will cause problems. So we need separate codec instances.
             return Ok(false);
         }
-        let operating_point = self.tiles[0][0].operating_point;
-        let all_layers = self.tiles[0][0].input.all_layers;
+        let operating_point = first_tile.operating_point;
+        let all_layers = first_tile.input.all_layers;
         for tiles in &self.tiles {
             for tile in tiles {
                 if tile.operating_point != operating_point || tile.input.all_layers != all_layers {
@@ -1772,10 +1779,12 @@ impl Decoder {
             all_layers: tile.input.all_layers,
             width: tile.width,
             height: tile.height,
-            depth: if decoding_item.category == Category::Gainmap {
-                self.gainmap.image.depth
-            } else {
-                self.image.depth
+            depth: match decoding_item.category {
+                Category::Gainmap => self.gainmap.image.depth,
+                Category::Color | Category::Alpha if decoding_item.item_idx > 0 => {
+                    self.extra_inputs[decoding_item.item_idx - 1].depth
+                }
+                _ => self.image.depth,
             },
             max_threads: self.settings.max_threads,
             image_size_limit: self.settings.image_size_limit,
@@ -1813,7 +1822,13 @@ impl Decoder {
             }
         } else if self.can_use_single_codec()? {
             self.codecs = create_vec_exact(1)?;
-            self.create_codec(DecodingItem::COLOR, 0)?;
+            let first_decoding_item = self
+                .settings
+                .image_content_to_decode
+                .decoding_items()
+                .find(|d| !self.tiles[d.usize()].is_empty())
+                .ok_or(AvifError::NoContent)?;
+            self.create_codec(first_decoding_item, 0)?;
             for tiles in &mut self.tiles {
                 for tile in tiles {
                     tile.codec_index = 0;
@@ -2178,10 +2193,12 @@ impl Decoder {
         let category = decoding_item.category;
         let mut grid_image_helper = GridImageHelper {
             grid,
-            image: if category == Category::Gainmap {
-                &mut self.gainmap.image
-            } else {
-                &mut self.image
+            image: match category {
+                Category::Color | Category::Alpha if decoding_item.item_idx == 0 => &mut self.image,
+                Category::Color | Category::Alpha => {
+                    &mut self.extra_inputs[decoding_item.item_idx - 1]
+                }
+                Category::Gainmap => &mut self.gainmap.image,
             },
             category,
             cell_index: previous_decoded_tile_count,
@@ -2486,16 +2503,29 @@ impl Decoder {
 
     #[cfg(feature = "satofloat")]
     pub fn image_float(&self) -> AvifResult<FloatPlanes> {
-        if !self.parsing_complete() {
+        if !self.is_current_frame_fully_decoded() {
             return AvifError::no_content();
         }
-        if !self.settings.allow_sample_transform {
+        if !self.settings.allow_sample_transform || self.image.depth != 32 {
             return AvifError::invalid_argument();
         }
         if self.tile_info[DecodingItem::COLOR.usize()].sample_transform
             != SampleTransform::from_float32b_recipe()?
         {
             return AvifError::invalid_argument();
+        }
+        for (idx, input) in self.extra_inputs[..3].iter().enumerate() {
+            let expected_depth_ok = if idx == 0 { input.depth == 8 } else { input.depth > 8 };
+            if !expected_depth_ok
+                || input.width != self.image.width
+                || input.height != self.image.height
+                || input.yuv_format != self.image.yuv_format
+                || input.has_alpha() != self.extra_inputs[0].has_alpha()
+            {
+                return AvifError::invalid_image_grid(
+                    "input image properties for float sample transform do not match",
+                );
+            }
         }
         let mut float_planes: FloatPlanes = [const { None }; MAX_PLANE_COUNT];
         for plane in ALL_PLANES {
@@ -2504,6 +2534,15 @@ impl Decoder {
             }
             let width = self.extra_inputs[0].width(plane);
             let height = self.extra_inputs[0].height(plane);
+            if self.extra_inputs[1].width(plane) != width
+                || self.extra_inputs[1].height(plane) != height
+                || self.extra_inputs[2].width(plane) != width
+                || self.extra_inputs[2].height(plane) != height
+            {
+                return AvifError::invalid_image_grid(
+                    "input image plane dimensions for float sample transform do not match",
+                );
+            }
             let mut float_plane = create_vec_exact(checked_mul!(width, height)?)?;
 
             for y in 0..height as u32 {

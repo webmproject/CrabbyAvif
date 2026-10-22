@@ -351,9 +351,26 @@ impl SampleTransform {
         };
 
         let width = output.width(plane);
+        let height = output.height(plane);
+        if extra_inputs.len() < self.num_inputs {
+            return AvifError::invalid_image_grid("not enough input images for sample transform");
+        }
+        for input in &extra_inputs[..self.num_inputs] {
+            if input.width != output.width
+                || input.height != output.height
+                || input.yuv_format != output.yuv_format
+                || input.width(plane) != width
+                || input.height(plane) != height
+                || (height > 0 && width > 0 && !input.has_plane(plane))
+            {
+                return AvifError::invalid_image_grid(
+                    "input image dimensions or format for sample transform do not match output",
+                );
+            }
+        }
 
         // Process the image row by row.
-        for y in 0..u32_from_usize(output.height(plane))? {
+        for y in 0..u32_from_usize(height)? {
             for token in &self.tokens {
                 token.apply(stack, extra_inputs, plane, y, width, bounds)?;
             }
@@ -437,6 +454,9 @@ impl SampleTransform {
     }
 
     fn is_valid(&self) -> AvifResult<()> {
+        if !matches!(self.bit_depth, 8 | 16 | 32 | 64) {
+            return AvifError::invalid_image_grid("invalid bit depth for sample transform");
+        }
         let mut stack_size: i32 = 0;
         for token in &self.tokens {
             match token {
@@ -494,6 +514,20 @@ impl SampleTransform {
         extra_inputs: &[&Image],
         output: &mut Image,
     ) -> AvifResult<()> {
+        if extra_inputs.len() < self.num_inputs {
+            return AvifError::invalid_image_grid("not enough input images for sample transform");
+        }
+        for input in &extra_inputs[..self.num_inputs] {
+            if input.width != output.width
+                || input.height != output.height
+                || input.yuv_format != output.yuv_format
+                || input.has_alpha() != extra_inputs[0].has_alpha()
+            {
+                return AvifError::invalid_image_grid(
+                    "input image dimensions or format for sample transform do not match output",
+                );
+            }
+        }
         output.allocate_planes(Category::Color)?;
         if self.num_inputs > 0 && extra_inputs[0].has_alpha() {
             output.allocate_planes(Category::Alpha)?;
@@ -850,5 +884,50 @@ mod tests {
 
         assert_eq!(pow.apply(-(1 << 16), 3, clamp), 0); // i32::MIN as i64 clamped
         assert_eq!(pow.apply(1 << 16, 3, clamp), 255); // i32::MAX as i64 clamped
+    }
+
+    #[test]
+    fn test_mismatched_input_dimensions_or_format() -> AvifResult<()> {
+        let sample_transform =
+            SampleTransform::create_from(32, 1, vec![SampleTransformToken::ImageItem(0)])?;
+        let mut output = Image {
+            width: 8,
+            height: 8,
+            depth: 16,
+            yuv_format: PixelFormat::Yuv444,
+            yuv_range: YuvRange::Full,
+            ..Default::default()
+        };
+        output.allocate_planes(Category::Color)?;
+
+        // Input has smaller width than output (4x8 vs 8x8).
+        let mut smaller_input = Image {
+            width: 4,
+            height: 8,
+            depth: 16,
+            yuv_format: PixelFormat::Yuv444,
+            yuv_range: YuvRange::Full,
+            ..Default::default()
+        };
+        smaller_input.allocate_planes(Category::Color)?;
+        assert!(sample_transform
+            .apply(&[&smaller_input], &mut output)
+            .is_err());
+
+        // Input has same luma dimensions (8x8) but subsampled chroma (Yuv420 vs Yuv444).
+        let mut subsampled_input = Image {
+            width: 8,
+            height: 8,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            yuv_range: YuvRange::Full,
+            ..Default::default()
+        };
+        subsampled_input.allocate_planes(Category::Color)?;
+        assert!(sample_transform
+            .apply(&[&subsampled_input], &mut output)
+            .is_err());
+
+        Ok(())
     }
 }

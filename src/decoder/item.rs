@@ -296,6 +296,11 @@ impl Item {
         match self.pixi() {
             Some(pixi) => {
                 for plane in &pixi.planes {
+                    if plane.depth != pixi.planes[0].depth {
+                        return AvifError::bmff_parse_failed(
+                            "pixi planes do not all have the same depth",
+                        );
+                    }
                     if let Some(codec_config_depth) = codec_config.depth() {
                         // Check that the depth in pixi matches the codec config.
                         // For derived image items, the codec config comes from the first source
