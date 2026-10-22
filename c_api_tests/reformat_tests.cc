@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "avif/avif.h"
@@ -803,6 +804,63 @@ TEST(ReformatTest, NullCases) {
   EXPECT_NE(avifRGBImageAllocatePixels(nullptr), AVIF_RESULT_OK);
 
   avifRGBImageFreePixels(nullptr);
+}
+
+TEST(ReformatTest, MismatchedDimensions) {
+  ImagePtr image(avifImageCreate(kWidth, kHeight, 8, AVIF_PIXEL_FORMAT_YUV444));
+  ASSERT_NE(image, nullptr);
+  ASSERT_EQ(avifImageAllocatePlanes(image.get(), AVIF_PLANES_YUV),
+            AVIF_RESULT_OK);
+  memcpy(image->yuvPlanes[0], kYuv[0], kPlaneSize);
+  memcpy(image->yuvPlanes[1], kYuv[0] + kUOffset, kPlaneSize);
+  memcpy(image->yuvPlanes[2], kYuv[0] + kVOffset, kPlaneSize);
+
+  for (decltype(AVIF_MATRIX_COEFFICIENTS_BT601) matrix_coefficients :
+       {AVIF_MATRIX_COEFFICIENTS_BT601, AVIF_MATRIX_COEFFICIENTS_YCGCO}) {
+    image->matrixCoefficients =
+        static_cast<avifMatrixCoefficients>(matrix_coefficients);
+    for (std::pair<uint32_t, uint32_t> dims :
+         {std::make_pair(2u, 2u), std::make_pair(8u, 8u),
+          std::make_pair(2u, 4u), std::make_pair(4u, 2u),
+          std::make_pair(8u, 4u), std::make_pair(4u, 8u)}) {
+      avifRGBImage rgb;
+      avifRGBImageSetDefaults(&rgb, image.get());
+      rgb.width = dims.first;
+      rgb.height = dims.second;
+      ASSERT_EQ(avifRGBImageAllocatePixels(&rgb), AVIF_RESULT_OK);
+      memset(rgb.pixels, 0, rgb.rowBytes * rgb.height);
+      EXPECT_NE(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+      EXPECT_NE(avifImageRGBToYUV(image.get(), &rgb), AVIF_RESULT_OK);
+      avifRGBImageFreePixels(&rgb);
+    }
+  }
+}
+
+TEST(ReformatTest, InsufficientRowBytes) {
+  ImagePtr image(avifImageCreate(kWidth, kHeight, 8, AVIF_PIXEL_FORMAT_YUV444));
+  ASSERT_NE(image, nullptr);
+  ASSERT_EQ(avifImageAllocatePlanes(image.get(), AVIF_PLANES_YUV),
+            AVIF_RESULT_OK);
+  memcpy(image->yuvPlanes[0], kYuv[0], kPlaneSize);
+  memcpy(image->yuvPlanes[1], kYuv[0] + kUOffset, kPlaneSize);
+  memcpy(image->yuvPlanes[2], kYuv[0] + kVOffset, kPlaneSize);
+
+  for (decltype(AVIF_MATRIX_COEFFICIENTS_BT601) matrix_coefficients :
+       {AVIF_MATRIX_COEFFICIENTS_BT601, AVIF_MATRIX_COEFFICIENTS_YCGCO}) {
+    image->matrixCoefficients =
+        static_cast<avifMatrixCoefficients>(matrix_coefficients);
+    avifRGBImage rgb;
+    avifRGBImageSetDefaults(&rgb, image.get());
+    ASSERT_EQ(avifRGBImageAllocatePixels(&rgb), AVIF_RESULT_OK);
+    memset(rgb.pixels, 0, rgb.rowBytes * rgb.height);
+    rgb.rowBytes = rgb.width * avifRGBImagePixelSize(&rgb) - 1;
+    EXPECT_NE(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+    EXPECT_NE(avifImageRGBToYUV(image.get(), &rgb), AVIF_RESULT_OK);
+    rgb.rowBytes = 4;
+    EXPECT_NE(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+    EXPECT_NE(avifImageRGBToYUV(image.get(), &rgb), AVIF_RESULT_OK);
+    avifRGBImageFreePixels(&rgb);
+  }
 }
 
 TEST(RGBImageTest, PixelSize) {
