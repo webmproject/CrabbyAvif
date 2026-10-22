@@ -40,6 +40,9 @@ impl Pixels {
         mut row_bytes: u32,
     ) -> AvifResult<Self> {
         if depth > 8 {
+            if row_bytes % 2 != 0 {
+                return AvifError::invalid_argument();
+            }
             row_bytes /= 2;
         }
         let size = usize_from_u32(checked_mul!(height, row_bytes)?)?;

@@ -296,6 +296,97 @@ INSTANTIATE_TEST_SUITE_P(GeneralDecodeTests,
                                             ::testing::ValuesIn(kScaleFactors),
                                             ::testing::ValuesIn(kRgbFormats)));
 
+TEST(SkCrabbyAvifCodecTest, UnalignedAndOddStride16BitPlanes) {
+  ImagePtr image(avifImageCreate(4, 4, 10, AVIF_PIXEL_FORMAT_YUV420));
+  ASSERT_NE(image, nullptr);
+
+  std::vector<uint8_t> buffer(256, 0);
+  // Set an unaligned Y plane pointer (not 2-byte aligned).
+  image->yuvPlanes[0] = buffer.data() + 1;
+  image->yuvRowBytes[0] = 8;
+  image->yuvPlanes[1] = buffer.data() + 64;
+  image->yuvRowBytes[1] = 4;
+  image->yuvPlanes[2] = buffer.data() + 128;
+  image->yuvRowBytes[2] = 4;
+
+  EXPECT_NE(avifImageScale(image.get(), 2, 2, nullptr), AVIF_RESULT_OK);
+
+  avifRGBImage rgb;
+  avifRGBImageSetDefaults(&rgb, image.get());
+  ASSERT_EQ(avifRGBImageAllocatePixels(&rgb), AVIF_RESULT_OK);
+  EXPECT_NE(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+
+  // Set aligned pointers but an odd row stride on a 10-bit plane.
+  image->yuvPlanes[0] = buffer.data();
+  image->yuvRowBytes[0] = 9;
+  EXPECT_NE(avifImageScale(image.get(), 2, 2, nullptr), AVIF_RESULT_OK);
+  EXPECT_NE(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+
+  // Valid YUV planes, but unaligned or odd-stride 10-bit RGB destination.
+  image->yuvRowBytes[0] = 8;
+  uint8_t* orig_rgb_pixels = rgb.pixels;
+  uint32_t orig_rgb_row_bytes = rgb.rowBytes;
+  rgb.pixels = orig_rgb_pixels + 1;
+  EXPECT_NE(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+  rgb.pixels = orig_rgb_pixels;
+  rgb.rowBytes = orig_rgb_row_bytes + 1;
+  EXPECT_NE(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+
+  rgb.pixels = orig_rgb_pixels;
+  rgb.rowBytes = orig_rgb_row_bytes;
+  avifRGBImageFreePixels(&rgb);
+}
+
+TEST(SkCrabbyAvifCodecTest, ScaleAndroidP010WithAlphaToRgba1010102) {
+  constexpr uint32_t kWidth = 4;
+  constexpr uint32_t kHeight = 4;
+  ImagePtr image(
+      avifImageCreate(kWidth, kHeight, 16, AVIF_PIXEL_FORMAT_ANDROID_P010));
+  ASSERT_NE(image, nullptr);
+  ASSERT_EQ(avifImageAllocatePlanes(image.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+
+  // Fill P010 planes (10-bit values in the upper 10 bits of 16-bit words).
+  for (uint32_t y = 0; y < kHeight; ++y) {
+    uint16_t* y_row = reinterpret_cast<uint16_t*>(image->yuvPlanes[0] +
+                                                  y * image->yuvRowBytes[0]);
+    uint16_t* a_row = reinterpret_cast<uint16_t*>(image->alphaPlane +
+                                                  y * image->alphaRowBytes);
+    for (uint32_t x = 0; x < kWidth; ++x) {
+      y_row[x] = 512 << 6;
+      a_row[x] = 512 << 6;
+    }
+  }
+  for (uint32_t y = 0; y < kHeight / 2; ++y) {
+    uint16_t* uv_row = reinterpret_cast<uint16_t*>(image->yuvPlanes[1] +
+                                                   y * image->yuvRowBytes[1]);
+    for (uint32_t x = 0; x < kWidth; ++x) {
+      uv_row[x] = 512 << 6;
+    }
+  }
+
+  ASSERT_EQ(avifImageScale(image.get(), 2, 2, nullptr), AVIF_RESULT_OK);
+  EXPECT_EQ(image->depth, 10u);
+  EXPECT_EQ(image->yuvFormat, AVIF_PIXEL_FORMAT_YUV420);
+
+  // Alpha plane must be downshifted to 10-bit (512) to match image->depth = 10.
+  const uint16_t* scaled_a =
+      reinterpret_cast<const uint16_t*>(image->alphaPlane);
+  EXPECT_EQ(scaled_a[0], 512);
+
+  avifRGBImage rgb;
+  avifRGBImageSetDefaults(&rgb, image.get());
+  rgb.format = AVIF_RGB_FORMAT_RGBA1010102;
+  rgb.depth = 10;
+  ASSERT_EQ(avifRGBImageAllocatePixels(&rgb), AVIF_RESULT_OK);
+  ASSERT_EQ(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+
+  // 512 >> (10 - 2) == 2 in the top 2 bits of RGBA1010102.
+  const uint32_t* rgba_pixels = reinterpret_cast<const uint32_t*>(rgb.pixels);
+  EXPECT_EQ(rgba_pixels[0] >> 30, 2u);
+  avifRGBImageFreePixels(&rgb);
+}
+
 }  // namespace
 }  // namespace avif
 

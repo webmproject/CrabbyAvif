@@ -344,11 +344,14 @@ impl<T> PointerSlice<T> {
     /// `ptr` must live at least as long as the struct, and not be accessed other than through this
     /// struct. It must point to a memory region of at least `size` elements.
     pub unsafe fn create(ptr: *mut T, size: usize) -> AvifResult<Self> {
-        if ptr.is_null() || size == 0 {
+        if ptr.is_null() || !ptr.is_aligned() || size == 0 {
             return AvifError::no_content();
         }
-        // Ensure that size does not exceed isize::MAX.
-        let _ = isize_from_usize(size)?;
+        // Ensure that the byte size does not exceed isize::MAX.
+        let byte_size = size
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or(AvifError::NoContent)?;
+        let _ = isize_from_usize(byte_size)?;
         Ok(Self {
             ptr: unsafe { std::slice::from_raw_parts_mut(ptr, size) },
         })

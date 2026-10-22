@@ -242,6 +242,13 @@ impl Image {
             if ret != 0 {
                 return AvifError::reformat_failed();
             }
+            if self.has_plane(Plane::A) {
+                for y in 0..self.height {
+                    for pixel in self.row16_mut(Plane::A, y)? {
+                        *pixel >>= 6;
+                    }
+                }
+            }
             i010
         } else {
             let mut src = self.shallow_clone();

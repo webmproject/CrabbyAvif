@@ -91,6 +91,9 @@ impl From<&avifRGBImage> for rgb::Image {
             (rgb::Format::AGray, true) => rgb::Format::Gray,
             (rgb::Format::AGray, false) => rgb::Format::AGray,
         };
+        if dst.pixels.is_none() {
+            return dst;
+        }
         dst.shuffle_channels_to(format).unwrap()
     }
 }
@@ -121,11 +124,28 @@ pub unsafe extern "C" fn crabby_avifImageYUVToRGB(
 ) -> avifResult {
     check_pointer!(image);
     check_pointer!(rgb);
-    if deref_const!(image).yuvPlanes[0].is_null() {
+    let c_image = deref_const!(image);
+    if c_image.yuvPlanes[0].is_null() {
         return avifResult::Ok;
     }
     let mut rgb: rgb::Image = deref_const!(rgb).into();
-    let image: image::Image = deref_const!(image).as_rust_image_no_metadata();
+    if rgb.pixels.is_none() {
+        return avifResult::ReformatFailed;
+    }
+    let image: image::Image = c_image.as_rust_image_no_metadata();
+    for (plane_ptr, rust_plane) in [
+        c_image.yuvPlanes[0],
+        c_image.yuvPlanes[1],
+        c_image.yuvPlanes[2],
+        c_image.alphaPlane,
+    ]
+    .into_iter()
+    .zip(&image.planes)
+    {
+        if !plane_ptr.is_null() && rust_plane.is_none() {
+            return avifResult::ReformatFailed;
+        }
+    }
     rgb.convert_from_yuv(&image).into()
 }
 
@@ -141,6 +161,9 @@ pub unsafe extern "C" fn crabby_avifImageRGBToYUV(
     check_pointer!(image);
     check_pointer!(rgb);
     let rgb: rgb::Image = deref_const!(rgb).into();
+    if rgb.pixels.is_none() {
+        return avifResult::ReformatFailed;
+    }
     let mut tmp_image: image::Image = deref_const!(image).as_rust_image_no_metadata();
     let res = rgb.convert_to_yuv(&mut tmp_image);
     if res.is_err() {
@@ -223,6 +246,12 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
                 dst.yuvPlanes[2] as *mut u16,
                 dst.alphaPlane as *mut u16,
             ];
+            let raw_row_bytes = [
+                dst.yuvRowBytes[0],
+                dst.yuvRowBytes[1],
+                dst.yuvRowBytes[2],
+                dst.alphaRowBytes,
+            ];
             let dst_row_bytes = [
                 dst.yuvRowBytes[0] / 2,
                 dst.yuvRowBytes[1] / 2,
@@ -230,7 +259,10 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
                 dst.alphaRowBytes / 2,
             ];
             let dst_ptr = dst_planes[plane.as_usize()];
-            if dst_ptr.is_null() {
+            if dst_ptr.is_null()
+                || !dst_ptr.is_aligned()
+                || raw_row_bytes[plane.as_usize()] % 2 != 0
+            {
                 return AvifError::invalid_argument();
             }
             for y in 0..plane_data.height {
@@ -273,6 +305,19 @@ pub unsafe extern "C" fn crabby_avifImageScale(
     }
 
     let mut rust_image: image::Image = deref_const!(image).as_rust_image_no_metadata();
+    for (plane_ptr, rust_plane) in [
+        dst_image.yuvPlanes[0],
+        dst_image.yuvPlanes[1],
+        dst_image.yuvPlanes[2],
+        dst_image.alphaPlane,
+    ]
+    .into_iter()
+    .zip(&rust_image.planes)
+    {
+        if !plane_ptr.is_null() && rust_plane.is_none() {
+            return avifResult::InvalidArgument;
+        }
+    }
     let res = rust_image.scale(dstWidth, dstHeight, Category::Color);
     if res.is_err() {
         return res.into();
