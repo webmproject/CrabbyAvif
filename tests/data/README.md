@@ -127,3 +127,28 @@ track 3:
 00 00 00 18 't' 'r' 'e' 'f'  00 00 00 10 'p' 'r' 'e' 'm'  00 00 00 02  00 00 00 03
 00 00 00 14 'f' 'r' 'e' 'e'  followed by 12 zero bytes
 ```
+
+## thumbnails_grid_per_tile_alpha.avif
+
+Derived from the coded AV1 payloads of
+`color_grid_alpha_grid_gainmap_nogrid.avif` (without the `tmap` brand or item):
+
+- Item 1 (primary): 128x200 AV1 color item.
+- Item 2 (thumbnail 0, `thmb` -> 1): 2x1 `grid` color item (256x200)
+  referencing 128x200 AV1 color tile items 3 and 4 (`dimg`), with per-tile
+  128x200 AV1 auxiliary alpha items 5 and 6 attached directly via `auxl`
+  (`5 -> 3`, `6 -> 4`) and no `grid` alpha item.
+- Item 7 (thumbnail 1, `thmb` -> 1): 64x80 standalone AV1 color item without
+  alpha.
+
+## thumbnails_progressive_lsel.avif
+
+Contains a 16x16 2-layer progressive AV1 color stream (layer 0 = 58 bytes at
+quality 2, layer 1 = 302 bytes at quality 90, encoded with
+`crabbyavif --progressive -q 90 --speed 10`) shared across three items:
+
+- Item 1 (primary): 16x16 AV1 color item with `a1lx`.
+- Item 2 (thumbnail 0, `thmb` -> 1): 16x16 AV1 color item with `a1lx` and no
+  `lsel`.
+- Item 3 (thumbnail 1, `thmb` -> 1): 16x16 AV1 color item with `a1lx` and
+  `lsel` selecting layer 0.

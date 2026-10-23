@@ -1898,3 +1898,94 @@ fn nth_image_properties() {
         Err(AvifError::NoImagesRemaining)
     ));
 }
+
+#[test]
+fn thumbnail_max_extent_grid_per_tile_alpha() {
+    let mut primary_decoder = get_decoder("thumbnails_grid_per_tile_alpha.avif");
+    assert_eq!(primary_decoder.parse(), Ok(()));
+
+    let mut decoder = get_decoder("thumbnails_grid_per_tile_alpha.avif");
+    decoder.settings.source = decoder::Source::Thumbnail;
+    assert_eq!(decoder.parse(), Ok(()));
+    assert_eq!(decoder.image_count(), 2);
+
+    // Thumbnail 0 is a 2x1 color grid (cells at 1208..+448) with per-tile auxiliary alpha items
+    // (cells at 824..+224). Both ranges must be covered.
+    let extent0 = decoder.nth_image_max_extent(0).unwrap();
+    assert_eq!(extent0.offset, 824);
+    assert_eq!(extent0.size, (1208 + 448) - 824);
+
+    // Thumbnail 1 is a standalone coded item at 1048..+160 without alpha.
+    let extent1 = decoder.nth_image_max_extent(1).unwrap();
+    assert_eq!(extent1.offset, 1048);
+    assert_eq!(extent1.size, 160);
+
+    assert!(matches!(
+        decoder.nth_image_max_extent(2),
+        Err(AvifError::NoImagesRemaining)
+    ));
+
+    if !HAS_DECODER {
+        return;
+    }
+    assert_eq!(primary_decoder.next_image(), Ok(()));
+
+    assert_eq!(decoder.next_image(), Ok(()));
+    let image0 = decoder.image().unwrap();
+    assert_eq!(image0.width, 256);
+    assert_eq!(image0.height, 200);
+    assert!(image0.alpha_present);
+    assert!(image0.plane_data(Plane::A).is_some());
+
+    assert_eq!(decoder.next_image(), Ok(()));
+    let image1 = decoder.image().unwrap();
+    assert_eq!(image1.width, 64);
+    assert_eq!(image1.height, 80);
+    assert!(!image1.alpha_present);
+}
+
+#[test]
+fn thumbnail_max_extent_progressive_and_lsel() {
+    // Primary item (item 1) and both thumbnails share a 2-layer progressive AV1 payload at offset
+    // 462 (layer 0 = 58 bytes, layer 1 = 302 bytes, total = 360 bytes):
+    //  - thumbnail 0 (item 2): progressive item with a1lx and no lsel. With multiple thumbnails
+    //    and allow_progressive = true, progressive exposure is disabled so both next_image() and
+    //    nth_image_max_extent(0) must cover the full 360-byte 2-layer payload.
+    //  - thumbnail 1 (item 3): layered item with a1lx + lsel(0). nth_image_max_extent(1) must
+    //    report only layer 0's 58-byte extent.
+    let mut decoder = get_decoder("thumbnails_progressive_lsel.avif");
+    decoder.settings.source = decoder::Source::Thumbnail;
+    decoder.settings.allow_progressive = true;
+    assert_eq!(decoder.parse(), Ok(()));
+    assert_eq!(decoder.image_count(), 2);
+
+    let extent0 = decoder.nth_image_max_extent(0).unwrap();
+    assert_eq!(extent0.offset, 462);
+    assert_eq!(extent0.size, 58 + 302);
+
+    let extent1 = decoder.nth_image_max_extent(1).unwrap();
+    assert_eq!(extent1.offset, 462);
+    assert_eq!(extent1.size, 58);
+
+    assert!(matches!(
+        decoder.nth_image_max_extent(2),
+        Err(AvifError::NoImagesRemaining)
+    ));
+
+    if !HAS_DECODER {
+        return;
+    }
+    // Reference decode of the full 2-layer primary item (non-progressive mode).
+    let mut ref_decoder = get_decoder("thumbnails_progressive_lsel.avif");
+    assert_eq!(ref_decoder.parse(), Ok(()));
+    assert_eq!(ref_decoder.next_image(), Ok(()));
+    let ref_image = ref_decoder.image().unwrap();
+
+    // Thumbnail 0 must decode the full 2-layer image, not just layer 0.
+    assert_eq!(decoder.next_image(), Ok(()));
+    assert!(utils::are_images_equal(decoder.image().unwrap(), ref_image).unwrap());
+
+    // Thumbnail 1 has lsel=0 so it decodes only layer 0 (which differs from the 2-layer image).
+    assert_eq!(decoder.next_image(), Ok(()));
+    assert!(!utils::are_images_equal(decoder.image().unwrap(), ref_image).unwrap());
+}

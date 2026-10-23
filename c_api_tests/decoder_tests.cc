@@ -1538,6 +1538,53 @@ TEST(DecoderTest, NthImagePropertiesFreesExistingPlanes) {
   EXPECT_EQ(props->alphaRowBytes, 0u);
 }
 
+TEST(DecoderTest, ThumbnailMaxExtentGridPerTileAlpha) {
+  auto decoder = CreateDecoder("thumbnails_grid_per_tile_alpha.avif");
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderSetSource(decoder.get(), AVIF_DECODER_SOURCE_THUMBNAIL),
+            AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->imageCount, 2);
+
+  avifExtent extent{};
+  ASSERT_EQ(avifDecoderNthImageMaxExtent(decoder.get(), 0, &extent),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(extent.offset, 824u);
+  EXPECT_EQ(extent.size, static_cast<size_t>((1208 + 448) - 824));
+
+  ASSERT_EQ(avifDecoderNthImageMaxExtent(decoder.get(), 1, &extent),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(extent.offset, 1048u);
+  EXPECT_EQ(extent.size, 160u);
+
+  EXPECT_EQ(avifDecoderNthImageMaxExtent(decoder.get(), 2, &extent),
+            AVIF_RESULT_NO_IMAGES_REMAINING);
+}
+
+TEST(DecoderTest, ThumbnailMaxExtentProgressiveAndLsel) {
+  auto decoder = CreateDecoder("thumbnails_progressive_lsel.avif");
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderSetSource(decoder.get(), AVIF_DECODER_SOURCE_THUMBNAIL),
+            AVIF_RESULT_OK);
+  decoder->allowProgressive = AVIF_TRUE;
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->imageCount, 2);
+
+  avifExtent extent{};
+  ASSERT_EQ(avifDecoderNthImageMaxExtent(decoder.get(), 0, &extent),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(extent.offset, 462u);
+  EXPECT_EQ(extent.size, 58u + 302u);
+
+  ASSERT_EQ(avifDecoderNthImageMaxExtent(decoder.get(), 1, &extent),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(extent.offset, 462u);
+  EXPECT_EQ(extent.size, 58u);
+
+  EXPECT_EQ(avifDecoderNthImageMaxExtent(decoder.get(), 2, &extent),
+            AVIF_RESULT_NO_IMAGES_REMAINING);
+}
+
 }  // namespace
 }  // namespace avif
 

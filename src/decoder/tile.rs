@@ -19,7 +19,7 @@ use crate::*;
 
 use std::num::NonZero;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct DecodeSample {
     pub item_id: u32, // 1-based. 0 if it comes from a track.
     pub offset: u64,

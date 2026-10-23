@@ -388,6 +388,7 @@ pub struct Decoder {
     compression_format: CompressionFormat,
     thumbnail_item_ids: Vec<u32>,
     thumbnail_images: Vec<Image>,
+    thumbnail_samples: Vec<Vec<DecodeSample>>,
     active_thumbnail_index: Option<usize>,
 }
 
@@ -722,13 +723,19 @@ impl Decoder {
         if item.is_sample_transform_item() {
             return Ok(tiles);
         }
+        // When exposing multiple thumbnails, `image_count` indexes the thumbnails rather than
+        // progressive layers (`progressive_state` is `Unavailable`), and each thumbnail is decoded
+        // in a single step from `samples[0]`. Keep the full item payload in a single sample
+        // instead of splitting `a1lx` layers into separate progressive samples.
+        let allow_progressive = self.settings.allow_progressive
+            && !(self.source == Source::Thumbnail && self.thumbnail_item_ids.len() > 1);
         if item.source_item_ids.is_empty() {
             if item.size == 0 {
                 return AvifError::missing_image_item();
             }
             let mut tile = Tile::create_from_item(
                 self.items.get_mut(&item_id).unwrap(),
-                self.settings.allow_progressive,
+                allow_progressive,
                 self.settings.image_count_limit,
                 self.io.unwrap_ref().size_hint(),
             )?;
@@ -748,7 +755,7 @@ impl Decoder {
                     .ok_or(AvifError::InvalidImageGrid("missing derived item".into()))?;
                 let mut tile = Tile::create_from_item(
                     derived_item,
-                    self.settings.allow_progressive,
+                    allow_progressive,
                     self.settings.image_count_limit,
                     self.io.unwrap_ref().size_hint(),
                 )?;
@@ -1414,6 +1421,7 @@ impl Decoder {
         self.compression_format = decoder.compression_format;
         self.thumbnail_item_ids = decoder.thumbnail_item_ids;
         self.thumbnail_images = decoder.thumbnail_images;
+        self.thumbnail_samples = decoder.thumbnail_samples;
         self.active_thumbnail_index = decoder.active_thumbnail_index;
     }
 
@@ -1641,10 +1649,16 @@ impl Decoder {
                         }
                     }
                     // Prepare the thumbnails in reverse order so that the decoder state is left
-                    // set up for the first thumbnail. The images are reversed back into index
-                    // order afterwards.
+                    // set up for the first thumbnail. The images and samples are reversed back
+                    // into index order afterwards.
                     let mut thumbnail_images_rev: Vec<Image> =
                         create_vec_exact(self.thumbnail_item_ids.len())?;
+                    let mut thumbnail_samples_rev: Vec<Vec<DecodeSample>> =
+                        if self.thumbnail_item_ids.len() > 1 {
+                            create_vec_exact(self.thumbnail_item_ids.len())?
+                        } else {
+                            Vec::new()
+                        };
                     let mut first_cicp_set = false;
                     for idx in (0..self.thumbnail_item_ids.len()).rev() {
                         let item_id = self.thumbnail_item_ids[idx];
@@ -1656,6 +1670,20 @@ impl Decoder {
                         if self.thumbnail_item_ids.len() > 1 {
                             self.image_count = thumbnail_count;
                             self.image.progressive_state = ProgressiveState::Unavailable;
+                            let mut sample_count: usize = 0;
+                            for tiles in &self.tiles {
+                                sample_count = checked_add!(sample_count, tiles.len())?;
+                            }
+                            let mut samples: Vec<DecodeSample> = create_vec_exact(sample_count)?;
+                            for tiles in &self.tiles {
+                                for tile in tiles {
+                                    let sample = tile.input.samples.first().ok_or_else(|| {
+                                        AvifError::BmffParseFailed("missing sample".into())
+                                    })?;
+                                    samples.try_push(*sample)?;
+                                }
+                            }
+                            thumbnail_samples_rev.try_push(samples)?;
                         }
                         if idx > 0 && !item_cicp_set {
                             let _ = self.harvest_cicp_from_sequence_header();
@@ -1667,6 +1695,10 @@ impl Decoder {
                     }
                     thumbnail_images_rev.reverse();
                     self.thumbnail_images = thumbnail_images_rev;
+                    if self.thumbnail_item_ids.len() > 1 {
+                        thumbnail_samples_rev.reverse();
+                        self.thumbnail_samples = thumbnail_samples_rev;
+                    }
                     self.active_thumbnail_index = Some(0);
                     first_cicp_set
                 }
@@ -2656,74 +2688,47 @@ impl Decoder {
         0
     }
 
+    fn sample_max_extent(&self, sample: &DecodeSample) -> AvifResult<Extent> {
+        if sample.item_id != 0 {
+            let item = self
+                .items
+                .get(&sample.item_id)
+                .ok_or_else(|| AvifError::BmffParseFailed("missing item".into()))?;
+            item.max_extent(sample)
+        } else {
+            Ok(Extent {
+                offset: sample.offset,
+                size: sample.size,
+            })
+        }
+    }
+
     pub fn nth_image_max_extent(&self, index: u32) -> AvifResult<Extent> {
         if !self.parsing_complete() {
             return AvifError::no_content();
         }
         let mut extent = Extent::default();
         if self.source == Source::Thumbnail && self.thumbnail_item_ids.len() > 1 {
-            if index as usize >= self.thumbnail_item_ids.len() {
-                return AvifError::no_images_remaining();
-            }
-            let color_item_id = self.thumbnail_item_ids[index as usize];
-            let color_item = self
-                .items
-                .get(&color_item_id)
-                .ok_or_else(|| AvifError::BmffParseFailed("missing color item".into()))?;
-            let mut item_ids: Vec<u32> = Vec::new();
-            if color_item.source_item_ids.is_empty() {
-                item_ids.try_push(color_item_id)?;
-            } else {
-                item_ids.try_extend_from_slice(&color_item.source_item_ids)?;
-            }
-            if let Some(alpha_item) = self.items.values().find(|item| {
-                !item.should_skip()
-                    && item.aux_for_id.contains(&color_item_id)
-                    && item.is_auxiliary_alpha()
-            }) {
-                if alpha_item.source_item_ids.is_empty() {
-                    item_ids.try_push(alpha_item.id)?;
-                } else {
-                    item_ids.try_extend_from_slice(&alpha_item.source_item_ids)?;
-                }
-            }
-            for item_id in item_ids {
-                let item = self
-                    .items
-                    .get(&item_id)
-                    .ok_or_else(|| AvifError::BmffParseFailed("missing item".into()))?;
-                let base_item_offset =
-                    if item.extents.len() == 1 { item.extents[0].offset } else { 0 };
-                let sample = DecodeSample {
-                    item_id,
-                    offset: base_item_offset,
-                    size: item.size,
-                    spatial_id: 0xff,
-                    sync: true,
-                };
-                extent.merge(&item.max_extent(&sample)?)?;
+            let samples = self
+                .thumbnail_samples
+                .get(usize_from_u32(index)?)
+                .ok_or(AvifError::NoImagesRemaining)?;
+            for sample in samples {
+                extent.merge(&self.sample_max_extent(sample)?)?;
             }
             return Ok(extent);
         }
-        let start_index = self.nearest_keyframe(index) as usize;
-        let end_index = index as usize;
+        let start_index = usize_from_u32(self.nearest_keyframe(index))?;
+        let end_index = usize_from_u32(index)?;
         for current_index in start_index..=end_index {
             for decoding_item in DecodingItem::ALL_USIZE {
                 for tile in &self.tiles[decoding_item] {
-                    if current_index >= tile.input.samples.len() {
-                        return AvifError::no_images_remaining();
-                    }
-                    let sample = &tile.input.samples[current_index];
-                    let sample_extent = if sample.item_id != 0 {
-                        let item = self.items.get(&sample.item_id).unwrap();
-                        item.max_extent(sample)?
-                    } else {
-                        Extent {
-                            offset: sample.offset,
-                            size: sample.size,
-                        }
-                    };
-                    extent.merge(&sample_extent)?;
+                    let sample = tile
+                        .input
+                        .samples
+                        .get(current_index)
+                        .ok_or(AvifError::NoImagesRemaining)?;
+                    extent.merge(&self.sample_max_extent(sample)?)?;
                 }
             }
         }
