@@ -2722,6 +2722,19 @@ fn test_conformance_thumbnails() {
         Err(AvifError::NoImagesRemaining)
     ));
 
+    let extent0 = decoder.nth_image_max_extent(0).expect("extent0 failed");
+    assert_eq!(extent0.offset, 9393);
+    assert_eq!(extent0.size, 1409);
+
+    let extent1 = decoder.nth_image_max_extent(1).expect("extent1 failed");
+    assert_eq!(extent1.offset, 564);
+    assert_eq!(extent1.size, 1211);
+
+    assert!(matches!(
+        decoder.nth_image_max_extent(2),
+        Err(AvifError::NoImagesRemaining)
+    ));
+
     let image = decoder.image().expect("image was none");
     assert_eq!(image.width, 320);
     assert_eq!(image.height, 180);

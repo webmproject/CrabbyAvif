@@ -2660,11 +2660,51 @@ impl Decoder {
         if !self.parsing_complete() {
             return AvifError::no_content();
         }
-        if self.source == Source::Thumbnail {
-            // TODO: b/568840641 - Support nth_image_max_extent for thumbnails.
-            return AvifError::not_implemented();
-        }
         let mut extent = Extent::default();
+        if self.source == Source::Thumbnail && self.thumbnail_item_ids.len() > 1 {
+            if index as usize >= self.thumbnail_item_ids.len() {
+                return AvifError::no_images_remaining();
+            }
+            let color_item_id = self.thumbnail_item_ids[index as usize];
+            let color_item = self
+                .items
+                .get(&color_item_id)
+                .ok_or_else(|| AvifError::BmffParseFailed("missing color item".into()))?;
+            let mut item_ids: Vec<u32> = Vec::new();
+            if color_item.source_item_ids.is_empty() {
+                item_ids.try_push(color_item_id)?;
+            } else {
+                item_ids.try_extend_from_slice(&color_item.source_item_ids)?;
+            }
+            if let Some(alpha_item) = self.items.values().find(|item| {
+                !item.should_skip()
+                    && item.aux_for_id.contains(&color_item_id)
+                    && item.is_auxiliary_alpha()
+            }) {
+                if alpha_item.source_item_ids.is_empty() {
+                    item_ids.try_push(alpha_item.id)?;
+                } else {
+                    item_ids.try_extend_from_slice(&alpha_item.source_item_ids)?;
+                }
+            }
+            for item_id in item_ids {
+                let item = self
+                    .items
+                    .get(&item_id)
+                    .ok_or_else(|| AvifError::BmffParseFailed("missing item".into()))?;
+                let base_item_offset =
+                    if item.extents.len() == 1 { item.extents[0].offset } else { 0 };
+                let sample = DecodeSample {
+                    item_id,
+                    offset: base_item_offset,
+                    size: item.size,
+                    spatial_id: 0xff,
+                    sync: true,
+                };
+                extent.merge(&item.max_extent(&sample)?)?;
+            }
+            return Ok(extent);
+        }
         let start_index = self.nearest_keyframe(index) as usize;
         let end_index = index as usize;
         for current_index in start_index..=end_index {

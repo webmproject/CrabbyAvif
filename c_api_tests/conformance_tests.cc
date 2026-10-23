@@ -2700,6 +2700,20 @@ TEST(ThumbnailConformanceTest, ValidateDecode) {
   EXPECT_EQ(avifDecoderNthImageProperties(decoder.get(), 2, prop1.get()),
             AVIF_RESULT_NO_IMAGES_REMAINING);
 
+  avifExtent extent{};
+  ASSERT_EQ(avifDecoderNthImageMaxExtent(decoder.get(), 0, &extent),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(extent.offset, 9393u);
+  EXPECT_EQ(extent.size, 1409u);
+
+  ASSERT_EQ(avifDecoderNthImageMaxExtent(decoder.get(), 1, &extent),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(extent.offset, 564u);
+  EXPECT_EQ(extent.size, 1211u);
+
+  EXPECT_EQ(avifDecoderNthImageMaxExtent(decoder.get(), 2, &extent),
+            AVIF_RESULT_NO_IMAGES_REMAINING);
+
   ASSERT_NE(decoder->image, nullptr);
   EXPECT_EQ(decoder->image->width, 320u);
   EXPECT_EQ(decoder->image->height, 180u);
