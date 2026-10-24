@@ -304,57 +304,69 @@ impl Image {
             .slice16_mut(start, plane_data.width)
     }
 
+    // Returns a view of the region of self described by `rect`. The returned image has the same
+    // properties as self and points to the pixel values of self (no pixel data is copied). Exif,
+    // XMP and ICC data are not copied. `rect` must be a valid rectangle within the bounds of self,
+    // with x and y aligned to the chroma subsampling of the image.
+    //
+    // The returned image must not outlive self and the pixel buffers of self must not be
+    // reallocated or freed while the view is alive.
+    //
+    // This function may not be used in all configurations.
+    #[allow(dead_code)]
+    pub(crate) fn view(&self, rect: &CropRect) -> AvifResult<Image> {
+        if !rect.is_valid(self.width, self.height, self.yuv_format) {
+            return AvifError::invalid_argument();
+        }
+        let mut image = self.shallow_clone();
+        image.width = rect.width;
+        image.height = rect.height;
+        for plane in ALL_PLANES {
+            if !self.has_plane(plane) {
+                continue;
+            }
+            let (x, y) = if plane == Plane::Y || plane == Plane::A {
+                (usize_from_u32(rect.x)?, rect.y)
+            } else {
+                (
+                    usize_from_u32(image.yuv_format.apply_chroma_shift_x(rect.x))?,
+                    image.yuv_format.apply_chroma_shift_y(rect.y),
+                )
+            };
+            let ptr = if image.depth == 8 {
+                let row = self.row(plane, y)?;
+                // SAFETY: rect is a valid rectangle that is guaranteed to be within the image
+                // bounds. So this pointer is pointing to a valid buffer.
+                unsafe { row.as_ptr().add(x) as *mut u8 }
+            } else {
+                let row = self.row16(plane, y)?;
+                // SAFETY: rect is a valid rectangle that is guaranteed to be within the image
+                // bounds. So this pointer is pointing to a valid buffer.
+                unsafe { row.as_ptr().add(x) as *mut u8 }
+            };
+            image.planes[plane.as_usize()] = Some(Pixels::from_raw_pointer(
+                ptr,
+                image.depth as _,
+                u32_from_usize(image.height(plane))?,
+                self.row_bytes[plane.as_usize()],
+            )?);
+            image.row_bytes[plane.as_usize()] = self.row_bytes[plane.as_usize()];
+        }
+        Ok(image)
+    }
+
     // Returns a view with the same image properties as self and pointing to
     // the pixel values of self. Copies all Exif, XMP and ICC data if any.
     #[cfg(feature = "cli")]
     pub fn cropped_image(&self) -> AvifResult<Image> {
         match self.clap {
             Some(clap) => {
-                match CropRect::create_from(&clap, self.width, self.height, self.yuv_format) {
-                    Ok(rect) => {
-                        let mut image = self.shallow_clone();
-                        image.width = rect.width;
-                        image.height = rect.height;
-                        for plane in ALL_PLANES {
-                            if self.planes[plane.as_usize()].is_none() {
-                                continue;
-                            }
-                            let (x, y) = if plane == Plane::Y || plane == Plane::A {
-                                (usize_from_u32(rect.x)?, rect.y)
-                            } else {
-                                (
-                                    usize_from_u32(image.yuv_format.apply_chroma_shift_x(rect.x))?,
-                                    image.yuv_format.apply_chroma_shift_y(rect.y),
-                                )
-                            };
-                            let ptr = if image.depth == 8 {
-                                let row = self.row(plane, y)?;
-                                // SAFETY: rect is a valid rectangle that is guaranteed to be
-                                // within the image bounds. So this pointer is pointing to a valid
-                                // buffer.
-                                unsafe { row.as_ptr().add(x) as *mut u8 }
-                            } else {
-                                let row = self.row16(plane, y)?;
-                                // SAFETY: rect is a valid rectangle that is guaranteed to be
-                                // within the image bounds. So this pointer is pointing to a valid
-                                // buffer.
-                                unsafe { row.as_ptr().add(x) as *mut u8 }
-                            };
-                            image.planes[plane.as_usize()] = Some(Pixels::from_raw_pointer(
-                                ptr,
-                                image.depth as _,
-                                u32_from_usize(image.height(plane))?,
-                                self.row_bytes[plane.as_usize()],
-                            )?);
-                            image.row_bytes[plane.as_usize()] = self.row_bytes[plane.as_usize()];
-                        }
-                        image.exif = self.exif.try_clone()?;
-                        image.xmp = self.xmp.try_clone()?;
-                        image.icc = self.icc.try_clone()?;
-                        Ok(image)
-                    }
-                    Err(e) => Err(e),
-                }
+                let rect = CropRect::create_from(&clap, self.width, self.height, self.yuv_format)?;
+                let mut image = self.view(&rect)?;
+                image.exif = self.exif.try_clone()?;
+                image.xmp = self.xmp.try_clone()?;
+                image.icc = self.icc.try_clone()?;
+                Ok(image)
             }
             None => Err(AvifError::InvalidArgument),
         }

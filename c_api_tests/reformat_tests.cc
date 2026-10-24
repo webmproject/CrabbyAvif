@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <tuple>
 #include <vector>
@@ -914,6 +915,122 @@ TEST(RGBToYUVTest, 8BitGrayRoundTripWithLift) {
     EXPECT_EQ(gray_plane[3], gray[3]);
     avifRGBImageFreePixels(&rgb_final);
   }
+}
+
+bool AreRgbImagesEqual(avifRGBImage& rgb1, avifRGBImage& rgb2) {
+  if (rgb1.width != rgb2.width || rgb1.height != rgb2.height ||
+      rgb1.depth != rgb2.depth || rgb1.format != rgb2.format) {
+    return false;
+  }
+  const uint32_t row_width = rgb1.width * avifRGBImagePixelSize(&rgb1);
+  for (uint32_t y = 0; y < rgb1.height; ++y) {
+    if (memcmp(rgb1.pixels + y * rgb1.rowBytes, rgb2.pixels + y * rgb2.rowBytes,
+               row_width) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Converts YUV pixels to RGB using one thread and multiple threads and checks
+// whether the results of both are identical.
+class YUVToRGBThreadingTest
+    : public testing::TestWithParam<std::tuple<
+          /*rgb_depth=*/int, /*yuv_depth=*/int,
+          /*width=*/int, /*height=*/int, avifRGBFormat, avifPixelFormat,
+          /*threads=*/int, avifChromaUpsampling, /*has_alpha=*/bool>> {};
+
+TEST_P(YUVToRGBThreadingTest, TestIdentical) {
+  const int rgb_depth = std::get<0>(GetParam());
+  const int yuv_depth = std::get<1>(GetParam());
+  const int width = std::get<2>(GetParam());
+  const int height = std::get<3>(GetParam());
+  const avifRGBFormat rgb_format = std::get<4>(GetParam());
+  const avifPixelFormat yuv_format = std::get<5>(GetParam());
+  const int max_threads = std::get<6>(GetParam());
+  const avifChromaUpsampling chroma_upsampling = std::get<7>(GetParam());
+  const bool has_alpha = std::get<8>(GetParam());
+
+  if (rgb_depth > 8 && rgb_format == AVIF_RGB_FORMAT_RGB565) {
+    return;
+  }
+
+  ImagePtr yuv(avifImageCreate(width, height, yuv_depth, yuv_format));
+  ASSERT_NE(yuv, nullptr);
+  yuv->matrixCoefficients = AVIF_MATRIX_COEFFICIENTS_BT601;
+  yuv->yuvRange = AVIF_RANGE_FULL;
+
+  // Fill YUVA planes with random values.
+  srand(0xAABBCCDD);
+  const int yuv_max = (1 << yuv_depth);
+  ASSERT_EQ(avifImageAllocatePlanes(
+                yuv.get(), has_alpha ? AVIF_PLANES_ALL : AVIF_PLANES_YUV),
+            AVIF_RESULT_OK);
+  for (int plane = AVIF_CHAN_Y; plane <= AVIF_CHAN_A; ++plane) {
+    const uint32_t plane_width = avifImagePlaneWidth(yuv.get(), plane);
+    if (plane_width == 0) continue;
+    const uint32_t plane_height = avifImagePlaneHeight(yuv.get(), plane);
+    const uint32_t row_bytes = avifImagePlaneRowBytes(yuv.get(), plane);
+    uint8_t* row = avifImagePlane(yuv.get(), plane);
+    for (uint32_t y = 0; y < plane_height; ++y, row += row_bytes) {
+      for (uint32_t x = 0; x < plane_width; ++x) {
+        if (yuv_depth == 8) {
+          row[x] = static_cast<uint8_t>(rand() % yuv_max);
+        } else {
+          reinterpret_cast<uint16_t*>(row)[x] =
+              static_cast<uint16_t>(rand() % yuv_max);
+        }
+      }
+    }
+  }
+
+  // Convert to RGB with 1 thread.
+  AvifRgbImage rgb(yuv.get(), rgb_depth, rgb_format);
+  rgb.chromaUpsampling = chroma_upsampling;
+  ASSERT_EQ(avifImageYUVToRGB(yuv.get(), &rgb), AVIF_RESULT_OK);
+
+  // Convert to RGB with multiple threads.
+  AvifRgbImage rgb_threaded(yuv.get(), rgb_depth, rgb_format);
+  rgb_threaded.chromaUpsampling = chroma_upsampling;
+  rgb_threaded.maxThreads = max_threads;
+  ASSERT_EQ(avifImageYUVToRGB(yuv.get(), &rgb_threaded), AVIF_RESULT_OK);
+
+  EXPECT_TRUE(AreRgbImagesEqual(rgb, rgb_threaded));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    YUVToRGBThreadingTestInstance, YUVToRGBThreadingTest,
+    Combine(/*rgb_depth=*/Values(8, 16),
+            /*yuv_depth=*/Values(8, 10),
+            /*width=*/Values(1, 2, 127, 200),
+            /*height=*/Values(1, 2, 127, 200),
+            Values(AVIF_RGB_FORMAT_RGB, AVIF_RGB_FORMAT_RGBA,
+                   AVIF_RGB_FORMAT_RGB565),
+            Values(AVIF_PIXEL_FORMAT_YUV444, AVIF_PIXEL_FORMAT_YUV422,
+                   AVIF_PIXEL_FORMAT_YUV420, AVIF_PIXEL_FORMAT_YUV400),
+            // Test an odd and even number for threads. Not adding all possible
+            // thread values to keep the number of test instances low.
+            /*threads=*/Values(2, 7),
+            Values(AVIF_CHROMA_UPSAMPLING_AUTOMATIC,
+                   AVIF_CHROMA_UPSAMPLING_FASTEST,
+                   AVIF_CHROMA_UPSAMPLING_NEAREST,
+                   AVIF_CHROMA_UPSAMPLING_BILINEAR),
+            /*has_alpha=*/Bool()));
+
+TEST(YUVToRGBThreadingTest, NegativeMaxThreads) {
+  ImagePtr yuv(avifImageCreate(16, 16, 8, AVIF_PIXEL_FORMAT_YUV420));
+  ASSERT_NE(yuv, nullptr);
+  ASSERT_EQ(avifImageAllocatePlanes(yuv.get(), AVIF_PLANES_YUV),
+            AVIF_RESULT_OK);
+  AvifRgbImage rgb(yuv.get(), 8, AVIF_RGB_FORMAT_RGBA);
+  rgb.maxThreads = -1;
+  EXPECT_EQ(avifImageYUVToRGB(yuv.get(), &rgb), AVIF_RESULT_REFORMAT_FAILED);
+  // Zero is allowed so that clients can zero-initialize the struct.
+  rgb.maxThreads = 0;
+  EXPECT_EQ(avifImageYUVToRGB(yuv.get(), &rgb), AVIF_RESULT_OK);
+  // Values larger than the internal maximum are clamped.
+  rgb.maxThreads = 1000;
+  EXPECT_EQ(avifImageYUVToRGB(yuv.get(), &rgb), AVIF_RESULT_OK);
 }
 
 }  // namespace
