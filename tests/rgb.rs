@@ -733,3 +733,92 @@ fn pixel_slices() -> AvifResult<()> {
 
     Ok(())
 }
+
+// Converts YUV pixels to RGB using one thread and multiple threads and checks whether the results
+// of both are identical.
+#[test_matrix(
+    [8, 16],
+    [8, 10],
+    [1, 2, 127, 200],
+    [1, 2, 127, 200],
+    [rgb::Format::Rgb, rgb::Format::Rgba, rgb::Format::Rgb565],
+    [PixelFormat::Yuv444, PixelFormat::Yuv422, PixelFormat::Yuv420, PixelFormat::Yuv400],
+    [2, 7],
+    [
+        rgb::ChromaUpsampling::Automatic,
+        rgb::ChromaUpsampling::Fastest,
+        rgb::ChromaUpsampling::Nearest,
+        rgb::ChromaUpsampling::Bilinear
+    ],
+    [false, true]
+)]
+#[allow(clippy::too_many_arguments)]
+fn yuv_to_rgb_threading(
+    rgb_depth: u8,
+    yuv_depth: u8,
+    width: u32,
+    height: u32,
+    rgb_format: rgb::Format,
+    yuv_format: PixelFormat,
+    max_threads: i32,
+    chroma_upsampling: rgb::ChromaUpsampling,
+    has_alpha: bool,
+) -> AvifResult<()> {
+    if rgb_depth > 8 && rgb_format == rgb::Format::Rgb565 {
+        return Ok(());
+    }
+    let mut image = generate_gradient_image(
+        width,
+        height,
+        yuv_depth,
+        yuv_format,
+        YuvRange::Full,
+        has_alpha,
+    )?;
+    image.matrix_coefficients = MatrixCoefficients::Bt601;
+
+    // Convert to RGB with 1 thread.
+    let mut rgb = rgb::Image::create_from_yuv(&image);
+    rgb.depth = rgb_depth;
+    rgb.format = rgb_format;
+    rgb.chroma_upsampling = chroma_upsampling;
+    rgb.allocate()?;
+    rgb.convert_from_yuv(&image)?;
+
+    // Convert to RGB with multiple threads.
+    let mut rgb_threaded = rgb::Image::create_from_yuv(&image);
+    rgb_threaded.depth = rgb_depth;
+    rgb_threaded.format = rgb_format;
+    rgb_threaded.chroma_upsampling = chroma_upsampling;
+    rgb_threaded.max_threads = max_threads;
+    rgb_threaded.allocate()?;
+    rgb_threaded.convert_from_yuv(&image)?;
+
+    for y in 0..height {
+        if rgb_depth == 8 {
+            assert_eq!(rgb.row(y)?, rgb_threaded.row(y)?);
+        } else {
+            assert_eq!(rgb.row16(y)?, rgb_threaded.row16(y)?);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn yuv_to_rgb_negative_max_threads() -> AvifResult<()> {
+    let image = generate_gradient_image(16, 16, 8, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    let mut rgb = rgb::Image::create_from_yuv(&image);
+    rgb.allocate()?;
+    rgb.max_threads = -1;
+    assert!(matches!(
+        rgb.convert_from_yuv(&image),
+        Err(AvifError::ReformatFailed)
+    ));
+    // Zero is allowed so that clients can zero-initialize the struct.
+    rgb.max_threads = 0;
+    assert!(rgb.convert_from_yuv(&image).is_ok());
+    // Values larger than the internal maximum are clamped.
+    rgb.max_threads = 1000;
+    assert!(rgb.convert_from_yuv(&image).is_ok());
+    Ok(())
+}
