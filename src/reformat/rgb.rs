@@ -17,10 +17,12 @@ use super::libyuv;
 use super::rgb_impl;
 use super::sharpyuv;
 
+use crate::checked_add;
 use crate::checked_mul;
 use crate::image::Plane;
 use crate::image::YuvRange;
 use crate::internal_utils::*;
+use crate::utils::clap::CropRect;
 use crate::utils::pixels::*;
 use crate::AvifError;
 use crate::AvifResult;
@@ -185,6 +187,30 @@ impl From<&crate::image::Image> for Mode {
                 Mode::YuvCoefficients(coeffs[0], coeffs[1], coeffs[2])
             }
         }
+    }
+}
+
+// Maximum number of threads used for the YUV to RGB conversion, regardless of the value of
+// `Image::max_threads`. Matches libavif.
+const MAX_YUV_TO_RGB_THREADS: i32 = 8;
+
+// A horizontal strip of a YUV image and of the RGB image it is converted into. Used to split the
+// YUV to RGB conversion across multiple threads.
+struct Strip {
+    image: crate::image::Image,
+    rgb: Image,
+}
+
+// SAFETY: The views held by a Strip are only ever created by `Image::convert_from_yuv_threaded`,
+// which guarantees that: the YUV view is only read from (and it is fine for multiple threads to
+// read from the same source image concurrently), the RGB view of each strip points to a set of
+// rows that is disjoint from the rows of every other strip, and the parent images outlive all of
+// the strips (the threads are scoped). So it is safe to send a Strip to another thread.
+unsafe impl Send for Strip {}
+
+impl Strip {
+    fn convert(&mut self) -> AvifResult<()> {
+        self.rgb.convert_from_yuv_impl(&self.image)
     }
 }
 
@@ -365,7 +391,125 @@ impl Image {
         Ok(())
     }
 
+    // Returns a view of the rows [start_row, start_row + height) of self. The returned image has
+    // the same properties as self and points to the pixel values of self (no pixel data is
+    // copied).
+    //
+    // The returned image must not outlive self and the pixel buffer of self must not be
+    // reallocated or freed while the view is alive.
+    fn row_range_view(&mut self, start_row: u32, height: u32) -> AvifResult<Image> {
+        if height == 0 || checked_add!(start_row, height)? > self.height {
+            return AvifError::invalid_argument();
+        }
+        let ptr = if self.depth == 8 {
+            self.row_mut(start_row)?.as_mut_ptr()
+        } else {
+            self.row16_mut(start_row)?.as_mut_ptr() as *mut u8
+        };
+        Ok(Image {
+            width: self.width,
+            height,
+            depth: self.depth,
+            format: self.format,
+            chroma_upsampling: self.chroma_upsampling,
+            chroma_downsampling: self.chroma_downsampling,
+            premultiply_alpha: self.premultiply_alpha,
+            is_float: self.is_float,
+            max_threads: 1,
+            pixels: Some(Pixels::from_raw_pointer(
+                ptr,
+                self.depth as u32,
+                height,
+                self.row_bytes,
+            )?),
+            row_bytes: self.row_bytes,
+        })
+    }
+
     pub fn convert_from_yuv(&mut self, image: &crate::image::Image) -> AvifResult<()> {
+        // It is okay for max_threads to be equal to zero in order to allow clients to zero
+        // initialize the struct.
+        if self.max_threads < 0 {
+            return AvifError::reformat_failed();
+        }
+        // When the chroma planes are vertically subsampled and the chroma upsampling could be
+        // bilinear, there is a dependency across the horizontal borders of each job. So
+        // multi-threading is disallowed in that case.
+        let jobs = if image.yuv_format.chroma_shift_y() != 0
+            && matches!(
+                self.chroma_upsampling,
+                ChromaUpsampling::Automatic
+                    | ChromaUpsampling::BestQuality
+                    | ChromaUpsampling::Bilinear
+            ) {
+            1
+        } else {
+            // In practice, we rarely need more than 8 threads for YUV to RGB conversion.
+            self.max_threads.clamp(1, MAX_YUV_TO_RGB_THREADS) as u32
+        };
+        // Each job needs at least 2 Y rows (to account for potential chroma subsampling).
+        if jobs == 1 || image.height / 2 < jobs {
+            return self.convert_from_yuv_impl(image);
+        }
+        self.convert_from_yuv_threaded(image, jobs)
+    }
+
+    // Splits the images into horizontal strips (one per job) and converts them in parallel. The
+    // first strip is converted on the calling thread and the rest are converted in newly spawned
+    // threads.
+    fn convert_from_yuv_threaded(
+        &mut self,
+        image: &crate::image::Image,
+        jobs: u32,
+    ) -> AvifResult<()> {
+        let rows = image.height / jobs;
+        let (jobs, rows_per_job) = if rows % 2 == 1 {
+            // Make sure that each strip starts at an even row so that the chroma planes of
+            // vertically subsampled images are split cleanly.
+            (image.height.div_ceil(rows + 1), rows + 1)
+        } else {
+            (jobs, rows)
+        };
+        let mut strips: Vec<Strip> = create_vec_exact(usize_from_u32(jobs)?)?;
+        let mut start_row = 0;
+        for i in 0..jobs {
+            let height = if i == jobs - 1 { image.height - start_row } else { rows_per_job };
+            let rect = CropRect {
+                x: 0,
+                y: start_row,
+                width: image.width,
+                height,
+            };
+            strips.try_push(Strip {
+                image: image.view(&rect)?,
+                rgb: self.row_range_view(start_row, height)?,
+            })?;
+            start_row += height;
+        }
+        let (first, rest) = strips.split_first_mut().ok_or(AvifError::ReformatFailed)?;
+        let mut results: Vec<AvifResult<()>> = create_vec_exact(usize_from_u32(jobs)?)?;
+        std::thread::scope(|scope| -> AvifResult<()> {
+            let mut handles = create_vec_exact(rest.len())?;
+            for strip in rest.iter_mut() {
+                let handle = std::thread::Builder::new()
+                    .spawn_scoped(scope, move || strip.convert())
+                    .map_err(|_| AvifError::ReformatFailed)?;
+                handles.try_push(handle)?;
+            }
+            results.try_push(first.convert())?;
+            for handle in handles {
+                // join() only fails if the thread panicked.
+                results.try_push(handle.join().unwrap_or(AvifError::reformat_failed()))?;
+            }
+            Ok(())
+        })?;
+        for result in results {
+            result?;
+        }
+        Ok(())
+    }
+
+    fn convert_from_yuv_impl(&mut self, image: &crate::image::Image) -> AvifResult<()> {
         if !image.has_plane(Plane::Y) || !image.depth_valid() || !self.depth_valid() {
             return AvifError::reformat_failed();
         }
