@@ -9,7 +9,7 @@ edition = "2021"
 link-cplusplus = "1"
 
 [build-dependencies]
-bindgen = "0.69.2"
+bindgen = "0.72.1"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(google3)'] }

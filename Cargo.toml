@@ -71,7 +71,7 @@ tempfile = "3.8.1"
 rand = "0.10.1"
 
 [build-dependencies]
-bindgen = "0.69.1"
+bindgen = "0.72.1"
 cbindgen = "0.26.0"
 
 [features]
