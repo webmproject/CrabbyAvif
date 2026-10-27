@@ -51,7 +51,7 @@ macro_rules! alpha_index_in_rgba_1010102 {
 
 impl rgb::Image {
     pub(crate) fn premultiply_alpha(&mut self) -> AvifResult<()> {
-        if self.pixels_mut().is_null() || self.row_bytes == 0 {
+        if !self.has_valid_pixels() {
             return AvifError::reformat_failed();
         }
         if !self.has_alpha() {
@@ -125,7 +125,7 @@ impl rgb::Image {
     }
 
     pub(crate) fn unpremultiply_alpha(&mut self) -> AvifResult<()> {
-        if self.pixels_mut().is_null() || self.row_bytes == 0 {
+        if !self.has_valid_pixels() {
             return AvifError::reformat_failed();
         }
         if !self.has_alpha() {
@@ -205,6 +205,9 @@ impl rgb::Image {
         if self.format == rgb::Format::Rgb565 {
             return AvifError::not_implemented();
         }
+        if !self.has_valid_pixels() {
+            return AvifError::reformat_failed();
+        }
         let alpha_offset = self.format.alpha_offset();
         let width = usize_from_u32(self.width)?;
         if self.depth > 8 {
@@ -238,6 +241,7 @@ impl rgb::Image {
             || !image.has_alpha()
             || self.width != image.width
             || self.height != image.height
+            || !self.has_valid_pixels()
         {
             return AvifError::invalid_argument();
         }
@@ -396,6 +400,7 @@ impl image::Image {
             || self.width != rgb.width
             || self.height != rgb.height
             || rgb.format == rgb::Format::Rgba1010102
+            || !rgb.has_valid_pixels()
         {
             return AvifError::invalid_argument();
         }

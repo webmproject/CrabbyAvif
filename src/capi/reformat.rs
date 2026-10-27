@@ -91,6 +91,9 @@ impl From<&avifRGBImage> for rgb::Image {
             (rgb::Format::AGray, true) => rgb::Format::Gray,
             (rgb::Format::AGray, false) => rgb::Format::AGray,
         };
+        if !dst.has_valid_pixels() {
+            return dst;
+        }
         dst.shuffle_channels_to(format).unwrap()
     }
 }
