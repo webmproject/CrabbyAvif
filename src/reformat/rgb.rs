@@ -287,31 +287,35 @@ impl Image {
     }
 
     pub fn row(&self, row: u32) -> AvifResult<&[u8]> {
-        self.pixels
-            .as_ref()
-            .ok_or(AvifError::NoContent)?
-            .slice(checked_mul!(row, self.row_bytes)?, self.row_bytes)
+        self.pixels.as_ref().ok_or(AvifError::NoContent)?.slice(
+            checked_mul!(row, self.row_bytes)?,
+            checked_mul!(self.width, self.pixel_size())?,
+        )
     }
 
     pub fn row_mut(&mut self, row: u32) -> AvifResult<&mut [u8]> {
+        let width_bytes = checked_mul!(self.width, self.pixel_size())?;
+        let offset = checked_mul!(row, self.row_bytes)?;
         self.pixels
             .as_mut()
             .ok_or(AvifError::NoContent)?
-            .slice_mut(checked_mul!(row, self.row_bytes)?, self.row_bytes)
+            .slice_mut(offset, width_bytes)
     }
 
     pub fn row16(&self, row: u32) -> AvifResult<&[u16]> {
-        self.pixels
-            .as_ref()
-            .ok_or(AvifError::NoContent)?
-            .slice16(checked_mul!(row, self.row_bytes / 2)?, self.row_bytes / 2)
+        self.pixels.as_ref().ok_or(AvifError::NoContent)?.slice16(
+            checked_mul!(row, self.row_bytes / 2)?,
+            checked_mul!(self.width, self.pixel_size() / 2)?,
+        )
     }
 
     pub fn row16_mut(&mut self, row: u32) -> AvifResult<&mut [u16]> {
+        let width_u16 = checked_mul!(self.width, self.pixel_size() / 2)?;
+        let offset = checked_mul!(row, self.row_bytes / 2)?;
         self.pixels
             .as_mut()
             .ok_or(AvifError::NoContent)?
-            .slice16_mut(checked_mul!(row, self.row_bytes / 2)?, self.row_bytes / 2)
+            .slice16_mut(offset, width_u16)
     }
 
     pub fn allocate(&mut self) -> AvifResult<()> {
