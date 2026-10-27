@@ -403,7 +403,6 @@ impl Image {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::pixels::*;
     use test_case::test_matrix;
 
     #[test_matrix([PixelFormat::Yuv444, PixelFormat::Yuv422, PixelFormat::Yuv420, PixelFormat::Yuv400], [false, true], [false, true])]
@@ -427,13 +426,11 @@ mod tests {
             30, 40,
         ];
         for plane in planes {
-            yuv.planes[plane.as_usize()] = Some(if is_pointer_input {
-                Pixels::Pointer(unsafe {
-                    PointerSlice::create(values.as_mut_ptr(), values.len()).unwrap()
-                })
+            yuv.planes[plane.as_usize()] = if is_pointer_input {
+                Pixels::from_raw_pointer(values.as_mut_ptr(), 8, 2, 2).ok()
             } else {
-                Pixels::Buffer(values.try_to_vec().unwrap())
-            });
+                Some(Pixels::Buffer(values.to_vec()))
+            };
             yuv.row_bytes[plane.as_usize()] = 2;
         }
         let categories: &[Category] =

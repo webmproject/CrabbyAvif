@@ -2136,20 +2136,11 @@ impl Decoder {
             };
             for plane in planes {
                 let plane = plane.as_usize();
-                if let Some(src_plane) = &tile.image.planes[plane] {
+                if let Some(src_plane) = tile.image.planes[plane].take() {
                     dst_image.planes[plane] = match src_plane {
-                        Pixels::Pointer(p) => Some(Pixels::Pointer(p.shallow_clone())),
-                        Pixels::Pointer16(p) => Some(Pixels::Pointer16(p.shallow_clone())),
                         Pixels::Buffer(b) if b.is_empty() => None,
-                        // SAFETY: Bounded lifetime and read-only access.
-                        Pixels::Buffer(b) => Some(Pixels::Pointer(unsafe {
-                            PointerSlice::create(b.as_ptr() as *mut _, b.len())?
-                        })),
                         Pixels::Buffer16(b) if b.is_empty() => None,
-                        // SAFETY: Bounded lifetime and read-only access.
-                        Pixels::Buffer16(b) => Some(Pixels::Pointer16(unsafe {
-                            PointerSlice::create(b.as_ptr() as *mut _, b.len())?
-                        })),
+                        other => Some(other),
                     };
                     dst_image.row_bytes[plane] = tile.image.row_bytes[plane];
                 } else {

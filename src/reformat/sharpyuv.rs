@@ -69,31 +69,31 @@ pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResu
     let plane_u8 = image.plane_ptrs_mut();
     let plane_row_bytes = image.plane_row_bytes()?;
     let (r_ptr, g_ptr, b_ptr) = if rgb.depth == 8 {
-        let rgb_pixels = rgb.pixels();
-        if rgb_pixels.is_null() {
-            return AvifError::invalid_argument();
-        }
-        // SAFETY: Computing pointer offset with non-null pointers and positive offsets.
-        unsafe {
-            (
-                rgb_pixels.add(rgb.format.r_offset()) as *const c_void,
-                rgb_pixels.add(rgb.format.g_offset()) as *const c_void,
-                rgb_pixels.add(rgb.format.b_offset()) as *const c_void,
-            )
-        }
+        let row = rgb.row(0)?;
+        (
+            row.get(rgb.format.r_offset()..)
+                .ok_or(AvifError::ReformatFailed)?
+                .as_ptr() as *const c_void,
+            row.get(rgb.format.g_offset()..)
+                .ok_or(AvifError::ReformatFailed)?
+                .as_ptr() as *const c_void,
+            row.get(rgb.format.b_offset()..)
+                .ok_or(AvifError::ReformatFailed)?
+                .as_ptr() as *const c_void,
+        )
     } else {
-        let rgb_pixels = rgb.pixels16();
-        if rgb_pixels.is_null() {
-            return AvifError::invalid_argument();
-        }
-        // SAFETY: Computing pointer offset with non-null pointers and positive offsets.
-        unsafe {
-            (
-                rgb_pixels.add(rgb.format.r_offset()) as *const c_void,
-                rgb_pixels.add(rgb.format.g_offset()) as *const c_void,
-                rgb_pixels.add(rgb.format.b_offset()) as *const c_void,
-            )
-        }
+        let row = rgb.row16(0)?;
+        (
+            row.get(rgb.format.r_offset()..)
+                .ok_or(AvifError::ReformatFailed)?
+                .as_ptr() as *const c_void,
+            row.get(rgb.format.g_offset()..)
+                .ok_or(AvifError::ReformatFailed)?
+                .as_ptr() as *const c_void,
+            row.get(rgb.format.b_offset()..)
+                .ok_or(AvifError::ReformatFailed)?
+                .as_ptr() as *const c_void,
+        )
     };
     // SAFETY: Calling the C library conversion function. Pointers and strides are guaranteed to be
     // valid.

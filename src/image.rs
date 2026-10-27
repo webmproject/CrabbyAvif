@@ -335,14 +335,10 @@ impl Image {
             };
             let ptr = if image.depth == 8 {
                 let row = self.row(plane, y)?;
-                // SAFETY: rect is a valid rectangle that is guaranteed to be within the image
-                // bounds. So this pointer is pointing to a valid buffer.
-                unsafe { row.as_ptr().add(x) as *mut u8 }
+                row.get(x..).ok_or(AvifError::InvalidArgument)?.as_ptr() as *mut u8
             } else {
                 let row = self.row16(plane, y)?;
-                // SAFETY: rect is a valid rectangle that is guaranteed to be within the image
-                // bounds. So this pointer is pointing to a valid buffer.
-                unsafe { row.as_ptr().add(x) as *mut u8 }
+                row.get(x..).ok_or(AvifError::InvalidArgument)?.as_ptr() as *mut u8
             };
             image.planes[plane.as_usize()] = Some(Pixels::from_raw_pointer(
                 ptr,
