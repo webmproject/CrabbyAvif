@@ -22,25 +22,6 @@ use crate::*;
 
 use std::cmp::min;
 
-macro_rules! unorm_value8 {
-    ($row:expr, $index:expr, $table:expr) => {
-        // # Safety:
-        // # $table has 255 values. $row is of type u8, so the $table access is always valid.
-        // # $index is guaranteed to be within the bounds of $row[].
-        unsafe { *$table.get_unchecked(*$row.get_unchecked($index) as usize) }
-    };
-}
-
-macro_rules! unorm_value16 {
-    ($row:expr, $index:expr, $max_channel:expr, $table:expr) => {
-        // # Safety:
-        // # $table has 1024 or 4096 values depending on image depth. the clamp to $max_channel
-        //   makes the $table access always valid.
-        // # $index is guaranteed to be within the bounds of $row[].
-        unsafe { *$table.get_unchecked(min(*$row.get_unchecked($index), $max_channel) as usize) }
-    };
-}
-
 macro_rules! to_unorm8 {
     ($bias_y: expr, $range_y: expr, $v: expr) => {
         clamp_i32((0.5 + ($v * $range_y + $bias_y)).floor() as i32, 0, 255) as u8
@@ -670,6 +651,7 @@ fn unorm_lookup_tables(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 fn compute_rgb(
     y: f32,
     cb: f32,
@@ -732,6 +714,9 @@ fn yuv16_to_rgb_any(
     alpha_multiply_mode: AlphaMultiplyMode,
     fast_or_no_chroma_subsampling: bool,
 ) -> AvifResult<()> {
+    if image.width == 0 || image.height == 0 {
+        return Ok(());
+    }
     let mode: Mode = image.into();
     let (table_y, table_uv) = unorm_lookup_tables(image, mode)?;
     let table_uv = match &table_uv {
@@ -746,148 +731,182 @@ fn yuv16_to_rgb_any(
         && image.has_plane(Plane::V)
         && image.yuv_format != PixelFormat::Yuv400;
     let rgb_has_color = !rgb.format.is_gray();
+    if rgb_channel_count == 0
+        || r_offset >= rgb_channel_count
+        || (rgb_has_color && (g_offset >= rgb_channel_count || b_offset >= rgb_channel_count))
+    {
+        return AvifError::reformat_failed();
+    }
     let yuv_max_channel = image.max_channel();
+    let mask = yuv_max_channel as usize;
+    let table_y = table_y.get(..=mask).ok_or(AvifError::ReformatFailed)?;
+    let table_uv = table_uv.get(..=mask).ok_or(AvifError::ReformatFailed)?;
     let rgb_max_channel = rgb.max_channel();
     let rgb_max_channel_f = rgb.max_channel_f();
     let chroma_shift = image.yuv_format.chroma_shift_x();
-    let image_width_minus_1 = (image.width - 1) as usize;
+    let image_width = image.width as usize;
+    let image_width_minus_1 = image_width.saturating_sub(1);
+    let uv_width = if image_width > 0 {
+        ((image_width_minus_1 >> chroma_shift.0) << chroma_shift.1) + 1
+    } else {
+        0
+    };
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
-        let y_row = image.row16(Plane::Y, j)?;
-        let u_row = image.row16(Plane::U, uv_j).ok();
-        let v_row = image.row16(Plane::V, uv_j).ok();
-        let a_row = image.row16(Plane::A, j).ok();
-        let uv_adj_j = if j == 0
-            || (j == image.height - 1 && (j % 2) != 0)
-            || image.yuv_format == PixelFormat::Yuv422
-        {
-            uv_j
-        } else if (j % 2) != 0 {
-            uv_j + 1
-        } else {
-            uv_j - 1
-        };
-        let u_adj_row = image.row16(Plane::U, uv_adj_j).ok();
-        let v_adj_row = image.row16(Plane::V, uv_adj_j).ok();
-        let (dst, dst16) = if rgb.depth == 8 {
-            (
-                rgb.row_mut(j).unwrap().as_mut_ptr(),
-                std::ptr::null_mut() as _,
-            )
-        } else {
-            (
-                std::ptr::null_mut() as _,
-                rgb.row16_mut(j).unwrap().as_mut_ptr(),
-            )
-        };
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..image.width as usize {
-            let clamped_y = min(y_row[i], yuv_max_channel);
-            let y = table_y[clamped_y as usize];
-            let mut cb = 0.5;
-            let mut cr = 0.5;
+        let y_row = image
+            .row16(Plane::Y, j)?
+            .get(..image_width)
+            .ok_or(AvifError::ReformatFailed)?;
+        let (u_row, v_row, u_adj_row, v_adj_row): (&[u16], &[u16], &[u16], &[u16]) =
             if yuv_has_color {
-                let u_row = u_row.unwrap();
-                let v_row = v_row.unwrap();
-                let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
+                let u_row = image
+                    .row16(Plane::U, uv_j)?
+                    .get(..uv_width)
+                    .ok_or(AvifError::ReformatFailed)?;
+                let v_row = image
+                    .row16(Plane::V, uv_j)?
+                    .get(..uv_width)
+                    .ok_or(AvifError::ReformatFailed)?;
                 if fast_or_no_chroma_subsampling {
-                    cb = unorm_value16!(u_row, uv_i, yuv_max_channel, table_uv);
-                    cr = unorm_value16!(v_row, uv_i, yuv_max_channel, table_uv);
+                    (u_row, v_row, u_row, v_row)
                 } else {
-                    // Bilinear filtering with weights. See
-                    // https://github.com/AOMediaCodec/libavif/blob/0580334466d57fedb889d5ed7ae9574d6f66e00c/src/reformat.c#L657-L685.
-                    let uv_adj_i = if i == 0 || (i == image_width_minus_1 && (i % 2) != 0) {
-                        uv_i
-                    } else if (i % 2) != 0 {
-                        uv_i + 1
+                    let uv_adj_j = if j == 0
+                        || (j == image.height - 1 && (j % 2) != 0)
+                        || image.yuv_format == PixelFormat::Yuv422
+                    {
+                        uv_j
+                    } else if (j % 2) != 0 {
+                        uv_j + 1
                     } else {
-                        uv_i - 1
+                        uv_j - 1
                     };
-
-                    let u_adj_row = u_adj_row.unwrap();
-                    let unorm_u = [
-                        unorm_value16!(u_row, uv_i, yuv_max_channel, table_uv),
-                        unorm_value16!(u_row, uv_adj_i, yuv_max_channel, table_uv),
-                        unorm_value16!(u_adj_row, uv_i, yuv_max_channel, table_uv),
-                        unorm_value16!(u_adj_row, uv_adj_i, yuv_max_channel, table_uv),
-                    ];
-                    cb = (unorm_u[0] * (9.0 / 16.0))
-                        + (unorm_u[1] * (3.0 / 16.0))
-                        + (unorm_u[2] * (3.0 / 16.0))
-                        + (unorm_u[3] * (1.0 / 16.0));
-
-                    let v_adj_row = v_adj_row.unwrap();
-                    let unorm_v = [
-                        unorm_value16!(v_row, uv_i, yuv_max_channel, table_uv),
-                        unorm_value16!(v_row, uv_adj_i, yuv_max_channel, table_uv),
-                        unorm_value16!(v_adj_row, uv_i, yuv_max_channel, table_uv),
-                        unorm_value16!(v_adj_row, uv_adj_i, yuv_max_channel, table_uv),
-                    ];
-                    cr = (unorm_v[0] * (9.0 / 16.0))
-                        + (unorm_v[1] * (3.0 / 16.0))
-                        + (unorm_v[2] * (3.0 / 16.0))
-                        + (unorm_v[3] * (1.0 / 16.0));
+                    (
+                        u_row,
+                        v_row,
+                        image
+                            .row16(Plane::U, uv_adj_j)?
+                            .get(..uv_width)
+                            .ok_or(AvifError::ReformatFailed)?,
+                        image
+                            .row16(Plane::V, uv_adj_j)?
+                            .get(..uv_width)
+                            .ok_or(AvifError::ReformatFailed)?,
+                    )
                 }
-            }
-            let (mut rc, mut gc, mut bc) = if rgb_has_color {
-                compute_rgb(
-                    y,
-                    cb,
-                    cr,
-                    yuv_has_color,
-                    mode,
-                    clamped_y,
-                    yuv_max_channel,
-                    rgb_max_channel,
-                    rgb_max_channel_f,
-                )
             } else {
-                (clamp_f32(y, 0.0, 1.0), 0.0, 0.0)
+                (&[], &[], &[], &[])
             };
-            if alpha_multiply_mode != AlphaMultiplyMode::NoOp {
-                let unorm_a = min(a_row.unwrap()[i], yuv_max_channel);
-                let ac = clamp_f32((unorm_a as f32) / (yuv_max_channel as f32), 0.0, 1.0);
-                if ac == 0.0 {
-                    rc = 0.0;
-                    gc = 0.0;
-                    bc = 0.0;
-                } else if ac < 1.0 {
-                    match alpha_multiply_mode {
-                        AlphaMultiplyMode::Multiply => {
-                            rc *= ac;
-                            gc *= ac;
-                            bc *= ac;
+        let a_row: &[u16] = if alpha_multiply_mode != AlphaMultiplyMode::NoOp {
+            image
+                .row16(Plane::A, j)?
+                .get(..image_width)
+                .ok_or(AvifError::ReformatFailed)?
+        } else {
+            &[]
+        };
+        macro_rules! convert_row {
+            ($dst_row:expr, $as_ty:ty) => {{
+                let dst = $dst_row
+                    .get_mut(..image_width * rgb_channel_count)
+                    .ok_or(AvifError::ReformatFailed)?;
+                for (i, (&y_sample, dst_pixel)) in y_row
+                    .iter()
+                    .zip(dst.chunks_exact_mut(rgb_channel_count))
+                    .enumerate()
+                {
+                    let clamped_y = min(y_sample, yuv_max_channel);
+                    let y = table_y[min(y_sample as usize, mask)];
+                    let mut cb = 0.5;
+                    let mut cr = 0.5;
+                    if yuv_has_color {
+                        let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
+                        if fast_or_no_chroma_subsampling {
+                            cb = table_uv[min(u_row[uv_i] as usize, mask)];
+                            cr = table_uv[min(v_row[uv_i] as usize, mask)];
+                        } else {
+                            // Bilinear filtering with weights. See
+                            // https://github.com/AOMediaCodec/libavif/blob/0580334466d57fedb889d5ed7ae9574d6f66e00c/src/reformat.c#L657-L685.
+                            let uv_adj_i = if i == 0 || (i == image_width_minus_1 && (i % 2) != 0) {
+                                uv_i
+                            } else if (i % 2) != 0 {
+                                uv_i + 1
+                            } else {
+                                uv_i - 1
+                            };
+
+                            let unorm_u = [
+                                table_uv[min(u_row[uv_i] as usize, mask)],
+                                table_uv[min(u_row[uv_adj_i] as usize, mask)],
+                                table_uv[min(u_adj_row[uv_i] as usize, mask)],
+                                table_uv[min(u_adj_row[uv_adj_i] as usize, mask)],
+                            ];
+                            cb = (unorm_u[0] * (9.0 / 16.0))
+                                + (unorm_u[1] * (3.0 / 16.0))
+                                + (unorm_u[2] * (3.0 / 16.0))
+                                + (unorm_u[3] * (1.0 / 16.0));
+
+                            let unorm_v = [
+                                table_uv[min(v_row[uv_i] as usize, mask)],
+                                table_uv[min(v_row[uv_adj_i] as usize, mask)],
+                                table_uv[min(v_adj_row[uv_i] as usize, mask)],
+                                table_uv[min(v_adj_row[uv_adj_i] as usize, mask)],
+                            ];
+                            cr = (unorm_v[0] * (9.0 / 16.0))
+                                + (unorm_v[1] * (3.0 / 16.0))
+                                + (unorm_v[2] * (3.0 / 16.0))
+                                + (unorm_v[3] * (1.0 / 16.0));
                         }
-                        AlphaMultiplyMode::UnMultiply => {
-                            rc = f32::min(rc / ac, 1.0);
-                            gc = f32::min(gc / ac, 1.0);
-                            bc = f32::min(bc / ac, 1.0);
+                    }
+                    let (mut rc, mut gc, mut bc) = if rgb_has_color {
+                        compute_rgb(
+                            y,
+                            cb,
+                            cr,
+                            yuv_has_color,
+                            mode,
+                            clamped_y,
+                            yuv_max_channel,
+                            rgb_max_channel,
+                            rgb_max_channel_f,
+                        )
+                    } else {
+                        (clamp_f32(y, 0.0, 1.0), 0.0, 0.0)
+                    };
+                    if alpha_multiply_mode != AlphaMultiplyMode::NoOp {
+                        let unorm_a = min(a_row[i], yuv_max_channel);
+                        let ac = clamp_f32((unorm_a as f32) / (yuv_max_channel as f32), 0.0, 1.0);
+                        if ac == 0.0 {
+                            rc = 0.0;
+                            gc = 0.0;
+                            bc = 0.0;
+                        } else if ac < 1.0 {
+                            match alpha_multiply_mode {
+                                AlphaMultiplyMode::Multiply => {
+                                    rc *= ac;
+                                    gc *= ac;
+                                    bc *= ac;
+                                }
+                                AlphaMultiplyMode::UnMultiply => {
+                                    rc = f32::min(rc / ac, 1.0);
+                                    gc = f32::min(gc / ac, 1.0);
+                                    bc = f32::min(bc / ac, 1.0);
+                                }
+                                _ => {} // Not reached.
+                            }
                         }
-                        _ => {} // Not reached.
+                    }
+                    dst_pixel[r_offset] = (0.5 + (rc * rgb_max_channel_f)) as $as_ty;
+                    if rgb_has_color {
+                        dst_pixel[g_offset] = (0.5 + (gc * rgb_max_channel_f)) as $as_ty;
+                        dst_pixel[b_offset] = (0.5 + (bc * rgb_max_channel_f)) as $as_ty;
                     }
                 }
-            }
-            unsafe {
-                if !dst.is_null() {
-                    *dst.add((i * rgb_channel_count) + r_offset) =
-                        (0.5 + (rc * rgb_max_channel_f)) as u8;
-                    if rgb_has_color {
-                        *dst.add((i * rgb_channel_count) + g_offset) =
-                            (0.5 + (gc * rgb_max_channel_f)) as u8;
-                        *dst.add((i * rgb_channel_count) + b_offset) =
-                            (0.5 + (bc * rgb_max_channel_f)) as u8;
-                    }
-                } else {
-                    *dst16.add((i * rgb_channel_count) + r_offset) =
-                        (0.5 + (rc * rgb_max_channel_f)) as u16;
-                    if rgb_has_color {
-                        *dst16.add((i * rgb_channel_count) + g_offset) =
-                            (0.5 + (gc * rgb_max_channel_f)) as u16;
-                        *dst16.add((i * rgb_channel_count) + b_offset) =
-                            (0.5 + (bc * rgb_max_channel_f)) as u16;
-                    }
-                }
-            }
+            }};
+        }
+        if rgb.depth == 8 {
+            convert_row!(rgb.row_mut(j)?, u8);
+        } else {
+            convert_row!(rgb.row16_mut(j)?, u16);
         }
     }
     Ok(())
@@ -899,12 +918,23 @@ fn yuv8_to_rgb_any(
     alpha_multiply_mode: AlphaMultiplyMode,
     fast_or_no_chroma_subsampling: bool,
 ) -> AvifResult<()> {
+    if image.width == 0 || image.height == 0 {
+        return Ok(());
+    }
     let mode: Mode = image.into();
     let (table_y, table_uv) = unorm_lookup_tables(image, mode)?;
     let table_uv = match &table_uv {
         Some(table_uv) => table_uv,
         None => &table_y,
     };
+    let table_y: &[f32; 256] = table_y
+        .get(..256)
+        .and_then(|s| s.try_into().ok())
+        .ok_or(AvifError::ReformatFailed)?;
+    let table_uv: &[f32; 256] = table_uv
+        .get(..256)
+        .and_then(|s| s.try_into().ok())
+        .ok_or(AvifError::ReformatFailed)?;
     let r_offset = rgb.format.r_offset();
     let g_offset = rgb.format.g_offset();
     let b_offset = rgb.format.b_offset();
@@ -913,147 +943,178 @@ fn yuv8_to_rgb_any(
         && image.has_plane(Plane::V)
         && image.yuv_format != PixelFormat::Yuv400;
     let rgb_has_color = !rgb.format.is_gray();
+    if rgb_channel_count == 0
+        || r_offset >= rgb_channel_count
+        || (rgb_has_color && (g_offset >= rgb_channel_count || b_offset >= rgb_channel_count))
+    {
+        return AvifError::reformat_failed();
+    }
     let yuv_max_channel = image.max_channel();
     let rgb_max_channel = rgb.max_channel();
     let rgb_max_channel_f = rgb.max_channel_f();
     let chroma_shift = image.yuv_format.chroma_shift_x();
-    let image_width_minus_1 = (image.width - 1) as usize;
+    let image_width = image.width as usize;
+    let image_width_minus_1 = image_width.saturating_sub(1);
+    let uv_width = if image_width > 0 {
+        ((image_width_minus_1 >> chroma_shift.0) << chroma_shift.1) + 1
+    } else {
+        0
+    };
     for j in 0..image.height {
         let uv_j = j >> image.yuv_format.chroma_shift_y();
-        let y_row = image.row(Plane::Y, j)?;
-        let u_row = image.row(Plane::U, uv_j).ok();
-        let v_row = image.row(Plane::V, uv_j).ok();
-        let a_row = image.row(Plane::A, j).ok();
-        let uv_adj_j = if j == 0
-            || (j == image.height - 1 && (j % 2) != 0)
-            || image.yuv_format == PixelFormat::Yuv422
-        {
-            uv_j
-        } else if (j % 2) != 0 {
-            uv_j + 1
-        } else {
-            uv_j - 1
-        };
-        let u_adj_row = image.row(Plane::U, uv_adj_j).ok();
-        let v_adj_row = image.row(Plane::V, uv_adj_j).ok();
-        let (dst, dst16) = if rgb.depth == 8 {
-            (
-                rgb.row_mut(j).unwrap().as_mut_ptr(),
-                std::ptr::null_mut() as _,
-            )
-        } else {
-            (
-                std::ptr::null_mut() as _,
-                rgb.row16_mut(j).unwrap().as_mut_ptr(),
-            )
-        };
-        for i in 0..image.width as usize {
-            let clamped_y = unsafe { *y_row.get_unchecked(i) as u16 };
-            let y = unsafe { *table_y.get_unchecked(clamped_y as usize) };
-            let mut cb = 0.5;
-            let mut cr = 0.5;
-            if yuv_has_color {
-                let u_row = u_row.unwrap();
-                let v_row = v_row.unwrap();
-                let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
-                if fast_or_no_chroma_subsampling {
-                    cb = unorm_value8!(u_row, uv_i, table_uv);
-                    cr = unorm_value8!(v_row, uv_i, table_uv);
-                } else {
-                    // Bilinear filtering with weights. See
-                    // https://github.com/AOMediaCodec/libavif/blob/0580334466d57fedb889d5ed7ae9574d6f66e00c/src/reformat.c#L657-L685.
-                    let uv_adj_i = if i == 0 || (i == image_width_minus_1 && (i % 2) != 0) {
-                        uv_i
-                    } else if (i % 2) != 0 {
-                        uv_i + 1
-                    } else {
-                        uv_i - 1
-                    };
-
-                    let u_adj_row = u_adj_row.unwrap();
-                    let unorm_u = [
-                        unorm_value8!(u_row, uv_i, table_uv),
-                        unorm_value8!(u_row, uv_adj_i, table_uv),
-                        unorm_value8!(u_adj_row, uv_i, table_uv),
-                        unorm_value8!(u_adj_row, uv_adj_i, table_uv),
-                    ];
-                    cb = (unorm_u[0] * (9.0 / 16.0))
-                        + (unorm_u[1] * (3.0 / 16.0))
-                        + (unorm_u[2] * (3.0 / 16.0))
-                        + (unorm_u[3] * (1.0 / 16.0));
-
-                    let v_adj_row = v_adj_row.unwrap();
-                    let unorm_v = [
-                        unorm_value8!(v_row, uv_i, table_uv),
-                        unorm_value8!(v_row, uv_adj_i, table_uv),
-                        unorm_value8!(v_adj_row, uv_i, table_uv),
-                        unorm_value8!(v_adj_row, uv_adj_i, table_uv),
-                    ];
-                    cr = (unorm_v[0] * (9.0 / 16.0))
-                        + (unorm_v[1] * (3.0 / 16.0))
-                        + (unorm_v[2] * (3.0 / 16.0))
-                        + (unorm_v[3] * (1.0 / 16.0));
-                }
-            }
-            let (mut rc, mut gc, mut bc) = if rgb_has_color {
-                compute_rgb(
-                    y,
-                    cb,
-                    cr,
-                    yuv_has_color,
-                    mode,
-                    clamped_y,
-                    yuv_max_channel,
-                    rgb_max_channel,
-                    rgb_max_channel_f,
-                )
+        let y_row = image
+            .row(Plane::Y, j)?
+            .get(..image_width)
+            .ok_or(AvifError::ReformatFailed)?;
+        let (u_row, v_row, u_adj_row, v_adj_row): (&[u8], &[u8], &[u8], &[u8]) = if yuv_has_color {
+            let u_row = image
+                .row(Plane::U, uv_j)?
+                .get(..uv_width)
+                .ok_or(AvifError::ReformatFailed)?;
+            let v_row = image
+                .row(Plane::V, uv_j)?
+                .get(..uv_width)
+                .ok_or(AvifError::ReformatFailed)?;
+            if fast_or_no_chroma_subsampling {
+                (u_row, v_row, u_row, v_row)
             } else {
-                (clamp_f32(y, 0.0, 1.0), 0.0, 0.0)
-            };
-            if alpha_multiply_mode != AlphaMultiplyMode::NoOp {
-                let unorm_a = a_row.unwrap()[i];
-                let ac = clamp_f32((unorm_a as f32) / (yuv_max_channel as f32), 0.0, 1.0);
-                if ac == 0.0 {
-                    rc = 0.0;
-                    gc = 0.0;
-                    bc = 0.0;
-                } else if ac < 1.0 {
-                    match alpha_multiply_mode {
-                        AlphaMultiplyMode::Multiply => {
-                            rc *= ac;
-                            gc *= ac;
-                            bc *= ac;
-                        }
-                        AlphaMultiplyMode::UnMultiply => {
-                            rc = f32::min(rc / ac, 1.0);
-                            gc = f32::min(gc / ac, 1.0);
-                            bc = f32::min(bc / ac, 1.0);
-                        }
-                        _ => {} // Not reached.
-                    }
-                }
-            }
-            unsafe {
-                if !dst.is_null() {
-                    *dst.add((i * rgb_channel_count) + r_offset) =
-                        (0.5 + (rc * rgb_max_channel_f)) as u8;
-                    if rgb_has_color {
-                        *dst.add((i * rgb_channel_count) + g_offset) =
-                            (0.5 + (gc * rgb_max_channel_f)) as u8;
-                        *dst.add((i * rgb_channel_count) + b_offset) =
-                            (0.5 + (bc * rgb_max_channel_f)) as u8;
-                    }
+                let uv_adj_j = if j == 0
+                    || (j == image.height - 1 && (j % 2) != 0)
+                    || image.yuv_format == PixelFormat::Yuv422
+                {
+                    uv_j
+                } else if (j % 2) != 0 {
+                    uv_j + 1
                 } else {
-                    *dst16.add((i * rgb_channel_count) + r_offset) =
-                        (0.5 + (rc * rgb_max_channel_f)) as u16;
+                    uv_j - 1
+                };
+                (
+                    u_row,
+                    v_row,
+                    image
+                        .row(Plane::U, uv_adj_j)?
+                        .get(..uv_width)
+                        .ok_or(AvifError::ReformatFailed)?,
+                    image
+                        .row(Plane::V, uv_adj_j)?
+                        .get(..uv_width)
+                        .ok_or(AvifError::ReformatFailed)?,
+                )
+            }
+        } else {
+            (&[], &[], &[], &[])
+        };
+        let a_row: &[u8] = if alpha_multiply_mode != AlphaMultiplyMode::NoOp {
+            image
+                .row(Plane::A, j)?
+                .get(..image_width)
+                .ok_or(AvifError::ReformatFailed)?
+        } else {
+            &[]
+        };
+        macro_rules! convert_row {
+            ($dst_row:expr, $as_ty:ty) => {{
+                let dst = $dst_row
+                    .get_mut(..image_width * rgb_channel_count)
+                    .ok_or(AvifError::ReformatFailed)?;
+                for (i, (&y_sample, dst_pixel)) in y_row
+                    .iter()
+                    .zip(dst.chunks_exact_mut(rgb_channel_count))
+                    .enumerate()
+                {
+                    let clamped_y = y_sample as u16;
+                    let y = table_y[y_sample as usize];
+                    let mut cb = 0.5;
+                    let mut cr = 0.5;
+                    if yuv_has_color {
+                        let uv_i = (i >> chroma_shift.0) << chroma_shift.1;
+                        if fast_or_no_chroma_subsampling {
+                            cb = table_uv[u_row[uv_i] as usize];
+                            cr = table_uv[v_row[uv_i] as usize];
+                        } else {
+                            // Bilinear filtering with weights. See
+                            // https://github.com/AOMediaCodec/libavif/blob/0580334466d57fedb889d5ed7ae9574d6f66e00c/src/reformat.c#L657-L685.
+                            let uv_adj_i = if i == 0 || (i == image_width_minus_1 && (i % 2) != 0) {
+                                uv_i
+                            } else if (i % 2) != 0 {
+                                uv_i + 1
+                            } else {
+                                uv_i - 1
+                            };
+
+                            let unorm_u = [
+                                table_uv[u_row[uv_i] as usize],
+                                table_uv[u_row[uv_adj_i] as usize],
+                                table_uv[u_adj_row[uv_i] as usize],
+                                table_uv[u_adj_row[uv_adj_i] as usize],
+                            ];
+                            cb = (unorm_u[0] * (9.0 / 16.0))
+                                + (unorm_u[1] * (3.0 / 16.0))
+                                + (unorm_u[2] * (3.0 / 16.0))
+                                + (unorm_u[3] * (1.0 / 16.0));
+
+                            let unorm_v = [
+                                table_uv[v_row[uv_i] as usize],
+                                table_uv[v_row[uv_adj_i] as usize],
+                                table_uv[v_adj_row[uv_i] as usize],
+                                table_uv[v_adj_row[uv_adj_i] as usize],
+                            ];
+                            cr = (unorm_v[0] * (9.0 / 16.0))
+                                + (unorm_v[1] * (3.0 / 16.0))
+                                + (unorm_v[2] * (3.0 / 16.0))
+                                + (unorm_v[3] * (1.0 / 16.0));
+                        }
+                    }
+                    let (mut rc, mut gc, mut bc) = if rgb_has_color {
+                        compute_rgb(
+                            y,
+                            cb,
+                            cr,
+                            yuv_has_color,
+                            mode,
+                            clamped_y,
+                            yuv_max_channel,
+                            rgb_max_channel,
+                            rgb_max_channel_f,
+                        )
+                    } else {
+                        (clamp_f32(y, 0.0, 1.0), 0.0, 0.0)
+                    };
+                    if alpha_multiply_mode != AlphaMultiplyMode::NoOp {
+                        let unorm_a = a_row[i];
+                        let ac = clamp_f32((unorm_a as f32) / (yuv_max_channel as f32), 0.0, 1.0);
+                        if ac == 0.0 {
+                            rc = 0.0;
+                            gc = 0.0;
+                            bc = 0.0;
+                        } else if ac < 1.0 {
+                            match alpha_multiply_mode {
+                                AlphaMultiplyMode::Multiply => {
+                                    rc *= ac;
+                                    gc *= ac;
+                                    bc *= ac;
+                                }
+                                AlphaMultiplyMode::UnMultiply => {
+                                    rc = f32::min(rc / ac, 1.0);
+                                    gc = f32::min(gc / ac, 1.0);
+                                    bc = f32::min(bc / ac, 1.0);
+                                }
+                                _ => {} // Not reached.
+                            }
+                        }
+                    }
+                    dst_pixel[r_offset] = (0.5 + (rc * rgb_max_channel_f)) as $as_ty;
                     if rgb_has_color {
-                        *dst16.add((i * rgb_channel_count) + g_offset) =
-                            (0.5 + (gc * rgb_max_channel_f)) as u16;
-                        *dst16.add((i * rgb_channel_count) + b_offset) =
-                            (0.5 + (bc * rgb_max_channel_f)) as u16;
+                        dst_pixel[g_offset] = (0.5 + (gc * rgb_max_channel_f)) as $as_ty;
+                        dst_pixel[b_offset] = (0.5 + (bc * rgb_max_channel_f)) as $as_ty;
                     }
                 }
-            }
+            }};
+        }
+        if rgb.depth == 8 {
+            convert_row!(rgb.row_mut(j)?, u8);
+        } else {
+            convert_row!(rgb.row16_mut(j)?, u16);
         }
     }
     Ok(())
