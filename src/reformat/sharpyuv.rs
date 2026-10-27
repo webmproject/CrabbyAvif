@@ -60,12 +60,9 @@ pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResu
     }
     // SAFETY: options_uninit was initialized by the C function above.
     let mut options = unsafe { options_uninit.assume_init() };
-    options.transfer_type =
-        if image.transfer_characteristics == TransferCharacteristics::Unspecified {
-            SharpYuvTransferFunctionType_kSharpYuvTransferFunctionSrgb
-        } else {
-            image.transfer_characteristics as _
-        };
+    if image.transfer_characteristics != TransferCharacteristics::Unspecified {
+        options.transfer_type = image.transfer_characteristics as _;
+    }
     let plane_u8 = image.plane_ptrs_mut();
     let plane_row_bytes = image.plane_row_bytes()?;
     let (r_ptr, g_ptr, b_ptr) = if rgb.depth == 8 {
