@@ -50,7 +50,7 @@ avm-sys = { version = "0.1.0", path = "sys/avm-sys", features = [
 libjxl-sys = { version = "0.1.0", path = "sys/libjxl-sys", features = [
   "libjxl",
 ], optional = true }
-jxl = { version = "0.7", optional = true }
+jxl = { version = "0.8", optional = true }
 libpng-sys = { version = "0.1.0", path = "sys/libpng-sys", features = [
   "png",
 ], optional = true }
