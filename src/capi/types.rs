@@ -285,6 +285,9 @@ pub enum avifCodecChoice {
     Rav1e = 4,
     Svt = 5,
     Avm = 6,
+    // Pure Rust AV1 keyframe-only decoder. Only available when built with the native_av1
+    // feature. WARNING: experimental.
+    Native = 7,
 }
 
 impl avifCodecChoice {
@@ -294,6 +297,8 @@ impl avifCodecChoice {
             (Self::Aom, "aom"),
             #[cfg(feature = "dav1d")]
             (Self::Dav1d, "dav1d"),
+            #[cfg(feature = "native_av1")]
+            (Self::Native, "native"),
         ];
         for available_codec in available_codecs {
             if name == available_codec.1 {

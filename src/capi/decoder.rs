@@ -235,6 +235,8 @@ impl TryFrom<&avifDecoder> for Settings {
             codec_choice: match decoder.codecChoice {
                 avifCodecChoice::Auto => CodecChoice::Auto,
                 avifCodecChoice::Dav1d => CodecChoice::Dav1d,
+                #[cfg(feature = "native_av1")]
+                avifCodecChoice::Native => CodecChoice::Native,
                 // Silently treat all other choices the same as Auto.
                 _ => CodecChoice::Auto,
             },

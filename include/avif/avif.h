@@ -270,6 +270,7 @@ enum avifCodecChoice {
     AVIF_CODEC_CHOICE_RAV1E = 4,
     AVIF_CODEC_CHOICE_SVT = 5,
     AVIF_CODEC_CHOICE_AVM = 6,
+    AVIF_CODEC_CHOICE_NATIVE = 7,
 };
 
 enum avifCodecFlag {

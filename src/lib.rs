@@ -70,6 +70,8 @@ pub enum CodecChoice {
     Libgav1, // AVIF (AV1-HEIF) decoder.
     #[cfg(feature = "jpegxl")]
     Libjxl, // JPEG XL-HEIF encoder and decoder. WARNING: experimental.
+    #[cfg(feature = "native_av1")]
+    Native, // AVIF (AV1-HEIF) keyframe-only decoder in pure Rust. WARNING: experimental.
 }
 
 #[repr(C)]
@@ -582,6 +584,8 @@ pub fn codec_versions() -> String {
         codecs::avm::Avm::version(),
         #[cfg(feature = "jpegxl")]
         codecs::libjxl::Libjxl::version(),
+        #[cfg(feature = "native_av1")]
+        codecs::native::Native::version(),
     ];
     versions.join(", ")
 }

@@ -164,6 +164,8 @@ fn codec_choice_parser(s: &str) -> Result<CodecChoice, String> {
         "gav1" | "libgav1" => Ok(CodecChoice::Libgav1),
         #[cfg(feature = "jpegxl")]
         "hxl" | "jxl" | "jpegxl" | "libjxl" => Ok(CodecChoice::Libjxl),
+        #[cfg(feature = "native_av1")]
+        "native" | "native_av1" => Ok(CodecChoice::Native),
         _ => Err(format!("Invalid codec choice: {s}")),
     }
 }

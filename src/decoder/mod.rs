@@ -21,6 +21,12 @@ macro_rules! find_property {
     };
 }
 
+/// cbindgen:ignore
+#[cfg(feature = "native_av1")]
+// TODO: b/578110464 - The native AV1 decoder does not conform to the clippy lints used by the
+// rest of CrabbyAvif yet. Remove this once the decoder code has been cleaned up to pass clippy.
+#[allow(clippy::all)]
+pub mod av1;
 pub mod item;
 pub mod tile;
 pub mod track;
@@ -40,6 +46,9 @@ use crate::codecs::avm::Avm;
 
 #[cfg(feature = "jpegxl")]
 use crate::codecs::libjxl::Libjxl;
+
+#[cfg(feature = "native_av1")]
+use crate::codecs::native::Native;
 
 #[cfg(feature = "satofloat")]
 use crate::internal_utils::sampletransform::*;
@@ -96,6 +105,10 @@ impl CodecChoice {
                 #[cfg(feature = "dav1d")]
                 if matches!(self, CodecChoice::Auto | CodecChoice::Dav1d) {
                     return Some(Box::<Dav1d>::default());
+                }
+                #[cfg(feature = "native_av1")]
+                if matches!(self, CodecChoice::Auto | CodecChoice::Native) {
+                    return Some(Box::<Native>::default());
                 }
                 None
             }

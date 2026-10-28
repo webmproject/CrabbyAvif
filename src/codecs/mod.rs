@@ -27,6 +27,9 @@ pub mod avm;
 #[cfg(feature = "jpegxl")]
 pub mod libjxl;
 
+#[cfg(feature = "native_av1")]
+pub mod native;
+
 #[cfg(feature = "encoder")]
 use crate::internal_utils::*;
 
