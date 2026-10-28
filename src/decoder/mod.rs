@@ -2264,7 +2264,12 @@ impl Decoder {
         // Has to be a grid.
         self.tile_info[decoding_item.usize()].is_grid()
             // Has to be one of the supported codecs.
-            && matches!(codec, CodecChoice::MediaCodec | CodecChoice::Dav1d)
+            && match codec {
+                CodecChoice::MediaCodec | CodecChoice::Dav1d => true,
+                #[cfg(feature = "native_av1")]
+                CodecChoice::Native => true,
+                _ => false,
+            }
             // All the tiles must use the same codec instance.
             && self.tiles[decoding_item.usize()][1..]
                 .iter()

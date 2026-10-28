@@ -412,7 +412,7 @@ impl Image {
         Ok(row_bytes)
     }
 
-    #[cfg(any(feature = "dav1d", feature = "avm"))]
+    #[cfg(any(feature = "dav1d", feature = "avm", feature = "native_av1"))]
     pub(crate) fn free_planes(&mut self, planes: &[Plane]) {
         for plane in planes {
             let plane = plane.as_usize();
@@ -421,7 +421,7 @@ impl Image {
         }
     }
 
-    #[cfg(feature = "dav1d")]
+    #[cfg(any(feature = "dav1d", feature = "native_av1"))]
     pub(crate) fn clear_chroma_planes(&mut self) {
         self.free_planes(&[Plane::U, Plane::V])
     }
