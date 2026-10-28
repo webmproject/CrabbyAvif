@@ -403,6 +403,7 @@ impl Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use test_case::test_case;
     use test_case::test_matrix;
 
     #[test_matrix([PixelFormat::Yuv444, PixelFormat::Yuv422, PixelFormat::Yuv420, PixelFormat::Yuv400], [false, true], [false, true])]
@@ -470,15 +471,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn scale_nv12_odd_dimension() -> AvifResult<()> {
+    #[test_case(PixelFormat::AndroidNv12, 8 ; "nv12")]
+    #[test_case(PixelFormat::AndroidP010, 16 ; "p010")]
+    fn scale_semi_planar_odd_dimension(yuv_format: PixelFormat, depth: u8) -> AvifResult<()> {
         let mut image = image::Image {
             width: 99,
             height: 49,
-            depth: 8,
-            yuv_format: PixelFormat::AndroidNv12,
+            depth,
+            yuv_format,
             ..Default::default()
         };
+        assert_eq!(image.width(Plane::U), 100);
         image.allocate_planes(Category::Color)?;
         assert!(image.scale(49, 24, Category::Color).is_ok());
         assert_eq!(image.width, 49);
