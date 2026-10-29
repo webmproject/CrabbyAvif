@@ -374,7 +374,7 @@ pub enum AvifError {
 pub type AvifResult<T> = Result<T, AvifError>;
 
 #[repr(i32)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum AndroidMediaCodecOutputColorFormat {
     // Flexible YUV 420 format used for 8-bit images:
     // https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#COLOR_FormatYUV420Flexible

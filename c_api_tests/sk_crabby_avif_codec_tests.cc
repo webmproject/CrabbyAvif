@@ -418,6 +418,70 @@ TEST(SkCrabbyAvifCodecTest, OddWidthP010CopyAndScale) {
   avifRGBImageFreePixels(&dst_rgb);
 }
 
+TEST(SkCrabbyAvifCodecTest, ChangeAndroidMediaCodecOutputColorFormatReDecodes) {
+  for (const char* file_name :
+       {"white_2x2.avif", "color_grid_gainmap_different_grid.avif",
+        "colors-animated-8bpc.avif"}) {
+    std::vector<uint8_t> data =
+        testutil::read_file(GetFilename(file_name).c_str());
+
+    DecoderPtr decoder(avifDecoderCreate());
+    ASSERT_NE(decoder, nullptr);
+    decoder->ignoreXMP = AVIF_TRUE;
+    decoder->ignoreExif = AVIF_TRUE;
+    decoder->strictFlags = AVIF_STRICT_DISABLED;
+    decoder->allowSampleTransform = AVIF_FALSE;
+    decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA;
+
+    ASSERT_EQ(avifDecoderSetIOMemory(decoder.get(), data.data(), data.size()),
+              AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+
+    // First decode with YUV420_FLEXIBLE to record the expected output for that
+    // format.
+    decoder->androidMediaCodecOutputColorFormat =
+        ANDROID_MEDIA_CODEC_OUTPUT_COLOR_FORMAT_YUV420_FLEXIBLE;
+    ASSERT_EQ(avifDecoderNthImage(decoder.get(), 0), AVIF_RESULT_OK);
+    ASSERT_NE(decoder->image, nullptr);
+    ASSERT_NE(decoder->image->yuvPlanes[0], nullptr);
+    const uint32_t yuv420_depth = decoder->image->depth;
+    const avifPixelFormat yuv420_format = decoder->image->yuvFormat;
+    const uint8_t yuv420_y = decoder->image->yuvPlanes[0][0];
+
+    // Switch to P010 output color format (e.g. for RGBA_F16 / RGBA_1010102).
+    decoder->androidMediaCodecOutputColorFormat =
+        ANDROID_MEDIA_CODEC_OUTPUT_COLOR_FORMAT_P010;
+    ASSERT_EQ(avifDecoderNthImage(decoder.get(), 0), AVIF_RESULT_OK);
+    ASSERT_NE(decoder->image, nullptr);
+    ASSERT_NE(decoder->image->yuvPlanes[0], nullptr);
+
+    decoder->image->yuvPlanes[0][0] = yuv420_y ^ 0xFF;
+
+    // Decoding the same frame index again with the same color format should
+    // reuse the cached frame.
+    ASSERT_EQ(avifDecoderNthImage(decoder.get(), 0), AVIF_RESULT_OK);
+    EXPECT_EQ(decoder->image->yuvPlanes[0][0],
+              static_cast<uint8_t>(yuv420_y ^ 0xFF));
+
+    // Switching androidMediaCodecOutputColorFormat back to YUV420_FLEXIBLE
+    // (e.g. for RGB_565 / RGBA_8888) on the same decoder must invalidate the
+    // cached frame and re-decode.
+    decoder->androidMediaCodecOutputColorFormat =
+        ANDROID_MEDIA_CODEC_OUTPUT_COLOR_FORMAT_YUV420_FLEXIBLE;
+    ASSERT_EQ(avifDecoderNthImage(decoder.get(), 0), AVIF_RESULT_OK);
+    EXPECT_EQ(decoder->image->depth, yuv420_depth);
+    EXPECT_EQ(decoder->image->yuvFormat, yuv420_format);
+    EXPECT_EQ(decoder->image->yuvPlanes[0][0], yuv420_y);
+
+    if (decoder->imageCount > 1) {
+      decoder->androidMediaCodecOutputColorFormat =
+          ANDROID_MEDIA_CODEC_OUTPUT_COLOR_FORMAT_P010;
+      ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+      EXPECT_EQ(decoder->imageIndex, 1);
+    }
+  }
+}
+
 }  // namespace
 }  // namespace avif
 

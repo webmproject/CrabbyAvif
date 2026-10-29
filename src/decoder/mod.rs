@@ -403,6 +403,9 @@ pub struct Decoder {
     thumbnail_images: Vec<Image>,
     thumbnail_samples: Vec<Vec<DecodeSample>>,
     active_thumbnail_index: Option<usize>,
+    // Color format used by the previous decode, kept separately from `settings` (which the caller
+    // may change between decode calls) so that a change can be detected and the decoder reset.
+    previous_android_mediacodec_output_color_format: Option<AndroidMediaCodecOutputColorFormat>,
 }
 
 #[repr(C)]
@@ -1436,6 +1439,8 @@ impl Decoder {
         self.thumbnail_images = decoder.thumbnail_images;
         self.thumbnail_samples = decoder.thumbnail_samples;
         self.active_thumbnail_index = decoder.active_thumbnail_index;
+        self.previous_android_mediacodec_output_color_format =
+            decoder.previous_android_mediacodec_output_color_format;
     }
 
     pub fn parse(&mut self) -> AvifResult<()> {
@@ -1874,6 +1879,8 @@ impl Decoder {
                 }
             }
         }
+        self.previous_android_mediacodec_output_color_format =
+            Some(self.settings.android_mediacodec_output_color_format);
         Ok(())
     }
 
@@ -2317,6 +2324,12 @@ impl Decoder {
         }
 
         let next_image_index = checked_add!(self.image_index, 1)?;
+        if self
+            .previous_android_mediacodec_output_color_format
+            .is_some_and(|x| x != self.settings.android_mediacodec_output_color_format)
+        {
+            return self.nth_image(u32_from_i32(next_image_index)?);
+        }
         if self.can_use_decode_until() {
             // If decode_until can be used, always prefer that since we cannot conflate calls
             // between get_last_image and get_next_image.
@@ -2432,6 +2445,13 @@ impl Decoder {
         }
         if index >= self.image_count {
             return AvifError::no_images_remaining();
+        }
+        if self
+            .previous_android_mediacodec_output_color_format
+            .is_some_and(|x| x != self.settings.android_mediacodec_output_color_format)
+        {
+            self.reset();
+            self.parse()?;
         }
         let requested_index = i32_from_u32(index)?;
         if requested_index == checked_add!(self.image_index, 1)? {
