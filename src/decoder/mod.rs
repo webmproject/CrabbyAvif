@@ -1795,8 +1795,11 @@ impl Decoder {
             // Stealing will cause problems. So we need separate codec instances.
             return Ok(false);
         }
-        let operating_point = self.tiles[0][0].operating_point;
-        let all_layers = self.tiles[0][0].input.all_layers;
+        let Some(first_tile) = self.tiles[0].first() else {
+            return Ok(false);
+        };
+        let operating_point = first_tile.operating_point;
+        let all_layers = first_tile.input.all_layers;
         for tiles in &self.tiles {
             for tile in tiles {
                 if tile.operating_point != operating_point || tile.input.all_layers != all_layers {
