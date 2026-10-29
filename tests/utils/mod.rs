@@ -328,8 +328,53 @@ pub fn merge_cells_into_grid_image(
     Ok(image)
 }
 
-pub const HAS_DECODER: bool = cfg!(any(feature = "dav1d", feature = "android_mediacodec"));
+pub const HAS_DECODER: bool = cfg!(any(
+    feature = "dav1d",
+    feature = "android_mediacodec",
+    feature = "native_av1"
+));
 
-pub const HAS_NON_ANDROID_DECODER: bool = cfg!(feature = "dav1d");
+pub const HAS_NON_ANDROID_DECODER: bool = cfg!(any(feature = "dav1d", feature = "native_av1"));
 
 pub const HAS_ENCODER: bool = cfg!(feature = "aom");
+
+#[cfg(all(feature = "dav1d", feature = "native_av1"))]
+pub fn decode_with_codec(filename: &str, codec: CodecChoice) -> AvifResult<Image> {
+    let mut decoder = decoder::Decoder::default();
+    decoder.settings.codec_choice = codec;
+    decoder.settings.strictness = decoder::Strictness::None;
+    let filename_string = filename.to_string();
+    decoder.set_io_file(&filename_string)?;
+    decoder.parse()?;
+    decoder.next_image()?;
+    decoder.image().expect("image was none").try_deep_clone()
+}
+
+#[cfg(all(feature = "dav1d", feature = "native_av1"))]
+pub fn test_dav1d_vs_native(filename: &str) {
+    let mut decoder = decoder::Decoder::default();
+    decoder.settings.strictness = decoder::Strictness::None;
+    let filename_string = filename.to_string();
+    decoder
+        .set_io_file(&filename_string)
+        .expect("Failed to set IO");
+    decoder.parse().expect("Failed to parse");
+    let image = decoder.image().expect("image was none");
+    // Image sequences and progressive images are not supported by the native decoder, so skip
+    // them.
+    if image.image_sequence_track_present
+        || !matches!(
+            image.progressive_state,
+            decoder::ProgressiveState::Unavailable
+        )
+    {
+        return;
+    }
+
+    let dav1d_image = decode_with_codec(filename, CodecChoice::Dav1d).unwrap();
+    let native_image = decode_with_codec(filename, CodecChoice::Native).unwrap();
+    assert!(
+        are_images_equal(&dav1d_image, &native_image).unwrap(),
+        "Decoded images do not match between dav1d and native for {filename}"
+    );
+}

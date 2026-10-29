@@ -110,6 +110,19 @@ fn test_conformance(index: usize) {
     }
 }
 
+#[cfg(all(feature = "dav1d", feature = "native_av1"))]
+#[allow(clippy::zero_prefixed_literal)]
+#[test_case::test_matrix(0usize..172)]
+fn test_conformance_native_matches_dav1d(index: usize) {
+    let expected_info = &EXPECTED_INFOS[index];
+    let filename = get_test_file(expected_info.filename);
+    // Multi-layer files are not supported by the native decoder, so skip them.
+    if filename.contains("multilayer") || filename.contains("3layer") {
+        return;
+    }
+    utils::test_dav1d_vs_native(&filename);
+}
+
 // If more files are added to this array, update the call to generate_tests macro below.
 const EXPECTED_INFOS: [ExpectedImageInfo; 172] = [
     // index: 0
