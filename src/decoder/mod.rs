@@ -406,6 +406,7 @@ pub struct Decoder {
     // Color format used by the previous decode, kept separately from `settings` (which the caller
     // may change between decode calls) so that a change can be detected and the decoder reset.
     previous_android_mediacodec_output_color_format: Option<AndroidMediaCodecOutputColorFormat>,
+    parsed_image: Image,
 }
 
 #[repr(C)]
@@ -1452,6 +1453,7 @@ impl Decoder {
         self.active_thumbnail_index = decoder.active_thumbnail_index;
         self.previous_android_mediacodec_output_color_format =
             decoder.previous_android_mediacodec_output_color_format;
+        self.parsed_image = decoder.parsed_image;
     }
 
     pub fn parse(&mut self) -> AvifResult<()> {
@@ -1735,6 +1737,7 @@ impl Decoder {
             };
 
             if cicp_set {
+                self.parsed_image = self.image.shallow_clone();
                 self.parse_state = ParseState::Complete;
                 return Ok(());
             }
@@ -1746,6 +1749,7 @@ impl Decoder {
         if self.source == Source::Thumbnail && !self.thumbnail_images.is_empty() {
             self.thumbnail_images[0] = self.image.shallow_clone();
         }
+        self.parsed_image = self.image.shallow_clone();
         self.parse_state = ParseState::Complete;
 
         Ok(())
@@ -2402,6 +2406,7 @@ impl Decoder {
                 }
                 self.codecs.clear();
                 self.active_thumbnail_index = Some(thumbnail_idx);
+                self.parsed_image = self.image.shallow_clone();
             }
             0
         } else {
@@ -2658,7 +2663,11 @@ impl Decoder {
         if self.source == Source::Thumbnail {
             Ok(self.thumbnail_images[n as usize].shallow_clone())
         } else {
-            Ok(self.image.shallow_clone())
+            let mut props = self.image.shallow_clone();
+            props.width = self.parsed_image.width;
+            props.height = self.parsed_image.height;
+            props.clap = self.parsed_image.clap;
+            Ok(props)
         }
     }
 
