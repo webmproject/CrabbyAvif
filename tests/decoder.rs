@@ -18,6 +18,7 @@ use crabby_avif::decoder::CompressionFormat;
 use crabby_avif::decoder::ImageContentType;
 use crabby_avif::image::*;
 use crabby_avif::reformat::rgb;
+use crabby_avif::utils::clap::CropRect;
 use crabby_avif::*;
 
 mod utils;
@@ -1988,4 +1989,58 @@ fn thumbnail_max_extent_progressive_and_lsel() {
     // Thumbnail 1 has lsel=0 so it decodes only layer 0 (which differs from the 2-layer image).
     assert_eq!(decoder.next_image(), Ok(()));
     assert!(!utils::are_images_equal(decoder.image().unwrap(), ref_image).unwrap());
+}
+
+#[test_case("paris_10bpc.avif")]
+#[test_case("colors-animated-8bpc.avif")]
+fn decode_with_default_options(filename: &str) -> AvifResult<()> {
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    let mut ref_decoder = get_decoder(filename);
+    ref_decoder.parse()?;
+    let mut decoder = get_decoder(filename);
+    decoder.parse()?;
+    let options = decoder::DecodeOptions::default();
+    let image_count = ref_decoder.image_count();
+    for _ in 0..image_count {
+        ref_decoder.next_image()?;
+        decoder.next_image_with_options(&options)?;
+        assert!(utils::are_images_equal(
+            decoder.image().unwrap(),
+            ref_decoder.image().unwrap()
+        )?);
+    }
+    for index in (0..image_count).rev() {
+        ref_decoder.nth_image(index)?;
+        decoder.nth_image_with_options(index, &options)?;
+        assert!(utils::are_images_equal(
+            decoder.image().unwrap(),
+            ref_decoder.image().unwrap()
+        )?);
+    }
+    Ok(())
+}
+
+#[test]
+fn region_decode_not_implemented() -> AvifResult<()> {
+    let mut decoder = get_decoder("paris_10bpc.avif");
+    decoder.parse()?;
+    let options = decoder::DecodeOptions {
+        crop_rect: Some(CropRect {
+            x: 0,
+            y: 0,
+            width: 16,
+            height: 16,
+        }),
+    };
+    assert_eq!(
+        decoder.next_image_with_options(&options),
+        Err(AvifError::NotImplemented)
+    );
+    assert_eq!(
+        decoder.nth_image_with_options(0, &options),
+        Err(AvifError::NotImplemented)
+    );
+    Ok(())
 }
