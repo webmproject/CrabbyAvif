@@ -73,15 +73,7 @@ impl CropRect {
         image_height: u32,
         pixel_format: PixelFormat,
     ) -> bool {
-        let x_plus_width = checked_add!(self.x, self.width);
-        let y_plus_height = checked_add!(self.y, self.height);
-        if self.width == 0
-            || self.height == 0
-            || x_plus_width.is_err()
-            || y_plus_height.is_err()
-            || x_plus_width.unwrap() > image_width
-            || y_plus_height.unwrap() > image_height
-        {
+        if !self.is_within(image_width, image_height) {
             return false;
         }
         match pixel_format {
@@ -89,6 +81,20 @@ impl CropRect {
             PixelFormat::Yuv422 => self.x % 2 == 0,
             _ => true,
         }
+    }
+
+    // Returns true if self is not empty and fits within an image of the given dimensions.
+    pub(crate) fn is_within(&self, image_width: u32, image_height: u32) -> bool {
+        if self.width == 0 || self.height == 0 {
+            return false;
+        }
+        let Some(right) = self.x.checked_add(self.width) else {
+            return false;
+        };
+        let Some(bottom) = self.y.checked_add(self.height) else {
+            return false;
+        };
+        right <= image_width && bottom <= image_height
     }
 
     pub fn create_from(
@@ -247,5 +253,32 @@ mod tests {
         );
         assert!(clap.is_ok());
         assert_eq!(clap.unwrap(), param.clap);
+    }
+
+    #[test]
+    fn crop_rect_is_within() {
+        let r = CropRect {
+            x: 3,
+            y: 5,
+            width: 7,
+            height: 9,
+        };
+        assert!(r.is_within(10, 14));
+        assert!(!r.is_within(9, 14));
+        assert!(!r.is_within(10, 13));
+        assert!(!(CropRect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 5
+        })
+        .is_within(10, 10));
+        assert!(!(CropRect {
+            x: u32::MAX,
+            y: 0,
+            width: 2,
+            height: 2
+        })
+        .is_within(u32::MAX, 10));
     }
 }
