@@ -1983,6 +1983,7 @@ impl Decoder {
         image_index: usize,
         decoding_item: DecodingItem,
         tile_index: usize,
+        dst_image_override: Option<&mut Image>,
     ) -> AvifResult<()> {
         let signal_eos =
             if !cfg!(feature = "android_mediacodec") || self.image.image_sequence_track_present {
@@ -2046,10 +2047,17 @@ impl Decoder {
         }
         tile.image.scale(tile.width, tile.height, category)?;
 
-        let dst_image = match category {
-            Category::Color | Category::Alpha if (decoding_item.item_idx == 0) => &mut self.image,
-            Category::Color | Category::Alpha => &mut self.extra_inputs[decoding_item.item_idx - 1],
-            Category::Gainmap => &mut self.gainmap.image,
+        let dst_image = match dst_image_override {
+            Some(img) => img,
+            None => match category {
+                Category::Color | Category::Alpha if (decoding_item.item_idx == 0) => {
+                    &mut self.image
+                }
+                Category::Color | Category::Alpha => {
+                    &mut self.extra_inputs[decoding_item.item_idx - 1]
+                }
+                Category::Gainmap => &mut self.gainmap.image,
+            },
         };
 
         if self.tile_info[decoding_item.usize()].is_grid() {
@@ -2186,7 +2194,12 @@ impl Decoder {
         Ok(())
     }
 
-    fn decode_grid(&mut self, image_index: usize, decoding_item: DecodingItem) -> AvifResult<()> {
+    fn decode_grid(
+        &mut self,
+        image_index: usize,
+        decoding_item: DecodingItem,
+        dst_image_override: Option<&mut Image>,
+    ) -> AvifResult<()> {
         let tile_count = self.tiles[decoding_item.usize()].len();
         if tile_count == 0 {
             return Ok(());
@@ -2233,13 +2246,19 @@ impl Decoder {
         }
         let first_tile = &self.tiles[decoding_item.usize()][previous_decoded_tile_count];
         let category = decoding_item.category;
+        let dst_image = match dst_image_override {
+            Some(img) => img,
+            None => {
+                if category == Category::Gainmap {
+                    &mut self.gainmap.image
+                } else {
+                    &mut self.image
+                }
+            }
+        };
         let mut grid_image_helper = GridImageHelper {
             grid,
-            image: if category == Category::Gainmap {
-                &mut self.gainmap.image
-            } else {
-                &mut self.image
-            },
+            image: dst_image,
             category,
             cell_index: previous_decoded_tile_count,
             expected_cell_count: previous_decoded_tile_count + payloads.len(),
@@ -2311,13 +2330,13 @@ impl Decoder {
                 continue;
             }
             if self.can_use_decode_grid(decoding_item) {
-                self.decode_grid(image_index, decoding_item)?;
+                self.decode_grid(image_index, decoding_item, None)?;
                 decoded_something = true;
             } else {
                 let previous_decoded_tile_count =
                     self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
                 for tile_index in previous_decoded_tile_count..tile_count {
-                    self.decode_tile(image_index, decoding_item, tile_index)?;
+                    self.decode_tile(image_index, decoding_item, tile_index, None)?;
                     decoded_something = true;
                 }
             }
