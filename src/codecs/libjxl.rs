@@ -38,7 +38,7 @@ use libjxl_sys::bindings::*;
 // several of its type names (JxlDecoder, JxlPixelFormat etc.) collide with the libjxl C bindings
 // glob-imported above.
 use jxl::api as jxl_api;
-use jxl::headers::extra_channels::ExtraChannel;
+use jxl_api::ExtraChannel;
 
 use std::mem::MaybeUninit;
 use std::ptr::null;
@@ -51,7 +51,7 @@ pub struct Libjxl {
     expected_header: Option<Vec<u8>>,
 
     // Decoding
-    decoder: Option<jxl_api::JxlDecoder<jxl_api::states::WithImageInfo>>,
+    decoder: Option<jxl_api::JxlDecoder>,
     reconstructed_jxl: Option<Vec<u8>>,
     // Number of bytes of |reconstructed_jxl| that were already consumed by |decoder|.
     consumed_bytes: usize,
@@ -79,15 +79,18 @@ fn map_dec_err(error: jxl::error::Error) -> AvifError {
 }
 
 // The whole bitstream is available when decoding starts, so any jxl-rs operation is expected to
-// complete without asking for more input. Anything else means the payload was truncated.
-fn expect_complete<T, U>(
-    result: jxl::error::Result<jxl_api::ProcessingResult<T, U>>,
-) -> AvifResult<T> {
+// reach its target event without asking for more input. Anything else means the payload was
+// truncated or the decoder reached an unexpected state.
+fn expect_event(
+    result: jxl::error::Result<jxl_api::Event>,
+    expected: impl FnOnce(&jxl_api::Event) -> bool,
+) -> AvifResult<()> {
     match result.map_err(map_dec_err)? {
-        jxl_api::ProcessingResult::Complete { result } => Ok(result),
-        jxl_api::ProcessingResult::NeedsMoreInput { size_hint, .. } => AvifError::unknown_error(
-            format!("Truncated JPEG XL bitstream ({size_hint} more bytes needed)"),
-        ),
+        jxl_api::Event::NeedMoreInput { size_hint } => AvifError::unknown_error(format!(
+            "Truncated JPEG XL bitstream ({size_hint} more bytes needed)"
+        )),
+        event if expected(&event) => Ok(()),
+        event => AvifError::unknown_error(format!("Unexpected jxl-rs event: {event:?}")),
     }
 }
 
@@ -539,25 +542,28 @@ impl Libjxl {
     // the first frame of the bitstream. Returns the decoder, ready to decode the next frame, if
     // any, and advances |consumed_bytes| accordingly.
     fn decode_frame(
-        decoder: Option<jxl_api::JxlDecoder<jxl_api::states::WithImageInfo>>,
+        decoder: Option<jxl_api::JxlDecoder>,
         data: &[u8],
         consumed_bytes: &mut usize,
         image: &mut Image,
-    ) -> AvifResult<jxl_api::JxlDecoder<jxl_api::states::WithImageInfo>> {
+    ) -> AvifResult<jxl_api::JxlDecoder> {
         // jxl-rs reads from |input| and leaves the bytes it did not consume in it.
         let mut input = data.get(*consumed_bytes..).ok_or(AvifError::NoContent)?;
 
         let mut decoder = match decoder {
             Some(decoder) => decoder,
             None => {
-                let decoder = jxl_api::JxlDecoder::<jxl_api::states::Initialized>::new(
-                    jxl_api::JxlDecoderOptions::default(),
-                );
-                expect_complete(decoder.process(&mut input, None))?
+                let mut decoder = jxl_api::JxlDecoder::new(jxl_api::JxlDecoderOptions::default());
+                expect_event(decoder.process(&mut input, None, None), |e| {
+                    *e == jxl_api::Event::BasicInfo
+                })?;
+                decoder
             }
         };
 
-        let basic_info = decoder.basic_info();
+        let basic_info = decoder
+            .basic_info()
+            .ok_or_else(|| AvifError::UnknownError("Missing JPEG XL basic info".into()))?;
         let depth: u8 = match basic_info.bit_depth {
             jxl_api::JxlBitDepth::Int { bits_per_sample } => bits_per_sample
                 .try_into()
@@ -616,7 +622,9 @@ impl Libjxl {
             .set_pixel_format(pixel_format)
             .map_err(map_dec_err)?;
 
-        let decoder = expect_complete(decoder.process(&mut input, None))?;
+        expect_event(decoder.process(&mut input, None, None), |e| {
+            *e == jxl_api::Event::FrameHeader
+        })?;
 
         let num_rows = usize_from_u32(rgb.height)?;
         let bytes_per_row = usize_from_u32(checked_mul!(rgb.width, rgb.pixel_size())?)?;
@@ -637,7 +645,7 @@ impl Libjxl {
             ));
         }
 
-        let decoder = {
+        {
             let buffer = jxl_api::JxlOutputBuffer::new_with_stride(
                 pixel_data,
                 num_rows,
@@ -645,8 +653,10 @@ impl Libjxl {
                 byte_stride,
             );
             let mut buffers = [buffer];
-            expect_complete(decoder.process(&mut input, &mut buffers, None))?
-        };
+            expect_event(decoder.process(&mut input, Some(&mut buffers), None), |e| {
+                matches!(e, jxl_api::Event::FrameComplete { .. })
+            })?;
+        }
 
         *consumed_bytes = checked_sub!(data.len(), input.len())?;
 
