@@ -214,20 +214,21 @@ impl Image {
         self.has_same_properties(other) && self.has_same_cicp(other)
     }
 
-    pub fn width(&self, plane: Plane) -> usize {
+    pub(crate) fn plane_width(yuv_format: PixelFormat, plane: Plane, luma_width: u32) -> usize {
+        let width = luma_width as usize;
         match plane {
-            Plane::Y | Plane::A => self.width as usize,
-            Plane::U => match self.yuv_format {
-                PixelFormat::Yuv444 => self.width as usize,
+            Plane::Y | Plane::A => width,
+            Plane::U => match yuv_format {
+                PixelFormat::Yuv444 => width,
                 PixelFormat::AndroidP010 | PixelFormat::AndroidNv12 | PixelFormat::AndroidNv21 => {
-                    (self.width as usize).div_ceil(2) * 2
+                    width.div_ceil(2) * 2
                 }
-                PixelFormat::Yuv420 | PixelFormat::Yuv422 => (self.width as usize).div_ceil(2),
+                PixelFormat::Yuv420 | PixelFormat::Yuv422 => width.div_ceil(2),
                 PixelFormat::None | PixelFormat::Yuv400 => 0,
             },
-            Plane::V => match self.yuv_format {
-                PixelFormat::Yuv444 => self.width as usize,
-                PixelFormat::Yuv420 | PixelFormat::Yuv422 => (self.width as usize).div_ceil(2),
+            Plane::V => match yuv_format {
+                PixelFormat::Yuv444 => width,
+                PixelFormat::Yuv420 | PixelFormat::Yuv422 => width.div_ceil(2),
                 PixelFormat::None
                 | PixelFormat::Yuv400
                 | PixelFormat::AndroidP010
@@ -237,20 +238,21 @@ impl Image {
         }
     }
 
-    pub fn height(&self, plane: Plane) -> usize {
+    pub(crate) fn plane_height(yuv_format: PixelFormat, plane: Plane, luma_height: u32) -> usize {
+        let height = luma_height as usize;
         match plane {
-            Plane::Y | Plane::A => self.height as usize,
-            Plane::U => match self.yuv_format {
-                PixelFormat::Yuv444 | PixelFormat::Yuv422 => self.height as usize,
+            Plane::Y | Plane::A => height,
+            Plane::U => match yuv_format {
+                PixelFormat::Yuv444 | PixelFormat::Yuv422 => height,
                 PixelFormat::Yuv420
                 | PixelFormat::AndroidP010
                 | PixelFormat::AndroidNv12
-                | PixelFormat::AndroidNv21 => (self.height as usize).div_ceil(2),
+                | PixelFormat::AndroidNv21 => height.div_ceil(2),
                 PixelFormat::None | PixelFormat::Yuv400 => 0,
             },
-            Plane::V => match self.yuv_format {
-                PixelFormat::Yuv444 | PixelFormat::Yuv422 => self.height as usize,
-                PixelFormat::Yuv420 => (self.height as usize).div_ceil(2),
+            Plane::V => match yuv_format {
+                PixelFormat::Yuv444 | PixelFormat::Yuv422 => height,
+                PixelFormat::Yuv420 => height.div_ceil(2),
                 PixelFormat::None
                 | PixelFormat::Yuv400
                 | PixelFormat::AndroidP010
@@ -258,6 +260,14 @@ impl Image {
                 | PixelFormat::AndroidNv21 => 0,
             },
         }
+    }
+
+    pub fn width(&self, plane: Plane) -> usize {
+        Self::plane_width(self.yuv_format, plane, self.width)
+    }
+
+    pub fn height(&self, plane: Plane) -> usize {
+        Self::plane_height(self.yuv_format, plane, self.height)
     }
 
     pub fn plane_data(&self, plane: Plane) -> Option<PlaneData> {
