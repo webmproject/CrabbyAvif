@@ -13,6 +13,8 @@
 // limitations under the License.
 
 pub mod exif;
+#[cfg(feature = "heic")]
+pub mod hevc;
 pub mod mini;
 pub mod mp4box;
 pub mod obu;

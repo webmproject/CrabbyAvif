@@ -23,6 +23,8 @@ use crate::image::MAX_PLANE_COUNT;
 use crate::internal_utils::sampletransform::*;
 use crate::internal_utils::stream::*;
 use crate::internal_utils::*;
+#[cfg(feature = "heic")]
+use crate::parser::hevc;
 use crate::utils::clap::CleanAperture;
 use crate::utils::pixels::ChannelIdc;
 use crate::*;
@@ -293,6 +295,11 @@ pub struct HevcCodecConfiguration {
     pub vps: Vec<u8>,
     pub sps: Vec<u8>,
     pub pps: Vec<u8>,
+    // Color information from the VUI parameters of the SPS.
+    pub color_primaries: ColorPrimaries,
+    pub transfer_characteristics: TransferCharacteristics,
+    pub matrix_coefficients: MatrixCoefficients,
+    pub yuv_range: YuvRange,
 }
 
 #[cfg(feature = "jpegxl")]
@@ -1132,15 +1139,19 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
             }
         }
     }
+    let mut config = HevcCodecConfiguration {
+        bitdepth,
+        pixel_format,
+        nal_length_size,
+        vps,
+        pps,
+        sps,
+        ..Default::default()
+    };
+    // The color information is optional. If the SPS cannot be parsed, the default values are used.
+    let _ = hevc::parse_sps_color_info(&mut config);
     Ok(ItemProperty::CodecConfiguration(CodecConfiguration::Hevc(
-        HevcCodecConfiguration {
-            bitdepth,
-            pixel_format,
-            nal_length_size,
-            vps,
-            pps,
-            sps,
-        },
+        config,
     )))
 }
 

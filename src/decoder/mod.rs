@@ -796,6 +796,17 @@ impl Decoder {
             return Ok(());
         }
 
+        // For HEVC, the CICP values were parsed from the VUI of the SPS in the codec configuration.
+        if let CodecConfiguration::Hevc(config) =
+            &self.tiles[decoding_item.usize()][tile_index].codec_config
+        {
+            self.image.color_primaries = config.color_primaries;
+            self.image.transfer_characteristics = config.transfer_characteristics;
+            self.image.matrix_coefficients = config.matrix_coefficients;
+            self.image.yuv_range = config.yuv_range;
+            return Ok(());
+        }
+
         // Only AV1 OBUs can be parsed for CICP values for now.
         if !matches!(
             self.tiles[decoding_item.usize()][tile_index].codec_config,

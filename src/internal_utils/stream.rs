@@ -323,8 +323,10 @@ impl IStream<'_> {
         Ok(())
     }
 
+    // See the section 4.10.3. uvlc() of the AV1 specification.
+    // This is also equivalent to skipping ue(v) and se(v) in Section 9.2 of the H.265
+    // specification.
     pub(crate) fn skip_uvlc(&mut self) -> AvifResult<()> {
-        // See the section 4.10.3. uvlc() of the AV1 specification.
         let mut leading_zeros = 0u128; // leadingZeros
         while !self.read_bool()? {
             leading_zeros += 1;
@@ -335,8 +337,10 @@ impl IStream<'_> {
         Ok(())
     }
 
-    #[cfg(feature = "avm")]
+    #[cfg(any(feature = "avm", feature = "heic"))]
     // Variable Length Coding.
+    // This is also equivalent to ue(v) in Section 9.2 of the H.265 specification (for values that
+    // fit in 32 bits).
     pub(crate) fn read_uvlc(&mut self) -> AvifResult<u32> {
         let mut num_bits = 0;
         while !self.read_bool()? {
@@ -350,6 +354,17 @@ impl IStream<'_> {
         } else {
             0
         })
+    }
+
+    #[cfg(feature = "heic")]
+    // Reads ue(v) (Section 9.2 of the H.265 specification) and returns an error if the value is
+    // larger than max.
+    pub(crate) fn read_uvlc_max(&mut self, max: u32) -> AvifResult<u32> {
+        let value = self.read_uvlc()?;
+        if value > max {
+            return AvifError::bmff_parse_failed("out of range exp-Golomb value");
+        }
+        Ok(value)
     }
 
     #[cfg(feature = "avm")]
@@ -661,6 +676,27 @@ mod tests {
         assert_eq!(stream.read_u64(), Ok(72623859790382856));
         stream.offset = 0;
         assert_eq!(stream.read_uxx(9), AvifError::not_implemented());
+    }
+
+    #[cfg(any(feature = "avm", feature = "heic"))]
+    #[test]
+    fn read_uvlc() {
+        // 1 -> 0, 010 -> 1, 011 -> 2, 00100 -> 3.
+        let data = [0b1010_0110, 0b0100_0000];
+        let mut stream = IStream::create(&data);
+        assert_eq!(stream.read_uvlc(), Ok(0));
+        assert_eq!(stream.read_uvlc(), Ok(1));
+        assert_eq!(stream.read_uvlc(), Ok(2));
+        assert_eq!(stream.read_uvlc(), Ok(3));
+    }
+
+    #[cfg(feature = "heic")]
+    #[test]
+    fn read_uvlc_max() {
+        let data = [0b0110_0110];
+        let mut stream = IStream::create(&data);
+        assert_eq!(stream.read_uvlc_max(2), Ok(2));
+        assert!(stream.read_uvlc_max(1).is_err());
     }
 
     #[test]
