@@ -29,6 +29,31 @@ use std::rc::Rc;
 use test_case::test_case;
 use test_case::test_matrix;
 
+// The decoding tests run with both dav1d and the native AV1 decoder (only
+// available with the native_av1 feature). Falls back to the default decoder if
+// dav1d is not available (for example on Android, which uses MediaCodec).
+const DAV1D: CodecChoice =
+    if cfg!(feature = "dav1d") { CodecChoice::Dav1d } else { CodecChoice::Auto };
+#[cfg(feature = "native_av1")]
+const NATIVE: CodecChoice = CodecChoice::Native;
+// Placeholder that is never used for decoding: the tests return early for
+// NATIVE when the native AV1 decoder is not available. It must differ from
+// DAV1D so that the DAV1D test cases are not skipped as well.
+#[cfg(not(feature = "native_av1"))]
+const NATIVE: CodecChoice = CodecChoice::Aom;
+
+fn decoder_with_codec(codec: CodecChoice) -> decoder::Decoder {
+    let mut decoder = decoder::Decoder::default();
+    decoder.settings.codec_choice = codec;
+    decoder
+}
+
+fn get_decoder_with_codec(filename: &str, codec: CodecChoice) -> decoder::Decoder {
+    let mut decoder = get_decoder(filename);
+    decoder.settings.codec_choice = codec;
+    decoder
+}
+
 macro_rules! pixel_eq {
     ($a:expr, $b:expr) => {
         assert!((i32::from($a) - i32::from($b)).abs() <= 3);
@@ -36,10 +61,13 @@ macro_rules! pixel_eq {
 }
 
 // From avifalphanoispetest.cc
-#[test]
-fn alpha_no_ispe() {
+#[test_matrix([DAV1D, NATIVE])]
+fn alpha_no_ispe(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
     // See https://github.com/AOMediaCodec/libavif/pull/745.
-    let mut decoder = get_decoder("alpha_noispe.avif");
+    let mut decoder = get_decoder_with_codec("alpha_noispe.avif", codec);
     // By default, non-strict files are refused.
     assert!(matches!(
         decoder.settings.strictness,
@@ -66,9 +94,12 @@ fn alpha_no_ispe() {
     assert!(alpha_plane.unwrap().row_bytes > 0);
 }
 
-#[test]
-fn alpha_premultiplied() {
-    let mut decoder = get_decoder("alpha_premultiplied.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn alpha_premultiplied(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec("alpha_premultiplied.avif", codec);
     let res = decoder.parse();
     assert!(res.is_ok());
     let image = decoder.image().expect("image was none");
@@ -88,10 +119,12 @@ fn alpha_premultiplied() {
 }
 
 // From avifanimationtest.cc
+// The native AV1 decoder does not support inter frames (image sequences), so this test only runs
+// with dav1d.
 #[test_case("colors-animated-8bpc.avif")]
 #[test_case("colors-animated-8bpc-audio.avif")]
 fn animated_image(filename: &str) {
-    let mut decoder = get_decoder(filename);
+    let mut decoder = get_decoder_with_codec(filename, DAV1D);
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
@@ -112,10 +145,12 @@ fn animated_image(filename: &str) {
 }
 
 // From avifanimationtest.cc
-#[test_case("colors-animated-8bpc.avif")]
-#[test_case("colors-animated-8bpc-audio.avif")]
-fn animated_image_with_source_set_to_primary_item(filename: &str) {
-    let mut decoder = get_decoder(filename);
+#[test_matrix(["colors-animated-8bpc.avif", "colors-animated-8bpc-audio.avif"], [DAV1D, NATIVE])]
+fn animated_image_with_source_set_to_primary_item(filename: &str, codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec(filename, codec);
     decoder.settings.source = decoder::Source::PrimaryItem;
     let res = decoder.parse();
     assert!(res.is_ok());
@@ -139,9 +174,11 @@ fn animated_image_with_source_set_to_primary_item(filename: &str) {
 }
 
 // From avifanimationtest.cc
+// The native AV1 decoder does not support inter frames (image sequences), so this test only runs
+// with dav1d.
 #[test]
 fn animated_image_with_alpha_and_metadata() {
-    let mut decoder = get_decoder("colors-animated-8bpc-alpha-exif-xmp.avif");
+    let mut decoder = get_decoder_with_codec("colors-animated-8bpc-alpha-exif-xmp.avif", DAV1D);
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
@@ -160,10 +197,12 @@ fn animated_image_with_alpha_and_metadata() {
     }
 }
 
+// The native AV1 decoder does not support inter frames (image sequences), so this test only runs
+// with dav1d.
 #[test]
 fn animated_image_with_depth_and_metadata() {
     // Depth map data is not supported and should be ignored.
-    let mut decoder = get_decoder("colors-animated-8bpc-depth-exif-xmp.avif");
+    let mut decoder = get_decoder_with_codec("colors-animated-8bpc-depth-exif-xmp.avif", DAV1D);
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
@@ -182,10 +221,13 @@ fn animated_image_with_depth_and_metadata() {
     }
 }
 
-#[test]
-fn animated_image_with_depth_and_metadata_source_set_to_primary_item() {
+#[test_matrix([DAV1D, NATIVE])]
+fn animated_image_with_depth_and_metadata_source_set_to_primary_item(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
     // Depth map data is not supported and should be ignored.
-    let mut decoder = get_decoder("colors-animated-8bpc-depth-exif-xmp.avif");
+    let mut decoder = get_decoder_with_codec("colors-animated-8bpc-depth-exif-xmp.avif", codec);
     decoder.settings.source = decoder::Source::PrimaryItem;
     let res = decoder.parse();
     assert!(res.is_ok());
@@ -208,9 +250,11 @@ fn animated_image_with_depth_and_metadata_source_set_to_primary_item() {
     assert!(decoder.next_image().is_err());
 }
 
+// The native AV1 decoder does not support inter frames (image sequences), so this test only runs
+// with dav1d.
 #[test]
 fn animated_image_seeking() {
-    let mut decoder = get_decoder("anim.avif");
+    let mut decoder = get_decoder_with_codec("anim.avif", DAV1D);
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
@@ -291,10 +335,13 @@ fn animated_image_with_unsupported_hdlr() {
 }
 
 // From avifdecodetest.cc
-#[test]
-fn color_grid_alpha_no_grid() {
+#[test_matrix([DAV1D, NATIVE])]
+fn color_grid_alpha_no_grid(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
     // Test case from https://github.com/AOMediaCodec/libavif/issues/1203.
-    let mut decoder = get_decoder("color_grid_alpha_nogrid.avif");
+    let mut decoder = get_decoder_with_codec("color_grid_alpha_nogrid.avif", codec);
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
@@ -312,23 +359,39 @@ fn color_grid_alpha_no_grid() {
     assert!(alpha_plane.unwrap().row_bytes > 0);
 }
 
-#[test_case("paris_icc_exif_xmp.avif")]
-#[test_case("sofa_grid1x5_420.avif")]
-#[test_case("color_grid_alpha_nogrid.avif")]
-#[test_case("seine_sdr_gainmap_srgb.avif")]
-fn image_content_to_decode_none(filename: &str) {
-    let mut decoder = get_decoder(filename);
+#[test_matrix(
+    [
+        "paris_icc_exif_xmp.avif",
+        "sofa_grid1x5_420.avif",
+        "color_grid_alpha_nogrid.avif",
+        "seine_sdr_gainmap_srgb.avif"
+    ],
+    [DAV1D, NATIVE]
+)]
+fn image_content_to_decode_none(filename: &str, codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec(filename, codec);
     decoder.settings.image_content_to_decode = ImageContentType::None;
     assert!(decoder.parse().is_ok());
     assert!(decoder.next_image().is_err());
 }
 
-#[test_case("draw_points_idat.avif")]
-#[test_case("draw_points_idat_metasize0.avif")]
-#[test_case("draw_points_idat_progressive.avif")]
-#[test_case("draw_points_idat_progressive_metasize0.avif")]
-fn idat(filename: &str) {
-    let mut decoder = get_decoder(filename);
+#[test_matrix(
+    [
+        "draw_points_idat.avif",
+        "draw_points_idat_metasize0.avif",
+        "draw_points_idat_progressive.avif",
+        "draw_points_idat_progressive_metasize0.avif"
+    ],
+    [DAV1D, NATIVE]
+)]
+fn idat(filename: &str, codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec(filename, codec);
     assert!(decoder.parse().is_ok());
     if !HAS_DECODER {
         return;
@@ -338,6 +401,8 @@ fn idat(filename: &str) {
 }
 
 // From avifprogressivetest.cc
+// The native AV1 decoder does not support progressive (layered) images, so this test only runs with
+// dav1d.
 #[test_case("progressive_dimension_change.avif", 2, 256, 256; "progressive_dimension_change")]
 #[test_case("progressive_layered_grid.avif", 2, 512, 256; "progressive_layered_grid")]
 #[test_case("progressive_quality_change.avif", 2, 256, 256; "progressive_quality_change")]
@@ -347,7 +412,7 @@ fn idat(filename: &str) {
 fn progressive(filename: &str, layer_count: u32, width: u32, height: u32) {
     let mut filename_with_prefix = String::from("progressive/");
     filename_with_prefix.push_str(filename);
-    let mut decoder = get_decoder(&filename_with_prefix);
+    let mut decoder = get_decoder_with_codec(&filename_with_prefix, DAV1D);
 
     decoder.settings.allow_progressive = false;
     let res = decoder.parse();
@@ -445,10 +510,13 @@ fn decoder_parse_icc_exif_xmp() {
     assert_eq!(image.xmp[3], 112);
 }
 
-#[test]
-fn decode_gainmap() {
+#[test_matrix([DAV1D, NATIVE])]
+fn decode_gainmap(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
     let filename = "tmap_primary_item.avif";
-    let mut decoder = get_decoder(filename);
+    let mut decoder = get_decoder_with_codec(filename, codec);
     let res = decoder.parse();
     assert!(res.is_ok());
     // Gain map found but not decoded.
@@ -460,7 +528,7 @@ fn decode_gainmap() {
     assert_eq!(decoder.gainmap().image.width, 0);
 
     // Decode again with image_content_to_decode = ImageContentType::All.
-    decoder = get_decoder(filename);
+    decoder = get_decoder_with_codec(filename, codec);
     decoder.settings.image_content_to_decode = ImageContentType::All;
     let res = decoder.parse();
     assert!(res.is_ok());
@@ -474,9 +542,12 @@ fn decode_gainmap() {
 }
 
 // From avifgainmaptest.cc
-#[test]
-fn color_grid_gainmap_different_grid() {
-    let mut decoder = get_decoder("color_grid_gainmap_different_grid.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn color_grid_gainmap_different_grid(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec("color_grid_gainmap_different_grid.avif", codec);
     decoder.settings.image_content_to_decode = ImageContentType::All;
     let res = decoder.parse();
     assert!(res.is_ok());
@@ -502,9 +573,12 @@ fn color_grid_gainmap_different_grid() {
 }
 
 // From avifgainmaptest.cc
-#[test]
-fn color_grid_alpha_grid_gainmap_nogrid() {
-    let mut decoder = get_decoder("color_grid_alpha_grid_gainmap_nogrid.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn color_grid_alpha_grid_gainmap_nogrid(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec("color_grid_alpha_grid_gainmap_nogrid.avif", codec);
     decoder.settings.image_content_to_decode = ImageContentType::All;
     let res = decoder.parse();
     assert!(res.is_ok());
@@ -530,9 +604,12 @@ fn color_grid_alpha_grid_gainmap_nogrid() {
 }
 
 // From avifgainmaptest.cc
-#[test]
-fn color_nogrid_alpha_nogrid_gainmap_grid() {
-    let mut decoder = get_decoder("color_nogrid_alpha_nogrid_gainmap_grid.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn color_nogrid_alpha_nogrid_gainmap_grid(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec("color_nogrid_alpha_nogrid_gainmap_grid.avif", codec);
     decoder.settings.image_content_to_decode = ImageContentType::All;
     let res = decoder.parse();
     assert!(res.is_ok());
@@ -558,11 +635,14 @@ fn color_nogrid_alpha_nogrid_gainmap_grid() {
 }
 
 // From aviftransformtest.cc
-#[test]
-fn lenient_missing_alpha_transformative_properties() {
-    let mut decoder_ref = get_decoder("abc_color_irot_alpha_irot.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn lenient_missing_alpha_transformative_properties(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder_ref = get_decoder_with_codec("abc_color_irot_alpha_irot.avif", codec);
     assert!(decoder_ref.parse().is_ok());
-    let mut decoder = get_decoder("abc_color_irot_alpha_NOirot.avif");
+    let mut decoder = get_decoder_with_codec("abc_color_irot_alpha_NOirot.avif", codec);
     assert!(decoder.parse().is_ok());
     if HAS_DECODER {
         assert!(decoder_ref.next_image().is_ok());
@@ -592,15 +672,20 @@ fn gainmap_oriented() {
         ("gainmap_oriented.avif", 34),
         ("color_grid_gainmap_different_grid.avif", 600)
     ],
-    [ImageContentType::Color, ImageContentType::ColorAndAlpha, ImageContentType::GainMap, ImageContentType::ColorAndGainMap, ImageContentType::All]
+    [ImageContentType::Color, ImageContentType::ColorAndAlpha, ImageContentType::GainMap, ImageContentType::ColorAndGainMap, ImageContentType::All],
+    [DAV1D, NATIVE]
 )]
 fn decoded_row_count(
     filename_and_row_count: (&str, u32),
     image_content_to_decode: ImageContentType,
+    codec: CodecChoice,
 ) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
     let filename = filename_and_row_count.0;
     let expected_row_count = filename_and_row_count.1;
-    let mut decoder = get_decoder(filename);
+    let mut decoder = get_decoder_with_codec(filename, codec);
     decoder.settings.image_content_to_decode = image_content_to_decode;
     let res = decoder.parse();
     assert!(res.is_ok());
@@ -616,17 +701,25 @@ fn decoded_row_count(
 // From avifgainmaptest.cc
 // Tests files with gain maps that should be ignored by the decoder for various
 // reasons.
-// File with unsupported version field.
-#[test_case("unsupported_gainmap_version.avif")]
-// File with unsupported minimum version field.
-#[test_case("unsupported_gainmap_minimum_version.avif")]
-// Missing 'tmap' brand in ftyp box.
-#[test_case("seine_sdr_gainmap_notmapbrand.avif")]
-// Gain map not present before the base image in 'altr' box.
-#[test_case("seine_hdr_gainmap_wrongaltr.avif")]
-fn decode_unsupported_version(filename: &str) {
+#[test_matrix(
+    [
+        // File with unsupported version field.
+        "unsupported_gainmap_version.avif",
+        // File with unsupported minimum version field.
+        "unsupported_gainmap_minimum_version.avif",
+        // Missing 'tmap' brand in ftyp box.
+        "seine_sdr_gainmap_notmapbrand.avif",
+        // Gain map not present before the base image in 'altr' box.
+        "seine_hdr_gainmap_wrongaltr.avif"
+    ],
+    [DAV1D, NATIVE]
+)]
+fn decode_unsupported_version(filename: &str, codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
     // Parse with various settings.
-    let mut decoder = get_decoder(filename);
+    let mut decoder = get_decoder_with_codec(filename, codec);
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
@@ -637,7 +730,7 @@ fn decode_unsupported_version(filename: &str) {
     assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.0, 0);
 
     // Decode again with image_content_to_decode = ImageContentType::All.
-    decoder = get_decoder(filename);
+    decoder = get_decoder_with_codec(filename, codec);
     decoder.settings.image_content_to_decode = ImageContentType::All;
     let res = decoder.parse();
     assert!(res.is_ok());
@@ -650,9 +743,15 @@ fn decode_unsupported_version(filename: &str) {
 }
 
 // From avifgainmaptest.cc
-#[test]
-fn decode_unsupported_writer_version_with_extra_bytes() {
-    let mut decoder = get_decoder("unsupported_gainmap_writer_version_with_extra_bytes.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn decode_unsupported_writer_version_with_extra_bytes(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec(
+        "unsupported_gainmap_writer_version_with_extra_bytes.avif",
+        codec,
+    );
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
@@ -665,9 +764,15 @@ fn decode_unsupported_writer_version_with_extra_bytes() {
 }
 
 // From avifgainmaptest.cc
-#[test]
-fn decode_supported_writer_version_with_extra_bytes() {
-    let mut decoder = get_decoder("supported_gainmap_writer_version_with_extra_bytes.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn decode_supported_writer_version_with_extra_bytes(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec(
+        "supported_gainmap_writer_version_with_extra_bytes.avif",
+        codec,
+    );
     let res = decoder.parse();
     // Fails to decode: there are extra bytes at the end of the gain map metadata
     // that shouldn't be there.
@@ -675,9 +780,12 @@ fn decode_supported_writer_version_with_extra_bytes() {
 }
 
 // From avifgainmaptest.cc
-#[test]
-fn decode_ignore_gain_map_but_read_metadata() {
-    let mut decoder = get_decoder("seine_sdr_gainmap_srgb.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn decode_ignore_gain_map_but_read_metadata(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec("seine_sdr_gainmap_srgb.avif", codec);
 
     let res = decoder.parse();
     assert!(res.is_ok());
@@ -694,9 +802,12 @@ fn decode_ignore_gain_map_but_read_metadata() {
 }
 
 // From avifgainmaptest.cc
-#[test]
-fn decode_ignore_color_and_alpha() {
-    let mut decoder = get_decoder("seine_sdr_gainmap_srgb.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn decode_ignore_color_and_alpha(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec("seine_sdr_gainmap_srgb.avif", codec);
     decoder.settings.image_content_to_decode = ImageContentType::GainMap;
 
     let res = decoder.parse();
@@ -724,12 +835,20 @@ fn decode_ignore_color_and_alpha() {
 }
 
 // From avifgainmaptest.cc
-#[test_case("paris_icc_exif_xmp.avif")]
-#[test_case("sofa_grid1x5_420.avif")]
-#[test_case("color_grid_alpha_nogrid.avif")]
-#[test_case("seine_sdr_gainmap_srgb.avif")]
-fn decode_ignore_all(filename: &str) {
-    let mut decoder = get_decoder(filename);
+#[test_matrix(
+    [
+        "paris_icc_exif_xmp.avif",
+        "sofa_grid1x5_420.avif",
+        "color_grid_alpha_nogrid.avif",
+        "seine_sdr_gainmap_srgb.avif"
+    ],
+    [DAV1D, NATIVE]
+)]
+fn decode_ignore_all(filename: &str, codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec(filename, codec);
     // Ignore both the main image and the gain map.
     decoder.settings.image_content_to_decode = ImageContentType::None;
     // But do read the gain map metadata
@@ -774,11 +893,13 @@ fn clli(filename: &str, max_cll: u16, max_pall: u16) {
     }
 }
 
+// The native AV1 decoder does not support inter frames (image sequences), so this test only runs
+// with dav1d.
 #[test]
 fn raw_io() {
     let data =
         std::fs::read(get_test_file("colors-animated-8bpc.avif")).expect("Unable to read file");
-    let mut decoder = decoder::Decoder::default();
+    let mut decoder = decoder_with_codec(DAV1D);
     unsafe {
         decoder
             .set_io_raw(data.as_ptr(), data.len())
@@ -828,11 +949,13 @@ impl decoder::IO for CustomIO {
     }
 }
 
+// The native AV1 decoder does not support inter frames (image sequences), so this test only runs
+// with dav1d.
 #[test]
 fn custom_io() {
     let data =
         std::fs::read(get_test_file("colors-animated-8bpc.avif")).expect("Unable to read file");
-    let mut decoder = decoder::Decoder::default();
+    let mut decoder = decoder_with_codec(DAV1D);
     let available_size_rc = Rc::new(RefCell::new(data.len()));
     let io = Box::new(CustomIO {
         available_size_rc: available_size_rc.clone(),
@@ -916,8 +1039,11 @@ fn expected_min_decoded_row_count_computation() {
     );
 }
 
-#[test]
-fn incremental_decode() {
+#[test_matrix([DAV1D, NATIVE])]
+fn incremental_decode(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
     // Grid item offsets for sofa_grid1x5_420.avif:
     // Each line is "$extent_offset + $extent_length".
     let grid_cell_offsets: Vec<usize> = vec![
@@ -931,7 +1057,7 @@ fn incremental_decode() {
     let data = std::fs::read(get_test_file("sofa_grid1x5_420.avif")).expect("Unable to read file");
     let len = data.len();
     let available_size_rc = Rc::new(RefCell::new(0usize));
-    let mut decoder = decoder::Decoder::default();
+    let mut decoder = decoder_with_codec(codec);
     decoder.settings.allow_incremental = true;
     let io = Box::new(CustomIO {
         available_size_rc: available_size_rc.clone(),
@@ -996,6 +1122,8 @@ fn incremental_decode() {
     // TODO: check if incremental and non incremental produces same output.
 }
 
+// The native AV1 decoder does not support progressive (layered) images, so this test only runs with
+// dav1d.
 #[test]
 fn progressive_partial_data() -> AvifResult<()> {
     let data = std::fs::read(get_test_file(
@@ -1004,7 +1132,7 @@ fn progressive_partial_data() -> AvifResult<()> {
     .expect("Unable to read file");
     let len = data.len();
     let available_size_rc = Rc::new(RefCell::new(0usize));
-    let mut decoder = decoder::Decoder::default();
+    let mut decoder = decoder_with_codec(DAV1D);
     decoder.settings.allow_progressive = true;
     let io = Box::new(CustomIO {
         available_size_rc: available_size_rc.clone(),
@@ -1080,10 +1208,12 @@ fn progressive_partial_data() -> AvifResult<()> {
     Ok(())
 }
 
+// The native AV1 decoder does not support inter frames (image sequences), so this test only runs
+// with dav1d.
 #[allow(clippy::zero_prefixed_literal)]
 #[test_matrix(1u32..=2)]
 fn nth_image(max_threads: u32) {
-    let mut decoder = get_decoder("colors-animated-8bpc.avif");
+    let mut decoder = get_decoder_with_codec("colors-animated-8bpc.avif", DAV1D);
     decoder.settings.max_threads = max_threads;
     let res = decoder.parse();
     assert!(res.is_ok());
@@ -1102,9 +1232,12 @@ fn nth_image(max_threads: u32) {
     assert!(decoder.nth_image(50).is_err());
 }
 
-#[test]
-fn color_and_alpha_dimensions_do_not_match() {
-    let mut decoder = get_decoder("invalid_color10x10_alpha5x5.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn color_and_alpha_dimensions_do_not_match(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec("invalid_color10x10_alpha5x5.avif", codec);
     // Parsing should succeed.
     let res = decoder.parse();
     assert!(res.is_ok());
@@ -1120,9 +1253,12 @@ fn color_and_alpha_dimensions_do_not_match() {
     assert!(res.is_err());
 }
 
-#[test]
-fn rgb_conversion_alpha_premultiply() -> AvifResult<()> {
-    let mut decoder = get_decoder("alpha.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn rgb_conversion_alpha_premultiply(codec: CodecChoice) -> AvifResult<()> {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return Ok(());
+    }
+    let mut decoder = get_decoder_with_codec("alpha.avif", codec);
     let res = decoder.parse();
     assert!(res.is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
@@ -1139,9 +1275,12 @@ fn rgb_conversion_alpha_premultiply() -> AvifResult<()> {
     Ok(())
 }
 
-#[test]
-fn white_1x1() -> AvifResult<()> {
-    let mut decoder = get_decoder("white_1x1.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn white_1x1(codec: CodecChoice) -> AvifResult<()> {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return Ok(());
+    }
+    let mut decoder = get_decoder_with_codec("white_1x1.avif", codec);
     assert_eq!(decoder.parse(), Ok(()));
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
     // Android MediaCodec does not support decoding 1x1 images.
@@ -1165,9 +1304,12 @@ fn white_1x1() -> AvifResult<()> {
     Ok(())
 }
 
-#[test]
-fn white_2x2() -> AvifResult<()> {
-    let mut decoder = get_decoder("white_2x2.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn white_2x2(codec: CodecChoice) -> AvifResult<()> {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return Ok(());
+    }
+    let mut decoder = get_decoder_with_codec("white_2x2.avif", codec);
     assert_eq!(decoder.parse(), Ok(()));
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
     if !HAS_DECODER {
@@ -1205,15 +1347,18 @@ fn white_2x2_mdat_size0() -> AvifResult<()> {
     Ok(())
 }
 
-#[test]
-fn white_2x2_meta_size0() -> AvifResult<()> {
+#[test_matrix([DAV1D, NATIVE])]
+fn white_2x2_meta_size0(codec: CodecChoice) -> AvifResult<()> {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return Ok(());
+    }
     // Edit the file to simulate a 'meta' box with size 0 (invalid).
     let mut file_bytes = std::fs::read(get_test_file("white_2x2.avif")).unwrap();
     let meta = *b"meta";
     let meta_size_pos = file_bytes.windows(4).position(|w| w == meta).unwrap() - 4;
     file_bytes[meta_size_pos + 3] = b'\0';
 
-    let mut decoder = decoder::Decoder::default();
+    let mut decoder = decoder_with_codec(codec);
     decoder.set_io_vec(file_bytes);
 
     // This should fail because the meta box contains the mdat box.
@@ -1297,10 +1442,18 @@ fn iref_child_box_size_mismatch(declared_size: u8) {
 // The alpha track of these files names the color track 1 next to track 3 in its 'tref' box: in a
 // second 'auxl' box after the one naming track 1, and ahead of track 1 in a single 'auxl' box.
 // Section 8.3.3.2 of ISO/IEC 14496-12 represents the tracks referenced as an array of track_IDs.
-#[test_case("colors-animated-8bpc-alpha-auxl-two-boxes.avif"; "two_auxl_boxes")]
-#[test_case("colors-animated-8bpc-alpha-auxl-two-track-ids.avif"; "auxl_with_two_track_ids")]
-fn alpha_track_auxl_reference(filename: &str) {
-    let mut decoder = get_decoder(filename);
+#[test_matrix(
+    [
+        "colors-animated-8bpc-alpha-auxl-two-boxes.avif",
+        "colors-animated-8bpc-alpha-auxl-two-track-ids.avif"
+    ],
+    [DAV1D, NATIVE]
+)]
+fn alpha_track_auxl_reference(filename: &str, codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec(filename, codec);
     assert_eq!(decoder.parse(), Ok(()));
     let image = decoder.image().expect("image was none");
     assert!(image.alpha_present);
@@ -1330,9 +1483,12 @@ fn color_track_prem_two_targets() {
 // color item 1 and the Exif item 3. Section 8.11.12.1 of ISO/IEC 14496-12 represents the items
 // linked to as an array of to_item_IDs. Keeping only the last one dropped item 1, and with it
 // the alpha channel.
-#[test]
-fn auxl_with_two_targets() {
-    let mut decoder = get_decoder("circle_auxl_two_targets.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn auxl_with_two_targets(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec("circle_auxl_two_targets.avif", codec);
     assert_eq!(decoder.parse(), Ok(()));
     let image = decoder.image().expect("image was none");
     assert!(image.alpha_present);
@@ -1372,8 +1528,11 @@ fn dimg_shared() {
     );
 }
 
-#[test]
-fn dimg_shared_between_grids() {
+#[test_matrix([DAV1D, NATIVE])]
+fn dimg_shared_between_grids(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
     if !HAS_DECODER {
         return;
     }
@@ -1381,24 +1540,27 @@ fn dimg_shared_between_grids() {
     // of the items 2 to 5 is an input of two derived items. The ordered 'dimg' list
     // can express that, and the tiles stay consistent because both grids use the
     // same ones.
-    let mut decoder = get_decoder("color_grid_alpha_grid_shared_tiles.avif");
+    let mut decoder = get_decoder_with_codec("color_grid_alpha_grid_shared_tiles.avif", codec);
     assert!(decoder.parse().is_ok());
     assert!(decoder.next_image().is_ok());
     let image = decoder.image().expect("image was none");
     assert!(image.alpha_present);
 }
 
-#[test]
-fn dimg_ordering() {
+#[test_matrix([DAV1D, NATIVE])]
+fn dimg_ordering(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
     if !HAS_DECODER {
         return;
     }
-    let mut decoder1 = get_decoder("sofa_grid1x5_420.avif");
+    let mut decoder1 = get_decoder_with_codec("sofa_grid1x5_420.avif", codec);
     let res = decoder1.parse();
     assert!(res.is_ok());
     let res = decoder1.next_image();
     assert!(res.is_ok());
-    let mut decoder2 = get_decoder("sofa_grid1x5_420_random_dimg_order.avif");
+    let mut decoder2 = get_decoder_with_codec("sofa_grid1x5_420_random_dimg_order.avif", codec);
     let res = decoder2.parse();
     assert!(res.is_ok());
     let res = decoder2.next_image();
@@ -1675,10 +1837,15 @@ const EXPECTED_OVERLAY_IMAGE_INFOS: [ExpectedOverlayImageInfo; 4] = [
 ];
 
 #[allow(clippy::zero_prefixed_literal)]
-#[test_matrix(0usize..4)]
-fn overlay(index: usize) {
+#[test_matrix(0usize..4,
+    [DAV1D, NATIVE]
+)]
+fn overlay(index: usize, codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
     let info = &EXPECTED_OVERLAY_IMAGE_INFOS[index];
-    let mut decoder = get_decoder(info.filename);
+    let mut decoder = get_decoder_with_codec(info.filename, codec);
     decoder.settings.strictness = decoder::Strictness::None;
     let res = decoder.parse();
     assert!(res.is_ok());
@@ -1733,11 +1900,20 @@ fn yuv_range(filename: &str, expected_yuv_range: YuvRange) {
     assert_eq!(image.yuv_range, expected_yuv_range);
 }
 
-#[test_case("weld_sato_8plus8bit.avif", false)]
-#[test_case("weld_sato_8plus8bit_alpha.avif", true)]
-#[test_case("weld_sato_12plus4bit.avif", false)]
-fn sato_16bit(filename: &str, has_alpha: bool) {
-    let mut decoder = get_decoder(filename);
+#[test_matrix(
+    [
+        ("weld_sato_8plus8bit.avif", false),
+        ("weld_sato_8plus8bit_alpha.avif", true),
+        ("weld_sato_12plus4bit.avif", false)
+    ],
+    [DAV1D, NATIVE]
+)]
+fn sato_16bit(filename_and_has_alpha: (&str, bool), codec: CodecChoice) {
+    let (filename, has_alpha) = filename_and_has_alpha;
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec(filename, codec);
     decoder.settings.allow_sample_transform = true;
     assert!(decoder.parse().is_ok());
     assert_eq!(has_alpha, decoder.image().unwrap().alpha_present);
@@ -1751,9 +1927,12 @@ fn sato_16bit(filename: &str, has_alpha: bool) {
     // TODO: compare with reference weld_16bit.png
 }
 
-#[test]
-fn sato_disabled() {
-    let mut decoder = get_decoder("weld_sato_8plus8bit.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn sato_disabled(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec("weld_sato_8plus8bit.avif", codec);
     decoder.settings.allow_sample_transform = false;
     assert!(decoder.parse().is_ok());
     if !HAS_DECODER {
@@ -1764,9 +1943,12 @@ fn sato_disabled() {
     assert_eq!(decoder.image().unwrap().depth, 8);
 }
 
-#[test]
-fn sato_16bit_decoder_reset() {
-    let mut decoder = get_decoder("weld_sato_12plus4bit.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn sato_16bit_decoder_reset(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec("weld_sato_12plus4bit.avif", codec);
     decoder.settings.allow_sample_transform = true;
     assert_eq!(decoder.parse(), Ok(()));
     if !HAS_NON_ANDROID_DECODER {
@@ -1781,15 +1963,18 @@ fn sato_16bit_decoder_reset() {
     assert_eq!(16, decoder.image().unwrap().depth);
 }
 
-#[test]
-fn b_497926602() -> AvifResult<()> {
+#[test_matrix([DAV1D, NATIVE])]
+fn b_497926602(codec: CodecChoice) -> AvifResult<()> {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return Ok(());
+    }
     // The file has two cells with the mdat payloads (offset, size) at (424, 36) and (460, 35).
     let data =
         std::fs::read(get_test_file("grid_cell0_444_cell1_420.avif")).expect("Unable to read file");
     let len = data.len();
     // Make only the first cell available.
     let available_size_rc = Rc::new(RefCell::new(460));
-    let mut decoder = decoder::Decoder::default();
+    let mut decoder = decoder_with_codec(codec);
     decoder.settings.allow_incremental = true;
     let io = Box::new(CustomIO {
         available_size_rc: available_size_rc.clone(),
@@ -1813,11 +1998,20 @@ fn b_497926602() -> AvifResult<()> {
     Ok(())
 }
 
-#[test_case("white_iden_chain_with_imir.avif", false, false)]
-#[test_case("white_iden_chain_with_imir_primary.avif", false, true)]
-#[test_case("white_iden_irot.avif", true, false)]
-fn identity_derivation(filename: &str, has_irot: bool, has_imir: bool) -> AvifResult<()> {
-    let mut decoder = get_decoder(filename);
+#[test_matrix(
+    [
+        ("white_iden_chain_with_imir.avif", false, false),
+        ("white_iden_chain_with_imir_primary.avif", false, true),
+        ("white_iden_irot.avif", true, false)
+    ],
+    [DAV1D, NATIVE]
+)]
+fn identity_derivation(params: (&str, bool, bool), codec: CodecChoice) -> AvifResult<()> {
+    let (filename, has_irot, has_imir) = params;
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return Ok(());
+    }
+    let mut decoder = get_decoder_with_codec(filename, codec);
     assert!(decoder.parse().is_ok());
     let image = decoder.image().expect("image was none");
     assert_eq!(image.irot_angle.is_some(), has_irot);
@@ -1838,20 +2032,26 @@ fn identity_derivation_invalid(filename: &str) -> AvifResult<()> {
     Ok(())
 }
 
-#[test_case(
-    "white_2x2_multiple_iloc_entries_for_same_item.avif",
-    decoder::StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed
+#[test_matrix(
+    [
+        (
+            "white_2x2_multiple_iloc_entries_for_same_item.avif",
+            decoder::StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed
+        ),
+        ("white_2x2_invalid_exif.avif", decoder::StrictnessFlag::ExifValid),
+        ("heic/blue_hevc_brand_without_moov.heic", decoder::StrictnessFlag::HevcBrandRequiresMoov)
+    ],
+    [DAV1D, NATIVE]
 )]
-#[test_case("white_2x2_invalid_exif.avif", decoder::StrictnessFlag::ExifValid)]
-#[test_case(
-    "heic/blue_hevc_brand_without_moov.heic",
-    decoder::StrictnessFlag::HevcBrandRequiresMoov
-)]
-fn strictness(filename: &str, strictness_flag: decoder::StrictnessFlag) {
+fn strictness(filename_and_strictness_flag: (&str, decoder::StrictnessFlag), codec: CodecChoice) {
+    let (filename, strictness_flag) = filename_and_strictness_flag;
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
     if filename.contains("heic") && !cfg!(feature = "heic") {
         return;
     }
-    let mut decoder = get_decoder(filename);
+    let mut decoder = get_decoder_with_codec(filename, codec);
     // By default, non-strict files are refused.
     assert!(matches!(
         decoder.settings.strictness,
@@ -1877,9 +2077,12 @@ fn thumbnail_not_present() {
     ));
 }
 
-#[test]
-fn nth_image_properties() {
-    let mut decoder = get_decoder("colors-animated-8bpc-alpha-exif-xmp.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn nth_image_properties(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec("colors-animated-8bpc-alpha-exif-xmp.avif", codec);
     assert!(decoder.parse().is_ok());
     assert_eq!(decoder.image_count(), 5);
     for i in 0..5 {
@@ -1900,12 +2103,15 @@ fn nth_image_properties() {
     ));
 }
 
-#[test]
-fn thumbnail_max_extent_grid_per_tile_alpha() {
-    let mut primary_decoder = get_decoder("thumbnails_grid_per_tile_alpha.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn thumbnail_max_extent_grid_per_tile_alpha(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    let mut primary_decoder = get_decoder_with_codec("thumbnails_grid_per_tile_alpha.avif", codec);
     assert_eq!(primary_decoder.parse(), Ok(()));
 
-    let mut decoder = get_decoder("thumbnails_grid_per_tile_alpha.avif");
+    let mut decoder = get_decoder_with_codec("thumbnails_grid_per_tile_alpha.avif", codec);
     decoder.settings.source = decoder::Source::Thumbnail;
     assert_eq!(decoder.parse(), Ok(()));
     assert_eq!(decoder.image_count(), 2);
@@ -1945,6 +2151,8 @@ fn thumbnail_max_extent_grid_per_tile_alpha() {
     assert!(!image1.alpha_present);
 }
 
+// The native AV1 decoder does not support progressive (layered) images, so this test only runs with
+// dav1d.
 #[test]
 fn thumbnail_max_extent_progressive_and_lsel() {
     // Primary item (item 1) and both thumbnails share a 2-layer progressive AV1 payload at offset
@@ -1954,7 +2162,7 @@ fn thumbnail_max_extent_progressive_and_lsel() {
     //    nth_image_max_extent(0) must cover the full 360-byte 2-layer payload.
     //  - thumbnail 1 (item 3): layered item with a1lx + lsel(0). nth_image_max_extent(1) must
     //    report only layer 0's 58-byte extent.
-    let mut decoder = get_decoder("thumbnails_progressive_lsel.avif");
+    let mut decoder = get_decoder_with_codec("thumbnails_progressive_lsel.avif", DAV1D);
     decoder.settings.source = decoder::Source::Thumbnail;
     decoder.settings.allow_progressive = true;
     assert_eq!(decoder.parse(), Ok(()));
@@ -1977,7 +2185,7 @@ fn thumbnail_max_extent_progressive_and_lsel() {
         return;
     }
     // Reference decode of the full 2-layer primary item (non-progressive mode).
-    let mut ref_decoder = get_decoder("thumbnails_progressive_lsel.avif");
+    let mut ref_decoder = get_decoder_with_codec("thumbnails_progressive_lsel.avif", DAV1D);
     assert_eq!(ref_decoder.parse(), Ok(()));
     assert_eq!(ref_decoder.next_image(), Ok(()));
     let ref_image = ref_decoder.image().unwrap();
@@ -1991,15 +2199,21 @@ fn thumbnail_max_extent_progressive_and_lsel() {
     assert!(!utils::are_images_equal(decoder.image().unwrap(), ref_image).unwrap());
 }
 
-#[test_case("paris_10bpc.avif")]
-#[test_case("colors-animated-8bpc.avif")]
-fn decode_with_default_options(filename: &str) -> AvifResult<()> {
+#[test_matrix(["paris_10bpc.avif", "colors-animated-8bpc.avif"], [DAV1D, NATIVE])]
+fn decode_with_default_options(filename: &str, codec: CodecChoice) -> AvifResult<()> {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return Ok(());
+    }
+    // The native AV1 decoder does not support inter frames (image sequences).
+    if codec == NATIVE && filename == "colors-animated-8bpc.avif" {
+        return Ok(());
+    }
     if !HAS_DECODER {
         return Ok(());
     }
-    let mut ref_decoder = get_decoder(filename);
+    let mut ref_decoder = get_decoder_with_codec(filename, codec);
     ref_decoder.parse()?;
-    let mut decoder = get_decoder(filename);
+    let mut decoder = get_decoder_with_codec(filename, codec);
     decoder.parse()?;
     let options = decoder::DecodeOptions::default();
     let image_count = ref_decoder.image_count();
@@ -2022,9 +2236,12 @@ fn decode_with_default_options(filename: &str) -> AvifResult<()> {
     Ok(())
 }
 
-#[test]
-fn region_decode_not_implemented() -> AvifResult<()> {
-    let mut decoder = get_decoder("paris_10bpc.avif");
+#[test_matrix([DAV1D, NATIVE])]
+fn region_decode_not_implemented(codec: CodecChoice) -> AvifResult<()> {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return Ok(());
+    }
+    let mut decoder = get_decoder_with_codec("paris_10bpc.avif", codec);
     decoder.parse()?;
     let options = decoder::DecodeOptions {
         crop_rect: Some(CropRect {
