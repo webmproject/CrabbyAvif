@@ -189,10 +189,58 @@ impl avifEncoder {
             avifResult::Ok
         }
     }
-}
 
-fn rust_encoder<'a>(encoder: *mut avifEncoder) -> &'a mut Encoder {
-    &mut deref_mut!(encoder).rust_encoder
+    fn add_image(
+        &mut self,
+        image: &avifImage,
+        duration_in_timescales: u64,
+        add_image_flags: avifAddImageFlags,
+    ) -> avifResult {
+        let res = self.initialize_or_update_rust_encoder();
+        if res != avifResult::Ok {
+            return res;
+        }
+        let gainmap_res = image.gainmap();
+        self.diag.set_from_result(&gainmap_res);
+        let gainmap = match gainmap_res {
+            Ok(gainmap) => gainmap,
+            Err(err) => return (&err).into(),
+        };
+        let image_res: AvifResult<image::Image> = image.try_into();
+        self.diag.set_from_result(&image_res);
+        let rust_image = match image_res {
+            Ok(rust_image) => rust_image,
+            Err(err) => return (&err).into(),
+        };
+        let res =
+            if (add_image_flags & AVIF_ADD_IMAGE_FLAG_SINGLE) != 0 || self.extraLayerCount != 0 {
+                match &gainmap {
+                    Some(gainmap) => self.rust_encoder.add_image_gainmap(&rust_image, gainmap),
+                    None => self.rust_encoder.add_image(&rust_image),
+                }
+            } else {
+                self.rust_encoder
+                    .add_image_for_sequence(&rust_image, duration_in_timescales)
+            };
+        self.diag.set_from_result(&res);
+        res.into()
+    }
+
+    fn finish(&mut self, output: &mut avifRWData) -> avifResult {
+        let res = self.rust_encoder.finish();
+        self.diag.set_from_result(&res);
+        match res {
+            Ok(encoded_data) => {
+                let data_ptr = encoded_data.as_ptr();
+                let data_len = encoded_data.len();
+                // SAFETY: `output` points to a valid mutable `avifRWData` with a well-formed (or
+                // default) allocation, and `data_ptr` is valid for reads of `data_len` initialized
+                // bytes from `encoded_data` and disjoint from `output`.
+                unsafe { crabby_avifRWDataSet(output, data_ptr, data_len) }
+            }
+            Err(err) => (&err).into(),
+        }
+    }
 }
 
 /// # Safety
@@ -227,13 +275,14 @@ pub unsafe extern "C" fn crabby_avifEncoderWrite(
     check_pointer!(image);
     check_pointer!(output);
 
-    // SAFETY: Pre-conditions are met to call this function.
-    let res = unsafe { crabby_avifEncoderAddImage(encoder, image, 1, AVIF_ADD_IMAGE_FLAG_SINGLE) };
+    let encoder_ref = deref_mut!(encoder);
+    let image_ref = deref_const!(image);
+    let res = encoder_ref.add_image(image_ref, 1, AVIF_ADD_IMAGE_FLAG_SINGLE);
     if res != avifResult::Ok {
         return res;
     }
-    // SAFETY: Pre-conditions are met to call this function.
-    unsafe { crabby_avifEncoderFinish(encoder, output) }
+    let output_ref = deref_mut!(output);
+    encoder_ref.finish(output_ref)
 }
 
 /// # Safety
@@ -251,33 +300,8 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImage(
     check_pointer!(image);
 
     let encoder_ref = deref_mut!(encoder);
-    let res = encoder_ref.initialize_or_update_rust_encoder();
-    if res != avifResult::Ok {
-        return res;
-    }
-    let res = deref_const!(image).gainmap();
-    encoder_ref.diag.set_from_result(&res);
-    if res.is_err() {
-        return res.into();
-    }
-    let gainmap = res.unwrap();
-    let res = deref_const!(image).try_into();
-    encoder_ref.diag.set_from_result(&res);
-    if res.is_err() {
-        return res.into();
-    }
-    let image = res.unwrap();
-    let res =
-        if (addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) != 0 || encoder_ref.extraLayerCount != 0 {
-            match &gainmap {
-                Some(gainmap) => rust_encoder(encoder).add_image_gainmap(&image, gainmap),
-                None => rust_encoder(encoder).add_image(&image),
-            }
-        } else {
-            rust_encoder(encoder).add_image_for_sequence(&image, durationInTimescales)
-        };
-    encoder_ref.diag.set_from_result(&res);
-    res.into()
+    let image_ref = deref_const!(image);
+    encoder_ref.add_image(image_ref, durationInTimescales, addImageFlags)
 }
 
 /// # Safety
@@ -340,14 +364,16 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
             for gainmap in &gainmaps {
                 gainmap_refs.try_push(gainmap.as_ref().ok_or(AvifError::InvalidArgument)?)?;
             }
-            rust_encoder(encoder).add_image_gainmap_grid(
+            encoder_ref.rust_encoder.add_image_gainmap_grid(
                 gridCols,
                 gridRows,
                 &image_refs,
                 &gainmap_refs,
             )
         } else if gainmaps.iter().all(|x| x.is_none()) {
-            rust_encoder(encoder).add_image_grid(gridCols, gridRows, &image_refs)
+            encoder_ref
+                .rust_encoder
+                .add_image_grid(gridCols, gridRows, &image_refs)
         } else {
             // Some cells had GainMap and some did not. This is invalid.
             AvifError::invalid_argument()
@@ -370,15 +396,9 @@ pub unsafe extern "C" fn crabby_avifEncoderFinish(
     check_pointer!(encoder);
     check_pointer!(output);
 
-    let res = rust_encoder(encoder).finish();
-    deref_mut!(encoder).diag.set_from_result(&res);
-    match res {
-        // SAFETY: Pre-conditions are met to call this function.
-        Ok(encoded_data) => unsafe {
-            crabby_avifRWDataSet(output, encoded_data.as_ptr(), encoded_data.len())
-        },
-        Err(err) => (&err).into(),
-    }
+    let encoder_ref = deref_mut!(encoder);
+    let output_ref = deref_mut!(output);
+    encoder_ref.finish(output_ref)
 }
 
 /// # Safety
@@ -418,10 +438,13 @@ pub unsafe extern "C" fn crabby_avifEncoderSetCodecSpecificOption(
     } else {
         (key, None)
     };
-    if deref_const!(encoder).rust_encoder_initialized {
-        rust_encoder(encoder).set_codec_specific_option(category, key, value);
+    let encoder_ref = deref_mut!(encoder);
+    if encoder_ref.rust_encoder_initialized {
+        encoder_ref
+            .rust_encoder
+            .set_codec_specific_option(category, key, value);
     } else {
-        deref_mut!(encoder)
+        encoder_ref
             .codec_specific_options
             .insert((category, key), value);
     }
