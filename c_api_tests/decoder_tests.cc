@@ -35,7 +35,63 @@ DecoderPtr CreateDecoder(const char* file_name) {
   return decoder;
 }
 
-TEST(DecoderTest, AlphaNoIspe) {
+// Returns the AV1 decoders that the decoding tests run with: dav1d and the
+// native AV1 decoder (only available when crabbyavif is built with the
+// native_av1 feature). Falls back to the default decoder if neither is
+// available (for example on Android, which uses MediaCodec).
+std::vector<avifCodecChoice> GetCodecChoices() {
+  std::vector<avifCodecChoice> codec_choices;
+  for (const char* name : {"dav1d", "native"}) {
+    const avifCodecChoice codec_choice = avifCodecChoiceFromName(name);
+    if (codec_choice != AVIF_CODEC_CHOICE_AUTO) {
+      codec_choices.push_back(codec_choice);
+    }
+  }
+  if (codec_choices.empty()) {
+    codec_choices.push_back(AVIF_CODEC_CHOICE_AUTO);
+  }
+  return codec_choices;
+}
+
+std::string GetCodecName(avifCodecChoice codec_choice) {
+  switch (codec_choice) {
+    case AVIF_CODEC_CHOICE_DAV1D:
+      return "dav1d";
+    case AVIF_CODEC_CHOICE_NATIVE:
+      return "native";
+    default:
+      return "auto";
+  }
+}
+
+// Returns a new decoder that uses |codec_choice|.
+avifDecoder* NewDecoder(avifCodecChoice codec_choice) {
+  avifDecoder* decoder = avifDecoderCreate();
+  if (decoder != nullptr) {
+    decoder->codecChoice = codec_choice;
+  }
+  return decoder;
+}
+
+DecoderPtr CreateDecoder(const char* file_name, avifCodecChoice codec_choice) {
+  DecoderPtr decoder = CreateDecoder(file_name);
+  if (decoder != nullptr) {
+    decoder->codecChoice = codec_choice;
+  }
+  return decoder;
+}
+
+// Fixture of the tests that decode images, parameterized by the AV1 decoder.
+class DecoderTest : public testing::TestWithParam<avifCodecChoice> {
+ protected:
+  avifCodecChoice codec_choice() const { return GetParam(); }
+  avifDecoder* NewDecoder() const { return avif::NewDecoder(codec_choice()); }
+  DecoderPtr CreateDecoder(const char* file_name) const {
+    return avif::CreateDecoder(file_name, codec_choice());
+  }
+};
+
+TEST_P(DecoderTest, AlphaNoIspe) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
@@ -58,7 +114,7 @@ TEST(DecoderTest, AlphaNoIspe) {
   EXPECT_GT(decoder->image->alphaRowBytes, 0u);
 }
 
-TEST(DecoderTest, AlphaPremultiplied) {
+TEST_P(DecoderTest, AlphaPremultiplied) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
@@ -74,7 +130,7 @@ TEST(DecoderTest, AlphaPremultiplied) {
   EXPECT_GT(decoder->image->alphaRowBytes, 0u);
 }
 
-TEST(DecoderTest, AlphaPremultipliedIgnoreAlpha) {
+TEST_P(DecoderTest, AlphaPremultipliedIgnoreAlpha) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
@@ -91,7 +147,10 @@ TEST(DecoderTest, AlphaPremultipliedIgnoreAlpha) {
   EXPECT_EQ(decoder->image->alphaRowBytes, 0u);
 }
 
-TEST(DecoderTest, AnimatedImage) {
+TEST_P(DecoderTest, AnimatedImage) {
+  if (codec_choice() == AVIF_CODEC_CHOICE_NATIVE) {
+    GTEST_SKIP() << "The native AV1 decoder does not support inter frames.";
+  }
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
@@ -108,7 +167,7 @@ TEST(DecoderTest, AnimatedImage) {
   }
 }
 
-TEST(DecoderTest, AnimatedImageWithSourceSetToPrimaryItem) {
+TEST_P(DecoderTest, AnimatedImageWithSourceSetToPrimaryItem) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
@@ -159,7 +218,7 @@ TEST(DecoderTest, AnimatedImageWithAlphaAndMetadataIgnoreAlpha) {
   EXPECT_EQ(decoder->image->xmp.size, 3898);
 }
 
-TEST(DecoderTest, OneShotDecodeFile) {
+TEST_P(DecoderTest, OneShotDecodeFile) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
@@ -169,7 +228,7 @@ TEST(DecoderTest, OneShotDecodeFile) {
   GTEST_SKIP() << "Unsupported test on Android.";
 #endif
   const char* file_name = "sofa_grid1x5_420.avif";
-  DecoderPtr decoder(avifDecoderCreate());
+  DecoderPtr decoder(NewDecoder());
   ASSERT_NE(decoder, nullptr);
   avifImage image;
   ASSERT_EQ(avifDecoderReadFile(decoder.get(), &image,
@@ -190,13 +249,13 @@ TEST(DecoderTest, OneShotDecodeFile) {
   EXPECT_EQ(image.depth, 8);
 }
 
-TEST(DecoderTest, OneShotDecodeMemory) {
+TEST_P(DecoderTest, OneShotDecodeMemory) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
   const char* file_name = "sofa_grid1x5_420.avif";
   auto file_data = testutil::read_file(GetFilename(file_name).c_str());
-  DecoderPtr decoder(avifDecoderCreate());
+  DecoderPtr decoder(NewDecoder());
   ASSERT_NE(decoder, nullptr);
   avifImage image;
   ASSERT_EQ(avifDecoderReadMemory(decoder.get(), &image, file_data.data(),
@@ -222,7 +281,7 @@ avifResult io_read(struct avifIO* io, uint32_t flags, uint64_t offset,
   return AVIF_RESULT_OK;
 }
 
-TEST(DecoderTest, OneShotDecodeCustomIO) {
+TEST_P(DecoderTest, OneShotDecodeCustomIO) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
@@ -234,7 +293,7 @@ TEST(DecoderTest, OneShotDecodeCustomIO) {
                .sizeHint = data.size(),
                .persistent = false,
                .data = &ro_data};
-  DecoderPtr decoder(avifDecoderCreate());
+  DecoderPtr decoder(NewDecoder());
   ASSERT_NE(decoder, nullptr);
   avifDecoderSetIO(decoder.get(), &io);
   avifImage image;
@@ -280,14 +339,14 @@ class DerivedIO : public avifIO {
   const std::vector<uint8_t>& data_;
 };
 
-TEST(DecoderTest, DerivedIO) {
+TEST_P(DecoderTest, DerivedIO) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
   const char* file_name = "sofa_grid1x5_420.avif";
   auto data = testutil::read_file(GetFilename(file_name).c_str());
   avifIO* io = DerivedIO::Create(data);
-  DecoderPtr decoder(avifDecoderCreate());
+  DecoderPtr decoder(NewDecoder());
   ASSERT_NE(decoder, nullptr);
   avifDecoderSetIO(decoder.get(), io);
   avifImage image;
@@ -297,7 +356,10 @@ TEST(DecoderTest, DerivedIO) {
   EXPECT_EQ(image.depth, 8);
 }
 
-TEST(DecoderTest, NthImage) {
+TEST_P(DecoderTest, NthImage) {
+  if (codec_choice() == AVIF_CODEC_CHOICE_NATIVE) {
+    GTEST_SKIP() << "The native AV1 decoder does not support inter frames.";
+  }
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
@@ -350,7 +412,7 @@ TEST(DecoderTest, Clli) {
   }
 }
 
-TEST(DecoderTest, ColorGridAlphaNoGrid) {
+TEST_P(DecoderTest, ColorGridAlphaNoGrid) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
@@ -366,7 +428,7 @@ TEST(DecoderTest, ColorGridAlphaNoGrid) {
   EXPECT_GT(decoder->image->alphaRowBytes, 0u);
 }
 
-TEST(DecoderTest, ColorGridAlphaNoGridIgnoreAlpha) {
+TEST_P(DecoderTest, ColorGridAlphaNoGridIgnoreAlpha) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
   }
@@ -383,7 +445,7 @@ TEST(DecoderTest, ColorGridAlphaNoGridIgnoreAlpha) {
   EXPECT_EQ(decoder->image->alphaRowBytes, 0u);
 }
 
-TEST(DecoderTest, GainMapGrid) {
+TEST_P(DecoderTest, GainMapGrid) {
   auto decoder = CreateDecoder("color_grid_gainmap_different_grid.avif");
   ASSERT_NE(decoder, nullptr);
   decoder->imageContentToDecode |= AVIF_IMAGE_CONTENT_GAIN_MAP;
@@ -416,7 +478,7 @@ TEST(DecoderTest, GainMapGrid) {
       << avifResultToString(result) << " " << decoder->diag.error;
 }
 
-TEST(DecoderTest, GainMapOriented) {
+TEST_P(DecoderTest, GainMapOriented) {
   auto decoder = CreateDecoder("gainmap_oriented.avif");
   ASSERT_NE(decoder, nullptr);
   decoder->imageContentToDecode |= AVIF_IMAGE_CONTENT_GAIN_MAP;
@@ -436,7 +498,7 @@ TEST(DecoderTest, GainMapOriented) {
   EXPECT_GT(decoder->image->alphaRowBytes, 0u);
 }
 
-TEST(DecoderTest, GainMapOrientedIgnoreAlpha) {
+TEST_P(DecoderTest, GainMapOrientedIgnoreAlpha) {
   auto decoder = CreateDecoder("gainmap_oriented.avif");
   ASSERT_NE(decoder, nullptr);
   decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_COLOR_AND_GAIN_MAP;
@@ -456,7 +518,7 @@ TEST(DecoderTest, GainMapOrientedIgnoreAlpha) {
   EXPECT_EQ(decoder->image->alphaRowBytes, 0u);
 }
 
-TEST(DecoderTest, GainmapOnlyDecodedRowCount) {
+TEST_P(DecoderTest, GainmapOnlyDecodedRowCount) {
   // Both image and gainmap have the same height (34).
   auto decoder = CreateDecoder("gainmap_oriented.avif");
   ASSERT_NE(decoder, nullptr);
@@ -498,7 +560,7 @@ TEST(DecoderTest, IgnoreGainMapButReadMetadata) {
   EXPECT_EQ(decoded->gainMap->alternateHdrHeadroom.d, 10);
 }
 
-TEST(DecoderTest, IgnoreColorAndAlpha) {
+TEST_P(DecoderTest, IgnoreColorAndAlpha) {
   auto decoder = CreateDecoder("seine_sdr_gainmap_srgb.avif");
   ASSERT_NE(decoder, nullptr);
   decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_GAIN_MAP;
@@ -526,7 +588,7 @@ TEST(DecoderTest, IgnoreColorAndAlpha) {
   EXPECT_GT(decoded->gainMap->image->yuvRowBytes[0], 0u);
 }
 
-TEST(DecoderTest, IgnoreAll) {
+TEST_P(DecoderTest, IgnoreAll) {
   auto decoder = CreateDecoder("seine_sdr_gainmap_srgb.avif");
   ASSERT_NE(decoder, nullptr);
   decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_NONE;
@@ -544,11 +606,11 @@ TEST(DecoderTest, IgnoreAll) {
   ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_NO_CONTENT);
 }
 
-TEST(DecoderTest, GainMapReadMemoryFails) {
+TEST_P(DecoderTest, GainMapReadMemoryFails) {
   auto data =
       testutil::read_file(GetFilename("seine_sdr_gainmap_srgb.avif").c_str());
   ASSERT_GT(data.size(), 0);
-  DecoderPtr decoder(avifDecoderCreate());
+  DecoderPtr decoder(NewDecoder());
   ASSERT_NE(decoder, nullptr);
   avifImage image;
   // avifDecoderReadMemory does not support gainmaps.
@@ -588,7 +650,11 @@ TEST(DecoderTest, KeyFrame) {
   EXPECT_EQ(avifDecoderNearestKeyframe(decoder.get(), 4), 3);
 }
 
-TEST(DecoderTest, Progressive) {
+TEST_P(DecoderTest, Progressive) {
+  if (codec_choice() == AVIF_CODEC_CHOICE_NATIVE) {
+    GTEST_SKIP() << "The native AV1 decoder does not support progressive "
+                    "(layered) images.";
+  }
 #ifdef __ANDROID__
   // Android MediaCodec does not support progressive images.
   GTEST_SKIP() << "Unsupported test on Android.";
@@ -608,7 +674,7 @@ TEST(DecoderTest, Progressive) {
       {"progressive/tiger_3layer_3res.avif", 1216, 832, 3},
   };
   for (const auto& param : params) {
-    DecoderPtr decoder(avifDecoderCreate());
+    DecoderPtr decoder(NewDecoder());
     ASSERT_NE(decoder, nullptr);
     decoder->allowProgressive = true;
     ASSERT_EQ(avifDecoderSetIOFile(decoder.get(),
@@ -885,8 +951,11 @@ INSTANTIATE_TEST_SUITE_P(
                                         AVIF_PIXEL_FORMAT_ANDROID_P010}),
                      testing::ValuesIn(kRects)));
 
-TEST(DecoderTest, SetRawIO) {
-  DecoderPtr decoder(avifDecoderCreate());
+TEST_P(DecoderTest, SetRawIO) {
+  if (codec_choice() == AVIF_CODEC_CHOICE_NATIVE) {
+    GTEST_SKIP() << "The native AV1 decoder does not support inter frames.";
+  }
+  DecoderPtr decoder(NewDecoder());
   ASSERT_NE(decoder, nullptr);
   auto data =
       testutil::read_file(GetFilename("colors-animated-8bpc.avif").c_str());
@@ -902,11 +971,14 @@ TEST(DecoderTest, SetRawIO) {
     EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
   }
 
-  decoder.reset(avifDecoderCreate());
+  decoder.reset(NewDecoder());
   EXPECT_NE(avifDecoderSetIOMemory(decoder.get(), nullptr, 0), AVIF_RESULT_OK);
 }
 
-TEST(DecoderTest, SetCustomIO) {
+TEST_P(DecoderTest, SetCustomIO) {
+  if (codec_choice() == AVIF_CODEC_CHOICE_NATIVE) {
+    GTEST_SKIP() << "The native AV1 decoder does not support inter frames.";
+  }
   auto data =
       testutil::read_file(GetFilename("colors-animated-8bpc.avif").c_str());
   avifROData ro_data = {.data = data.data(), .size = data.size()};
@@ -916,7 +988,7 @@ TEST(DecoderTest, SetCustomIO) {
                .persistent = false,
                .data = &ro_data};
   // |io| must outlive the decoder.
-  DecoderPtr decoder(avifDecoderCreate());
+  DecoderPtr decoder(NewDecoder());
   ASSERT_NE(decoder, nullptr);
   avifDecoderSetIO(decoder.get(), &io);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
@@ -959,7 +1031,10 @@ avifResult non_persistent_read(struct avifIO* io, uint32_t flags,
   return AVIF_RESULT_OK;
 }
 
-TEST(DecoderTest, NonPersistentIOBug506387278) {
+TEST_P(DecoderTest, NonPersistentIOBug506387278) {
+  if (codec_choice() == AVIF_CODEC_CHOICE_NATIVE) {
+    GTEST_SKIP() << "The native AV1 decoder does not support inter frames.";
+  }
 #ifdef __ANDROID__
   // Android MediaCodec does not support decoding this constructed poc file.
   GTEST_SKIP() << "Unsupported test on Android.";
@@ -973,7 +1048,7 @@ TEST(DecoderTest, NonPersistentIOBug506387278) {
                .persistent = false,
                .data = &io_data};
   // |io| must outlive the decoder.
-  DecoderPtr decoder(avifDecoderCreate());
+  DecoderPtr decoder(NewDecoder());
   ASSERT_NE(decoder, nullptr);
   avifDecoderSetIO(decoder.get(), &io);
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
@@ -1428,18 +1503,20 @@ struct SatoTestParams {
   uint32_t expected_depth;
 };
 
-using SatoTest = ::testing::TestWithParam<SatoTestParams>;
+using SatoTest =
+    ::testing::TestWithParam<std::tuple<SatoTestParams, avifCodecChoice>>;
 
 TEST_P(SatoTest, SampleTransform) {
-  const std::string path = GetFilename(GetParam().filename);
-  DecoderPtr decoder(avifDecoderCreate());
+  const SatoTestParams& param = std::get<0>(GetParam());
+  const std::string path = GetFilename(param.filename);
+  DecoderPtr decoder(NewDecoder(std::get<1>(GetParam())));
   ASSERT_NE(decoder, nullptr);
   decoder->allowSampleTransform =
-      static_cast<crabbyavif::avifBool>(GetParam().allow_sample_transform);
+      static_cast<crabbyavif::avifBool>(param.allow_sample_transform);
   ASSERT_EQ(avifDecoderSetIOFile(decoder.get(), path.c_str()), AVIF_RESULT_OK);
 
   ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
-  if (GetParam().reset_decoder) {
+  if (param.reset_decoder) {
     ASSERT_EQ(avifDecoderReset(decoder.get()), AVIF_RESULT_OK);
   }
   if (!testutil::Av1DecoderAvailable()) {
@@ -1450,32 +1527,34 @@ TEST_P(SatoTest, SampleTransform) {
     // Android MediaCodec does not support re-use of the same decoder instance
     // for multiple images, which is the case with Sample Transforms.
     ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_UNKNOWN_ERROR);
-  } else if (GetParam().expected_depth > 10) {
+  } else if (param.expected_depth > 10) {
     // Android MediaCodec does not support 12-bit.
     ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_UNKNOWN_ERROR);
   } else {
     // When allowSampleTransform is false, the decoder outputs a
     // backward-compatible single-frame image.
     ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
-    EXPECT_EQ(decoder->image->depth, GetParam().expected_depth);
+    EXPECT_EQ(decoder->image->depth, param.expected_depth);
   }
 #else
   ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
-  EXPECT_EQ(decoder->image->depth, GetParam().expected_depth);
+  EXPECT_EQ(decoder->image->depth, param.expected_depth);
 #endif
 }
 
 INSTANTIATE_TEST_SUITE_P(
     DecoderTest, SatoTest,
-    ::testing::Values(
-        SatoTestParams{"weld_sato_8plus8bit.avif", false, false, 8},
-        SatoTestParams{"weld_sato_8plus8bit.avif", true, false, 16},
-        SatoTestParams{"weld_sato_12plus4bit.avif", false, false, 12},
-        SatoTestParams{"weld_sato_12plus4bit.avif", true, false, 16},
-        SatoTestParams{"weld_sato_8plus8bit.avif", false, true, 8},
-        SatoTestParams{"weld_sato_8plus8bit.avif", true, true, 16},
-        SatoTestParams{"weld_sato_12plus4bit.avif", false, true, 12},
-        SatoTestParams{"weld_sato_12plus4bit.avif", true, true, 16}));
+    ::testing::Combine(
+        ::testing::Values(
+            SatoTestParams{"weld_sato_8plus8bit.avif", false, false, 8},
+            SatoTestParams{"weld_sato_8plus8bit.avif", true, false, 16},
+            SatoTestParams{"weld_sato_12plus4bit.avif", false, false, 12},
+            SatoTestParams{"weld_sato_12plus4bit.avif", true, false, 16},
+            SatoTestParams{"weld_sato_8plus8bit.avif", false, true, 8},
+            SatoTestParams{"weld_sato_8plus8bit.avif", true, true, 16},
+            SatoTestParams{"weld_sato_12plus4bit.avif", false, true, 12},
+            SatoTestParams{"weld_sato_12plus4bit.avif", true, true, 16}),
+        ::testing::ValuesIn(GetCodecChoices())));
 
 TEST(DecoderTest, ThumbnailNotPresent) {
   auto decoder = CreateDecoder("sofa_grid1x5_420.avif");
@@ -1584,6 +1663,12 @@ TEST(DecoderTest, ThumbnailMaxExtentProgressiveAndLsel) {
   EXPECT_EQ(avifDecoderNthImageMaxExtent(decoder.get(), 2, &extent),
             AVIF_RESULT_NO_IMAGES_REMAINING);
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    Codecs, DecoderTest, testing::ValuesIn(GetCodecChoices()),
+    [](const testing::TestParamInfo<avifCodecChoice>& info) {
+      return GetCodecName(info.param);
+    });
 
 }  // namespace
 }  // namespace avif
