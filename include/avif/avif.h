@@ -744,38 +744,42 @@ avifBool crabby_avifPeekCompatibleFileType(const avifROData *input);
 /// - if decoder is not null, it has to point to a valid avifDecoder object.
 avifResult crabby_avifDecoderReset(avifDecoder *decoder);
 
-/// # Safety
-/// Used by the C API to create an avifEncoder object with default values.
 avifEncoder *crabby_avifEncoderCreate();
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if encoder is not null, it has to point to a valid avifEncoder object.
+/// If `encoder` is non-null, it must be a valid pointer obtained from
+/// [`crabby_avifEncoderCreate`] that has not yet been destroyed.
 void crabby_avifEncoderDestroy(avifEncoder *encoder);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if encoder is not null, it has to point to a valid avifEncoder object.
-/// - if image is not null, it has to point to a valid avifImage object.
-/// - if output is not null, it has to point to a valid avifRWData object.
+/// - If `encoder` is non-null, it must point to a valid, mutable [`avifEncoder`] for the duration
+///   of this call, not aliased by any other reference.
+/// - If `image` is non-null, it must point to a valid [`avifImage`] (including valid plane,
+///   metadata, and optional `gainMap` buffers matching its fields) for the duration of this call.
+/// - If `output` is non-null, it must point to a valid, mutable [`avifRWData`] (either zeroed /
+///   default-initialized or previously managed by `crabby_avifRWData*`) not aliasing `encoder` or
+///   `image`.
 avifResult crabby_avifEncoderWrite(avifEncoder *encoder,
                                    const avifImage *image,
                                    avifRWData *output);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if encoder is not null, it has to point to a valid avifEncoder object.
-/// - if image is not null, it has to point to a valid avifImage object.
+/// - If `encoder` is non-null, it must point to a valid, mutable [`avifEncoder`] for the duration
+///   of this call, not aliased by `image`.
+/// - If `image` is non-null, it must point to a valid [`avifImage`] (including valid plane,
+///   metadata, and optional `gainMap` buffers matching its fields) for the duration of this call.
 avifResult crabby_avifEncoderAddImage(avifEncoder *encoder,
                                       const avifImage *image,
                                       uint64_t durationInTimescales,
                                       avifAddImageFlags addImageFlags);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if encoder is not null, it has to point to a valid avifEncoder object.
-/// - if cellImages is not null, it has to point to valid array of avifImage objects of size
-///   |gridCols * gridRows|.
+/// - If `encoder` is non-null, it must point to a valid, mutable [`avifEncoder`] for the duration
+///   of this call.
+/// - If `cellImages` is non-null and `gridCols * gridRows > 0`, `cellImages` must be properly
+///   aligned and point to a contiguous array of `gridCols * gridRows` pointers, where every
+///   non-null element points to a valid [`avifImage`] (including valid plane, metadata, and
+///   optional `gainMap` buffers) for the duration of this call.
 avifResult crabby_avifEncoderAddImageGrid(avifEncoder *encoder,
                                           uint32_t gridCols,
                                           uint32_t gridRows,
@@ -783,16 +787,19 @@ avifResult crabby_avifEncoderAddImageGrid(avifEncoder *encoder,
                                           avifAddImageFlags addImageFlags);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if encoder is not null, it has to point to a valid avifEncoder object.
-/// - if output is not null, it has to point to a valid avifRWData object.
+/// - If `encoder` is non-null, it must point to a valid, mutable [`avifEncoder`] for the duration
+///   of this call.
+/// - If `output` is non-null, it must point to a valid, mutable [`avifRWData`] (either zeroed /
+///   default-initialized or previously managed by `crabby_avifRWData*`) not aliasing `encoder`.
 avifResult crabby_avifEncoderFinish(avifEncoder *encoder, avifRWData *output);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if encoder is not null, it has to point to a valid avifEncoder object.
-/// - if key is not null, it has to point to a valid C-style string.
-/// - if value is not null, it has to point to a valid C-style string.
+/// - If `encoder` is non-null, it must point to a valid, mutable [`avifEncoder`] for the duration
+///   of this call.
+/// - If `key` is non-null, it must point to a valid NUL-terminated C string valid for reads for
+///   the duration of this call.
+/// - If `value` is non-null, it must point to a valid NUL-terminated C string valid for reads for
+///   the duration of this call.
 avifResult crabby_avifEncoderSetCodecSpecificOption(avifEncoder *encoder,
                                                     const char *key,
                                                     const char *value);

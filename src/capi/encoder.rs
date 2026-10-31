@@ -243,28 +243,30 @@ impl avifEncoder {
     }
 }
 
-/// # Safety
-/// Used by the C API to create an avifEncoder object with default values.
 #[no_mangle]
-pub unsafe extern "C" fn crabby_avifEncoderCreate() -> *mut avifEncoder {
+pub extern "C" fn crabby_avifEncoderCreate() -> *mut avifEncoder {
     Box::into_raw(Box::<avifEncoder>::default())
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if encoder is not null, it has to point to a valid avifEncoder object.
+/// If `encoder` is non-null, it must be a valid pointer obtained from
+/// [`crabby_avifEncoderCreate`] that has not yet been destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifEncoderDestroy(encoder: *mut avifEncoder) {
     check_pointer_or_return!(encoder);
-    // SAFETY: encoder is guaranteed to be not null, so this is ok.
+    // SAFETY: `encoder` was verified to be non-null and, by caller precondition, was allocated via
+    // `Box::into_raw` in `crabby_avifEncoderCreate` and has not yet been freed.
     let _ = unsafe { Box::from_raw(encoder) };
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if encoder is not null, it has to point to a valid avifEncoder object.
-/// - if image is not null, it has to point to a valid avifImage object.
-/// - if output is not null, it has to point to a valid avifRWData object.
+/// - If `encoder` is non-null, it must point to a valid, mutable [`avifEncoder`] for the duration
+///   of this call, not aliased by any other reference.
+/// - If `image` is non-null, it must point to a valid [`avifImage`] (including valid plane,
+///   metadata, and optional `gainMap` buffers matching its fields) for the duration of this call.
+/// - If `output` is non-null, it must point to a valid, mutable [`avifRWData`] (either zeroed /
+///   default-initialized or previously managed by `crabby_avifRWData*`) not aliasing `encoder` or
+///   `image`.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifEncoderWrite(
     encoder: *mut avifEncoder,
@@ -286,9 +288,10 @@ pub unsafe extern "C" fn crabby_avifEncoderWrite(
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if encoder is not null, it has to point to a valid avifEncoder object.
-/// - if image is not null, it has to point to a valid avifImage object.
+/// - If `encoder` is non-null, it must point to a valid, mutable [`avifEncoder`] for the duration
+///   of this call, not aliased by `image`.
+/// - If `image` is non-null, it must point to a valid [`avifImage`] (including valid plane,
+///   metadata, and optional `gainMap` buffers matching its fields) for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifEncoderAddImage(
     encoder: *mut avifEncoder,
@@ -305,10 +308,12 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImage(
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if encoder is not null, it has to point to a valid avifEncoder object.
-/// - if cellImages is not null, it has to point to valid array of avifImage objects of size
-///   |gridCols * gridRows|.
+/// - If `encoder` is non-null, it must point to a valid, mutable [`avifEncoder`] for the duration
+///   of this call.
+/// - If `cellImages` is non-null and `gridCols * gridRows > 0`, `cellImages` must be properly
+///   aligned and point to a contiguous array of `gridCols * gridRows` pointers, where every
+///   non-null element points to a valid [`avifImage`] (including valid plane, metadata, and
+///   optional `gainMap` buffers) for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
     encoder: *mut avifEncoder,
@@ -321,8 +326,7 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
     check_pointer!(cellImages);
 
     let encoder_ref = deref_mut!(encoder);
-    if cellImages.is_null()
-        || gridCols == 0
+    if gridCols == 0
         || gridRows == 0
         // If we are not encoding a grid image with multiple layers, AVIF_ADD_IMAGE_FLAG_SINGLE has
         // to be set.
@@ -330,30 +334,40 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
     {
         return avifResult::InvalidArgument;
     }
+    let Some(cell_count_u32) = gridCols.checked_mul(gridRows) else {
+        return avifResult::InvalidArgument;
+    };
+    let Ok(cell_count) = usize_from_u32(cell_count_u32) else {
+        return avifResult::InvalidArgument;
+    };
+    let Some(cell_bytes) = cell_count.checked_mul(std::mem::size_of::<*const avifImage>()) else {
+        return avifResult::InvalidArgument;
+    };
+    if isize_from_usize(cell_bytes).is_err() || !cellImages.is_aligned() {
+        return avifResult::InvalidArgument;
+    }
     let res = encoder_ref.initialize_or_update_rust_encoder();
     if res != avifResult::Ok {
         return res;
     }
-    let cell_count = match gridCols.checked_mul(gridRows) {
-        Some(value) => value as usize,
-        None => return avifResult::InvalidArgument,
-    };
+
+    // SAFETY: `cellImages` was verified to be non-null and aligned, `cell_count >= 1`,
+    // `cell_count * size_of::<*const avifImage>() <= isize::MAX`, and by caller precondition
+    // `cellImages` points to `cell_count` initialized `*const avifImage` elements valid for this
+    // call.
+    let image_ptrs: &[*const avifImage] =
+        unsafe { std::slice::from_raw_parts(cellImages, cell_count) };
 
     let res = || -> AvifResult<()> {
         let mut images: Vec<image::Image> = create_vec_exact(cell_count)?;
-        // SAFETY: Pre-condition of this function ensures that |cellImages| contains |cell_count|
-        // avifImage objects. So this operation is safe.
-        let image_ptrs: &[*const avifImage] =
-            unsafe { std::slice::from_raw_parts(cellImages, cell_count) };
-        for image_ptr in image_ptrs {
+        let mut gainmaps: Vec<Option<GainMap>> = create_vec_exact(cell_count)?;
+        for &image_ptr in image_ptrs {
             if image_ptr.is_null() {
                 return AvifError::invalid_argument();
             }
-            images.try_push(deref_const!(*image_ptr).try_into()?)?;
-        }
-        let mut gainmaps: Vec<Option<GainMap>> = create_vec_exact(cell_count)?;
-        for image_ptr in image_ptrs {
-            gainmaps.try_push(deref_const!(*image_ptr).gainmap()?)?;
+            let cell_image = deref_const!(image_ptr);
+            images.try_push(cell_image.try_into()?)?;
+            gainmaps.try_push(cell_image.gainmap()?)?;
         }
         let mut image_refs: Vec<&image::Image> = create_vec_exact(images.len())?;
         for image in &images {
@@ -385,9 +399,10 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if encoder is not null, it has to point to a valid avifEncoder object.
-/// - if output is not null, it has to point to a valid avifRWData object.
+/// - If `encoder` is non-null, it must point to a valid, mutable [`avifEncoder`] for the duration
+///   of this call.
+/// - If `output` is non-null, it must point to a valid, mutable [`avifRWData`] (either zeroed /
+///   default-initialized or previously managed by `crabby_avifRWData*`) not aliasing `encoder`.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifEncoderFinish(
     encoder: *mut avifEncoder,
@@ -402,10 +417,12 @@ pub unsafe extern "C" fn crabby_avifEncoderFinish(
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if encoder is not null, it has to point to a valid avifEncoder object.
-/// - if key is not null, it has to point to a valid C-style string.
-/// - if value is not null, it has to point to a valid C-style string.
+/// - If `encoder` is non-null, it must point to a valid, mutable [`avifEncoder`] for the duration
+///   of this call.
+/// - If `key` is non-null, it must point to a valid NUL-terminated C string valid for reads for
+///   the duration of this call.
+/// - If `value` is non-null, it must point to a valid NUL-terminated C string valid for reads for
+///   the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifEncoderSetCodecSpecificOption(
     encoder: *mut avifEncoder,
@@ -416,10 +433,13 @@ pub unsafe extern "C" fn crabby_avifEncoderSetCodecSpecificOption(
     check_pointer!(key);
     check_pointer!(value);
 
-    // SAFETY: Pointers are guaranteed to be not-null and contain a valid c-string as per the
-    // pre-conditions of this function.
-    let (key, value) = unsafe { (CStr::from_ptr(key), CStr::from_ptr(value)) };
-    let (Ok(key), Ok(value)) = (key.to_str(), value.to_str()) else {
+    // SAFETY: `key` was verified to be non-null and, by caller precondition, points to a valid
+    // NUL-terminated C string for the duration of this call.
+    let key_cstr = unsafe { CStr::from_ptr(key) };
+    // SAFETY: `value` was verified to be non-null and, by caller precondition, points to a valid
+    // NUL-terminated C string for the duration of this call.
+    let value_cstr = unsafe { CStr::from_ptr(value) };
+    let (Ok(key), Ok(value)) = (key_cstr.to_str(), value_cstr.to_str()) else {
         return avifResult::InvalidArgument;
     };
     let (key, value) = (key.to_owned(), value.to_owned());
