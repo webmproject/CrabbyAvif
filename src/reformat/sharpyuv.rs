@@ -22,7 +22,46 @@ use libsharpyuv_sys::bindings::*;
 
 use std::os::raw::c_void;
 
+fn validate_plane(image: &image::Image, plane: Plane) -> AvifResult<()> {
+    let pd = image.plane_data(plane).ok_or(AvifError::ReformatFailed)?;
+    if pd.width == 0 || pd.height == 0 {
+        return AvifError::reformat_failed();
+    }
+    let min_row_bytes = checked_mul!(pd.width, pd.pixel_size)?;
+    if pd.row_bytes < min_row_bytes {
+        return AvifError::reformat_failed();
+    }
+    if image.depth > 8 {
+        if pd.row_bytes % 2 != 0 {
+            return AvifError::reformat_failed();
+        }
+        let _ = image
+            .row16(plane, pd.height - 1)
+            .map_err(|_| AvifError::ReformatFailed)?;
+    } else {
+        let _ = image
+            .row(plane, pd.height - 1)
+            .map_err(|_| AvifError::ReformatFailed)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> {
+    if image.yuv_format != PixelFormat::Yuv420
+        || !matches!(image.depth, 8 | 10 | 12)
+        || rgb.format == Format::Rgb565
+        || rgb.format == Format::Rgba1010102
+        || rgb.format.is_gray()
+        || rgb.is_float
+        || rgb.width != image.width
+        || rgb.height != image.height
+        || !rgb.has_valid_pixels()
+    {
+        return AvifError::reformat_failed();
+    }
+    for plane in YUV_PLANES {
+        validate_plane(image, plane)?;
+    }
     let color_space = match (image as &image::Image).into() {
         Mode::YuvCoefficients(kr, _kg, kb) => SharpYuvColorSpace {
             kr,
@@ -119,5 +158,119 @@ pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResu
         AvifError::reformat_failed()
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::pixels::Pixels;
+    use test_case::test_case;
+
+    fn valid_pair(rgb_depth: u8, yuv_depth: u8) -> (rgb::Image, image::Image) {
+        let mut yuv = image::Image {
+            width: 4,
+            height: 4,
+            depth: yuv_depth,
+            yuv_format: PixelFormat::Yuv420,
+            matrix_coefficients: MatrixCoefficients::Bt601,
+            ..Default::default()
+        };
+        yuv.allocate_planes(Category::Color).unwrap();
+        let mut rgb = rgb::Image::create_from_yuv(&yuv);
+        rgb.depth = rgb_depth;
+        rgb.chroma_downsampling = ChromaDownsampling::SharpYuv;
+        rgb.allocate().unwrap();
+        (rgb, yuv)
+    }
+
+    #[test_case(8, 8)]
+    #[test_case(10, 10)]
+    #[test_case(16, 12)]
+    fn rgb_to_yuv_valid(rgb_depth: u8, yuv_depth: u8) {
+        let (rgb, mut yuv) = valid_pair(rgb_depth, yuv_depth);
+        assert_eq!(rgb_to_yuv(&rgb, &mut yuv), Ok(()));
+    }
+
+    #[test_case(PixelFormat::Yuv444)]
+    #[test_case(PixelFormat::Yuv422)]
+    #[test_case(PixelFormat::Yuv400)]
+    fn rgb_to_yuv_rejects_non_yuv420(yuv_format: PixelFormat) {
+        let (rgb, mut yuv) = valid_pair(8, 8);
+        yuv.yuv_format = yuv_format;
+        yuv.allocate_planes(Category::Color).unwrap();
+        assert_eq!(rgb_to_yuv(&rgb, &mut yuv), Err(AvifError::ReformatFailed));
+    }
+
+    #[test_case(0)]
+    #[test_case(16)]
+    fn rgb_to_yuv_rejects_unsupported_yuv_depth(yuv_depth: u8) {
+        let (rgb, mut yuv) = valid_pair(8, 8);
+        yuv.depth = yuv_depth;
+        assert_eq!(rgb_to_yuv(&rgb, &mut yuv), Err(AvifError::ReformatFailed));
+    }
+
+    #[test_case(Format::Rgb565, 8, false)]
+    #[test_case(Format::Rgba1010102, 10, false)]
+    #[test_case(Format::Gray, 8, false)]
+    #[test_case(Format::GrayA, 8, false)]
+    #[test_case(Format::AGray, 8, false)]
+    #[test_case(Format::Rgba, 16, true)]
+    fn rgb_to_yuv_rejects_unsupported_rgb_format(format: Format, depth: u8, is_float: bool) {
+        let (mut rgb, mut yuv) = valid_pair(8, 8);
+        rgb.format = format;
+        rgb.depth = depth;
+        rgb.is_float = is_float;
+        rgb.allocate().unwrap();
+        assert_eq!(rgb_to_yuv(&rgb, &mut yuv), Err(AvifError::ReformatFailed));
+    }
+
+    #[test]
+    fn rgb_to_yuv_rejects_invalid_rgb_or_mismatched_dimensions() {
+        let (mut rgb, mut yuv) = valid_pair(8, 8);
+        rgb.width = 2;
+        assert_eq!(rgb_to_yuv(&rgb, &mut yuv), Err(AvifError::ReformatFailed));
+
+        let (mut rgb, mut yuv) = valid_pair(8, 8);
+        rgb.height = 2;
+        assert_eq!(rgb_to_yuv(&rgb, &mut yuv), Err(AvifError::ReformatFailed));
+
+        let (mut rgb, mut yuv) = valid_pair(8, 8);
+        rgb.pixels = None;
+        assert_eq!(rgb_to_yuv(&rgb, &mut yuv), Err(AvifError::ReformatFailed));
+    }
+
+    #[test]
+    fn rgb_to_yuv_rejects_invalid_planes() {
+        // Missing chroma plane.
+        let (rgb, mut yuv) = valid_pair(8, 8);
+        yuv.planes[Plane::U.as_usize()] = None;
+        assert_eq!(rgb_to_yuv(&rgb, &mut yuv), Err(AvifError::ReformatFailed));
+
+        // Row stride smaller than plane width * pixel_size.
+        let (rgb, mut yuv) = valid_pair(8, 8);
+        yuv.row_bytes[Plane::Y.as_usize()] = 3;
+        assert_eq!(rgb_to_yuv(&rgb, &mut yuv), Err(AvifError::ReformatFailed));
+
+        // Truncated 8-bit plane buffer.
+        let (rgb, mut yuv) = valid_pair(8, 8);
+        yuv.planes[Plane::Y.as_usize()] = Some(Pixels::Buffer(vec![0u8; 12]));
+        assert_eq!(rgb_to_yuv(&rgb, &mut yuv), Err(AvifError::ReformatFailed));
+
+        // Odd byte stride on a 10-bit plane.
+        let (rgb, mut yuv) = valid_pair(10, 10);
+        yuv.planes[Plane::Y.as_usize()] = Some(Pixels::Buffer16(vec![0u16; 32]));
+        yuv.row_bytes[Plane::Y.as_usize()] = 9;
+        assert_eq!(rgb_to_yuv(&rgb, &mut yuv), Err(AvifError::ReformatFailed));
+
+        // Truncated 10-bit chroma plane buffer.
+        let (rgb, mut yuv) = valid_pair(10, 10);
+        yuv.planes[Plane::V.as_usize()] = Some(Pixels::Buffer16(vec![0u16; 3]));
+        assert_eq!(rgb_to_yuv(&rgb, &mut yuv), Err(AvifError::ReformatFailed));
+
+        // Mismatched Pixels variant (8-bit buffer on a 10-bit image).
+        let (rgb, mut yuv) = valid_pair(10, 10);
+        yuv.planes[Plane::Y.as_usize()] = Some(Pixels::Buffer(vec![0u8; 64]));
+        assert_eq!(rgb_to_yuv(&rgb, &mut yuv), Err(AvifError::ReformatFailed));
     }
 }
