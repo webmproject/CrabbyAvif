@@ -40,15 +40,40 @@ impl Pixels {
         mut row_bytes: u32,
     ) -> AvifResult<Self> {
         if depth > 8 {
+            if !row_bytes.is_multiple_of(2) {
+                return AvifError::no_content();
+            }
             row_bytes /= 2;
         }
         let size = usize_from_u32(checked_mul!(height, row_bytes)?)?;
+        Self::from_raw_pointer_and_size(ptr, depth, size)
+    }
+
+    // This function may not be used in all configurations.
+    #[allow(dead_code)]
+    pub(crate) fn from_raw_pointer_and_size(
+        ptr: *mut u8,
+        depth: u32,
+        size: usize,
+    ) -> AvifResult<Self> {
         if depth > 8 {
-            Ok(Pixels::Pointer16(unsafe {
-                PointerSlice::create(ptr as *mut u16, size)?
-            }))
+            let ptr16 = ptr as *mut u16;
+            // SAFETY: Crate-internal callers (C API wrappers, native codec outputs, and scoped
+            // image views) pass a pointer to a single live allocation of at least `size`
+            // initialized `u16` elements that outlives the returned `Pixels` and obeys Rust's
+            // shared/mutable borrowing rules through `Pixels` accessors. Null pointers, unaligned
+            // pointers, zero sizes, and byte sizes exceeding `isize::MAX` are rejected by
+            // `PointerSlice::create`.
+            let slice = unsafe { PointerSlice::create(ptr16, size) }?;
+            Ok(Pixels::Pointer16(slice))
         } else {
-            Ok(Pixels::Pointer(unsafe { PointerSlice::create(ptr, size)? }))
+            // SAFETY: Crate-internal callers (C API wrappers, native codec outputs, and scoped
+            // image views) pass a pointer to a single live allocation of at least `size`
+            // initialized `u8` bytes that outlives the returned `Pixels` and obeys Rust's
+            // shared/mutable borrowing rules through `Pixels` accessors. Null pointers, zero
+            // sizes, and sizes exceeding `isize::MAX` are rejected by `PointerSlice::create`.
+            let slice = unsafe { PointerSlice::create(ptr, size) }?;
+            Ok(Pixels::Pointer(slice))
         }
     }
 
@@ -102,7 +127,7 @@ impl Pixels {
         match self {
             Pixels::Pointer(ptr) => ptr.ptr(),
             Pixels::Buffer(buffer) => buffer.as_ptr(),
-            _ => std::ptr::null_mut(),
+            _ => std::ptr::null(),
         }
     }
 
@@ -112,7 +137,7 @@ impl Pixels {
         match self {
             Pixels::Pointer16(ptr) => ptr.ptr(),
             Pixels::Buffer16(buffer) => buffer.as_ptr(),
-            _ => std::ptr::null_mut(),
+            _ => std::ptr::null(),
         }
     }
 
@@ -243,4 +268,36 @@ pub enum ChannelIdc {
     Alpha = 5,
     Depth = 6,
     FourthColorChannel = 7, // e.g. K
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pixels_from_raw_pointer_validation() {
+        let mut buf16 = [1u16, 2, 3, 4];
+        let raw_ptr = buf16.as_mut_ptr() as *mut u8;
+
+        // Odd row_bytes for >8-bit depth is rejected so row strides stay u16-aligned.
+        assert!(Pixels::from_raw_pointer(raw_ptr, 10, 2, 3).is_err());
+        // Unaligned pointer for >8-bit depth is rejected.
+        assert!(Pixels::from_raw_pointer(raw_ptr.wrapping_add(1), 10, 1, 4).is_err());
+
+        let mut pixels16 = Pixels::from_raw_pointer(raw_ptr, 10, 2, 4).unwrap();
+        assert!(pixels16.has_data());
+        assert!(pixels16.ptr().is_null());
+        assert!(!pixels16.ptr16().is_null());
+        assert_eq!(pixels16.slice16(0, 4).unwrap(), &[1, 2, 3, 4]);
+        pixels16
+            .slice16_mut(1, 2)
+            .unwrap()
+            .copy_from_slice(&[20, 30]);
+        assert_eq!(pixels16.slice16(0, 4).unwrap(), &[1, 20, 30, 4]);
+
+        let pixels8 = Pixels::from_raw_pointer_and_size(raw_ptr, 8, 4).unwrap();
+        assert!(pixels8.ptr16().is_null());
+        assert!(!pixels8.ptr().is_null());
+        assert_eq!(pixels8.slice(0, 4).unwrap().len(), 4);
+    }
 }

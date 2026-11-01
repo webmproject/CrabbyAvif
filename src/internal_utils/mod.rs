@@ -341,58 +341,68 @@ pub struct PointerSlice<T> {
 
 impl<T> PointerSlice<T> {
     /// # Safety
-    /// `ptr` must live at least as long as the struct, and not be accessed other than through this
-    /// struct. It must point to a memory region of at least `size` elements.
+    ///
+    /// When `ptr` is non-null, properly aligned for `T`, and `size > 0` with
+    /// `size * size_of::<T>() <= isize::MAX as usize`:
+    /// - `ptr` must point to a single allocated object containing at least `size` initialized
+    ///   elements of type `T`.
+    /// - That allocation must remain live and valid for the lifetime of the returned
+    ///   `PointerSlice<T>` (and any clones created via [`Self::shallow_clone`]).
+    /// - While any shared reference produced from this `PointerSlice<T>` is live, the underlying
+    ///   memory must not be mutated; while any mutable reference produced from this
+    ///   `PointerSlice<T>` is live, the underlying memory must not be accessed through any other
+    ///   pointer or `PointerSlice<T>`.
     pub unsafe fn create(ptr: *mut T, size: usize) -> AvifResult<Self> {
-        if ptr.is_null() || size == 0 {
+        if ptr.is_null() || !ptr.is_aligned() || size == 0 {
             return AvifError::no_content();
         }
-        // Ensure that size does not exceed isize::MAX.
-        let _ = isize_from_usize(size)?;
+        // Ensure that the total byte length does not exceed `isize::MAX`.
+        let byte_size = size
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or(AvifError::NoContent)?;
+        let _ = isize_from_usize(byte_size)?;
         Ok(Self {
-            ptr: unsafe { std::slice::from_raw_parts_mut(ptr, size) },
+            ptr: std::ptr::slice_from_raw_parts_mut(ptr, size),
         })
     }
     pub fn shallow_clone(&self) -> Self {
         Self { ptr: self.ptr }
     }
 
-    fn slice_impl(&self) -> &[T] {
-        // SAFETY: We only construct this with `ptr` which is valid at least as long as this struct
-        // is alive, and ro/mut borrows of the whole struct to access the inner slice, which makes
-        // our access appropriately exclusive.
-        unsafe { &(*self.ptr) }
-    }
-
-    fn slice_impl_mut(&mut self) -> &mut [T] {
-        // SAFETY: We only construct this with `ptr` which is valid at least as long as this struct
-        // is alive, and ro/mut borrows of the whole struct to access the inner slice, which makes
-        // our access appropriately exclusive.
-        unsafe { &mut (*self.ptr) }
-    }
-
     pub fn slice(&self, range: Range<usize>) -> AvifResult<&[T]> {
-        let data = self.slice_impl();
-        check_slice_range(data.len(), &range)?;
-        Ok(&data[range])
+        check_slice_range(self.ptr.len(), &range)?;
+        // SAFETY: `Self::create` verified that `self.ptr` is non-null, aligned for `T`, and has a
+        // byte size `<= isize::MAX`, and `check_slice_range` verified
+        // `range.start <= range.end <= self.ptr.len()`. By the safety contract of `Self::create`,
+        // `range` lies within a single live allocation of initialized `T` elements that is not
+        // concurrently mutated while `&self` is borrowed.
+        Ok(unsafe {
+            std::slice::from_raw_parts((self.ptr as *const T).add(range.start), range.len())
+        })
     }
 
     pub fn slice_mut(&mut self, range: Range<usize>) -> AvifResult<&mut [T]> {
-        let data = self.slice_impl_mut();
-        check_slice_range(data.len(), &range)?;
-        Ok(&mut data[range])
+        check_slice_range(self.ptr.len(), &range)?;
+        // SAFETY: `Self::create` verified that `self.ptr` is non-null, aligned for `T`, and has a
+        // byte size `<= isize::MAX`, and `check_slice_range` verified
+        // `range.start <= range.end <= self.ptr.len()`. By the safety contract of `Self::create`,
+        // `range` lies within a single live allocation of initialized `T` elements, and
+        // `&mut self` together with caller exclusivity guarantees unique mutable access.
+        Ok(unsafe {
+            std::slice::from_raw_parts_mut((self.ptr as *mut T).add(range.start), range.len())
+        })
     }
 
     pub fn ptr(&self) -> *const T {
-        self.slice_impl().as_ptr()
+        self.ptr as *const T
     }
 
     pub fn ptr_mut(&mut self) -> *mut T {
-        self.slice_impl_mut().as_mut_ptr()
+        self.ptr as *mut T
     }
 
     pub fn is_empty(&self) -> bool {
-        self.slice_impl().is_empty()
+        self.ptr.is_empty()
     }
 }
 
@@ -506,5 +516,39 @@ mod tests {
         assert!(check_slice_range(10, &(10..11)).is_err());
         assert!(check_slice_range(10, &(11..12)).is_err());
         assert!(check_slice_range(0, &(0..1)).is_err());
+    }
+
+    #[test]
+    fn test_pointer_slice_safety_checks_and_slicing() {
+        let mut aligned = [10u16, 20, 30, 40];
+
+        // Null pointer and zero size are rejected before dereferencing.
+        assert!(unsafe { PointerSlice::<u16>::create(std::ptr::null_mut(), 4) }.is_err());
+        assert!(unsafe { PointerSlice::<u16>::create(aligned.as_mut_ptr(), 0) }.is_err());
+
+        // Unaligned pointer for u16 is rejected.
+        let unaligned_ptr = (aligned.as_mut_ptr() as *mut u8).wrapping_add(1) as *mut u16;
+        assert!(unsafe { PointerSlice::<u16>::create(unaligned_ptr, 1) }.is_err());
+
+        // Element count <= isize::MAX whose byte length exceeds isize::MAX is rejected.
+        let too_many_u16 = (isize::MAX as usize / std::mem::size_of::<u16>()) + 1;
+        assert!(
+            unsafe { PointerSlice::<u16>::create(aligned.as_mut_ptr(), too_many_u16) }.is_err()
+        );
+        assert!(unsafe { PointerSlice::<u16>::create(aligned.as_mut_ptr(), usize::MAX) }.is_err());
+
+        // Valid creation, pointer accessors, and subrange slicing.
+        let base_ptr = aligned.as_mut_ptr();
+        // SAFETY: `aligned` is a live array of 4 initialized `u16` elements outliving `ps`.
+        let mut ps = unsafe { PointerSlice::create(base_ptr, aligned.len()) }.unwrap();
+        assert!(!ps.is_empty());
+        assert_eq!(ps.ptr(), base_ptr as *const u16);
+        assert_eq!(ps.ptr_mut(), base_ptr);
+        assert_eq!(ps.slice(1..3).unwrap(), &[20, 30]);
+        assert_eq!(ps.slice(4..4).unwrap(), &[]);
+        assert!(ps.slice(2..5).is_err());
+
+        ps.slice_mut(1..3).unwrap().copy_from_slice(&[200, 300]);
+        assert_eq!(ps.slice(0..4).unwrap(), &[10, 200, 300, 40]);
     }
 }
