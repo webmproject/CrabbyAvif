@@ -20,7 +20,6 @@ use crate::*;
 
 use libsharpyuv_sys::bindings::*;
 
-use std::mem::MaybeUninit;
 use std::os::raw::c_void;
 
 pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResult<()> {
@@ -37,29 +36,31 @@ pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResu
         },
         _ => return AvifError::not_implemented(),
     };
-    let mut matrix_uninit: MaybeUninit<SharpYuvConversionMatrix> = MaybeUninit::uninit();
-    // SAFETY: Calling into a C function with pointers that are guaranteed to be not null.
+    let mut matrix = SharpYuvConversionMatrix {
+        rgb_to_y: [0; 4],
+        rgb_to_u: [0; 4],
+        rgb_to_v: [0; 4],
+    };
+    // SAFETY: `color_space` and `matrix` are valid, aligned, initialized stack structs;
+    // `SharpYuvComputeConversionMatrix` only reads `color_space` and writes `matrix`.
     unsafe {
-        SharpYuvComputeConversionMatrix(&color_space as *const _, matrix_uninit.as_mut_ptr());
+        SharpYuvComputeConversionMatrix(&color_space, &mut matrix);
     }
     // bindgen does not expose SHARPYUV_VERSION directly since it's populated with a macro. The
     // code to compute the version is duplicated from libwebp.
     const SHARPYUV_VERSION: i32 = ((SHARPYUV_VERSION_MAJOR << 24)
         | (SHARPYUV_VERSION_MINOR << 16)
         | SHARPYUV_VERSION_PATCH) as i32;
-    // SAFETY: matrix_uninit was initialized by the C function above.
-    let matrix = unsafe { matrix_uninit.assume_init() };
-    let mut options_uninit: MaybeUninit<SharpYuvOptions> = MaybeUninit::uninit();
-    // SAFETY: Calling into a C function with pointers that are guaranteed to be not null.
-    unsafe {
-        SharpYuvOptionsInitInternal(
-            &matrix as *const _,
-            options_uninit.as_mut_ptr(),
-            SHARPYUV_VERSION,
-        );
+    let mut options = SharpYuvOptions {
+        yuv_matrix: &matrix,
+        transfer_type: SharpYuvTransferFunctionType_kSharpYuvTransferFunctionSrgb,
+    };
+    // SAFETY: `matrix` and `options` are valid, aligned, initialized stack structs and `matrix`
+    // outlives `options` for the entire duration of this function.
+    let init_ok = unsafe { SharpYuvOptionsInitInternal(&matrix, &mut options, SHARPYUV_VERSION) };
+    if init_ok == 0 {
+        return AvifError::reformat_failed();
     }
-    // SAFETY: options_uninit was initialized by the C function above.
-    let mut options = unsafe { options_uninit.assume_init() };
     if image.transfer_characteristics != TransferCharacteristics::Unspecified {
         options.transfer_type = image.transfer_characteristics as _;
     }
