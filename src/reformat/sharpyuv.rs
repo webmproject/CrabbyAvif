@@ -103,58 +103,101 @@ pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResu
     if image.transfer_characteristics != TransferCharacteristics::Unspecified {
         options.transfer_type = image.transfer_characteristics as _;
     }
-    let plane_u8 = image.plane_ptrs_mut();
-    let plane_row_bytes = image.plane_row_bytes()?;
+    let rgb_pixels = rgb.pixels.as_ref().ok_or(AvifError::ReformatFailed)?;
+    let rgb_pixel_size = rgb.pixel_size();
     let (r_ptr, g_ptr, b_ptr) = if rgb.depth == 8 {
-        let row = rgb.row(0)?;
+        let rgb_span_bytes = checked_add!(
+            checked_mul!(rgb.height - 1, rgb.row_bytes)?,
+            checked_mul!(rgb.width, rgb_pixel_size)?
+        )?;
+        let slice = rgb_pixels
+            .slice(0, rgb_span_bytes)
+            .map_err(|_| AvifError::ReformatFailed)?;
         (
-            row.get(rgb.format.r_offset()..)
+            slice
+                .get(rgb.format.r_offset()..)
                 .ok_or(AvifError::ReformatFailed)?
                 .as_ptr() as *const c_void,
-            row.get(rgb.format.g_offset()..)
+            slice
+                .get(rgb.format.g_offset()..)
                 .ok_or(AvifError::ReformatFailed)?
                 .as_ptr() as *const c_void,
-            row.get(rgb.format.b_offset()..)
+            slice
+                .get(rgb.format.b_offset()..)
                 .ok_or(AvifError::ReformatFailed)?
                 .as_ptr() as *const c_void,
         )
     } else {
-        let row = rgb.row16(0)?;
+        let rgb_span_u16 = checked_add!(
+            checked_mul!(rgb.height - 1, rgb.row_bytes / 2)?,
+            checked_mul!(rgb.width, rgb_pixel_size / 2)?
+        )?;
+        let slice16 = rgb_pixels
+            .slice16(0, rgb_span_u16)
+            .map_err(|_| AvifError::ReformatFailed)?;
         (
-            row.get(rgb.format.r_offset()..)
+            slice16
+                .get(rgb.format.r_offset()..)
                 .ok_or(AvifError::ReformatFailed)?
                 .as_ptr() as *const c_void,
-            row.get(rgb.format.g_offset()..)
+            slice16
+                .get(rgb.format.g_offset()..)
                 .ok_or(AvifError::ReformatFailed)?
                 .as_ptr() as *const c_void,
-            row.get(rgb.format.b_offset()..)
+            slice16
+                .get(rgb.format.b_offset()..)
                 .ok_or(AvifError::ReformatFailed)?
                 .as_ptr() as *const c_void,
         )
     };
-    // SAFETY: Calling the C library conversion function. Pointers and strides are guaranteed to be
-    // valid.
-    if unsafe {
+    let rgb_step = i32_from_u32(rgb_pixel_size)?;
+    let rgb_stride = i32_from_u32(rgb.row_bytes)?;
+    let rgb_bit_depth = i32::from(rgb.depth);
+    let width = i32_from_u32(rgb.width)?;
+    let height = i32_from_u32(rgb.height)?;
+    let plane_row_bytes = image.plane_row_bytes()?;
+    let yuv_bit_depth = i32::from(image.depth);
+    let y_stride = plane_row_bytes[0];
+    let u_stride = plane_row_bytes[1];
+    let v_stride = plane_row_bytes[2];
+    let plane_u8 = image.plane_ptrs_mut();
+    let y_ptr = plane_u8[0] as *mut c_void;
+    let u_ptr = plane_u8[1] as *mut c_void;
+    let v_ptr = plane_u8[2] as *mut c_void;
+    // SAFETY:
+    // - `rgb.has_valid_pixels()` verified non-zero dimensions, valid `rgb.depth` (8/10/12/16), and
+    //   2-byte alignment and even `row_bytes` when `rgb.depth > 8`. `r_ptr`, `g_ptr`, and `b_ptr`
+    //   are derived from a single slice covering all `height` rows up to the end of the last row's
+    //   active pixels, so stepping across all `height` rows by `rgb_stride` stays in bounds with
+    //   full multi-row provenance.
+    // - `image.yuv_format == PixelFormat::Yuv420`, `image.depth` is 8/10/12, and `validate_plane`
+    //   verified that `y_ptr`, `u_ptr`, and `v_ptr` are non-null, properly aligned (`u8` for 8-bit
+    //   or `u16` with even strides for 10/12-bit), and backed by allocations with sufficient
+    //   capacity for all luma and 4:2:0 chroma rows; `plane_ptrs_mut()` is taken after all shared
+    //   reads of `image` so the mutable pointers remain uniquely borrowed for the FFI call.
+    // - `options` was initialized by `SharpYuvOptionsInitInternal` (`init_ok != 0`) and borrows
+    //   the live `matrix` struct on this stack frame.
+    let converted = unsafe {
         SharpYuvConvertWithOptions(
             r_ptr,
             g_ptr,
             b_ptr,
-            rgb.format.pixel_size(rgb.depth as _) as _,
-            i32_from_u32(rgb.row_bytes)?,
-            rgb.depth as _,
-            plane_u8[0] as *mut _,
-            plane_row_bytes[0],
-            plane_u8[1] as *mut _,
-            plane_row_bytes[1],
-            plane_u8[2] as *mut _,
-            plane_row_bytes[2],
-            image.depth as _,
-            i32_from_u32(rgb.width)?,
-            i32_from_u32(rgb.height)?,
-            &options as *const _,
+            rgb_step,
+            rgb_stride,
+            rgb_bit_depth,
+            y_ptr,
+            y_stride,
+            u_ptr,
+            u_stride,
+            v_ptr,
+            v_stride,
+            yuv_bit_depth,
+            width,
+            height,
+            &options,
         )
-    } == 0
-    {
+    };
+    if converted == 0 {
         AvifError::reformat_failed()
     } else {
         Ok(())
@@ -272,5 +315,22 @@ mod tests {
         let (rgb, mut yuv) = valid_pair(10, 10);
         yuv.planes[Plane::Y.as_usize()] = Some(Pixels::Buffer(vec![0u8; 64]));
         assert_eq!(rgb_to_yuv(&rgb, &mut yuv), Err(AvifError::ReformatFailed));
+    }
+
+    #[test]
+    fn rgb_to_yuv_strided_unpadded_last_row() {
+        // 8-bit BGRA 4x4 with row_bytes=20 (> 16) and unpadded final row (3 * 20 + 16 = 76 bytes).
+        let (mut rgb8, mut yuv8) = valid_pair(8, 8);
+        rgb8.format = Format::Bgra;
+        rgb8.row_bytes = 20;
+        rgb8.pixels = Some(Pixels::Buffer(vec![128u8; 76]));
+        assert_eq!(rgb_to_yuv(&rgb8, &mut yuv8), Ok(()));
+
+        // 10-bit BGRA 4x4 with row_bytes=40 (> 32) and unpadded final row (3 * 20 + 16 = 76 u16s).
+        let (mut rgb10, mut yuv10) = valid_pair(10, 10);
+        rgb10.format = Format::Bgra;
+        rgb10.row_bytes = 40;
+        rgb10.pixels = Some(Pixels::Buffer16(vec![512u16; 76]));
+        assert_eq!(rgb_to_yuv(&rgb10, &mut yuv10), Ok(()));
     }
 }
