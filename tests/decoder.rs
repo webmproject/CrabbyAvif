@@ -900,20 +900,29 @@ fn raw_io() {
     let data =
         std::fs::read(get_test_file("colors-animated-8bpc.avif")).expect("Unable to read file");
     let mut decoder = decoder_with_codec(DAV1D);
-    unsafe {
-        decoder
-            .set_io_raw(data.as_ptr(), data.len())
-            .expect("Failed to set IO");
-    }
+    // SAFETY: `data` is a live, initialized `Vec<u8>` that is neither mutated nor dropped before
+    // `decoder` is dropped at the end of this test.
+    let res = unsafe { decoder.set_io_raw(data.as_ptr(), data.len()) };
+    res.expect("Failed to set IO");
     assert!(decoder.parse().is_ok());
     assert_eq!(decoder.compression_format(), CompressionFormat::Avif);
     assert_eq!(decoder.image_count(), 5);
-    if !HAS_DECODER {
-        return;
+    if HAS_DECODER {
+        for _ in 0..5 {
+            assert!(decoder.next_image().is_ok());
+        }
     }
-    for _ in 0..5 {
-        assert!(decoder.next_image().is_ok());
-    }
+
+    // SAFETY: Null pointers and sizes exceeding `isize::MAX` are rejected before dereferencing.
+    let res = unsafe { decoder.set_io_raw(std::ptr::null(), 0) };
+    assert!(matches!(res, Err(AvifError::InvalidArgument)));
+    let res = unsafe { decoder.set_io_raw(data.as_ptr(), (isize::MAX as usize) + 1) };
+    assert!(matches!(res, Err(AvifError::InvalidArgument)));
+
+    // SAFETY: `data.as_ptr()` is non-null and `size == 0` reads zero bytes.
+    let res = unsafe { decoder.set_io_raw(data.as_ptr(), 0) };
+    assert!(res.is_ok());
+    assert!(decoder.parse().is_err());
 }
 
 struct CustomIO {

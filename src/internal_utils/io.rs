@@ -86,12 +86,20 @@ pub struct DecoderRawIO<'a> {
 
 impl DecoderRawIO<'_> {
     /// # Safety
-    /// This function is only used from the C/C++ API when the input comes from native callers. The
-    /// assumption is that the caller will always pass in a valid pointer and size.
+    ///
+    /// When `size > 0`, `data` must be non-null, valid for reads of `size` initialized bytes
+    /// within a single allocated object (`size <= isize::MAX as usize`), not mutated for the
+    /// lifetime of the returned `DecoderRawIO`, and outlive the returned `DecoderRawIO`.
     pub unsafe fn create(data: *const u8, size: usize) -> Self {
-        Self {
-            data: unsafe { std::slice::from_raw_parts(data, size) },
-        }
+        let slice = if size == 0 || data.is_null() {
+            &[]
+        } else {
+            // SAFETY: `size > 0` and `data` is non-null (checked above), `u8` has alignment 1, and
+            // the caller guarantees that `data` points to `size` (`<= isize::MAX as usize`)
+            // initialized, immutable bytes within a single allocation that outlives `'a`.
+            unsafe { std::slice::from_raw_parts(data, size) }
+        };
+        Self { data: slice }
     }
 }
 

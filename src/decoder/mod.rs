@@ -548,10 +548,20 @@ impl Decoder {
 
     /// # Safety
     ///
-    /// This function is intended for use only from the C API. The assumption is that the caller
-    /// will always pass in a valid pointer and size.
+    /// When `data` is non-null and `size <= isize::MAX as usize`:
+    /// - If `size > 0`, `data` must point to `size` initialized bytes within a single allocated
+    ///   object.
+    /// - The memory referenced by `data` must remain valid and not be mutated or freed until
+    ///   `self` is dropped or its IO source is replaced (via `set_io*`).
     pub unsafe fn set_io_raw(&mut self, data: *const u8, size: usize) -> AvifResult<()> {
-        self.io = Some(Box::new(unsafe { DecoderRawIO::create(data, size) }));
+        if data.is_null() || size > isize::MAX as usize {
+            return AvifError::invalid_argument();
+        }
+        // SAFETY: `data` is non-null and `size <= isize::MAX as usize` (checked above), and the
+        // caller upholds that `data` is valid for reads of `size` initialized, immutable bytes for
+        // as long as this IO remains attached to `self`.
+        let raw_io = unsafe { DecoderRawIO::create(data, size) };
+        self.io = Some(Box::new(raw_io));
         self.parse_state = ParseState::None;
         Ok(())
     }
