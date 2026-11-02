@@ -2619,12 +2619,29 @@ constexpr ExpectedImageInfo kExpectedImageInfos[] = {
     },
 };
 
-void VerifyInfo(const ExpectedImageInfo& expected_info,
-                const avifImage& image) {
+void VerifyInfo(const ExpectedImageInfo& expected_info, const avifImage& image,
+                bool after_decode = false) {
   EXPECT_EQ(image.width, expected_info.width);
   EXPECT_EQ(image.height, expected_info.height);
+#ifdef __ANDROID__
+  if (after_decode) {
+    if (expected_info.depth == 8) {
+      EXPECT_EQ(image.depth, 8u);
+      EXPECT_TRUE(image.yuvFormat == AVIF_PIXEL_FORMAT_YUV420 ||
+                  image.yuvFormat == AVIF_PIXEL_FORMAT_ANDROID_NV12);
+    } else {
+      EXPECT_EQ(image.depth, 16u);
+      EXPECT_EQ(image.yuvFormat, AVIF_PIXEL_FORMAT_ANDROID_P010);
+    }
+  } else {
+    EXPECT_EQ(image.depth, expected_info.depth);
+    EXPECT_EQ(image.yuvFormat, expected_info.yuv_format);
+  }
+#else
+  (void)after_decode;
   EXPECT_EQ(image.depth, expected_info.depth);
   EXPECT_EQ(image.yuvFormat, expected_info.yuv_format);
+#endif
   EXPECT_EQ(image.yuvRange,
             expected_info.full_range ? AVIF_RANGE_FULL : AVIF_RANGE_LIMITED);
   EXPECT_EQ(image.colorPrimaries, expected_info.color_primaries);
@@ -2654,12 +2671,36 @@ TEST_P(ConformanceTest, ValidateDecode) {
   VerifyInfo(info, *decoder->image);
   EXPECT_EQ(decoder->alphaPresent, info.alpha_present);
 
-  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+#ifdef __ANDROID__
+  if (info.depth > 8) {
+    decoder->androidMediaCodecOutputColorFormat =
+        ANDROID_MEDIA_CODEC_OUTPUT_COLOR_FORMAT_P010;
+  }
+  if (info.depth > 10) {
+    // Android MediaCodec does not support 12-bit AV1 decoding.
+    ASSERT_NE(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK)
+        << info.filename;
+    return;
+  }
+  const avifResult result = avifDecoderNextImage(decoder.get());
+  if (info.color_obu_size > 2 * 1024 * 1024 &&
+      std::string(info.filename).find("grid") == std::string::npos &&
+      result != AVIF_RESULT_OK) {
+    // Some Android MediaCodec decoders (such as c2.android.av1.decoder on API
+    // 34) cap the input buffer size at 2 MiB for 2048x858 images, which is too
+    // small for these lossless AV1 payloads.
+    return;
+  }
+  ASSERT_EQ(result, AVIF_RESULT_OK) << info.filename;
+#else
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK)
+      << info.filename;
+#endif
   // Link-U 422 files have wrong subsampling in the Avif header(decoded one is
   // right).
   if (std::string(info.filename).find("Link-U") == std::string::npos ||
       std::string(info.filename).find("yuv422") == std::string::npos) {
-    VerifyInfo(info, *decoder->image);
+    VerifyInfo(info, *decoder->image, /*after_decode=*/true);
   }
 }
 
