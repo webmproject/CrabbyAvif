@@ -751,7 +751,10 @@ pub(crate) fn construct_items(
                 // Section 8.11.12.1 of ISO/IEC 14496-12:
                 //   The items linked to are then represented by an array of to_item_IDs;
                 //   within a given array, a given value shall occur at most once.
-                if item.source_item_ids.contains(&reference.to_item_id) {
+                // Overlay items are an exception: the same input image may be placed on the
+                // canvas multiple times (at different offsets), and each instance needs its own
+                // dimg entry (see e.g. C021.heic in the HEIF conformance suite).
+                if !item.is_overlay_item() && item.source_item_ids.contains(&reference.to_item_id) {
                     return AvifError::bmff_parse_failed(format!(
                         "multiple dimg references for item ID {}",
                         reference.from_item_id

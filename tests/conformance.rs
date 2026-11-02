@@ -3205,9 +3205,7 @@ mod heic {
             color_primaries: None,
             transfer_characteristics: None,
             matrix_coefficients: None,
-            // The overlay (iovl) item references the same input image twice, which CrabbyAvif
-            // rejects as duplicate dimg references.
-            support: HeicSupport::ParseUnsupported,
+            support: HeicSupport::Supported,
         },
         // index: 21
         HeicExpectedImageInfo {
