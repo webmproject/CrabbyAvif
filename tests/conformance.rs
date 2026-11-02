@@ -2981,9 +2981,7 @@ mod heic {
             color_primaries: None,
             transfer_characteristics: None,
             matrix_coefficients: None,
-            // The primary item is also a thumbnail of another item, and CrabbyAvif skips thumbnail
-            // items when looking for the primary item.
-            support: HeicSupport::ParseUnsupported,
+            support: HeicSupport::Supported,
         },
         // index: 5
         HeicExpectedImageInfo {

@@ -1025,13 +1025,19 @@ impl Decoder {
             Some(altr_group) => &altr_group.entity_ids,
             None => &single_item_id,
         };
+        let requested_item_id = item_id;
         for item_id in item_ids {
             if let Some(item) = self.items.get(item_id) {
                 if item.should_skip()
                     || !item.is_image_item()
                     || (item.is_tone_mapped_item() && !ftyp.has_tmap())
                     || (item.is_sample_transform_item() && !self.settings.allow_sample_transform)
-                    || (self.source != Source::Thumbnail && !item.thumbnail_for_id.is_empty())
+                    // Thumbnails are not used as alternatives from an altr group, but an item
+                    // that is explicitly requested (e.g. a primary item that also happens to be
+                    // a thumbnail of another item) is decoded as is.
+                    || (self.source != Source::Thumbnail
+                        && *item_id != requested_item_id
+                        && !item.thumbnail_for_id.is_empty())
                 {
                     continue;
                 }
