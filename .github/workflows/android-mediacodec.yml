@@ -55,6 +55,27 @@ jobs:
       env:
         STEPS_SETUP_NDK_OUTPUTS_NDK_PATH: ${{ steps.setup-ndk.outputs.ndk-path }}
 
+    - name: Set globals
+      id: globals
+      run: echo "HEIF_CONFORMANCE_COMMIT_HASH=6ff1e33481d325296d8a787432453ef3fa91f591" >> "${GITHUB_OUTPUT}"
+
+    - name: Cache heif_conformance conformance_files
+      id: cache-heif-conformance-files
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: external/heif_conformance/conformance_files
+        key: cache-heif-conformance-files-${{ steps.globals.outputs.HEIF_CONFORMANCE_COMMIT_HASH }}
+
+    - name: Clone heif_conformance (HEIF conformance files)
+      if: steps.cache-heif-conformance-files.outputs.cache-hit != 'true'
+      working-directory: ./external
+      run: |
+        git clone https://github.com/nokiatech/heif_conformance.git
+        cd heif_conformance
+        git checkout ${STEPS_GLOBALS_OUTPUTS_HEIF_CONFORMANCE_COMMIT_HASH}
+      env:
+        STEPS_GLOBALS_OUTPUTS_HEIF_CONFORMANCE_COMMIT_HASH: ${{ steps.globals.outputs.HEIF_CONFORMANCE_COMMIT_HASH }}
+
     - name: Install cargo dinghy
       run: cargo install cargo-dinghy --force
 
@@ -65,8 +86,13 @@ jobs:
       uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
       with:
         script: |
-          # Run the rust tests.
-          cargo dinghy -p auto-android-x86_64-latest -d android test --no-default-features --features android_mediacodec,heic,libyuv --target x86_64-linux-android -- --skip test_conformance
+          # Push the HEIF conformance files on to the emulator.
+          adb shell mkdir -p /data/local/tmp/heif_conformance
+          adb push external/heif_conformance/conformance_files /data/local/tmp/heif_conformance/
+
+          # Run the rust tests (including the HEIC conformance tests). The AVIF
+          # conformance tests are skipped since they need dav1d.
+          cargo dinghy -p auto-android-x86_64-latest -d android -e CRABBYAVIF_HEIC_CONFORMANCE_TEST_DATA_DIR=/data/local/tmp/heif_conformance test --no-default-features --features android_mediacodec,heic,libyuv --target x86_64-linux-android -- --skip test_conformance
 
           # Build the library with C API enabled.
           export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}

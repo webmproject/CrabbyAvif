@@ -2788,3 +2788,1029 @@ fn test_conformance_thumbnails() {
     assert_eq!(image.width, 160);
     assert_eq!(image.height, 90);
 }
+
+// HEIF conformance files from https://github.com/nokiatech/heif_conformance
+// (conformance_files directory). HEIC decoding is only supported on Android
+// (via MediaCodec), so these tests only run when both the heic and
+// android_mediacodec features are enabled. Expected values were generated
+// from the output of libheif's heif-info. See README.md for instructions on
+// how to run these tests on an Android device.
+#[cfg(all(feature = "heic", feature = "android_mediacodec"))]
+mod heic {
+    use super::*;
+
+    fn get_heic_test_file(filename: &str) -> String {
+        let base_path = match env::var("CRABBYAVIF_HEIC_CONFORMANCE_TEST_DATA_DIR") {
+            Ok(dir) => format!("{dir}/conformance_files"),
+            Err(_) => format!(
+                "{}/external/heif_conformance/conformance_files",
+                env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not defined")
+            ),
+        };
+        format!("{base_path}/{filename}")
+    }
+
+    #[derive(PartialEq)]
+    enum HeicSupport {
+        // parse() and decode (next_image()) are expected to succeed.
+        Supported,
+        // parse() is expected to succeed, but decoding is not supported by the
+        // Android MediaCodec based HEIC decoding path, so it is skipped.
+        DecodeUnsupported,
+        // CrabbyAvif does not support the file, so the test is skipped
+        // entirely.
+        ParseUnsupported,
+    }
+
+    struct HeicExpectedImageInfo<'a> {
+        filename: &'a str,
+        // Displayed width and height, i.e. after applying the clap and irot
+        // transformative properties (this is what heif-info reports).
+        width: u32,
+        height: u32,
+        depth: u8,
+        yuv_format: PixelFormat,
+        alpha_present: bool,
+        // None means "not checked". None of the conformance files have a colr
+        // box, so heif-info does not report the CICP values or the range.
+        // yuv_range is taken from the HEVC bitstream VUI instead.
+        yuv_range: Option<YuvRange>,
+        color_primaries: Option<u16>,
+        transfer_characteristics: Option<u16>,
+        matrix_coefficients: Option<u16>,
+        // Entries that are not HeicSupport::Supported must have a comment
+        // explaining why.
+        support: HeicSupport,
+    }
+
+    fn displayed_size(image: &Image) -> (u32, u32) {
+        let (mut width, mut height) = (image.width, image.height);
+        if let Some(clap) = &image.clap {
+            // The crop offsets may be odd (e.g. C039), which CropRect rejects
+            // for subsampled formats, so only the clap dimensions are used.
+            assert!(clap.width.1 != 0 && clap.width.0 % clap.width.1 == 0);
+            assert!(clap.height.1 != 0 && clap.height.0 % clap.height.1 == 0);
+            width = clap.width.0 / clap.width.1;
+            height = clap.height.0 / clap.height.1;
+        }
+        if matches!(image.irot_angle, Some(1) | Some(3)) {
+            std::mem::swap(&mut width, &mut height);
+        }
+        (width, height)
+    }
+
+    fn verify_heic_info(expected_info: &HeicExpectedImageInfo, image: &Image) {
+        assert_eq!(
+            displayed_size(image),
+            (expected_info.width, expected_info.height)
+        );
+        assert_eq!(image.depth, expected_info.depth);
+        assert_eq!(image.yuv_format, expected_info.yuv_format);
+        assert_eq!(image.alpha_present, expected_info.alpha_present);
+        if let Some(yuv_range) = expected_info.yuv_range {
+            assert_eq!(image.yuv_range, yuv_range);
+        }
+        if let Some(color_primaries) = expected_info.color_primaries {
+            assert_eq!(image.color_primaries, color_primaries.into());
+        }
+        if let Some(transfer_characteristics) = expected_info.transfer_characteristics {
+            assert_eq!(
+                image.transfer_characteristics,
+                transfer_characteristics.into()
+            );
+        }
+        if let Some(matrix_coefficients) = expected_info.matrix_coefficients {
+            assert_eq!(image.matrix_coefficients, matrix_coefficients.into());
+        }
+    }
+
+    #[test_case::test_matrix(0usize..63)]
+    fn test_heic_conformance(index: usize) {
+        let expected_info = &HEIC_EXPECTED_INFOS[index];
+        if expected_info.support == HeicSupport::ParseUnsupported {
+            return;
+        }
+        let filename = get_heic_test_file(expected_info.filename);
+        let mut decoder = decoder::Decoder::default();
+        decoder.settings.strictness = decoder::Strictness::None;
+        decoder.set_io_file(&filename).expect("Failed to set IO");
+        let res = decoder.parse();
+        assert!(res.is_ok(), "parse failed: {res:?}");
+        let image = decoder.image().expect("image was none");
+        verify_heic_info(expected_info, image);
+        if expected_info.support == HeicSupport::DecodeUnsupported {
+            return;
+        }
+        let res = decoder.next_image();
+        assert!(res.is_ok(), "next_image failed: {res:?}");
+        let image = decoder.image().expect("image was none");
+        verify_heic_info(expected_info, image);
+        assert!(image.has_plane(Plane::Y));
+        if expected_info.alpha_present {
+            assert!(image.has_plane(Plane::A));
+        }
+    }
+
+    // If more files are added to this array, update the call to test_matrix above.
+    const HEIC_EXPECTED_INFOS: [HeicExpectedImageInfo; 63] = [
+        // index: 0
+        HeicExpectedImageInfo {
+            filename: "C001.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 1
+        HeicExpectedImageInfo {
+            filename: "C002.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 2
+        HeicExpectedImageInfo {
+            filename: "C003.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 3
+        HeicExpectedImageInfo {
+            filename: "C004.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 4
+        HeicExpectedImageInfo {
+            filename: "C005.heic",
+            width: 128,
+            height: 72,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            // The primary item is also a thumbnail of another item, and CrabbyAvif skips thumbnail
+            // items when looking for the primary item.
+            support: HeicSupport::ParseUnsupported,
+        },
+        // index: 5
+        HeicExpectedImageInfo {
+            filename: "C006.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: true,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 6
+        HeicExpectedImageInfo {
+            filename: "C007.heic",
+            width: 2560,
+            height: 1440,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 7
+        HeicExpectedImageInfo {
+            filename: "C008.heic",
+            width: 720,
+            height: 1280,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 8
+        HeicExpectedImageInfo {
+            filename: "C009.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 9
+        HeicExpectedImageInfo {
+            filename: "C010.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 10
+        HeicExpectedImageInfo {
+            filename: "C011.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 11
+        HeicExpectedImageInfo {
+            filename: "C012.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 12
+        HeicExpectedImageInfo {
+            filename: "C013.heic",
+            width: 300,
+            height: 300,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 13
+        HeicExpectedImageInfo {
+            filename: "C014.heic",
+            width: 300,
+            height: 300,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 14
+        HeicExpectedImageInfo {
+            filename: "C015.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 15
+        HeicExpectedImageInfo {
+            filename: "C016.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 16
+        HeicExpectedImageInfo {
+            filename: "C017.heic",
+            width: 640,
+            height: 360,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 17
+        HeicExpectedImageInfo {
+            filename: "C018.heic",
+            width: 640,
+            height: 360,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 18
+        HeicExpectedImageInfo {
+            filename: "C019.heic",
+            width: 640,
+            height: 360,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 19
+        HeicExpectedImageInfo {
+            filename: "C020.heic",
+            width: 640,
+            height: 360,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 20
+        HeicExpectedImageInfo {
+            filename: "C021.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            // The overlay (iovl) item references the same input image twice, which CrabbyAvif
+            // rejects as duplicate dimg references.
+            support: HeicSupport::ParseUnsupported,
+        },
+        // index: 21
+        HeicExpectedImageInfo {
+            filename: "C022.heic",
+            width: 1440,
+            height: 960,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 22
+        HeicExpectedImageInfo {
+            filename: "C023.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 23
+        HeicExpectedImageInfo {
+            filename: "C024.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 24
+        HeicExpectedImageInfo {
+            filename: "C025.heic",
+            width: 128,
+            height: 72,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 25
+        HeicExpectedImageInfo {
+            filename: "C026.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 26
+        HeicExpectedImageInfo {
+            filename: "C027.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 27
+        HeicExpectedImageInfo {
+            filename: "C028.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 28
+        HeicExpectedImageInfo {
+            filename: "C029.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 29
+        HeicExpectedImageInfo {
+            filename: "C030.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 30
+        HeicExpectedImageInfo {
+            filename: "C031.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 31
+        HeicExpectedImageInfo {
+            filename: "C032.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 32
+        HeicExpectedImageInfo {
+            filename: "C034.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 33
+        HeicExpectedImageInfo {
+            filename: "C036.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 34
+        HeicExpectedImageInfo {
+            filename: "C037.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 35
+        HeicExpectedImageInfo {
+            filename: "C038.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 36
+        HeicExpectedImageInfo {
+            filename: "C039.heic",
+            width: 150,
+            height: 150,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 37
+        HeicExpectedImageInfo {
+            filename: "C040.heic",
+            width: 1024,
+            height: 576,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 38
+        HeicExpectedImageInfo {
+            filename: "C041.heic",
+            width: 1920,
+            height: 1080,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 39
+        HeicExpectedImageInfo {
+            filename: "C042.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 40
+        HeicExpectedImageInfo {
+            filename: "C043.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 41
+        HeicExpectedImageInfo {
+            filename: "C044.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            // The primary item is predictively coded (pred reference + essential rref) and decoding
+            // it requires first feeding its reference item to the decoder, which CrabbyAvif does
+            // not support. heif-info also rejects it.
+            support: HeicSupport::ParseUnsupported,
+        },
+        // index: 42
+        HeicExpectedImageInfo {
+            filename: "C045.heic",
+            width: 1024,
+            height: 768,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 43
+        HeicExpectedImageInfo {
+            filename: "C046.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 44
+        HeicExpectedImageInfo {
+            filename: "C047.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 45
+        HeicExpectedImageInfo {
+            filename: "C048.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 46
+        HeicExpectedImageInfo {
+            filename: "C049.heic",
+            width: 1920,
+            height: 1080,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 47
+        HeicExpectedImageInfo {
+            filename: "C050.heic",
+            width: 1280,
+            height: 960,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 48
+        HeicExpectedImageInfo {
+            filename: "C051.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 49
+        HeicExpectedImageInfo {
+            filename: "C052.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: true,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 50
+        HeicExpectedImageInfo {
+            filename: "C053.heic",
+            width: 1024,
+            height: 512,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 51
+        HeicExpectedImageInfo {
+            filename: "MIAF001.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 52
+        HeicExpectedImageInfo {
+            filename: "MIAF002.heic",
+            width: 2048,
+            height: 2048,
+            depth: 10,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            // 10-bit HEVC (Main10) is not supported by the HEVC decoders on the test device
+            // (c2.android.hevc.decoder / c2.goldfish.hevc.decoder advertise only Main/MainStill),
+            // so decoding fails in MediaCodec.
+            support: HeicSupport::DecodeUnsupported,
+        },
+        // index: 53
+        HeicExpectedImageInfo {
+            filename: "MIAF003.heic",
+            width: 2048,
+            height: 2048,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv444,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            // 4:4:4 HEVC (RExt) is not supported by the HEVC decoders on the test device
+            // (c2.android.hevc.decoder / c2.goldfish.hevc.decoder advertise only Main/MainStill),
+            // so decoding fails in MediaCodec.
+            support: HeicSupport::DecodeUnsupported,
+        },
+        // index: 54
+        HeicExpectedImageInfo {
+            filename: "MIAF004.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 55
+        HeicExpectedImageInfo {
+            filename: "MIAF005.heic",
+            width: 1280,
+            height: 720,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 56
+        HeicExpectedImageInfo {
+            filename: "MIAF006.heic",
+            width: 1920,
+            height: 1440,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 57
+        HeicExpectedImageInfo {
+            filename: "MIAF007.heic",
+            width: 360,
+            height: 640,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            // The clap, irot and imir properties are not marked as essential, which CrabbyAvif
+            // rejects even when strictness is disabled.
+            support: HeicSupport::ParseUnsupported,
+        },
+        // index: 58
+        HeicExpectedImageInfo {
+            filename: "multilayer001.heic",
+            width: 1024,
+            height: 512,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 59
+        HeicExpectedImageInfo {
+            filename: "multilayer002.heic",
+            width: 512,
+            height: 256,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 60
+        HeicExpectedImageInfo {
+            filename: "multilayer003.heic",
+            width: 1024,
+            height: 512,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+        // index: 61
+        HeicExpectedImageInfo {
+            filename: "multilayer004.heic",
+            width: 1024,
+            height: 512,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: None,
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            // The primary item is an AVC (avc1) base layer and its altr alternative is an L-HEVC
+            // (lhv1) enhancement layer; CrabbyAvif supports neither AVC nor layered HEVC items.
+            support: HeicSupport::ParseUnsupported,
+        },
+        // index: 62
+        HeicExpectedImageInfo {
+            filename: "multilayer005.heic",
+            width: 512,
+            height: 256,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            alpha_present: false,
+            yuv_range: Some(YuvRange::Limited),
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
+            support: HeicSupport::Supported,
+        },
+    ];
+}
