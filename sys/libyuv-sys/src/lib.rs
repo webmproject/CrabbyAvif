@@ -19,6 +19,10 @@ pub mod bindings {
     // complete path to the generated bindings as an environment variable.
     #[cfg(google3)]
     include!(env!("CRABBYAVIF_LIBYUV_BINDINGS_RS"));
+    // Since libyuv commit e58eeea3 (version 1971), NV21ToNV12 is a `#define` alias for NV12ToNV21,
+    // which bindgen skips.
+    #[cfg(google3)]
+    pub use NV12ToNV21 as NV21ToNV12;
     #[cfg(not(google3))]
     include!(concat!(env!("OUT_DIR"), "/libyuv_bindgen.rs"));
 }
