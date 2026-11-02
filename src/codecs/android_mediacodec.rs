@@ -814,11 +814,12 @@ impl MediaCodec {
             } else if output_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
                 retry_count += 1;
                 if retry_count >= Self::MAX_RETRIES {
-                    return AvifError::unknown_error("output format was null");
+                    return AvifError::unknown_error("mediacodec dequeue_output_buffer timed out");
                 }
             } else if output_index < 0 {
                 return AvifError::unknown_error("");
             } else {
+                retry_count = 0;
                 let mut buffer_size: usize = 0;
                 // # Safety: Calling a C function with valid parameters.
                 let output_buffer = unsafe {
