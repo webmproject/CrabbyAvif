@@ -394,6 +394,39 @@ fn validate_plane(image: &image::Image, plane: Plane) -> AvifResult<PlaneData> {
     Ok(pd)
 }
 
+fn validate_conversion_planes(
+    image: &image::Image,
+    conversion_function: &ConversionFunction,
+) -> AvifResult<()> {
+    match conversion_function {
+        ConversionFunction::YUV400ToRGBMatrix(_) => {
+            let _ = validate_plane(image, Plane::Y)?;
+        }
+        ConversionFunction::NVToARGBMatrix(_) | ConversionFunction::P010ToRGBMatrix(_, _) => {
+            let _ = validate_plane(image, Plane::Y)?;
+            let _ = validate_plane(image, Plane::U)?;
+        }
+        ConversionFunction::YUVToAB30Matrix(_, _)
+        | ConversionFunction::YUVToRGBMatrixFilter(_)
+        | ConversionFunction::YUVToRGBMatrix(_)
+        | ConversionFunction::YUVToRGBMatrixFilterHighBitDepth(_)
+        | ConversionFunction::YUVToRGBMatrixHighBitDepth(_) => {
+            for plane in YUV_PLANES {
+                let _ = validate_plane(image, plane)?;
+            }
+        }
+        ConversionFunction::YUVAToRGBMatrixFilter(_)
+        | ConversionFunction::YUVAToRGBMatrix(_)
+        | ConversionFunction::YUVAToRGBMatrixFilterHighBitDepth(_)
+        | ConversionFunction::YUVAToRGBMatrixHighBitDepth(_) => {
+            for plane in ALL_PLANES {
+                let _ = validate_plane(image, plane)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 // Converts YUV(A) samples to RGB(A).
 // Returns Ok(Some(true)) if the whole conversion was performed.
 // Returns Ok(Some(false)) if only YUV was converted and alpha
@@ -407,6 +440,9 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
     if rgb.depth == 10 && rgb.format != Format::Rgba1010102 {
         return Ok(None); // Not implemented.
     }
+    if rgb.width != image.width || rgb.height != image.height || !rgb.has_valid_pixels() {
+        return AvifError::reformat_failed();
+    }
     let (matrix_yuv, matrix_yvu) = match find_constants(image) {
         Some((matrix_yuv, matrix_yvu)) => (matrix_yuv, matrix_yvu),
         None => return Ok(None), // Not implemented.
@@ -417,8 +453,9 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
             Some(conversion_function) => conversion_function,
             None => return Ok(None), // Not implemented.
         };
+    validate_conversion_planes(image, &conversion_function)?;
     let is_yvu = matches!(rgb.format, Format::Rgb | Format::Rgba | Format::Argb);
-    let matrix = if is_yvu { matrix_yvu } else { matrix_yuv };
+    let matrix: *const YuvConstants = if is_yvu { matrix_yvu } else { matrix_yuv };
     let u_plane_index: usize = if is_yvu { 2 } else { 1 };
     let v_plane_index: usize = if is_yvu { 1 } else { 2 };
     let filter = if rgb.chroma_upsampling.bilinear_or_better_filter_allowed() {
@@ -568,6 +605,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
         let mut image8 = image::Image::default();
         if image.depth > 8 {
             downshift_to_8bit(image, &mut image8, conversion_function.is_yuva())?;
+            validate_conversion_planes(&image8, &conversion_function)?;
             plane_u8 = image8.plane_ptrs();
             plane_row_bytes = image8.plane_row_bytes()?;
         }
