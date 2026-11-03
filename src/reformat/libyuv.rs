@@ -473,146 +473,237 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
     if rgb_ptr.is_null() {
         return AvifError::reformat_failed();
     }
-    let mut result: c_int;
-    unsafe {
-        let mut high_bd_matched = true;
-        // Apply one of the high bitdepth functions if possible.
-        result = match conversion_function {
-            ConversionFunction::P010ToRGBMatrix(func1, func2) => {
-                let result = func1(
-                    plane_u16[0],
-                    plane_row_bytes[0] / 2,
-                    plane_u16[1],
-                    plane_row_bytes[1] / 2,
+    let mut high_bd_matched = true;
+    // Apply one of the high bitdepth functions if possible.
+    let mut result: c_int = match conversion_function {
+        ConversionFunction::P010ToRGBMatrix(func1, func2) => {
+            let y_ptr = plane_u16[0];
+            let y_stride = plane_row_bytes[0] / 2;
+            let uv_ptr = plane_u16[1];
+            let uv_stride = plane_row_bytes[1] / 2;
+            // SAFETY: `validate_conversion_planes` verified that `y_ptr` and `uv_ptr` are
+            // non-null, 2-byte aligned `u16` P010 planes covering `width x height` with valid
+            // even byte strides; `rgb.has_valid_pixels()` verified that `rgb_ptr` is non-null,
+            // uniquely borrowed via `&mut *rgb`, and large enough for `height` rows of
+            // `rgb_row_bytes` bytes (4 bytes per pixel); `matrix` points to a `'static`
+            // `YuvConstants`.
+            let res = unsafe {
+                func1(
+                    y_ptr,
+                    y_stride,
+                    uv_ptr,
+                    uv_stride,
                     rgb_ptr,
                     rgb_row_bytes,
                     matrix,
                     width,
                     height,
-                );
-                if result == 0 {
-                    // It is okay to use the same pointer as source and destination for this
-                    // conversion.
-                    func2(
-                        rgb_ptr,
-                        rgb_row_bytes,
-                        rgb_ptr,
-                        rgb_row_bytes,
-                        width,
-                        height,
-                    )
-                } else {
-                    result
-                }
-            }
-            ConversionFunction::YUVToAB30Matrix(func1, func2) => {
-                let result = func1(
-                    plane_u16[0],
-                    plane_row_bytes[0] / 2,
-                    plane_u16[1],
-                    plane_row_bytes[1] / 2,
-                    plane_u16[2],
-                    plane_row_bytes[2] / 2,
-                    rgb_ptr,
-                    rgb_row_bytes,
-                    matrix,
-                    width,
-                    height,
-                );
-                if result == 0 {
-                    // It is okay to use the same pointer as source and destination for this
-                    // conversion.
-                    func2(
-                        rgb_ptr,
-                        rgb_row_bytes,
-                        rgb_ptr,
-                        rgb_row_bytes,
-                        width,
-                        height,
-                    )
-                } else {
-                    result
-                }
-            }
-            ConversionFunction::YUVToRGBMatrixFilterHighBitDepth(func) => func(
-                plane_u16[0],
-                plane_row_bytes[0] / 2,
-                plane_u16[u_plane_index],
-                plane_row_bytes[u_plane_index] / 2,
-                plane_u16[v_plane_index],
-                plane_row_bytes[v_plane_index] / 2,
-                rgb_ptr,
-                rgb_row_bytes,
-                matrix,
-                width,
-                height,
-                filter,
-            ),
-            ConversionFunction::YUVAToRGBMatrixFilterHighBitDepth(func) => func(
-                plane_u16[0],
-                plane_row_bytes[0] / 2,
-                plane_u16[u_plane_index],
-                plane_row_bytes[u_plane_index] / 2,
-                plane_u16[v_plane_index],
-                plane_row_bytes[v_plane_index] / 2,
-                plane_u16[3],
-                plane_row_bytes[3] / 2,
-                rgb_ptr,
-                rgb_row_bytes,
-                matrix,
-                width,
-                height,
-                0, // attenuate
-                filter,
-            ),
-            ConversionFunction::YUVToRGBMatrixHighBitDepth(func) => func(
-                plane_u16[0],
-                plane_row_bytes[0] / 2,
-                plane_u16[u_plane_index],
-                plane_row_bytes[u_plane_index] / 2,
-                plane_u16[v_plane_index],
-                plane_row_bytes[v_plane_index] / 2,
-                rgb_ptr,
-                rgb_row_bytes,
-                matrix,
-                width,
-                height,
-            ),
-            ConversionFunction::YUVAToRGBMatrixHighBitDepth(func) => func(
-                plane_u16[0],
-                plane_row_bytes[0] / 2,
-                plane_u16[u_plane_index],
-                plane_row_bytes[u_plane_index] / 2,
-                plane_u16[v_plane_index],
-                plane_row_bytes[v_plane_index] / 2,
-                plane_u16[3],
-                plane_row_bytes[3] / 2,
-                rgb_ptr,
-                rgb_row_bytes,
-                matrix,
-                width,
-                height,
-                0, // attenuate
-            ),
-            _ => {
-                high_bd_matched = false;
-                -1
-            }
-        };
-        if high_bd_matched {
-            return if result == 0 {
-                Ok(Some(!image.has_alpha() || conversion_function.is_yuva()))
-            } else {
-                AvifError::reformat_failed()
+                )
             };
+            if res == 0 {
+                // libyuv explicitly supports in-place `src == dst` channel swizzling for
+                // `AR30ToAB30` and `ARGBToABGR`.
+                // SAFETY: `rgb_ptr` is non-null, uniquely borrowed via `&mut *rgb`, and valid for
+                // reads and writes of `height` rows of `rgb_row_bytes` bytes (`>= width * 4`).
+                unsafe {
+                    func2(
+                        rgb_ptr,
+                        rgb_row_bytes,
+                        rgb_ptr,
+                        rgb_row_bytes,
+                        width,
+                        height,
+                    )
+                }
+            } else {
+                res
+            }
         }
-        let mut image8 = image::Image::default();
-        if image.depth > 8 {
-            downshift_to_8bit(image, &mut image8, conversion_function.is_yuva())?;
-            validate_conversion_planes(&image8, &conversion_function)?;
-            plane_u8 = image8.plane_ptrs();
-            plane_row_bytes = image8.plane_row_bytes()?;
+        ConversionFunction::YUVToAB30Matrix(func1, func2) => {
+            let y_ptr = plane_u16[0];
+            let y_stride = plane_row_bytes[0] / 2;
+            let u_ptr = plane_u16[1];
+            let u_stride = plane_row_bytes[1] / 2;
+            let v_ptr = plane_u16[2];
+            let v_stride = plane_row_bytes[2] / 2;
+            // SAFETY: `validate_conversion_planes` verified that `y_ptr`, `u_ptr`, and `v_ptr` are
+            // non-null, 2-byte aligned 10-bit `u16` planes with valid strides covering `width x
+            // height`; `rgb.has_valid_pixels()` verified `rgb_ptr` is non-null, uniquely borrowed,
+            // and valid for `height` rows of `rgb_row_bytes` (`>= width * 4` bytes); `matrix` is a
+            // valid `'static` `YuvConstants` pointer.
+            let res = unsafe {
+                func1(
+                    y_ptr,
+                    y_stride,
+                    u_ptr,
+                    u_stride,
+                    v_ptr,
+                    v_stride,
+                    rgb_ptr,
+                    rgb_row_bytes,
+                    matrix,
+                    width,
+                    height,
+                )
+            };
+            if res == 0 {
+                // libyuv explicitly supports in-place `src == dst` conversion for `AR30ToAB30`.
+                // SAFETY: `rgb_ptr` is non-null, uniquely borrowed via `&mut *rgb`, and valid for
+                // reads and writes of `height` rows of `rgb_row_bytes` bytes (`>= width * 4`).
+                unsafe {
+                    func2(
+                        rgb_ptr,
+                        rgb_row_bytes,
+                        rgb_ptr,
+                        rgb_row_bytes,
+                        width,
+                        height,
+                    )
+                }
+            } else {
+                res
+            }
         }
+        ConversionFunction::YUVToRGBMatrixFilterHighBitDepth(func) => {
+            let y_ptr = plane_u16[0];
+            let y_stride = plane_row_bytes[0] / 2;
+            let u_ptr = plane_u16[u_plane_index];
+            let u_stride = plane_row_bytes[u_plane_index] / 2;
+            let v_ptr = plane_u16[v_plane_index];
+            let v_stride = plane_row_bytes[v_plane_index] / 2;
+            // SAFETY: `validate_conversion_planes` verified Y, U, and V are non-null, 2-byte
+            // aligned `u16` planes with valid strides covering `width x height`; `rgb_ptr` is
+            // non-null, uniquely borrowed, and valid for `height` rows of `rgb_row_bytes` bytes;
+            // `matrix` points to a `'static` `YuvConstants`.
+            unsafe {
+                func(
+                    y_ptr,
+                    y_stride,
+                    u_ptr,
+                    u_stride,
+                    v_ptr,
+                    v_stride,
+                    rgb_ptr,
+                    rgb_row_bytes,
+                    matrix,
+                    width,
+                    height,
+                    filter,
+                )
+            }
+        }
+        ConversionFunction::YUVAToRGBMatrixFilterHighBitDepth(func) => {
+            let y_ptr = plane_u16[0];
+            let y_stride = plane_row_bytes[0] / 2;
+            let u_ptr = plane_u16[u_plane_index];
+            let u_stride = plane_row_bytes[u_plane_index] / 2;
+            let v_ptr = plane_u16[v_plane_index];
+            let v_stride = plane_row_bytes[v_plane_index] / 2;
+            let a_ptr = plane_u16[3];
+            let a_stride = plane_row_bytes[3] / 2;
+            // SAFETY: `validate_conversion_planes` verified Y, U, V, and A are non-null, 2-byte
+            // aligned `u16` planes with valid strides covering `width x height`; `rgb_ptr` is
+            // non-null, uniquely borrowed, and valid for `height` rows of `rgb_row_bytes` bytes;
+            // `matrix` points to a `'static` `YuvConstants`.
+            unsafe {
+                func(
+                    y_ptr,
+                    y_stride,
+                    u_ptr,
+                    u_stride,
+                    v_ptr,
+                    v_stride,
+                    a_ptr,
+                    a_stride,
+                    rgb_ptr,
+                    rgb_row_bytes,
+                    matrix,
+                    width,
+                    height,
+                    0, // attenuate
+                    filter,
+                )
+            }
+        }
+        ConversionFunction::YUVToRGBMatrixHighBitDepth(func) => {
+            let y_ptr = plane_u16[0];
+            let y_stride = plane_row_bytes[0] / 2;
+            let u_ptr = plane_u16[u_plane_index];
+            let u_stride = plane_row_bytes[u_plane_index] / 2;
+            let v_ptr = plane_u16[v_plane_index];
+            let v_stride = plane_row_bytes[v_plane_index] / 2;
+            // SAFETY: `validate_conversion_planes` verified Y, U, and V are non-null, 2-byte
+            // aligned `u16` planes with valid strides covering `width x height`; `rgb_ptr` is
+            // non-null, uniquely borrowed, and valid for `height` rows of `rgb_row_bytes` bytes;
+            // `matrix` points to a `'static` `YuvConstants`.
+            unsafe {
+                func(
+                    y_ptr,
+                    y_stride,
+                    u_ptr,
+                    u_stride,
+                    v_ptr,
+                    v_stride,
+                    rgb_ptr,
+                    rgb_row_bytes,
+                    matrix,
+                    width,
+                    height,
+                )
+            }
+        }
+        ConversionFunction::YUVAToRGBMatrixHighBitDepth(func) => {
+            let y_ptr = plane_u16[0];
+            let y_stride = plane_row_bytes[0] / 2;
+            let u_ptr = plane_u16[u_plane_index];
+            let u_stride = plane_row_bytes[u_plane_index] / 2;
+            let v_ptr = plane_u16[v_plane_index];
+            let v_stride = plane_row_bytes[v_plane_index] / 2;
+            let a_ptr = plane_u16[3];
+            let a_stride = plane_row_bytes[3] / 2;
+            // SAFETY: `validate_conversion_planes` verified Y, U, V, and A are non-null, 2-byte
+            // aligned `u16` planes with valid strides covering `width x height`; `rgb_ptr` is
+            // non-null, uniquely borrowed, and valid for `height` rows of `rgb_row_bytes` bytes;
+            // `matrix` points to a `'static` `YuvConstants`.
+            unsafe {
+                func(
+                    y_ptr,
+                    y_stride,
+                    u_ptr,
+                    u_stride,
+                    v_ptr,
+                    v_stride,
+                    a_ptr,
+                    a_stride,
+                    rgb_ptr,
+                    rgb_row_bytes,
+                    matrix,
+                    width,
+                    height,
+                    0, // attenuate
+                )
+            }
+        }
+        _ => {
+            high_bd_matched = false;
+            -1
+        }
+    };
+    if high_bd_matched {
+        return if result == 0 {
+            Ok(Some(!image.has_alpha() || conversion_function.is_yuva()))
+        } else {
+            AvifError::reformat_failed()
+        };
+    }
+    let mut image8 = image::Image::default();
+    if image.depth > 8 {
+        downshift_to_8bit(image, &mut image8, conversion_function.is_yuva())?;
+        validate_conversion_planes(&image8, &conversion_function)?;
+        plane_u8 = image8.plane_ptrs();
+        plane_row_bytes = image8.plane_row_bytes()?;
+    }
+    unsafe {
         result = match conversion_function {
             ConversionFunction::NVToARGBMatrix(func) => func(
                 plane_u8[0],
