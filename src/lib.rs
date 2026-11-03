@@ -14,6 +14,7 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![cfg_attr(feature = "disable_cfi", feature(sanitize))]
+#![cfg_attr(feature = "native_av1", feature(portable_simd))]
 // Clippy flags this as a false positive for some of the uses in this library. Disable this clippy
 // warning.
 #![allow(clippy::cast_slice_from_raw_parts)]

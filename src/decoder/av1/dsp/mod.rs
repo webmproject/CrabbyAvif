@@ -25,6 +25,7 @@ pub mod ipred;
 pub mod itx;
 pub mod loopfilter;
 pub mod lr;
+pub mod simd;
 
 use crate::decoder::av1::pixel::Pixel;
 use crate::decoder::av1::types::{TxSize, TxType};
@@ -81,10 +82,35 @@ pub struct Dsp<T: Pixel> {
 }
 
 impl<T: Pixel> Dsp<T> {
-    /// The kernels of this build for bit depth `bd` (8, 10 or 12).
+    /// The kernels of this build for bit depth `bd` (8, 10 or 12): the
+    /// `std::simd` kernels.
     pub fn new(bd: u32) -> Self {
-        let _ = bd;
-        Self::portable()
+        Self::simd(bd)
+    }
+
+    /// `std::simd` kernels, specialized for bit depth `bd`. The kernels
+    /// still receive `bd` as an argument; it is always equal to the `BD`
+    /// they were instantiated with.
+    pub fn simd(bd: u32) -> Self {
+        match bd {
+            8 => Self::simd_bd::<8>(),
+            10 => Self::simd_bd::<10>(),
+            _ => Self::simd_bd::<12>(),
+        }
+    }
+
+    fn simd_bd<const BD: u32>() -> Self {
+        Self {
+            inv_txfm_add: simd::itx::inv_txfm_add_bd::<T, BD>,
+            predict_intra: simd::ipred::predict_intra_bd::<T, BD>,
+            cfl_ac: simd::ipred::cfl_ac::<T, BD>,
+            cfl_pred: simd::ipred::cfl_pred::<T, BD>,
+            lf_v_edge: simd::loopfilter::filter_v_edge_bd::<T, BD>,
+            lf_h_edge: simd::loopfilter::filter_h_edge_bd::<T, BD>,
+            cdef_unit: cdef::cdef_unit::<T, simd::cdef::SimdCdef<BD>>,
+            wiener: simd::lr::wiener_filter_bd::<T, BD>,
+            sgr: simd::lr::sgr_filter_bd::<T, BD>,
+        }
     }
 
     /// Portable (scalar, auto-vectorized) kernels.

@@ -82,6 +82,9 @@ fn golomb_coef_slow(buf: &[u8], pos: usize, dif: u64, state: u64) -> (u64, u64) 
 /// 32768 and the adaptation counter), in the layout `symbol5_r` works on.
 #[derive(Clone, Copy)]
 pub struct Cdf5 {
+    #[cfg(target_arch = "x86_64")]
+    x: std::simd::u16x8,
+    #[cfg(not(target_arch = "x86_64"))]
     x: u64,
     count: u16,
 }
@@ -89,6 +92,9 @@ pub struct Cdf5 {
 impl Cdf5 {
     #[inline(always)]
     pub fn load(c: &[u16; 5]) -> Self {
+        #[cfg(target_arch = "x86_64")]
+        let x = std::simd::u16x8::from_array([c[0], c[1], c[2], c[3], 0, 0, 0, 0]);
+        #[cfg(not(target_arch = "x86_64"))]
         let x =
             (c[0] as u64) | ((c[1] as u64) << 16) | ((c[2] as u64) << 32) | ((c[3] as u64) << 48);
         Self { x, count: c[4] }
@@ -96,12 +102,107 @@ impl Cdf5 {
 
     #[inline(always)]
     pub fn store(self, c: &mut [u16; 5]) {
-        c[0] = self.x as u16;
-        c[1] = (self.x >> 16) as u16;
-        c[2] = (self.x >> 32) as u16;
-        c[3] = (self.x >> 48) as u16;
+        #[cfg(target_arch = "x86_64")]
+        c[..4].copy_from_slice(&self.x.as_array()[..4]);
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            c[0] = self.x as u16;
+            c[1] = (self.x >> 16) as u16;
+            c[2] = (self.x >> 32) as u16;
+            c[3] = (self.x >> 48) as u16;
+        }
         c[4] = self.count;
     }
+}
+
+/// Body of `symbol_simd8` / `symbol_simd16` (`L` lanes of type `$v`,
+/// `$b` the byte vector of the same width).
+macro_rules! simd_symbol_body {
+    ($self:ident, $cdf:ident, $l:literal, $v:ident, $b:ident) => {{
+        use std::simd::prelude::*;
+        let n = N - 1;
+        let k = (n & !1).min($l);
+        let c = ($self.dif >> (WIN_SIZE - 16)) as u16;
+        let r = $self.rng;
+        let mut arr = [0x8000u16; $l];
+        arr[..k].copy_from_slice(&$cdf[..k]);
+        let x = $v::from_array(arr);
+        let f = $v::splat(0x8000) - x;
+        let min_prob = const {
+            let mut mp = [0u16; $l];
+            let mut i = 0;
+            while i < N - 2 && i < $l {
+                mp[i] = (EC_MIN_PROB * (N - 2 - i) as u32) as u16;
+                i += 1;
+            }
+            mp
+        };
+        // ((rng >> 8) * (f >> 6)) >> 1: dav1d's pmulhuw form on x86, the
+        // split (f & 0xffc0) + ((f >> 6) * (r7 = (rng >> 8) & 0x7f) >> 1)
+        // in 16 bits elsewhere.
+        #[cfg(target_arch = "x86_64")]
+        let prod = {
+            let fm = (f & $v::splat(0xffc0)) << 1;
+            let rr = $v::splat((r & 0xff00) as u16).cast::<u32>();
+            ((fm.cast::<u32>() * rr) >> 16).cast::<u16>()
+        };
+        #[cfg(not(target_arch = "x86_64"))]
+        let prod = {
+            let r7 = $v::splat(((r >> 8) & 0x7f) as u16);
+            (f & $v::splat(0xffc0)) + (((f >> 6) * r7) >> 1)
+        };
+        // x86: movemask / tzcnt index into a stack copy of [rng, v..]
+        // (measured faster there than the reductions below).
+        #[cfg(target_arch = "x86_64")]
+        let (ge, u, vv, val) = {
+            let v = prod + $v::from_array(min_prob);
+            let ge = $v::splat(c).simd_ge(v);
+            let ge_b = $b::from_ne_bytes(ge.to_simd().cast::<u16>().to_ne_bytes());
+            let mask = ge_b.simd_lt($b::splat(0)).to_bitmask() as u32
+                | 1u32.wrapping_shl(2 * (N - 2) as u32);
+            let val = (mask.trailing_zeros() >> 1) as usize;
+            let mut vs = [0u16; $l + 1];
+            vs[0] = r as u16;
+            vs[1..].copy_from_slice(v.as_array());
+            let idx = val & ($l - 1);
+            (ge, vs[idx] as u32, vs[idx + 1] as u32, val)
+        };
+        // aarch64: u and v of the decoded symbol by uminv / umaxv of the
+        // compare masked lanes. Lane N - 2 (true v = 0, always <= c)
+        // carries rng (> c) for the minimum.
+        #[cfg(not(target_arch = "x86_64"))]
+        let (ge, u, vv, val) = {
+            let mut add = min_prob;
+            add[N - 2] = r as u16;
+            let v = prod + $v::from_array(add);
+            let lt = v.simd_gt($v::splat(c));
+            let lm = lt.to_simd().cast::<u16>();
+            let u = (v | !lm).reduce_min() as u32;
+            let vv = (v & !lm).reduce_max() as u32;
+            // The c < v lanes are 0..val plus lane N - 2.
+            let val = lt.to_simd().cast::<i16>().reduce_sum().wrapping_neg() as usize - 1;
+            let lane = const {
+                let mut a = [0u16; $l];
+                let mut i = 0;
+                while i < $l {
+                    a[i] = i as u16;
+                    i += 1;
+                }
+                $v::from_array(a)
+            };
+            // The true compare result of lane N - 2 is c >= 0.
+            (!lt | lane.simd_eq($v::splat((N - 2) as u16)), u, vv, val)
+        };
+        if $self.allow_update {
+            let count = $cdf[n];
+            let rate = $v::splat(5 + (count >> 4));
+            let y = ge.select(x + (f >> rate), x - (x >> rate));
+            $cdf[..k].copy_from_slice(&y.as_array()[..k]);
+            $cdf[n] = count + 1 - (count >> 5);
+        }
+        $self.norm($self.dif - ((vv as u64) << (WIN_SIZE - 16)), u - vv);
+        val
+    }};
 }
 
 #[derive(Clone)]
@@ -279,35 +380,11 @@ impl<'a> SymbolDecoder<'a> {
             let upd = self.allow_update;
             return self.symbol5(cdf.first_chunk_mut().unwrap(), upd);
         }
-        // vs[0] = rng, vs[i + 1] = v(i); v(n - 1) = 0 since cdf[n - 1]
-        // is 32768. v(i) is strictly decreasing for monotone CDFs, so
-        // c < vs[i + 1] holds for a prefix 0..val.
-        let mut vs = [0u16; 17];
-        vs[0] = self.rng as u16;
-        let mut val = 0usize;
-        for i in 0..n - 1 {
-            let f = 32768 - cdf[i] as u32;
-            let vi = ((r * (f >> EC_PROB_SHIFT)) >> (7 - EC_PROB_SHIFT))
-                + EC_MIN_PROB * (n - 1 - i) as u32;
-            vs[i + 1] = vi as u16;
-            val += (c < vi) as usize;
+        if N <= 9 {
+            self.symbol_simd8::<N>(cdf)
+        } else {
+            self.symbol_simd16::<N>(cdf)
         }
-        let idx = val & 15;
-        let u = vs[idx] as u32;
-        let v = vs[idx + 1] as u32;
-        if self.allow_update {
-            let count = cdf[n];
-            let rate = 5 + (count >> 4) as u32;
-            let c16 = c as u16;
-            for (p, &vi) in cdf[..n - 1].iter_mut().zip(&vs[1..n]) {
-                let x = *p as i32;
-                let m = -((c16 < vi) as i32);
-                *p = (x - m + (((m | 32768) - x) >> rate)) as u16;
-            }
-            cdf[n] = count + 1 - (count >> 5);
-        }
-        self.norm(self.dif - ((v as u64) << (WIN_SIZE - 16)), u - v);
-        val
     }
 
     /// `symbol_n::<5>` (coefficient tokens). `upd` is the CDF adaptation
@@ -325,54 +402,59 @@ impl<'a> SymbolDecoder<'a> {
     /// the adapted CDF (unchanged unless `upd`).
     #[inline(always)]
     pub fn symbol5_r(&mut self, cdf: Cdf5, upd: bool) -> (u32, Cdf5) {
-        let c = (self.dif >> (WIN_SIZE - 16)) as u32;
-        let r = self.rng >> 8;
-        const ONES: u64 = 0x0001_0001_0001_0001;
-        let x = cdf.x;
-        let f = (0x8000 * ONES).wrapping_sub(x);
-        let v0 = ((r * (((f as u32) >> 6) & 0x3ff)) >> 1) + 12;
-        let v1 = ((r * (((f >> 22) as u32) & 0x3ff)) >> 1) + 8;
-        let v2 = ((r * (((f >> 38) as u32) & 0x3ff)) >> 1) + 4;
-        let c0 = c < v0;
-        let c1 = c < v1;
-        let c2 = c < v2;
-        let val = c0 as u32 + c1 as u32 + c2 as u32;
-        let u = if c2 {
-            v2
-        } else if c1 {
-            v1
-        } else if c0 {
-            v0
-        } else {
-            self.rng
-        };
-        let v = if c2 {
-            0
-        } else if c1 {
-            v2
-        } else if c0 {
-            v1
-        } else {
-            v0
-        };
-        let y = if upd {
-            let count = cdf.count;
-            let rate = 5 + (count >> 4) as u32;
-            let mr = (0xFFFFu64 >> rate) * ONES;
-            let m = (1u64 << (16 * val)) - 1;
-            let top = m | (0x8000 * ONES);
-            let y = x
-                .wrapping_add((top.wrapping_sub(x) >> rate) & mr)
-                .wrapping_sub(m & mr);
-            Cdf5 {
-                x: y,
-                count: count + (count < 32) as u16,
-            }
-        } else {
-            cdf
-        };
-        self.norm_hot(self.dif - ((v as u64) << (WIN_SIZE - 16)), u - v);
-        (val, y)
+        #[cfg(target_arch = "x86_64")]
+        return self.symbol5_simd(cdf, upd);
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            let c = (self.dif >> (WIN_SIZE - 16)) as u32;
+            let r = self.rng >> 8;
+            const ONES: u64 = 0x0001_0001_0001_0001;
+            let x = cdf.x;
+            let f = (0x8000 * ONES).wrapping_sub(x);
+            let v0 = ((r * (((f as u32) >> 6) & 0x3ff)) >> 1) + 12;
+            let v1 = ((r * (((f >> 22) as u32) & 0x3ff)) >> 1) + 8;
+            let v2 = ((r * (((f >> 38) as u32) & 0x3ff)) >> 1) + 4;
+            let c0 = c < v0;
+            let c1 = c < v1;
+            let c2 = c < v2;
+            let val = c0 as u32 + c1 as u32 + c2 as u32;
+            let u = if c2 {
+                v2
+            } else if c1 {
+                v1
+            } else if c0 {
+                v0
+            } else {
+                self.rng
+            };
+            let v = if c2 {
+                0
+            } else if c1 {
+                v2
+            } else if c0 {
+                v1
+            } else {
+                v0
+            };
+            let y = if upd {
+                let count = cdf.count;
+                let rate = 5 + (count >> 4) as u32;
+                let mr = (0xFFFFu64 >> rate) * ONES;
+                let m = (1u64 << (16 * val)) - 1;
+                let top = m | (0x8000 * ONES);
+                let y = x
+                    .wrapping_add((top.wrapping_sub(x) >> rate) & mr)
+                    .wrapping_sub(m & mr);
+                Cdf5 {
+                    x: y,
+                    count: count + (count < 32) as u16,
+                }
+            } else {
+                cdf
+            };
+            self.norm_hot(self.dif - ((v as u64) << (WIN_SIZE - 16)), u - v);
+            (val, y)
+        }
     }
 
     /// Whether CDF adaptation is enabled.
@@ -399,6 +481,69 @@ impl<'a> SymbolDecoder<'a> {
             }
         }
         tok
+    }
+
+    /// `symbol_n::<5>` with 16-bit SIMD. The latency of the rng / dif
+    /// dependency chain bounds the coefficient loop, so it is kept short:
+    /// - `v` uses dav1d's `pmulhuw` form, `((f >> 6) << 7) * (rng & 0xff00)
+    ///   >> 16`, which equals `((rng >> 8) * (f >> 6)) >> 1`.
+    /// - `u` and `v` of the decoded symbol come from horizontal min / max
+    ///   reductions (`phminposuw`) of the compare masked `v` lanes instead
+    ///   of a movemask / tzcnt / shift extraction. `v` is decreasing, so
+    ///   `v[val]` is the largest `v` with `c >= v` and `u = v[val - 1]` is
+    ///   the smallest with `c < v`; lane 4 holds `rng` (never `<= c`) so
+    ///   that the minimum is `rng` for `val == 0`. `val` itself is only
+    ///   needed off the critical path.
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn symbol5_simd(&mut self, cdf: Cdf5, upd: bool) -> (u32, Cdf5) {
+        use std::simd::prelude::*;
+        let c = (self.dif >> (WIN_SIZE - 16)) as u16;
+        let rng = self.rng;
+        // Lanes 4.. are 0, so f = 0x8000 and fm = 0 there.
+        let x = cdf.x;
+        let f = u16x8::splat(0x8000) - x;
+        let fm = (f & u16x8::splat(0xffc0)) << 1;
+        let r = u16x8::splat((rng & 0xff00) as u16).cast::<u32>();
+        let prod = ((fm.cast::<u32>() * r) >> 16).cast::<u16>();
+        let v = prod + u16x8::from_array([12, 8, 4, 0, rng as u16, 0, 0, 0]);
+        let ge = u16x8::splat(c).simd_ge(v);
+        let u = ge.select(u16x8::splat(0xffff), v).reduce_min() as u32;
+        let vv = ge.select(v, u16x8::splat(0)).reduce_max() as u32;
+        let ge_b = i8x16::from_ne_bytes(ge.to_simd().cast::<u16>().to_ne_bytes());
+        let val = (ge_b.simd_lt(i8x16::splat(0)).to_bitmask() as u32).trailing_zeros() >> 1;
+        let y = if upd {
+            let count = cdf.count;
+            let rate = u16x8::splat(5 + (count >> 4));
+            let y = ge.select(x + (f >> rate), x - (x >> rate));
+            // Keep lanes 4.. zero for the next use.
+            let y = y & u16x8::from_array([0xffff, 0xffff, 0xffff, 0xffff, 0, 0, 0, 0]);
+            Cdf5 {
+                x: y,
+                count: count + (count < 32) as u16,
+            }
+        } else {
+            cdf
+        };
+        self.norm_hot(self.dif - ((vv as u64) << (WIN_SIZE - 16)), u - vv);
+        (val, y)
+    }
+
+    /// `symbol_n` for `N <= 9` with 8 lanes. On x86, `u` and `v` of the
+    /// decoded symbol are read from a stack copy of `[rng, v..]` at the
+    /// index given by a movemask / tzcnt of the compare mask. Elsewhere
+    /// they come from min / max reductions (`uminv` / `umaxv` on aarch64)
+    /// of the compare masked `v` lanes, where lane `N - 2` (true `v` = 0,
+    /// always `<= c`) carries `rng` (`> c`) for the minimum.
+    #[inline(always)]
+    fn symbol_simd8<const N: usize>(&mut self, cdf: &mut [u16; N]) -> usize {
+        simd_symbol_body!(self, cdf, 8, u16x8, i8x16)
+    }
+
+    /// `symbol_n` for `10 <= N <= 17` with 16 lanes (see symbol_simd8).
+    #[inline(always)]
+    fn symbol_simd16<const N: usize>(&mut self, cdf: &mut [u16; N]) -> usize {
+        simd_symbol_body!(self, cdf, 16, u16x16, i8x32)
     }
 
     /// Coefficient `coeff_br` loop: starting from level 3, adds up to four
