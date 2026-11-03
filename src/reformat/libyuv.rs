@@ -469,6 +469,10 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
     let rgb_row_bytes = i32_from_u32(rgb.row_bytes)?;
     let width = i32_from_u32(image.width)?;
     let height = i32_from_u32(image.height)?;
+    let rgb_ptr = rgb.pixels_mut();
+    if rgb_ptr.is_null() {
+        return AvifError::reformat_failed();
+    }
     let mut result: c_int;
     unsafe {
         let mut high_bd_matched = true;
@@ -480,7 +484,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
                     plane_row_bytes[0] / 2,
                     plane_u16[1],
                     plane_row_bytes[1] / 2,
-                    rgb.pixels_mut(),
+                    rgb_ptr,
                     rgb_row_bytes,
                     matrix,
                     width,
@@ -490,9 +494,9 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
                     // It is okay to use the same pointer as source and destination for this
                     // conversion.
                     func2(
-                        rgb.pixels_mut(),
+                        rgb_ptr,
                         rgb_row_bytes,
-                        rgb.pixels_mut(),
+                        rgb_ptr,
                         rgb_row_bytes,
                         width,
                         height,
@@ -509,7 +513,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
                     plane_row_bytes[1] / 2,
                     plane_u16[2],
                     plane_row_bytes[2] / 2,
-                    rgb.pixels_mut(),
+                    rgb_ptr,
                     rgb_row_bytes,
                     matrix,
                     width,
@@ -519,9 +523,9 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
                     // It is okay to use the same pointer as source and destination for this
                     // conversion.
                     func2(
-                        rgb.pixels_mut(),
+                        rgb_ptr,
                         rgb_row_bytes,
-                        rgb.pixels_mut(),
+                        rgb_ptr,
                         rgb_row_bytes,
                         width,
                         height,
@@ -537,7 +541,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
                 plane_row_bytes[u_plane_index] / 2,
                 plane_u16[v_plane_index],
                 plane_row_bytes[v_plane_index] / 2,
-                rgb.pixels_mut(),
+                rgb_ptr,
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -553,7 +557,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
                 plane_row_bytes[v_plane_index] / 2,
                 plane_u16[3],
                 plane_row_bytes[3] / 2,
-                rgb.pixels_mut(),
+                rgb_ptr,
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -568,7 +572,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
                 plane_row_bytes[u_plane_index] / 2,
                 plane_u16[v_plane_index],
                 plane_row_bytes[v_plane_index] / 2,
-                rgb.pixels_mut(),
+                rgb_ptr,
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -583,7 +587,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
                 plane_row_bytes[v_plane_index] / 2,
                 plane_u16[3],
                 plane_row_bytes[3] / 2,
-                rgb.pixels_mut(),
+                rgb_ptr,
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -615,7 +619,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
                 plane_row_bytes[0],
                 plane_u8[1],
                 plane_row_bytes[1],
-                rgb.pixels_mut(),
+                rgb_ptr,
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -624,7 +628,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
             ConversionFunction::YUV400ToRGBMatrix(func) => func(
                 plane_u8[0],
                 plane_row_bytes[0],
-                rgb.pixels_mut(),
+                rgb_ptr,
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -637,7 +641,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
                 plane_row_bytes[u_plane_index],
                 plane_u8[v_plane_index],
                 plane_row_bytes[v_plane_index],
-                rgb.pixels_mut(),
+                rgb_ptr,
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -653,7 +657,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
                 plane_row_bytes[v_plane_index],
                 plane_u8[3],
                 plane_row_bytes[3],
-                rgb.pixels_mut(),
+                rgb_ptr,
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -668,7 +672,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
                 plane_row_bytes[u_plane_index],
                 plane_u8[v_plane_index],
                 plane_row_bytes[v_plane_index],
-                rgb.pixels_mut(),
+                rgb_ptr,
                 rgb_row_bytes,
                 matrix,
                 width,
@@ -683,7 +687,7 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
                 plane_row_bytes[v_plane_index],
                 plane_u8[3],
                 plane_row_bytes[3],
-                rgb.pixels_mut(),
+                rgb_ptr,
                 rgb_row_bytes,
                 matrix,
                 width,
