@@ -370,6 +370,30 @@ fn find_conversion_function(
     }
 }
 
+fn validate_plane(image: &image::Image, plane: Plane) -> AvifResult<PlaneData> {
+    let pd = image.plane_data(plane).ok_or(AvifError::ReformatFailed)?;
+    if pd.width == 0 || pd.height == 0 {
+        return AvifError::reformat_failed();
+    }
+    let min_row_bytes = checked_mul!(pd.width, pd.pixel_size)?;
+    if pd.row_bytes < min_row_bytes {
+        return AvifError::reformat_failed();
+    }
+    if image.depth > 8 {
+        if pd.row_bytes % 2 != 0 {
+            return AvifError::reformat_failed();
+        }
+        let _ = image
+            .row16(plane, pd.height - 1)
+            .map_err(|_| AvifError::ReformatFailed)?;
+    } else {
+        let _ = image
+            .row(plane, pd.height - 1)
+            .map_err(|_| AvifError::ReformatFailed)?;
+    }
+    Ok(pd)
+}
+
 // Converts YUV(A) samples to RGB(A).
 // Returns Ok(Some(true)) if the whole conversion was performed.
 // Returns Ok(Some(false)) if only YUV was converted and alpha
@@ -643,6 +667,9 @@ fn downshift_to_8bit(
     image8: &mut image::Image,
     alpha: bool,
 ) -> AvifResult<()> {
+    if image.width == 0 || image.height == 0 || !matches!(image.depth, 10 | 12 | 16) {
+        return AvifError::reformat_failed();
+    }
     image8.width = image.width;
     image8.height = image.height;
     image8.depth = 8;
@@ -653,29 +680,33 @@ fn downshift_to_8bit(
     }
     let scale = 1 << (24 - image.depth);
     for plane in ALL_PLANES {
-        if plane == Plane::A && !alpha {
+        if (plane == Plane::A && !alpha) || image.width(plane) == 0 {
             continue;
         }
-        let pd = image.plane_data(plane);
-        if pd.is_none() {
-            continue;
+        let pd = validate_plane(image, plane)?;
+        let pd8 = validate_plane(image8, plane)?;
+        let source_ptr = image.planes[plane.as_usize()]
+            .as_ref()
+            .ok_or(AvifError::ReformatFailed)?
+            .ptr16();
+        let dst_ptr = image8.planes[plane.as_usize()]
+            .as_mut()
+            .ok_or(AvifError::ReformatFailed)?
+            .ptr_mut();
+        if source_ptr.is_null() || dst_ptr.is_null() {
+            return AvifError::reformat_failed();
         }
-        let pd = pd.unwrap();
-        if pd.width == 0 {
-            continue;
-        }
-        let source_ptr = image.planes[plane.as_usize()].unwrap_ref().ptr16();
-        let pd8 = image8.plane_data(plane).unwrap();
-        let dst_ptr = image8.planes[plane.as_usize()].unwrap_mut().ptr_mut();
+        let src_stride = i32_from_u32(pd.row_bytes / 2)?;
+        let dst_stride = i32_from_u32(pd8.row_bytes)?;
+        let width = i32_from_u32(pd.width)?;
+        let height = i32_from_u32(pd.height)?;
+        // SAFETY: `validate_plane` and the null check above verified `source_ptr` is a non-null,
+        // 2-byte aligned `u16` plane of `width x height` with `src_stride` `u16` elements per row,
+        // and `dst_ptr` is a freshly allocated, disjoint `u8` buffer in `image8` of `width x
+        // height` with `dst_stride` bytes per row.
         unsafe {
             Convert16To8Plane(
-                source_ptr,
-                i32_from_u32(pd.row_bytes / 2)?,
-                dst_ptr,
-                i32_from_u32(pd8.row_bytes)?,
-                scale,
-                i32_from_u32(pd.width)?,
-                i32_from_u32(pd.height)?,
+                source_ptr, src_stride, dst_ptr, dst_stride, scale, width, height,
             );
         }
     }
