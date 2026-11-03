@@ -2834,12 +2834,19 @@ mod heic {
     use super::*;
 
     fn get_heic_test_file(filename: &str) -> String {
-        let base_path = match env::var("CRABBYAVIF_HEIC_CONFORMANCE_TEST_DATA_DIR") {
-            Ok(dir) => format!("{dir}/conformance_files"),
-            Err(_) => format!(
-                "{}/external/heif_conformance/conformance_files",
-                env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not defined")
-            ),
+        let base_path = if cfg!(google3) {
+            format!(
+                "{}/google3/third_party/crabbyavif/google/test_data/heif_conformance",
+                env::var("TEST_SRCDIR").expect("TEST_SRCDIR is not defined")
+            )
+        } else {
+            match env::var("CRABBYAVIF_HEIC_CONFORMANCE_TEST_DATA_DIR") {
+                Ok(dir) => format!("{dir}/conformance_files"),
+                Err(_) => format!(
+                    "{}/external/heif_conformance/conformance_files",
+                    env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not defined")
+                ),
+            }
         };
         format!("{base_path}/{filename}")
     }
