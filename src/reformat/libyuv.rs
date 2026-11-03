@@ -703,91 +703,171 @@ pub(crate) fn yuv_to_rgb(image: &image::Image, rgb: &mut rgb::Image) -> AvifResu
         plane_u8 = image8.plane_ptrs();
         plane_row_bytes = image8.plane_row_bytes()?;
     }
-    unsafe {
-        result = match conversion_function {
-            ConversionFunction::NVToARGBMatrix(func) => func(
-                plane_u8[0],
-                plane_row_bytes[0],
-                plane_u8[1],
-                plane_row_bytes[1],
-                rgb_ptr,
-                rgb_row_bytes,
-                matrix,
-                width,
-                height,
-            ),
-            ConversionFunction::YUV400ToRGBMatrix(func) => func(
-                plane_u8[0],
-                plane_row_bytes[0],
-                rgb_ptr,
-                rgb_row_bytes,
-                matrix,
-                width,
-                height,
-            ),
-            ConversionFunction::YUVToRGBMatrixFilter(func) => func(
-                plane_u8[0],
-                plane_row_bytes[0],
-                plane_u8[u_plane_index],
-                plane_row_bytes[u_plane_index],
-                plane_u8[v_plane_index],
-                plane_row_bytes[v_plane_index],
-                rgb_ptr,
-                rgb_row_bytes,
-                matrix,
-                width,
-                height,
-                filter,
-            ),
-            ConversionFunction::YUVAToRGBMatrixFilter(func) => func(
-                plane_u8[0],
-                plane_row_bytes[0],
-                plane_u8[u_plane_index],
-                plane_row_bytes[u_plane_index],
-                plane_u8[v_plane_index],
-                plane_row_bytes[v_plane_index],
-                plane_u8[3],
-                plane_row_bytes[3],
-                rgb_ptr,
-                rgb_row_bytes,
-                matrix,
-                width,
-                height,
-                0, // attenuate
-                filter,
-            ),
-            ConversionFunction::YUVToRGBMatrix(func) => func(
-                plane_u8[0],
-                plane_row_bytes[0],
-                plane_u8[u_plane_index],
-                plane_row_bytes[u_plane_index],
-                plane_u8[v_plane_index],
-                plane_row_bytes[v_plane_index],
-                rgb_ptr,
-                rgb_row_bytes,
-                matrix,
-                width,
-                height,
-            ),
-            ConversionFunction::YUVAToRGBMatrix(func) => func(
-                plane_u8[0],
-                plane_row_bytes[0],
-                plane_u8[u_plane_index],
-                plane_row_bytes[u_plane_index],
-                plane_u8[v_plane_index],
-                plane_row_bytes[v_plane_index],
-                plane_u8[3],
-                plane_row_bytes[3],
-                rgb_ptr,
-                rgb_row_bytes,
-                matrix,
-                width,
-                height,
-                0, // attenuate
-            ),
-            _ => 0,
-        };
-    }
+    result = match conversion_function {
+        ConversionFunction::NVToARGBMatrix(func) => {
+            let y_ptr = plane_u8[0];
+            let y_stride = plane_row_bytes[0];
+            let uv_ptr = plane_u8[1];
+            let uv_stride = plane_row_bytes[1];
+            // SAFETY: `validate_conversion_planes` verified `y_ptr` and `uv_ptr` are non-null 8-bit
+            // luma and interleaved UV planes covering `width x height`; `rgb_ptr` is non-null,
+            // uniquely borrowed, and valid for `height` rows of `rgb_row_bytes` bytes; `matrix`
+            // points to a `'static` `YuvConstants`.
+            unsafe {
+                func(
+                    y_ptr,
+                    y_stride,
+                    uv_ptr,
+                    uv_stride,
+                    rgb_ptr,
+                    rgb_row_bytes,
+                    matrix,
+                    width,
+                    height,
+                )
+            }
+        }
+        ConversionFunction::YUV400ToRGBMatrix(func) => {
+            let y_ptr = plane_u8[0];
+            let y_stride = plane_row_bytes[0];
+            // SAFETY: `validate_conversion_planes` verified `y_ptr` is a non-null 8-bit luma plane
+            // covering `width x height`; `rgb_ptr` is non-null, uniquely borrowed, and valid for
+            // `height` rows of `rgb_row_bytes` bytes; `matrix` points to a `'static`
+            // `YuvConstants`.
+            unsafe {
+                func(
+                    y_ptr,
+                    y_stride,
+                    rgb_ptr,
+                    rgb_row_bytes,
+                    matrix,
+                    width,
+                    height,
+                )
+            }
+        }
+        ConversionFunction::YUVToRGBMatrixFilter(func) => {
+            let y_ptr = plane_u8[0];
+            let y_stride = plane_row_bytes[0];
+            let u_ptr = plane_u8[u_plane_index];
+            let u_stride = plane_row_bytes[u_plane_index];
+            let v_ptr = plane_u8[v_plane_index];
+            let v_stride = plane_row_bytes[v_plane_index];
+            // SAFETY: `validate_conversion_planes` verified Y, U, and V are non-null 8-bit planes
+            // covering `width x height` with valid strides; `rgb_ptr` is non-null, uniquely
+            // borrowed, and valid for `height` rows of `rgb_row_bytes` bytes; `matrix` points to a
+            // `'static` `YuvConstants`.
+            unsafe {
+                func(
+                    y_ptr,
+                    y_stride,
+                    u_ptr,
+                    u_stride,
+                    v_ptr,
+                    v_stride,
+                    rgb_ptr,
+                    rgb_row_bytes,
+                    matrix,
+                    width,
+                    height,
+                    filter,
+                )
+            }
+        }
+        ConversionFunction::YUVAToRGBMatrixFilter(func) => {
+            let y_ptr = plane_u8[0];
+            let y_stride = plane_row_bytes[0];
+            let u_ptr = plane_u8[u_plane_index];
+            let u_stride = plane_row_bytes[u_plane_index];
+            let v_ptr = plane_u8[v_plane_index];
+            let v_stride = plane_row_bytes[v_plane_index];
+            let a_ptr = plane_u8[3];
+            let a_stride = plane_row_bytes[3];
+            // SAFETY: `validate_conversion_planes` verified Y, U, V, and A are non-null 8-bit
+            // planes covering `width x height` with valid strides; `rgb_ptr` is non-null, uniquely
+            // borrowed, and valid for `height` rows of `rgb_row_bytes` bytes; `matrix` points to a
+            // `'static` `YuvConstants`.
+            unsafe {
+                func(
+                    y_ptr,
+                    y_stride,
+                    u_ptr,
+                    u_stride,
+                    v_ptr,
+                    v_stride,
+                    a_ptr,
+                    a_stride,
+                    rgb_ptr,
+                    rgb_row_bytes,
+                    matrix,
+                    width,
+                    height,
+                    0, // attenuate
+                    filter,
+                )
+            }
+        }
+        ConversionFunction::YUVToRGBMatrix(func) => {
+            let y_ptr = plane_u8[0];
+            let y_stride = plane_row_bytes[0];
+            let u_ptr = plane_u8[u_plane_index];
+            let u_stride = plane_row_bytes[u_plane_index];
+            let v_ptr = plane_u8[v_plane_index];
+            let v_stride = plane_row_bytes[v_plane_index];
+            // SAFETY: `validate_conversion_planes` verified Y, U, and V are non-null 8-bit planes
+            // covering `width x height` with valid strides; `rgb_ptr` is non-null, uniquely
+            // borrowed, and valid for `height` rows of `rgb_row_bytes` bytes; `matrix` points to a
+            // `'static` `YuvConstants`.
+            unsafe {
+                func(
+                    y_ptr,
+                    y_stride,
+                    u_ptr,
+                    u_stride,
+                    v_ptr,
+                    v_stride,
+                    rgb_ptr,
+                    rgb_row_bytes,
+                    matrix,
+                    width,
+                    height,
+                )
+            }
+        }
+        ConversionFunction::YUVAToRGBMatrix(func) => {
+            let y_ptr = plane_u8[0];
+            let y_stride = plane_row_bytes[0];
+            let u_ptr = plane_u8[u_plane_index];
+            let u_stride = plane_row_bytes[u_plane_index];
+            let v_ptr = plane_u8[v_plane_index];
+            let v_stride = plane_row_bytes[v_plane_index];
+            let a_ptr = plane_u8[3];
+            let a_stride = plane_row_bytes[3];
+            // SAFETY: `validate_conversion_planes` verified Y, U, V, and A are non-null 8-bit
+            // planes covering `width x height` with valid strides; `rgb_ptr` is non-null, uniquely
+            // borrowed, and valid for `height` rows of `rgb_row_bytes` bytes; `matrix` points to a
+            // `'static` `YuvConstants`.
+            unsafe {
+                func(
+                    y_ptr,
+                    y_stride,
+                    u_ptr,
+                    u_stride,
+                    v_ptr,
+                    v_stride,
+                    a_ptr,
+                    a_stride,
+                    rgb_ptr,
+                    rgb_row_bytes,
+                    matrix,
+                    width,
+                    height,
+                    0, // attenuate
+                )
+            }
+        }
+        _ => 0,
+    };
     if result == 0 {
         Ok(Some(!image.has_alpha() || conversion_function.is_yuva()))
     } else {
