@@ -23,7 +23,14 @@ use libyuv_sys::bindings::*;
 
 use std::os::raw::c_int;
 
-fn find_constants(image: &image::Image) -> Option<(&YuvConstants, &YuvConstants)> {
+#[derive(Clone, Copy)]
+enum YuvMatrix {
+    Bt709,
+    Bt601,
+    Bt2020,
+}
+
+fn find_constants(image: &image::Image) -> Option<(&'static YuvConstants, &'static YuvConstants)> {
     let matrix_coefficients = if image.yuv_format == PixelFormat::Yuv400
         && image.matrix_coefficients == MatrixCoefficients::Identity
     {
@@ -38,70 +45,36 @@ fn find_constants(image: &image::Image) -> Option<(&YuvConstants, &YuvConstants)
     } else {
         matrix_coefficients
     };
-    unsafe {
-        match image.yuv_range {
-            YuvRange::Full => {
-                let default = if cfg!(feature = "android_mediacodec") {
-                    Some((&kYuvJPEGConstants, &kYvuJPEGConstants))
-                } else {
-                    None
-                };
-                match matrix_coefficients {
-                    MatrixCoefficients::Bt709 => Some((&kYuvF709Constants, &kYvuF709Constants)),
-                    MatrixCoefficients::Bt470bg
-                    | MatrixCoefficients::Bt601
-                    | MatrixCoefficients::Unspecified => {
-                        Some((&kYuvJPEGConstants, &kYvuJPEGConstants))
-                    }
-                    MatrixCoefficients::Bt2020Ncl => {
-                        Some((&kYuvV2020Constants, &kYvuV2020Constants))
-                    }
-                    MatrixCoefficients::ChromaDerivedNcl => match image.color_primaries {
-                        ColorPrimaries::Srgb | ColorPrimaries::Unspecified => {
-                            Some((&kYuvF709Constants, &kYvuF709Constants))
-                        }
-                        ColorPrimaries::Bt470bg | ColorPrimaries::Bt601 => {
-                            Some((&kYuvJPEGConstants, &kYvuJPEGConstants))
-                        }
-                        ColorPrimaries::Bt2020 => Some((&kYuvV2020Constants, &kYvuV2020Constants)),
-                        _ => default,
-                    },
-                    // default cannot be used here as this is expected to be near-lossless.
-                    MatrixCoefficients::YcgcoRe => None,
-                    _ => default,
-                }
-            }
-            YuvRange::Limited => {
-                let default = if cfg!(feature = "android_mediacodec") {
-                    Some((&kYuvI601Constants, &kYvuI601Constants))
-                } else {
-                    None
-                };
-                match matrix_coefficients {
-                    MatrixCoefficients::Bt709 => Some((&kYuvH709Constants, &kYvuH709Constants)),
-                    MatrixCoefficients::Bt470bg
-                    | MatrixCoefficients::Bt601
-                    | MatrixCoefficients::Unspecified => {
-                        Some((&kYuvI601Constants, &kYvuI601Constants))
-                    }
-                    MatrixCoefficients::Bt2020Ncl => Some((&kYuv2020Constants, &kYvu2020Constants)),
-                    MatrixCoefficients::ChromaDerivedNcl => match image.color_primaries {
-                        ColorPrimaries::Srgb | ColorPrimaries::Unspecified => {
-                            Some((&kYuvH709Constants, &kYvuH709Constants))
-                        }
-                        ColorPrimaries::Bt470bg | ColorPrimaries::Bt601 => {
-                            Some((&kYuvI601Constants, &kYvuI601Constants))
-                        }
-                        ColorPrimaries::Bt2020 => Some((&kYuv2020Constants, &kYvu2020Constants)),
-                        _ => default,
-                    },
-                    // default cannot be used here as this is expected to be near-lossless.
-                    MatrixCoefficients::YcgcoRe => None,
-                    _ => default,
-                }
-            }
+    let default = if cfg!(feature = "android_mediacodec") { Some(YuvMatrix::Bt601) } else { None };
+    let matrix = match matrix_coefficients {
+        MatrixCoefficients::Bt709 => Some(YuvMatrix::Bt709),
+        MatrixCoefficients::Bt470bg
+        | MatrixCoefficients::Bt601
+        | MatrixCoefficients::Unspecified => Some(YuvMatrix::Bt601),
+        MatrixCoefficients::Bt2020Ncl => Some(YuvMatrix::Bt2020),
+        MatrixCoefficients::ChromaDerivedNcl => match image.color_primaries {
+            ColorPrimaries::Srgb | ColorPrimaries::Unspecified => Some(YuvMatrix::Bt709),
+            ColorPrimaries::Bt470bg | ColorPrimaries::Bt601 => Some(YuvMatrix::Bt601),
+            ColorPrimaries::Bt2020 => Some(YuvMatrix::Bt2020),
+            _ => default,
+        },
+        // default cannot be used here as this is expected to be near-lossless.
+        MatrixCoefficients::YcgcoRe => None,
+        _ => default,
+    }?;
+    // SAFETY: All `kYuv*Constants` and `kYvu*Constants` symbols are immutable, properly aligned
+    // static `YuvConstants` coefficient tables defined by libyuv with `'static` lifetime and are
+    // never mutated at runtime.
+    Some(unsafe {
+        match (image.yuv_range, matrix) {
+            (YuvRange::Full, YuvMatrix::Bt709) => (&kYuvF709Constants, &kYvuF709Constants),
+            (YuvRange::Full, YuvMatrix::Bt601) => (&kYuvJPEGConstants, &kYvuJPEGConstants),
+            (YuvRange::Full, YuvMatrix::Bt2020) => (&kYuvV2020Constants, &kYvuV2020Constants),
+            (YuvRange::Limited, YuvMatrix::Bt709) => (&kYuvH709Constants, &kYvuH709Constants),
+            (YuvRange::Limited, YuvMatrix::Bt601) => (&kYuvI601Constants, &kYvuI601Constants),
+            (YuvRange::Limited, YuvMatrix::Bt2020) => (&kYuv2020Constants, &kYvu2020Constants),
         }
-    }
+    })
 }
 
 #[rustfmt::skip]
