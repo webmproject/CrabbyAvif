@@ -240,22 +240,39 @@ impl Image {
                 .as_mut()
                 .ok_or(AvifError::NoContent)?
                 .ptr16_mut();
-            // SAFETY: This function calls into libyuv which is a C++ library. We pass in
-            // pointers and strides to rust slices that are guaranteed to be valid.
+            if src_y.is_null()
+                || src_uv.is_null()
+                || dst_y.is_null()
+                || dst_u.is_null()
+                || dst_v.is_null()
+            {
+                return AvifError::no_content();
+            }
+            let src_stride_y = i32_from_u32(src_y_pd.row_bytes / 2)?;
+            let src_stride_uv = i32_from_u32(src_uv_pd.row_bytes / 2)?;
+            let dst_stride_y = i32_from_u32(dst_y_pd.row_bytes / 2)?;
+            let dst_stride_u = i32_from_u32(dst_u_pd.row_bytes / 2)?;
+            let dst_stride_v = i32_from_u32(dst_v_pd.row_bytes / 2)?;
+            let src_width = i32_from_u32(self.width)?;
+            let src_height = i32_from_u32(self.height)?;
+            // SAFETY: `validate_plane` and the null checks above verified that `src_y` and
+            // `src_uv` point to valid, 2-byte aligned `u16` planes covering `src_width x
+            // src_height` P010 samples, and `dst_y`, `dst_u`, `dst_v` point to freshly allocated,
+            // disjoint, 2-byte aligned `u16` buffers in `i010` with valid strides and capacity.
             let ret = unsafe {
                 P010ToI010(
                     src_y,
-                    i32_from_u32(src_y_pd.row_bytes / 2)?,
+                    src_stride_y,
                     src_uv,
-                    i32_from_u32(src_uv_pd.row_bytes / 2)?,
+                    src_stride_uv,
                     dst_y,
-                    i32_from_u32(dst_y_pd.row_bytes / 2)?,
+                    dst_stride_y,
                     dst_u,
-                    i32_from_u32(dst_u_pd.row_bytes / 2)?,
+                    dst_stride_u,
                     dst_v,
-                    i32_from_u32(dst_v_pd.row_bytes / 2)?,
-                    i32_from_u32(self.width)?,
-                    i32_from_u32(self.height)?,
+                    dst_stride_v,
+                    src_width,
+                    src_height,
                 )
             };
             if ret != 0 {
