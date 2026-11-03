@@ -16,16 +16,18 @@
 
 /// Spec `dc_q( b )`: the DC quantizer step for quantizer index `b`
 /// (clamped to 0..=255) at bit depth `bit_depth` (8, 10 or 12).
-#[inline]
+#[inline(always)]
 pub fn dc_q(b: i32, bit_depth: u32) -> i32 {
-    DC_QLOOKUP[((bit_depth - 8) >> 1) as usize][b.clamp(0, 255) as usize] as i32
+    let bd_idx = ((bit_depth >> 1).wrapping_sub(4) as usize).min(2);
+    DC_QLOOKUP[bd_idx][b.clamp(0, 255) as usize] as i32
 }
 
 /// Spec `ac_q( b )`: the AC quantizer step for quantizer index `b`
 /// (clamped to 0..=255) at bit depth `bit_depth` (8, 10 or 12).
-#[inline]
+#[inline(always)]
 pub fn ac_q(b: i32, bit_depth: u32) -> i32 {
-    AC_QLOOKUP[((bit_depth - 8) >> 1) as usize][b.clamp(0, 255) as usize] as i32
+    let bd_idx = ((bit_depth >> 1).wrapping_sub(4) as usize).min(2);
+    AC_QLOOKUP[bd_idx][b.clamp(0, 255) as usize] as i32
 }
 
 // BEGIN GENERATED (extracted mechanically from the spec text)
@@ -33,7 +35,7 @@ pub fn ac_q(b: i32, bit_depth: u32) -> i32 {
 /// `Dc_Qlookup[3][256]` (spec section 7.12.2, Dequantization functions).
 /// Indexed by `[(BitDepth - 8) >> 1][qindex]`.
 #[rustfmt::skip]
-pub static DC_QLOOKUP: [[u16; 256]; 3] = [
+pub const DC_QLOOKUP: [[u16; 256]; 3] = [
     [
         4, 8, 8, 9, 10, 11, 12, 12, 13, 14, 15, 16, 17, 18, 19, 19, 20, 21, 22, 23, 24, 25, 26, 26,
         27, 28, 29, 30, 31, 32, 32, 33, 34, 35, 36, 37, 38, 38, 39, 40, 41, 42, 43, 43, 44, 45, 46,
@@ -90,7 +92,7 @@ pub static DC_QLOOKUP: [[u16; 256]; 3] = [
 /// `Ac_Qlookup[3][256]` (spec section 7.12.2, Dequantization functions).
 /// Indexed by `[(BitDepth - 8) >> 1][qindex]`.
 #[rustfmt::skip]
-pub static AC_QLOOKUP: [[u16; 256]; 3] = [
+pub const AC_QLOOKUP: [[u16; 256]; 3] = [
     [
         4, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
         31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53,

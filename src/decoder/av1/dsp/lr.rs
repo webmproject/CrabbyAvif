@@ -56,6 +56,13 @@ use crate::decoder::av1::pixel::{round2, Pixel};
 /// Border (in samples) around the rectangle in the padded source buffer.
 pub const LR_BORDER: usize = 3;
 
+/// Extra samples a caller should leave readable at the end of every padded
+/// source row when it can (the row slices extend past `w + 2 *
+/// LR_BORDER`). SIMD kernels then load whole vectors at the end of every
+/// row instead of using scalar tail loads; the extra samples only feed
+/// results that are never used.
+pub const LR_SRC_SLACK: usize = 16;
+
 /// Maximum rectangle width accepted by the filters (largest restoration
 /// unit is 256 samples wide, the last unit of a row may be up to 1.5x).
 pub const LR_MAX_W: usize = 384;
@@ -197,9 +204,11 @@ pub(crate) fn check_rect(w: usize, h: usize) {
 
 /// Wiener filter of a `w x h` rectangle.
 ///
-/// * `src`: samples equal to `get_source_sample(plane, x, y)` for the
-///   rectangle extended by [`LR_BORDER`] on every side; the rectangle's
-///   top-left sample is at `src[LR_BORDER * src_stride + LR_BORDER]`.
+/// * `src`: the rows of the rectangle extended by [`LR_BORDER`] on every
+///   side, with samples equal to `get_source_sample(plane, x, y)`:
+///   `src[r][c]` is the sample at rectangle row `r - LR_BORDER` and column
+///   `c - LR_BORDER` (`h + 2 * LR_BORDER` rows of at least
+///   `w + 2 * LR_BORDER` samples each, see also [`LR_SRC_SLACK`]).
 /// * `coeffs`: `LrWiener[plane][unitRow][unitCol]`, i.e. `coeffs[0]` holds
 ///   the 3 coded vertical taps and `coeffs[1]` the 3 horizontal taps (spec
 ///   7.17.5 derives the full 7-tap filters from them).
@@ -210,8 +219,7 @@ pub(crate) fn check_rect(w: usize, h: usize) {
 pub fn wiener_filter<T: Pixel>(
     dst: &mut [T],
     dst_stride: usize,
-    src: &[T],
-    src_stride: usize,
+    src: &[&[T]],
     w: usize,
     h: usize,
     coeffs: &[[i32; 3]; 2],
@@ -227,7 +235,7 @@ pub fn wiener_filter<T: Pixel>(
 
     // Horizontal pass for intermediate row `r` (padded source row `r`).
     let hpass = |r: usize, out: &mut [i32; LR_MAX_W]| {
-        let row = &src[r * src_stride..r * src_stride + w + 2 * LR_BORDER];
+        let row = &src[r][..w + 2 * LR_BORDER];
         for (c, o) in out[..w].iter_mut().enumerate() {
             let taps = &row[c..c + 7];
             let s: i32 = taps
@@ -275,8 +283,7 @@ impl AbRow {
 /// box filter with radius `r` and scale `s` (spec 7.17.3).
 #[allow(clippy::too_many_arguments)]
 fn box_ab_row<T: Pixel>(
-    src: &[T],
-    src_stride: usize,
+    src: &[&[T]],
     i: isize,
     w: usize,
     r: usize,
@@ -296,7 +303,7 @@ fn box_ab_row<T: Pixel>(
     let mut vsq = [0u32; COLS];
     for dy in -(r as isize)..=(r as isize) {
         let pr = (i + dy + LR_BORDER as isize) as usize;
-        let row = &src[pr * src_stride + col0..pr * src_stride + col0 + ncols];
+        let row = &src[pr][col0..col0 + ncols];
         for ((sum, sq), p) in vsum.iter_mut().zip(vsq.iter_mut()).zip(row) {
             let c = p.to_i32() as u32;
             *sum += c;
@@ -389,8 +396,7 @@ fn box_filter_r1_row<T: Pixel>(
 pub fn sgr_filter<T: Pixel>(
     dst: &mut [T],
     dst_stride: usize,
-    src: &[T],
-    src_stride: usize,
+    src: &[&[T]],
     w: usize,
     h: usize,
     set: usize,
@@ -414,48 +420,29 @@ pub fn sgr_filter<T: Pixel>(
     let mut ab1 = [AbRow::new(), AbRow::new(), AbRow::new()];
 
     if r0 != 0 {
-        box_ab_row(src, src_stride, -1, w, r0, s0, bd, &mut ab0[0]);
-        box_ab_row(src, src_stride, 1, w, r0, s0, bd, &mut ab0[1]);
+        box_ab_row(src, -1, w, r0, s0, bd, &mut ab0[0]);
+        box_ab_row(src, 1, w, r0, s0, bd, &mut ab0[1]);
     }
     if r1 != 0 {
-        box_ab_row(src, src_stride, -1, w, r1, s1, bd, &mut ab1[0]);
-        box_ab_row(src, src_stride, 0, w, r1, s1, bd, &mut ab1[1]);
+        box_ab_row(src, -1, w, r1, s1, bd, &mut ab1[0]);
+        box_ab_row(src, 0, w, r1, s1, bd, &mut ab1[1]);
     }
 
     let mut flt0 = [0i32; LR_MAX_W];
     let mut flt1 = [0i32; LR_MAX_W];
     for i in 0..h {
-        let pr = (i + LR_BORDER) * src_stride + LR_BORDER;
-        let px = &src[pr..pr + w];
+        let px = &src[i + LR_BORDER][LR_BORDER..LR_BORDER + w];
 
         if r0 != 0 {
             let odd = i & 1 == 1;
             if !odd && i >= 2 {
                 cur0 ^= 1;
-                box_ab_row(
-                    src,
-                    src_stride,
-                    i as isize + 1,
-                    w,
-                    r0,
-                    s0,
-                    bd,
-                    &mut ab0[cur0],
-                );
+                box_ab_row(src, i as isize + 1, w, r0, s0, bd, &mut ab0[cur0]);
             }
             box_filter_r2_row(px, &ab0[cur0 ^ 1], &ab0[cur0], odd, &mut flt0);
         }
         if r1 != 0 {
-            box_ab_row(
-                src,
-                src_stride,
-                i as isize + 1,
-                w,
-                r1,
-                s1,
-                bd,
-                &mut ab1[(i + 2) % 3],
-            );
+            box_ab_row(src, i as isize + 1, w, r1, s1, bd, &mut ab1[(i + 2) % 3]);
             box_filter_r1_row(
                 px,
                 &ab1[i % 3],
@@ -734,7 +721,15 @@ mod tests {
             }
             let dst_stride = w + rng.range(0, 3) as usize;
             let mut dst = vec![T::default(); dst_stride * h];
-            wiener_filter(&mut dst, dst_stride, &src, stride, w, h, &coeffs, bd);
+            wiener_filter(
+                &mut dst,
+                dst_stride,
+                &src.chunks(stride).collect::<Vec<_>>(),
+                w,
+                h,
+                &coeffs,
+                bd,
+            );
             let want = spec_wiener(&Src { buf: &src, stride }, w, h, &coeffs, bd);
             for i in 0..h {
                 for j in 0..w {
@@ -772,7 +767,16 @@ mod tests {
                 }
                 let dst_stride = w + rng.range(0, 3) as usize;
                 let mut dst = vec![T::default(); dst_stride * h];
-                sgr_filter(&mut dst, dst_stride, &src, stride, w, h, set, xqd, bd);
+                sgr_filter(
+                    &mut dst,
+                    dst_stride,
+                    &src.chunks(stride).collect::<Vec<_>>(),
+                    w,
+                    h,
+                    set,
+                    xqd,
+                    bd,
+                );
                 let want = spec_sgr(&Src { buf: &src, stride }, w, h, set, xqd, bd);
                 for i in 0..h {
                     for j in 0..w {
@@ -922,7 +926,16 @@ mod tests {
             for set in 0..SGR_PARAMS.len() {
                 for xqd in [[-96, 95], [31, -32], [0, 0], [-96, -32]] {
                     let mut dst = vec![0u16; w * h];
-                    sgr_filter(&mut dst, w, &src, stride, w, h, set, xqd, 12);
+                    sgr_filter(
+                        &mut dst,
+                        w,
+                        &src.chunks(stride).collect::<Vec<_>>(),
+                        w,
+                        h,
+                        set,
+                        xqd,
+                        12,
+                    );
                     let want = spec_sgr(&Src { buf: &src, stride }, w, h, set, xqd, 12);
                     for (k, (&d, &e)) in dst.iter().zip(want.iter()).enumerate() {
                         assert_eq!(d as i64, e, "set={set} xqd={xqd:?} at {k}");

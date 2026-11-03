@@ -96,8 +96,7 @@ impl DecodedFrame {
 }
 
 fn decode_payload(av1_payload: &[u8], options: &av1::DecodeOptions) -> AvifResult<DecodedFrame> {
-    let info = av1::probe(av1_payload)?;
-    let frame = av1::decode(av1_payload, options)?;
+    let (info, frame) = av1::decode_with_info(av1_payload, options)?;
     Ok(DecodedFrame { info, frame })
 }
 

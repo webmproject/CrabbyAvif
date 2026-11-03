@@ -33,8 +33,69 @@ pub const QM_TOTAL_SIZE: usize = 3344;
 pub fn quantizer_matrix(level: usize, plane_type: usize, tx_size: TxSize) -> &'static [u8] {
     let tw = (crate::decoder::av1::tables::block::TX_WIDTH[tx_size as usize] as usize).min(32);
     let th = (crate::decoder::av1::tables::block::TX_HEIGHT[tx_size as usize] as usize).min(32);
-    let off = QM_OFFSET[tx_size as usize] as usize;
-    &QUANTIZER_MATRIX[level][plane_type][off..off + tw * th]
+    &quantizer_matrix_1024(level, plane_type, tx_size)[..tw * th]
+}
+
+/// Flattened `QUANTIZER_MATRIX` with 768 trailing zero bytes so any valid
+/// `(level, plane_type, tx_size)` start offset has a full 1024-byte slice
+/// (`rc = (e & 0x3FF) as usize` indexes directly without a runtime mask).
+/// A `static` (not a `const`) so the ~100 KB table has a single address
+/// and is not duplicated by `&'static` promotion at each use site.
+static QUANTIZER_MATRIX_FLAT: [u8; 15 * 2 * QM_TOTAL_SIZE + 768] = {
+    let mut out = [0u8; 15 * 2 * QM_TOTAL_SIZE + 768];
+    let mut l = 0;
+    while l < 15 {
+        let mut p = 0;
+        while p < 2 {
+            let base = (l * 2 + p) * QM_TOTAL_SIZE;
+            let row = &QUANTIZER_MATRIX[l][p];
+            let mut i = 0;
+            while i < QM_TOTAL_SIZE {
+                out[base + i] = row[i];
+                i += 1;
+            }
+            p += 1;
+        }
+        l += 1;
+    }
+    out
+};
+
+/// Upper bound of the DC weight (first entry of every matrix) over all
+/// levels, plane types and transform sizes. The unclamped quantizer matrix
+/// DC dequantization fast path in `decode/block.rs` relies on this bound
+/// (checked at compile time below).
+pub const QM_MAX_DC_WEIGHT: u8 = 35;
+
+const _: () = {
+    let mut l = 0;
+    while l < 15 {
+        let mut p = 0;
+        while p < 2 {
+            let row = &QUANTIZER_MATRIX[l][p];
+            let mut t = 0;
+            while t < QM_OFFSET.len() {
+                assert!(row[QM_OFFSET[t] as usize] <= QM_MAX_DC_WEIGHT);
+                t += 1;
+            }
+            p += 1;
+        }
+        l += 1;
+    }
+};
+
+/// Returns a 1024-element view starting at `Qm_Offset[tx_size]` for `(level, plane_type)`.
+#[inline(always)]
+pub fn quantizer_matrix_1024(
+    level: usize,
+    plane_type: usize,
+    tx_size: TxSize,
+) -> &'static [u8; 1024] {
+    let base = (level.min(14) * 2 + (plane_type & 1)) * QM_TOTAL_SIZE
+        + (QM_OFFSET[tx_size as usize] as usize).min(3088);
+    QUANTIZER_MATRIX_FLAT[base..base + 1024]
+        .first_chunk::<1024>()
+        .unwrap()
 }
 
 // BEGIN GENERATED (extracted mechanically from the spec text)
@@ -54,7 +115,7 @@ pub const QM_OFFSET: [u16; 19] = [
 /// with `tw = Min(32, Tx_Width[tx_size])` (spec 7.12.3). Levels 0..14;
 /// level 15 means a flat matrix and is not stored.
 #[rustfmt::skip]
-pub static QUANTIZER_MATRIX: [[[u8; 3344]; 2]; 15] = [
+const QUANTIZER_MATRIX: [[[u8; 3344]; 2]; 15] = [
     [
         [
             32, 43, 73, 97, 43, 67, 94, 110, 73, 94, 137, 150, 97, 110, 150, 200, 32, 32, 38, 51,

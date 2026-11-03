@@ -77,10 +77,26 @@ pub(crate) trait TxLanes:
         self.mul(ka).rnd(12)
     }
 
+    /// Same result as [`Self::m1`]; only a codegen hint (see
+    /// `dot_rnd12_wrap`'s `FORCE_CORR`) for products whose result feeds a
+    /// saturating / clamping operation directly (e.g. a single-input
+    /// `H(x, 0)` into another `B()` butterfly, or the rect2 pre-scaling).
+    #[inline(always)]
+    fn m1_h0(self, ka: i32) -> Self {
+        self.m1(ka)
+    }
+
     /// `Round2(a * ka + b * kb, 12)`.
     #[inline(always)]
     fn m2(self, ka: i32, b: Self, kb: i32) -> Self {
         (self.mul(ka) + b.mul(kb)).rnd(12)
+    }
+
+    /// Same result as [`Self::m2`]; only a codegen hint, see
+    /// [`Self::m1_h0`].
+    #[inline(always)]
+    fn m2_h0(self, ka: i32, b: Self, kb: i32) -> Self {
+        self.m2(ka, b, kb)
     }
 
     /// `Round2(sum(a[i] * k[i]), 12)`.
@@ -272,8 +288,14 @@ fn narrow_rnd12<const N: usize>(x: Simd<i32, N>) -> Simd<i16, N> {
 /// i.e. `Round2(.., 12) - a`. Negative constants are avoided because LLVM
 /// shrinks them to the low 28 bits that the result depends on, which
 /// defeats `smull`.
+///
+/// With `FORCE_CORR`, if all constants are non-negative the first one is
+/// applied the same way (`a * (k + 4096)`, then `- a`), so that there is
+/// always one `sub`. `Round2(s + a * 4096, 12) == Round2(s, 12) + a`
+/// exactly, so the result is bit-identical to `FORCE_CORR = false`; only
+/// the instruction selection on aarch64 changes.
 #[inline(always)]
-fn dot_rnd12_wrap<const N: usize, const K: usize>(
+fn dot_rnd12_wrap<const N: usize, const K: usize, const FORCE_CORR: bool>(
     a: [Simd<i16, N>; K],
     k: [i32; K],
 ) -> Option<Simd<i16, N>> {
@@ -282,10 +304,11 @@ fn dot_rnd12_wrap<const N: usize, const K: usize>(
     }
     // `|sum| <= K * 2^27 < 2^31` for the `K <= 4` used here.
     debug_assert!(K <= 8);
+    let all_pos = FORCE_CORR && k.iter().all(|&x| x >= 0);
     let mut sum = Simd::<i32, N>::splat(0);
     let mut corr = Simd::<i16, N>::splat(0);
-    for (&a, &k) in a.iter().zip(&k) {
-        let k = if k < 0 {
+    for (i, (&a, &k)) in a.iter().zip(&k).enumerate() {
+        let k = if k < 0 || (all_pos && i == 0) {
             corr += a;
             k + 4096
         } else {
@@ -329,6 +352,10 @@ fn dot_rnd12_pmadd<const N: usize, const K: usize>(
 ) -> Option<Simd<i16, N>> {
     if !cfg!(target_arch = "x86_64") || !matches!(N, 4 | 8 | 16) {
         return None;
+    }
+    if K == 3 {
+        let k1a = k[1] / 2;
+        return dot_rnd12_pmadd([a[0], a[1], a[1], a[2]], [k[0], k1a, k[1] - k1a, k[2]]);
     }
     let ones = Simd::<i16, N>::splat(1);
     // Pairs (a[2j], a[2j + 1]) with constants, plus the rounding term.
@@ -400,10 +427,36 @@ pub(super) fn sat16<const N: usize>(x: Simd<i32, N>) -> Simd<i16, N> {
 
 /// `Round2(a * k, 12)` of `i16` lanes, saturated to 16 bits (wrapping on
 /// aarch64 for `|k| <= 4096`, see `dot_rnd12_wrap`).
+///
+/// On x86_64, `k` is split as `k' + c * 4096` with `|k'| <= 2047` so
+/// `k16 = 16 * k'` fits in `i16` and `Round2(a * k', 12) =
+/// (a * k16 + 2^15) >> 16 = pmulhw(a, k16) + (pmullw(a, k16) >> 15)`
+/// in 4 instructions (avoiding `dot_rnd12_pmadd` where LLVM constant-folds
+/// `1 * 2048` and falls back to `pmuludq`).
 #[inline(always)]
-fn mul_rnd12<const N: usize>(a: Simd<i16, N>, k: i32) -> Simd<i16, N> {
-    if let Some(r) = dot_rnd12_wrap([a], [k]) {
+fn mul_rnd12<const N: usize, const FORCE_CORR: bool>(a: Simd<i16, N>, k: i32) -> Simd<i16, N> {
+    if let Some(r) = dot_rnd12_wrap::<N, 1, FORCE_CORR>([a], [k]) {
         return r;
+    }
+    if cfg!(target_arch = "x86_64") {
+        let c = (k + 2048) >> 12;
+        let kp = k - c * 4096;
+        if (-2047..=2047).contains(&kp) {
+            let k16 = (kp * 16) as i16;
+            let hi = ((a.cast::<i32>() * Simd::splat(k16 as i32)) >> 16).cast::<i16>();
+            let lo = a * Simd::splat(k16);
+            let mut r = hi - (lo >> 15);
+            if c > 0 {
+                for _ in 0..c {
+                    r = r.saturating_add(a);
+                }
+            } else if c < 0 {
+                for _ in 0..-c {
+                    r = r.saturating_sub(a);
+                }
+            }
+            return r;
+        }
     }
     if let Some(r) = dot_rnd12_pmadd([a], [k]) {
         return r;
@@ -457,11 +510,15 @@ impl<const N: usize> TxLanes for S16<N> {
     }
     #[inline(always)]
     fn m1(self, ka: i32) -> Self {
-        S16(mul_rnd12(self.0, ka))
+        S16(mul_rnd12::<N, false>(self.0, ka))
+    }
+    #[inline(always)]
+    fn m1_h0(self, ka: i32) -> Self {
+        S16(mul_rnd12::<N, true>(self.0, ka))
     }
     #[inline(always)]
     fn m2(self, ka: i32, b: Self, kb: i32) -> Self {
-        if let Some(r) = dot_rnd12_wrap([self.0, b.0], [ka, kb]) {
+        if let Some(r) = dot_rnd12_wrap::<N, 2, false>([self.0, b.0], [ka, kb]) {
             return S16(r);
         }
         if let Some(r) = dot_rnd12_pmadd([self.0, b.0], [ka, kb]) {
@@ -472,8 +529,15 @@ impl<const N: usize> TxLanes for S16<N> {
         ))
     }
     #[inline(always)]
+    fn m2_h0(self, ka: i32, b: Self, kb: i32) -> Self {
+        if let Some(r) = dot_rnd12_wrap::<N, 2, true>([self.0, b.0], [ka, kb]) {
+            return S16(r);
+        }
+        self.m2(ka, b, kb)
+    }
+    #[inline(always)]
     fn dot_rnd12<const K: usize>(a: [Self; K], k: [i32; K]) -> Self {
-        if let Some(r) = dot_rnd12_wrap(a.map(|a| a.0), k) {
+        if let Some(r) = dot_rnd12_wrap::<N, K, false>(a.map(|a| a.0), k) {
             return S16(r);
         }
         if let Some(r) = dot_rnd12_pmadd(a.map(|a| a.0), k) {
@@ -487,10 +551,30 @@ impl<const N: usize> TxLanes for S16<N> {
     }
 }
 
+impl<const N: usize> S16<N> {
+    /// `Round2(self, 4)` for residual addition to a `BD <= 10` pixel.
+    /// For `v >= 32760`, `2047` and `2048` both saturate `d + r` to
+    /// `(1 << BD) - 1 <= 1023`.
+    #[inline(always)]
+    fn rnd4_add(self) -> Simd<i16, N> {
+        if cfg!(target_arch = "x86_64") {
+            self.0.saturating_add(Simd::splat(8)) >> 4
+        } else {
+            self.rnd(4).0
+        }
+    }
+}
+
 /// Lane vectors of the row pass: `N` lanes loaded from / stored to `i32`.
 trait RowLanes<const N: usize>: TxLanes {
     fn from_i32(v: Simd<i32, N>) -> Self;
     fn to_i32(self) -> Simd<i32, N>;
+    fn bitor(self, o: Self) -> Self;
+    fn last_nz_lane(self) -> usize;
+    #[inline(always)]
+    fn load_row(src: &[i32; N]) -> Self {
+        Self::from_i32(Simd::from_array(*src))
+    }
     /// Narrows to `i16` (the value must fit).
     #[inline(always)]
     fn to_i16(self) -> Simd<i16, N> {
@@ -501,6 +585,11 @@ trait RowLanes<const N: usize>: TxLanes {
     #[inline(always)]
     fn load_tile(rows: [Simd<i32, N>; N]) -> [Self; N] {
         transpose_e(rows).map(Self::from_i32)
+    }
+    /// Transposes an `N x N` tile of already-loaded rows to columns.
+    #[inline(always)]
+    fn transpose_tile(rows: [Self; N]) -> [Self; N] {
+        transpose_e(rows.map(Self::to_i32)).map(Self::from_i32)
     }
 }
 
@@ -513,6 +602,14 @@ impl<const N: usize> RowLanes<N> for Simd<i32, N> {
     fn to_i32(self) -> Simd<i32, N> {
         self
     }
+    #[inline(always)]
+    fn bitor(self, o: Self) -> Self {
+        self | o
+    }
+    #[inline(always)]
+    fn last_nz_lane(self) -> usize {
+        last_nz_lane(self)
+    }
 }
 
 impl<const N: usize> RowLanes<N> for Wide<N> {
@@ -523,6 +620,14 @@ impl<const N: usize> RowLanes<N> for Wide<N> {
     #[inline(always)]
     fn to_i32(self) -> Simd<i32, N> {
         self.0
+    }
+    #[inline(always)]
+    fn bitor(self, o: Self) -> Self {
+        Wide(self.0 | o.0)
+    }
+    #[inline(always)]
+    fn last_nz_lane(self) -> usize {
+        last_nz_lane(self.0)
     }
 }
 
@@ -537,12 +642,24 @@ impl<const N: usize> RowLanes<N> for S16<N> {
         self.0.cast()
     }
     #[inline(always)]
+    fn bitor(self, o: Self) -> Self {
+        S16(self.0 | o.0)
+    }
+    #[inline(always)]
+    fn last_nz_lane(self) -> usize {
+        last_nz_lane16(self.0)
+    }
+    #[inline(always)]
     fn to_i16(self) -> Simd<i16, N> {
         self.0
     }
     #[inline(always)]
     fn load_tile(rows: [Simd<i32, N>; N]) -> [Self; N] {
         transpose_e(rows.map(|r| r.cast::<i16>())).map(S16)
+    }
+    #[inline(always)]
+    fn transpose_tile(rows: [Self; N]) -> [Self; N] {
+        transpose_e(rows.map(|r| r.0)).map(S16)
     }
 }
 
@@ -578,6 +695,7 @@ type Kern<V> = fn(&mut [V], Clamp<V>);
 /// Selects the 1D kernel for a transform kind and length `1 << log2n`,
 /// given that only the first `nz` inputs (`1 <= nz <= 32`) can be
 /// non-zero (see the portable `select_1d`).
+#[inline(always)]
 fn select<V: TxLanes>(kind: Tx1d, log2n: usize, nz: usize) -> Kern<V> {
     use kernels::*;
     let v = match nz {
@@ -706,39 +824,21 @@ pub(super) const fn rect2(w: usize, h: usize) -> bool {
     w * 2 == h || h * 2 == w
 }
 
-/// Per transform size entry point: `fn(dst, stride, coeffs, tx_type, eob)`
-/// with `eob >= 1`, non-lossless.
-type SizeFn<T> = fn(&mut [T], usize, &mut [i32], TxType, usize);
+/// Per transform size and type entry point: `fn(dst, stride, coeffs,
+/// eob_type)` with `eob_type = eob | (tx_type as usize) << 16`, `eob >= 1`,
+/// non-lossless (see [`itx_table`]). Four integer arguments, so that the
+/// call passes everything in registers.
+pub type ItxFn<T> = fn(&mut [T], usize, &mut [i32], usize);
 
-/// See [`crate::decoder::av1::dsp::itx::inv_txfm_add`].
-#[allow(clippy::too_many_arguments)]
-pub fn inv_txfm_add_bd<T: Pixel, const BD: u32>(
-    dst: &mut [T],
-    stride: usize,
-    coeffs: &mut [i32],
-    tx_size: TxSize,
-    tx_type: TxType,
-    lossless: bool,
-    eob: usize,
-    bd: u32,
-) {
-    debug_assert_eq!(bd, BD);
-    if eob == 0 {
-        return;
-    }
-    if lossless {
-        debug_assert_eq!(tx_size, TxSize::Tx4x4);
-        let col_range = (BD + 6).max(16);
-        let (fud, flr) = (flip_ud(tx_type), flip_lr(tx_type));
-        inv_wht4x4_add_bd::<T, BD>(dst, stride, coeffs, col_range, fud, flr, bd);
-        coeffs[..16].fill(0);
-        return;
-    }
+/// [`ItxFn`] of each `[tx_size as usize][tx_type as usize]` for
+/// [`inv_txfm_add_bd`]'s contract (`eob >= 1`, not lossless; `bd == BD`),
+/// so that callers can skip [`inv_txfm_add_bd`]'s dispatch.
+pub fn itx_table<T: Pixel, const BD: u32>() -> &'static [[ItxFn<T>; 16]; 19] {
     // One monomorphized entry per size (and per transform type for the
     // sizes of at most 8x8), so that the size and type dependent
     // parameters are compile-time constants: one table lookup + indirect
     // call, like dav1d's per (size, type) functions.
-    let table: &[[SizeFn<T>; 16]; 19] = const {
+    const {
         &[
             entries!(T, BD, 4, 4),
             entries!(T, BD, 8, 8),
@@ -760,11 +860,48 @@ pub fn inv_txfm_add_bd<T: Pixel, const BD: u32>(
             entries!(T, BD, 16, 64),
             entries!(T, BD, 64, 16),
         ]
-    };
-    table[tx_size as usize][tx_type as usize](dst, stride, coeffs, tx_type, eob)
+    }
 }
 
-/// The 16 [`SizeFn`]s of a `W x H` transform size, indexed by `TxType`.
+/// See [`crate::decoder::av1::dsp::itx::inv_txfm_add`].
+#[allow(clippy::too_many_arguments)]
+pub fn inv_txfm_add_bd<T: Pixel, const BD: u32>(
+    dst: &mut [T],
+    stride: usize,
+    coeffs: &mut [i32],
+    tx_size: TxSize,
+    tx_type: TxType,
+    lossless: bool,
+    eob: usize,
+    bd: u32,
+) {
+    // The decoder uses `u8` pixels iff the bit depth is 8. The tests also
+    // run `u16` pixels at bit depth 8, which every kernel supports.
+    debug_assert!(
+        !(std::mem::size_of::<T>() == 1 && BD > 8)
+            && (cfg!(test) || !(std::mem::size_of::<T>() == 2 && BD == 8))
+    );
+    debug_assert_eq!(bd, BD);
+    if eob == 0 {
+        return;
+    }
+    if lossless {
+        debug_assert_eq!(tx_size, TxSize::Tx4x4);
+        let col_range = (BD + 6).max(16);
+        let (fud, flr) = (flip_ud(tx_type), flip_lr(tx_type));
+        inv_wht4x4_add_bd::<T, BD>(dst, stride, coeffs, col_range, fud, flr, bd);
+        coeffs[..16].fill(0);
+        return;
+    }
+    itx_table::<T, BD>()[tx_size as usize][tx_type as usize](
+        dst,
+        stride,
+        coeffs,
+        eob | (tx_type as usize) << 16,
+    )
+}
+
+/// The 16 [`ItxFn`]s of a `W x H` transform size, indexed by `TxType`.
 /// For the sizes of at most 8x8 with 16-bit intermediates, the four
 /// DCT / ADST combinations (about 98% of all such blocks; the identity
 /// and flipped types are rare) get per type monomorphized entries
@@ -773,7 +910,7 @@ pub fn inv_txfm_add_bd<T: Pixel, const BD: u32>(
 /// uses [`size_entry`].
 macro_rules! entries {
     ($T:ty, $BD:expr, $W:expr, $H:expr) => {{
-        let mut e = [size_entry::<$T, $BD, $W, $H> as SizeFn<$T>; 16];
+        let mut e = [size_entry::<$T, $BD, $W, $H> as ItxFn<$T>; 16];
         if $W <= 8 && $H <= 8 && $BD <= 10 && (std::mem::size_of::<$T>() == 1) == ($BD == 8) {
             e[0] = typed_entry::<$T, $BD, $W, $H, 0>;
             e[1] = typed_entry::<$T, $BD, $W, $H, 1>;
@@ -785,28 +922,33 @@ macro_rules! entries {
 }
 use entries;
 
-/// [`size_entry`] for the transform type `TxType::ALL[TT]` (the
-/// `tx_type` argument is ignored).
+/// [`size_entry`] for the transform type `TxType::ALL[TT]` (the type
+/// bits of `eob_type` are ignored).
 fn typed_entry<T: Pixel, const BD: u32, const W: usize, const H: usize, const TT: u8>(
     dst: &mut [T],
     stride: usize,
     coeffs: &mut [i32],
-    _tx_type: TxType,
-    eob: usize,
+    eob_type: usize,
 ) {
-    size_entry_inl::<T, BD, W, H>(dst, stride, coeffs, TxType::ALL[TT as usize], eob)
+    size_entry_inl::<T, BD, W, H>(
+        dst,
+        stride,
+        coeffs,
+        TxType::ALL[TT as usize],
+        eob_type & 0xffff,
+    )
 }
 
 /// [`inv_txfm_add_bd`] for one `W x H` transform size (`eob >= 1`, not
-/// lossless).
+/// lossless; see [`ItxFn`] for `eob_type`).
 fn size_entry<T: Pixel, const BD: u32, const W: usize, const H: usize>(
     dst: &mut [T],
     stride: usize,
     coeffs: &mut [i32],
-    tx_type: TxType,
-    eob: usize,
+    eob_type: usize,
 ) {
-    size_entry_inl::<T, BD, W, H>(dst, stride, coeffs, tx_type, eob)
+    let tx_type = TxType::ALL[(eob_type >> 16) & 15];
+    size_entry_inl::<T, BD, W, H>(dst, stride, coeffs, tx_type, eob_type & 0xffff)
 }
 
 /// Body of [`size_entry`], inlined into [`typed_entry`].
@@ -843,7 +985,8 @@ fn size_entry_inl<T: Pixel, const BD: u32, const W: usize, const H: usize>(
     }
 
     let (col_kind, row_kind) = tx1d_kinds(tx_type);
-    let (eob_rows, eob_cols) = eob_bounds(eob, tw, th, row_kind, col_kind);
+    let (eob_rows, eob_cols) =
+        if eob == 1 { (1, 1) } else { eob_bounds(eob, tw, th, row_kind, col_kind) };
     let p = Params {
         w: W,
         h: H,
@@ -856,8 +999,8 @@ fn size_entry_inl<T: Pixel, const BD: u32, const W: usize, const H: usize>(
         row_kind,
         col_kind,
         col_range,
-        flip_ud: flip_ud(tx_type),
-        flip_lr: flip_lr(tx_type),
+        flip_ud: H <= 16 && flip_ud(tx_type),
+        flip_lr: W <= 16 && flip_lr(tx_type),
         bd: BD,
         eob_rows,
         eob_cols,
@@ -941,19 +1084,33 @@ fn add_dc_only<T: Pixel, const BD: u32, const W: usize, const H: usize>(
                 *d = T::from_i32((d.to_i32() + dc).clamp(0, max));
             });
         }
-        _ => {
-            let dc_h = if tx_type == TxType::H_DCT { 1 } else { H };
+        TxType::H_DCT => {
             if BD <= 10 {
                 match W {
-                    4 => add_dc16::<T, 4, BD>(dst, stride, W, dc_h, dc),
-                    8 => add_dc16::<T, 8, BD>(dst, stride, W, dc_h, dc),
-                    _ => add_dc16::<T, 16, BD>(dst, stride, W, dc_h, dc),
+                    4 => add_dc16::<T, 4, W, 1, BD>(dst, stride, dc),
+                    8 => add_dc16::<T, 8, W, 1, BD>(dst, stride, dc),
+                    _ => add_dc16::<T, 16, W, 1, BD>(dst, stride, dc),
                 }
             } else {
                 match W {
-                    4 => add_dc_bd::<T, 4, BD>(dst, stride, W, dc_h, dc, BD),
-                    8 => add_dc_bd::<T, 8, BD>(dst, stride, W, dc_h, dc, BD),
-                    _ => add_dc_bd::<T, 16, BD>(dst, stride, W, dc_h, dc, BD),
+                    4 => add_dc_bd::<T, 4, BD>(dst, stride, W, 1, dc, BD),
+                    8 => add_dc_bd::<T, 8, BD>(dst, stride, W, 1, dc, BD),
+                    _ => add_dc_bd::<T, 16, BD>(dst, stride, W, 1, dc, BD),
+                }
+            }
+        }
+        _ => {
+            if BD <= 10 {
+                match W {
+                    4 => add_dc16::<T, 4, W, H, BD>(dst, stride, dc),
+                    8 => add_dc16::<T, 8, W, H, BD>(dst, stride, dc),
+                    _ => add_dc16::<T, 16, W, H, BD>(dst, stride, dc),
+                }
+            } else {
+                match W {
+                    4 => add_dc_bd::<T, 4, BD>(dst, stride, W, H, dc, BD),
+                    8 => add_dc_bd::<T, 8, BD>(dst, stride, W, H, dc, BD),
+                    _ => add_dc_bd::<T, 16, BD>(dst, stride, W, H, dc, BD),
                 }
             }
         }
@@ -1224,10 +1381,36 @@ fn transpose_e<E: SimdElement, const N: usize>(mut m: [Simd<E, N>; N]) -> [Simd<
 /// are zero). Avoids `to_bitmask`, which is slow on aarch64.
 #[inline(always)]
 fn last_nz_lane<const N: usize>(v: Simd<i32, N>) -> usize {
-    let idx = Simd::from_array(std::array::from_fn(|i| i as i32 + 1));
-    v.simd_ne(Simd::splat(0))
-        .select(idx, Simd::splat(0))
-        .reduce_max() as usize
+    #[cfg(target_arch = "x86_64")]
+    {
+        let m = v.simd_ne(Simd::splat(0)).to_bitmask();
+        return (64 - m.leading_zeros()) as usize;
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let idx = Simd::from_array(std::array::from_fn(|i| i as i32 + 1));
+        v.simd_ne(Simd::splat(0))
+            .select(idx, Simd::splat(0))
+            .reduce_max() as usize
+    }
+}
+
+/// One more than the index of the last non-zero lane of `v` (0 if all
+/// are zero).
+#[inline(always)]
+pub(super) fn last_nz_lane16<const N: usize>(v: Simd<i16, N>) -> usize {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let m = v.simd_ne(Simd::splat(0)).to_bitmask();
+        return (64 - m.leading_zeros()) as usize;
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let idx = Simd::from_array(std::array::from_fn(|i| i as i16 + 1));
+        v.simd_ne(Simd::splat(0))
+            .select(idx, Simd::splat(0))
+            .reduce_max() as usize
+    }
 }
 
 /// Stages 2..3 of the 8-point inverse DCT.
@@ -1409,12 +1592,20 @@ fn transform_add_8x8_sub4<T: Pixel, const BD: u32>(
 ) {
     debug_assert!(p.w == 8 && p.h == 8 && p.eob_rows <= 4 && p.eob_cols <= 4);
     let coeffs = &mut coeffs[..64];
-    let rows: [Simd<i32, 4>; 4] = std::array::from_fn(|i| Simd::from_slice(&coeffs[i * 8..][..4]));
+    let rows: [Simd<i32, 4>; 4] = [
+        Simd::from_slice(&coeffs[..4]),
+        Simd::from_slice(&coeffs[8..12]),
+        Simd::from_slice(&coeffs[16..20]),
+        Simd::from_slice(&coeffs[24..28]),
+    ];
     for i in 0..4 {
         coeffs[i * 8..][..4].fill(0);
     }
-    let t: [Simd<i16, 4>; 8] = if BD == 8 {
-        let tile = transpose_e(rows.map(|r| r.cast::<i16>())).map(S16);
+    // 8-bit Dequant has 16 bits; 10-bit rows accepted by `rows_fit_s16`
+    // (checked on the saturated values) are exact on 16-bit lanes.
+    let tile16 = transpose_e(rows.map(|r| if BD == 8 { r.cast::<i16>() } else { sat16(r) }));
+    let t: [Simd<i16, 4>; 8] = if BD == 8 || large::rows_fit_s16(tile16) {
+        let tile = tile16.map(S16);
         let mut t = [S16::<4>::splat(0); 8];
         t[..4].copy_from_slice(&tile);
         if p.row_kind != Tx1d::Identity {
@@ -1423,18 +1614,7 @@ fn transform_add_8x8_sub4<T: Pixel, const BD: u32>(
         }
         t.map(|v| v.0)
     } else {
-        let tile = transpose_e(rows);
-        let mut t = [Simd::<i32, 4>::splat(0); 8];
-        t[..4].copy_from_slice(&tile);
-        if p.row_kind == Tx1d::Identity {
-            for v in &mut t[..4] {
-                *v = identity::<_, 8>(*v);
-            }
-        } else {
-            dct_adst_small(p.row_kind, true, &mut t, Clamp::bits(BD + 8));
-        }
-        let col_clamp = Clamp::<Simd<i32, 4>>::bits(16);
-        t.map(|v| col_clamp.apply(v.rnd(1)).cast())
+        sub4_8x8_rows32::<BD>(rows, p.row_kind)
     };
     let lo = transpose_e([t[0], t[1], t[2], t[3]]);
     let hi = transpose_e([t[4], t[5], t[6], t[7]]);
@@ -1447,32 +1627,31 @@ fn transform_add_8x8_sub4<T: Pixel, const BD: u32>(
         // upside down) with `flip_ud`.
         let r = [0, 1, 2, 3].map(|i| col_identity_rnd4::<8, 8>(c[i].0));
         let base = if p.flip_ud { 4 * stride } else { 0 };
-        add_rows16::<T, 8, BD>(&mut dst[base..], stride, p, &r);
+        add_rows16::<T, 8, 4, BD>(&mut dst[base..], stride, p, &r);
         return;
     }
     dct_adst_small(p.col_kind, true, &mut c, Clamp::bits(16));
-    let r = c.map(|v| v.rnd(4).0);
-    add_rows16::<T, 8, BD>(dst, stride, p, &r);
+    let r = c.map(|v| v.rnd4_add());
+    add_rows16::<T, 8, 8, BD>(dst, stride, p, &r);
 }
 
-/// In-lane interleave of the low halves of two `i16x8` (`punpcklwd`).
-#[inline(always)]
-fn unpacklo16(a: Simd<i16, 8>, b: Simd<i16, 8>) -> Simd<i16, 8> {
-    simd_swizzle!(a, b, [0, 8, 1, 9, 2, 10, 3, 11])
-}
-
-/// In-lane interleave of the high halves of two `i16x8` (`punpckhwd`).
-#[inline(always)]
-fn unpackhi16(a: Simd<i16, 8>, b: Simd<i16, 8>) -> Simd<i16, 8> {
-    simd_swizzle!(a, b, [4, 12, 5, 13, 6, 14, 7, 15])
-}
-
-/// Transposes a 4x4 matrix of `i16` held as `[row 0 | row 1]`, `[row 2 |
-/// row 3]` into `[col 0 | col 1]`, `[col 2 | col 3]` (4 interleaves).
-#[inline(always)]
-fn transpose4x4_packed(a: Simd<i16, 8>, b: Simd<i16, 8>) -> [Simd<i16, 8>; 2] {
-    let (t0, t1) = (unpacklo16(a, b), unpackhi16(a, b));
-    [unpacklo16(t0, t1), unpackhi16(t0, t1)]
+/// 32-bit lane row pass fallback for [`transform_add_8x8_sub4`] when a
+/// 10-bit row exceeds [`large::S16_ROW_L1_MAX`].
+#[cold]
+#[inline(never)]
+fn sub4_8x8_rows32<const BD: u32>(rows: [Simd<i32, 4>; 4], row_kind: Tx1d) -> [Simd<i16, 4>; 8] {
+    let tile = transpose_e(rows);
+    let mut t = [Simd::<i32, 4>::splat(0); 8];
+    t[..4].copy_from_slice(&tile);
+    if row_kind == Tx1d::Identity {
+        for v in &mut t[..4] {
+            *v = identity::<_, 8>(*v);
+        }
+    } else {
+        dct_adst_small(row_kind, true, &mut t, Clamp::bits(BD + 8));
+    }
+    let col_clamp = Clamp::<Simd<i32, 4>>::bits(16);
+    t.map(|v| col_clamp.apply(v.rnd(1)).cast())
 }
 
 /// `[Round2(lo, 12) | Round2(hi, 12)]` narrowed with saturation
@@ -1487,39 +1666,43 @@ fn pack_rnd12(lo: Simd<i32, 4>, hi: Simd<i32, 4>) -> Simd<i16, 8> {
     )
 }
 
-/// 4-point DCT or ADST of 4 vectors of 4 lanes held as `[in0 | in1]`,
-/// `[in2 | in3]`, returning `[out0 | out1]`, `[out2 | out3]`, with
-/// `pmaddwd` on interleaved pairs (as dav1d's x86 4x4). The Hadamard
-/// steps saturate to 16 bits, like [`S16`].
+/// 4-point DCT or ADST of 4 vectors of 4 lanes held as `a = [vec 0 |
+/// vec 1]`, `b = [vec 2 | vec 3]`, returning the transposed outputs
+/// `[out 0 | out 1]`, `[out 2 | out 3]` for ADST and `[out 0 | out 1]`,
+/// `[out 3 | out 2]` for DCT (`out k` has lane `i` = output `k` of
+/// `vec i`), with `pmaddwd` on horizontal pairs. Leaving `[out 3 | out 2]`
+/// unswapped in DCT avoids a 64-bit half-swap shuffle between the row
+/// and column passes; [`transform_add_4x4_packed`] accounts for the
+/// swapped pair after the column rounding shift.
 #[inline(always)]
-fn dct_adst4_packed(adst: bool, x: Simd<i16, 8>, y: Simd<i16, 8>) -> [Simd<i16, 8>; 2] {
+fn dct_adst4_packed(adst: bool, a: Simd<i16, 8>, b: Simd<i16, 8>) -> [Simd<i16, 8>; 2] {
     if adst {
-        // Pairs (in0, in1) and (in2, in3).
-        let q01 = unpacklo16(x, simd_swizzle!(x, [4, 5, 6, 7, 4, 5, 6, 7]));
-        let q23 = unpacklo16(y, simd_swizzle!(y, [4, 5, 6, 7, 4, 5, 6, 7]));
-        let o = |k: [i32; 4]| pmadd8(q01, k[0], k[1]) + pmadd8(q23, k[2], k[3]);
-        [
-            pack_rnd12(o([1321, 3344, 3803, 2482]), o([2482, 3344, -1321, -3803])),
-            pack_rnd12(o([3344, 0, -3344, 3344]), o([3803, -3344, 2482, -1321])),
-        ]
+        // Horizontal pairs (in0, in1) and (in2, in3) of each vector.
+        let q01 = simd_swizzle!(a, b, [0, 1, 4, 5, 8, 9, 12, 13]);
+        let q23 = simd_swizzle!(a, b, [2, 3, 6, 7, 10, 11, 14, 15]);
+        let p0 = pmadd8(q01, 1321, 3344);
+        let o0 = p0 + pmadd8(q23, 3803, 2482);
+        let o1 = pmadd8(q01, 2482, 3344) + pmadd8(q23, -1321, -3803);
+        // 3344 * in0 = (4665 * in0 + 3344 * in1) - (1321 * in0 + 3344 * in1).
+        let o2 = (pmadd8(q01, 4665, 3344) - p0) + pmadd8(q23, -3344, 3344);
+        let o3 = pmadd8(q01, 3803, -3344) + pmadd8(q23, 2482, -1321);
+        [pack_rnd12(o0, o1), pack_rnd12(o2, o3)]
     } else {
-        // Pairs (in0, in2) and (in1, in3).
-        let p02 = unpacklo16(x, y);
-        let p13 = unpackhi16(x, y);
+        // Horizontal pairs (in0, in2) and (in1, in3) of each vector.
+        let p02 = simd_swizzle!(a, b, [0, 2, 4, 6, 8, 10, 12, 14]);
+        let p13 = simd_swizzle!(a, b, [1, 3, 5, 7, 9, 11, 13, 15]);
         let u = pack_rnd12(pmadd8(p02, 2896, 2896), pmadd8(p02, 2896, -2896));
         let v = pack_rnd12(pmadd8(p13, 3784, 1567), pmadd8(p13, 1567, -3784));
-        // u = [t0 | t1], v = [t3 | t2]: outputs t0 + t3, t1 + t2 and
-        // t1 - t2, t0 - t3.
-        let s = u.saturating_add(v);
-        let d = u.saturating_sub(v);
-        [s, simd_swizzle!(d, [4, 5, 6, 7, 0, 1, 2, 3])]
+        // u = [t0 | t1], v = [t3 | t2]: outputs [t0 + t3 | t1 + t2] =
+        // [out 0 | out 1] and [t0 - t3 | t1 - t2] = [out 3 | out 2].
+        [u.saturating_add(v), u.saturating_sub(v)]
     }
 }
 
-/// 8-bit 4x4 DCT / ADST transforms without flips on x86, with the whole
-/// block in two 128-bit registers (`[row 0 | row 1]`, `[row 2 | row 3]`)
-/// instead of four half-empty 4-lane vectors. Returns false (doing
-/// nothing) for other types.
+/// 8-bit and 10-bit 4x4 DCT / ADST transforms without flips on x86,
+/// with the whole block in two 128-bit registers (`[row 0 | row 1]`,
+/// `[row 2 | row 3]`) instead of four half-empty 4-lane vectors. Returns
+/// false (doing nothing) for other types.
 #[inline(always)]
 fn transform_add_4x4_packed<T: Pixel, const BD: u32>(
     dst: &mut [T],
@@ -1528,7 +1711,7 @@ fn transform_add_4x4_packed<T: Pixel, const BD: u32>(
     p: &Params,
 ) -> bool {
     if !cfg!(target_arch = "x86_64")
-        || BD != 8
+        || BD > 10
         || p.flip_lr
         || p.flip_ud
         || p.row_kind == Tx1d::Identity
@@ -1540,22 +1723,278 @@ fn transform_add_4x4_packed<T: Pixel, const BD: u32>(
     // Dequant has 16 bits for 8-bit streams.
     let a = sat16(Simd::<i32, 8>::from_slice(&c[..8]));
     let b = sat16(Simd::<i32, 8>::from_slice(&c[8..]));
+    if BD == 10 {
+        // 10-bit rows are exact on 16-bit lanes if their absolute sums
+        // are at most `S16_ROW_L1_MAX` (`large::rows_fit_s16`), which holds
+        // if every coefficient is at most a quarter of it (coefficients
+        // beyond 16 bits saturate above that).
+        let zero = Simd::<i16, 8>::splat(0);
+        let abs_a = a.simd_max(zero.saturating_sub(a));
+        let abs_b = b.simd_max(zero.saturating_sub(b));
+        if !abs_a
+            .simd_max(abs_b)
+            .simd_le(Simd::splat(large::S16_ROW_L1_MAX / 4))
+            .all()
+        {
+            transform_add_4x4_fallback::<T, BD>(dst, stride, coeffs, p.row_kind, p.col_kind);
+            return true;
+        }
+    }
     *c = [0; 16];
     // Rows (rowShift = 0, 16-bit row clamp = saturation).
-    let [x, y] = transpose4x4_packed(a, b);
-    let [o01, o23] = dct_adst4_packed(p.row_kind == Tx1d::Adst, x, y);
+    let [o01, o23] = dct_adst4_packed(p.row_kind == Tx1d::Adst, a, b);
     // Columns.
-    let [x, y] = transpose4x4_packed(o01, o23);
-    let [r01, r23] = dct_adst4_packed(p.col_kind == Tx1d::Adst, x, y);
-    let (r01, r23) = (rnd16(r01, 4), rnd16(r23, 4));
-    let rows = [
-        r01.resize::<4>(0),
-        simd_swizzle!(r01, [4, 5, 6, 7]),
-        r23.resize::<4>(0),
-        simd_swizzle!(r23, [4, 5, 6, 7]),
-    ];
+    let [r01, r23] = dct_adst4_packed(p.col_kind == Tx1d::Adst, o01, o23);
+    let (r01, r23) = (S16(r01).rnd4_add(), S16(r23).rnd4_add());
+    let (r2, r3) = if p.col_kind == Tx1d::Adst {
+        (r23.resize::<4>(0), simd_swizzle!(r23, [4, 5, 6, 7]))
+    } else {
+        (simd_swizzle!(r23, [4, 5, 6, 7]), r23.resize::<4>(0))
+    };
+    let mut rows = [r01.resize::<4>(0), simd_swizzle!(r01, [4, 5, 6, 7]), r2, r3];
+    if p.row_kind == Tx1d::Dct {
+        rows = rows.map(|r| simd_swizzle!(r, [0, 1, 3, 2]));
+    }
     visit_rows::<T, 4, 4>(dst, stride, |y, d| add_row16::<T, 4, BD>(d, rows[y]));
     true
+}
+
+/// Cold fallback for [`transform_add_4x4_packed`] when a 10-bit
+/// coefficient exceeds `S16_ROW_L1_MAX / 4`.
+#[cold]
+#[inline(never)]
+fn transform_add_4x4_fallback<T: Pixel, const BD: u32>(
+    dst: &mut [T],
+    stride: usize,
+    coeffs: &mut [i32],
+    row_kind: Tx1d,
+    col_kind: Tx1d,
+) {
+    let coeffs = &mut coeffs[..16];
+    let rows: [Simd<i32, 4>; 4] = [
+        Simd::from_slice(&coeffs[..4]),
+        Simd::from_slice(&coeffs[4..8]),
+        Simd::from_slice(&coeffs[8..12]),
+        Simd::from_slice(&coeffs[12..16]),
+    ];
+    coeffs.fill(0);
+    let t16 = transpose_e(rows.map(sat16));
+    let t = if large::rows_fit_s16(t16) {
+        let mut t = t16.map(S16);
+        dct_adst_small(row_kind, true, &mut t, Clamp::bits(16));
+        t.map(|v| v.0)
+    } else {
+        square_rows32::<BD, 4>(rows, row_kind)
+    };
+    let mut c = transpose_e(t).map(S16);
+    dct_adst_small(col_kind, true, &mut c, Clamp::bits(16));
+    let r = c.map(|v| v.rnd4_add());
+    visit_rows::<T, 4, 4>(dst, stride, |y, d| add_row16::<T, 4, BD>(d, r[y]));
+}
+
+/// Transposes a 4x4 block of `i16` held as `[row 0 | row 1]`, `[row 2 |
+/// row 3]` into `[col 0 | col 1]`, `[col 2 | col 3]` (two `zip1` / `zip2`
+/// pairs on NEON).
+#[inline(always)]
+fn transpose4x4_packed(a: Simd<i16, 8>, b: Simd<i16, 8>) -> [Simd<i16, 8>; 2] {
+    let (z0, z1) = a.interleave(b);
+    let (c01, c23) = z0.interleave(z1);
+    [c01, c23]
+}
+
+/// `Round2(x, 12)` of the two 4-lane sums narrowed *modulo 2^16* and
+/// packed as `[lo | hi]` (`rshrn` + `rshrn2` on NEON). Exact whenever the
+/// results fit in 16 bits, which they do for conformant streams (see
+/// `S16`; for 10-bit rows [`transform_add_4x4_neon`] checks it).
+#[inline(always)]
+fn narrow2_rnd12(lo: Simd<i32, 4>, hi: Simd<i32, 4>) -> Simd<i16, 8> {
+    let r = Simd::splat(1 << 11);
+    simd_swizzle!(
+        ((lo + r) >> 12).cast::<i16>(),
+        ((hi + r) >> 12).cast::<i16>(),
+        [0, 1, 2, 3, 4, 5, 6, 7]
+    )
+}
+
+/// 4-point DCT or ADST (spec 7.13.2.3 / 7.13.2.6) of 4 transforms held as
+/// `x01 = [in 0 | in 1]`, `x23 = [in 2 | in 3]` (lane `i` of `in j` is
+/// input `j` of transform `i`), returning `[out 0 | out 1]`, `[out 2 |
+/// out 3]`. Every product is a `smull` / `smlal{,2}` by an element of the
+/// constant vector `k` (`ADST4_K` or `DCT4_K`), so that the constants
+/// live in one register instead of one `dup` each. The `i32` sums are
+/// exact for 16-bit inputs (the absolute constants of an output add up
+/// to at most 10950 < 2^16).
+#[inline(always)]
+fn dct_adst4_neon(
+    adst: bool,
+    x01: Simd<i16, 8>,
+    x23: Simd<i16, 8>,
+    k: Simd<i16, 8>,
+) -> [Simd<i16, 8>; 2] {
+    macro_rules! kl {
+        ($i:literal) => {
+            simd_swizzle!(k, [$i; 4]).cast::<i32>()
+        };
+    }
+    let x0 = simd_swizzle!(x01, [0, 1, 2, 3]).cast::<i32>();
+    let x1 = simd_swizzle!(x01, [4, 5, 6, 7]).cast::<i32>();
+    let x2 = simd_swizzle!(x23, [0, 1, 2, 3]).cast::<i32>();
+    let x3 = simd_swizzle!(x23, [4, 5, 6, 7]).cast::<i32>();
+    if adst {
+        // k = [1321, 2482, 3344, 3803, -1321, -2482, -3344, -3803].
+        let o0 = x0 * kl!(0) + x1 * kl!(2) + x2 * kl!(3) + x3 * kl!(1);
+        let o1 = x0 * kl!(1) + x1 * kl!(2) + x2 * kl!(4) + x3 * kl!(7);
+        let o2 = x0 * kl!(2) + x2 * kl!(6) + x3 * kl!(2);
+        let o3 = x0 * kl!(3) + x1 * kl!(6) + x2 * kl!(1) + x3 * kl!(4);
+        [narrow2_rnd12(o0, o1), narrow2_rnd12(o2, o3)]
+    } else {
+        // k = [2896, -2896, 1567, 3784, -3784, 0, 0, 0].
+        let a0 = x0 * kl!(0) + x2 * kl!(0);
+        let a1 = x0 * kl!(0) + x2 * kl!(1);
+        let b3 = x1 * kl!(3) + x3 * kl!(2);
+        let b2 = x1 * kl!(2) + x3 * kl!(4);
+        let a01 = narrow2_rnd12(a0, a1);
+        let b32 = narrow2_rnd12(b3, b2);
+        // [t0 + t3 | t1 + t2] and [t0 - t3 | t1 - t2] = [out 3 | out 2].
+        let d = a01.saturating_sub(b32);
+        [
+            a01.saturating_add(b32),
+            simd_swizzle!(d, [4, 5, 6, 7, 0, 1, 2, 3]),
+        ]
+    }
+}
+
+/// Constants of [`dct_adst4_neon`].
+const ADST4_K: [i16; 8] = [1321, 2482, 3344, 3803, -1321, -2482, -3344, -3803];
+const DCT4_K: [i16; 8] = [2896, -2896, 1567, 3784, -3784, 0, 0, 0];
+
+/// Adds the residual rows `r = [row a | row b]` to the two 4-pixel rows
+/// `da` and `db` with clipping to `BD` bits.
+#[inline(always)]
+fn add_rows2_4<T: Pixel, const BD: u32>(da: &mut [T; 4], db: &mut [T; 4], r: Simd<i16, 8>) {
+    let max = Simd::splat((1 << BD) - 1);
+    let (aa, ab): (&mut dyn Any, &mut dyn Any) = (&mut *da, &mut *db);
+    if let (Some(da), Some(db)) = (aa.downcast_mut::<[u16; 4]>(), ab.downcast_mut::<[u16; 4]>()) {
+        let d: Simd<u16, 8> = simd_swizzle!(
+            Simd::from_array(*da),
+            Simd::from_array(*db),
+            [0, 1, 2, 3, 4, 5, 6, 7]
+        );
+        let v = (d.cast::<i16>() + r)
+            .simd_clamp(Simd::splat(0), max)
+            .cast::<u16>();
+        *da = simd_swizzle!(v, [0, 1, 2, 3]).to_array();
+        *db = simd_swizzle!(v, [4, 5, 6, 7]).to_array();
+    } else if let (Some(da), Some(db)) =
+        (aa.downcast_mut::<[u8; 4]>(), ab.downcast_mut::<[u8; 4]>())
+    {
+        let d: Simd<u8, 8> = simd_swizzle!(
+            Simd::from_array(*da),
+            Simd::from_array(*db),
+            [0, 1, 2, 3, 4, 5, 6, 7]
+        );
+        let v = (d.cast::<i16>() + r)
+            .simd_clamp(Simd::splat(0), max)
+            .cast::<u8>();
+        *da = simd_swizzle!(v, [0, 1, 2, 3]).to_array();
+        *db = simd_swizzle!(v, [4, 5, 6, 7]).to_array();
+    } else {
+        // Not reached (pixels are u8 or u16).
+        add_row16::<T, 4, BD>(da, simd_swizzle!(r, [0, 1, 2, 3]));
+        add_row16::<T, 4, BD>(db, simd_swizzle!(r, [4, 5, 6, 7]));
+    }
+}
+
+/// 8-bit and 10-bit 4x4 DCT / ADST transforms without flips on aarch64,
+/// with the block in two 128-bit registers (`[row 0 | row 1]`, `[row 2 |
+/// row 3]`) and the transform constants in one register per kind (see
+/// [`dct_adst4_neon`]). Returns false (doing nothing) for other types.
+#[inline(always)]
+fn transform_add_4x4_neon<T: Pixel, const BD: u32>(
+    dst: &mut [T],
+    stride: usize,
+    coeffs: &mut [i32],
+    p: &Params,
+) -> bool {
+    if !cfg!(target_arch = "aarch64")
+        || BD > 10
+        || p.flip_lr
+        || p.flip_ud
+        || p.row_kind == Tx1d::Identity
+        || p.col_kind == Tx1d::Identity
+    {
+        return false;
+    }
+    transform_add_4x4_neon_impl::<T, BD>(dst, stride, coeffs, p.row_kind, p.col_kind);
+    true
+}
+
+/// Body of [`transform_add_4x4_neon`] (any architecture, for the tests):
+/// `row_kind` and `col_kind` are DCT or ADST.
+#[inline(always)]
+fn transform_add_4x4_neon_impl<T: Pixel, const BD: u32>(
+    dst: &mut [T],
+    stride: usize,
+    coeffs: &mut [i32],
+    row_kind: Tx1d,
+    col_kind: Tx1d,
+) {
+    // A 4x4 block always has 16 coefficients.
+    let Some(c) = coeffs.first_chunk_mut::<16>() else {
+        return;
+    };
+    // Dequant has 16 bits for 8-bit streams.
+    let a = sat16(Simd::<i32, 8>::from_slice(&c[..8]));
+    let b = sat16(Simd::<i32, 8>::from_slice(&c[8..]));
+    if BD == 10 {
+        // 10-bit rows are exact on 16-bit lanes if their absolute sums
+        // are at most `S16_ROW_L1_MAX` (`large::rows_fit_s16`), which holds
+        // if every coefficient is at most a quarter of it (coefficients
+        // beyond 16 bits saturate above that). Then every row output
+        // (at most the absolute sum, all constants being below 4096)
+        // fits in 16 bits too. `|x| <= L` is `(x + L) as u16 <= 2 * L`.
+        const L: i16 = large::S16_ROW_L1_MAX / 4;
+        let bias = |v: Simd<i16, 8>| (v + Simd::splat(L)).cast::<u16>();
+        if bias(a).simd_max(bias(b)).reduce_max() > 2 * L as u16 {
+            transform_add_4x4_fallback::<T, BD>(dst, stride, coeffs, row_kind, col_kind);
+            return;
+        }
+    }
+    *c = [0; 16];
+    let (row_adst, col_adst) = (row_kind == Tx1d::Adst, col_kind == Tx1d::Adst);
+    // Opaque to the optimizer, so that the products use the constants
+    // as vector elements instead of materializing one splat per constant.
+    let kr = std::hint::black_box(Simd::from_array(if row_adst { ADST4_K } else { DCT4_K }));
+    let kc = if row_adst == col_adst {
+        kr
+    } else {
+        std::hint::black_box(Simd::from_array(if col_adst { ADST4_K } else { DCT4_K }))
+    };
+    // Rows (rowShift = 0, 16-bit row clamp = saturation): out k lane i is
+    // Residual[i][k].
+    let [t01, t23] = transpose4x4_packed(a, b);
+    let [o01, o23] = dct_adst4_neon(row_adst, t01, t23, kr);
+    // Columns: lane j of in i is Residual[i][j]; out k lane j is row k.
+    let [c01, c23] = transpose4x4_packed(o01, o23);
+    let [r01, r23] = dct_adst4_neon(col_adst, c01, c23, kc);
+    let (r01, r23) = (S16(r01).rnd4_add(), S16(r23).rnd4_add());
+    let stride = stride & 0xffff_ffff;
+    assert!(stride >= 4);
+    let dst = &mut dst[..3 * stride + 4];
+    let (top, bot) = dst.split_at_mut(2 * stride);
+    let (d0, d1) = top.split_at_mut(stride);
+    let (d2, d3) = bot.split_at_mut(stride);
+    // Every row has at least 4 pixels (`stride >= 4`).
+    let (Some(d0), Some(d1), Some(d2), Some(d3)) = (
+        d0.first_chunk_mut::<4>(),
+        d1.first_chunk_mut::<4>(),
+        d2.first_chunk_mut::<4>(),
+        d3.first_chunk_mut::<4>(),
+    ) else {
+        return;
+    };
+    add_rows2_4::<T, BD>(d0, d1, r01);
+    add_rows2_4::<T, BD>(d2, d3, r23);
 }
 
 /// `N x N` transforms (`N` = 4 or 8, `BD` = 8 or 10) with all data in
@@ -1572,12 +2011,18 @@ fn transform_add_square<T: Pixel, const BD: u32, const N: usize>(
     if N == 4 && transform_add_4x4_packed::<T, BD>(dst, stride, coeffs, p) {
         return;
     }
+    if N == 4 && transform_add_4x4_neon::<T, BD>(dst, stride, coeffs, p) {
+        return;
+    }
     if N == 8 && p.eob_rows <= 4 && p.eob_cols <= 4 {
         transform_add_8x8_sub4::<T, BD>(dst, stride, coeffs, p);
         return;
     }
     let coeffs = &mut coeffs[..N * N];
-    let rows: [Simd<i32, N>; N] = std::array::from_fn(|i| Simd::from_slice(&coeffs[i * N..]));
+    let mut rows = [Simd::<i32, N>::splat(0); N];
+    for i in 0..N {
+        rows[i] = Simd::from_slice(&coeffs[i * N..][..N]);
+    }
     coeffs.fill(0);
     let rshift = const { row_shift(N, N) };
     let rows_le4 = N == 4
@@ -1586,45 +2031,78 @@ fn transform_add_square<T: Pixel, const BD: u32, const N: usize>(
     // Row transforms: t[j] lane i = Residual[i][j] (clamped to 16 bits).
     let t: [Simd<i16, N>; N] = if BD == 8 {
         // Dequant has 16 bits for 8-bit streams.
-        let t16 = transpose_e(rows.map(|r| r.cast::<i16>()));
-        let cols_le4 = N == 4
-            || p.eob_cols <= 4
-            || ((t16[N / 2] | t16[N / 2 + 1]) | (t16[N - 2] | t16[N - 1])) == Simd::splat(0);
-        let mut t = t16.map(S16);
-        if p.row_kind == Tx1d::Identity {
-            // 4x4: Round2(x * 5793, 12) clamped to 16 bits (rowShift =
-            // 0). 8x8: Round2(2 * x, rowShift = 1) = x.
-            if N == 4 {
-                t = t.map(|v| v.m1(5793));
-            }
-        } else {
-            dct_adst_small(p.row_kind, cols_le4, &mut t, Clamp::bits(16));
-            t = t.map(|v| v.rnd(rshift));
-        }
-        t.map(|v| v.0)
+        square_rows16::<N>(transpose_e(rows.map(|r| r.cast::<i16>())), p, rshift)
     } else {
-        let mut t = transpose_e(rows);
-        let cols_le4 = N == 4
-            || p.eob_cols <= 4
-            || ((t[N / 2] | t[N / 2 + 1]) | (t[N - 2] | t[N - 1])) == Simd::splat(0);
-        if p.row_kind == Tx1d::Identity {
-            t = t.map(identity::<_, N>);
+        let t16 = transpose_e(rows.map(sat16));
+        if large::rows_fit_s16(t16) {
+            // 16-bit lanes are exact for these rows (see `rows_fit_s16`).
+            square_rows16::<N>(t16, p, rshift)
         } else {
-            dct_adst_small(p.row_kind, cols_le4, &mut t, Clamp::bits(BD + 8));
+            square_rows32::<BD, N>(rows, p.row_kind)
         }
-        let col_clamp = Clamp::<Simd<i32, N>>::bits(16);
-        t.map(|v| col_clamp.apply(v.rnd(rshift)).cast())
     };
     // c[i] lane j = Residual[i][j]; rows at or beyond nz_rows are zero.
     let mut c = transpose_e(t).map(S16);
     if p.col_kind == Tx1d::Identity {
-        let r = c.map(|v| col_identity_rnd4::<N, N>(v.0));
-        add_rows16::<T, N, BD>(dst, stride, p, &r[..p.eob_rows]);
+        for i in 0..p.eob_rows.min(N) {
+            let y = if p.flip_ud { N - 1 - i } else { i };
+            let v = col_identity_rnd4::<N, N>(c[i].0);
+            add_row16_at::<T, N, BD>(dst, y * stride, if p.flip_lr { v.reverse() } else { v });
+        }
         return;
     }
     dct_adst_small(p.col_kind, rows_le4, &mut c, Clamp::bits(16));
-    let r = c.map(|v| v.rnd(4).0);
-    add_rows16::<T, N, BD>(dst, stride, p, &r);
+    let r = c.map(|v| v.rnd4_add());
+    add_rows16::<T, N, N, BD>(dst, stride, p, &r);
+}
+
+/// 32-bit lane row pass fallback for [`transform_add_square`] when a
+/// 10-bit row exceeds [`large::S16_ROW_L1_MAX`].
+#[cold]
+#[inline(never)]
+fn square_rows32<const BD: u32, const N: usize>(
+    rows: [Simd<i32, N>; N],
+    row_kind: Tx1d,
+) -> [Simd<i16, N>; N] {
+    let rshift = const { row_shift(N, N) };
+    let mut t = transpose_e(rows);
+    let cols_le4 = N == 4 || ((t[N / 2] | t[N / 2 + 1]) | (t[N - 2] | t[N - 1])) == Simd::splat(0);
+    if row_kind == Tx1d::Identity {
+        t = t.map(identity::<_, N>);
+    } else {
+        dct_adst_small(row_kind, cols_le4, &mut t, Clamp::bits(BD + 8));
+    }
+    let col_clamp = Clamp::<Simd<i32, N>>::bits(16);
+    t.map(|v| col_clamp.apply(v.rnd(rshift)).cast())
+}
+
+/// Row transforms of [`transform_add_square`] on 16-bit lanes: `t16[j]`
+/// lane `i` is `Dequant[i][j]`; returns `t[j]` lane `i` = Residual[i][j].
+/// Exact for 8-bit streams and for 10-bit rows accepted by
+/// [`large::rows_fit_s16`] (whose identity outputs `Round2(x * 5793, 12)`
+/// (4x4) and `x` (8x8) then saturate exactly like the clamp to the
+/// 16-bit column range).
+#[inline(always)]
+fn square_rows16<const N: usize>(
+    t16: [Simd<i16, N>; N],
+    p: &Params,
+    rshift: u32,
+) -> [Simd<i16, N>; N] {
+    let cols_le4 = N == 4
+        || p.eob_cols <= 4
+        || ((t16[N / 2] | t16[N / 2 + 1]) | (t16[N - 2] | t16[N - 1])) == Simd::splat(0);
+    let mut t = t16.map(S16);
+    if p.row_kind == Tx1d::Identity {
+        // 4x4: Round2(x * 5793, 12) clamped to 16 bits (rowShift =
+        // 0). 8x8: Round2(2 * x, rowShift = 1) = x.
+        if N == 4 {
+            t = t.map(|v| v.m1(5793));
+        }
+    } else {
+        dct_adst_small(p.row_kind, cols_le4, &mut t, Clamp::bits(16));
+        t = t.map(|v| v.rnd(rshift));
+    }
+    t.map(|v| v.0)
 }
 
 /// 8x4 and 4x8 transforms (`BD` = 8 or 10) with all data in registers
@@ -1638,19 +2116,26 @@ fn transform_add_rect<T: Pixel, const BD: u32, const W: usize, const H: usize>(
 ) {
     debug_assert!(p.w == W && p.h == H && p.bd == BD && BD <= 10 && p.rect2 && p.row_shift == 0);
     let coeffs = &mut coeffs[..W * H];
-    let rows: [Simd<i32, W>; H] = std::array::from_fn(|i| Simd::from_slice(&coeffs[i * W..]));
+    let mut rows = [Simd::<i32, W>::splat(0); H];
+    for i in 0..H {
+        rows[i] = Simd::from_slice(&coeffs[i * W..][..W]);
+    }
     coeffs.fill(0);
     let rows_le4 = H == 4
         || p.eob_rows <= 4
         || ((rows[H / 2] | rows[H / 2 + 1]) | (rows[H - 2] | rows[H - 1])) == Simd::splat(0);
     let z16 = Simd::<i16, 8>::splat(0);
-    let t_cols: [Simd<i16, H>; W] = if BD == 8 {
-        let m: [Simd<i16, 8>; 8] =
-            std::array::from_fn(|i| if i < H { rows[i].cast::<i16>().resize::<8>(0) } else { z16 });
-        let m = transpose_e(m);
+    // Row transforms on 16-bit lanes from `m[j]` lane `i` = Dequant[i][j]:
+    // exact for 8-bit streams and for 10-bit rows accepted by
+    // `rows_fit_s16` (the identity outputs then saturate like the clamp
+    // to 16 bits, rowShift being 0).
+    let rows16 = |m: [Simd<i16, 8>; 8]| -> [Simd<i16, H>; W] {
         let cols_le4 = W == 4 || p.eob_cols <= 4 || ((m[4] | m[5]) | (m[6] | m[7])) == z16;
         // t[j] lane i = Round2(Dequant[i][j] * 2896, 12) (rect2).
-        let mut t: [S16<H>; W] = std::array::from_fn(|j| S16(m[j].resize::<H>(0)).m1(2896));
+        let mut t = [S16::<H>::splat(0); W];
+        for j in 0..W {
+            t[j] = S16(m[j].resize::<H>(0)).m1_h0(2896);
+        }
         if p.row_kind == Tx1d::Identity {
             // rowShift = 0, so the clamp to 16 bits is the saturation.
             t = if W == 8 { t.map(|v| v + v) } else { t.map(|v| v.m1(5793)) };
@@ -1658,39 +2143,79 @@ fn transform_add_rect<T: Pixel, const BD: u32, const W: usize, const H: usize>(
             dct_adst_small(p.row_kind, cols_le4, &mut t, Clamp::bits(16));
         }
         t.map(|v| v.0)
-    } else {
-        let z32 = Simd::<i32, 8>::splat(0);
-        let m: [Simd<i32, 8>; 8] =
-            std::array::from_fn(|i| if i < H { rows[i].resize::<8>(0) } else { z32 });
-        let m = transpose_e(m);
-        let cols_le4 = W == 4 || p.eob_cols <= 4 || ((m[4] | m[5]) | (m[6] | m[7])) == z32;
-        let mut t: [Simd<i32, H>; W] = std::array::from_fn(|j| m[j].resize::<H>(0).m1(2896));
-        if p.row_kind == Tx1d::Identity {
-            t = t.map(identity::<_, W>);
-        } else {
-            dct_adst_small(p.row_kind, cols_le4, &mut t, Clamp::bits(BD + 8));
-        }
-        let col_clamp = Clamp::<Simd<i32, H>>::bits(16);
-        t.map(|v| col_clamp.apply(v).cast())
     };
-    let m: [Simd<i16, 8>; 8] =
-        std::array::from_fn(|j| if j < W { t_cols[j].resize::<8>(0) } else { z16 });
+    let t_cols: [Simd<i16, H>; W] = if BD == 8 {
+        let mut m = [z16; 8];
+        for i in 0..H {
+            m[i] = rows[i].cast::<i16>().resize::<8>(0);
+        }
+        rows16(transpose_e(m))
+    } else {
+        let mut m16 = [z16; 8];
+        for i in 0..H {
+            m16[i] = sat16(rows[i]).resize::<8>(0);
+        }
+        let m16 = transpose_e(m16);
+        if large::rows_fit_s16(m16[..W].iter().copied()) {
+            rows16(m16)
+        } else {
+            rect_rows32::<BD, W, H>(rows, p.row_kind)
+        }
+    };
+    let mut m = [z16; 8];
+    for j in 0..W {
+        m[j] = t_cols[j].resize::<8>(0);
+    }
     // c[i] lane j = Residual[i][j].
     let m = transpose_e(m);
-    let mut c: [S16<W>; H] = std::array::from_fn(|i| S16(m[i].resize::<W>(0)));
+    let mut c = [S16::<W>::splat(0); H];
+    for i in 0..H {
+        c[i] = S16(m[i].resize::<W>(0));
+    }
     if p.col_kind == Tx1d::Identity {
-        let r = c.map(|v| col_identity_rnd4::<W, H>(v.0));
-        add_rows16::<T, W, BD>(dst, stride, p, &r[..p.eob_rows]);
+        for i in 0..p.eob_rows.min(H) {
+            let y = if p.flip_ud { H - 1 - i } else { i };
+            let v = col_identity_rnd4::<W, H>(c[i].0);
+            add_row16_at::<T, W, BD>(dst, y * stride, if p.flip_lr { v.reverse() } else { v });
+        }
         return;
     }
     dct_adst_small(p.col_kind, rows_le4, &mut c, Clamp::bits(16));
-    let r = c.map(|v| v.rnd(4).0);
-    add_rows16::<T, W, BD>(dst, stride, p, &r);
+    let r = c.map(|v| v.rnd4_add());
+    add_rows16::<T, W, H, BD>(dst, stride, p, &r);
+}
+
+/// 32-bit lane row pass fallback for [`transform_add_rect`] when a
+/// 10-bit row exceeds [`large::S16_ROW_L1_MAX`].
+#[cold]
+#[inline(never)]
+fn rect_rows32<const BD: u32, const W: usize, const H: usize>(
+    rows: [Simd<i32, W>; H],
+    row_kind: Tx1d,
+) -> [Simd<i16, H>; W] {
+    let z32 = Simd::<i32, 8>::splat(0);
+    let mut m = [z32; 8];
+    for i in 0..H {
+        m[i] = rows[i].resize::<8>(0);
+    }
+    let m = transpose_e(m);
+    let cols_le4 = W == 4 || ((m[4] | m[5]) | (m[6] | m[7])) == z32;
+    let mut t = [Simd::<i32, H>::splat(0); W];
+    for j in 0..W {
+        t[j] = m[j].resize::<H>(0).m1(2896);
+    }
+    if row_kind == Tx1d::Identity {
+        t = t.map(identity::<_, W>);
+    } else {
+        dct_adst_small(row_kind, cols_le4, &mut t, Clamp::bits(BD + 8));
+    }
+    let col_clamp = Clamp::<Simd<i32, H>>::bits(16);
+    t.map(|v| col_clamp.apply(v).cast())
 }
 
 /// Dispatches [`large::transform_add16`] on the transform size (generic
-/// parameters after the size: row / column pass lane counts, then the
-/// sizes of its column buffers). Inlined into
+/// parameters after the size: `TH = min(H, 32)`, row / column pass lane
+/// counts, then the sizes of its column buffers). Inlined into
 /// [`size_entry`], where the size is a constant.
 #[inline(always)]
 fn transform_add16_dispatch<T: Pixel, const BD: u32>(
@@ -1711,21 +2236,21 @@ fn transform_add16_dispatch<T: Pixel, const BD: u32>(
         _ => {}
     }
     let f = match (p.w, p.h) {
-        (4, 16) => large::transform_add16::<T, BD, 4, 16, 4, 4, { 64 / 4 }, { 16 / 4 }>,
-        (8, 16) => large::transform_add16::<T, BD, 8, 16, 8, 8, { 128 / 8 }, { 32 / 8 }>,
-        (8, 32) => large::transform_add16::<T, BD, 8, 32, 8, 8, { 256 / 8 }, { 32 / 8 }>,
-        (16, 4) => large::transform_add16::<T, BD, 16, 4, 4, CW, { 64 / CW }, { 64 / CW }>,
-        (16, 8) => large::transform_add16::<T, BD, 16, 8, 8, CW, { 128 / CW }, { 64 / CW }>,
-        (16, 16) => large::transform_add16::<T, BD, 16, 16, 8, CW, { 256 / CW }, { 64 / CW }>,
-        (16, 32) => large::transform_add16::<T, BD, 16, 32, 8, CW, { 512 / CW }, { 64 / CW }>,
-        (16, 64) => large::transform_add16::<T, BD, 16, 64, 8, CW, { 512 / CW }, { 64 / CW }>,
-        (32, 8) => large::transform_add16::<T, BD, 32, 8, 8, CW, { 256 / CW }, { 128 / CW }>,
-        (32, 16) => large::transform_add16::<T, BD, 32, 16, 8, CW, { 512 / CW }, { 128 / CW }>,
-        (32, 32) => large::transform_add16::<T, BD, 32, 32, 8, CW, { 1024 / CW }, { 128 / CW }>,
-        (32, 64) => large::transform_add16::<T, BD, 32, 64, 8, CW, { 1024 / CW }, { 128 / CW }>,
-        (64, 16) => large::transform_add16::<T, BD, 64, 16, 8, CW, { 1024 / CW }, { 256 / CW }>,
-        (64, 32) => large::transform_add16::<T, BD, 64, 32, 8, CW, { 2048 / CW }, { 256 / CW }>,
-        _ => large::transform_add16::<T, BD, 64, 64, 8, CW, { 2048 / CW }, { 256 / CW }>,
+        (4, 16) => large::transform_add16::<T, BD, 4, 16, 16, 4, 4, { 64 / 4 }, { 16 / 4 }>,
+        (8, 16) => large::transform_add16::<T, BD, 8, 16, 16, 8, 8, { 128 / 8 }, { 32 / 8 }>,
+        (8, 32) => large::transform_add16::<T, BD, 8, 32, 32, 8, 8, { 256 / 8 }, { 32 / 8 }>,
+        (16, 4) => large::transform_add16::<T, BD, 16, 4, 4, 4, CW, { 64 / CW }, { 64 / CW }>,
+        (16, 8) => large::transform_add16::<T, BD, 16, 8, 8, 8, CW, { 128 / CW }, { 64 / CW }>,
+        (16, 16) => large::transform_add16::<T, BD, 16, 16, 16, 8, CW, { 256 / CW }, { 64 / CW }>,
+        (16, 32) => large::transform_add16::<T, BD, 16, 32, 32, 8, CW, { 512 / CW }, { 64 / CW }>,
+        (16, 64) => large::transform_add16::<T, BD, 16, 64, 32, 8, CW, { 512 / CW }, { 64 / CW }>,
+        (32, 8) => large::transform_add16::<T, BD, 32, 8, 8, 8, CW, { 256 / CW }, { 128 / CW }>,
+        (32, 16) => large::transform_add16::<T, BD, 32, 16, 16, 8, CW, { 512 / CW }, { 128 / CW }>,
+        (32, 32) => large::transform_add16::<T, BD, 32, 32, 32, 8, CW, { 1024 / CW }, { 128 / CW }>,
+        (32, 64) => large::transform_add16::<T, BD, 32, 64, 32, 8, CW, { 1024 / CW }, { 128 / CW }>,
+        (64, 16) => large::transform_add16::<T, BD, 64, 16, 16, 8, CW, { 1024 / CW }, { 256 / CW }>,
+        (64, 32) => large::transform_add16::<T, BD, 64, 32, 32, 8, CW, { 2048 / CW }, { 256 / CW }>,
+        _ => large::transform_add16::<T, BD, 64, 64, 32, 8, CW, { 2048 / CW }, { 256 / CW }>,
     };
     f(dst, stride, coeffs, p)
 }
@@ -1740,12 +2265,14 @@ fn col_identity_rnd4<const N: usize, const H: usize>(v: Simd<i16, N>) -> Simd<i1
     if H == 32 {
         return rnd16(v, 2);
     }
+    let k: i16 = if H == 4 { 5793 } else { 11586 };
+    if cfg!(target_arch = "x86_64") {
+        let hi = ((v.cast::<i32>() * Simd::splat(k as i32)) >> 16).cast::<i16>();
+        let lo = (v * Simd::splat(k)).cast::<u16>();
+        return hi + (((lo >> 11) + Simd::splat(17)) >> 5).cast::<i16>();
+    }
     let x = v.cast::<i32>();
-    let y = match H {
-        4 => (x * Simd::splat(5793) + Simd::splat(2048)) >> 12,
-        _ => (x * Simd::splat(11586) + Simd::splat(2048)) >> 12,
-    };
-    ((y + Simd::splat(8)) >> 4).cast()
+    ((x * Simd::splat(k as i32) + Simd::splat(34816)) >> 16).cast()
 }
 
 /// Adds the residual `r` to `dst[off..off + N]` with clipping to `BD`
@@ -1785,104 +2312,111 @@ fn add_row16<T: Pixel, const N: usize, const BD: u32>(d: &mut [T; N], r: Simd<i1
 }
 
 /// Calls `f(y, row)` for the `N` pixels at `dst[y * stride..]`, `y in
-/// 0..H`, top to bottom. Splits rows off with `split_at_mut` (one
-/// predictable compare per row) instead of `chunks_mut(stride)`, whose
-/// length computation is a 64-bit division.
+/// 0..H`, top to bottom. Masks `stride` to 32 bits and slices `dst` up
+/// front so `y * stride + N <= dst.len()` is proved without per-row
+/// bounds checks.
 #[inline(always)]
 fn visit_rows<T, const N: usize, const H: usize>(
     dst: &mut [T],
     stride: usize,
     mut f: impl FnMut(usize, &mut [T; N]),
 ) {
-    let mut rest = dst;
-    for y in 0..H - 1 {
-        let (row, tail) = rest.split_at_mut(stride);
-        f(y, (&mut row[..N]).try_into().unwrap());
-        rest = tail;
+    let stride = stride & 0xffff_ffff;
+    assert!(stride >= N);
+    if H < 4 {
+        let dst = &mut dst[..(H - 1) * stride + N];
+        for y in 0..H {
+            let base = y * stride;
+            let d: &mut [T; N] = (&mut dst[base..base + N]).try_into().unwrap();
+            f(y, d);
+        }
+        return;
     }
-    f(H - 1, (&mut rest[..N]).try_into().unwrap());
+    const { assert!(H < 4 || H.is_multiple_of(4)) };
+    let s2 = stride * 2;
+    let s3 = stride * 3;
+    let s4 = stride * 4;
+    let head_len = (H / 4 - 1) * s4;
+    let dst = &mut dst[..head_len + s3 + N];
+    let (head, tail) = dst.split_at_mut(head_len);
+    for (y4, win) in head.chunks_exact_mut(s4).enumerate() {
+        let y = y4 * 4;
+        f(y, (&mut win[..N]).try_into().unwrap());
+        f(y + 1, (&mut win[stride..stride + N]).try_into().unwrap());
+        f(y + 2, (&mut win[s2..s2 + N]).try_into().unwrap());
+        f(y + 3, (&mut win[s3..s3 + N]).try_into().unwrap());
+    }
+    let y = H - 4;
+    f(y, (&mut tail[..N]).try_into().unwrap());
+    f(y + 1, (&mut tail[stride..stride + N]).try_into().unwrap());
+    f(y + 2, (&mut tail[s2..s2 + N]).try_into().unwrap());
+    f(y + 3, (&mut tail[s3..s3 + N]).try_into().unwrap());
 }
 
-/// Adds `rows.len()` residual rows of width `N` to the left edge of
-/// `dst`, applying `p.flip_lr` and `p.flip_ud`. Hoists the flip checks
-/// outside the row loop so the common non-flipped path has no per-row
-/// branch or multiply. Rows are split off with `split_at_mut` (no
-/// division, unlike `chunks_mut(stride)`).
+/// Adds `H` residual rows of width `N` to the left edge of `dst`,
+/// applying `p.flip_lr` and `p.flip_ud`. Hoists the flip checks outside
+/// the row loop so the common non-flipped path has no per-row branch.
 #[inline(always)]
-fn add_rows16<T: Pixel, const N: usize, const BD: u32>(
+fn add_rows16<T: Pixel, const N: usize, const H: usize, const BD: u32>(
     dst: &mut [T],
     stride: usize,
     p: &Params,
-    rows: &[Simd<i16, N>],
+    rows: &[Simd<i16, N>; H],
 ) {
-    let h = rows.len();
-    if h == 0 {
-        return;
-    }
-    let mut rest = dst;
-    let mut row = |i: usize, r: Simd<i16, N>| {
-        let d: &mut [T; N] = if i + 1 < h {
-            let (d, tail) = std::mem::take(&mut rest).split_at_mut(stride);
-            rest = tail;
-            (&mut d[..N]).try_into().unwrap()
-        } else {
-            (&mut std::mem::take(&mut rest)[..N]).try_into().unwrap()
-        };
-        add_row16::<T, N, BD>(d, r);
-    };
     if !p.flip_lr && !p.flip_ud {
-        for (i, &r) in rows.iter().enumerate() {
-            row(i, r);
-        }
+        visit_rows::<T, N, H>(dst, stride, |y, d| add_row16::<T, N, BD>(d, rows[y]));
     } else {
-        let flip = |r: Simd<i16, N>| if p.flip_lr { r.reverse() } else { r };
-        if p.flip_ud {
-            for (i, &r) in rows.iter().rev().enumerate() {
-                row(i, flip(r));
-            }
-        } else {
-            for (i, &r) in rows.iter().enumerate() {
-                row(i, flip(r));
-            }
-        }
+        visit_rows::<T, N, H>(dst, stride, |y, d| {
+            let r = rows[if p.flip_ud { H - 1 - y } else { y }];
+            add_row16::<T, N, BD>(d, if p.flip_lr { r.reverse() } else { r });
+        });
     }
 }
 
-/// Adds the constant residual `dc` (`|dc| <= 2^11`) to a `w x h` block
-/// with clipping to `BD` bits, `N` pixels at a time (`N <= w`, `w` a
+/// Adds the constant residual `dc` (`|dc| <= 2^11`) to a `W x H` block
+/// with clipping to `BD` bits, `N` pixels at a time (`N <= W`, `W` a
 /// multiple of `N`).
-fn add_dc16<T: Pixel, const N: usize, const BD: u32>(
+#[inline(always)]
+fn add_dc16<T: Pixel, const N: usize, const W: usize, const H: usize, const BD: u32>(
     dst: &mut [T],
     stride: usize,
-    w: usize,
-    h: usize,
     dc: i32,
 ) {
-    let a8 = Simd::<u8, N>::splat(dc.unsigned_abs().min(255) as u8);
     let r16 = Simd::<i16, N>::splat(dc as i16);
-    // `inv_txfm_add_bd` checked `stride >= w` and `(h - 1) * stride + w <=
-    // dst.len()`, so every row has at least `w` pixels.
-    let mut rest = dst;
-    for y in 0..h {
-        let row = if y + 1 < h {
-            let (row, tail) = std::mem::take(&mut rest).split_at_mut(stride);
-            rest = tail;
-            row
-        } else {
-            std::mem::take(&mut rest)
-        };
-        for d in row[..w].chunks_exact_mut(N) {
-            let d: &mut [T; N] = d.try_into().unwrap();
-            let any: &mut dyn Any = d;
-            if let Some(d) = any.downcast_mut::<[u8; N]>() {
-                // clip(p + dc) is a saturating add / subtract of
-                // min(|dc|, 255).
-                let v = Simd::from_array(*d);
-                *d = if dc >= 0 { v.saturating_add(a8) } else { v.saturating_sub(a8) }.to_array();
-            } else {
+    if BD > 8 {
+        visit_rows::<T, W, H>(dst, stride, |_, row| {
+            for x in (0..W / N).map(|k| k * N) {
+                let d: &mut [T; N] = (&mut row[x..x + N]).try_into().unwrap();
                 add_row16::<T, N, BD>(d, r16);
             }
-        }
+        });
+        return;
+    }
+    let a8 = Simd::<u8, N>::splat(dc.unsigned_abs().min(255) as u8);
+    if dc >= 0 {
+        visit_rows::<T, W, H>(dst, stride, |_, row| {
+            for x in (0..W / N).map(|k| k * N) {
+                let d: &mut [T; N] = (&mut row[x..x + N]).try_into().unwrap();
+                let any: &mut dyn Any = d;
+                if let Some(d) = any.downcast_mut::<[u8; N]>() {
+                    *d = Simd::from_array(*d).saturating_add(a8).to_array();
+                } else {
+                    add_row16::<T, N, BD>(d, r16);
+                }
+            }
+        });
+    } else {
+        visit_rows::<T, W, H>(dst, stride, |_, row| {
+            for x in (0..W / N).map(|k| k * N) {
+                let d: &mut [T; N] = (&mut row[x..x + N]).try_into().unwrap();
+                let any: &mut dyn Any = d;
+                if let Some(d) = any.downcast_mut::<[u8; N]>() {
+                    *d = Simd::from_array(*d).saturating_sub(a8).to_array();
+                } else {
+                    add_row16::<T, N, BD>(d, r16);
+                }
+            }
+        });
     }
 }
 
@@ -2034,7 +2568,8 @@ mod tests {
 
     /// Coefficient blocks: 0 DC only, 1 sparse (in a sub-block tier),
     /// 2 dense, 3 full Dequant range (non-conformant), 4 zero, 5 sparse
-    /// at the range limits, 6 first row / column only.
+    /// at the range limits, 6 first row / column only, 7 rows at the
+    /// 10-bit 16-bit row lane limit.
     fn gen_coeffs(rng: &mut Rng, dist: u32, tw: usize, th: usize, bd: u32) -> (Vec<i32>, usize) {
         let max = (1i64 << (7 + bd)) - 1;
         let min = -(1i64 << (7 + bd));
@@ -2097,7 +2632,7 @@ mod tests {
                     c[i * tw + j] = extreme(rng);
                 }
             }
-            _ => {
+            6 => {
                 let row = rng.range(0, 1) == 0;
                 for k in 0..if row { tw } else { th } {
                     if rng.range(0, 1) == 0 {
@@ -2106,8 +2641,44 @@ mod tests {
                     }
                 }
             }
+            _ => {
+                // One or two rows whose absolute sums are at (or just
+                // below) the limit of the 16-bit row lanes of 10-bit
+                // streams (`large::S16_ROW_L1_MAX`).
+                for _ in 0..rng.range(1, 2) {
+                    let i = rng.range(0, th as i64 - 1) as usize;
+                    let mut left = (large::S16_ROW_L1_MAX as i64
+                        - rng.range(0, 2) * rng.range(0, 64))
+                    .min(max);
+                    let k = rng.range(1, tw.min(8) as i64);
+                    for n in 0..k {
+                        let j = rng.range(0, tw as i64 - 1) as usize;
+                        let a = if n == k - 1 { left } else { rng.range(0, left) };
+                        left -= a;
+                        let v = c[i * tw + j] as i64 + if rng.range(0, 1) == 0 { a } else { -a };
+                        c[i * tw + j] = v.clamp(min, max) as i32;
+                    }
+                }
+            }
         }
         (c, eob)
+    }
+
+    /// 10-bit rows at the limit of the 16-bit row lanes match the
+    /// portable transforms.
+    #[test]
+    fn s16_row_limit_10bit() {
+        let mut rng = Rng(0x0123_4567_89ab_cdef);
+        let (mut ok, mut n) = (0, 0);
+        for &tx_size in TxSize::ALL {
+            for tx_type in types_for(tx_size) {
+                for _ in 0..24 {
+                    ok += run_case::<u16, 10>(&mut rng, tx_size, tx_type, false, 7, 10) as usize;
+                    n += 1;
+                }
+            }
+        }
+        assert!(ok as f64 >= n as f64 * 0.5, "{ok}/{n} conformant");
     }
 
     #[test]
@@ -2288,6 +2859,58 @@ mod tests {
     #[test]
     fn matches_portable_8bit_in_u16() {
         run_all::<u16, 8>(8, 0x7777_1111_2222_9999);
+    }
+
+    /// The aarch64 4x4 path (run on every architecture) matches the
+    /// portable transforms for the DCT / ADST types.
+    #[test]
+    fn neon_4x4_matches_portable() {
+        fn run<T: Pixel, const BD: u32>(seed: u64) {
+            let mut rng = Rng(seed);
+            for tx_type in [
+                TxType::DCT_DCT,
+                TxType::ADST_DCT,
+                TxType::DCT_ADST,
+                TxType::ADST_ADST,
+            ] {
+                let (col_kind, row_kind) = tx1d_kinds(tx_type);
+                for dist in 0..8 {
+                    for _ in 0..200 {
+                        let (coeffs, eob) = gen_coeffs(&mut rng, dist, 4, 4, BD);
+                        let stride = 4 + rng.range(0, 5) as usize;
+                        let pix_max = (1i64 << BD) - 1;
+                        let frame: Vec<T> = (0..stride * 4)
+                            .map(|_| T::from_i32(rng.range(0, pix_max) as i32))
+                            .collect();
+                        let mut want = frame.clone();
+                        portable::conformance::take_violated();
+                        let mut c_want = coeffs.clone();
+                        portable::inv_txfm_add(
+                            &mut want,
+                            stride,
+                            &mut c_want,
+                            TxSize::Tx4x4,
+                            tx_type,
+                            false,
+                            eob,
+                            BD,
+                        );
+                        let conformant = !portable::conformance::take_violated();
+                        let mut got = frame;
+                        let mut c_got = coeffs.clone();
+                        transform_add_4x4_neon_impl::<T, BD>(
+                            &mut got, stride, &mut c_got, row_kind, col_kind,
+                        );
+                        if conformant {
+                            assert!(got == want, "mismatch: {tx_type:?} dist {dist} bd={BD}");
+                        }
+                        assert!(c_got.iter().all(|&c| c == 0));
+                    }
+                }
+            }
+        }
+        run::<u8, 8>(0x1357_9bdf_2468_ace0);
+        run::<u16, 10>(0x0246_8ace_1357_9bdf);
     }
 
     /// Rough timing (`cargo test --release --lib

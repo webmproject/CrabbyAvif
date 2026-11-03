@@ -25,61 +25,61 @@
 
 /// `Default_Scan_4x4[16]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static DEFAULT_SCAN_4X4: [u16; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
+pub const DEFAULT_SCAN_4X4: [u16; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
 
 /// `Mcol_Scan_4x4[16]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MCOL_SCAN_4X4: [u16; 16] = [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15];
+pub const MCOL_SCAN_4X4: [u16; 16] = [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15];
 
 /// `Mrow_Scan_4x4[16]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MROW_SCAN_4X4: [u16; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+pub const MROW_SCAN_4X4: [u16; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 /// `Default_Scan_4x8[32]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static DEFAULT_SCAN_4X8: [u16; 32] = [
+pub const DEFAULT_SCAN_4X8: [u16; 32] = [
     0, 1, 4, 2, 5, 8, 3, 6, 9, 12, 7, 10, 13, 16, 11, 14, 17, 20, 15, 18, 21, 24, 19, 22, 25, 28,
     23, 26, 29, 27, 30, 31,
 ];
 
 /// `Mcol_Scan_4x8[32]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MCOL_SCAN_4X8: [u16; 32] = [
+pub const MCOL_SCAN_4X8: [u16; 32] = [
     0, 4, 8, 12, 16, 20, 24, 28, 1, 5, 9, 13, 17, 21, 25, 29, 2, 6, 10, 14, 18, 22, 26, 30, 3, 7,
     11, 15, 19, 23, 27, 31,
 ];
 
 /// `Mrow_Scan_4x8[32]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MROW_SCAN_4X8: [u16; 32] = [
+pub const MROW_SCAN_4X8: [u16; 32] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
     26, 27, 28, 29, 30, 31,
 ];
 
 /// `Default_Scan_8x4[32]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static DEFAULT_SCAN_8X4: [u16; 32] = [
+pub const DEFAULT_SCAN_8X4: [u16; 32] = [
     0, 8, 1, 16, 9, 2, 24, 17, 10, 3, 25, 18, 11, 4, 26, 19, 12, 5, 27, 20, 13, 6, 28, 21, 14, 7,
     29, 22, 15, 30, 23, 31,
 ];
 
 /// `Mcol_Scan_8x4[32]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MCOL_SCAN_8X4: [u16; 32] = [
+pub const MCOL_SCAN_8X4: [u16; 32] = [
     0, 8, 16, 24, 1, 9, 17, 25, 2, 10, 18, 26, 3, 11, 19, 27, 4, 12, 20, 28, 5, 13, 21, 29, 6, 14,
     22, 30, 7, 15, 23, 31,
 ];
 
 /// `Mrow_Scan_8x4[32]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MROW_SCAN_8X4: [u16; 32] = [
+pub const MROW_SCAN_8X4: [u16; 32] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
     26, 27, 28, 29, 30, 31,
 ];
 
 /// `Default_Scan_8x8[64]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static DEFAULT_SCAN_8X8: [u16; 64] = [
+pub const DEFAULT_SCAN_8X8: [u16; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
     13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
     52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
@@ -87,7 +87,7 @@ pub static DEFAULT_SCAN_8X8: [u16; 64] = [
 
 /// `Mcol_Scan_8x8[64]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MCOL_SCAN_8X8: [u16; 64] = [
+pub const MCOL_SCAN_8X8: [u16; 64] = [
     0, 8, 16, 24, 32, 40, 48, 56, 1, 9, 17, 25, 33, 41, 49, 57, 2, 10, 18, 26, 34, 42, 50, 58, 3,
     11, 19, 27, 35, 43, 51, 59, 4, 12, 20, 28, 36, 44, 52, 60, 5, 13, 21, 29, 37, 45, 53, 61, 6, 14,
     22, 30, 38, 46, 54, 62, 7, 15, 23, 31, 39, 47, 55, 63,
@@ -95,7 +95,7 @@ pub static MCOL_SCAN_8X8: [u16; 64] = [
 
 /// `Mrow_Scan_8x8[64]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MROW_SCAN_8X8: [u16; 64] = [
+pub const MROW_SCAN_8X8: [u16; 64] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
     26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
     50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
@@ -103,7 +103,7 @@ pub static MROW_SCAN_8X8: [u16; 64] = [
 
 /// `Default_Scan_8x16[128]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static DEFAULT_SCAN_8X16: [u16; 128] = [
+pub const DEFAULT_SCAN_8X16: [u16; 128] = [
     0, 1, 8, 2, 9, 16, 3, 10, 17, 24, 4, 11, 18, 25, 32, 5, 12, 19, 26, 33, 40, 6, 13, 20, 27, 34,
     41, 48, 7, 14, 21, 28, 35, 42, 49, 56, 15, 22, 29, 36, 43, 50, 57, 64, 23, 30, 37, 44, 51, 58,
     65, 72, 31, 38, 45, 52, 59, 66, 73, 80, 39, 46, 53, 60, 67, 74, 81, 88, 47, 54, 61, 68, 75, 82,
@@ -114,7 +114,7 @@ pub static DEFAULT_SCAN_8X16: [u16; 128] = [
 
 /// `Mcol_Scan_8x16[128]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MCOL_SCAN_8X16: [u16; 128] = [
+pub const MCOL_SCAN_8X16: [u16; 128] = [
     0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 1, 9, 17, 25, 33, 41, 49, 57,
     65, 73, 81, 89, 97, 105, 113, 121, 2, 10, 18, 26, 34, 42, 50, 58, 66, 74, 82, 90, 98, 106, 114,
     122, 3, 11, 19, 27, 35, 43, 51, 59, 67, 75, 83, 91, 99, 107, 115, 123, 4, 12, 20, 28, 36, 44,
@@ -125,7 +125,7 @@ pub static MCOL_SCAN_8X16: [u16; 128] = [
 
 /// `Mrow_Scan_8x16[128]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MROW_SCAN_8X16: [u16; 128] = [
+pub const MROW_SCAN_8X16: [u16; 128] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
     26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
     50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
@@ -136,7 +136,7 @@ pub static MROW_SCAN_8X16: [u16; 128] = [
 
 /// `Default_Scan_16x8[128]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static DEFAULT_SCAN_16X8: [u16; 128] = [
+pub const DEFAULT_SCAN_16X8: [u16; 128] = [
     0, 16, 1, 32, 17, 2, 48, 33, 18, 3, 64, 49, 34, 19, 4, 80, 65, 50, 35, 20, 5, 96, 81, 66, 51,
     36, 21, 6, 112, 97, 82, 67, 52, 37, 22, 7, 113, 98, 83, 68, 53, 38, 23, 8, 114, 99, 84, 69, 54,
     39, 24, 9, 115, 100, 85, 70, 55, 40, 25, 10, 116, 101, 86, 71, 56, 41, 26, 11, 117, 102, 87, 72,
@@ -147,7 +147,7 @@ pub static DEFAULT_SCAN_16X8: [u16; 128] = [
 
 /// `Mcol_Scan_16x8[128]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MCOL_SCAN_16X8: [u16; 128] = [
+pub const MCOL_SCAN_16X8: [u16; 128] = [
     0, 16, 32, 48, 64, 80, 96, 112, 1, 17, 33, 49, 65, 81, 97, 113, 2, 18, 34, 50, 66, 82, 98, 114,
     3, 19, 35, 51, 67, 83, 99, 115, 4, 20, 36, 52, 68, 84, 100, 116, 5, 21, 37, 53, 69, 85, 101,
     117, 6, 22, 38, 54, 70, 86, 102, 118, 7, 23, 39, 55, 71, 87, 103, 119, 8, 24, 40, 56, 72, 88,
@@ -158,7 +158,7 @@ pub static MCOL_SCAN_16X8: [u16; 128] = [
 
 /// `Mrow_Scan_16x8[128]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MROW_SCAN_16X8: [u16; 128] = [
+pub const MROW_SCAN_16X8: [u16; 128] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
     26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
     50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
@@ -169,7 +169,7 @@ pub static MROW_SCAN_16X8: [u16; 128] = [
 
 /// `Default_Scan_16x16[256]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static DEFAULT_SCAN_16X16: [u16; 256] = [
+pub const DEFAULT_SCAN_16X16: [u16; 256] = [
     0, 1, 16, 32, 17, 2, 3, 18, 33, 48, 64, 49, 34, 19, 4, 5, 20, 35, 50, 65, 80, 96, 81, 66, 51,
     36, 21, 6, 7, 22, 37, 52, 67, 82, 97, 112, 128, 113, 98, 83, 68, 53, 38, 23, 8, 9, 24, 39, 54,
     69, 84, 99, 114, 129, 144, 160, 145, 130, 115, 100, 85, 70, 55, 40, 25, 10, 11, 26, 41, 56, 71,
@@ -187,7 +187,7 @@ pub static DEFAULT_SCAN_16X16: [u16; 256] = [
 
 /// `Mcol_Scan_16x16[256]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MCOL_SCAN_16X16: [u16; 256] = [
+pub const MCOL_SCAN_16X16: [u16; 256] = [
     0, 16, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 1, 17, 33, 49, 65, 81,
     97, 113, 129, 145, 161, 177, 193, 209, 225, 241, 2, 18, 34, 50, 66, 82, 98, 114, 130, 146, 162,
     178, 194, 210, 226, 242, 3, 19, 35, 51, 67, 83, 99, 115, 131, 147, 163, 179, 195, 211, 227, 243,
@@ -205,7 +205,7 @@ pub static MCOL_SCAN_16X16: [u16; 256] = [
 
 /// `Mrow_Scan_16x16[256]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MROW_SCAN_16X16: [u16; 256] = [
+pub const MROW_SCAN_16X16: [u16; 256] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
     26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
     50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
@@ -223,7 +223,7 @@ pub static MROW_SCAN_16X16: [u16; 256] = [
 
 /// `Default_Scan_16x32[512]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static DEFAULT_SCAN_16X32: [u16; 512] = [
+pub const DEFAULT_SCAN_16X32: [u16; 512] = [
     0, 1, 16, 2, 17, 32, 3, 18, 33, 48, 4, 19, 34, 49, 64, 5, 20, 35, 50, 65, 80, 6, 21, 36, 51, 66,
     81, 96, 7, 22, 37, 52, 67, 82, 97, 112, 8, 23, 38, 53, 68, 83, 98, 113, 128, 9, 24, 39, 54, 69,
     84, 99, 114, 129, 144, 10, 25, 40, 55, 70, 85, 100, 115, 130, 145, 160, 11, 26, 41, 56, 71, 86,
@@ -254,7 +254,7 @@ pub static DEFAULT_SCAN_16X32: [u16; 512] = [
 
 /// `Default_Scan_32x16[512]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static DEFAULT_SCAN_32X16: [u16; 512] = [
+pub const DEFAULT_SCAN_32X16: [u16; 512] = [
     0, 32, 1, 64, 33, 2, 96, 65, 34, 3, 128, 97, 66, 35, 4, 160, 129, 98, 67, 36, 5, 192, 161, 130,
     99, 68, 37, 6, 224, 193, 162, 131, 100, 69, 38, 7, 256, 225, 194, 163, 132, 101, 70, 39, 8, 288,
     257, 226, 195, 164, 133, 102, 71, 40, 9, 320, 289, 258, 227, 196, 165, 134, 103, 72, 41, 10,
@@ -285,7 +285,7 @@ pub static DEFAULT_SCAN_32X16: [u16; 512] = [
 
 /// `Default_Scan_32x32[1024]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static DEFAULT_SCAN_32X32: [u16; 1024] = [
+pub const DEFAULT_SCAN_32X32: [u16; 1024] = [
     0, 1, 32, 64, 33, 2, 3, 34, 65, 96, 128, 97, 66, 35, 4, 5, 36, 67, 98, 129, 160, 192, 161, 130,
     99, 68, 37, 6, 7, 38, 69, 100, 131, 162, 193, 224, 256, 225, 194, 163, 132, 101, 70, 39, 8, 9,
     40, 71, 102, 133, 164, 195, 226, 257, 288, 320, 289, 258, 227, 196, 165, 134, 103, 72, 41, 10,
@@ -343,7 +343,7 @@ pub static DEFAULT_SCAN_32X32: [u16; 1024] = [
 
 /// `Default_Scan_4x16[64]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static DEFAULT_SCAN_4X16: [u16; 64] = [
+pub const DEFAULT_SCAN_4X16: [u16; 64] = [
     0, 1, 4, 2, 5, 8, 3, 6, 9, 12, 7, 10, 13, 16, 11, 14, 17, 20, 15, 18, 21, 24, 19, 22, 25, 28,
     23, 26, 29, 32, 27, 30, 33, 36, 31, 34, 37, 40, 35, 38, 41, 44, 39, 42, 45, 48, 43, 46, 49, 52,
     47, 50, 53, 56, 51, 54, 57, 60, 55, 58, 61, 59, 62, 63,
@@ -351,7 +351,7 @@ pub static DEFAULT_SCAN_4X16: [u16; 64] = [
 
 /// `Mcol_Scan_4x16[64]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MCOL_SCAN_4X16: [u16; 64] = [
+pub const MCOL_SCAN_4X16: [u16; 64] = [
     0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 1, 5, 9, 13, 17, 21, 25, 29, 33,
     37, 41, 45, 49, 53, 57, 61, 2, 6, 10, 14, 18, 22, 26, 30, 34, 38, 42, 46, 50, 54, 58, 62, 3, 7,
     11, 15, 19, 23, 27, 31, 35, 39, 43, 47, 51, 55, 59, 63,
@@ -359,7 +359,7 @@ pub static MCOL_SCAN_4X16: [u16; 64] = [
 
 /// `Mrow_Scan_4x16[64]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MROW_SCAN_4X16: [u16; 64] = [
+pub const MROW_SCAN_4X16: [u16; 64] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
     26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
     50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
@@ -367,7 +367,7 @@ pub static MROW_SCAN_4X16: [u16; 64] = [
 
 /// `Default_Scan_16x4[64]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static DEFAULT_SCAN_16X4: [u16; 64] = [
+pub const DEFAULT_SCAN_16X4: [u16; 64] = [
     0, 16, 1, 32, 17, 2, 48, 33, 18, 3, 49, 34, 19, 4, 50, 35, 20, 5, 51, 36, 21, 6, 52, 37, 22, 7,
     53, 38, 23, 8, 54, 39, 24, 9, 55, 40, 25, 10, 56, 41, 26, 11, 57, 42, 27, 12, 58, 43, 28, 13,
     59, 44, 29, 14, 60, 45, 30, 15, 61, 46, 31, 62, 47, 63,
@@ -375,7 +375,7 @@ pub static DEFAULT_SCAN_16X4: [u16; 64] = [
 
 /// `Mcol_Scan_16x4[64]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MCOL_SCAN_16X4: [u16; 64] = [
+pub const MCOL_SCAN_16X4: [u16; 64] = [
     0, 16, 32, 48, 1, 17, 33, 49, 2, 18, 34, 50, 3, 19, 35, 51, 4, 20, 36, 52, 5, 21, 37, 53, 6, 22,
     38, 54, 7, 23, 39, 55, 8, 24, 40, 56, 9, 25, 41, 57, 10, 26, 42, 58, 11, 27, 43, 59, 12, 28, 44,
     60, 13, 29, 45, 61, 14, 30, 46, 62, 15, 31, 47, 63,
@@ -383,7 +383,7 @@ pub static MCOL_SCAN_16X4: [u16; 64] = [
 
 /// `Mrow_Scan_16x4[64]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static MROW_SCAN_16X4: [u16; 64] = [
+pub const MROW_SCAN_16X4: [u16; 64] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
     26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
     50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
@@ -391,7 +391,7 @@ pub static MROW_SCAN_16X4: [u16; 64] = [
 
 /// `Default_Scan_8x32[256]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static DEFAULT_SCAN_8X32: [u16; 256] = [
+pub const DEFAULT_SCAN_8X32: [u16; 256] = [
     0, 1, 8, 2, 9, 16, 3, 10, 17, 24, 4, 11, 18, 25, 32, 5, 12, 19, 26, 33, 40, 6, 13, 20, 27, 34,
     41, 48, 7, 14, 21, 28, 35, 42, 49, 56, 15, 22, 29, 36, 43, 50, 57, 64, 23, 30, 37, 44, 51, 58,
     65, 72, 31, 38, 45, 52, 59, 66, 73, 80, 39, 46, 53, 60, 67, 74, 81, 88, 47, 54, 61, 68, 75, 82,
@@ -409,7 +409,7 @@ pub static DEFAULT_SCAN_8X32: [u16; 256] = [
 
 /// `Default_Scan_32x8[256]` (spec section 9.2, Scan tables).
 #[rustfmt::skip]
-pub static DEFAULT_SCAN_32X8: [u16; 256] = [
+pub const DEFAULT_SCAN_32X8: [u16; 256] = [
     0, 32, 1, 64, 33, 2, 96, 65, 34, 3, 128, 97, 66, 35, 4, 160, 129, 98, 67, 36, 5, 192, 161, 130,
     99, 68, 37, 6, 224, 193, 162, 131, 100, 69, 38, 7, 225, 194, 163, 132, 101, 70, 39, 8, 226, 195,
     164, 133, 102, 71, 40, 9, 227, 196, 165, 134, 103, 72, 41, 10, 228, 197, 166, 135, 104, 73, 42,
@@ -474,28 +474,27 @@ const fn with_ctx_offset<const L: usize>(
     out
 }
 
-pub static COEF_SCAN_4X4: [u16; 16] = with_ctx_offset(&DEFAULT_SCAN_4X4, 2, &CTX_OFFSET_SQUARE);
-pub static COEF_SCAN_8X8: [u16; 64] = with_ctx_offset(&DEFAULT_SCAN_8X8, 3, &CTX_OFFSET_SQUARE);
-pub static COEF_SCAN_16X16: [u16; 256] =
-    with_ctx_offset(&DEFAULT_SCAN_16X16, 4, &CTX_OFFSET_SQUARE);
-pub static COEF_SCAN_32X32: [u16; 1024] =
+pub const COEF_SCAN_4X4: [u16; 16] = with_ctx_offset(&DEFAULT_SCAN_4X4, 2, &CTX_OFFSET_SQUARE);
+pub const COEF_SCAN_8X8: [u16; 64] = with_ctx_offset(&DEFAULT_SCAN_8X8, 3, &CTX_OFFSET_SQUARE);
+pub const COEF_SCAN_16X16: [u16; 256] = with_ctx_offset(&DEFAULT_SCAN_16X16, 4, &CTX_OFFSET_SQUARE);
+pub const COEF_SCAN_32X32: [u16; 1024] =
     with_ctx_offset(&DEFAULT_SCAN_32X32, 5, &CTX_OFFSET_SQUARE);
 /// TX_32X64 (32x32 scan, tall offsets).
-pub static COEF_SCAN_32X32_TALL: [u16; 1024] =
+pub const COEF_SCAN_32X32_TALL: [u16; 1024] =
     with_ctx_offset(&DEFAULT_SCAN_32X32, 5, &CTX_OFFSET_TALL);
 /// TX_64X32 (32x32 scan, wide offsets).
-pub static COEF_SCAN_32X32_WIDE: [u16; 1024] =
+pub const COEF_SCAN_32X32_WIDE: [u16; 1024] =
     with_ctx_offset(&DEFAULT_SCAN_32X32, 5, &CTX_OFFSET_WIDE);
-pub static COEF_SCAN_4X8: [u16; 32] = with_ctx_offset(&DEFAULT_SCAN_4X8, 2, &CTX_OFFSET_TALL);
-pub static COEF_SCAN_8X4: [u16; 32] = with_ctx_offset(&DEFAULT_SCAN_8X4, 3, &CTX_OFFSET_WIDE);
-pub static COEF_SCAN_8X16: [u16; 128] = with_ctx_offset(&DEFAULT_SCAN_8X16, 3, &CTX_OFFSET_TALL);
-pub static COEF_SCAN_16X8: [u16; 128] = with_ctx_offset(&DEFAULT_SCAN_16X8, 4, &CTX_OFFSET_WIDE);
-pub static COEF_SCAN_16X32: [u16; 512] = with_ctx_offset(&DEFAULT_SCAN_16X32, 4, &CTX_OFFSET_TALL);
-pub static COEF_SCAN_32X16: [u16; 512] = with_ctx_offset(&DEFAULT_SCAN_32X16, 5, &CTX_OFFSET_WIDE);
-pub static COEF_SCAN_4X16: [u16; 64] = with_ctx_offset(&DEFAULT_SCAN_4X16, 2, &CTX_OFFSET_TALL);
-pub static COEF_SCAN_16X4: [u16; 64] = with_ctx_offset(&DEFAULT_SCAN_16X4, 4, &CTX_OFFSET_WIDE);
-pub static COEF_SCAN_8X32: [u16; 256] = with_ctx_offset(&DEFAULT_SCAN_8X32, 3, &CTX_OFFSET_TALL);
-pub static COEF_SCAN_32X8: [u16; 256] = with_ctx_offset(&DEFAULT_SCAN_32X8, 5, &CTX_OFFSET_WIDE);
+pub const COEF_SCAN_4X8: [u16; 32] = with_ctx_offset(&DEFAULT_SCAN_4X8, 2, &CTX_OFFSET_TALL);
+pub const COEF_SCAN_8X4: [u16; 32] = with_ctx_offset(&DEFAULT_SCAN_8X4, 3, &CTX_OFFSET_WIDE);
+pub const COEF_SCAN_8X16: [u16; 128] = with_ctx_offset(&DEFAULT_SCAN_8X16, 3, &CTX_OFFSET_TALL);
+pub const COEF_SCAN_16X8: [u16; 128] = with_ctx_offset(&DEFAULT_SCAN_16X8, 4, &CTX_OFFSET_WIDE);
+pub const COEF_SCAN_16X32: [u16; 512] = with_ctx_offset(&DEFAULT_SCAN_16X32, 4, &CTX_OFFSET_TALL);
+pub const COEF_SCAN_32X16: [u16; 512] = with_ctx_offset(&DEFAULT_SCAN_32X16, 5, &CTX_OFFSET_WIDE);
+pub const COEF_SCAN_4X16: [u16; 64] = with_ctx_offset(&DEFAULT_SCAN_4X16, 2, &CTX_OFFSET_TALL);
+pub const COEF_SCAN_16X4: [u16; 64] = with_ctx_offset(&DEFAULT_SCAN_16X4, 4, &CTX_OFFSET_WIDE);
+pub const COEF_SCAN_8X32: [u16; 256] = with_ctx_offset(&DEFAULT_SCAN_8X32, 3, &CTX_OFFSET_TALL);
+pub const COEF_SCAN_32X8: [u16; 256] = with_ctx_offset(&DEFAULT_SCAN_32X8, 5, &CTX_OFFSET_WIDE);
 
 #[cfg(test)]
 mod tests {

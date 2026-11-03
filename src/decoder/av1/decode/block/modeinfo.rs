@@ -36,44 +36,82 @@ const SPLIT_TX_BY_DEPTH: [[TxSize; 5]; TxSize::COUNT] = {
 
 #[inline(always)]
 fn zero_ctx2(a: &mut [u8], b: &mut [u8], pos: usize, len: usize) {
-    #[inline(always)]
-    fn z<const N: usize>(a: &mut [u8], b: &mut [u8], pos: usize) {
-        a[pos..pos + N].fill(0);
-        b[pos..pos + N].fill(0);
-    }
-    match len {
-        1 => z::<1>(a, b, pos),
-        2 => z::<2>(a, b, pos),
-        4 => z::<4>(a, b, pos),
-        8 => z::<8>(a, b, pos),
-        16 => z::<16>(a, b, pos),
-        _ => z::<32>(a, b, pos),
+    let a = &mut a[pos..pos + len];
+    let b = &mut b[pos..pos + len];
+    if len >= 8 {
+        if len >= 16 {
+            a[..16].fill(0);
+            b[..16].fill(0);
+            a[len - 16..len].fill(0);
+            b[len - 16..len].fill(0);
+        } else {
+            a[..8].fill(0);
+            b[..8].fill(0);
+        }
+    } else if len >= 4 {
+        a[..4].fill(0);
+        b[..4].fill(0);
+    } else if len >= 2 {
+        a[..2].fill(0);
+        b[..2].fill(0);
+    } else if len == 1 {
+        a[0] = 0;
+        b[0] = 0;
     }
 }
 
 #[inline(always)]
 fn zero_ctx4(a1: &mut [u8], b1: &mut [u8], a2: &mut [u8], b2: &mut [u8], pos: usize, len: usize) {
-    #[inline(always)]
-    fn z<const N: usize>(a1: &mut [u8], b1: &mut [u8], a2: &mut [u8], b2: &mut [u8], pos: usize) {
-        a1[pos..pos + N].fill(0);
-        b1[pos..pos + N].fill(0);
-        a2[pos..pos + N].fill(0);
-        b2[pos..pos + N].fill(0);
-    }
-    match len {
-        1 => z::<1>(a1, b1, a2, b2, pos),
-        2 => z::<2>(a1, b1, a2, b2, pos),
-        4 => z::<4>(a1, b1, a2, b2, pos),
-        8 => z::<8>(a1, b1, a2, b2, pos),
-        16 => z::<16>(a1, b1, a2, b2, pos),
-        _ => z::<32>(a1, b1, a2, b2, pos),
+    let a1 = &mut a1[pos..pos + len];
+    let b1 = &mut b1[pos..pos + len];
+    let a2 = &mut a2[pos..pos + len];
+    let b2 = &mut b2[pos..pos + len];
+    if len >= 8 {
+        if len >= 16 {
+            a1[..16].fill(0);
+            b1[..16].fill(0);
+            a2[..16].fill(0);
+            b2[..16].fill(0);
+            a1[len - 16..len].fill(0);
+            b1[len - 16..len].fill(0);
+            a2[len - 16..len].fill(0);
+            b2[len - 16..len].fill(0);
+        } else {
+            a1[..8].fill(0);
+            b1[..8].fill(0);
+            a2[..8].fill(0);
+            b2[..8].fill(0);
+        }
+    } else if len >= 4 {
+        a1[..4].fill(0);
+        b1[..4].fill(0);
+        a2[..4].fill(0);
+        b2[..4].fill(0);
+    } else if len >= 2 {
+        a1[..2].fill(0);
+        b1[..2].fill(0);
+        a2[..2].fill(0);
+        b2[..2].fill(0);
+    } else if len == 1 {
+        a1[0] = 0;
+        b1[0] = 0;
+        a2[0] = 0;
+        b2[0] = 0;
     }
 }
 
 /// Sets `w` (1, 2, 4, 8, 16 or 32) entries from column `c0` in rows
-/// `r0..r_end` of a wrapped 2D array. `fill` on a constant-length
-/// subslice packs `val` into one register and broadcasts it (copying
-/// from a `[val; N]` array made LLVM store `MiInfo` byte by byte).
+/// `r0..r_end` of a 2D ring buffer with `row_mask + 1` rows. Only `r0` is
+/// wrapped (`r0 & row_mask`); rows `r0..r_end` are then written
+/// contiguously, so the range must not cross the ring's wrap point. This
+/// holds because every ring has a power-of-two row count that is a
+/// multiple of the superblock height (`sb4`, or `sb4 >> ss_y` for the
+/// chroma `lf_mask` ring) and a block never crosses a superblock. The
+/// row count (`< 64`) and `stride` (`<= 0xFFFF`) are masked only to give
+/// the compiler bounds; out-of-range values are caught by debug asserts.
+/// `fill` on a constant-length subslice packs `val` into one register and
+/// broadcasts it (copying from a `[val; N]` array made LLVM store `MiInfo`
+/// byte by byte).
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn fill_mi_rows<T: Copy>(
@@ -90,29 +128,52 @@ fn fill_mi_rows<T: Copy>(
     fn rows<T: Copy, const N: usize>(
         data: &mut [T],
         stride: usize,
-        row_mask: usize,
+        i: usize,
         r0: usize,
         r_end: usize,
-        c0: usize,
         val: T,
     ) {
-        for row in r0..r_end {
-            let i = (row & row_mask) * stride + c0;
-            data[i..i + N].fill(val);
+        let n = r_end.saturating_sub(r0) & 63;
+        if n == 0 {
+            return;
+        }
+        if N == 1 && n == 1 {
+            data[i] = val;
+            return;
+        }
+        let s = stride & 0xFFFF;
+        let need = (n - 1) * s + N;
+        let data = &mut data[i..i + need];
+        let mut off = 0;
+        for _ in 0..n {
+            data[off..off + N].fill(val);
+            off += s;
         }
     }
-    match w {
-        1 => rows::<T, 1>(data, stride, row_mask, r0, r_end, c0, val),
-        2 => rows::<T, 2>(data, stride, row_mask, r0, r_end, c0, val),
-        4 => rows::<T, 4>(data, stride, row_mask, r0, r_end, c0, val),
-        8 => rows::<T, 8>(data, stride, row_mask, r0, r_end, c0, val),
-        16 => rows::<T, 16>(data, stride, row_mask, r0, r_end, c0, val),
-        _ => rows::<T, 32>(data, stride, row_mask, r0, r_end, c0, val),
+    debug_assert!((r0 & row_mask) + r_end.saturating_sub(r0) <= row_mask + 1);
+    debug_assert!(r_end.saturating_sub(r0) < 64);
+    debug_assert!(stride <= 0xFFFF);
+    let i = (r0 & row_mask) * stride + c0;
+    if w < 8 {
+        if w == 1 {
+            rows::<T, 1>(data, stride, i, r0, r_end, val);
+        } else if w == 2 {
+            rows::<T, 2>(data, stride, i, r0, r_end, val);
+        } else {
+            rows::<T, 4>(data, stride, i, r0, r_end, val);
+        }
+    } else if w == 8 {
+        rows::<T, 8>(data, stride, i, r0, r_end, val);
+    } else if w == 16 {
+        rows::<T, 16>(data, stride, i, r0, r_end, val);
+    } else {
+        rows::<T, 32>(data, stride, i, r0, r_end, val);
     }
 }
 
 /// `fill_mi_rows` of the mode info and a second array (`LoopfilterTxSizes`
-/// or `Mvs`, same layout) in one pass.
+/// or `Mvs`, same layout) in one pass. Same row range requirements as
+/// `fill_mi_rows`.
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn fill_mi_rows2<U: Copy>(
@@ -133,26 +194,50 @@ fn fill_mi_rows2<U: Copy>(
         data: &mut [MiInfo],
         aux: &mut [U],
         stride: usize,
-        row_mask: usize,
+        i: usize,
         r0: usize,
         r_end: usize,
-        c0: usize,
         info: MiInfo,
         aux_val: U,
     ) {
-        for row in r0..r_end {
-            let i = (row & row_mask) * stride + c0;
-            data[i..i + N].fill(info);
-            aux[i..i + N].fill(aux_val);
+        let n = r_end.saturating_sub(r0) & 63;
+        if n == 0 {
+            return;
+        }
+        if N == 1 && n == 1 {
+            data[i] = info;
+            aux[i] = aux_val;
+            return;
+        }
+        let s = stride & 0xFFFF;
+        let need = (n - 1) * s + N;
+        let data = &mut data[i..i + need];
+        let aux = &mut aux[i..i + need];
+        let mut off = 0;
+        for _ in 0..n {
+            data[off..off + N].fill(info);
+            aux[off..off + N].fill(aux_val);
+            off += s;
         }
     }
-    match w {
-        1 => rows::<U, 1>(data, aux, stride, row_mask, r0, r_end, c0, info, aux_val),
-        2 => rows::<U, 2>(data, aux, stride, row_mask, r0, r_end, c0, info, aux_val),
-        4 => rows::<U, 4>(data, aux, stride, row_mask, r0, r_end, c0, info, aux_val),
-        8 => rows::<U, 8>(data, aux, stride, row_mask, r0, r_end, c0, info, aux_val),
-        16 => rows::<U, 16>(data, aux, stride, row_mask, r0, r_end, c0, info, aux_val),
-        _ => rows::<U, 32>(data, aux, stride, row_mask, r0, r_end, c0, info, aux_val),
+    debug_assert!((r0 & row_mask) + r_end.saturating_sub(r0) <= row_mask + 1);
+    debug_assert!(r_end.saturating_sub(r0) < 64);
+    debug_assert!(stride <= 0xFFFF);
+    let i = (r0 & row_mask) * stride + c0;
+    if w < 8 {
+        if w == 1 {
+            rows::<U, 1>(data, aux, stride, i, r0, r_end, info, aux_val);
+        } else if w == 2 {
+            rows::<U, 2>(data, aux, stride, i, r0, r_end, info, aux_val);
+        } else {
+            rows::<U, 4>(data, aux, stride, i, r0, r_end, info, aux_val);
+        }
+    } else if w == 8 {
+        rows::<U, 8>(data, aux, stride, i, r0, r_end, info, aux_val);
+    } else if w == 16 {
+        rows::<U, 16>(data, aux, stride, i, r0, r_end, info, aux_val);
+    } else {
+        rows::<U, 32>(data, aux, stride, i, r0, r_end, info, aux_val);
     }
 }
 
@@ -161,16 +246,24 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
     /// clear_block_decoded_flags, read_lr and decode_partition.
     pub fn decode_sb(&mut self, r: usize, c: usize) -> Result<()> {
         // clear_cdef
+        let fh = self.f.fh;
         self.s.set_cdef_idx(r, c, -1);
         if self.f.sb128 {
             self.s.set_cdef_idx(r, c + 16, -1);
             self.s.set_cdef_idx(r + 16, c, -1);
             self.s.set_cdef_idx(r + 16, c + 16, -1);
         }
+        self.b.cdef_unread = if !self.f.seq.enable_cdef || fh.coded_lossless || fh.allow_intrabc {
+            0
+        } else {
+            0xF
+        };
         self.clear_block_decoded_flags(r, c);
-        self.read_deltas = self.f.fh.delta_q_present;
-        self.read_lr(r, c)?;
+        self.read_deltas = fh.delta_q_present;
+        self.update_quant();
+        self.read_lr(r, c);
         self.decode_partition(r, c, self.f.sb_size)
+            .map_err(Error::Invalid)
     }
 
     pub(crate) fn clear_block_decoded_flags(&mut self, r: usize, c: usize) {
@@ -190,10 +283,10 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         }
     }
 
-    pub(crate) fn read_lr(&mut self, r: usize, c: usize) -> Result<()> {
+    pub(crate) fn read_lr(&mut self, r: usize, c: usize) {
         let fh = self.f.fh;
         if fh.allow_intrabc {
-            return Ok(());
+            return;
         }
         let w = self.f.sb4;
         let h = self.f.sb4;
@@ -224,7 +317,6 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
                 }
             }
         }
-        Ok(())
     }
 
     pub(crate) fn read_lr_unit(&mut self, plane: usize, unit_row: usize, unit_col: usize) {
@@ -345,7 +437,7 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         }
     }
 
-    pub(crate) fn decode_partition(&mut self, r: usize, c: usize, bsize: BlockSize) -> Result<()> {
+    pub(crate) fn decode_partition(&mut self, r: usize, c: usize, bsize: BlockSize) -> BlockResult {
         let f = self.f;
         if r >= f.mi_rows || c >= f.mi_cols {
             return Ok(());
@@ -353,71 +445,49 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         if bsize == BlockSize::B4x4 {
             return self.decode_block(r, c, BlockSize::B4x4);
         }
-        let avail_u = r > self.t.mi_row_start;
-        let avail_l = c > self.t.mi_col_start;
-        let num4x4 = bw4(bsize);
-        let half = num4x4 >> 1;
+        let bsl = MI_WIDTH_LOG2[bsize as usize];
+        let half = 1usize << (bsl - 1);
         let has_rows = r + half < f.mi_rows;
         let has_cols = c + half < f.mi_cols;
-        let bsl = MI_WIDTH_LOG2[bsize as usize];
-        let above = avail_u && MI_WIDTH_LOG2[self.s.mi.get(r - 1, c).bsize as usize] < bsl;
-        let left = avail_l && MI_HEIGHT_LOG2[self.s.mi.get(r, c - 1).bsize as usize] < bsl;
+        let mi = &self.s.mi;
+        let mc = c - mi.col0;
+        let s = mi.stride;
+        let m = mi.row_mask;
+        let d = mi.data.as_slice();
+        let rm = r & m;
+        let row_off = rm * s + mc;
+        let above = r > self.t.mi_row_start && {
+            let off = if rm != 0 { row_off - s } else { m * s + mc };
+            MI_WIDTH_LOG2[(d[off].bsize as usize).min(21)] < bsl
+        };
+        let left = c > self.t.mi_col_start
+            && MI_HEIGHT_LOG2[(d[row_off - 1].bsize as usize).min(21)] < bsl;
         let ctx = left as usize * 2 + above as usize;
         let partition = if has_rows && has_cols {
             let p = match bsl {
                 1 => self.sym(|cd| &mut cd.partition_w8[ctx]),
-                2 => self.sym(|cd| &mut cd.partition_w16[ctx]),
-                3 => self.sym(|cd| &mut cd.partition_w32[ctx]),
-                4 => self.sym(|cd| &mut cd.partition_w64[ctx]),
+                2..=4 => {
+                    let cdf = match bsl {
+                        2 => &mut self.t.cdf.partition_w16[ctx],
+                        3 => &mut self.t.cdf.partition_w32[ctx],
+                        _ => &mut self.t.cdf.partition_w64[ctx],
+                    };
+                    self.t.msac.symbol_n(cdf)
+                }
                 _ => self.sym(|cd| &mut cd.partition_w128[ctx]),
             };
-            Partition::from_u8(p as u8)
+            Partition::from_u8((p as u8).min(9))
         } else if has_cols || has_rows {
-            let pcdf: &[u16] = match bsl {
-                2 => &cdf!(self).partition_w16[ctx],
-                3 => &cdf!(self).partition_w32[ctx],
-                4 => &cdf!(self).partition_w64[ctx],
-                _ => &cdf!(self).partition_w128[ctx],
-            };
-            let p = |i: Partition| -> u32 {
-                let i = i as usize;
-                pcdf[i] as u32 - if i > 0 { pcdf[i - 1] as u32 } else { 0 }
-            };
-            use Partition::*;
-            let psum = if has_cols {
-                // split_or_horz
-                let mut s = p(Vert) + p(Split) + p(HorzA) + p(VertA) + p(VertB);
-                if bsize != BlockSize::B128x128 {
-                    s += p(Vert4);
-                }
-                s
-            } else {
-                // split_or_vert
-                let mut s = p(Horz) + p(Split) + p(HorzA) + p(HorzB) + p(VertA);
-                if bsize != BlockSize::B128x128 {
-                    s += p(Horz4);
-                }
-                s
-            };
-            let mut tmp = [(32768 - psum) as u16, 32768, 0];
-            let split = self.t.msac.symbol(&mut tmp) != 0;
-            if split {
-                Split
-            } else if has_cols {
-                Horz
-            } else {
-                Vert
-            }
+            self.decode_partition_edge(bsize, bsl, ctx, has_cols)
         } else {
             Partition::Split
         };
-        let sub_size = PARTITION_SUBSIZE[partition as usize][bsize as usize]
-            .ok_or(Error::Invalid("partition"))?;
+        let sub_size = PARTITION_SUBSIZE[partition as usize][bsize as usize].ok_or("partition")?;
         // Conformance (5.11.4): get_plane_residual_size(subSize, 1) is
         // not BLOCK_INVALID (e.g. 4:2:2 B4x16). Else chroma areas would be
         // left unwritten.
         if !f.sub_valid[sub_size as usize] {
-            return Err(Error::Invalid("subsampled size"));
+            return Err("subsampled size");
         }
         use Partition::*;
         match partition {
@@ -441,29 +511,25 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
                 self.decode_partition(r + half, c + half, sub_size)?;
             }
             HorzA => {
-                let split_size = PARTITION_SUBSIZE[Partition::Split as usize][bsize as usize]
-                    .unwrap_or(BlockSize::B4x4);
+                let split_size = BlockSize::from_u8((bsize as u8).saturating_sub(3));
                 self.decode_block(r, c, split_size)?;
                 self.decode_block(r, c + half, split_size)?;
                 self.decode_block(r + half, c, sub_size)?;
             }
             HorzB => {
-                let split_size = PARTITION_SUBSIZE[Partition::Split as usize][bsize as usize]
-                    .unwrap_or(BlockSize::B4x4);
+                let split_size = BlockSize::from_u8((bsize as u8).saturating_sub(3));
                 self.decode_block(r, c, sub_size)?;
                 self.decode_block(r + half, c, split_size)?;
                 self.decode_block(r + half, c + half, split_size)?;
             }
             VertA => {
-                let split_size = PARTITION_SUBSIZE[Partition::Split as usize][bsize as usize]
-                    .unwrap_or(BlockSize::B4x4);
+                let split_size = BlockSize::from_u8((bsize as u8).saturating_sub(3));
                 self.decode_block(r, c, split_size)?;
                 self.decode_block(r + half, c, split_size)?;
                 self.decode_block(r, c + half, sub_size)?;
             }
             VertB => {
-                let split_size = PARTITION_SUBSIZE[Partition::Split as usize][bsize as usize]
-                    .unwrap_or(BlockSize::B4x4);
+                let split_size = BlockSize::from_u8((bsize as u8).saturating_sub(3));
                 self.decode_block(r, c, sub_size)?;
                 self.decode_block(r, c + half, split_size)?;
                 self.decode_block(r + half, c + half, split_size)?;
@@ -490,27 +556,59 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         Ok(())
     }
 
-    pub(crate) fn decode_block(&mut self, r: usize, c: usize, bsize: BlockSize) -> Result<()> {
+    #[cold]
+    #[inline(never)]
+    fn decode_partition_edge(
+        &mut self,
+        bsize: BlockSize,
+        bsl: u8,
+        ctx: usize,
+        has_cols: bool,
+    ) -> Partition {
+        use Partition::*;
+        let psum = if bsize == BlockSize::B128x128 {
+            let pcdf = &cdf!(self).partition_w128[ctx];
+            if has_cols {
+                (pcdf[4] as u32 - pcdf[1] as u32) + (pcdf[7] as u32 - pcdf[5] as u32)
+            } else {
+                (pcdf[1] as u32 - pcdf[0] as u32) + (pcdf[6] as u32 - pcdf[2] as u32)
+            }
+        } else {
+            let pcdf = match bsl {
+                2 => &cdf!(self).partition_w16[ctx],
+                3 => &cdf!(self).partition_w32[ctx],
+                _ => &cdf!(self).partition_w64[ctx],
+            };
+            if has_cols {
+                (pcdf[4] as u32 - pcdf[1] as u32)
+                    + (pcdf[7] as u32 - pcdf[5] as u32)
+                    + (pcdf[9] as u32 - pcdf[8] as u32)
+            } else {
+                (pcdf[1] as u32 - pcdf[0] as u32)
+                    + (pcdf[6] as u32 - pcdf[2] as u32)
+                    + (pcdf[8] as u32 - pcdf[7] as u32)
+            }
+        };
+        if self.t.msac.bool_inv(psum) {
+            Split
+        } else if has_cols {
+            Horz
+        } else {
+            Vert
+        }
+    }
+
+    pub(crate) fn decode_block(&mut self, r: usize, c: usize, bsize: BlockSize) -> BlockResult {
         let f = self.f;
         let bw = bw4(bsize);
         let bh = bh4(bsize);
-        let has_chroma = if (bh == 1 && f.ss_y == 1 && (r & 1) == 0)
-            || (bw == 1 && f.ss_x == 1 && (c & 1) == 0)
-        {
-            false
-        } else {
-            f.num_planes > 1
-        };
-        let avail_u = r > self.t.mi_row_start;
-        let avail_l = c > self.t.mi_col_start;
-        let (avail_u_chroma, avail_l_chroma) = if has_chroma {
-            (
-                if f.ss_y == 1 && bh == 1 { r > self.t.mi_row_start + 1 } else { avail_u },
-                if f.ss_x == 1 && bw == 1 { c > self.t.mi_col_start + 1 } else { avail_l },
-            )
-        } else {
-            (false, false)
-        };
+        let sub_h = bh & f.ss_y;
+        let sub_w = bw & f.ss_x;
+        let has_chroma = f.num_planes > 1 && (((r | !sub_h) & (c | !sub_w) & 1) != 0);
+        let row_start = self.t.mi_row_start;
+        let col_start = self.t.mi_col_start;
+        let avail_u = r > row_start;
+        let avail_l = c > col_start;
         self.b.mi_row = r;
         self.b.mi_col = c;
         self.b.bsize = bsize;
@@ -519,8 +617,8 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         self.b.has_chroma = has_chroma;
         self.b.avail_u = avail_u;
         self.b.avail_l = avail_l;
-        self.b.avail_u_chroma = avail_u_chroma;
-        self.b.avail_l_chroma = avail_l_chroma;
+        self.b.avail_u_chroma = has_chroma && r > row_start + sub_h;
+        self.b.avail_l_chroma = has_chroma && c > col_start + sub_w;
         self.b.above_mi = if avail_u { *self.s.mi.get(r - 1, c) } else { MiInfo::default() };
         self.b.left_mi = if avail_l { *self.s.mi.get(r, c - 1) } else { MiInfo::default() };
         self.b.uv_mode = IntraMode::DC_PRED;
@@ -538,11 +636,19 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         }
         self.store_mode_info();
         if self.b.is_inter {
-            self.predict_intrabc()?;
+            self.predict_intrabc_cold()?;
         } else if self.recon {
             self.setup_intra();
         }
-        self.residual()?;
+        self.residual()
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn predict_intrabc_cold(&mut self) -> BlockResult {
+        if self.predict_intrabc().is_err() {
+            return Err("intra block copy motion vector");
+        }
         Ok(())
     }
 
@@ -586,10 +692,86 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         };
         let uniform_tx = !self.var_tx();
         let mi = &mut self.s.mi;
+        if uniform_tx && mi.delta_lf.is_empty() {
+            let col0 = mi.col0;
+            let mc0 = b.mi_col - col0;
+            if !mi.lf_tx[0].is_empty() {
+                let y_tx = crate::decoder::av1::decode::deblock::lf_code(if b.lossless {
+                    TxSize::Tx4x4 as u8
+                } else {
+                    tx_size
+                });
+                fill_mi_rows2(
+                    &mut mi.data,
+                    &mut mi.lf_tx[0],
+                    mi.stride,
+                    mi.row_mask,
+                    b.mi_row,
+                    r_end,
+                    mc0,
+                    b.bw4,
+                    info,
+                    y_tx,
+                );
+                if b.has_chroma && !mi.lf_tx[1].is_empty() {
+                    let uv_tx = crate::decoder::av1::decode::deblock::lf_code(if b.lossless {
+                        TxSize::Tx4x4 as u8
+                    } else {
+                        f.uv_tx_size[b.bsize as usize] as u8
+                    });
+                    let (sx, sy) = (f.ss_x, f.ss_y);
+                    let r4_0 = b.mi_row >> sy;
+                    let r4_end = (r4_0 + ((b.bh4 + sy) >> sy)).min((f.mi_rows + sy) >> sy);
+                    let c4_0 = (b.mi_col >> sx) - (col0 >> sx);
+                    let uv_w = (b.bw4 + sx) >> sx;
+                    fill_mi_rows(
+                        &mut mi.lf_tx[1],
+                        mi.lf_stride[1],
+                        mi.lf_mask[1],
+                        r4_0,
+                        r4_end,
+                        c4_0,
+                        uv_w,
+                        uv_tx,
+                    );
+                }
+            } else if mi.mv.is_empty() {
+                fill_mi_rows(
+                    &mut mi.data,
+                    mi.stride,
+                    mi.row_mask,
+                    b.mi_row,
+                    r_end,
+                    mc0,
+                    b.bw4,
+                    info,
+                );
+            } else {
+                self.store_mode_info_cold(info, r_end, uniform_tx);
+            }
+        } else {
+            self.store_mode_info_cold(info, r_end, uniform_tx);
+        }
+        if (self.b.palette_size_y | self.b.palette_size_uv) > 0 {
+            self.store_palette_context(r_end);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn store_mode_info_cold(&mut self, info: MiInfo, r_end: usize, uniform_tx: bool) {
+        let f = self.f;
+        let b = &self.b;
+        let tx_size = b.tx_size as u8;
+        let mi = &mut self.s.mi;
         let col0 = mi.col0;
         let mc0 = b.mi_col - col0;
         if !mi.lf_tx[0].is_empty() {
-            let y_tx = if b.lossless { TxSize::Tx4x4 as u8 } else { tx_size };
+            let y_tx = crate::decoder::av1::decode::deblock::lf_code(if b.lossless {
+                TxSize::Tx4x4 as u8
+            } else {
+                tx_size
+            });
             if uniform_tx {
                 fill_mi_rows2(
                     &mut mi.data,
@@ -625,11 +807,11 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
                 );
             }
             if b.has_chroma && !mi.lf_tx[1].is_empty() {
-                let uv_tx = if b.lossless {
+                let uv_tx = crate::decoder::av1::decode::deblock::lf_code(if b.lossless {
                     TxSize::Tx4x4 as u8
                 } else {
                     f.uv_tx_size[b.bsize as usize] as u8
-                };
+                });
                 let (sx, sy) = (f.ss_x, f.ss_y);
                 let r4_0 = b.mi_row >> sy;
                 let r4_end = (r4_0 + ((b.bh4 + sy) >> sy)).min((f.mi_rows + sy) >> sy);
@@ -715,9 +897,6 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
                 );
             }
         }
-        if (b.palette_size_y | b.palette_size_uv) > 0 {
-            self.store_palette_context(r_end);
-        }
     }
 
     #[inline(never)]
@@ -740,128 +919,169 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
     #[inline(always)]
     pub(crate) fn seg_feature_active(&self, feature: usize) -> bool {
         let seg = &self.f.fh.seg;
-        seg.enabled && seg.feature_enabled[self.b.segment_id][feature]
+        seg.enabled && seg.feature_enabled[self.b.segment_id & 7][feature]
     }
 
-    pub(crate) fn intra_frame_mode_info(&mut self) -> Result<()> {
+    #[inline(always)]
+    pub(crate) fn intra_frame_mode_info(&mut self) -> BlockResult {
         let fh = self.f.fh;
-        self.b.skip = false;
-        if fh.seg.seg_id_pre_skip {
-            self.intra_segment_id()?;
-        }
-        // read_skip
-        if fh.seg.seg_id_pre_skip && self.seg_feature_active(SEG_LVL_SKIP) {
-            self.b.skip = true;
-        } else {
+        if !fh.seg.enabled {
+            self.b.segment_id = 0;
+            self.b.lossless = fh.lossless_array[0];
             let ctx = self.b.above_mi.skip as usize + self.b.left_mi.skip as usize;
             self.b.skip = self.bool_cdf(|c| &mut c.skip[ctx]);
-        }
-        if !fh.seg.seg_id_pre_skip {
-            self.intra_segment_id()?;
+        } else {
+            self.intra_segment_and_skip()?;
         }
         self.read_cdef();
         if self.read_deltas {
-            if self.b.bsize != self.f.sb_size || !self.b.skip {
-                self.read_delta_qindex();
-                self.read_delta_lf();
-            }
-            self.read_deltas = false;
+            self.read_block_deltas();
         }
-        self.b.use_intrabc = fh.allow_intrabc && self.bool_cdf(|c| &mut c.intrabc);
-        if self.b.use_intrabc {
+        if fh.allow_intrabc && self.read_intrabc()? {
+            return Ok(());
+        }
+        self.b.use_intrabc = false;
+        self.b.is_inter = false;
+        const Y_MODE_CTX: [u8; 16] = {
+            let mut t = [0u8; 16];
+            let mut i = 0;
+            while i < 13 {
+                t[i] = INTRA_MODE_CONTEXT[i];
+                i += 1;
+            }
+            t
+        };
+        let actx = (Y_MODE_CTX[(self.b.above_mi.y_mode & 15) as usize] as usize).min(4);
+        let lctx = (Y_MODE_CTX[(self.b.left_mi.y_mode & 15) as usize] as usize).min(4);
+        let y_mode = self
+            .sym(|cd| &mut cd.intra_frame_y_mode[actx][lctx])
+            .min(12);
+        self.b.y_mode = IntraMode::from_u8(y_mode as u8);
+        self.b.angle_delta_y = self.intra_angle_info(self.b.y_mode);
+        let bs = self.b.bsize as usize;
+        if self.b.has_chroma {
+            let cfl_allowed = if self.b.lossless {
+                self.f.uv_residual_size[bs] == BlockSize::B4x4
+            } else {
+                (self.b.bw4 | self.b.bh4) < 16
+            };
+            let uv = if cfl_allowed {
+                self.sym(|cd| &mut cd.uv_mode_cfl_allowed[y_mode])
+            } else {
+                self.sym(|cd| &mut cd.uv_mode_cfl_not_allowed[y_mode])
+            }
+            .min(13);
+            self.b.uv_mode = IntraMode::from_u8(uv as u8);
+            if self.b.uv_mode == IntraMode::UV_CFL_PRED {
+                self.read_cfl_alphas();
+            }
+            self.b.angle_delta_uv = self.intra_angle_info(self.b.uv_mode);
+        }
+        self.b.palette_size_y = 0;
+        self.b.palette_size_uv = 0;
+        if fh.allow_screen_content_tools
+            && self.b.bsize >= BlockSize::B8x8
+            && (self.b.bw4 | self.b.bh4) < 32
+        {
+            self.palette_mode_info();
+        }
+        self.filter_intra_mode_info();
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn read_intrabc(&mut self) -> BlockResult<bool> {
+        let use_intrabc = self.bool_cdf(|c| &mut c.intrabc);
+        self.b.use_intrabc = use_intrabc;
+        if use_intrabc {
             self.b.is_inter = true;
             self.b.y_mode = IntraMode::DC_PRED;
             self.b.uv_mode = IntraMode::DC_PRED;
             self.b.palette_size_y = 0;
             self.b.palette_size_uv = 0;
-            self.intrabc_mode_info()?;
+            if self.intrabc_mode_info().is_err() {
+                return Err("intra block copy motion vector");
+            }
+        }
+        Ok(use_intrabc)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn read_block_deltas(&mut self) {
+        if self.b.bsize != self.f.sb_size || !self.b.skip {
+            self.read_delta_qindex();
+            self.read_delta_lf();
+        }
+        self.read_deltas = false;
+    }
+
+    #[inline(never)]
+    fn intra_segment_and_skip(&mut self) -> BlockResult {
+        let fh = self.f.fh;
+        if !fh.seg.seg_id_pre_skip {
+            let ctx = self.b.above_mi.skip as usize + self.b.left_mi.skip as usize;
+            self.b.skip = self.bool_cdf(|c| &mut c.skip[ctx]);
+            return self.intra_segment_id();
+        }
+        self.b.skip = false;
+        self.intra_segment_id()?;
+        if self.seg_feature_active(SEG_LVL_SKIP) {
+            self.b.skip = true;
         } else {
-            self.b.is_inter = false;
-            let actx = INTRA_MODE_CONTEXT[self.b.above_mi.y_mode as usize] as usize;
-            let lctx = INTRA_MODE_CONTEXT[self.b.left_mi.y_mode as usize] as usize;
-            let y_mode = self.sym(|cd| &mut cd.intra_frame_y_mode[actx][lctx]);
-            self.b.y_mode = IntraMode::from_u8(y_mode as u8);
-            self.b.angle_delta_y = self.intra_angle_info(self.b.y_mode);
-            let bs = self.b.bsize as usize;
-            if self.b.has_chroma {
-                let cfl_allowed = if self.b.lossless {
-                    self.f.uv_residual_size[bs] == BlockSize::B4x4
-                } else {
-                    (BLOCK_WIDTH[bs] | BLOCK_HEIGHT[bs]) < 64
-                };
-                let uv = if cfl_allowed {
-                    self.sym(|cd| &mut cd.uv_mode_cfl_allowed[y_mode])
-                } else {
-                    self.sym(|cd| &mut cd.uv_mode_cfl_not_allowed[y_mode])
-                };
-                self.b.uv_mode = IntraMode::from_u8(uv as u8);
-                if self.b.uv_mode == IntraMode::UV_CFL_PRED {
-                    self.read_cfl_alphas();
-                }
-                self.b.angle_delta_uv = self.intra_angle_info(self.b.uv_mode);
-            }
-            self.b.palette_size_y = 0;
-            self.b.palette_size_uv = 0;
-            if fh.allow_screen_content_tools
-                && self.b.bsize >= BlockSize::B8x8
-                && (BLOCK_WIDTH[bs] | BLOCK_HEIGHT[bs]) < 128
-            {
-                self.palette_mode_info();
-            }
-            self.filter_intra_mode_info();
+            let ctx = self.b.above_mi.skip as usize + self.b.left_mi.skip as usize;
+            self.b.skip = self.bool_cdf(|c| &mut c.skip[ctx]);
         }
         Ok(())
     }
 
     #[inline(always)]
-    pub(crate) fn intra_segment_id(&mut self) -> Result<()> {
+    pub(crate) fn intra_segment_id(&mut self) -> BlockResult {
         if self.f.fh.seg.enabled {
+            let old_seg = self.b.segment_id;
             self.read_segment_id()?;
+            if self.b.segment_id != old_seg {
+                self.update_quant();
+            }
         } else {
             self.b.segment_id = 0;
         }
-        self.b.lossless = self.f.fh.lossless_array[self.b.segment_id];
+        self.b.lossless = self.f.fh.lossless_array[self.b.segment_id & 7];
         Ok(())
     }
 
-    pub(crate) fn read_segment_id(&mut self) -> Result<()> {
+    #[inline(always)]
+    pub(crate) fn read_segment_id(&mut self) -> BlockResult {
         let (r, c) = (self.b.mi_row, self.b.mi_col);
         let (au, al) = (self.b.avail_u, self.b.avail_l);
-        let prev_ul: i32 =
-            if au && al { self.s.mi.get(r - 1, c - 1).segment_id as i32 } else { -1 };
-        let prev_u: i32 = if au { self.b.above_mi.segment_id as i32 } else { -1 };
-        let prev_l: i32 = if al { self.b.left_mi.segment_id as i32 } else { -1 };
-        let pred = if prev_u == -1 {
-            if prev_l == -1 {
-                0
-            } else {
-                prev_l
-            }
-        } else if prev_l == -1 {
-            prev_u
-        } else if prev_ul == prev_u {
-            prev_u
+        let (pred, ctx) = if au && al {
+            let u = self.b.above_mi.segment_id as i32;
+            let l = self.b.left_mi.segment_id as i32;
+            let ul = self.s.mi.get(r - 1, c - 1).segment_id as i32;
+            let pred = if ul == u { u } else { l };
+            let ctx =
+                ((ul == u) & (ul == l)) as usize + ((ul == u) | (ul == l) | (u == l)) as usize;
+            (pred, ctx)
         } else {
-            prev_l
+            let pred = if au {
+                self.b.above_mi.segment_id as i32
+            } else if al {
+                self.b.left_mi.segment_id as i32
+            } else {
+                0
+            };
+            (pred, 0)
         };
         if self.b.skip {
             self.b.segment_id = pred as usize;
         } else {
-            let ctx = if prev_ul < 0 {
-                0
-            } else if prev_ul == prev_u && prev_ul == prev_l {
-                2
-            } else if prev_ul == prev_u || prev_ul == prev_l || prev_u == prev_l {
-                1
-            } else {
-                0
-            };
             let v = self.sym(|cd| &mut cd.segment_id[ctx]) as i32;
             let max = self.f.fh.seg.last_active_seg_id as i32 + 1;
             let id = neg_deinterleave(v, pred, max);
             // Conformance: 0 <= segment_id <= LastActiveSegId (6.10.8).
             if !(0..max).contains(&id) {
-                return Err(Error::Invalid("segment_id"));
+                return Err("segment_id");
             }
             self.b.segment_id = id as usize;
         }
@@ -870,25 +1090,31 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
 
     #[inline(always)]
     pub(crate) fn read_cdef(&mut self) {
-        let fh = self.f.fh;
-        if self.b.skip || fh.coded_lossless || !self.f.seq.enable_cdef || fh.allow_intrabc {
-            return;
-        }
-        let r = self.b.mi_row & !15;
-        let c = self.b.mi_col & !15;
-        if self.s.cdef_idx_at(r, c) == -1 {
-            let v = self.lit(fh.cdef.bits as u32) as i8;
-            let w4 = self.b.bw4;
-            let h4 = self.b.bh4;
-            let mut i = r;
-            while i < r + h4 {
-                let mut j = c;
-                while j < c + w4 {
-                    self.s.set_cdef_idx(i, j, v);
-                    j += 16;
-                }
-                i += 16;
+        if !self.b.skip {
+            let r = self.b.mi_row;
+            let c = self.b.mi_col;
+            let bit = 1u8 << (((r >> 3) & 2) | ((c >> 4) & 1));
+            if (self.b.cdef_unread & bit) != 0 {
+                self.read_cdef_new(r & !15, c & !15);
             }
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn read_cdef_new(&mut self, r: usize, c: usize) {
+        let v = self.lit(self.f.fh.cdef.bits as u32) as i8;
+        let w4 = self.b.bw4;
+        let h4 = self.b.bh4;
+        let mut i = r;
+        while i < r + h4 {
+            let mut j = c;
+            while j < c + w4 {
+                self.b.cdef_unread &= !(1u8 << (((i >> 3) & 2) | ((j >> 4) & 1)));
+                self.s.set_cdef_idx(i, j, v);
+                j += 16;
+            }
+            i += 16;
         }
     }
 
@@ -905,6 +1131,7 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
             let reduced = if sign { -abs } else { abs };
             self.t.current_qindex =
                 (self.t.current_qindex + (reduced << self.f.fh.delta_q_res)).clamp(1, 255);
+            self.update_quant();
         }
     }
 
@@ -952,6 +1179,7 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         }
     }
 
+    #[inline(never)]
     pub(crate) fn read_cfl_alphas(&mut self) {
         let signs = self.sym(|c| &mut c.cfl_sign) as i32;
         let sign_u = (signs + 1) / 3;
@@ -975,12 +1203,12 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
 
     #[inline(always)]
     pub(crate) fn filter_intra_mode_info(&mut self) {
-        let bs = self.b.bsize as usize;
         if self.b.y_mode == IntraMode::DC_PRED
             && self.f.seq.enable_filter_intra
             && self.b.palette_size_y == 0
-            && (BLOCK_WIDTH[bs] | BLOCK_HEIGHT[bs]) < 64
+            && (self.b.bw4 | self.b.bh4) < 16
         {
+            let bs = self.b.bsize as usize;
             self.b.use_filter_intra = self.bool_cdf(|c| &mut c.filter_intra[bs]);
             if self.b.use_filter_intra {
                 self.b.filter_intra_mode = self.sym(|c| &mut c.filter_intra_mode) as u8;
@@ -1076,49 +1304,67 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
 
     #[inline(never)]
     pub(crate) fn palette_mode_info(&mut self) {
-        let bs = self.b.bsize as usize;
-        let bsize_ctx = MI_WIDTH_LOG2[bs] as usize + MI_HEIGHT_LOG2[bs] as usize - 2;
         if self.b.y_mode == IntraMode::DC_PRED {
+            let bs = (self.b.bsize as usize).min(21);
+            let bsize_ctx = (MI_WIDTH_LOG2[bs] as usize + MI_HEIGHT_LOG2[bs] as usize)
+                .wrapping_sub(2)
+                .min(6);
             let ctx = (self.b.above_mi.palette_size(0) > 0) as usize
                 + (self.b.left_mi.palette_size(0) > 0) as usize;
             if self.bool_cdf(|cd| &mut cd.palette_y_mode[bsize_ctx][ctx]) {
-                let size = self.sym(|cd| &mut cd.palette_y_size[bsize_ctx]) + 2;
-                self.b.palette_size_y = size;
-                self.b.palette_y = self.read_palette_colors(0, size, 1);
+                self.read_palette_y(bsize_ctx);
             }
         }
         if self.b.has_chroma && self.b.uv_mode == IntraMode::DC_PRED {
             let ctx = (self.b.palette_size_y > 0) as usize;
             if self.bool_cdf(|cd| &mut cd.palette_uv_mode[ctx]) {
-                let size = self.sym(|cd| &mut cd.palette_uv_size[bsize_ctx]) + 2;
-                self.b.palette_size_uv = size;
-                self.b.palette_u = self.read_palette_colors(1, size, 0);
-                // V colors
-                let bd = self.f.bd;
-                if self.lit(1) != 0 {
-                    let min_bits = bd - 4;
-                    let max_val = 1i32 << bd;
-                    let bits = min_bits + self.lit(2);
-                    self.b.palette_v[0] = self.lit(bd) as u16;
-                    for idx in 1..size {
-                        let mut delta = self.lit(bits) as i32;
-                        if delta != 0 && self.lit(1) != 0 {
-                            delta = -delta;
-                        }
-                        let mut val = self.b.palette_v[idx - 1] as i32 + delta;
-                        if val < 0 {
-                            val += max_val;
-                        }
-                        if val >= max_val {
-                            val -= max_val;
-                        }
-                        self.b.palette_v[idx] = val.clamp(0, (1 << bd) - 1) as u16;
-                    }
-                } else {
-                    for idx in 0..size {
-                        self.b.palette_v[idx] = self.lit(bd) as u16;
-                    }
+                self.read_palette_uv();
+            }
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn read_palette_y(&mut self, bsize_ctx: usize) {
+        let size = self.sym(|cd| &mut cd.palette_y_size[bsize_ctx]) + 2;
+        self.b.palette_size_y = size;
+        self.b.palette_y = self.read_palette_colors(0, size, 1);
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn read_palette_uv(&mut self) {
+        let bs = (self.b.bsize as usize).min(21);
+        let bsize_ctx = (MI_WIDTH_LOG2[bs] as usize + MI_HEIGHT_LOG2[bs] as usize)
+            .wrapping_sub(2)
+            .min(6);
+        let size = self.sym(|cd| &mut cd.palette_uv_size[bsize_ctx]) + 2;
+        self.b.palette_size_uv = size;
+        self.b.palette_u = self.read_palette_colors(1, size, 0);
+        // V colors
+        let bd = self.f.bd;
+        if self.lit(1) != 0 {
+            let min_bits = bd - 4;
+            let max_val = 1i32 << bd;
+            let bits = min_bits + self.lit(2);
+            self.b.palette_v[0] = self.lit(bd) as u16;
+            for idx in 1..size {
+                let mut delta = self.lit(bits) as i32;
+                if delta != 0 && self.lit(1) != 0 {
+                    delta = -delta;
                 }
+                let mut val = self.b.palette_v[idx - 1] as i32 + delta;
+                if val < 0 {
+                    val += max_val;
+                }
+                if val >= max_val {
+                    val -= max_val;
+                }
+                self.b.palette_v[idx] = val.clamp(0, (1 << bd) - 1) as u16;
+            }
+        } else {
+            for idx in 0..size {
+                self.b.palette_v[idx] = self.lit(bd) as u16;
             }
         }
     }
@@ -1229,23 +1475,29 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
     #[inline(always)]
     pub(crate) fn read_block_tx_size(&mut self) {
         if self.var_tx() {
-            let bs = self.b.bsize;
-            let (r0, c0) = (self.b.mi_row, self.b.mi_col);
-            let max_tx = MAX_TX_SIZE_RECT[bs as usize];
-            let tw4 = txw(max_tx) / 4;
-            let th4 = txh(max_tx) / 4;
-            let mut row = r0;
-            while row < r0 + self.b.bh4 {
-                let mut col = c0;
-                while col < c0 + self.b.bw4 {
-                    self.read_var_tx_size(row, col, max_tx, 0);
-                    col += tw4;
-                }
-                row += th4;
-            }
+            self.read_block_var_tx_size();
         } else {
             // InterTxSizes = TxSize is written by store_mode_info.
             self.read_tx_size(!self.b.skip || !self.b.is_inter);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn read_block_var_tx_size(&mut self) {
+        let bs = self.b.bsize;
+        let (r0, c0) = (self.b.mi_row, self.b.mi_col);
+        let max_tx = MAX_TX_SIZE_RECT[bs as usize];
+        let tw4 = txw(max_tx) / 4;
+        let th4 = txh(max_tx) / 4;
+        let mut row = r0;
+        while row < r0 + self.b.bh4 {
+            let mut col = c0;
+            while col < c0 + self.b.bw4 {
+                self.read_var_tx_size(row, col, max_tx, 0);
+                col += tw4;
+            }
+            row += th4;
         }
     }
 
@@ -1261,13 +1513,17 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         if self.b.bsize > BlockSize::B4x4 && allow_select && self.f.fh.tx_mode == TxMode::Select {
             let max_depth = MAX_TX_DEPTH[bs] as usize;
             let ctx = self.tx_depth_ctx(max_rect);
-            let depth = match max_depth {
-                4 => self.sym(|c| &mut c.tx_64x64[ctx]),
-                3 => self.sym(|c| &mut c.tx_32x32[ctx]),
-                2 => self.sym(|c| &mut c.tx_16x16[ctx]),
-                _ => self.sym(|c| &mut c.tx_8x8[ctx]),
+            let depth = if max_depth >= 2 {
+                let cdf = match max_depth {
+                    4 => &mut self.t.cdf.tx_64x64[ctx],
+                    3 => &mut self.t.cdf.tx_32x32[ctx],
+                    _ => &mut self.t.cdf.tx_16x16[ctx],
+                };
+                self.t.msac.symbol_n(cdf)
+            } else {
+                self.bool_cdf(|c| &mut c.tx_8x8[ctx]) as usize
             };
-            self.b.tx_size = SPLIT_TX_BY_DEPTH[max_rect as usize][depth];
+            self.b.tx_size = SPLIT_TX_BY_DEPTH[max_rect as usize][depth.min(4)];
         }
     }
 
@@ -1278,9 +1534,9 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         }
         let a = self.s.mi.get(row - 1, col);
         if row == self.b.mi_row && a.skip && a.is_inter {
-            return BLOCK_WIDTH[a.bsize as usize] as usize;
+            return BLOCK_WIDTH[(a.bsize as usize).min(21)] as usize;
         }
-        txw(TxSize::from_u8(a.inter_tx_size))
+        txw(TxSize::from_u8(a.inter_tx_size.min(18)))
     }
 
     #[inline(always)]
@@ -1290,9 +1546,9 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         }
         let l = self.s.mi.get(row, col - 1);
         if col == self.b.mi_col && l.skip && l.is_inter {
-            return BLOCK_HEIGHT[l.bsize as usize] as usize;
+            return BLOCK_HEIGHT[(l.bsize as usize).min(21)] as usize;
         }
-        txh(TxSize::from_u8(l.inter_tx_size))
+        txh(TxSize::from_u8(l.inter_tx_size.min(18)))
     }
 
     #[inline(always)]
@@ -1302,9 +1558,9 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         let above_w = if self.b.avail_u {
             let a = self.b.above_mi;
             if a.is_inter {
-                BLOCK_WIDTH[a.bsize as usize] as usize
+                BLOCK_WIDTH[(a.bsize as usize).min(21)] as usize
             } else {
-                TX_WIDTH[a.inter_tx_size as usize] as usize
+                TX_WIDTH[(a.inter_tx_size as usize).min(18)] as usize
             }
         } else {
             0
@@ -1312,9 +1568,9 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         let left_h = if self.b.avail_l {
             let l = self.b.left_mi;
             if l.is_inter {
-                BLOCK_HEIGHT[l.bsize as usize] as usize
+                BLOCK_HEIGHT[(l.bsize as usize).min(21)] as usize
             } else {
-                TX_HEIGHT[l.inter_tx_size as usize] as usize
+                TX_HEIGHT[(l.inter_tx_size as usize).min(18)] as usize
             }
         } else {
             0
@@ -1322,6 +1578,8 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         (above_w >= max_w) as usize + (left_h >= max_h) as usize
     }
 
+    #[cold]
+    #[inline(never)]
     pub(crate) fn read_var_tx_size(&mut self, row: usize, col: usize, tx_sz: TxSize, depth: usize) {
         let f = self.f;
         if row >= f.mi_rows || col >= f.mi_cols {

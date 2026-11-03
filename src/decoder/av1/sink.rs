@@ -27,8 +27,8 @@ pub struct Plane<T> {
     pub width: usize,
     pub height: usize,
     pub stride: usize,
-    /// Index of sample (0, 0) in `data` (decoder planes start at a 64-byte
-    /// aligned address inside their allocation).
+    /// Index of sample (0, 0) in `data` (0 for the planes produced by the
+    /// decoder).
     pub offset: usize,
     pub data: Vec<T>,
 }
@@ -65,7 +65,7 @@ impl<T: Copy + Default> Plane<T> {
 }
 
 /// Crop rectangle of one plane (in plane samples).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct PlaneCrop {
     pub x0: usize,
     pub y0: usize,
@@ -74,17 +74,18 @@ pub struct PlaneCrop {
 }
 
 pub struct OutputSink<T: Pixel> {
-    crops: Vec<PlaneCrop>,
-    scalers: Vec<Option<PlaneScaler>>,
+    crops: [PlaneCrop; 3],
+    out_dims: [(usize, usize); 3],
+    scalers: [Option<Box<PlaneScaler>>; 3],
     pub planes: Vec<Plane<T>>,
-    grain: Option<GrainStage<T>>,
+    grain: Option<Box<GrainStage<T>>>,
     /// The output planes are the whole frame (no crop or scaling), so
     /// grain is applied in place there instead of in `GrainStage::buf`.
     grain_in_place: bool,
     /// The output is the whole frame (no crop or scaling).
     full: bool,
     /// Next row expected per plane.
-    next_y: Vec<usize>,
+    next_y: [usize; 3],
 }
 
 struct GrainStage<T> {
@@ -105,66 +106,59 @@ impl<T: Pixel> OutputSink<T> {
     /// scaling).
     pub fn new(
         plane_dims: &[(usize, usize)],
-        crops: Vec<PlaneCrop>,
-        out_dims: &[(usize, usize)],
+        crops: [PlaneCrop; 3],
+        out_dims: [(usize, usize); 3],
         grain: Option<(FilmGrain, usize)>,
-        bd: u32,
     ) -> Self {
-        let _ = bd;
-        let mut scalers = Vec::new();
-        for (p, c) in crops.iter().enumerate() {
+        let np = plane_dims.len();
+        let mut scalers = [None, None, None];
+        let mut full = true;
+        for p in 0..np {
+            let c = crops[p];
             let (ow, oh) = out_dims[p];
+            let (w, h) = plane_dims[p];
             if ow != c.w || oh != c.h {
-                scalers.push(Some(PlaneScaler::new(c.w, c.h, ow, oh)));
-            } else {
-                scalers.push(None);
+                scalers[p] = Some(Box::new(PlaneScaler::new(c.w, c.h, ow, oh)));
+                full = false;
+            } else if c.x0 != 0 || c.y0 != 0 || c.w != w || c.h != h {
+                full = false;
             }
         }
-        let full = crops
-            .iter()
-            .zip(plane_dims)
-            .zip(&scalers)
-            .all(|((c, &(w, h)), s)| s.is_none() && c.x0 == 0 && c.y0 == 0 && c.w == w && c.h == h);
         // When `full` is set, `decode_frame` hands its planes to
         // `finish` instead of calling `push` (unless superres is active,
         // in which case `forward` allocates on first use).
-        let planes = out_dims
-            .iter()
-            .map(|&(ow, oh)| {
-                if full {
-                    Plane {
-                        width: ow,
-                        height: oh,
-                        stride: ow,
-                        offset: 0,
-                        data: Vec::new(),
-                    }
-                } else {
-                    Plane::new(ow, oh)
-                }
-            })
-            .collect();
+        let planes = if full {
+            Vec::new()
+        } else {
+            out_dims[..np]
+                .iter()
+                .map(|&(ow, oh)| Plane::new(ow, oh))
+                .collect()
+        };
         let grain_in_place = full && grain.is_some();
-        let grain = grain.map(|(fg, sub_y)| GrainStage {
-            fg,
-            frame_w: plane_dims[0].0,
-            frame_h: plane_dims[0].1,
-            sub_y,
-            buf: if grain_in_place {
-                Vec::new()
-            } else {
-                plane_dims
-                    .iter()
-                    .map(|&(w, _)| vec![T::default(); w * 96])
-                    .collect()
-            },
-            widths: plane_dims.iter().map(|&(w, _)| w).collect(),
-            y0: 0,
-            rows: 0,
+        let grain = grain.map(|(fg, sub_y)| {
+            Box::new(GrainStage {
+                fg,
+                frame_w: plane_dims[0].0,
+                frame_h: plane_dims[0].1,
+                sub_y,
+                buf: if grain_in_place {
+                    Vec::new()
+                } else {
+                    plane_dims
+                        .iter()
+                        .map(|&(w, _)| vec![T::default(); w * 96])
+                        .collect()
+                },
+                widths: plane_dims.iter().map(|&(w, _)| w).collect(),
+                y0: 0,
+                rows: 0,
+            })
         });
         Self {
-            next_y: vec![0; crops.len()],
+            next_y: [0; 3],
             crops,
+            out_dims,
             scalers,
             planes,
             grain,
@@ -174,11 +168,13 @@ impl<T: Pixel> OutputSink<T> {
     }
 
     fn forward(&mut self, bands: &[PlaneRows<'_, T>]) {
+        if self.planes.is_empty() {
+            self.planes = self.out_dims[..bands.len()]
+                .iter()
+                .map(|&(ow, oh)| Plane::new(ow, oh))
+                .collect();
+        }
         for (p, b) in bands.iter().enumerate() {
-            let out = &mut self.planes[p];
-            if out.data.is_empty() {
-                out.data.resize(out.stride * out.height, T::default());
-            }
             self.next_y[p] = b.y0 + b.h;
             let c = self.crops[p];
             for i in 0..b.h {
@@ -213,6 +209,10 @@ impl<T: Pixel> RowSink<T> for OutputSink<T> {
         // Full frame output without scaling (`grain_in_place` without
         // grain).
         self.full
+    }
+
+    fn wants_rows_final(&self) -> bool {
+        self.full && self.grain.is_some()
     }
 
     fn finish(&mut self, mut planes: Vec<Plane<T>>) -> Result<()> {

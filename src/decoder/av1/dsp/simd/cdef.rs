@@ -57,10 +57,11 @@ impl<'a, S: Pixel, const L: usize> Params<'a, S, L> {
         tap_set: usize,
     ) -> Self {
         let len = (H - 1) * src_stride + W;
+        let max_start = 4 * src_stride + 4;
         let base = CDEF_BORDER * src_stride + CDEF_BORDER;
         let win = |off: isize| -> &'a [S] {
-            let start = (base as isize + off) as usize;
-            &src[start..start + len]
+            let start = ((base as isize + off) as usize).min(max_start);
+            &src[start..][..len]
         };
         let pair = |d: usize, k: usize| {
             let off = tap_offset(d, k, src_stride);
@@ -91,10 +92,11 @@ impl<'a, S: Pixel, const L: usize> Params<'a, S, L> {
 /// The 16-bit lane path of [`cdef_filter`] (kept out of line so that the
 /// dispatcher stays small). `src` holds `u16` samples with
 /// [`CDEF_VERY_LARGE`](crate::decoder::av1::dsp::cdef::CDEF_VERY_LARGE) for unavailable
-/// ones (`SENT`), or pixels (all available, `!SENT`).
+/// ones (`SENT`), or pixels (all available, `!SENT`). When `PAD` is
+/// true, `src_stride` is [`CDEF_PAD_STRIDE`].
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-fn filter_i16<T: Pixel, S: Pixel, const SENT: bool>(
+fn filter_i16<T: Pixel, S: Pixel, const SENT: bool, const PAD: bool>(
     dst: &mut [T],
     dst_stride: usize,
     src: &[S],
@@ -107,17 +109,18 @@ fn filter_i16<T: Pixel, S: Pixel, const SENT: bool>(
     dir: usize,
     tap_set: usize,
 ) {
+    let s = if PAD { CDEF_PAD_STRIDE } else { src_stride };
     macro_rules! size {
         ($w:literal, $h:literal) => {
             match (pri_str != 0, sec_str != 0) {
                 (true, true) => filter_block::<T, S, $w, $h, true, true, SENT, LANES>(
-                    dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set,
+                    dst, dst_stride, src, s, pri_str, sec_str, damping, dir, tap_set,
                 ),
                 (true, false) => filter_block::<T, S, $w, $h, true, false, SENT, LANES>(
-                    dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set,
+                    dst, dst_stride, src, s, pri_str, sec_str, damping, dir, tap_set,
                 ),
                 _ => filter_block::<T, S, $w, $h, false, true, SENT, LANES>(
-                    dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set,
+                    dst, dst_stride, src, s, pri_str, sec_str, damping, dir, tap_set,
                 ),
             }
         };
@@ -157,10 +160,12 @@ fn load_i16<const W: usize, const L: usize, S: Pixel>(
 #[inline(always)]
 fn load8_i16<const W: usize, S: Pixel>(win: &[S], pos: usize, src_stride: usize) -> u16x8 {
     if W == 8 {
-        u16x8::from_array(load_u16::<S, 8>(&win[pos..]))
+        u16x8::from_array(load_u16::<S, 8>(&win[pos..pos + 8]))
     } else {
-        let a = u16x4::from_array(load_u16::<S, 4>(&win[pos..]));
-        let b = u16x4::from_array(load_u16::<S, 4>(&win[pos + src_stride..]));
+        let a = u16x4::from_array(load_u16::<S, 4>(&win[pos..pos + 4]));
+        let b = u16x4::from_array(load_u16::<S, 4>(
+            &win[pos + src_stride..pos + src_stride + 4],
+        ));
         simd_swizzle!(a, b, [0, 1, 2, 3, 4, 5, 6, 7])
     }
 }
@@ -188,9 +193,7 @@ fn constrain_i16<const L: usize>(
     adj: u16,
 ) -> Simd<i16, L> {
     let ad = d.abs().cast::<u16>();
-    let t = strength
-        .saturating_sub(ad >> Simd::splat(adj))
-        .cast::<i16>();
+    let t = strength.saturating_sub(ad >> adj).cast::<i16>();
     d.simd_max(-t).simd_min(t)
 }
 
@@ -399,7 +402,11 @@ pub(super) fn cdef_filter<T: Pixel>(dst: &mut [T], dst_stride: usize, src: &[u16
         return;
     }
     let tap_set = ((pri_str >> (BD - 8)) & 1) as usize;
-    filter_i16::<T, u16, true>(dst, dst_stride, src, src_stride, w, h, pri_str, sec_str, damping, dir, tap_set);
+    if src_stride == CDEF_PAD_STRIDE {
+        filter_i16::<T, u16, true, true>(dst, dst_stride, src, CDEF_PAD_STRIDE, w, h, pri_str, sec_str, damping, dir, tap_set);
+    } else {
+        filter_i16::<T, u16, true, false>(dst, dst_stride, src, src_stride, w, h, pri_str, sec_str, damping, dir, tap_set);
+    }
 }
 
 /// `dsp::cdef::CdefKernels::filter` with `std::simd`: blocks whose border
@@ -410,6 +417,28 @@ pub(super) fn cdef_filter<T: Pixel>(dst: &mut [T], dst_stride: usize, src: &[u16
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 pub(super) fn filter_px<T: Pixel>(dst: &mut [T], dst_stride: usize, src: &[T], src_stride: usize, w: usize, h: usize, pri_str: i32, sec_str: i32, damping: i32, dir: usize, edges: u8) {
+    if BD == 8 && std::mem::size_of::<T>() == 1 {
+        if (damping as u32) <= 7
+            && ((pri_str | sec_str) as u32) < 16
+            && (pri_str | sec_str) != 0
+            && matches!((w, h), (8, 8) | (8, 4) | (4, 8) | (4, 4))
+        {
+            let tap_set = (pri_str & 1) as usize;
+            if edges == CDEF_HAVE_ALL {
+                match (w, h) {
+                    (8, 8) => u8_path::filter_8x8_dir(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set),
+                    (8, 4) => u8_path::filter::<T, 8, 4>(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set),
+                    (4, 8) => u8_path::filter::<T, 4, 8>(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set),
+                    _ => u8_path::filter_4x4_dir(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set),
+                }
+            } else {
+                u8_path::filter_edges(dst, dst_stride, src, src_stride, w, h, pri_str, sec_str, damping, dir, tap_set, edges);
+            }
+            return;
+        }
+        filter_px_slow(dst, dst_stride, src, src_stride, w, h, pri_str, sec_str, damping, dir, edges);
+        return;
+    }
     let fast = edges == CDEF_HAVE_ALL
         && damping <= 13
         && (0..FAST_MAX_STRENGTH).contains(&pri_str)
@@ -421,16 +450,29 @@ pub(super) fn filter_px<T: Pixel>(dst: &mut [T], dst_stride: usize, src: &[T], s
         return;
     }
     let tap_set = ((pri_str >> (BD - 8)) & 1) as usize;
-    if BD == 8 && std::mem::size_of::<T>() == 1 && damping <= 7 && pri_str < 16 && sec_str < 16 {
-        match (w, h) {
-            (8, 8) => u8_path::filter_8x8_dir(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set),
-            (8, 4) => u8_path::filter::<T, 8, 4>(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set),
-            (4, 8) => u8_path::filter::<T, 4, 8>(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set),
-            _ => u8_path::filter_4x4_dir(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set),
-        }
+    if matches!((w, h), (8, 8) | (4, 4)) {
+        dir16::filter(dst, dst_stride, src, src_stride, w, pri_str, sec_str, damping, dir, tap_set);
         return;
     }
-    filter_i16::<T, T, false>(dst, dst_stride, src, src_stride, w, h, pri_str, sec_str, damping, dir, tap_set);
+    filter_i16::<T, T, false, false>(dst, dst_stride, src, src_stride, w, h, pri_str, sec_str, damping, dir, tap_set);
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cold]
+#[inline(never)]
+fn filter_px_slow<T: Pixel>(dst: &mut [T], dst_stride: usize, src: &[T], src_stride: usize, w: usize, h: usize, pri_str: i32, sec_str: i32, damping: i32, dir: usize, edges: u8) {
+    let fast = edges == CDEF_HAVE_ALL
+        && damping <= 13
+        && (0..FAST_MAX_STRENGTH).contains(&pri_str)
+        && (0..FAST_MAX_STRENGTH).contains(&sec_str)
+        && (pri_str != 0 || sec_str != 0)
+        && matches!((w, h), (8, 8) | (8, 4) | (4, 8) | (4, 4));
+    if !fast {
+        filter_padded(dst, dst_stride, src, src_stride, w, h, pri_str, sec_str, damping, dir, edges);
+        return;
+    }
+    let tap_set = ((pri_str >> (BD - 8)) & 1) as usize;
+    filter_i16::<T, T, false, false>(dst, dst_stride, src, src_stride, w, h, pri_str, sec_str, damping, dir, tap_set);
 }
 
 /// [`filter_px`] of a block at the frame border (or with parameters
@@ -468,8 +510,15 @@ fn dir_row<T: Pixel>(src: &[T], pos: usize, shift: i16) -> i16x8 {
 /// b0 + b1, b2 + b3, b4 + b5, b6 + b7]` (NEON `addp.8h`).
 #[inline(always)]
 fn addp(a: i16x8, b: i16x8) -> i16x8 {
-    let (even, odd) = a.deinterleave(b);
-    even + odd
+    if cfg!(target_arch = "x86_64") {
+        let shl = |v: i16x8| {
+            i16x8::from_ne_bytes((u32x4::from_ne_bytes(v.to_ne_bytes()) << 16).to_ne_bytes())
+        };
+        simd_swizzle!(a + shl(a), b + shl(b), [1, 3, 5, 7, 9, 11, 13, 15])
+    } else {
+        let (even, odd) = a.deinterleave(b);
+        even + odd
+    }
 }
 
 /// Window `8 - S..16 - S` of the concatenation of two vectors (NEON
@@ -500,56 +549,143 @@ fn acc<const S: usize, const N: usize>(a: &mut [i16x8; 2], x: i16x8) {
     }
 }
 
-/// Widening square of 4 `i16` lanes (NEON `smull.4s` / `smull2.4s`).
+/// Adds `[x0, x1, x2, x3]` at offsets `0, 1, 2, 3` for an odd direction
+/// (11 partial sums: `0..8` in the first vector, `8..11` in lanes `4..7`
+/// of the second vector with lane 7 zero).
+#[inline(always)]
+fn acc_odd(x0: i16x8, x1: i16x8, x2: i16x8, x3: i16x8) -> [i16x8; 2] {
+    use std::simd::Swizzle;
+    let z = i16x8::splat(0);
+    let lo = x0
+        + Ext::<1>::concat_swizzle(z, x1)
+        + Ext::<2>::concat_swizzle(z, x2)
+        + Ext::<3>::concat_swizzle(z, x3);
+    // Lanes 4..7 of the 64-bit lane shifts (lanes 0..3 are not used).
+    let shr = |v: i16x8, k: u64| i16x8::from_ne_bytes((u64x2::from_ne_bytes(v.to_ne_bytes()) >> k).to_ne_bytes());
+    let hi = shr(x1, 48) + shr(x2, 32) + shr(x3, 16);
+    [lo, hi]
+}
+/// Adds `[q0, q1, q2, q3]` (where `q_i` holds `[row_i, row_{i+4}]`) for
+/// direction 3 (`p3r[0..8]` in the first vector, `p3r[8..11]` in lanes
+/// `4..7` of the second vector with lane 7 zero) without pre-reversing `q`.
+#[inline(always)]
+fn acc_odd_q3(q0: i16x8, q1: i16x8, q2: i16x8, q3: i16x8) -> [i16x8; 2] {
+    if cfg!(target_arch = "x86_64") {
+        use std::simd::Swizzle;
+        let shl = |v: i16x8, k: u64| {
+            i16x8::from_ne_bytes((u64x2::from_ne_bytes(v.to_ne_bytes()) << k).to_ne_bytes())
+        };
+        let shr = |v: i16x8, k: u64| {
+            i16x8::from_ne_bytes((u64x2::from_ne_bytes(v.to_ne_bytes()) >> k).to_ne_bytes())
+        };
+        let z = i16x8::splat(0);
+        let a = q3 + shl(q2, 16) + shl(q1, 32) + shl(q0, 48);
+        let b = shr(q2, 48) + shr(q1, 32) + shr(q0, 16);
+        let lo_swapped = a + Ext::<4>::concat_swizzle(b, z);
+        let lo = simd_swizzle!(lo_swapped, [4, 5, 6, 7, 0, 1, 2, 3]);
+        let hi = Ext::<4>::concat_swizzle(z, b);
+        [lo, hi]
+    } else {
+        let rev = |v: i16x8| simd_swizzle!(v, [4, 5, 6, 7, 0, 1, 2, 3]);
+        acc_odd(rev(q3), rev(q2), rev(q1), rev(q0))
+    }
+}
+
 #[inline(always)]
 fn sq4(v: i16x4) -> i32x4 {
     let v: i32x4 = v.cast();
     v * v
 }
 
+#[inline(always)]
+fn madd8(x: i16x8, y: i16x8) -> i32x4 {
+    let p = x.cast::<i32>() * y.cast::<i32>();
+    simd_swizzle!(p, [0, 2, 4, 6]) + simd_swizzle!(p, [1, 3, 5, 7])
+}
+
 /// `sum_k p[k]^2 * w[k]` folded to 4 lanes for directions 0 and 4
 /// (15 sums: lane 7 of `p[1]` is 0, and weights are symmetric).
 #[inline(always)]
 fn weighted_diag(p: [i16x8; 2]) -> i32x4 {
-    let p0_lo = simd_swizzle!(p[0], [0, 1, 2, 3]);
-    let p0_hi = simd_swizzle!(p[0], [4, 5, 6, 7]);
-    let p1_hi_rev = simd_swizzle!(p[1], [6, 5, 4, 3]);
-    let p1_lo_rev = simd_swizzle!(p[1], [2, 1, 0, 7]);
-    (sq4(p0_lo) + sq4(p1_hi_rev)) * i32x4::from_array([840, 420, 280, 210])
-        + (sq4(p0_hi) + sq4(p1_lo_rev)) * i32x4::from_array([168, 140, 120, 105])
+    if cfg!(target_arch = "x86_64") {
+        // w[0..8]  = [840, 420, 280, 210, 168, 140, 120, 105]
+        let w0_a = i16x8::from_array([28, 20, 14, 14, 12, 10, 10, 7]);
+        let w0_b = i16x8::from_array([30, 21, 20, 15, 14, 14, 12, 15]);
+        // w[8..16] = [120, 140, 168, 210, 280, 420, 840, 0]
+        let w1_a = i16x8::from_array([10, 10, 12, 14, 14, 20, 28, 0]);
+        let w1_b = i16x8::from_array([12, 14, 14, 15, 20, 21, 30, 0]);
+        madd8(p[0] * w0_a, p[0] * w0_b) + madd8(p[1] * w1_a, p[1] * w1_b)
+    } else {
+        use std::simd::Swizzle;
+        let r0 = simd_swizzle!(p[0], [3, 2, 1, 0, 7, 6, 5, 4]);
+        let (r0_lo, r0_hi) = (simd_swizzle!(r0, [0, 1, 2, 3]), simd_swizzle!(r0, [4, 5, 6, 7]));
+        let s1 = Ext::<1>::concat_swizzle(i16x8::splat(0), p[1]);
+        let s1_lo = simd_swizzle!(s1, [0, 1, 2, 3]);
+        let s1_hi = simd_swizzle!(s1, [4, 5, 6, 7]);
+        (sq4(r0_lo) + sq4(s1_hi)) * i32x4::from_array([210, 280, 420, 840])
+            + (sq4(r0_hi) + sq4(s1_lo)) * i32x4::from_array([105, 120, 140, 168])
+    }
 }
 
-/// `sum_k p[k]^2 * w[k]` folded to 4 lanes for the odd directions (11
-/// sums: lanes `3..8` of `p[1]` are 0, and weights are symmetric).
+/// `sum_k p[k]^2 * (w[k] / 35)` folded to 4 lanes for the odd directions
+/// (11 sums: lanes `4..7` of `p[1]` hold `partial[d][8..11]` and lane 7
+/// is 0; on non-x86_64 the common factor 35 is applied after [`hsum4x8`]).
 #[inline(always)]
 fn weighted_odd(p: [i16x8; 2]) -> i32x4 {
-    let p0_lo = simd_swizzle!(p[0], [0, 1, 2, 3]);
-    let p0_hi = simd_swizzle!(p[0], [4, 5, 6, 7]);
-    let p1_lo_rev = simd_swizzle!(p[1], [2, 1, 0, 3]);
-    (sq4(p0_lo) + sq4(p1_lo_rev)) * i32x4::from_array([420, 210, 140, 105])
-        + sq4(p0_hi) * i32x4::splat(105)
+    if cfg!(target_arch = "x86_64") {
+        // w[0..8]  = [420, 210, 140, 105, 105, 105, 105, 105]
+        let w0_a = i16x8::from_array([20, 14, 10, 7, 7, 7, 7, 7]);
+        let w0_b = i16x8::from_array([21, 15, 14, 15, 15, 15, 15, 15]);
+        // lanes 4..7 of p[1] hold partial[d][8..11] with w = [140, 210, 420, 0]
+        let w1_a = i16x8::from_array([0, 0, 0, 0, 10, 14, 20, 0]);
+        let w1_b = i16x8::from_array([0, 0, 0, 0, 14, 15, 21, 0]);
+        madd8(p[0] * w0_a, p[0] * w0_b) + madd8(p[1] * w1_a, p[1] * w1_b)
+    } else {
+        let r0_lo = simd_swizzle!(p[0], [2, 1, 0, 3]);
+        let p0_hi = simd_swizzle!(p[0], [4, 5, 6, 7]);
+        let p1_hi = simd_swizzle!(p[1], [4, 5, 6, 7]);
+        let s_hi = sq4(p0_hi);
+        (sq4(r0_lo) + sq4(p1_hi)) * i32x4::from_array([4, 6, 12, 3]) + (s_hi << 1) + s_hi
+    }
 }
 
-/// `sum_k p[k]^2 * 105` folded to 4 lanes for directions 2 and 6.
+/// `sum_k p[k]^2` folded to 4 lanes for directions 2 and 6 (on non-x86_64
+/// the weight 105 is applied after [`pairs`]).
 #[inline(always)]
 fn weighted_hv(p: i16x8) -> i32x4 {
-    let lo = simd_swizzle!(p, [0, 1, 2, 3]);
-    let hi = simd_swizzle!(p, [4, 5, 6, 7]);
-    (sq4(lo) + sq4(hi)) * i32x4::splat(105)
+    if cfg!(target_arch = "x86_64") {
+        madd8(p * i16x8::splat(7), p * i16x8::splat(15))
+    } else {
+        let (a, b) = (simd_swizzle!(p, [0, 1, 2, 3]), simd_swizzle!(p, [4, 5, 6, 7]));
+        sq4(a) + sq4(b)
+    }
 }
 
-/// `[v[0].reduce_sum(), .., v[7].reduce_sum()]` as `(cost[0..4],
-/// cost[4..8])`, pairing each direction `d` with `d + 4` in the same
-/// lane.
+/// Pairwise lane sums `[a[0] + a[1], a[2] + a[3], b[0] + b[1], b[2] + b[3]]`.
 #[inline(always)]
-fn hsum4x8(v: [i32x4; 8]) -> (i32x4, i32x4) {
-    let pairs = |a: i32x4, b: i32x4| {
-        let (even, odd) = a.deinterleave(b);
-        even + odd
-    };
-    let lo = pairs(pairs(v[0], v[1]), pairs(v[2], v[3]));
-    let hi = pairs(pairs(v[4], v[5]), pairs(v[6], v[7]));
-    (lo, hi)
+fn pairs(a: i32x4, b: i32x4) -> i32x4 {
+    let (even, odd) = a.deinterleave(b);
+    even + odd
+}
+
+/// Pairwise folded costs for two odd directions `(pa, pb)` so that lanes `0..2`
+/// sum to `cost(pa)` and lanes `2..4` sum to `cost(pb)`.
+#[inline(always)]
+fn weighted_odd_pair(pa: [i16x8; 2], pb: [i16x8; 2]) -> i32x4 {
+    if cfg!(target_arch = "x86_64") {
+        // w[0..8] = [420, 210, 140, 105, 105, 105, 105, 105]
+        let w0_a = i16x8::from_array([20, 14, 10, 7, 7, 7, 7, 7]);
+        let w0_b = i16x8::from_array([21, 15, 14, 15, 15, 15, 15, 15]);
+        let ca = madd8(pa[0] * w0_a, pa[0] * w0_b);
+        let cb = madd8(pb[0] * w0_a, pb[0] * w0_b);
+        // lanes 4..7 of pa[1] and pb[1] hold partial[d][8..11] with w = [140, 210, 420, 0]
+        let p1 = simd_swizzle!(pa[1], pb[1], [4, 5, 6, 7, 12, 13, 14, 15]);
+        let w1_a = i16x8::from_array([10, 14, 20, 0, 10, 14, 20, 0]);
+        let w1_b = i16x8::from_array([14, 15, 21, 0, 14, 15, 21, 0]);
+        pairs(ca, cb) + madd8(p1 * w1_a, p1 * w1_b)
+    } else {
+        pairs(weighted_odd(pa), weighted_odd(pb))
+    }
 }
 
 /// `dsp::cdef::cdef_direction` with `std::simd`: spec 7.15.2, returns
@@ -565,56 +701,13 @@ fn hsum4x8(v: [i32x4; 8]) -> (i32x4, i32x4) {
 /// it fits in `i16`. Squares and costs are computed in `i32`: a cost is
 /// at most `840 * 128^2 * 64 < 2^30` (each `partial[d][k]` with `n`
 /// terms has weight `840 / n`).
+#[inline(always)]
 pub(super) fn cdef_direction<T: Pixel>(src: &[T], stride: usize) -> (usize, i32) {
     assert!(stride <= 0x0fff_ffff);
     let src = &src[..7 * stride + 8];
     let shift = (BD - 8) as i16;
     let x: [i16x8; 8] = std::array::from_fn(|i| dir_row(src, i * stride, shift));
     let z0 = i16x8::splat(0);
-
-    // Rows 2k and 2k + 1 have the same offsets for directions 5 and 7:
-    // their sum is added once.
-    let y = [x[0] + x[1], x[2] + x[3], x[4] + x[5], x[6] + x[7]];
-    let p6 = (y[0] + y[1]) + (y[2] + y[3]); // partial[6][j]
-    let c6 = weighted_hv(p6);
-    let mut p5 = [y[3], z0];
-    acc::<3, 8>(&mut p5, y[0]); // partial[5][3 - i / 2 + j]
-    acc::<2, 8>(&mut p5, y[1]);
-    acc::<1, 8>(&mut p5, y[2]);
-    let mut p7 = [y[0], z0];
-    acc::<1, 8>(&mut p7, y[1]); // partial[7][i / 2 + j]
-    acc::<2, 8>(&mut p7, y[2]);
-    acc::<3, 8>(&mut p7, y[3]);
-    let (c5, c7) = (weighted_odd(p5), weighted_odd(p7));
-
-    // Horizontal pair sums of rows 2k and 2k + 1 (low and high 4 lanes).
-    // Rows i and i + 4 have disjoint 4-lane windows at offsets i and i + 4
-    // in p1 (and 7 - i and 3 - i in p3r), so packing [row_i, row_{i+4}]
-    // into 8-lane vectors reduces p1 and p3r to 4-step accumulations.
-    let s = [addp(x[0], x[1]), addp(x[2], x[3]), addp(x[4], x[5]), addp(x[6], x[7])];
-    let p2 = addp(addp(s[0], s[1]), addp(s[2], s[3])); // partial[2][i]
-    let c2 = weighted_hv(p2);
-    let q = [
-        simd_swizzle!(s[0], s[2], [0, 1, 2, 3, 8, 9, 10, 11]),
-        simd_swizzle!(s[0], s[2], [4, 5, 6, 7, 12, 13, 14, 15]),
-        simd_swizzle!(s[1], s[3], [0, 1, 2, 3, 8, 9, 10, 11]),
-        simd_swizzle!(s[1], s[3], [4, 5, 6, 7, 12, 13, 14, 15]),
-    ];
-    let qr = [
-        simd_swizzle!(q[0], [4, 5, 6, 7, 0, 1, 2, 3]),
-        simd_swizzle!(q[1], [4, 5, 6, 7, 0, 1, 2, 3]),
-        simd_swizzle!(q[2], [4, 5, 6, 7, 0, 1, 2, 3]),
-        simd_swizzle!(q[3], [4, 5, 6, 7, 0, 1, 2, 3]),
-    ];
-    let mut p1 = [q[0], z0];
-    acc::<1, 8>(&mut p1, q[1]);
-    acc::<2, 8>(&mut p1, q[2]);
-    acc::<3, 8>(&mut p1, q[3]);
-    let mut p3r = [qr[3], z0];
-    acc::<3, 8>(&mut p3r, qr[0]);
-    acc::<2, 8>(&mut p3r, qr[1]);
-    acc::<1, 8>(&mut p3r, qr[2]);
-    let (c1, c3) = (weighted_odd(p1), weighted_odd(p3r));
 
     let mut p0 = [x[0], z0];
     let mut p4r = [x[7], z0];
@@ -634,20 +727,65 @@ pub(super) fn cdef_direction<T: Pixel>(src: &[T], stride: usize) -> (usize, i32)
     acc::<7, 8>(&mut p0, x[7]);
     let (c0, c4) = (weighted_diag(p0), weighted_diag(p4r));
 
-    let (lo, hi) = hsum4x8([c0, c1, c2, c3, c4, c5, c6, c7]);
-    // Each lane k holds (cost[k], cost[k + 4]). For the winning lane,
-    // max_lh[k] is best_cost and min_lh[k] is cost[y_dir ^ 4]. Packing
-    // (d << 24) | var (< 2^20) into u32 and taking reduce_min picks the
-    // first direction of maximal cost alongside its variance.
+    // Rows 2k and 2k + 1 have the same offsets for directions 5 and 7:
+    // their sum is added once.
+    let y = [x[0] + x[1], x[2] + x[3], x[4] + x[5], x[6] + x[7]];
+    let p6 = (y[0] + y[1]) + (y[2] + y[3]); // partial[6][j]
+    let v46 = pairs(c4, weighted_hv(p6));
+    let v57 = weighted_odd_pair(acc_odd(y[3], y[2], y[1], y[0]), acc_odd(y[0], y[1], y[2], y[3]));
+    let hi = pairs(v46, v57);
+
+    // Horizontal pair sums of rows i and i + 4 (low and high 4 lanes).
+    // Rows i and i + 4 have disjoint 4-lane windows at offsets i and i + 4
+    // in p1 (and 7 - i and 3 - i in p3r), so packing [row_i, row_{i+4}]
+    // into 8-lane vectors reduces p1 and p3r to 4-step accumulations.
+    let q = [
+        addp(x[0], x[4]),
+        addp(x[1], x[5]),
+        addp(x[2], x[6]),
+        addp(x[3], x[7]),
+    ];
+    let p2 = if cfg!(target_arch = "x86_64") {
+        let q01 = simd_swizzle!(q[0], q[1], [0, 1, 4, 5, 8, 9, 12, 13])
+            + simd_swizzle!(q[0], q[1], [2, 3, 6, 7, 10, 11, 14, 15]);
+        let q23 = simd_swizzle!(q[2], q[3], [0, 1, 4, 5, 8, 9, 12, 13])
+            + simd_swizzle!(q[2], q[3], [2, 3, 6, 7, 10, 11, 14, 15]);
+        addp(q01, q23)
+    } else {
+        addp(addp(q[0], q[1]), addp(q[2], q[3]))
+    }; // partial[2] (permuted)
+    let v02 = pairs(c0, weighted_hv(p2));
+    let v13 = weighted_odd_pair(acc_odd(q[0], q[1], q[2], q[3]), acc_odd_q3(q[0], q[1], q[2], q[3]));
+    let lo = pairs(v02, v13);
+
+    let (lo, hi) = if cfg!(target_arch = "x86_64") {
+        (lo, hi)
+    } else {
+        let scale = i32x4::from_array([1, 105, 35, 35]);
+        (lo * scale, hi * scale)
+    };
+    // Lanes hold `(cost[d], cost[d + 4])` for `d = [0, 2, 1, 3]`. For the
+    // winning lane, max_lh[k] is best_cost and min_lh[k] is cost[y_dir ^ 4].
+    // Since `var < 2^20`, setting bits 24..28 to `15 - d` (in `8..16`) for
+    // matching lanes and 0 for non-matching lanes lets `(dir_tag | var)` and
+    // signed `reduce_max` pick the first direction of maximal cost alongside
+    // its variance.
     let max_lh = lo.simd_max(hi);
     let min_lh = lo.simd_min(hi);
-    let best = i32x4::splat(max_lh.reduce_max());
-    let var = ((max_lh - min_lh).cast::<u32>() >> 10)
-        | u32x4::from_array([0 << 24, 1 << 24, 2 << 24, 3 << 24]);
-    let m_lo = lo.simd_eq(best).select(var, u32x4::splat(u32::MAX));
-    let m_hi = hi.simd_eq(best).select(var | u32x4::splat(4 << 24), u32x4::splat(u32::MAX));
-    let r = m_lo.simd_min(m_hi).reduce_min();
-    ((r >> 24) as usize, (r & 0xff_ffff) as i32)
+    let best = if cfg!(target_arch = "x86_64") {
+        let m = max_lh.simd_max(simd_swizzle!(max_lh, [2, 3, 0, 1]));
+        m.simd_max(simd_swizzle!(m, [1, 0, 3, 2]))
+    } else {
+        i32x4::splat(max_lh.reduce_max())
+    };
+    let eq_lo = lo.simd_eq(best);
+    let eq_any = eq_lo | hi.simd_eq(best);
+    let dir_tag = eq_any.select(
+        i32x4::from_array([11 << 24, 9 << 24, 10 << 24, 8 << 24]),
+        i32x4::splat(0),
+    ) | eq_lo.select(i32x4::splat(4 << 24), i32x4::splat(0));
+    let r = (dir_tag | ((max_lh - min_lh) >> 10)).reduce_max() as u32;
+    (((!r >> 24) & 7) as usize, (r & 0xff_ffff) as i32)
 }
 
 
@@ -689,9 +827,8 @@ mod u8_path {
     use crate::decoder::av1::dsp::cdef::CDEF_DIRECTIONS;
 
     /// Length of the local `u8` copy of a block and its border:
-    /// `(H + 4)` rows of `stride::<W>()` samples, plus slack for the
-    /// windows of the last rows.
-    const BLK: usize = 12 * 16 + 16;
+    /// `(H + 4)` rows of `stride::<W>()` samples (`4 * 16 + 4 + WIN <= 192`).
+    const BLK: usize = 12 * 16;
 
     /// Length of a tap window (see `simd::cdef::Window`): enough for all
     /// loads of a block, which end at `16 * 7 + 8` (W = 8) and `8 * 4 +
@@ -726,33 +863,79 @@ mod u8_path {
             let b = u8x8::from_slice(&win[pos + s..pos + s + 8]);
             simd_swizzle!(a, b, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
         } else {
-            let v = u8x32::from_slice(&win[pos..pos + 32]);
-            simd_swizzle!(
-                v,
-                [0, 1, 2, 3, 8, 9, 10, 11, 16, 17, 18, 19, 24, 25, 26, 27]
-            )
+            let a = u32x4::from_ne_bytes(u8x16::from_slice(&win[pos..pos + 16]));
+            let b = u32x4::from_ne_bytes(u8x16::from_slice(&win[pos + 16..pos + 32]));
+            simd_swizzle!(a, b, [0, 2, 4, 6]).to_ne_bytes()
+        }
+    }
+
+    /// A byte shift right by `sh` (direct vector shift on aarch64 NEON;
+    /// 16-bit shift + byte mask on x86_64 where there is no byte shift).
+    #[cfg(target_arch = "aarch64")]
+    type Sh<const N: usize> = Simd<u8, N>;
+
+    #[cfg(not(target_arch = "aarch64"))]
+    #[derive(Clone, Copy)]
+    struct Sh<const N: usize> {
+        sh: u16,
+        mask: Simd<u8, N>,
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[inline(always)]
+    fn make_sh<const N: usize>(sh: u32) -> Sh<N> {
+        Simd::splat(sh as u8)
+    }
+
+    #[cfg(not(target_arch = "aarch64"))]
+    #[inline(always)]
+    fn make_sh<const N: usize>(sh: u32) -> Sh<N> {
+        Sh {
+            sh: sh as u16,
+            mask: Simd::splat((0xffu32 >> sh) as u8),
+        }
+    }
+
+    /// `v >> sh` (bytes) as a 16-bit shift and a mask.
+    #[cfg(not(target_arch = "aarch64"))]
+    #[inline(always)]
+    fn shr<const N: usize>(v: Simd<u8, N>, sh: Sh<N>) -> Simd<u8, N> {
+        if N == 32 {
+            let w = u16x16::from_ne_bytes(Simd::<u8, 32>::from_slice(v.as_array()).to_ne_bytes());
+            Simd::from_slice(&(w >> sh.sh).to_ne_bytes().to_array()) & sh.mask
+        } else {
+            let w = u16x8::from_ne_bytes(Simd::<u8, 16>::from_slice(v.as_array()).to_ne_bytes());
+            Simd::from_slice(&(w >> sh.sh).to_ne_bytes().to_array()) & sh.mask
         }
     }
 
     /// Spec `constrain(p - x, strength, damping)` with the shift `sh =
     /// adj` precomputed (see the module documentation).
+    #[cfg(target_arch = "aarch64")]
     #[inline(always)]
-    fn constrain(x: u8x16, p: u8x16, strength: u8x16, sh: u8x16) -> i8x16 {
-        let mn = x.simd_min(p);
-        let ad = x.simd_max(p) - mn;
-        let m = strength.saturating_sub(ad >> sh).simd_min(ad).cast::<i8>();
-        let neg = if cfg!(target_arch = "x86_64") { mn.simd_eq(p) } else { x.simd_gt(p) };
-        neg.select(-m, m)
+    fn constrain<const N: usize>(
+        x: Simd<u8, N>,
+        p: Simd<u8, N>,
+        th: Simd<u8, N>,
+        sh: Sh<N>,
+    ) -> Simd<i8, N> {
+        let ad = x.simd_max(p) - x.simd_min(p);
+        let mag = th.saturating_sub(ad >> sh).simd_min(ad).cast::<i8>();
+        x.simd_gt(p).select(-mag, mag)
     }
 
-    /// 32-lane `constrain` on `[x, x]` and `[a, b]` (for AVX2).
+    #[cfg(not(target_arch = "aarch64"))]
     #[inline(always)]
-    fn constrain32(xx: u8x32, ab: u8x32, strength: u8x32, sh: u8x32) -> i8x32 {
-        let mn = xx.simd_min(ab);
-        let ad = xx.simd_max(ab) - mn;
-        let m = strength.saturating_sub(ad >> sh).simd_min(ad).cast::<i8>();
-        let neg = if cfg!(target_arch = "x86_64") { mn.simd_eq(ab) } else { xx.simd_gt(ab) };
-        neg.select(-m, m)
+    fn constrain<const N: usize>(
+        x: Simd<u8, N>,
+        p: Simd<u8, N>,
+        th: Simd<u8, N>,
+        sh: Sh<N>,
+    ) -> Simd<i8, N> {
+        let a = p.saturating_sub(x);
+        let b = x.saturating_sub(p);
+        let t = th.saturating_sub(shr(a | b, sh));
+        (t.simd_min(a) - t.simd_min(b)).cast::<i8>()
     }
 
     /// Loads `N` 8-bit samples of a pixel row as bytes.
@@ -783,7 +966,7 @@ mod u8_path {
         dir: usize,
         tap_set: usize,
     ) {
-        assert!(src_stride <= 0xffff_ffff);
+        let (src_stride, dst_stride) = (src_stride as u32 as usize, dst_stride as u32 as usize);
         let s = stride(W);
         let src = &src[..(H + 2 * CDEF_BORDER - 1) * src_stride + s];
         let mut blk = [0u8; BLK];
@@ -792,11 +975,11 @@ mod u8_path {
             // each of the later loads from it (8 bytes at offsets <= 4
             // for W = 8, 4 bytes at offsets <= 4 for W = 4), so that
             // they can be store-forwarded.
-            let row = &src[r * src_stride..];
+            let pos = r * src_stride;
             if W == 8 {
-                blk[r * s..r * s + 16].copy_from_slice(&load_px::<T, 16>(row));
+                blk[r * s..r * s + 16].copy_from_slice(&load_px::<T, 16>(&src[pos..pos + 16]));
             } else {
-                blk[r * s..r * s + 8].copy_from_slice(&load_px::<T, 8>(row));
+                blk[r * s..r * s + 8].copy_from_slice(&load_px::<T, 8>(&src[pos..pos + 8]));
             }
         }
         match (pri_str != 0, sec_str != 0) {
@@ -824,7 +1007,6 @@ mod u8_path {
         dir: usize,
         tap_set: usize,
     ) {
-        assert!(dst_stride <= 0xffff_ffff);
         let dst = &mut dst[..(H - 1) * dst_stride + W];
         let s = stride(W);
         let w = |o: isize| window::<W>(blk, o);
@@ -839,48 +1021,206 @@ mod u8_path {
         }
     }
 
+    const COL_MASK_8: [[u8; 16]; 4] = [
+        [
+            0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0,
+        ],
+        [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0,
+        ],
+        [
+            0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0,
+        ],
+        [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0,
+        ],
+    ];
+
+    const COL_MASK_4: [[u8; 8]; 4] = [
+        [0, 0, 0xff, 0xff, 0xff, 0xff, 0, 0],
+        [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0],
+        [0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+        [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+    ];
+
+    /// Filters a `w x h` block of 8-bit pixels at a frame border
+    /// (`edges != CDEF_HAVE_ALL`) in `u8` lanes by replacing unavailable
+    /// tap lanes with the center pixel `x` (`constrain(x, x) == 0`,
+    /// `min(min, x) == min`, `max(max, x) == max`).
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    pub(super) fn filter_edges<T: Pixel>(
+        dst: &mut [T],
+        dst_stride: usize,
+        src: &[T],
+        src_stride: usize,
+        w: usize,
+        h: usize,
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+        dir: usize,
+        tap_set: usize,
+        edges: u8,
+    ) {
+        match (w, h) {
+            (8, 8) => filter_edges_wh::<T, 8, 8>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set, edges,
+            ),
+            (4, 4) => filter_edges_wh::<T, 4, 4>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set, edges,
+            ),
+            (8, 4) => filter_edges_wh::<T, 8, 4>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set, edges,
+            ),
+            _ => filter_edges_wh::<T, 4, 8>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set, edges,
+            ),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    fn filter_edges_wh<T: Pixel, const W: usize, const H: usize>(
+        dst: &mut [T],
+        dst_stride: usize,
+        src: &[T],
+        src_stride: usize,
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+        dir: usize,
+        tap_set: usize,
+        edges: u8,
+    ) {
+        let (src_stride, dst_stride) = (src_stride as u32 as usize, dst_stride as u32 as usize);
+        let s = stride(W);
+        let src = &src[..(H + 3) * src_stride + s];
+        let mut blk = [0u8; BLK];
+        let mut msk = [0u8; BLK];
+        if W == 8 {
+            let cm = COL_MASK_8[(edges & 3) as usize];
+            let top = if edges & 4 != 0 { cm } else { [0u8; 16] };
+            let bot = if edges & 8 != 0 { cm } else { [0u8; 16] };
+            for r in 0..H + 4 {
+                let pos = r * src_stride;
+                blk[r * 16..r * 16 + 16].copy_from_slice(&load_px::<T, 16>(&src[pos..pos + 16]));
+                let m = if r < 2 {
+                    top
+                } else if r < H + 2 {
+                    cm
+                } else {
+                    bot
+                };
+                msk[r * 16..r * 16 + 16].copy_from_slice(&m);
+            }
+        } else {
+            let cm = COL_MASK_4[(edges & 3) as usize];
+            let top = if edges & 4 != 0 { cm } else { [0u8; 8] };
+            let bot = if edges & 8 != 0 { cm } else { [0u8; 8] };
+            for r in 0..H + 4 {
+                let pos = r * src_stride;
+                blk[r * 8..r * 8 + 8].copy_from_slice(&load_px::<T, 8>(&src[pos..pos + 8]));
+                let m = if r < 2 {
+                    top
+                } else if r < H + 2 {
+                    cm
+                } else {
+                    bot
+                };
+                msk[r * 8..r * 8 + 8].copy_from_slice(&m);
+            }
+        }
+        match (pri_str != 0, sec_str != 0) {
+            (true, true) => run_edges::<T, W, H, true, true>(
+                dst, dst_stride, &blk, &msk, pri_str, sec_str, damping, dir, tap_set,
+            ),
+            (true, false) => run_edges::<T, W, H, true, false>(
+                dst, dst_stride, &blk, &msk, pri_str, sec_str, damping, dir, tap_set,
+            ),
+            _ => run_edges::<T, W, H, false, true>(
+                dst, dst_stride, &blk, &msk, pri_str, sec_str, damping, dir, tap_set,
+            ),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    fn run_edges<T: Pixel, const W: usize, const H: usize, const PRI: bool, const SEC: bool>(
+        dst: &mut [T],
+        dst_stride: usize,
+        blk: &[u8; BLK],
+        msk: &[u8; BLK],
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+        dir: usize,
+        tap_set: usize,
+    ) {
+        let dst = &mut dst[..(H - 1) * dst_stride + W];
+        let s = stride(W);
+        let off = |d: usize, k: usize| tap_offset(d, k, s);
+        let center = window::<W>(blk, 0);
+        let k = K8::new::<PRI, SEC>(pri_str, sec_str, damping, tap_set);
+        let step = 16 / W;
+        let mut i = 0;
+        while i < H {
+            let row_i = i & (H - step);
+            let x = load::<W>(center, row_i);
+            let tap = |d: usize, t: usize, sign: isize| {
+                let o = sign * off(d, t);
+                let p = load::<W>(window::<W>(blk, o), row_i);
+                let m = load::<W>(window::<W>(msk, o), row_i);
+                (p & m) | (x & !m)
+            };
+            let v = compute::<PRI, SEC>(x, dir, &k, tap);
+            store::<T, W>(dst, dst_stride, row_i, v);
+            i += step;
+        }
+    }
+
     /// Stores the 16 lanes of `v` to rows `i..i + 16 / W` of `dst`.
     #[inline(always)]
     fn store<T: Pixel, const W: usize>(dst: &mut [T], dst_stride: usize, i: usize, v: u8x16) {
         if W == 4 {
-            let rows = [
-                simd_swizzle!(v, [0, 1, 2, 3, 0, 1, 2, 3]),
-                simd_swizzle!(v, [4, 5, 6, 7, 4, 5, 6, 7]),
-                simd_swizzle!(v, [8, 9, 10, 11, 8, 9, 10, 11]),
-                simd_swizzle!(v, [12, 13, 14, 15, 12, 13, 14, 15]),
-            ];
-            for (r, rv) in rows.into_iter().enumerate() {
-                let a = rv.cast::<u16>().to_array();
+            let rows = u32x4::from_ne_bytes(v).to_array();
+            for (r, &w) in rows.iter().enumerate() {
                 let start = (i + r) * dst_stride;
                 let row: &mut [T; 4] = (&mut dst[start..start + 4]).try_into().unwrap();
+                let b = w.to_ne_bytes();
                 for j in 0..4 {
-                    row[j] = T::from_i32(a[j] as i32);
+                    row[j] = T::from_i32(b[j] as i32);
                 }
             }
-            return;
-        }
-        let v = v.to_array();
-        for r in 0..16 / W {
-            let start = (i + r) * dst_stride;
-            let row: &mut [T; W] = (&mut dst[start..start + W]).try_into().unwrap();
-            for j in 0..W {
-                row[j] = T::from_i32(v[r * W + j] as i32);
+        } else {
+            let rows = u64x2::from_ne_bytes(v).to_array();
+            for (r, &w) in rows.iter().enumerate() {
+                let start = (i + r) * dst_stride;
+                let row: &mut [T; 8] = (&mut dst[start..start + 8]).try_into().unwrap();
+                let b = w.to_ne_bytes();
+                for j in 0..8 {
+                    row[j] = T::from_i32(b[j] as i32);
+                }
             }
         }
     }
 
-    /// Per-block parameters, as lane vectors.
-    struct K8 {
-        pri_th: u8x16,
-        sec_th: u8x16,
-        pri_sh: u8x16,
-        sec_sh: u8x16,
+    /// Per-block parameters on `N` lanes.
+    struct Kn<const N: usize> {
+        pri_th: Simd<u8, N>,
+        sec_th: Simd<u8, N>,
+        /// The damping shifts (as 16-bit lane shifts) and the masks
+        /// `0xff >> shift` that make them byte shifts.
+        pri_sh: Sh<N>,
+        sec_sh: Sh<N>,
         /// All-ones (`-1`) when `tap_set == 0` (`CDEF_PRI_TAPS = [4, 2]`),
         /// `0` when `tap_set == 1` (`[3, 3]`).
-        even_mask: i8x16,
+        even_mask: Simd<i8, N>,
     }
 
-    impl K8 {
+    type K8 = Kn<16>;
+
+    impl<const N: usize> Kn<N> {
         #[inline(always)]
         fn new<const PRI: bool, const SEC: bool>(
             pri_str: i32,
@@ -888,26 +1228,25 @@ mod u8_path {
             damping: i32,
             tap_set: usize,
         ) -> Self {
-            let z = u8x16::splat(0);
-            let zi = i8x16::splat(0);
+            let z = Simd::splat(0);
             let (pri_th, pri_sh, even_mask) = if PRI {
                 (
-                    u8x16::splat(pri_str as u8),
-                    u8x16::splat(damping_adj(pri_str, damping) as u8),
-                    i8x16::splat(((tap_set & 1) as i8) - 1),
+                    Simd::splat(pri_str as u8),
+                    make_sh(damping_adj(pri_str, damping)),
+                    Simd::splat(((tap_set & 1) as i8) - 1),
                 )
             } else {
-                (z, z, zi)
+                (z, make_sh(0), Simd::splat(0))
             };
             let (sec_th, sec_sh) = if SEC {
                 (
-                    u8x16::splat(sec_str as u8),
-                    u8x16::splat(damping_adj(sec_str, damping) as u8),
+                    Simd::splat(sec_str as u8),
+                    make_sh(damping_adj(sec_str, damping)),
                 )
             } else {
-                (z, z)
+                (z, make_sh(0))
             };
-            K8 {
+            Kn {
                 pri_th,
                 sec_th,
                 pri_sh,
@@ -936,7 +1275,8 @@ mod u8_path {
         let clamp = PRI && SEC;
         let mut min = x;
         let mut max = x;
-        let (e, f) = if cfg!(target_feature = "avx2") {
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        let (e, f) = {
             let dup = |v: u8x16| -> u8x32 {
                 simd_swizzle!(
                     v,
@@ -959,38 +1299,48 @@ mod u8_path {
             let xx = dup(x);
             let mut min32 = xx;
             let mut max32 = xx;
-            let mut pair32 = |d: usize, t: usize, th: u8x32, sh: u8x32| -> i8x32 {
-                let a = tap(d, t, 1);
-                let b = tap(d, t, -1);
-                let ab: u8x32 = simd_swizzle!(
-                    a,
-                    b,
-                    [
-                        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-                        21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
-                    ]
-                );
-                if clamp {
-                    min32 = min32.simd_min(ab);
-                    max32 = max32.simd_max(ab);
-                }
-                constrain32(xx, ab, th, sh)
-            };
+            macro_rules! pair32 {
+                ($d:expr, $t:expr, $th:expr, $sh:expr) => {{
+                    let a = tap($d, $t, 1);
+                    let b = tap($d, $t, -1);
+                    let ab: u8x32 = simd_swizzle!(
+                        a,
+                        b,
+                        [
+                            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                            20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+                        ]
+                    );
+                    if clamp {
+                        min32 = min32.simd_min(ab);
+                        max32 = max32.simd_max(ab);
+                    }
+                    constrain::<32>(xx, ab, $th, $sh)
+                }};
+            }
             let (mut e32, mut f32) = (i8x32::splat(0), i8x32::splat(0));
             if PRI {
-                let (th, sh) = (dup(k.pri_th), dup(k.pri_sh));
+                let th = dup(k.pri_th);
+                let sh = Sh::<32> {
+                    sh: k.pri_sh.sh,
+                    mask: dup(k.pri_sh.mask),
+                };
                 let mask = dup(k.even_mask.cast::<u8>()).cast::<i8>();
-                let p0 = pair32(dir, 0, th, sh);
-                let p1 = pair32(dir, 1, th, sh);
+                let p0 = pair32!(dir, 0, th, sh);
+                let p1 = pair32!(dir, 1, th, sh);
                 let p01 = p0 + p1;
                 e32 = p01;
                 f32 = p01 + ((p0 - p1) & mask);
             }
             if SEC {
-                let (th, sh) = (dup(k.sec_th), dup(k.sec_sh));
+                let th = dup(k.sec_th);
+                let sh = Sh::<32> {
+                    sh: k.sec_sh.sh,
+                    mask: dup(k.sec_sh.mask),
+                };
                 let (s0, s1) = ((dir + 6) & 7, (dir + 2) & 7);
-                let c0 = pair32(s0, 0, th, sh) + pair32(s1, 0, th, sh);
-                let c1 = pair32(s0, 1, th, sh) + pair32(s1, 1, th, sh);
+                let c0 = pair32!(s0, 0, th, sh) + pair32!(s1, 0, th, sh);
+                let c1 = pair32!(s0, 1, th, sh) + pair32!(s1, 1, th, sh);
                 e32 = if PRI { e32 + c0 } else { c0 };
                 f32 = if PRI { f32 + c1 } else { c1 };
             }
@@ -1015,42 +1365,56 @@ mod u8_path {
                 max = max_lo.simd_max(max_hi);
             }
             (fold_i8(e32), fold_i8(f32))
-        } else {
-            let mut pair = |d: usize, t: usize, th: u8x16, sh: u8x16| -> i8x16 {
-                let a = tap(d, t, 1);
-                let b = tap(d, t, -1);
-                if clamp {
-                    min = min.simd_min(a).simd_min(b);
-                    max = max.simd_max(a).simd_max(b);
-                }
-                constrain(x, a, th, sh) + constrain(x, b, th, sh)
-            };
+        };
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+        let (e, f) = {
+            macro_rules! pair {
+                ($d:expr, $t:expr, $th:expr, $sh:expr) => {{
+                    let a = tap($d, $t, 1);
+                    let b = tap($d, $t, -1);
+                    if clamp {
+                        min = min.simd_min(a).simd_min(b);
+                        max = max.simd_max(a).simd_max(b);
+                    }
+                    constrain::<16>(x, a, $th, $sh) + constrain::<16>(x, b, $th, $sh)
+                }};
+            }
             let (mut e, mut f) = (i8x16::splat(0), i8x16::splat(0));
             if PRI {
-                let p0 = pair(dir, 0, k.pri_th, k.pri_sh);
-                let p1 = pair(dir, 1, k.pri_th, k.pri_sh);
+                let p0 = pair!(dir, 0, k.pri_th, k.pri_sh);
+                let p1 = pair!(dir, 1, k.pri_th, k.pri_sh);
                 let p01 = p0 + p1;
                 e = p01;
                 f = p01 + ((p0 - p1) & k.even_mask);
             }
             if SEC {
                 let (s0, s1) = ((dir + 6) & 7, (dir + 2) & 7);
-                let c0 = pair(s0, 0, k.sec_th, k.sec_sh) + pair(s1, 0, k.sec_th, k.sec_sh);
-                let c1 = pair(s0, 1, k.sec_th, k.sec_sh) + pair(s1, 1, k.sec_th, k.sec_sh);
+                let c0 = pair!(s0, 0, k.sec_th, k.sec_sh) + pair!(s1, 0, k.sec_th, k.sec_sh);
+                let c1 = pair!(s0, 1, k.sec_th, k.sec_sh) + pair!(s1, 1, k.sec_th, k.sec_sh);
                 e = if PRI { e + c0 } else { c0 };
                 f = if PRI { f + c1 } else { c1 };
             }
             (e, f)
         };
-        let sum = (e.cast::<i16>() << 1) + f.cast::<i16>();
-        let off = (i16x16::splat(8) + sum + (sum >> 15)) >> 4;
         if clamp {
-            let v = (x.cast::<i16>() + off)
-                .simd_max(i16x16::splat(0))
-                .simd_min(i16x16::splat(255))
-                .cast::<u8>();
+            let sum = (e.cast::<i16>() << 1) + f.cast::<i16>();
+            let off = ((i16x16::splat(8) + sum + (sum >> 15)) >> 4).cast::<i8>();
+            let bias = u8x16::splat(0x80);
+            let v = ((x ^ bias).cast::<i8>().saturating_add(off)).cast::<u8>() ^ bias;
             v.simd_max(min).simd_min(max)
+        } else if cfg!(target_arch = "x86_64") {
+            let shr = |v: u8x16, s: u16, m: u8| -> u8x16 {
+                (u16x8::from_ne_bytes(v.to_ne_bytes()) >> s).to_ne_bytes() & u8x16::splat(m)
+            };
+            let s = (e + e).saturating_add(f);
+            let pos = s.simd_gt(i8x16::splat(-1)).to_simd().cast::<u8>();
+            let fh = shr(f.cast::<u8>() - pos + u8x16::splat(183), 1, 0x7f);
+            let su = e.cast::<u8>() + fh;
+            // Within the range of the taps, i.e. 0..=255.
+            (x - u8x16::splat(11)) + shr(su, 3, 0x1f)
         } else {
+            let neg = (e + e).saturating_add(f) >> 7;
+            let off = (e + i8x16::splat(4) + ((f + neg) >> 1)) >> 3;
             // Within the range of the taps, i.e. 0..=255.
             x + off.cast::<u8>()
         }
@@ -1071,99 +1435,6 @@ mod u8_path {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     pub(super) mod avx2 {
         use super::*;
-
-        /// Per-block parameters on `N` lanes (see [`K8`]).
-        struct Kn<const N: usize> {
-            pri_th: Simd<u8, N>,
-            sec_th: Simd<u8, N>,
-            /// The damping shifts (as 16-bit lane shifts) and the masks
-            /// `0xff >> shift` that make them byte shifts.
-            pri_sh: Sh<N>,
-            sec_sh: Sh<N>,
-            even_mask: Simd<i8, N>,
-        }
-
-        /// A byte shift right by `sh` as a 16-bit shift and a mask.
-        #[derive(Clone, Copy)]
-        struct Sh<const N: usize> {
-            sh: u16,
-            mask: Simd<u8, N>,
-        }
-
-        impl<const N: usize> Sh<N> {
-            #[inline(always)]
-            fn new(sh: u32) -> Self {
-                Sh {
-                    sh: sh as u16,
-                    mask: Simd::splat((0xffu32 >> sh) as u8),
-                }
-            }
-        }
-
-        impl<const N: usize> Kn<N> {
-            #[inline(always)]
-            fn new<const PRI: bool, const SEC: bool>(
-                pri_str: i32,
-                sec_str: i32,
-                damping: i32,
-                tap_set: usize,
-            ) -> Self {
-                let z = Simd::splat(0);
-                let (pri_th, pri_sh, even_mask) = if PRI {
-                    (
-                        Simd::splat(pri_str as u8),
-                        Sh::new(damping_adj(pri_str, damping)),
-                        Simd::splat(((tap_set & 1) as i8) - 1),
-                    )
-                } else {
-                    (z, Sh::new(0), Simd::splat(0))
-                };
-                let (sec_th, sec_sh) = if SEC {
-                    (
-                        Simd::splat(sec_str as u8),
-                        Sh::new(damping_adj(sec_str, damping)),
-                    )
-                } else {
-                    (z, Sh::new(0))
-                };
-                Kn {
-                    pri_th,
-                    sec_th,
-                    pri_sh,
-                    sec_sh,
-                    even_mask,
-                }
-            }
-        }
-
-        /// Spec `constrain(p - x, strength, damping)` (see the module
-        /// documentation and [`super::constrain`]).
-        #[inline(always)]
-        fn constrain<const N: usize>(
-            x: Simd<u8, N>,
-            p: Simd<u8, N>,
-            th: Simd<u8, N>,
-            sh: Sh<N>,
-        ) -> Simd<i8, N> {
-            let a = p.saturating_sub(x);
-            let b = x.saturating_sub(p);
-            let t = th.saturating_sub(shr(a | b, sh));
-            (t.simd_min(a) - t.simd_min(b)).cast::<i8>()
-        }
-
-        /// `v >> sh` (bytes) as a 16-bit shift and a mask.
-        #[inline(always)]
-        fn shr<const N: usize>(v: Simd<u8, N>, sh: Sh<N>) -> Simd<u8, N> {
-            if N == 32 {
-                let w =
-                    u16x16::from_ne_bytes(Simd::<u8, 32>::from_slice(v.as_array()).to_ne_bytes());
-                Simd::from_slice(&(w >> sh.sh).to_ne_bytes().to_array()) & sh.mask
-            } else {
-                let w =
-                    u16x8::from_ne_bytes(Simd::<u8, 16>::from_slice(v.as_array()).to_ne_bytes());
-                Simd::from_slice(&(w >> sh.sh).to_ne_bytes().to_array()) & sh.mask
-            }
-        }
 
         /// In-lane byte interleave with zero: `[0, v[16 * b + i + H]]`
         /// pairs (`i` in `0..8`) for every 16-byte block `b` (`H = 8` for
@@ -1547,6 +1818,7 @@ mod u8_path {
     /// loaded once and every tap vector is one table lookup on two row
     /// pairs. `DIR` is the (constant) direction. Same contract as
     /// [`filter`].
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     #[allow(clippy::too_many_arguments)]
     #[inline(never)]
     pub(super) fn filter_4x4<T: Pixel, const DIR: usize, const PRI: bool, const SEC: bool>(
@@ -1557,26 +1829,14 @@ mod u8_path {
         pri_str: i32,
         sec_str: i32,
         damping: i32,
-        tap_set: usize,
     ) {
-        assert!(src_stride <= 0xffff_ffff && dst_stride <= 0xffff_ffff);
+        let (src_stride, dst_stride) = (src_stride as u32 as usize, dst_stride as u32 as usize);
         let src = &src[..7 * src_stride + 8];
         let dst = &mut dst[..3 * dst_stride + 4];
-        let rows: [u8x8; 8] =
-            std::array::from_fn(|r| u8x8::from_array(load_px::<T, 8>(&src[r * src_stride..])));
-        // A flat block (and border) is left unchanged (see `flat_8x8`).
-        if DIR == 0 {
-            let v = u8x8::splat(rows[0][0]);
-            if rows
-                .iter()
-                .fold(u8x8::splat(0), |acc, &r| acc | (r ^ v))
-                .reduce_or()
-                == 0
-            {
-                store::<T, 4>(dst, dst_stride, 0, u8x16::splat(rows[0][0]));
-                return;
-            }
-        }
+        let rows: [u8x8; 8] = std::array::from_fn(|r| {
+            let pos = r * src_stride;
+            u8x8::from_array(load_px::<T, 8>(&src[pos..pos + 8]))
+        });
         // pairs[r] = rows r and r + 1 as two u64 lanes.
         let pairs: [u64x2; 7] = std::array::from_fn(|r| {
             u64x2::from_ne_bytes(simd_swizzle!(
@@ -1588,16 +1848,28 @@ mod u8_path {
         // Rows 2 + dy..6 + dy, columns 2 + dx..6 + dx. All arguments are
         // constants after inlining.
         let at = |dy: isize, dx: isize| {
-            let sh = ((2 + dx) as u64) * 8;
-            let a = u32x4::from_ne_bytes((pairs[(2 + dy) as usize] >> sh).to_ne_bytes());
-            let b = u32x4::from_ne_bytes((pairs[(4 + dy) as usize] >> sh).to_ne_bytes());
-            simd_swizzle!(a, b, [0, 2, 4, 6]).to_ne_bytes()
+            let p0 = pairs[(2 + dy) as usize];
+            let p1 = pairs[(4 + dy) as usize];
+            if dx == 2 {
+                let a = u32x4::from_ne_bytes(p0.to_ne_bytes());
+                let b = u32x4::from_ne_bytes(p1.to_ne_bytes());
+                simd_swizzle!(a, b, [1, 3, 5, 7]).to_ne_bytes()
+            } else if dx == -2 {
+                let a = u32x4::from_ne_bytes(p0.to_ne_bytes());
+                let b = u32x4::from_ne_bytes(p1.to_ne_bytes());
+                simd_swizzle!(a, b, [0, 2, 4, 6]).to_ne_bytes()
+            } else {
+                let sh = ((2 + dx) as u64) * 8;
+                let a = u32x4::from_ne_bytes((p0 >> sh).to_ne_bytes());
+                let b = u32x4::from_ne_bytes((p1 >> sh).to_ne_bytes());
+                simd_swizzle!(a, b, [0, 2, 4, 6]).to_ne_bytes()
+            }
         };
         let tap = |d: usize, k: usize, sign: isize| {
             let [dy, dx] = CDEF_DIRECTIONS[d][k];
             at(sign * dy, sign * dx)
         };
-        let k = K8::new::<PRI, SEC>(pri_str, sec_str, damping, tap_set);
+        let k = K8::new::<PRI, SEC>(pri_str, sec_str, damping, (pri_str & 1) as usize);
         let v = compute::<PRI, SEC>(at(0, 0), DIR, &k, tap);
         store::<T, 4>(dst, dst_stride, 0, v);
     }
@@ -1649,22 +1921,34 @@ mod u8_path {
         sec_str: i32,
         damping: i32,
         dir: usize,
-        tap_set: usize,
+        _tap_set: usize,
     ) {
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        use avx2::filter_4x4;
+        {
+            use avx2::filter_4x4;
+            dispatch_dir!(
+                filter_4x4,
+                pri_str,
+                sec_str,
+                dir,
+                (dst, dst_stride, src, src_stride, pri_str, sec_str, damping, _tap_set)
+            );
+            return;
+        }
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
         dispatch_dir!(
             filter_4x4,
             pri_str,
             sec_str,
             dir,
-            (dst, dst_stride, src, src_stride, pri_str, sec_str, damping, tap_set)
+            (dst, dst_stride, src, src_stride, pri_str, sec_str, damping)
         )
     }
 
-    /// An 8x8 block without a tmp copy (see [`filter_4x4`]): the 12 rows
-    /// of 12 samples are held as 16 byte vectors and the lanes of rows
-    /// `i, i + 1` of a tap are one lookup on two of them.
+    /// An 8x8 block without a tmp copy: tap windows are sliced directly on
+    /// `src` and filtered two rows (`u8x16`) at a time. `DIR` is the
+    /// (constant) direction.
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     #[allow(clippy::too_many_arguments)]
     #[inline(never)]
     pub(super) fn filter_8x8<T: Pixel, const DIR: usize, const PRI: bool, const SEC: bool>(
@@ -1675,81 +1959,39 @@ mod u8_path {
         pri_str: i32,
         sec_str: i32,
         damping: i32,
-        tap_set: usize,
     ) {
-        assert!(src_stride <= 0xffff_ffff && dst_stride <= 0xffff_ffff);
-        let src = &src[..11 * src_stride + 16];
+        let (src_stride, dst_stride) = (src_stride as u32 as usize, dst_stride as u32 as usize);
+        let src = &src[..11 * src_stride + 12];
         let dst = &mut dst[..7 * dst_stride + 8];
-        if DIR == 0 && flat_8x8(src, src_stride) {
-            let v = u8x16::splat(src[2 * src_stride + 2].to_i32() as u8);
-            for i in [0, 2, 4, 6] {
-                store::<T, 8>(dst, dst_stride, i, v);
-            }
-            return;
-        }
-        let k = K8::new::<PRI, SEC>(pri_str, sec_str, damping, tap_set);
-        // Row r as [columns 0..8, columns 4..12].
-        macro_rules! load_row {
-            ($r:literal) => {{
-                let v = u8x16::from_array(load_px::<T, 16>(&src[$r * src_stride..]));
-                u64x2::from_ne_bytes(simd_swizzle!(
-                    v,
-                    [0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 8, 9, 10, 11]
-                ))
-            }};
-        }
+        let rows: [&[T; 12]; 12] = std::array::from_fn(|r| {
+            (&src[r * src_stride..r * src_stride + 12])
+                .try_into()
+                .unwrap()
+        });
+        let k = K8::new::<PRI, SEC>(pri_str, sec_str, damping, (pri_str & 1) as usize);
+        /// Concatenates two `u8x8` rows into one `u8x16`.
+        const CONCAT_8X2: [usize; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         macro_rules! row_pair {
-            ($i:literal, $r0:ident, $r1:ident, $r2:ident, $r3:ident, $r4:ident, $r5:ident) => {{
-                let win = [$r0, $r1, $r2, $r3, $r4, $r5];
-                let at = |dy: isize, dx: isize| {
-                    let r = (2 + dy) as usize;
-                    let sh = ((2 + dx) as u64) * 8;
-                    let a = u32x4::from_ne_bytes((win[r] >> sh).to_ne_bytes());
-                    let b = u32x4::from_ne_bytes((win[r + 1] >> sh).to_ne_bytes());
-                    simd_swizzle!(a, b, [0, 2, 4, 6]).to_ne_bytes()
+            ($i:literal) => {{
+                let load2 = |dy: isize, dx: isize| -> u8x16 {
+                    let ry = ($i + 2 + dy) as usize;
+                    let ox = (2 + dx) as usize;
+                    let a = u8x8::from_array(load_px::<T, 8>(&rows[ry][ox..]));
+                    let b = u8x8::from_array(load_px::<T, 8>(&rows[ry + 1][ox..]));
+                    simd_swizzle!(a, b, CONCAT_8X2)
                 };
-                let tap = |d: usize, k: usize, sign: isize| {
-                    let [dy, dx] = CDEF_DIRECTIONS[d][k];
-                    at(sign * dy, sign * dx)
+                let tap = |d: usize, t: usize, sign: isize| -> u8x16 {
+                    let [dy, dx] = CDEF_DIRECTIONS[d & 7][t];
+                    load2(sign * dy, sign * dx)
                 };
-                let v = compute::<PRI, SEC>(at(0, 0), DIR, &k, tap);
+                let v = compute::<PRI, SEC>(load2(0, 0), DIR, &k, tap);
                 store::<T, 8>(dst, dst_stride, $i, v);
             }};
         }
-        let (r0, r1, r2, r3, r4, r5) = (
-            load_row!(0),
-            load_row!(1),
-            load_row!(2),
-            load_row!(3),
-            load_row!(4),
-            load_row!(5),
-        );
-        row_pair!(0, r0, r1, r2, r3, r4, r5);
-        let (r6, r7) = (load_row!(6), load_row!(7));
-        row_pair!(2, r2, r3, r4, r5, r6, r7);
-        let (r8, r9) = (load_row!(8), load_row!(9));
-        row_pair!(4, r4, r5, r6, r7, r8, r9);
-        let (r10, r11) = (load_row!(10), load_row!(11));
-        row_pair!(6, r6, r7, r8, r9, r10, r11);
-    }
-
-    /// Whether the 12 x 12 samples of an 8x8 block and its border (`src`
-    /// as for [`filter_8x8`]) are all equal. Then every tap equals its
-    /// center sample, all constrained differences are 0 and the block is
-    /// left unchanged. Flat blocks have all direction costs equal, so
-    /// they get direction 0, and only those kernels test this (it is
-    /// common in synthetic content and alpha planes).
-    #[inline(always)]
-    fn flat_8x8<T: Pixel>(src: &[T], src_stride: usize) -> bool {
-        let v = u8x16::splat(src[0].to_i32() as u8);
-        let mut acc = u8x16::splat(0);
-        for r in 0..12 {
-            acc |= u8x16::from_array(load_px::<T, 16>(&src[r * src_stride..])) ^ v;
-        }
-        let m = u8x16::from_array([
-            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0,
-        ]);
-        (acc & m).reduce_or() == 0
+        row_pair!(0);
+        row_pair!(2);
+        row_pair!(4);
+        row_pair!(6);
     }
 
     /// [`filter_8x8`] for a runtime direction (`dir < 8`); the strengths
@@ -1765,31 +2007,430 @@ mod u8_path {
         sec_str: i32,
         damping: i32,
         dir: usize,
-        tap_set: usize,
+        _tap_set: usize,
     ) {
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-        use avx2::filter_8x8;
+        {
+            use avx2::filter_8x8;
+            dispatch_dir!(
+                filter_8x8,
+                pri_str,
+                sec_str,
+                dir,
+                (dst, dst_stride, src, src_stride, pri_str, sec_str, damping, _tap_set)
+            );
+            return;
+        }
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
         dispatch_dir!(
             filter_8x8,
             pri_str,
             sec_str,
             dir,
-            (dst, dst_stride, src, src_stride, pri_str, sec_str, damping, tap_set)
+            (dst, dst_stride, src, src_stride, pri_str, sec_str, damping)
         )
     }
 }
+
+/// High bit depth (16-bit lane) kernels for blocks whose border is
+/// entirely available (pixel source, no sentinels), with the direction a
+/// compile-time constant like [`u8_path`]: every tap is a load at a
+/// constant offset (8x8) or a constant shuffle of the rows held in
+/// registers (4x4), so that no per tap address or window set up is left.
+/// Same arithmetic (and exactness conditions: `damping <= 13`, strengths
+/// below [`FAST_MAX_STRENGTH`]) as [`filter_lanes`] without sentinels.
+mod dir16 {
+    use super::*;
+    use crate::decoder::av1::dsp::cdef::CDEF_DIRECTIONS;
+    use std::simd::Swizzle;
+
+    /// Splatted per block parameters.
+    struct K16<const L: usize> {
+        pri_str: Simd<u16, L>,
+        sec_str: Simd<u16, L>,
+        pri_adj: u16,
+        sec_adj: u16,
+        pri_taps: [Simd<i16, L>; 2],
+    }
+
+    impl<const L: usize> K16<L> {
+        #[inline(always)]
+        fn new<const PRI: bool, const SEC: bool>(
+            pri_str: i32,
+            sec_str: i32,
+            damping: i32,
+            tap_set: usize,
+        ) -> Self {
+            let taps = CDEF_PRI_TAPS[tap_set & 1];
+            K16 {
+                pri_str: Simd::splat(if PRI { pri_str as u16 } else { 0 }),
+                sec_str: Simd::splat(if SEC { sec_str as u16 } else { 0 }),
+                pri_adj: if PRI { damping_adj(pri_str, damping) as u16 } else { 0 },
+                sec_adj: if SEC { damping_adj(sec_str, damping) as u16 } else { 0 },
+                pri_taps: [Simd::splat(taps[0] as i16), Simd::splat(taps[1] as i16)],
+            }
+        }
+    }
+
+    /// `constrain(p - x, strength, damping)` for samples `p`, `x` in
+    /// `0..=30000`. Without `pabsw` (SSE2), `|p - x|` and its sign come
+    /// from the two saturating differences `a = p -sat x` and `b = x -sat
+    /// p` (one of which is 0): the result is `Min(a, t) - Min(b, t)`.
+    /// Swapping `p` and `x` exactly negates the result.
+    #[cfg(not(target_arch = "aarch64"))]
+    #[inline(always)]
+    fn constrain_diff<const L: usize>(
+        p: Simd<u16, L>,
+        x: Simd<u16, L>,
+        strength: Simd<u16, L>,
+        adj: u16,
+    ) -> Simd<i16, L> {
+        let a = p.saturating_sub(x);
+        let b = x.saturating_sub(p);
+        let t = strength.saturating_sub((a | b) >> adj).cast::<i16>();
+        a.cast::<i16>().simd_min(t) - b.cast::<i16>().simd_min(t)
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[inline(always)]
+    fn constrain_diff<const L: usize>(
+        p: Simd<u16, L>,
+        x: Simd<u16, L>,
+        strength: Simd<u16, L>,
+        adj: u16,
+    ) -> Simd<i16, L> {
+        constrain_i16(p.cast::<i16>() - x.cast::<i16>(), strength, adj)
+    }
+
+    /// Filters `L` lanes: `x` are the center samples and `tap(d, k, sign)`
+    /// gives the tap vector at `sign * CDEF_DIRECTIONS[d][k]` (see
+    /// [`filter_lanes`]). `pre(d, k, sign)` may return the precomputed
+    /// `constrain(tap(d, k, sign) - x)` (shared between rows, see
+    /// [`filter_8x8`]); its strength must be the one of the tap.
+    ///
+    /// The final clamp of `x + d` to `[x + min_d, x + max_d]` (with
+    /// `min_d = Min(0, p - x)` over all taps `p`) is done as a clamp to
+    /// the minimum / maximum of `x` and the taps.
+    #[inline(always)]
+    fn compute<const L: usize, const PRI: bool, const SEC: bool>(
+        x: Simd<u16, L>,
+        dir: usize,
+        k: &K16<L>,
+        tap: impl Fn(usize, usize, isize) -> Simd<u16, L>,
+        pre: impl Fn(usize, usize, isize) -> Option<Simd<i16, L>>,
+    ) -> Simd<u16, L> {
+        let xi = x.cast::<i16>();
+        let z = Simd::splat(0);
+        let mut min_p = xi;
+        let mut max_p = xi;
+        let mut pair = |d: usize, t: usize, strength: Simd<u16, L>, adj: u16| {
+            if PRI && SEC {
+                let (p0, p1) = (tap(d, t, 1).cast::<i16>(), tap(d, t, -1).cast::<i16>());
+                min_p = min_p.simd_min(p0).simd_min(p1);
+                max_p = max_p.simd_max(p0).simd_max(p1);
+            }
+            let c = |sign: isize| match pre(d, t, sign) {
+                Some(v) => v,
+                None => constrain_diff(tap(d, t, sign), x, strength, adj),
+            };
+            c(1) + c(-1)
+        };
+        let mut sum = z;
+        if PRI {
+            let s0 = pair(dir, 0, k.pri_str, k.pri_adj);
+            let s1 = pair(dir, 1, k.pri_str, k.pri_adj);
+            sum += k.pri_taps[0] * s0 + k.pri_taps[1] * s1;
+        }
+        if SEC {
+            let (s0d, s1d) = ((dir + 6) & 7, (dir + 2) & 7);
+            let s0 = pair(s0d, 0, k.sec_str, k.sec_adj) + pair(s1d, 0, k.sec_str, k.sec_adj);
+            let s1 = pair(s0d, 1, k.sec_str, k.sec_adj) + pair(s1d, 1, k.sec_str, k.sec_adj);
+            sum += (s0 << 1) + s1;
+        }
+        let mut y = xi + ((Simd::splat(8) + sum + (sum >> 15)) >> 4);
+        if PRI && SEC {
+            y = y.simd_max(min_p).simd_min(max_p);
+        }
+        y.cast::<u16>()
+    }
+
+    /// Lanes `K..K + 4` of `a` followed by lanes `K..K + 4` of `b`.
+    struct Pick<const K: usize>;
+    impl<const K: usize> Swizzle<8> for Pick<K> {
+        const INDEX: [usize; 8] = [K, K + 1, K + 2, K + 3, 8 + K, 9 + K, 10 + K, 11 + K];
+    }
+
+    /// [`Pick`] for a `k` that is a constant after inlining.
+    #[inline(always)]
+    fn pick(a: u16x8, b: u16x8, k: usize) -> u16x8 {
+        match k {
+            0 => Pick::<0>::concat_swizzle(a, b),
+            1 => Pick::<1>::concat_swizzle(a, b),
+            2 => Pick::<2>::concat_swizzle(a, b),
+            3 => Pick::<3>::concat_swizzle(a, b),
+            _ => Pick::<4>::concat_swizzle(a, b),
+        }
+    }
+
+    /// A 4x4 block: the 8 rows of 8 samples of the block and its border
+    /// are loaded once, every tap vector (two rows) is a constant shuffle
+    /// of two of them. `src[0]` is the top-left border sample; `DIR` is
+    /// the direction.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    pub(super) fn filter_4x4<T: Pixel, const DIR: usize, const PRI: bool, const SEC: bool>(
+        dst: &mut [T],
+        dst_stride: usize,
+        src: &[T],
+        src_stride: usize,
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+        tap_set: usize,
+    ) {
+        let (src_stride, dst_stride) = (src_stride as u32 as usize, dst_stride as u32 as usize);
+        let src = &src[..7 * src_stride + 8];
+        let dst = &mut dst[..3 * dst_stride + 4];
+        let rows: [u16x8; 8] = std::array::from_fn(|r| {
+            let pos = r * src_stride;
+            u16x8::from_array(load_u16::<T, 8>(&src[pos..pos + 8]))
+        });
+        let k = K16::<8>::new::<PRI, SEC>(pri_str, sec_str, damping, tap_set);
+        // The strength used with direction `d` (primary or secondary).
+        let strength_of = |d: usize| {
+            if PRI && d == DIR {
+                (k.pri_str, k.pri_adj)
+            } else {
+                (k.sec_str, k.sec_adj)
+            }
+        };
+        // A `[2, 0]` tap (direction 6, k = 1): the `+` tap of rows 2..4
+        // (rows 4..6 minus rows 2..4) is the negated `-` tap of rows 4..6.
+        let has_v2 = (PRI && DIR == 6) || (SEC && (DIR == 0 || DIR == 4));
+        let v2 = if has_v2 {
+            let (s, adj) = strength_of(6);
+            constrain_diff(pick(rows[4], rows[5], 2), pick(rows[2], rows[3], 2), s, adj)
+        } else {
+            Simd::splat(0)
+        };
+        macro_rules! row_pair {
+            ($i:literal) => {{
+                // Rows $i + 2 + dy, $i + 3 + dy, columns 2 + dx..6 + dx.
+                let at = |dy: isize, dx: isize| {
+                    let r = ($i + 2 + dy) as usize;
+                    pick(rows[r], rows[r + 1], (2 + dx) as usize)
+                };
+                let tap = |d: usize, t: usize, sign: isize| {
+                    let [dy, dx] = CDEF_DIRECTIONS[d & 7][t];
+                    at(sign * dy, sign * dx)
+                };
+                let pre = |d: usize, t: usize, sign: isize| {
+                    if has_v2
+                        && d & 7 == 6
+                        && t == 1
+                        && (($i == 0 && sign == 1) || ($i == 2 && sign == -1))
+                    {
+                        Some(if sign == 1 { v2 } else { -v2 })
+                    } else {
+                        None
+                    }
+                };
+                let v = compute::<8, PRI, SEC>(at(0, 0), DIR, &k, tap, pre);
+                store_i16::<T, 4, 8>(dst, dst_stride, $i, v);
+            }};
+        }
+        row_pair!(0);
+        row_pair!(2);
+    }
+
+    /// Loads the `L` lanes of rows `r..r + L / 8` (8 samples from column
+    /// `ox` each) of an 8 wide block.
+    #[inline(always)]
+    fn load8<T: Pixel, const L: usize>(rows: &[&[T; 12]; 12], r: usize, ox: usize) -> Simd<u16, L> {
+        let a = u16x8::from_array(load_u16::<T, 8>(&rows[r][ox..]));
+        if L == 8 {
+            Simd::from_slice(a.as_array())
+        } else {
+            let b = u16x8::from_array(load_u16::<T, 8>(&rows[r + 1][ox..]));
+            let v: u16x16 =
+                simd_swizzle!(a, b, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+            Simd::from_slice(v.as_array())
+        }
+    }
+
+    /// An 8x8 block: tap vectors are loaded at constant offsets of the 12
+    /// rows of the block and its border (`src[0]` is the top-left border
+    /// sample), [`LANES`] / 8 rows at a time. `DIR` is the direction.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    pub(super) fn filter_8x8<T: Pixel, const DIR: usize, const PRI: bool, const SEC: bool>(
+        dst: &mut [T],
+        dst_stride: usize,
+        src: &[T],
+        src_stride: usize,
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+        tap_set: usize,
+    ) {
+        const R: usize = LANES / 8;
+        let (src_stride, dst_stride) = (src_stride as u32 as usize, dst_stride as u32 as usize);
+        let src = &src[..11 * src_stride + 12];
+        let dst = &mut dst[..7 * dst_stride + 8];
+        let rows: [&[T; 12]; 12] = std::array::from_fn(|r| {
+            (&src[r * src_stride..r * src_stride + 12])
+                .try_into()
+                .unwrap()
+        });
+        let k = K16::<LANES>::new::<PRI, SEC>(pri_str, sec_str, damping, tap_set);
+        // Vertical taps (`[1, 0]`: k = 0 of directions 5..=7, `[2, 0]`: k = 1
+        // of direction 6) are shared between rows: with `v[j] = constrain(
+        // row[j + dy] - row[j])`, the `+` tap of row `a` is `v[a]` and its
+        // `-` tap is `-v[a - dy]`, so one `constrain` per row and tap
+        // replaces two. One row per vector (`R == 1`) only; at most one
+        // such tap uses each strength.
+        let is_v1 = |d: usize| matches!(d & 7, 5..=7);
+        let sec_d = [(DIR + 6) & 7, (DIR + 2) & 7];
+        let v1p_on = R == 1 && PRI && is_v1(DIR);
+        let v1s_on = R == 1 && SEC && (is_v1(sec_d[0]) || is_v1(sec_d[1]));
+        let v2p_on = R == 1 && PRI && DIR == 6;
+        let v2s_on = R == 1 && SEC && (sec_d[0] == 6 || sec_d[1] == 6);
+        let vert = |on: bool, dy: usize, s: Simd<u16, LANES>, adj: u16| -> [Simd<i16, LANES>; 10] {
+            if on {
+                std::array::from_fn(|j| {
+                    constrain_diff(
+                        load8::<T, LANES>(&rows, j + dy, 2),
+                        load8::<T, LANES>(&rows, j, 2),
+                        s,
+                        adj,
+                    )
+                })
+            } else {
+                [Simd::splat(0); 10]
+            }
+        };
+        let v1p = vert(v1p_on, 1, k.pri_str, k.pri_adj);
+        let v1s = vert(v1s_on, 1, k.sec_str, k.sec_adj);
+        let v2p = vert(v2p_on, 2, k.pri_str, k.pri_adj);
+        let v2s = vert(v2s_on, 2, k.sec_str, k.sec_adj);
+        macro_rules! rows {
+            ($($i:literal)*) => {$(
+                if $i % R == 0 {
+                    let at = |dy: isize, dx: isize| {
+                        load8::<T, LANES>(&rows, ($i + 2 + dy) as usize, (2 + dx) as usize)
+                    };
+                    let tap = |d: usize, t: usize, sign: isize| {
+                        let [dy, dx] = CDEF_DIRECTIONS[d & 7][t];
+                        at(sign * dy, sign * dx)
+                    };
+                    let pre = |d: usize, t: usize, sign: isize| {
+                        let d = d & 7;
+                        let is_pri = PRI && d == DIR;
+                        let (v, dy) = if t == 0 && is_v1(d) {
+                            (if is_pri { v1p_on.then_some(&v1p) } else { v1s_on.then_some(&v1s) }, 1)
+                        } else if t == 1 && d == 6 {
+                            (if is_pri { v2p_on.then_some(&v2p) } else { v2s_on.then_some(&v2s) }, 2)
+                        } else {
+                            (None, 0)
+                        };
+                        let a = $i + 2;
+                        v.map(|v| if sign == 1 { v[a] } else { -v[a - dy] })
+                    };
+                    let v = compute::<LANES, PRI, SEC>(at(0, 0), DIR, &k, tap, pre);
+                    store_i16::<T, 8, LANES>(dst, dst_stride, $i, v);
+                }
+            )*};
+        }
+        rows!(0 1 2 3 4 5 6 7);
+    }
+
+    /// Calls `$f::<T, DIR, PRI, SEC>` for the runtime direction (`dir <
+    /// 8`; only `dir & 3` matters without primary taps) and strengths
+    /// (not both 0).
+    macro_rules! dispatch_dir16 {
+        ($f:ident, $pri_str:expr, $sec_str:expr, $dir:expr, ($($arg:expr),*)) => {{
+            macro_rules! call {
+                ($pri:literal, $sec:literal, $d:literal) => {
+                    $f::<T, $d, $pri, $sec>($($arg),*)
+                };
+            }
+            match ($pri_str != 0, $sec_str != 0, $dir & 7) {
+                (false, _, 0 | 4) => call!(false, true, 0),
+                (false, _, 1 | 5) => call!(false, true, 1),
+                (false, _, 2 | 6) => call!(false, true, 2),
+                (false, _, _) => call!(false, true, 3),
+                (true, false, 0) => call!(true, false, 0),
+                (true, false, 1) => call!(true, false, 1),
+                (true, false, 2) => call!(true, false, 2),
+                (true, false, 3) => call!(true, false, 3),
+                (true, false, 4) => call!(true, false, 4),
+                (true, false, 5) => call!(true, false, 5),
+                (true, false, 6) => call!(true, false, 6),
+                (true, false, _) => call!(true, false, 7),
+                (true, true, 0) => call!(true, true, 0),
+                (true, true, 1) => call!(true, true, 1),
+                (true, true, 2) => call!(true, true, 2),
+                (true, true, 3) => call!(true, true, 3),
+                (true, true, 4) => call!(true, true, 4),
+                (true, true, 5) => call!(true, true, 5),
+                (true, true, 6) => call!(true, true, 6),
+                (true, true, _) => call!(true, true, 7),
+            }
+        }};
+    }
+
+    /// [`filter_4x4`] / [`filter_8x8`] for a runtime direction and
+    /// block size (8x8 or 4x4); the strengths must not both be 0.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub(super) fn filter<T: Pixel>(
+        dst: &mut [T],
+        dst_stride: usize,
+        src: &[T],
+        src_stride: usize,
+        w: usize,
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+        dir: usize,
+        tap_set: usize,
+    ) {
+        if w == 8 {
+            dispatch_dir16!(
+                filter_8x8,
+                pri_str,
+                sec_str,
+                dir,
+                (dst, dst_stride, src, src_stride, pri_str, sec_str, damping, tap_set)
+            )
+        } else {
+            dispatch_dir16!(
+                filter_4x4,
+                pri_str,
+                sec_str,
+                dir,
+                (dst, dst_stride, src, src_stride, pri_str, sec_str, damping, tap_set)
+            )
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Bit depth specialized entry points (selected by `Dsp::simd(bd)`).
 // `BD` is 8, 10 or 12 and always equals the runtime `bd` argument; the
 // pixel / intermediate ranges of `BD` may be relied upon.
 // ---------------------------------------------------------------------------
 
+#[inline(always)]
 pub fn cdef_direction_bd<T: Pixel, const BD: u32>(
     src: &[T],
     stride: usize,
     bd: u32,
 ) -> (usize, i32) {
     debug_assert_eq!(bd, BD);
+    // The decoder uses `u8` pixels iff the bit depth is 8. The tests also
+    // run `u16` pixels at bit depth 8, which every kernel supports.
+    debug_assert!(cfg!(test) || (T::MAX_BITDEPTH == 8) == (BD == 8));
     match BD {
         8 => bd8::cdef_direction(src, stride),
         10 => bd10::cdef_direction(src, stride),
@@ -1822,6 +2463,8 @@ impl<T: Pixel, const BD: u32> CdefKernels<T> for SimdCdef<BD> {
         bd: u32,
     ) {
         debug_assert_eq!(bd, BD);
+        // See cdef_direction_bd.
+        debug_assert!(cfg!(test) || (T::MAX_BITDEPTH == 8) == (BD == 8));
         match BD {
             8 => bd8::filter_px(
                 dst, dst_stride, src, src_stride, w, h, pri, sec, damping, dir, edges,
@@ -2053,111 +2696,6 @@ mod tests {
         }
         run::<u8>(8);
         run::<u16>(10);
-    }
-
-    /// Wall time of the 8-bit `u8` lane kernels of [`SimdCdef::filter`]
-    /// (interior blocks), new AVX2 forms against the 16-lane ones:
-    /// `RUSTFLAGS="-C target-cpu=x86-64-v3" cargo test --release
-    /// --lib -- --ignored --nocapture bench_px`
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    #[test]
-    #[ignore]
-    fn bench_px() {
-        use super::u8_path;
-        let mut rng = Rng(9);
-        let stride = 32;
-        let t = std::time::Instant::now();
-        while t.elapsed().as_millis() < 300 {
-            std::hint::black_box(gen_src(&mut rng, 8, 8, 12, 8));
-        }
-        type K = fn(&mut [u8], usize, &[u8], usize, i32, i32, i32, usize);
-        let time = |srcs: &[Vec<u8>], f: K, pri: i32, sec: i32| -> f64 {
-            let mut dst = vec![0u8; 8 * 8];
-            let reps = 3000;
-            let mut t = std::time::Instant::now();
-            for rep in 0..reps + 50 {
-                if rep == 50 {
-                    t = std::time::Instant::now();
-                }
-                for s in srcs {
-                    f(&mut dst, 8, std::hint::black_box(s), stride, pri, sec, 5, 0);
-                    std::hint::black_box(&mut dst);
-                }
-            }
-            t.elapsed().as_nanos() as f64 / (reps * srcs.len()) as f64
-        };
-        for (w, h) in [(8usize, 8usize), (4, 4)] {
-            let srcs: Vec<Vec<u8>> = (0..64)
-                .map(|_| {
-                    let mut s: Vec<u8> = gen_src(&mut rng, w, h, stride, 8)
-                        .iter()
-                        .map(|&v| v.min(255) as u8)
-                        .collect();
-                    s.resize(s.len() + 16, 0);
-                    s
-                })
-                .collect();
-            let cases: [(&str, i32, i32, K, K); 3] = if w == 8 {
-                [
-                    (
-                        "pri",
-                        6,
-                        0,
-                        u8_path::filter_8x8::<u8, 1, true, false>,
-                        u8_path::avx2::filter_8x8::<u8, 1, true, false>,
-                    ),
-                    (
-                        "sec",
-                        0,
-                        2,
-                        u8_path::filter_8x8::<u8, 1, false, true>,
-                        u8_path::avx2::filter_8x8::<u8, 1, false, true>,
-                    ),
-                    (
-                        "both",
-                        6,
-                        2,
-                        u8_path::filter_8x8::<u8, 1, true, true>,
-                        u8_path::avx2::filter_8x8::<u8, 1, true, true>,
-                    ),
-                ]
-            } else {
-                [
-                    (
-                        "pri",
-                        6,
-                        0,
-                        u8_path::filter_4x4::<u8, 1, true, false>,
-                        u8_path::avx2::filter_4x4::<u8, 1, true, false>,
-                    ),
-                    (
-                        "sec",
-                        0,
-                        2,
-                        u8_path::filter_4x4::<u8, 1, false, true>,
-                        u8_path::avx2::filter_4x4::<u8, 1, false, true>,
-                    ),
-                    (
-                        "both",
-                        6,
-                        2,
-                        u8_path::filter_4x4::<u8, 1, true, true>,
-                        u8_path::avx2::filter_4x4::<u8, 1, true, true>,
-                    ),
-                ]
-            };
-            for (name, pri, sec, old, new) in cases {
-                let (mut o, mut n) = (f64::MAX, f64::MAX);
-                for _ in 0..5 {
-                    o = o.min(time(&srcs, old, pri, sec));
-                    n = n.min(time(&srcs, new, pri, sec));
-                }
-                println!(
-                    "u8 {w}x{h} {name}: old {o:.1} ns, new {n:.1} ns ({:.2}x)",
-                    o / n
-                );
-            }
-        }
     }
 
     #[test]

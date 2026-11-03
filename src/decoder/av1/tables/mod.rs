@@ -24,9 +24,9 @@
 //! intra mode (stored as the [`crate::decoder::av1::types`] enums) or a 0/1 flag
 //! (stored as `bool`).
 
-pub mod block;
-pub mod cdf;
-pub mod misc;
-pub mod qm;
-pub mod quant;
-pub mod scan;
+pub(crate) mod block;
+pub(crate) mod cdf;
+pub(crate) mod misc;
+pub(crate) mod qm;
+pub(crate) mod quant;
+pub(crate) mod scan;

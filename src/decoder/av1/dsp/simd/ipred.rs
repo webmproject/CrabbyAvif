@@ -26,7 +26,7 @@ use crate::decoder::av1::dsp::ipred::{
     edge_filter_strength, filter_corner, sm_weights, use_upsample, IntraEdges, IntraPredParams,
     ANGLE_STEP, D67_PRED, DC_PRED, DR_INTRA_DERIVATIVE, EDGE_BUF_LEN, EDGE_PAD, INTRA_FILTER_TAPS,
     MAX_CFL_AC, MAX_EDGE, MAX_UPSAMPLE_PX, MODE_TO_ANGLE, PAETH_PRED, SMOOTH_H_PRED, SMOOTH_PRED,
-    SMOOTH_V_PRED, V_PRED,
+    SMOOTH_V_PRED, STRENGTH_LUT, V_PRED,
 };
 use crate::decoder::av1::pixel::Pixel;
 
@@ -109,10 +109,53 @@ fn check_block4<T, const W: usize>(
     stride: usize,
     h: usize,
 ) -> (&mut [T], usize, usize) {
-    let stride = stride & 0xffff_ffff;
+    let stride = (stride & 0xffff_ffff).max(W);
     let h4 = h >> 2;
-    assert!(stride >= W && (1..=16).contains(&h4));
-    (&mut dst[..(h4 * 4 - 1) * stride + W], stride, h4)
+    assert!((1..=16).contains(&h4));
+    let s3 = stride * 3;
+    let s4 = stride * 4;
+    (&mut dst[..(h4 - 1) * s4 + s3 + W], stride, h4)
+}
+
+/// Splits a window of at least `3 * stride + W` samples (`stride >= W`)
+/// into 4 consecutive `W`-sample rows separated by `stride`.
+#[inline(always)]
+fn split_rows4<T, const W: usize>(
+    win: &mut [T],
+    stride: usize,
+) -> (&mut [T; W], &mut [T; W], &mut [T; W], &mut [T; W]) {
+    let (r0, win) = win.split_at_mut(stride);
+    let (r1, win) = win.split_at_mut(stride);
+    let (r2, r3) = win.split_at_mut(stride);
+    (
+        (&mut r0[..W]).try_into().unwrap(),
+        (&mut r1[..W]).try_into().unwrap(),
+        (&mut r2[..W]).try_into().unwrap(),
+        (&mut r3[..W]).try_into().unwrap(),
+    )
+}
+
+/// Calls `f(i4, r0, r1, r2, r3)` for each group of 4 consecutive `W`-sample
+/// rows (`i4 in 0..h / 4`, `h` a multiple of 4 in `4..=64`). Slices `dst`
+/// into `head` (`chunks_exact_mut(stride * 4)`) and `tail` (`stride * 3 + W`)
+/// up front so the loop has no `imul` or per-iteration bounds checks.
+#[inline(always)]
+fn visit_row4<T, const W: usize>(
+    dst: &mut [T],
+    stride: usize,
+    h: usize,
+    mut f: impl FnMut(usize, &mut [T; W], &mut [T; W], &mut [T; W], &mut [T; W]),
+) {
+    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
+    let s4 = stride * 4;
+    let head_len = (h4 - 1) * s4;
+    let (head, tail) = dst.split_at_mut(head_len);
+    for (i4, win) in head.chunks_exact_mut(s4).enumerate() {
+        let (r0, r1, r2, r3) = split_rows4::<T, W>(win, stride);
+        f(i4, r0, r1, r2, r3);
+    }
+    let (r0, r1, r2, r3) = split_rows4::<T, W>(tail, stride);
+    f(h4 - 1, r0, r1, r2, r3);
 }
 
 /// Returns the `W`-sample row starting at `off` in `dst`.
@@ -121,21 +164,29 @@ fn row_mut<T, const W: usize>(dst: &mut [T], off: usize) -> &mut [T; W] {
     (&mut dst[off..off + W]).try_into().unwrap()
 }
 
+/// Returns 4 consecutive `W`-sample rows starting at row `4 * i` in `dst`
+/// (`i < h4`, `stride >= W` checked by [`check_block4`]).
+#[inline(always)]
+fn row4_mut<T, const W: usize>(
+    dst: &mut [T],
+    i: usize,
+    stride: usize,
+) -> (&mut [T; W], &mut [T; W], &mut [T; W], &mut [T; W]) {
+    let s3 = stride * 3;
+    let base = i * (stride * 4);
+    split_rows4::<T, W>(&mut dst[base..base + s3 + W], stride)
+}
+
 /// Fills a `W x h` block with `v` (`h` a multiple of 4 in `4..=64`).
 #[inline(always)]
 fn fill<T: Pixel, const W: usize>(dst: &mut [T], stride: usize, h: usize, v: T) {
-    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
     let src = [v; W];
-    let s2 = stride * 2;
-    let s3 = stride * 3;
-    let s4 = stride * 4;
-    for i in 0..h4 {
-        let base = i * s4;
-        *row_mut::<T, W>(dst, base) = src;
-        *row_mut::<T, W>(dst, base + stride) = src;
-        *row_mut::<T, W>(dst, base + s2) = src;
-        *row_mut::<T, W>(dst, base + s3) = src;
-    }
+    visit_row4::<T, W>(dst, stride, h, |_, r0, r1, r2, r3| {
+        *r0 = src;
+        *r1 = src;
+        *r2 = src;
+        *r3 = src;
+    });
 }
 
 /// Loads `N` samples as `u16` lanes.
@@ -189,21 +240,34 @@ fn store_i32<T: Pixel, const N: usize>(dst: &mut [T], v: Simd<i32, N>) {
     store_u16(dst, v.cast::<u16>());
 }
 
-/// Sum of `e[..n]` (`n` a multiple of `N`).
+/// Sum of `e[..n]` (`n` a multiple of `N` in `4..=64`).
 #[inline(always)]
 fn edge_sum<T: Pixel, const BD: u32, const N: usize>(e: &[T], n: usize) -> u32 {
     if BD <= 10 {
+        // At most 64 * 1023 = 65472, which fits in u16 without overflow.
         let mut acc = Simd::<u16, N>::splat(0);
         for c in e[..n].as_chunks::<N>().0 {
             acc += load_u16::<T, N>(c);
         }
-        acc.cast::<u32>().reduce_sum()
+        acc.reduce_sum() as u32
     } else {
         let mut acc = Simd::<u32, N>::splat(0);
         for c in e[..n].as_chunks::<N>().0 {
             acc += load_u16::<T, N>(c).cast::<u32>();
         }
         acc.reduce_sum()
+    }
+}
+
+/// [`edge_sum`] for a compile-time edge length `M` (4..=64).
+#[inline(always)]
+fn edge_sum_c<T: Pixel, const BD: u32, const M: usize>(e: &[T]) -> u32 {
+    match M {
+        4 => edge_sum::<T, BD, 4>(e, 4),
+        8 => edge_sum::<T, BD, 8>(e, 8),
+        16 => edge_sum::<T, BD, 16>(e, 16),
+        32 => edge_sum::<T, BD, 16>(e, 32),
+        _ => edge_sum::<T, BD, 16>(e, 64),
     }
 }
 
@@ -222,48 +286,6 @@ fn edge_sum_n<T: Pixel, const BD: u32>(e: &[T], n: usize) -> u32 {
 // ---------------------------------------------------------------------------
 // DC kernels.
 // ---------------------------------------------------------------------------
-
-/// `dsp::ipred::ipred_dc`.
-#[inline]
-pub fn ipred_dc<T: Pixel, const BD: u32>(
-    dst: &mut [T],
-    stride: usize,
-    above: &[T],
-    left: &[T],
-    w: usize,
-    h: usize,
-) {
-    let v = dc_both_val::<T, BD>(above, left, w, h);
-    by_width!(w, dc_fill::<T>(dst, stride, h, v));
-}
-
-#[inline(always)]
-fn dc_both_val<T: Pixel, const BD: u32>(above: &[T], left: &[T], w: usize, h: usize) -> T {
-    let sum = edge_sum_n::<T, BD>(above, w) + edge_sum_n::<T, BD>(left, h);
-    // w + h is 2^k, 3 * 2^k or 5 * 2^k: shift, then divide by 3 or 5 with
-    // an exact multiply (valid for any u32 numerator).
-    let n = (w + h) as u32;
-    let k = n.trailing_zeros();
-    let x = (sum + (n >> 1)) >> k;
-    let avg = match n >> k {
-        1 => x,
-        3 => ((x as u64 * 0xAAAA_AAAB) >> 33) as u32,
-        _ => ((x as u64 * 0xCCCC_CCCD) >> 34) as u32,
-    };
-    T::from_i32(avg as i32)
-}
-
-#[inline(always)]
-fn dc_edge_val<T: Pixel, const BD: u32>(edge: &[T], n: usize) -> T {
-    let sum = edge_sum_n::<T, BD>(edge, n);
-    let avg = (sum + (n as u32 >> 1)) >> n.trailing_zeros();
-    T::from_i32(avg as i32)
-}
-
-#[inline(always)]
-fn dc_fill<T: Pixel, const W: usize, const N: usize>(dst: &mut [T], stride: usize, h: usize, v: T) {
-    fill::<T, W>(dst, stride, h, v);
-}
 
 /// Calls `$f::<T.., W, H>(args)` for the runtime block size `$w x $h`
 /// (powers of two in 4..=64, aspect ratio at most 4), through one jump
@@ -295,46 +317,66 @@ macro_rules! by_size {
     };
 }
 
-/// DC prediction of a `W x H` block (all variants), with the edge sums,
-/// the division and the fill specialized for the block size. 8-bit
-/// blocks up to 16x16 add both edges in one vector (lanes past `W` /
-/// `H` zeroed) before a single horizontal reduction.
-#[allow(clippy::too_many_arguments)]
-#[inline(always)]
-fn dc_block<T: Pixel, const BD: u32, const W: usize, const H: usize>(
+/// `dsp::ipred::ipred_dc`.
+#[inline]
+pub fn ipred_dc<T: Pixel, const BD: u32>(
     dst: &mut [T],
     stride: usize,
     above: &[T],
     left: &[T],
-    have_left: bool,
-    have_above: bool,
+    w: usize,
+    h: usize,
 ) {
-    let v = match (have_left, have_above) {
-        (true, true) => {
-            if BD == 8 && W <= 16 && H <= 16 {
-                // Each lane holds at most 2 * 255, so the 16-lane
-                // reduction (at most 8160) fits u16.
-                const L: usize = 16;
-                let lane = Simd::<u16, L>::from_array(std::array::from_fn(|k| k as u16));
-                let a = load_u16::<T, L>(above);
-                let l = load_u16::<T, L>(left);
-                let a = lane
-                    .simd_lt(Simd::splat(W as u16))
-                    .select(a, Simd::splat(0));
-                let l = lane
-                    .simd_lt(Simd::splat(H as u16))
-                    .select(l, Simd::splat(0));
-                let sum = (a + l).reduce_sum() as u32;
-                T::from_i32(dc_div::<W, H>(sum) as i32)
-            } else {
-                dc_both_val::<T, BD>(above, left, W, H)
+    let v = by_size!(w, h, dc_both_block::<T, BD>(above, left));
+    by_width!(w, dc_fill::<T>(dst, stride, h, v));
+}
+
+#[inline(always)]
+fn dc_edge_val<T: Pixel, const BD: u32>(edge: &[T], n: usize) -> T {
+    let sum = edge_sum_n::<T, BD>(edge, n);
+    let avg = (sum + (n as u32 >> 1)) >> n.trailing_zeros();
+    T::from_i32(avg as i32)
+}
+
+#[inline(always)]
+fn dc_fill<T: Pixel, const W: usize, const N: usize>(dst: &mut [T], stride: usize, h: usize, v: T) {
+    fill::<T, W>(dst, stride, h, v);
+}
+
+/// Computes the DC value of a `W x H` block when both `above` and `left`
+/// are available, with the edge sums and division specialized for `W x H`.
+/// For 8/10-bit blocks up to 16x16, both edges are summed in a single
+/// `u16` vector of width `max(W, H)` before one horizontal reduction.
+#[inline(always)]
+fn dc_both_block<T: Pixel, const BD: u32, const W: usize, const H: usize>(
+    above: &[T],
+    left: &[T],
+) -> T {
+    let sum =
+        if BD <= 10 && W <= 16 && H <= 16 {
+            // Each lane holds at most 2 * 1023, so the 4/8/16-lane reduction
+            // (at most 32 * 1023 = 32736) fits u16.
+            match (W, H) {
+                (4, 4) => (load_u16::<T, 4>(above) + load_u16::<T, 4>(left)).reduce_sum() as u32,
+                (8, 4) => (load_u16::<T, 8>(above) + load_u16::<T, 4>(left).resize::<8>(0))
+                    .reduce_sum() as u32,
+                (4, 8) => (load_u16::<T, 4>(above).resize::<8>(0) + load_u16::<T, 8>(left))
+                    .reduce_sum() as u32,
+                (8, 8) => (load_u16::<T, 8>(above) + load_u16::<T, 8>(left)).reduce_sum() as u32,
+                (16, 4) => (load_u16::<T, 16>(above) + load_u16::<T, 4>(left).resize::<16>(0))
+                    .reduce_sum() as u32,
+                (4, 16) => (load_u16::<T, 4>(above).resize::<16>(0) + load_u16::<T, 16>(left))
+                    .reduce_sum() as u32,
+                (16, 8) => (load_u16::<T, 16>(above) + load_u16::<T, 8>(left).resize::<16>(0))
+                    .reduce_sum() as u32,
+                (8, 16) => (load_u16::<T, 8>(above).resize::<16>(0) + load_u16::<T, 16>(left))
+                    .reduce_sum() as u32,
+                _ => (load_u16::<T, 16>(above) + load_u16::<T, 16>(left)).reduce_sum() as u32,
             }
-        }
-        (true, false) => dc_edge_val::<T, BD>(left, H),
-        (false, true) => dc_edge_val::<T, BD>(above, W),
-        (false, false) => T::from_i32(1 << (BD - 1)),
-    };
-    fill::<T, W>(dst, stride, H, v);
+        } else {
+            edge_sum_c::<T, BD, W>(above) + edge_sum_c::<T, BD, H>(left)
+        };
+    T::from_i32(dc_div::<W, H>(sum) as i32)
 }
 
 /// `(sum + (W + H) / 2) / (W + H)` for `W + H` = 2^k, 3 * 2^k or 5 * 2^k.
@@ -411,18 +453,13 @@ fn v_w<T: Pixel, const W: usize, const N: usize>(
     above: &[T],
     h: usize,
 ) {
-    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
     let src: [T; W] = above[..W].try_into().unwrap();
-    let s2 = stride * 2;
-    let s3 = stride * 3;
-    let s4 = stride * 4;
-    for i in 0..h4 {
-        let base = i * s4;
-        *row_mut::<T, W>(dst, base) = src;
-        *row_mut::<T, W>(dst, base + stride) = src;
-        *row_mut::<T, W>(dst, base + s2) = src;
-        *row_mut::<T, W>(dst, base + s3) = src;
-    }
+    visit_row4::<T, W>(dst, stride, h, |_, r0, r1, r2, r3| {
+        *r0 = src;
+        *r1 = src;
+        *r2 = src;
+        *r3 = src;
+    });
 }
 
 /// `dsp::ipred::ipred_h`.
@@ -444,18 +481,16 @@ fn h_w<T: Pixel, const W: usize, const N: usize>(
     left: &[T],
     h: usize,
 ) {
-    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
+    let h4 = h >> 2;
+    assert!((1..=16).contains(&h4));
     let left4 = left[..h4 * 4].as_chunks::<4>().0;
-    let s2 = stride * 2;
-    let s3 = stride * 3;
-    let s4 = stride * 4;
-    for (i, &[l0, l1, l2, l3]) in left4.iter().enumerate() {
-        let base = i * s4;
-        *row_mut::<T, W>(dst, base) = [l0; W];
-        *row_mut::<T, W>(dst, base + stride) = [l1; W];
-        *row_mut::<T, W>(dst, base + s2) = [l2; W];
-        *row_mut::<T, W>(dst, base + s3) = [l3; W];
-    }
+    visit_row4::<T, W>(dst, stride, h, |i, r0, r1, r2, r3| {
+        let [l0, l1, l2, l3] = left4[i];
+        *r0 = [l0; W];
+        *r1 = [l1; W];
+        *r2 = [l2; W];
+        *r3 = [l3; W];
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -487,30 +522,31 @@ fn paeth_w<T: Pixel, const W: usize, const N: usize>(
     left: &[T],
     h: usize,
 ) {
-    let (dst, stride) = check_block::<T, W>(dst, stride, h);
+    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
     let tl_s = top_left.to_i32() as i16;
     let tl = Simd::<i16, N>::splat(tl_s);
     let above = &above[..W];
-    let left = &left[..h];
+    let left4 = left[..h4 * 4].as_chunks::<4>().0;
     // Column chunks outside, rows inside: `a`, `a - tl`, and `|a - tl|`
     // are row-invariant and loaded/computed once per column chunk.
     for x in (0..W).step_by(N) {
         let a = load_i16::<T, N>(&above[x..]);
         let a_tl = a - tl;
         let p_left = a_tl.abs();
-        for (i, &l) in left.iter().enumerate() {
-            let l_s = l.to_i32() as i16;
-            let l_tl = l_s - tl_s;
-            let lv = Simd::splat(l_s);
-            let p_top = Simd::splat(l_tl.abs());
-            let p_top_left = (a_tl + Simd::splat(l_tl)).abs();
-            let use_left = p_left.simd_le(p_top) & p_left.simd_le(p_top_left);
-            let use_above = p_top.simd_le(p_top_left);
-            store_i16(
-                row_mut::<T, N>(dst, i * stride + x),
-                use_left.select(lv, use_above.select(a, tl)),
-            );
-        }
+        let dst_x = &mut dst[x..];
+        visit_row4::<T, N>(dst_x, stride, h, |i4, r0, r1, r2, r3| {
+            let l4 = &left4[i4];
+            for (r, &l_pix) in [r0, r1, r2, r3].into_iter().zip(l4) {
+                let l_s = l_pix.to_i32() as i16;
+                let l_tl = l_s - tl_s;
+                let lv = Simd::splat(l_s);
+                let p_top = Simd::splat(l_tl.abs());
+                let p_top_left = (a_tl + Simd::splat(l_tl)).abs();
+                let use_left = p_left.simd_le(p_top) & p_left.simd_le(p_top_left);
+                let use_above = p_top.simd_le(p_top_left);
+                store_i16(r, use_left.select(lv, use_above.select(a, tl)));
+            }
+        });
     }
 }
 
@@ -538,10 +574,11 @@ pub fn ipred_smooth<T: Pixel, const BD: u32>(
     h: usize,
 ) {
     if BD == 8 {
-        match w {
-            4 => return smooth_packed::<T, 4, 4>(dst, stride, above, left, h),
-            8 => return smooth_packed::<T, 8, 2>(dst, stride, above, left, h),
-            _ => {}
+        if w == 4 {
+            return smooth_packed::<T, 4, 4>(dst, stride, above, left, h);
+        }
+        if cfg!(target_feature = "avx2") && w == 8 {
+            return smooth_packed::<T, 8, 2>(dst, stride, above, left, h);
         }
     }
     by_width!(w, smooth_w::<T, BD>(dst, stride, above, left, h));
@@ -562,29 +599,27 @@ fn smooth_packed<T: Pixel, const W: usize, const R: usize>(
     let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
     let h = h4 * 4;
     let wx = &sm_weights(W)[..W];
-    let wy = &sm_weights(h)[..h];
-    let left = &left[..h];
+    let wy = sm_weights(h)[..h].as_chunks::<R>().0;
+    let left_c = left[..h].as_chunks::<R>().0;
     let above = &above[..W];
     let bottom = left[h - 1].to_u16();
     let right = above[W - 1].to_u16();
     type V = Simd<u16, 16>;
-    let one = V::splat(1);
-    let a = V::from_array(std::array::from_fn(|j| above[j % W].to_u16()));
+    let a_diff = V::from_array(std::array::from_fn(|j| above[j % W].to_u16())) - V::splat(bottom);
     let wxv = V::from_array(std::array::from_fn(|j| wx[j % W] as u16));
     let hbase = (V::splat(256) - wxv) * V::splat(right) + V::splat(128);
     let vbase = V::splat(bottom * 256 + 128);
-    for (g, (l, wyg)) in left.chunks_exact(R).zip(wy.chunks_exact(R)).enumerate() {
-        let wyv = V::from_array(std::array::from_fn(|j| wyg[j / W] as u16));
-        let lv = V::from_array(std::array::from_fn(|j| l[j / W].to_u16()));
+    let one = V::splat(1);
+    for (g, (wy_r, left_r)) in wy.iter().zip(left_c).enumerate() {
+        let i0 = g * R;
+        let wyv = V::from_array(std::array::from_fn(|j| wy_r[j / W] as u16));
+        let lv = V::from_array(std::array::from_fn(|j| left_r[j / W].to_u16()));
         // (256 - wy) * bottom + wy * a == 256 * bottom + wy * (a - bottom)
         // (mod 2^16, and the true value fits u16).
-        let vert = wyv * (a - V::splat(bottom)) + vbase;
+        let vert = wyv * a_diff + vbase;
         let horz = wxv * lv + hbase;
         let p = ((vert >> one) + (horz >> one) + (vert & horz & one)) >> 8;
-        for r in 0..R {
-            let v = Simd::<u16, W>::from_slice(&p.as_array()[r * W..r * W + W]);
-            store_u16(row_mut::<T, W>(dst, (g * R + r) * stride), v);
-        }
+        store_rows_u8::<T, W>(dst, stride, i0, p.cast::<i16>());
     }
 }
 
@@ -596,32 +631,36 @@ fn smooth_w<T: Pixel, const BD: u32, const W: usize, const N: usize>(
     left: &[T],
     h: usize,
 ) {
-    let (dst, stride) = check_block::<T, W>(dst, stride, h);
+    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
+    let h = h4 * 4;
     let wx = &sm_weights(W)[..W];
-    let wy = &sm_weights(h)[..h];
+    let wy4 = sm_weights(h)[..h].as_chunks::<4>().0;
+    let left4 = left[..h].as_chunks::<4>().0;
     let bottom = left[h - 1].to_i32();
     let right = above[W - 1].to_i32();
     let above = &above[..W];
-    let left = &left[..h];
     // Column chunks outside, rows inside: the per column vectors are
     // loaded once per chunk.
     for x in (0..W).step_by(N) {
+        let dst_x = &mut dst[x..];
         if BD == 8 {
-            // vert = wy * a + (256 - wy) * bottom + 128 and
-            // horz = wx * l + (256 - wx) * right + 128 both fit in u16
-            // (<= 256 * 255 + 128 = 65408), and
+            // Add 128 to each of vert and horz (256 total == 1 << 8) so
+            // both stay <= 256 * 255 + 128 = 65408 (fits u16), then
             // (vert + horz) >> 9 == ((vert >> 1) + (horz >> 1) + (vert & horz & 1)) >> 8.
             let one = Simd::<u16, N>::splat(1);
             let wxv = weights::<u16, N>(&wx[x..]);
-            let a = load_u16::<T, N>(&above[x..]);
+            let a_diff = load_u16::<T, N>(&above[x..]) - Simd::splat(bottom as u16);
+            let vbase = Simd::<u16, N>::splat(bottom as u16 * 256 + 128);
             let hbase = (Simd::splat(256) - wxv) * Simd::splat(right as u16) + Simd::splat(128);
-            for (i, (&l, &wyi)) in left.iter().zip(wy).enumerate() {
-                let vert = Simd::splat(wyi as u16) * a
-                    + Simd::splat((256 - wyi as u16) * bottom as u16 + 128);
-                let horz = wxv * Simd::splat(l.to_u16()) + hbase;
-                let p = (vert >> one) + (horz >> one) + (vert & horz & one);
-                store_u16(row_mut::<T, N>(dst, i * stride + x), p >> 8);
-            }
+            visit_row4::<T, N>(dst_x, stride, h, |i4, r0, r1, r2, r3| {
+                let (wy_r, l_r) = (&wy4[i4], &left4[i4]);
+                for ((r, &wy_i), &l_i) in [r0, r1, r2, r3].into_iter().zip(wy_r).zip(l_r) {
+                    let vert = Simd::splat(wy_i as u16) * a_diff + vbase;
+                    let horz = wxv * Simd::splat(l_i.to_u16()) + hbase;
+                    let avg = (vert >> one) + (horz >> one) + (vert & horz & one);
+                    store_u16(r, avg >> 8);
+                }
+            });
         } else {
             // wy * a + (256 - wy) * bottom + wx * l + (256 - wx) * right
             // == wy * (a - bottom) + wx * (l - right) + 256 * (bottom + right)
@@ -629,14 +668,14 @@ fn smooth_w<T: Pixel, const BD: u32, const W: usize, const N: usize>(
             let bias = Simd::<i32, N>::splat(256 * (bottom + right) + 256);
             let wxv = weights::<i16, N>(&wx[x..]).cast::<i32>();
             let a = (load_i16::<T, N>(&above[x..]) - Simd::splat(bottom as i16)).cast::<i32>();
-            for (i, (&l, &wyi)) in left.iter().zip(wy).enumerate() {
-                let wyv = Simd::<i16, N>::splat(wyi as i16).cast::<i32>();
-                let l = Simd::<i16, N>::splat((l.to_i32() - right) as i16).cast::<i32>();
-                store_i32(
-                    row_mut::<T, N>(dst, i * stride + x),
-                    (wyv * a + wxv * l + bias) >> 9,
-                );
-            }
+            visit_row4::<T, N>(dst_x, stride, h, |i4, r0, r1, r2, r3| {
+                let (wy_r, l_r) = (&wy4[i4], &left4[i4]);
+                for ((r, &wy_i), &l_i) in [r0, r1, r2, r3].into_iter().zip(wy_r).zip(l_r) {
+                    let wyv = Simd::<i16, N>::splat(wy_i as i16).cast::<i32>();
+                    let l = Simd::<i16, N>::splat((l_i.to_i32() - right) as i16).cast::<i32>();
+                    store_i32(r, (wyv * a + wxv * l + bias) >> 9);
+                }
+            });
         }
     }
 }
@@ -652,10 +691,11 @@ pub fn ipred_smooth_v<T: Pixel, const BD: u32>(
     h: usize,
 ) {
     if BD == 8 {
-        match w {
-            4 => return smooth_hv_packed::<T, 4, 4, true>(dst, stride, above, left, h),
-            8 => return smooth_hv_packed::<T, 8, 2, true>(dst, stride, above, left, h),
-            _ => {}
+        if w == 4 {
+            return smooth_hv_packed::<T, 4, 4, true>(dst, stride, above, left, h);
+        }
+        if cfg!(target_feature = "avx2") && w == 8 {
+            return smooth_hv_packed::<T, 8, 2, true>(dst, stride, above, left, h);
         }
     }
     by_width!(w, smooth_v_w::<T, BD>(dst, stride, above, left, h));
@@ -676,8 +716,8 @@ fn smooth_hv_packed<T: Pixel, const W: usize, const R: usize, const V: bool>(
     let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
     let h = h4 * 4;
     let wx = &sm_weights(W)[..W];
-    let wy = &sm_weights(h)[..h];
-    let left = &left[..h];
+    let wy = sm_weights(h)[..h].as_chunks::<R>().0;
+    let left_c = left[..h].as_chunks::<R>().0;
     let above = &above[..W];
     type U = Simd<u16, 16>;
     // V: wy * (a - bottom) + 256 * bottom + 128; H: wx * (l - right) +
@@ -696,18 +736,16 @@ fn smooth_hv_packed<T: Pixel, const W: usize, const R: usize, const V: bool>(
         )
     };
     let right = U::splat(above[W - 1].to_u16());
-    for (g, (l, wyg)) in left.chunks_exact(R).zip(wy.chunks_exact(R)).enumerate() {
+    for (g, (wy_r, left_r)) in wy.iter().zip(left_c).enumerate() {
+        let i0 = g * R;
         let p = if V {
-            let wyv = U::from_array(std::array::from_fn(|j| wyg[j / W] as u16));
+            let wyv = U::from_array(std::array::from_fn(|j| wy_r[j / W] as u16));
             (wyv * edge + base) >> 8
         } else {
-            let lv = U::from_array(std::array::from_fn(|j| l[j / W].to_u16()));
+            let lv = U::from_array(std::array::from_fn(|j| left_r[j / W].to_u16()));
             (edge * (lv - right) + base) >> 8
         };
-        for r in 0..R {
-            let v = Simd::<u16, W>::from_slice(&p.as_array()[r * W..r * W + W]);
-            store_u16(row_mut::<T, W>(dst, (g * R + r) * stride), v);
-        }
+        store_rows_u8::<T, W>(dst, stride, i0, p.cast::<i16>());
     }
 }
 
@@ -719,27 +757,35 @@ fn smooth_v_w<T: Pixel, const BD: u32, const W: usize, const N: usize>(
     left: &[T],
     h: usize,
 ) {
-    let (dst, stride) = check_block::<T, W>(dst, stride, h);
-    let wy = sm_weights(h);
+    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
+    let h = h4 * 4;
+    let wy4 = sm_weights(h)[..h].as_chunks::<4>().0;
     let bottom = left[h - 1].to_i32();
     let above = &above[..W];
     for x in (0..W).step_by(N) {
+        let dst_x = &mut dst[x..];
         if BD == 8 {
-            // wy * a + (256 - wy) * bottom + 128 fits in u16.
-            let a = load_u16::<T, N>(&above[x..]);
-            for (i, &wyi) in wy.iter().enumerate() {
-                let wyv = Simd::splat(wyi as u16);
-                let base = Simd::splat((256 - wyi as u16) * bottom as u16 + 128);
-                store_u16(row_mut::<T, N>(dst, i * stride + x), (wyv * a + base) >> 8);
-            }
+            // wy * (a - bottom) + 256 * bottom + 128 (mod 2^16) fits in u16.
+            let a_diff = load_u16::<T, N>(&above[x..]) - Simd::splat(bottom as u16);
+            let base = Simd::<u16, N>::splat(bottom as u16 * 256 + 128);
+            visit_row4::<T, N>(dst_x, stride, h, |i4, r0, r1, r2, r3| {
+                let wy_r = &wy4[i4];
+                for (r, &wy_i) in [r0, r1, r2, r3].into_iter().zip(wy_r) {
+                    let wyv = Simd::splat(wy_i as u16);
+                    store_u16(r, (wyv * a_diff + base) >> 8);
+                }
+            });
         } else {
             // wy * (a - bottom) + 256 * bottom with 16 x 16 bit products.
             let a = (load_i16::<T, N>(&above[x..]) - Simd::splat(bottom as i16)).cast::<i32>();
             let bias = Simd::splat(256 * bottom + 128);
-            for (i, &wyi) in wy.iter().enumerate() {
-                let wyv = Simd::<i16, N>::splat(wyi as i16).cast::<i32>();
-                store_i32(row_mut::<T, N>(dst, i * stride + x), (wyv * a + bias) >> 8);
-            }
+            visit_row4::<T, N>(dst_x, stride, h, |i4, r0, r1, r2, r3| {
+                let wy_r = &wy4[i4];
+                for (r, &wy_i) in [r0, r1, r2, r3].into_iter().zip(wy_r) {
+                    let wyv = Simd::<i16, N>::splat(wy_i as i16).cast::<i32>();
+                    store_i32(r, (wyv * a + bias) >> 8);
+                }
+            });
         }
     }
 }
@@ -755,10 +801,11 @@ pub fn ipred_smooth_h<T: Pixel, const BD: u32>(
     h: usize,
 ) {
     if BD == 8 {
-        match w {
-            4 => return smooth_hv_packed::<T, 4, 4, false>(dst, stride, above, left, h),
-            8 => return smooth_hv_packed::<T, 8, 2, false>(dst, stride, above, left, h),
-            _ => {}
+        if w == 4 {
+            return smooth_hv_packed::<T, 4, 4, false>(dst, stride, above, left, h);
+        }
+        if cfg!(target_feature = "avx2") && w == 8 {
+            return smooth_hv_packed::<T, 8, 2, false>(dst, stride, above, left, h);
         }
     }
     by_width!(w, smooth_h_w::<T, BD>(dst, stride, above, left, h));
@@ -772,27 +819,35 @@ fn smooth_h_w<T: Pixel, const BD: u32, const W: usize, const N: usize>(
     left: &[T],
     h: usize,
 ) {
-    let (dst, stride) = check_block::<T, W>(dst, stride, h);
+    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
+    let h = h4 * 4;
     let wx = sm_weights(W);
     let right = above[W - 1].to_i32();
-    let left = &left[..h];
+    let left4 = left[..h].as_chunks::<4>().0;
     for x in (0..W).step_by(N) {
+        let dst_x = &mut dst[x..];
         if BD == 8 {
             // wx * l + (256 - wx) * right + 128 fits in u16.
             let w = weights::<u16, N>(&wx[x..]);
             let b = (Simd::splat(256) - w) * Simd::splat(right as u16) + Simd::splat(128);
-            for (i, &l) in left.iter().enumerate() {
-                let l = Simd::splat(l.to_u16());
-                store_u16(row_mut::<T, N>(dst, i * stride + x), (w * l + b) >> 8);
-            }
+            visit_row4::<T, N>(dst_x, stride, h, |i4, r0, r1, r2, r3| {
+                let l_r = &left4[i4];
+                for (r, &l_i) in [r0, r1, r2, r3].into_iter().zip(l_r) {
+                    let l = Simd::splat(l_i.to_u16());
+                    store_u16(r, (w * l + b) >> 8);
+                }
+            });
         } else {
             // wx * (l - right) + 256 * right with 16 x 16 bit products.
             let w = weights::<i16, N>(&wx[x..]).cast::<i32>();
             let bias = Simd::splat(256 * right + 128);
-            for (i, &l) in left.iter().enumerate() {
-                let l = Simd::<i16, N>::splat((l.to_i32() - right) as i16).cast::<i32>();
-                store_i32(row_mut::<T, N>(dst, i * stride + x), (w * l + bias) >> 8);
-            }
+            visit_row4::<T, N>(dst_x, stride, h, |i4, r0, r1, r2, r3| {
+                let l_r = &left4[i4];
+                for (r, &l_i) in [r0, r1, r2, r3].into_iter().zip(l_r) {
+                    let l = Simd::<i16, N>::splat((l_i.to_i32() - right) as i16).cast::<i32>();
+                    store_i32(r, (w * l + bias) >> 8);
+                }
+            });
         }
     }
 }
@@ -894,9 +949,11 @@ fn interp_run<T: Pixel, E: Lane, const N: usize>(
     s: Simd<E, N>,
 ) -> Simd<E, N> {
     if upsample {
+        let src = &src[..2 * N];
         let (a, b) = E::load::<T, N>(src).deinterleave(E::load::<T, N>(&src[N..]));
         E::interp(a, b, s)
     } else {
+        let src = &src[..N + 1];
         E::interp(E::load::<T, N>(src), E::load::<T, N>(&src[1..]), s)
     }
 }
@@ -938,6 +995,19 @@ pub fn ipred_z1<T: Pixel, const BD: u32>(
         }
         return;
     }
+    ipred_z1_large::<T, BD>(dst, stride, above, w, h, dx, upsample);
+}
+
+#[inline(never)]
+fn ipred_z1_large<T: Pixel, const BD: u32>(
+    dst: &mut [T],
+    stride: usize,
+    above: &[T],
+    w: usize,
+    h: usize,
+    dx: i32,
+    upsample: bool,
+) {
     // Separate instances with and without upsampling (z1_w is inlined).
     match (BD <= 10, upsample) {
         (true, false) => by_width!(w, z1_w::<T, i16>(dst, stride, above, h, dx, false)),
@@ -956,7 +1026,8 @@ fn z1_w<T: Pixel, E: Lane, const W: usize, const N: usize>(
     dx: i32,
     upsample: bool,
 ) {
-    let (dst, stride) = check_block::<T, W>(dst, stride, h);
+    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
+    let h = h4 * 4;
     let u = upsample as usize;
     let max_base_x = (W + h - 1) << u;
     let edge_val = above[max_base_x];
@@ -984,38 +1055,43 @@ fn z1_w<T: Pixel, E: Lane, const W: usize, const N: usize>(
         }
         return;
     }
-    for i in 0..h {
-        let row = row_mut::<T, W>(dst, i * stride);
-        let idx = (i as i32 + 1) * dx;
-        let base0 = (idx >> (6 - u)) as usize;
-        if base0 >= max_base_x {
-            for d in row.as_chunks_mut::<N>().0 {
-                E::store(d, edge_v);
-            }
-            continue;
-        }
-        let shift = E::splat::<N>(((idx << u) >> 1) & 0x1f);
-        // Number of columns with base < maxBaseX: only those read the
-        // edge (up to above[maxBaseX]), the others are edge_val.
-        let n = ((max_base_x - base0 + (1 << u) - 1) >> u).min(W);
-        if n == W {
-            for (x, d) in (0..W).step_by(N).zip(row.as_chunks_mut::<N>().0.iter_mut()) {
-                let v = interp_run::<T, E, N>(&above[base0 + (x << u)..], upsample, shift);
-                E::store(d, v);
-            }
-            continue;
-        }
-        for (x, d) in (0..W).step_by(N).zip(row.as_chunks_mut::<N>().0.iter_mut()) {
-            if x >= n {
-                E::store(d, edge_v);
+    let row_span = ((W - N) << u) + len;
+    for i4 in 0..h4 {
+        let (r0, r1, r2, r3) = row4_mut::<T, W>(dst, i4, stride);
+        for (k, row) in [r0, r1, r2, r3].into_iter().enumerate() {
+            let i = i4 * 4 + k;
+            let idx = (i as i32 + 1) * dx;
+            let base0 = (idx >> (6 - u)) as usize;
+            if base0 >= max_base_x {
+                for d in row.as_chunks_mut::<N>().0 {
+                    E::store(d, edge_v);
+                }
                 continue;
             }
-            let b = (base0 + (x << u)).min(max_base_x);
-            let v = interp_run::<T, E, N>(&above[b..], upsample, shift);
-            E::store(
-                d,
-                if n < x + N { E::select_lt(n - x, v, edge_v) } else { v },
-            );
+            let shift = E::splat::<N>(((idx << u) >> 1) & 0x1f);
+            // Number of columns with base < maxBaseX: only those read the
+            // edge (up to above[maxBaseX]), the others are edge_val.
+            let n = ((max_base_x - base0 + (1 << u) - 1) >> u).min(W);
+            if n == W {
+                let win = &above[base0..base0 + row_span];
+                for (x, d) in (0..W).step_by(N).zip(row.as_chunks_mut::<N>().0.iter_mut()) {
+                    let v = interp_run::<T, E, N>(&win[x << u..], upsample, shift);
+                    E::store(d, v);
+                }
+                continue;
+            }
+            for (x, d) in (0..W).step_by(N).zip(row.as_chunks_mut::<N>().0.iter_mut()) {
+                if x >= n {
+                    E::store(d, edge_v);
+                    continue;
+                }
+                let b = (base0 + (x << u)).min(max_base_x);
+                let v = interp_run::<T, E, N>(&above[b..], upsample, shift);
+                E::store(
+                    d,
+                    if n < x + N { E::select_lt(n - x, v, edge_v) } else { v },
+                );
+            }
         }
     }
 }
@@ -1074,6 +1150,63 @@ pub fn ipred_z2<T: Pixel, const BD: u32>(
         }
         return;
     }
+    // Up to 10-bit samples in u16: 4x4 tiles, two rows per 8-lane vector.
+    if use_z2_small16::<T, BD>(w, h, upsample_left) {
+        let above: &[T; EDGE_BUF_LEN] = above[..EDGE_BUF_LEN].try_into().unwrap();
+        let left: &[T; EDGE_BUF_LEN] = left[..EDGE_BUF_LEN].try_into().unwrap();
+        z2_small16::<T, EDGE_BUF_LEN>(
+            dst,
+            stride,
+            above,
+            left,
+            w,
+            h,
+            dx,
+            dy,
+            upsample_above,
+            upsample_left,
+        );
+        return;
+    }
+    if BD <= 10 && !upsample_above && !upsample_left && w >= 8 && h >= 8 {
+        let above: &[T; EDGE_BUF_LEN] = above[..EDGE_BUF_LEN].try_into().unwrap();
+        let left: &[T; EDGE_BUF_LEN] = left[..EDGE_BUF_LEN].try_into().unwrap();
+        match w {
+            8 => z2_big::<T, 8>(dst, stride, above, left, h, dx, dy),
+            16 => z2_big::<T, 16>(dst, stride, above, left, h, dx, dy),
+            32 => z2_big::<T, 32>(dst, stride, above, left, h, dx, dy),
+            _ => z2_big::<T, 64>(dst, stride, above, left, h, dx, dy),
+        }
+        return;
+    }
+    ipred_z2_large::<T, BD>(
+        dst,
+        stride,
+        above,
+        left,
+        w,
+        h,
+        dx,
+        dy,
+        upsample_above,
+        upsample_left,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn ipred_z2_large<T: Pixel, const BD: u32>(
+    dst: &mut [T],
+    stride: usize,
+    above: &[T],
+    left: &[T],
+    w: usize,
+    h: usize,
+    dx: i32,
+    dy: i32,
+    upsample_above: bool,
+    upsample_left: bool,
+) {
     // In AV1 (spec 7.11.2.10), upsampling is only enabled when w + h <= 16
     // (so w <= 8 and h <= 8). Specialize (false, false) across all widths,
     // and specialize upsampled combinations only for w <= 8 (using a single
@@ -1195,7 +1328,7 @@ fn z2_tbl<T: Pixel, const W: usize, const UA: i16, const UL: i16>(
     const L: usize = 16;
     const { assert!(EDGE_PAD >= 2 && EDGE_PAD + 30 <= EDGE_BUF_LEN && (W == 4 || W == 8)) };
     debug_assert!(h <= 16 && h % (L / W) == 0);
-    let (dst, stride) = check_block::<T, W>(dst, stride, h);
+    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
     // Table entry k is spec index k - 2. Pre-bias positions by 2 << (6 - U)
     // so the shifted base indices already include the +2 table offset.
     let ta = [
@@ -1217,7 +1350,8 @@ fn z2_tbl<T: Pixel, const W: usize, const UA: i16, const UL: i16>(
     let y_step = Simd::splat(((L / W) as i16) << 6);
     // Left positions advance by 64 per row: the shift is constant.
     let shift_y = if UL == 1 { idx_y } else { idx_y >> 1 } & Simd::splat(31);
-    for i0 in (0..h).step_by(L / W) {
+    for g in 0..(4 / (L / W)) * h4 {
+        let i0 = g * (L / W);
         let base_x = idx_x >> (6 - UA);
         let base_y = idx_y >> (6 - UL);
         let shift_x = if UA == 1 { idx_x } else { idx_x >> 1 } & Simd::splat(31);
@@ -1244,8 +1378,22 @@ fn interp_tbl(t: &[Simd<u8, 16>; 2], idx: Simd<i16, 16>, s: Simd<i16, 16>) -> Si
     a + (((b - a) * s + Simd::splat(16)) >> 5)
 }
 
+#[inline(always)]
+fn store_slice_u8<T: Pixel, const W: usize>(row: &mut [T; W], s: &[u8]) {
+    let any: &mut dyn Any = row;
+    if let Some(d) = any.downcast_mut::<[u8; W]>() {
+        d.copy_from_slice(&s[..W]);
+    } else if let Some(d) = any.downcast_mut::<[u16; W]>() {
+        *d = std::array::from_fn(|k| s[k] as u16);
+    } else {
+        for (d, &x) in row.iter_mut().zip(&s[..W]) {
+            *d = T::from_i32(x as i32);
+        }
+    }
+}
+
 /// Stores the 16 `u8` lanes of `v` (pixel values) to rows `i0..i0 + 16 / W`
-/// of `dst` (`T` is `u8`).
+/// of `dst` (`W` is 4 or 8, `stride >= W` checked by [`check_block4`]).
 #[inline(always)]
 fn store_rows_u8<T: Pixel, const W: usize>(
     dst: &mut [T],
@@ -1254,11 +1402,18 @@ fn store_rows_u8<T: Pixel, const W: usize>(
     v: Simd<i16, 16>,
 ) {
     let v = v.cast::<u8>().to_array();
-    for k in 0..16 / W {
-        let row: &mut dyn Any = row_mut::<T, W>(dst, (i0 + k) * stride);
-        if let Some(row) = row.downcast_mut::<[u8; W]>() {
-            row.copy_from_slice(&v[k * W..(k + 1) * W]);
-        }
+    if W == 4 {
+        let (r0, r1, r2, r3) = row4_mut::<T, W>(dst, i0 >> 2, stride);
+        store_slice_u8(r0, &v[..4]);
+        store_slice_u8(r1, &v[4..8]);
+        store_slice_u8(r2, &v[8..12]);
+        store_slice_u8(r3, &v[12..16]);
+    } else {
+        let base = (i0 & 63) * stride;
+        let win = &mut dst[base..base + stride + W];
+        let (r0, r1) = win.split_at_mut(stride);
+        store_slice_u8::<T, W>((&mut r0[..W]).try_into().unwrap(), &v[..W]);
+        store_slice_u8::<T, W>(r1.try_into().unwrap(), &v[W..2 * W]);
     }
 }
 
@@ -1279,7 +1434,8 @@ fn z1_tbl<T: Pixel, const W: usize, const U: i16>(
     const L: usize = 16;
     const { assert!(W == 4 || W == 8) };
     debug_assert!(h <= 16 && h % (L / W) == 0 && ((W + h - 1) << U) <= 30);
-    let (dst, stride) = check_block::<T, W>(dst, stride, h);
+    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
+    let h = h4 * 4;
     let t = [load_u8x16::<T>(above), load_u8x16::<T>(&above[16..])];
     let max_base_x = ((W + h - 1) << U) as i16;
     let edge = Simd::<i16, L>::splat(above[max_base_x as usize].to_i32() as i16);
@@ -1289,7 +1445,8 @@ fn z1_tbl<T: Pixel, const W: usize, const U: i16>(
     // Positions (i + 1) * dx <= 16 * 1023 fit in i16.
     let mut idx = (r + Simd::splat(1)) * Simd::splat(dx as i16);
     let step = Simd::splat((L / W) as i16 * dx as i16);
-    for i0 in (0..h).step_by(L / W) {
+    for g in 0..(4 / (L / W)) * h4 {
+        let i0 = g * (L / W);
         let base = (idx >> (6 - U)) + j;
         let shift = if U == 1 { idx } else { idx >> 1 } & Simd::splat(31);
         let v = base
@@ -1315,7 +1472,7 @@ fn z3_tbl<T: Pixel, const W: usize, const U: i16>(
     const L: usize = 16;
     const { assert!(W == 4 || W == 8) };
     debug_assert!(h <= 16 && h % (L / W) == 0);
-    let (dst, stride) = check_block::<T, W>(dst, stride, h);
+    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
     let t = [load_u8x16::<T>(left), load_u8x16::<T>(&left[16..])];
     let lane = Simd::<i16, L>::from_array(std::array::from_fn(|k| k as i16));
     let j = lane & Simd::splat(W as i16 - 1);
@@ -1324,7 +1481,8 @@ fn z3_tbl<T: Pixel, const W: usize, const U: i16>(
     let mut base = (idx >> (6 - U)) + (r << U);
     let step = Simd::splat(((L / W) as i16) << U);
     let shift = if U == 1 { idx } else { idx >> 1 } & Simd::splat(31);
-    for i0 in (0..h).step_by(L / W) {
+    for g in 0..(4 / (L / W)) * h4 {
+        let i0 = g * (L / W);
         store_rows_u8::<T, W>(dst, stride, i0, interp_tbl(&t, base, shift));
         base += step;
     }
@@ -1389,35 +1547,1086 @@ fn z2_small<T: Pixel, E: Lane, const K: usize>(
 ) {
     const { assert!(K <= 8 && EDGE_PAD == 16 && EDGE_PAD + 16 + 2 * 8 <= EDGE_BUF_LEN) };
     debug_assert!(h % K == 0 && h <= 16 && (!upsample_left || h <= 8));
-    let (dst, stride) = check_block::<T, K>(dst, stride, h);
+    let (dst, stride, h4) = check_block4::<T, K>(dst, stride, h);
+    let h = h4 * 4;
     let above: &[T; EDGE_BUF_LEN] = above[..EDGE_BUF_LEN].try_into().unwrap();
     let left: &[T; EDGE_BUF_LEN] = left[..EDGE_BUF_LEN].try_into().unwrap();
     let ua = upsample_above as i32;
     let ul = upsample_left as i32;
     let pad = EDGE_PAD as i32;
+    let b0: [usize; K] = std::array::from_fn(|k| {
+        let idx = -(k as i32 + 1) * dy;
+        ((idx >> (6 - ul)).max(-pad) + pad) as usize
+    });
+    let sl: [Simd<E, K>; K] = std::array::from_fn(|k| {
+        let idx = -(k as i32 + 1) * dy;
+        E::splat(((idx << ul) >> 1) & 0x1f)
+    });
     for r in (0..h / K).map(|t| t * K) {
-        let mut cols = [E::splat::<K>(0); K];
-        for (k, col) in cols.iter_mut().enumerate() {
-            let idx = -(k as i32 + 1) * dy;
-            let b = ((idx >> (6 - ul)).max(-pad) + pad) as usize + (r << ul);
-            let s = E::splat(((idx << ul) >> 1) & 0x1f);
-            *col = interp_run::<T, E, K>(&left[b..], upsample_left, s);
-        }
-        for (k, lt) in transpose(cols).into_iter().enumerate() {
-            let i = r + k;
-            let t = (i as i32 + 1) * dx;
-            // Columns j < j0 = ceil((t - 64) / 64) use the left edge.
-            let m = (((t - 1) >> 6).clamp(0, K as i32)) as usize;
-            let idx = -t;
-            let b = ((idx >> (6 - ua)).max(-pad) + pad) as usize;
-            let at = interp_run::<T, E, K>(
-                &above[b..],
-                upsample_above,
-                E::splat(((idx << ua) >> 1) & 0x1f),
-            );
-            E::store(row_mut::<T, K>(dst, i * stride), E::select_lt(m, lt, at));
+        let cols: [Simd<E, K>; K] = std::array::from_fn(|k| {
+            interp_run::<T, E, K>(&left[b0[k] + (r << ul)..], upsample_left, sl[k])
+        });
+        let lt_rows = transpose(cols);
+        for c4 in 0..K / 4 {
+            let (r0, r1, r2, r3) = row4_mut::<T, K>(dst, (r >> 2) + c4, stride);
+            for (k4, row) in [r0, r1, r2, r3].into_iter().enumerate() {
+                let k = c4 * 4 + k4;
+                let i = r + k;
+                let t = (i as i32 + 1) * dx;
+                // Columns j < j0 = ceil((t - 64) / 64) use the left edge.
+                let m = (((t - 1) >> 6).clamp(0, K as i32)) as usize;
+                let idx = -t;
+                let b = ((idx >> (6 - ua)).max(-pad) + pad) as usize;
+                let at = interp_run::<T, E, K>(
+                    &above[b..],
+                    upsample_above,
+                    E::splat(((idx << ua) >> 1) & 0x1f),
+                );
+                E::store(row, E::select_lt(m, lt_rows[k], at));
+            }
         }
     }
+}
+
+/// Buffer index of the spec edge index `b` for the run loads of the z2
+/// tile kernels (wrapped to the buffer by [`z2_pair4`]). Every run read
+/// by a selected lane starts at a spec index in `-EDGE_PAD..32`; runs
+/// starting below `-EDGE_PAD` have no selected lane (see [`z2_tiles`]),
+/// so it does not matter which (in bounds) samples they load.
+#[inline(always)]
+fn z2_pos(b: i32) -> usize {
+    (b + EDGE_PAD as i32) as usize
+}
+
+/// Edge buffer length of the small z2 blocks of [`predict_directional`]
+/// (samples up to 10 bits, `w <= 8`, `h <= 16`): spec indices
+/// `-EDGE_PAD..24`, enough for [`fill_edge`] / [`upsample_edge8`] of
+/// `w <= 8`, `h <= 16` samples and the wrapped run loads of [`z2_pair4`].
+const Z2_SMALL_LEN: usize = 32 + 8;
+
+/// The interpolation inputs of 4 consecutive output lanes whose first
+/// sample is `buf[pos]`: `(buf[pos + k], buf[pos + k + 1])`, or with
+/// upsampling (`U`) `(buf[pos + 2k], buf[pos + 2k + 1])`. `pos` is
+/// wrapped to `0..32`, which leaves every run read by a selected lane
+/// (`pos` in `8..=27`) unchanged.
+#[inline(always)]
+fn z2_pair4<T: Pixel, const U: bool, const L: usize>(
+    buf: &[T; L],
+    pos: usize,
+) -> (Simd<i16, 4>, Simd<i16, 4>) {
+    const { assert!(L >= 32 + 8) };
+    let pos = pos & 31;
+    if U {
+        let v = load_i16::<T, 8>(&buf[pos..]);
+        (
+            simd_swizzle!(v, [0, 2, 4, 6]),
+            simd_swizzle!(v, [1, 3, 5, 7]),
+        )
+    } else {
+        (
+            load_i16::<T, 4>(&buf[pos..]),
+            load_i16::<T, 4>(&buf[pos + 1..]),
+        )
+    }
+}
+
+/// `Round2(a * (32 - s) + b * s, 5)` on `i16` lanes (exact for samples
+/// of up to 10 bits: `|b - a| * s <= 1023 * 31`).
+#[inline(always)]
+fn interp_i16x8(a: i16x8, b: i16x8, s: i16x8) -> i16x8 {
+    a + (((b - a) * s + Simd::splat(16)) >> 5)
+}
+
+/// Interpolates two pairs of 4-lane runs (rows or columns `k`, `k + 1`).
+#[inline(always)]
+fn interp_runs(
+    p: (Simd<i16, 4>, Simd<i16, 4>),
+    q: (Simd<i16, 4>, Simd<i16, 4>),
+    s: i16x8,
+) -> i16x8 {
+    interp_i16x8(
+        simd_swizzle!(p.0, q.0, [0, 1, 2, 3, 4, 5, 6, 7]),
+        simd_swizzle!(p.1, q.1, [0, 1, 2, 3, 4, 5, 6, 7]),
+        s,
+    )
+}
+
+/// Inputs of one 4x4 tile of [`z2_tiles`]: buffer positions of the above
+/// runs of its 4 rows, `idx = (j << 6) - (i + 1) * dx` of its row pairs,
+/// tile row/column offset, and whether any lane uses the above / left edge.
+struct Z2Tile {
+    pa: [usize; 4],
+    idx: [i16x8; 2],
+    ru: i32,
+    c: usize,
+    need_a: bool,
+    need_l: bool,
+}
+
+/// Transposes 4 columns `(c02, c13)` of 4 `i16` rows into row pairs
+/// `(l01, l23)` using two 16-bit interleaves and two 32-bit interleaves.
+#[inline(always)]
+fn z2_transpose4(c02: i16x8, c13: i16x8) -> (i16x8, i16x8) {
+    let (lo, hi) = c02.interleave(c13);
+    let (r01, r23) = Simd::<i32, 4>::from_ne_bytes(lo.to_ne_bytes())
+        .interleave(Simd::<i32, 4>::from_ne_bytes(hi.to_ne_bytes()));
+    (
+        i16x8::from_ne_bytes(r01.to_ne_bytes()),
+        i16x8::from_ne_bytes(r23.to_ne_bytes()),
+    )
+}
+
+/// One 4x4 tile of [`z2_tiles`]: rows `(0, 1)` and `(2, 3)` of the tile.
+#[inline(always)]
+fn z2_tile<T: Pixel, const UA: bool, const UL: bool, const L: usize>(
+    above: &[T; L],
+    left: &[T; L],
+    dy: i32,
+    dyv: i16x8,
+    t: &Z2Tile,
+) -> [i16x8; 2] {
+    let a = if t.need_a {
+        let run = |k: usize| z2_pair4::<T, UA, L>(above, t.pa[k]);
+        let ua = i16x8::splat(UA as i16);
+        let m = i16x8::splat(31);
+        let sa0 = ((t.idx[0] << ua) >> 1) & m;
+        let sa1 = ((t.idx[1] << ua) >> 1) & m;
+        [
+            interp_runs(run(0), run(1), sa0),
+            interp_runs(run(2), run(3), sa1),
+        ]
+    } else {
+        [i16x8::splat(0); 2]
+    };
+    if !t.need_l {
+        return a;
+    }
+    let ul = UL as i32;
+    let c = t.c as i32;
+    let run = |k: i32| z2_pair4::<T, UL, L>(left, z2_pos(t.ru + ((-(c + k) * dy) >> (6 - ul))));
+    let u02 = (if t.c == 0 { Z2_COL_02 } else { Z2_COL_46 }) * dyv;
+    let u13 = u02 + dyv;
+    let c02 = interp_runs(run(1), run(3), z2_shift(u02, UL));
+    let c13 = interp_runs(run(2), run(4), z2_shift(u13, UL));
+    let (l01, l23) = z2_transpose4(c02, c13);
+    if !t.need_a {
+        return [l01, l23];
+    }
+    let m = i16x8::splat(-64);
+    [
+        t.idx[0].simd_ge(m).select(a[0], l01),
+        t.idx[1].simd_ge(m).select(a[1], l23),
+    ]
+}
+
+/// Lane `k` of a row pair vector is column `k & 3` of row `k >> 2`:
+/// `(k & 3) << 6` and `(k >> 2) + 1`.
+const Z2_LANE_J64: i16x8 = i16x8::from_array([0, 64, 128, 192, 0, 64, 128, 192]);
+const Z2_LANE_I1: i16x8 = i16x8::from_array([1, 1, 1, 1, 2, 2, 2, 2]);
+const Z2_COL_02: i16x8 = i16x8::from_array([1, 1, 1, 1, 3, 3, 3, 3]);
+const Z2_COL_46: i16x8 = i16x8::from_array([5, 5, 5, 5, 7, 7, 7, 7]);
+
+/// `((-t << u) >> 1) & 31`: the interpolation shift at position `-t`
+/// (plus any multiple of 64).
+#[inline(always)]
+fn z2_shift(t: i16x8, u: bool) -> i16x8 {
+    ((-t << i16x8::splat(u as i16)) >> 1) & i16x8::splat(31)
+}
+
+/// Stores the row pair vectors `v` to 4 rows of 4 samples.
+#[inline(always)]
+fn z2_store4<T: Pixel>(rows: [&mut [T]; 4], v: [i16x8; 2]) {
+    let [r0, r1, r2, r3] = rows;
+    store_i16::<T, 4>(r0, simd_swizzle!(v[0], [0, 1, 2, 3]));
+    store_i16::<T, 4>(r1, simd_swizzle!(v[0], [4, 5, 6, 7]));
+    store_i16::<T, 4>(r2, simd_swizzle!(v[1], [0, 1, 2, 3]));
+    store_i16::<T, 4>(r3, simd_swizzle!(v[1], [4, 5, 6, 7]));
+}
+
+/// Table of up to 24 `u16` edge samples in 3 byte vectors for
+/// [`z2_tbl16`]: spec indices from `-1` (from `-2` when upsampled, `U`).
+/// The vectors are built from loads at the addresses of the 16 byte
+/// stores of [`fill_edge`] / [`upsample_edge`] (and a 1 sample load of the
+/// corner), so that store to load forwarding works right after the edge
+/// preparation. Only the first `n` vectors are loaded.
+#[inline(always)]
+fn z2_tbl_load<T: Pixel, const U: bool, const L: usize>(buf: &[T; L], n: usize) -> [u8x16; 3] {
+    let base = if U { EDGE_PAD - 1 } else { EDGE_PAD };
+    let corner = u16x8::splat(buf[base - 1].to_u16());
+    let q0 = load_u16::<T, 8>(&buf[base..]);
+    let q1 = if n > 1 { load_u16::<T, 8>(&buf[base + 8..]) } else { u16x8::splat(0) };
+    let q2 = if n > 2 { load_u16::<T, 8>(&buf[base + 16..]) } else { u16x8::splat(0) };
+    let ext = |a: u16x8, b: u16x8| -> u8x16 {
+        simd_swizzle!(a, b, [7, 8, 9, 10, 11, 12, 13, 14]).to_ne_bytes()
+    };
+    [ext(corner, q0), ext(q0, q1), ext(q1, q2)]
+}
+
+/// `(t[e], t[e + 1])` for the `u16` table `t` of [`z2_tbl_load`] (its
+/// first `n` vectors) and every lane's element index `e`. Lanes whose
+/// index is outside the table get arbitrary values.
+#[inline(always)]
+fn z2_tbl_lookup(t: &[u8x16; 3], n: usize, e: i16x8) -> (i16x8, i16x8) {
+    // Byte indices 2e and 2e + 1 of every u16 lane (little endian).
+    let bi = (e * i16x8::splat(514) + i16x8::splat(256)).cast::<u16>();
+    let look = |b: u16x8| {
+        let b = b.to_ne_bytes();
+        let mut v = t[0].swizzle_dyn(b);
+        if n > 1 {
+            v |= t[1].swizzle_dyn(b - u8x16::splat(16));
+        }
+        if n > 2 {
+            v |= t[2].swizzle_dyn(b - u8x16::splat(32));
+        }
+        i16x8::from_ne_bytes(v)
+    };
+    (look(bi), look(bi + u16x8::splat(0x0202)))
+}
+
+/// z2 for samples of up to 10 bits and blocks of `W x H` (`W` 4 or 8,
+/// `H` 4, 8 or 16, at most 8 when `UL`) with per lane table lookups
+/// (NEON `tbl`) of the edges held in registers, 8 lanes (two rows of 4 or
+/// one row of 8) at a time. Every lane computes its above and its left
+/// prediction and selects one (`idx >= -64`, see [`z2_tiles`]). The
+/// tables cover spec indices `-1..23` (`-2..22` upsampled), which
+/// includes every index a selected lane reads (up to `2 * W - 1` above
+/// with upsampling, `H` on the left).
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn z2_tbl16<
+    T: Pixel,
+    const W: usize,
+    const H: usize,
+    const UA: bool,
+    const UL: bool,
+    const L: usize,
+>(
+    dst: &mut [T],
+    stride: usize,
+    above: &[T; L],
+    left: &[T; L],
+    dx: i32,
+    dy: i32,
+) {
+    const { assert!((W == 4 || W == 8) && (H == 4 || H == 8 || H == 16) && (!UL || H <= 8)) };
+    let (dst, stride, _) = check_block4::<T, W>(dst, stride, H);
+    // Table vectors needed: above indices up to W (2 * W - 1 + 1 when
+    // upsampled) from -1 (-2), left indices up to H (2 * H) likewise.
+    let need_a = ((W - 1) * 64) as i32 - dx >= -64;
+    let need_l = -((H as i32) * dx) < -64;
+    let na = if UA {
+        if W == 4 {
+            2
+        } else {
+            3
+        }
+    } else if W == 4 {
+        1
+    } else {
+        2
+    };
+    let nl = if UL {
+        if H == 4 {
+            2
+        } else {
+            3
+        }
+    } else if H == 4 {
+        1
+    } else if H == 8 {
+        2
+    } else {
+        3
+    };
+    let ta = if need_a { z2_tbl_load::<T, UA, L>(above, na) } else { [u8x16::splat(0); 3] };
+    let tl = if need_l { z2_tbl_load::<T, UL, L>(left, nl) } else { [u8x16::splat(0); 3] };
+    let lane = i16x8::from_array([0, 1, 2, 3, 4, 5, 6, 7]);
+    let j = lane & i16x8::splat(W as i16 - 1);
+    let r = lane >> i16x8::splat(W.trailing_zeros() as i16);
+    let (ua, ul) = (UA as i16, UL as i16);
+    let rows = 8 / W;
+    let mut idx_x = (j << 6) - (r + i16x8::splat(1)) * i16x8::splat(dx as i16);
+    let idx_y = (r << 6) - (j + i16x8::splat(1)) * i16x8::splat(dy as i16);
+    // The left shift does not depend on the row, and by advances by rows << ul.
+    let sy = ((idx_y << i16x8::splat(ul)) >> 1) & i16x8::splat(31);
+    let mut by = (idx_y >> i16x8::splat(6 - ul)) + i16x8::splat(1 + ul);
+    let step_x = i16x8::splat((rows as i32 * dx) as i16);
+    let step_by = i16x8::splat((rows as i16) << ul);
+    for g in 0..H / rows {
+        let i = g * rows;
+        let g_need_a = ((W - 1) * 64) as i32 - (i as i32 + 1) * dx >= -64;
+        let g_need_l = -(((i + rows) as i32) * dx) < -64;
+        let v = if !g_need_l {
+            let bx = (idx_x >> i16x8::splat(6 - ua)) + i16x8::splat(1 + ua);
+            let sx = ((idx_x << i16x8::splat(ua)) >> 1) & i16x8::splat(31);
+            let (a0, a1) = z2_tbl_lookup(&ta, na, bx);
+            interp_i16x8(a0, a1, sx)
+        } else if !g_need_a {
+            let (l0, l1) = z2_tbl_lookup(&tl, nl, by);
+            interp_i16x8(l0, l1, sy)
+        } else {
+            let bx = (idx_x >> i16x8::splat(6 - ua)) + i16x8::splat(1 + ua);
+            let sx = ((idx_x << i16x8::splat(ua)) >> 1) & i16x8::splat(31);
+            let (a0, a1) = z2_tbl_lookup(&ta, na, bx);
+            let (l0, l1) = z2_tbl_lookup(&tl, nl, by);
+            idx_x
+                .simd_ge(i16x8::splat(-64))
+                .select(interp_i16x8(a0, a1, sx), interp_i16x8(l0, l1, sy))
+        };
+        if W == 4 {
+            let base = (i & 15) * stride;
+            let win = &mut dst[base..base + stride + 4];
+            let (r0, r1) = win.split_at_mut(stride);
+            store_i16::<T, 4>(r0, simd_swizzle!(v, [0, 1, 2, 3]));
+            store_i16::<T, 4>(r1, simd_swizzle!(v, [4, 5, 6, 7]));
+        } else {
+            store_i16::<T, 8>(&mut dst[(i & 15) * stride..], v);
+        }
+        idx_x -= step_x;
+        by += step_by;
+    }
+}
+
+/// Register-edge specialization of [`z2_tbl16`] for non-upsampled blocks
+/// with `W <= 8` and `H <= 8`: filters the edges and builds the NEON `tbl`
+/// tables directly in registers (see [`z2_small_edges`] for `packed`).
+#[inline(never)]
+fn z2_tbl16_reg<T: Pixel, const W: usize, const H: usize>(
+    dst: &mut [T],
+    stride: usize,
+    edges: &IntraEdges<T>,
+    packed: u64,
+) {
+    const { assert!((W == 4 || W == 8) && (H == 4 || H == 8)) };
+    let (c, va, vl, dx, dy) = z2_small_edges::<T, W, H>(edges, packed);
+    let (ca, cl) = (c, c);
+    let (dst, stride, _) = check_block4::<T, W>(dst, stride, H);
+    let ext = |a: u16x8, b: u16x8| -> u8x16 {
+        simd_swizzle!(a, b, [7, 8, 9, 10, 11, 12, 13, 14]).to_ne_bytes()
+    };
+    let na = if W == 4 { 1 } else { 2 };
+    let nl = if H == 4 { 1 } else { 2 };
+    let ta = [
+        ext(ca, va),
+        if W == 8 { ext(va, ca) } else { u8x16::splat(0) },
+        u8x16::splat(0),
+    ];
+    let tl = [
+        ext(cl, vl),
+        if H == 8 { ext(vl, cl) } else { u8x16::splat(0) },
+        u8x16::splat(0),
+    ];
+    let lane = i16x8::from_array([0, 1, 2, 3, 4, 5, 6, 7]);
+    let j = lane & i16x8::splat(W as i16 - 1);
+    let r = lane >> i16x8::splat(W.trailing_zeros() as i16);
+    let rows = 8 / W;
+    let mut idx_x = (j << 6) - (r + i16x8::splat(1)) * i16x8::splat(dx as i16);
+    let idx_y = (r << 6) - (j + i16x8::splat(1)) * i16x8::splat(dy as i16);
+    let sy = (idx_y >> 1) & i16x8::splat(31);
+    let mut by = (idx_y >> 6) + i16x8::splat(1);
+    let step_x = i16x8::splat((rows as i32 * dx) as i16);
+    let step_by = i16x8::splat(rows as i16);
+    for g in 0..H / rows {
+        let i = g * rows;
+        let g_need_a = ((W - 1) * 64) as i32 - (i as i32 + 1) * dx >= -64;
+        let g_need_l = -(((i + rows) as i32) * dx) < -64;
+        let v = if !g_need_l {
+            let bx = (idx_x >> 6) + i16x8::splat(1);
+            let sx = (idx_x >> 1) & i16x8::splat(31);
+            let (a0, a1) = z2_tbl_lookup(&ta, na, bx);
+            interp_i16x8(a0, a1, sx)
+        } else if !g_need_a {
+            let (l0, l1) = z2_tbl_lookup(&tl, nl, by);
+            interp_i16x8(l0, l1, sy)
+        } else {
+            let bx = (idx_x >> 6) + i16x8::splat(1);
+            let sx = (idx_x >> 1) & i16x8::splat(31);
+            let (a0, a1) = z2_tbl_lookup(&ta, na, bx);
+            let (l0, l1) = z2_tbl_lookup(&tl, nl, by);
+            idx_x
+                .simd_ge(i16x8::splat(-64))
+                .select(interp_i16x8(a0, a1, sx), interp_i16x8(l0, l1, sy))
+        };
+        if W == 4 {
+            let base = (i & 15) * stride;
+            let win = &mut dst[base..base + stride + 4];
+            let (r0, r1) = win.split_at_mut(stride);
+            store_i16::<T, 4>(r0, simd_swizzle!(v, [0, 1, 2, 3]));
+            store_i16::<T, 4>(r1, simd_swizzle!(v, [4, 5, 6, 7]));
+        } else {
+            store_i16::<T, 8>(&mut dst[(i & 15) * stride..], v);
+        }
+        idx_x -= step_x;
+        by += step_by;
+    }
+}
+
+/// Pair of 4-lane runs from `buf[0..16]` (`buf[0..8]` = corner,
+/// `buf[8..16]` = edge[0..8]) at `(pos & 7) + OFF` (`OFF` is `0` or `4`).
+#[inline(always)]
+fn z2_pair4_reg<const OFF: usize>(buf: &[i16; 16], pos: usize) -> (Simd<i16, 4>, Simd<i16, 4>) {
+    let p = (pos & 7) + OFF;
+    (
+        Simd::from_array(buf[p..p + 4].try_into().unwrap()),
+        Simd::from_array(buf[p + 1..p + 5].try_into().unwrap()),
+    )
+}
+
+/// Left-edge prediction `(l01, l23)` of a 4x4 tile at tile row `R` (`0` or
+/// `4`) and tile column `C` (`0` or `4`).
+#[inline(always)]
+fn z2_left4_reg<const R: usize, const C: usize>(
+    lbuf: &[i16; 16],
+    dy: i32,
+    dyv: i16x8,
+) -> [i16x8; 2] {
+    let c = C as i32;
+    let run = |k: i32| z2_pair4_reg::<R>(lbuf, ((-(c + k) * dy) >> 6) as usize);
+    let u02 = (if C == 0 { Z2_COL_02 } else { Z2_COL_46 }) * dyv;
+    let u13 = u02 + dyv;
+    let m = i16x8::splat(31);
+    let c02 = interp_runs(run(1), run(3), (-u02 >> 1) & m);
+    let c13 = interp_runs(run(2), run(4), (-u13 >> 1) & m);
+    let (l01, l23) = z2_transpose4(c02, c13);
+    [l01, l23]
+}
+
+/// One 4-row strip (`R` is `0` or `4`) of [`z2_reg_x86`]: shares the
+/// above-edge row indices `pa` and shifts `sa` across `C = 0` and `C = 4`.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn z2_strip_x86<T: Pixel, const W: usize, const R: usize>(
+    rows: (&mut [T; W], &mut [T; W], &mut [T; W], &mut [T; W]),
+    abuf: &[i16; 16],
+    lbuf: &[i16; 16],
+    dx: i32,
+    dy: i32,
+    dyv: i16x8,
+    t01: i16x8,
+    t23: i16x8,
+) {
+    let r = R as i32;
+    let (r0, r1, r2, r3) = rows;
+    let idx0 = [Z2_LANE_J64 - t01, Z2_LANE_J64 - t23];
+    let pos = |k: i32| ((-(r + k) * dx) >> 6) as usize;
+    let m31 = i16x8::splat(31);
+    let th = i16x8::splat(-64);
+    let need_a0 = 3 * 64 - (r + 1) * dx >= -64;
+    let need_l0 = -(r + 4) * dx < -64;
+    if W == 4 {
+        let v0 = if !need_l0 {
+            let run = |p: usize| z2_pair4_reg::<0>(abuf, p);
+            [
+                interp_runs(run(pos(1)), run(pos(2)), (idx0[0] >> 1) & m31),
+                interp_runs(run(pos(3)), run(pos(4)), (idx0[1] >> 1) & m31),
+            ]
+        } else if !need_a0 {
+            z2_left4_reg::<R, 0>(lbuf, dy, dyv)
+        } else {
+            let run = |p: usize| z2_pair4_reg::<0>(abuf, p);
+            let a0 = [
+                interp_runs(run(pos(1)), run(pos(2)), (idx0[0] >> 1) & m31),
+                interp_runs(run(pos(3)), run(pos(4)), (idx0[1] >> 1) & m31),
+            ];
+            let l0 = z2_left4_reg::<R, 0>(lbuf, dy, dyv);
+            [
+                idx0[0].simd_ge(th).select(a0[0], l0[0]),
+                idx0[1].simd_ge(th).select(a0[1], l0[1]),
+            ]
+        };
+        z2_store4::<T>([r0, r1, r2, r3], v0);
+        return;
+    }
+    let need_a1 = 7 * 64 - (r + 1) * dx >= -64;
+    let need_l1 = 4 * 64 - (r + 4) * dx < -64;
+    let j4 = Z2_LANE_J64 + i16x8::splat(256);
+    let idx1 = [j4 - t01, j4 - t23];
+    let (pa, sa) = if need_a1 {
+        (
+            [pos(1), pos(2), pos(3), pos(4)],
+            [(idx0[0] >> 1) & m31, (idx0[1] >> 1) & m31],
+        )
+    } else {
+        ([0; 4], [i16x8::splat(0); 2])
+    };
+    let v0 = if !need_l0 {
+        let run = |p: usize| z2_pair4_reg::<0>(abuf, p);
+        [
+            interp_runs(run(pa[0]), run(pa[1]), sa[0]),
+            interp_runs(run(pa[2]), run(pa[3]), sa[1]),
+        ]
+    } else if !need_a0 {
+        z2_left4_reg::<R, 0>(lbuf, dy, dyv)
+    } else {
+        let run = |p: usize| z2_pair4_reg::<0>(abuf, p);
+        let a0 = [
+            interp_runs(run(pa[0]), run(pa[1]), sa[0]),
+            interp_runs(run(pa[2]), run(pa[3]), sa[1]),
+        ];
+        let l0 = z2_left4_reg::<R, 0>(lbuf, dy, dyv);
+        [
+            idx0[0].simd_ge(th).select(a0[0], l0[0]),
+            idx0[1].simd_ge(th).select(a0[1], l0[1]),
+        ]
+    };
+    let v1 = if !need_l1 {
+        let run = |p: usize| z2_pair4_reg::<4>(abuf, p);
+        [
+            interp_runs(run(pa[0]), run(pa[1]), sa[0]),
+            interp_runs(run(pa[2]), run(pa[3]), sa[1]),
+        ]
+    } else if !need_a1 {
+        z2_left4_reg::<R, 4>(lbuf, dy, dyv)
+    } else {
+        let run = |p: usize| z2_pair4_reg::<4>(abuf, p);
+        let a1 = [
+            interp_runs(run(pa[0]), run(pa[1]), sa[0]),
+            interp_runs(run(pa[2]), run(pa[3]), sa[1]),
+        ];
+        let l1 = z2_left4_reg::<R, 4>(lbuf, dy, dyv);
+        [
+            idx1[0].simd_ge(th).select(a1[0], l1[0]),
+            idx1[1].simd_ge(th).select(a1[1], l1[1]),
+        ]
+    };
+    store_i16::<T, 8>(r0, simd_swizzle!(v0[0], v1[0], [0, 1, 2, 3, 8, 9, 10, 11]));
+    store_i16::<T, 8>(
+        r1,
+        simd_swizzle!(v0[0], v1[0], [4, 5, 6, 7, 12, 13, 14, 15]),
+    );
+    store_i16::<T, 8>(r2, simd_swizzle!(v0[1], v1[1], [0, 1, 2, 3, 8, 9, 10, 11]));
+    store_i16::<T, 8>(
+        r3,
+        simd_swizzle!(v0[1], v1[1], [4, 5, 6, 7, 12, 13, 14, 15]),
+    );
+}
+
+/// Specialization of [`z2_4x4`] / [`z2_tiles`] for non-upsampled blocks
+/// with `W` in `{4, 8}` and `H` in `{4, 8}`, filtering the edges itself
+/// (see [`z2_small_edges`] for `packed`). All 4 arguments are passed in
+/// integer registers.
+#[inline(never)]
+fn z2_reg_x86<T: Pixel, const W: usize, const H: usize>(
+    dst: &mut [T],
+    stride: usize,
+    edges: &IntraEdges<T>,
+    packed: u64,
+) {
+    const { assert!((W == 4 || W == 8) && (H == 4 || H == 8)) };
+    let (c, va, vl, dx, dy) = z2_small_edges::<T, W, H>(edges, packed);
+    let abuf: [i16; 16] = simd_swizzle!(
+        c,
+        va,
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    )
+    .cast::<i16>()
+    .to_array();
+    let lbuf: [i16; 16] = simd_swizzle!(
+        c,
+        vl,
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    )
+    .cast::<i16>()
+    .to_array();
+    let (abuf, lbuf) = (&abuf, &lbuf);
+    let (dst, stride, _) = check_block4::<T, W>(dst, stride, H);
+    let (dxv, dyv) = (i16x8::splat(dx as i16), i16x8::splat(dy as i16));
+    let t01 = Z2_LANE_I1 * dxv;
+    let t23 = t01 + dxv + dxv;
+    z2_strip_x86::<T, W, 0>(
+        row4_mut::<T, W>(dst, 0, stride),
+        abuf,
+        lbuf,
+        dx,
+        dy,
+        dyv,
+        t01,
+        t23,
+    );
+    if H == 8 {
+        let t45 = t23 + dxv + dxv;
+        let t67 = t45 + dxv + dxv;
+        z2_strip_x86::<T, W, 4>(
+            row4_mut::<T, W>(dst, 1, stride),
+            abuf,
+            lbuf,
+            dx,
+            dy,
+            dyv,
+            t45,
+            t67,
+        );
+    }
+}
+
+/// Packs the scalar parameters of a small register z2 block for
+/// [`z2_small_edges`]: `dx`, `dy` (at most 1023), the edge filter sizes
+/// `sz_a`, `sz_l` (at most 9) and strengths `s_a`, `s_l` (at most 3).
+#[inline(always)]
+fn z2_small_pack(dx: i32, dy: i32, sz_a: i32, sz_l: i32, s_a: u32, s_l: u32) -> u64 {
+    (dx as u64 & 0xffff)
+        | ((dy as u64 & 0xffff) << 16)
+        | ((sz_a as u64 & 15) << 32)
+        | ((sz_l as u64 & 15) << 36)
+        | ((s_a as u64 & 3) << 40)
+        | ((s_l as u64 & 3) << 42)
+}
+
+/// Loads and filters the edges of a non-upsampled `W x H` z2 block (`W`,
+/// `H` 4 or 8; see [`z2_small_pack`]): returns the splatted corner, the
+/// above and left edges (zero if not read by the block) and `dx`, `dy`.
+#[inline(always)]
+fn z2_small_edges<T: Pixel, const W: usize, const H: usize>(
+    edges: &IntraEdges<T>,
+    packed: u64,
+) -> (u16x8, u16x8, u16x8, i32, i32) {
+    let dx = (packed & 0xffff) as i32;
+    let dy = ((packed >> 16) & 0xffff) as i32;
+    let (sz_a, sz_l) = (((packed >> 32) & 15) as i32, ((packed >> 36) & 15) as i32);
+    let (s_a, s_l) = (((packed >> 40) & 3) as u32, ((packed >> 42) & 3) as u32);
+    // Lane (i, j) selects the above edge iff (j << 6) - (i + 1) * dx >= -64.
+    let need_a = dx <= (W as i32) * 64;
+    let need_l = (H as i32) * dx > 64;
+    // Edges of 4 samples are loaded as 4 lanes: the caller stores the
+    // replicated samples past them separately, and an 8-lane load
+    // spanning both stores would stall on store forwarding.
+    let c = u16x8::splat(edges.top_left.to_u16());
+    let va = if need_a {
+        filter_edge8_s12(&edges.above, c, sz_a, s_a, W == 4)
+    } else {
+        u16x8::splat(0)
+    };
+    let vl = if need_l {
+        filter_edge8_s12(&edges.left, c, sz_l, s_l, H == 4)
+    } else {
+        u16x8::splat(0)
+    };
+    (c, va, vl, dx, dy)
+}
+
+/// `[w1, w2]` of the edge filter kernels `[0, w1, w2, w1, 0]` of strengths
+/// 1 and 2 (entry 0 is the identity, entry 3 is unused).
+static EDGE_W12: [[u16x8; 2]; 4] = {
+    const fn s(w: u16) -> u16x8 {
+        u16x8::from_array([w; 8])
+    }
+    [[s(0), s(16)], [s(4), s(8)], [s(5), s(6)], [s(5), s(6)]]
+};
+
+/// `LANE_LT[k]` lane `l` is all ones iff `l < k`.
+static LANE_LT: [u16x8; 16] = {
+    let mut t = [u16x8::from_array([0; 8]); 16];
+    let mut k = 0;
+    while k < 16 {
+        let mut a = [0u16; 8];
+        let mut l = 0;
+        while l < 8 {
+            if l < k {
+                a[l] = u16::MAX;
+            }
+            l += 1;
+        }
+        t[k] = u16x8::from_array(a);
+        k += 1;
+    }
+    t
+};
+
+/// [`filter_edge8_vec`] for the strengths of blocks with `w + h <= 16`
+/// (at most 2, see `STRENGTH_LUT`), whose kernels have no outer taps:
+/// one mask load and two neighbour vectors instead of four.
+#[inline(always)]
+fn filter_edge8_s12<T: Pixel>(
+    src: &[T; MAX_EDGE],
+    prev: u16x8,
+    sz: i32,
+    strength: u32,
+    four: bool,
+) -> u16x8 {
+    const M: usize = 8;
+    debug_assert!(sz <= M as i32 + 1 && (!four || sz <= 5) && strength <= 2);
+    let raw = if four { load_u16::<T, 4>(src).resize::<M>(0) } else { load_u16::<T, M>(src) };
+    if strength == 0 || sz <= 1 {
+        return raw;
+    }
+    // Lanes below sz - 1 are filtered; the inputs from there on repeat the
+    // last sample.
+    let m = LANE_LT[(sz - 1) as usize & 15];
+    let last = u16x8::splat(src[(sz as usize - 2) & 7].to_u16());
+    let cur = (raw & m) | (last & !m);
+    let t1 = simd_swizzle!(prev, cur, [7, 8, 9, 10, 11, 12, 13, 14]);
+    let t3 = simd_swizzle!(cur, last, [1, 2, 3, 4, 5, 6, 7, 8]);
+    let [w1, w2] = EDGE_W12[strength as usize & 3];
+    let f = ((t1 + t3) * w1 + cur * w2 + u16x8::splat(8)) >> 4;
+    (f & m) | (raw & !m)
+}
+
+/// Dispatches a non-upsampled `w <= 8, h <= 8` 10-bit z2 block to
+/// [`z2_tbl16_reg`] (NEON) or [`z2_reg_x86`] (x86), which load and filter
+/// the edges themselves (see [`z2_small_pack`] for `packed`).
+#[inline(always)]
+fn z2_small16_reg<T: Pixel>(
+    dst: &mut [T],
+    stride: usize,
+    edges: &IntraEdges<T>,
+    w: usize,
+    h: usize,
+    packed: u64,
+) {
+    if HAS_FAST_SWIZZLE {
+        match (w, h) {
+            (4, 4) => z2_tbl16_reg::<T, 4, 4>(dst, stride, edges, packed),
+            (4, _) => z2_tbl16_reg::<T, 4, 8>(dst, stride, edges, packed),
+            (_, 4) => z2_tbl16_reg::<T, 8, 4>(dst, stride, edges, packed),
+            _ => z2_tbl16_reg::<T, 8, 8>(dst, stride, edges, packed),
+        }
+    } else {
+        match (w, h) {
+            (4, 4) => z2_reg_x86::<T, 4, 4>(dst, stride, edges, packed),
+            (4, _) => z2_reg_x86::<T, 4, 8>(dst, stride, edges, packed),
+            (_, 4) => z2_reg_x86::<T, 8, 4>(dst, stride, edges, packed),
+            _ => z2_reg_x86::<T, 8, 8>(dst, stride, edges, packed),
+        }
+    }
+}
+
+/// Whether [`z2_small16`] handles a z2 block.
+#[inline(always)]
+fn use_z2_small16<T: Pixel, const BD: u32>(w: usize, h: usize, upsample_left: bool) -> bool {
+    BD <= 10 && !is_u8::<T>() && w <= 8 && h <= 16 && (!upsample_left || h <= 8)
+}
+
+/// [`z2_4x4`] / [`z2_tiles`] for runtime upsampling flags.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn z2_small16<T: Pixel, const L: usize>(
+    dst: &mut [T],
+    stride: usize,
+    above: &[T; L],
+    left: &[T; L],
+    w: usize,
+    h: usize,
+    dx: i32,
+    dy: i32,
+    upsample_above: bool,
+    upsample_left: bool,
+) {
+    macro_rules! tiles {
+        ($ua:literal, $ul:literal) => {
+            if HAS_FAST_SWIZZLE {
+                match (w, h) {
+                    (4, 4) => z2_tbl16::<T, 4, 4, $ua, $ul, L>(dst, stride, above, left, dx, dy),
+                    (4, 8) => z2_tbl16::<T, 4, 8, $ua, $ul, L>(dst, stride, above, left, dx, dy),
+                    (8, 4) => z2_tbl16::<T, 8, 4, $ua, $ul, L>(dst, stride, above, left, dx, dy),
+                    (8, 8) => z2_tbl16::<T, 8, 8, $ua, $ul, L>(dst, stride, above, left, dx, dy),
+                    // h == 16: never upsampled on the left.
+                    (4, _) => z2_tbl16::<T, 4, 16, $ua, false, L>(dst, stride, above, left, dx, dy),
+                    _ => z2_tbl16::<T, 8, 16, $ua, false, L>(dst, stride, above, left, dx, dy),
+                }
+            } else if w == 4 && h == 4 {
+                z2_4x4::<T, $ua, $ul, L>(dst, stride, above, left, dx, dy)
+            } else {
+                z2_tiles::<T, $ua, $ul, L>(dst, stride, above, left, w, h, dx, dy)
+            }
+        };
+    }
+    match (upsample_above, upsample_left) {
+        (false, false) => tiles!(false, false),
+        (true, false) => tiles!(true, false),
+        (false, true) => tiles!(false, true),
+        (true, true) => tiles!(true, true),
+    }
+}
+
+/// z2 of a 4x4 block (see [`z2_tiles`]).
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn z2_4x4<T: Pixel, const UA: bool, const UL: bool, const L: usize>(
+    dst: &mut [T],
+    stride: usize,
+    above: &[T; L],
+    left: &[T; L],
+    dx: i32,
+    dy: i32,
+) {
+    let (dst, stride, _) = check_block4::<T, 4>(dst, stride, 4);
+    let ua = UA as i32;
+    let (dxv, dyv) = (i16x8::splat(dx as i16), i16x8::splat(dy as i16));
+    let t01 = Z2_LANE_I1 * dxv;
+    let t23 = t01 + dxv + dxv;
+    let pa = |k: i32| z2_pos((-k * dx) >> (6 - ua));
+    let tile = Z2Tile {
+        pa: [pa(1), pa(2), pa(3), pa(4)],
+        idx: [Z2_LANE_J64 - t01, Z2_LANE_J64 - t23],
+        ru: 0,
+        c: 0,
+        need_a: 3 * 64 - dx >= -64,
+        need_l: -4 * dx < -64,
+    };
+    let v = z2_tile::<T, UA, UL, L>(above, left, dy, dyv, &tile);
+    let (r0, r1, r2, r3) = row4_mut::<T, 4>(dst, 0, stride);
+    z2_store4::<T>([r0, r1, r2, r3], v);
+}
+
+/// z2 for samples of up to 10 bits and blocks of width `w` (4 or 8) and
+/// height `h` (4, 8 or 16; at most 8 if `UL`), with upsampling `UA` /
+/// `UL`, by 4x4 tiles of two 8-lane vectors (two rows each).
+///
+/// In a tile, the above edge prediction of every row is one contiguous
+/// run (packed by row pairs) and the left edge prediction of every
+/// column is one contiguous run with a constant shift (packed by column
+/// pairs, then transposed); each lane selects one of them. Lane `(i, j)`
+/// uses the above edge iff `base >= -(1 << UA)`, i.e. `idx = (j << 6) -
+/// (i + 1) * dx >= -64`. Tiles in which no lane uses one of the edges
+/// skip it. A run starting below spec index `-EDGE_PAD` has no lane that
+/// selects it (`h <= 16`, `w <= 8`, and the decoder's left reads are at
+/// spec indices `>= -(1 << UL)`), so its position may wrap
+/// ([`z2_pos`]).
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn z2_tiles<T: Pixel, const UA: bool, const UL: bool, const L: usize>(
+    dst: &mut [T],
+    stride: usize,
+    above: &[T; L],
+    left: &[T; L],
+    w: usize,
+    h: usize,
+    dx: i32,
+    dy: i32,
+) {
+    if w == 4 {
+        z2_tiles_w::<T, 4, UA, UL, L>(dst, stride, above, left, h, dx, dy);
+    } else {
+        z2_tiles_w::<T, 8, UA, UL, L>(dst, stride, above, left, h, dx, dy);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn z2_tiles_w<T: Pixel, const W: usize, const UA: bool, const UL: bool, const L: usize>(
+    dst: &mut [T],
+    stride: usize,
+    above: &[T; L],
+    left: &[T; L],
+    h: usize,
+    dx: i32,
+    dy: i32,
+) {
+    const { assert!(EDGE_PAD == 16 && (W == 4 || W == 8) && L >= 32 + 8) };
+    debug_assert!(h % 4 == 0 && h <= 16 && (!UL || h <= 8));
+    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
+    let (ua, ul) = (UA as i32, UL as i32);
+    let (dxv, dyv) = (i16x8::splat(dx as i16), i16x8::splat(dy as i16));
+    let mut t01 = Z2_LANE_I1 * dxv;
+    for i4 in 0..h4 {
+        let r = (4 * i4) as i32;
+        let t23 = t01 + dxv + dxv;
+        let ab = |k: i32| (-(r + k + 1) * dx) >> (6 - ua);
+        let abs = [ab(0), ab(1), ab(2), ab(3)];
+        let (r0, r1, r2, r3) = row4_mut::<T, W>(dst, i4, stride);
+        let ru = r << ul;
+        let tile0 = Z2Tile {
+            pa: [
+                z2_pos(abs[0]),
+                z2_pos(abs[1]),
+                z2_pos(abs[2]),
+                z2_pos(abs[3]),
+            ],
+            idx: [Z2_LANE_J64 - t01, Z2_LANE_J64 - t23],
+            ru,
+            c: 0,
+            need_a: 3 * 64 - (r + 1) * dx >= -64,
+            need_l: -(r + 4) * dx < -64,
+        };
+        let v0 = z2_tile::<T, UA, UL, L>(above, left, dy, dyv, &tile0);
+        if W == 4 {
+            z2_store4::<T>([r0, r1, r2, r3], v0);
+        } else {
+            let cu = 4 << ua;
+            let j4 = Z2_LANE_J64 + i16x8::splat(256);
+            let tile1 = Z2Tile {
+                pa: [
+                    z2_pos(cu + abs[0]),
+                    z2_pos(cu + abs[1]),
+                    z2_pos(cu + abs[2]),
+                    z2_pos(cu + abs[3]),
+                ],
+                idx: [j4 - t01, j4 - t23],
+                ru,
+                c: 4,
+                need_a: 7 * 64 - (r + 1) * dx >= -64,
+                need_l: 4 * 64 - (r + 4) * dx < -64,
+            };
+            let v1 = z2_tile::<T, UA, UL, L>(above, left, dy, dyv, &tile1);
+            store_i16::<T, 8>(r0, simd_swizzle!(v0[0], v1[0], [0, 1, 2, 3, 8, 9, 10, 11]));
+            store_i16::<T, 8>(
+                r1,
+                simd_swizzle!(v0[0], v1[0], [4, 5, 6, 7, 12, 13, 14, 15]),
+            );
+            store_i16::<T, 8>(r2, simd_swizzle!(v0[1], v1[1], [0, 1, 2, 3, 8, 9, 10, 11]));
+            store_i16::<T, 8>(
+                r3,
+                simd_swizzle!(v0[1], v1[1], [4, 5, 6, 7, 12, 13, 14, 15]),
+            );
+        }
+        t01 = t23 + dxv + dxv;
+    }
+}
+
+/// Loads 8 samples at `buf[pos & 127..]` and the 8 following ones by
+/// one, as `i16` lanes (see [`z2_pos`] for the wrapping).
+#[inline(always)]
+fn z2_pair8<T: Pixel>(buf: &[T; EDGE_BUF_LEN], pos: usize) -> (i16x8, i16x8) {
+    const { assert!(128 + 9 <= EDGE_BUF_LEN) };
+    let pos = pos & 127;
+    (
+        load_i16::<T, 8>(&buf[pos..]),
+        load_i16::<T, 8>(&buf[pos + 1..]),
+    )
+}
+
+/// Left edge prediction of the 8x8 tile at rows `r..r + 8`, columns
+/// `c..c + 8` of [`z2_big`] (transposed column runs).
+#[inline(always)]
+fn z2_left8<T: Pixel>(left: &[T; EDGE_BUF_LEN], r: i32, c: usize, dy: i32) -> [i16x8; 8] {
+    let v0 = -((c as i32 + 1) * dy);
+    let col = |k: i32| {
+        let v = v0 - k * dy;
+        let (a, b) = z2_pair8::<T>(left, z2_pos(r + (v >> 6)));
+        interp_i16x8(a, b, i16x8::splat(((v >> 1) & 31) as i16))
+    };
+    transpose([
+        col(0),
+        col(1),
+        col(2),
+        col(3),
+        col(4),
+        col(5),
+        col(6),
+        col(7),
+    ])
+}
+
+/// z2 without upsampling for samples of up to 10 bits and blocks of
+/// width `W` (8..=64) and height `h` (8..=64, a multiple of 8), by 8x8
+/// tiles of 8-lane rows.
+///
+/// Row `i` uses the left edge for columns `j < m(i) = ((i + 1) * dx - 1)
+/// >> 6` (clamped to `0..=W`), which does not decrease with `i`. In a
+/// group of 8 rows, tiles left of `m(r)` only use the left edge: every
+/// column is one contiguous run of the left edge with a constant shift,
+/// interpolated as one vector and transposed. Tiles right of `m(r + 7)`
+/// only use the above edge: every row is one contiguous run of it with
+/// a constant shift. The tiles between compute both and select per lane
+/// (`idx = (j << 6) - (i + 1) * dx >= -64`). Run positions wrap into the
+/// buffer ([`z2_pos`]): a run starting below spec index `-EDGE_PAD`
+/// (or above the 128 samples) has no lane selecting it.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn z2_big<T: Pixel, const W: usize>(
+    dst: &mut [T],
+    stride: usize,
+    above: &[T; EDGE_BUF_LEN],
+    left: &[T; EDGE_BUF_LEN],
+    h: usize,
+    dx: i32,
+    dy: i32,
+) {
+    const { assert!(W % 8 == 0 && W <= 64 && 128 + 17 <= EDGE_BUF_LEN) };
+    debug_assert!(h % 8 == 0 && (8..=64).contains(&h));
+    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
+    let lane64 = i16x8::from_array([0, 64, 128, 192, 256, 320, 384, 448]);
+    let m = |i: i32| ((((i + 1) * dx - 1) >> 6).clamp(0, W as i32)) as usize;
+    let interp = |p: (i16x8, i16x8), s: i16x8| interp_i16x8(p.0, p.1, s);
+    for i8 in 0..h4 / 2 {
+        let r = i8 * 8;
+        let ri = r as i32;
+        let (j_min, j_max) = (m(ri), m(ri + 7));
+        let base = r * stride;
+        let win = &mut dst[base..base + stride * 7 + W];
+        let mut c = 0;
+        // Tiles using only the left edge.
+        while c + 8 <= j_min {
+            let v = z2_left8::<T>(left, ri, c, dy);
+            let (top, bot) = win.split_at_mut(stride * 4);
+            let (r0, r1, r2, r3) = split_rows4::<T, W>(top, stride);
+            let (r4, r5, r6, r7) = split_rows4::<T, W>(bot, stride);
+            for (row, &vk) in [r0, r1, r2, r3, r4, r5, r6, r7].into_iter().zip(v.iter()) {
+                store_i16::<T, 8>(&mut row[c..], vk);
+            }
+            c += 8;
+        }
+        // Tiles crossing the boundary.
+        while c < j_max {
+            let v = z2_left8::<T>(left, ri, c, dy);
+            let c64 = lane64 + i16x8::splat((c * 64) as i16);
+            let (top, bot) = win.split_at_mut(stride * 4);
+            let (r0, r1, r2, r3) = split_rows4::<T, W>(top, stride);
+            let (r4, r5, r6, r7) = split_rows4::<T, W>(bot, stride);
+            for (k, (row, &vk)) in [r0, r1, r2, r3, r4, r5, r6, r7]
+                .into_iter()
+                .zip(v.iter())
+                .enumerate()
+            {
+                let tk = (ri + k as i32 + 1) * dx;
+                let sa = i16x8::splat(((-tk >> 1) & 31) as i16);
+                let a = interp(
+                    z2_pair8::<T>(above, z2_pos(((c * 64) as i32 - tk) >> 6)),
+                    sa,
+                );
+                // (j << 6) <= 4032: larger t only select the left edge.
+                let idx = c64 - i16x8::splat(tk.min(8191) as i16);
+                store_i16::<T, 8>(&mut row[c..], idx.simd_ge(i16x8::splat(-64)).select(a, vk));
+            }
+            c += 8;
+        }
+        // Tiles using only the above edge: each row k is a contiguous run
+        // starting at spec index ((-tk) >> 6) + c_above with constant shift.
+        if c < W {
+            let c_above = c;
+            let (top, bot) = win.split_at_mut(stride * 4);
+            let (r0, r1, r2, r3) = split_rows4::<T, W>(top, stride);
+            let (r4, r5, r6, r7) = split_rows4::<T, W>(bot, stride);
+            for (k, row) in [r0, r1, r2, r3, r4, r5, r6, r7].into_iter().enumerate() {
+                let tk = (ri + k as i32 + 1) * dx;
+                let b0 = z2_pos((-tk) >> 6);
+                let s8 = i16x8::splat(((-tk >> 1) & 31) as i16);
+                let s16 = Simd::<i16, 16>::splat(((-tk >> 1) & 31) as i16);
+                let mut col = c_above;
+                while col + 16 <= W {
+                    let pos = b0.wrapping_add(col) & 127;
+                    let a = load_i16::<T, 16>(&above[pos..]);
+                    let b = load_i16::<T, 16>(&above[pos + 1..]);
+                    let v = a + (((b - a) * s16 + Simd::splat(16)) >> 5);
+                    store_i16::<T, 16>(&mut row[col..], v);
+                    col += 16;
+                }
+                if col < W {
+                    let v = interp(z2_pair8::<T>(above, b0.wrapping_add(col)), s8);
+                    store_i16::<T, 8>(&mut row[col..], v);
+                }
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn z2_8x4_left_tile<T: Pixel, E: Lane>(
+    left: &[T; EDGE_BUF_LEN],
+    c: usize,
+    dy: i32,
+    upsample_left: bool,
+) -> [Simd<E, 4>; 4] {
+    let ul = upsample_left as i32;
+    let pad = EDGE_PAD as i32;
+    let mut cols = [E::splat::<4>(0); 4];
+    for (k, col) in cols.iter_mut().enumerate() {
+        let idx = -((c + k + 1) as i32) * dy;
+        let b = ((idx >> (6 - ul)).max(-pad) + pad) as usize;
+        let s = E::splat(((idx << ul) >> 1) & 0x1f);
+        *col = interp_run::<T, E, 4>(&left[b..], upsample_left, s);
+    }
+    transpose(cols)
 }
 
 /// z2 for 8x4 blocks: interpolates the 4-row left columns in 4-lane
@@ -1436,25 +2645,19 @@ fn z2_8x4<T: Pixel, E: Lane>(
     upsample_above: bool,
     upsample_left: bool,
 ) {
-    let (dst, stride) = check_block::<T, 8>(dst, stride, 4);
+    let (dst, stride, _) = check_block4::<T, 8>(dst, stride, 4);
     let above: &[T; EDGE_BUF_LEN] = above[..EDGE_BUF_LEN].try_into().unwrap();
     let left: &[T; EDGE_BUF_LEN] = left[..EDGE_BUF_LEN].try_into().unwrap();
     let ua = upsample_above as i32;
-    let ul = upsample_left as i32;
     let pad = EDGE_PAD as i32;
-    let left_tile = |c: usize| {
-        let mut cols = [E::splat::<4>(0); 4];
-        for (k, col) in cols.iter_mut().enumerate() {
-            let idx = -((c + k + 1) as i32) * dy;
-            let b = ((idx >> (6 - ul)).max(-pad) + pad) as usize;
-            let s = E::splat(((idx << ul) >> 1) & 0x1f);
-            *col = interp_run::<T, E, 4>(&left[b..], upsample_left, s);
-        }
-        transpose(cols)
+    let lt0 = z2_8x4_left_tile::<T, E>(left, 0, dy, upsample_left);
+    let lt1 = if dx > 64 {
+        z2_8x4_left_tile::<T, E>(left, 4, dy, upsample_left)
+    } else {
+        [E::splat::<4>(0); 4]
     };
-    let lt0 = left_tile(0);
-    let lt1 = if dx > 64 { left_tile(4) } else { [E::splat::<4>(0); 4] };
-    for i in 0..4 {
+    let (r0, r1, r2, r3) = row4_mut::<T, 8>(dst, 0, stride);
+    for (i, row) in [r0, r1, r2, r3].into_iter().enumerate() {
         let lt = E::concat4(lt0[i], lt1[i]);
         let t = (i as i32 + 1) * dx;
         let m = (((t - 1) >> 6).clamp(0, 8)) as usize;
@@ -1465,7 +2668,7 @@ fn z2_8x4<T: Pixel, E: Lane>(
             upsample_above,
             E::splat(((idx << ua) >> 1) & 0x1f),
         );
-        E::store(row_mut::<T, 8>(dst, i * stride), E::select_lt(m, lt, at));
+        E::store(row, E::select_lt(m, lt, at));
     }
 }
 
@@ -1551,21 +2754,30 @@ fn z2_w<T: Pixel, E: Lane, const W: usize, const N: usize, const K: usize>(
         for i in r..r + K {
             let row = row_mut::<T, W>(dst, i * stride);
             let idx0 = -(i as i32 + 1) * dx;
-            let s = ((idx0 << ua) >> 1) & 0x1f;
-            let base = |x: usize| (((x as i32 * 64 + idx0) >> (6 - ua)) + pad) as usize;
+            let s = E::splat(((idx0 << ua) >> 1) & 0x1f);
+            let b0 = ((idx0 >> (6 - ua)) + pad) as usize;
             let mut x = x0;
             if K == 4 && N >= 8 && (x & 4) != 0 && x < W {
-                let v = interp_run::<T, E, 4>(&above[base(x)..], upsample_above, E::splat(s));
+                let v = interp_run::<T, E, 4>(
+                    &above[b0.wrapping_add(x << ua)..],
+                    upsample_above,
+                    E::splat(((idx0 << ua) >> 1) & 0x1f),
+                );
                 E::store(&mut row[x..x + 4], v);
                 x += 4;
             }
             if N == 16 && (x & 8) != 0 && x < W {
-                let v = interp_run::<T, E, 8>(&above[base(x)..], upsample_above, E::splat(s));
+                let v = interp_run::<T, E, 8>(
+                    &above[b0.wrapping_add(x << ua)..],
+                    upsample_above,
+                    E::splat(((idx0 << ua) >> 1) & 0x1f),
+                );
                 E::store(&mut row[x..x + 8], v);
                 x += 8;
             }
             while x < W {
-                let v = interp_run::<T, E, N>(&above[base(x)..], upsample_above, E::splat(s));
+                let v =
+                    interp_run::<T, E, N>(&above[b0.wrapping_add(x << ua)..], upsample_above, s);
                 E::store(&mut row[x..x + N], v);
                 x += N;
             }
@@ -1601,6 +2813,19 @@ pub fn ipred_z3<T: Pixel, const BD: u32>(
         }
         return;
     }
+    ipred_z3_large::<T, BD>(dst, stride, left, w, h, dy, upsample);
+}
+
+#[inline(never)]
+fn ipred_z3_large<T: Pixel, const BD: u32>(
+    dst: &mut [T],
+    stride: usize,
+    left: &[T],
+    w: usize,
+    h: usize,
+    dy: i32,
+    upsample: bool,
+) {
     // Separate instances with and without upsampling (z3_k and z3_w are
     // inlined).
     match (BD <= 10, upsample) {
@@ -1641,25 +2866,27 @@ fn z3_w<T: Pixel, E: Lane, const W: usize, const K: usize>(
     dy: i32,
     upsample: bool,
 ) {
-    let (dst, stride) = check_block::<T, W>(dst, stride, h);
+    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
+    let h = h4 * 4;
     let u = upsample as usize;
     for c in (0..W / K).map(|t| t * K) {
-        let mut base0 = [0usize; K];
-        let mut shift = [E::splat::<K>(0); K];
-        for k in 0..K {
-            let idx = (c + k + 1) as i32 * dy;
-            base0[k] = (idx >> (6 - u)) as usize;
-            shift[k] = E::splat(((idx << u) >> 1) & 0x1f);
-        }
+        let dst_c = &mut dst[c..];
         for r in (0..h / K).map(|t| t * K) {
             // Rows r..r + K of column c + k: left[base0 + (i << u)] and
             // the next sample.
             let mut cols = [E::splat::<K>(0); K];
-            for k in 0..K {
-                cols[k] = interp_run::<T, E, K>(&left[base0[k] + (r << u)..], upsample, shift[k]);
+            for (k, col) in cols.iter_mut().enumerate() {
+                let idx = (c + k + 1) as i32 * dy;
+                let b = (idx >> (6 - u)) as usize + (r << u);
+                let s = E::splat(((idx << u) >> 1) & 0x1f);
+                *col = interp_run::<T, E, K>(&left[b..], upsample, s);
             }
-            for (i, v) in transpose(cols).into_iter().enumerate() {
-                E::store(row_mut::<T, K>(dst, (r + i) * stride + c), v);
+            let rows = transpose(cols);
+            for c4 in 0..K / 4 {
+                let (r0, r1, r2, r3) = row4_mut::<T, K>(dst_c, (r >> 2) + c4, stride);
+                for (k4, row) in [r0, r1, r2, r3].into_iter().enumerate() {
+                    E::store(row, rows[c4 * 4 + k4]);
+                }
             }
         }
     }
@@ -1840,6 +3067,12 @@ pub fn cfl_ac<T: Pixel, const BD: u32>(
     ss_x: usize,
     ss_y: usize,
 ) {
+    // The decoder uses `u8` pixels iff the bit depth is 8. The tests also
+    // run `u16` pixels at bit depth 8, which every kernel supports.
+    debug_assert!(
+        !(std::mem::size_of::<T>() == 1 && BD > 8)
+            && (cfg!(test) || !(std::mem::size_of::<T>() == 2 && BD == 8))
+    );
     debug_assert!((1..=w).contains(&wv) && (1..=h).contains(&hv) && w * h <= MAX_CFL_AC);
     macro_rules! go {
         ($sx:literal, $sy:literal) => {
@@ -1870,7 +3103,7 @@ pub fn cfl_ac<T: Pixel, const BD: u32>(
 /// them.
 #[inline(always)]
 fn pair_sum<T: Pixel, const K: usize>(src: &[T]) -> Simd<u16, K> {
-    let p: &[[T; 2]; K] = src[..2 * K].as_chunks::<2>().0.try_into().unwrap();
+    let p: &[[T; 2]; K] = src.as_chunks::<2>().0[..K].try_into().unwrap();
     let any: &dyn Any = p;
     if let Some(p) = any.downcast_ref::<[[u8; 2]; K]>() {
         let w = Simd::<u16, K>::from_array(std::array::from_fn(|k| u16::from_ne_bytes(p[k])));
@@ -1924,11 +3157,22 @@ fn cfl_ac_w<
     let mut acc1 = Simd::<u16, K>::splat(0);
     let mut acc = Simd::<u32, K>::splat(0);
     if wv == W {
-        let luma = &luma[..((hv << SY) - 1) * stride + (W << SX)];
-        for i in 0..hv {
-            let r0 = &luma[(i << SY) * stride..];
-            let r1 = &luma[((i << SY) + SY) * stride..];
-            let row: &mut [i16; W] = (&mut ac[i * W..(i + 1) * W]).try_into().unwrap();
+        let w_luma = W << SX;
+        debug_assert!(stride >= w_luma && (1..=32).contains(&hv));
+        // Panic-free in release builds: the clamp and the bounds-checked
+        // slices below keep every access in `luma`.
+        let stride = stride.max(w_luma);
+        let luma = &luma[..((hv << SY) - 1) * stride + w_luma];
+        for (i, row) in ac.as_chunks_mut::<W>().0[..hv].iter_mut().enumerate() {
+            let (r0, r1) = if SY == 0 {
+                let r = &luma[(i & 31) * stride..][..w_luma];
+                (r, r)
+            } else {
+                let base = (i & 31) * (stride * 2);
+                let win = &luma[base..base + stride + w_luma];
+                let (a, b) = win.split_at(stride);
+                (&a[..w_luma], b)
+            };
             let v0 = cfl_ac_vec::<T, SX, SY, K>(r0, r1);
             if small {
                 acc0 += v0;
@@ -1950,10 +3194,9 @@ fn cfl_ac_w<
         // Right frame edge: output columns computed with whole vectors
         // where possible, the rest per sample.
         let wfull = wv / K * K;
-        for i in 0..hv {
+        for (i, row) in ac.as_chunks_mut::<W>().0[..hv].iter_mut().enumerate() {
             let r0 = &luma[(i << SY) * stride..];
             let r1 = &luma[((i << SY) + SY) * stride..];
-            let row: &mut [i16; W] = (&mut ac[i * W..(i + 1) * W]).try_into().unwrap();
             if wfull >= K {
                 let v0 = cfl_ac_vec::<T, SX, SY, K>(r0, r1);
                 row[..K].copy_from_slice(v0.cast::<i16>().as_array());
@@ -2005,6 +3248,12 @@ pub fn cfl_pred<T: Pixel, const BD: u32>(
     alpha: i32,
     bd: u32,
 ) {
+    // The decoder uses `u8` pixels iff the bit depth is 8. The tests also
+    // run `u16` pixels at bit depth 8, which every kernel supports.
+    debug_assert!(
+        !(std::mem::size_of::<T>() == 1 && BD > 8)
+            && (cfg!(test) || !(std::mem::size_of::<T>() == 2 && BD == 8))
+    );
     debug_assert!((-16..=16).contains(&alpha) && bd == BD);
     match w {
         4 => cfl_pred_w::<T, BD, 4, 4>(dst, stride, ac, h, alpha),
@@ -2017,6 +3266,9 @@ pub fn cfl_pred<T: Pixel, const BD: u32>(
 
 /// `Round2Signed(alpha * ac, 6)` is `(p + (p < 0 ? -1 : 0) + 32) >> 6`
 /// with `p = alpha * ac`. For 8-bit `|p| <= 16 * 8 * 255` fits in `i16`.
+/// For 10/12-bit (`|ac| <= 8 * 4095 = 32760`), signing `a` by `alpha` and
+/// splitting `a = 64 * (a >> 6) + (a & 63)` keeps the entire computation
+/// in `i16` lanes.
 #[inline(always)]
 fn cfl_pred_w<T: Pixel, const BD: u32, const W: usize, const K: usize>(
     dst: &mut [T],
@@ -2025,32 +3277,37 @@ fn cfl_pred_w<T: Pixel, const BD: u32, const W: usize, const K: usize>(
     h: usize,
     alpha: i32,
 ) {
-    let (dst, stride) = check_block::<T, W>(dst, stride, h);
-    let max = (1i32 << BD) - 1;
-    for (i, acr) in ac[..W * h].as_chunks::<W>().0.iter().enumerate() {
-        let row = row_mut::<T, W>(dst, i * stride);
-        for (d, a) in row
-            .as_chunks_mut::<K>()
-            .0
-            .iter_mut()
-            .zip(acr.as_chunks::<K>().0)
-        {
-            let a = Simd::<i16, K>::from_array(*a);
-            let dc = load_i16::<T, K>(d);
-            let v = if BD == 8 {
-                let p = a * Simd::splat(alpha as i16);
-                let p = (p + (p >> 15) + Simd::splat(32)) >> 6;
-                (dc + p).simd_clamp(Simd::splat(0), Simd::splat(max as i16))
-            } else {
-                let p = a.cast::<i32>() * Simd::splat(alpha);
-                let p = (p + (p >> 31) + Simd::splat(32)) >> 6;
-                (dc.cast::<i32>() + p)
-                    .simd_clamp(Simd::splat(0), Simd::splat(max))
-                    .cast::<i16>()
-            };
-            store_i16(d, v);
+    let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
+    let max = Simd::<i16, K>::splat(((1i32 << BD) - 1) as i16);
+    let zero = Simd::<i16, K>::splat(0);
+    let al = Simd::<i16, K>::splat(alpha.abs() as i16);
+    let al_signed = Simd::<i16, K>::splat(alpha as i16);
+    let neg = Simd::<i16, K>::splat((alpha >> 31) as i16);
+    let c32 = Simd::<i16, K>::splat(32);
+    let c63 = Simd::<i16, K>::splat(63);
+    let ac4 = ac[..W * h4 * 4].as_chunks::<W>().0.as_chunks::<4>().0;
+    visit_row4::<T, W>(dst, stride, h, |i4, r0, r1, r2, r3| {
+        let acr4 = &ac4[i4];
+        for (row, acr) in [r0, r1, r2, r3].into_iter().zip(acr4) {
+            for (d, a) in row
+                .as_chunks_mut::<K>()
+                .0
+                .iter_mut()
+                .zip(acr.as_chunks::<K>().0)
+            {
+                let a = Simd::<i16, K>::from_array(*a);
+                let dc = load_i16::<T, K>(d);
+                let p = if BD == 8 {
+                    let p = a * al_signed;
+                    (p + (p >> 15) + c32) >> 6
+                } else {
+                    let a = (a ^ neg) - neg;
+                    (a >> 6) * al + (((a & c63) * al + (a >> 15) + c32) >> 6)
+                };
+                store_i16(d, (dc + p).simd_clamp(zero, max));
+            }
         }
-    }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -2065,7 +3322,33 @@ pub fn predict_intra_bd<T: Pixel, const BD: u32>(
     edges: &IntraEdges<T>,
     p: &IntraPredParams,
 ) {
+    // The decoder uses `u8` pixels iff the bit depth is 8. The tests also
+    // run `u16` pixels at bit depth 8, which every kernel supports.
+    debug_assert!(
+        !(std::mem::size_of::<T>() == 1 && BD > 8)
+            && (cfg!(test) || !(std::mem::size_of::<T>() == 2 && BD == 8))
+    );
     debug_assert_eq!(p.bd, BD);
+    // Directional modes first, as a tail call without a stack frame (the
+    // other modes need many registers for their inlined kernels).
+    if p.filter_intra_mode.is_none() && (V_PRED..=D67_PRED).contains(&p.mode) {
+        let p_angle = MODE_TO_ANGLE[p.mode as usize] + p.angle_delta * ANGLE_STEP;
+        if p_angle != 90 && p_angle != 180 {
+            predict_directional::<T, BD>(dst, stride, edges, p, p_angle);
+            return;
+        }
+    }
+    predict_intra_other::<T, BD>(dst, stride, edges, p);
+}
+
+/// [`predict_intra_bd`] for the non-directional modes and pAngle 90 / 180.
+#[inline(never)]
+fn predict_intra_other<T: Pixel, const BD: u32>(
+    dst: &mut [T],
+    stride: usize,
+    edges: &IntraEdges<T>,
+    p: &IntraPredParams,
+) {
     let (w, h) = (p.w, p.h);
     debug_assert!(w.is_power_of_two() && (4..=64).contains(&w));
     debug_assert!(h.is_power_of_two() && (4..=64).contains(&h));
@@ -2091,11 +3374,13 @@ pub fn predict_intra_bd<T: Pixel, const BD: u32>(
     }
     match p.mode {
         DC_PRED => {
-            by_size!(
-                w,
-                h,
-                dc_block::<T, BD>(dst, stride, above, left, p.have_left, p.have_above)
-            );
+            let v = match (p.have_left, p.have_above) {
+                (true, true) => by_size!(w, h, dc_both_block::<T, BD>(above, left)),
+                (true, false) => dc_edge_val::<T, BD>(left, h),
+                (false, true) => dc_edge_val::<T, BD>(above, w),
+                (false, false) => T::from_i32(1 << (BD - 1)),
+            };
+            by_width!(w, dc_fill::<T>(dst, stride, h, v));
         }
         V_PRED..=D67_PRED => {
             let p_angle = MODE_TO_ANGLE[p.mode as usize] + p.angle_delta * ANGLE_STEP;
@@ -2115,11 +3400,42 @@ pub fn predict_intra_bd<T: Pixel, const BD: u32>(
     }
 }
 
+/// Prepares one directional edge buffer (`above` or `left`) of up to 8 samples.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn prepare_edge8<T: Pixel, const BD: u32, const L: usize>(
+    buf: &mut [T; L],
+    src: &[T; MAX_EDGE],
+    corner: T,
+    w: usize,
+    h: usize,
+    filter: bool,
+    ft: bool,
+    have: bool,
+    delta: i32,
+    len: i32,
+    up_px: usize,
+) -> bool {
+    if !filter {
+        fill_edge8::<T, L>(buf, src, corner, 0, 0);
+        return false;
+    }
+    let up = use_upsample(w, h, ft, delta);
+    if up {
+        debug_assert!(!have || edge_filter_strength(w, h, ft, delta) == 0);
+        upsample_edge8::<T, BD, L>(buf, corner, src, up_px);
+    } else {
+        let strength = if have { edge_filter_strength(w, h, ft, delta) } else { 0 };
+        fill_edge8::<T, L>(buf, src, corner, len + 1, strength);
+    }
+    up
+}
+
 /// Prepares one directional edge buffer (`above` or `left`).
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn prepare_edge<T: Pixel, const BD: u32>(
-    buf: &mut [T; EDGE_BUF_LEN],
+fn prepare_edge<T: Pixel, const BD: u32, const L: usize>(
+    buf: &mut [T; L],
     src: &[T; MAX_EDGE],
     corner: T,
     w: usize,
@@ -2133,21 +3449,274 @@ fn prepare_edge<T: Pixel, const BD: u32>(
 ) -> bool {
     let up = filter && use_upsample(w, h, ft, delta);
     if up {
-        // The edge filter strength is 0 (and n < 24, so no corner
-        // filter) whenever upsampling is selected.
+        // The edge filter strength is 0 (and n <= 16, so up_px <= 8 and no
+        // corner filter) whenever upsampling is selected.
         debug_assert!(!have || edge_filter_strength(w, h, ft, delta) == 0);
-        upsample_edge::<T, BD>(buf, corner, src, up_px);
+        upsample_edge8::<T, BD, L>(buf, corner, src, up_px);
     } else {
         let strength = if filter && have { edge_filter_strength(w, h, ft, delta) } else { 0 };
-        fill_edge::<T>(buf, src, corner, up_px, len + 1, strength);
+        if up_px <= 8 {
+            fill_edge8::<T, L>(buf, src, corner, len + 1, strength);
+        } else {
+            fill_edge::<T, L>(buf, src, corner, up_px, len + 1, strength);
+        }
     }
     up
 }
 
-/// `dsp::ipred::predict_directional` with SIMD edge filtering. Only the
-/// edge buffer(s) read by the selected kernel are prepared.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn predict_z1_buffered<T: Pixel, const BD: u32>(
+    dst: &mut [T],
+    stride: usize,
+    edges: &IntraEdges<T>,
+    w: usize,
+    h: usize,
+    dx: i32,
+    max_w: i32,
+    up: bool,
+    strength: u32,
+) {
+    let n = w + h;
+    let mut above = [T::default(); EDGE_BUF_LEN];
+    if up {
+        if n <= 8 {
+            upsample_edge8::<T, BD, EDGE_BUF_LEN>(&mut above, edges.top_left, &edges.above, n);
+        } else {
+            upsample_edge::<T, BD, EDGE_BUF_LEN>(&mut above, edges.top_left, &edges.above, n);
+        }
+    } else if n <= 8 {
+        fill_edge8::<T, EDGE_BUF_LEN>(
+            &mut above,
+            &edges.above,
+            edges.top_left,
+            max_w + h as i32 + 1,
+            strength,
+        );
+    } else {
+        fill_edge::<T, EDGE_BUF_LEN>(
+            &mut above,
+            &edges.above,
+            edges.top_left,
+            n,
+            max_w + h as i32 + 1,
+            strength,
+        );
+    }
+    ipred_z1::<T, BD>(dst, stride, &above[EDGE_PAD..], w, h, dx, up);
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn predict_z3_buffered<T: Pixel, const BD: u32>(
+    dst: &mut [T],
+    stride: usize,
+    edges: &IntraEdges<T>,
+    w: usize,
+    h: usize,
+    dy: i32,
+    max_h: i32,
+    up: bool,
+    strength: u32,
+) {
+    let n = w + h;
+    let mut left = [T::default(); EDGE_BUF_LEN];
+    if up {
+        if n <= 8 {
+            upsample_edge8::<T, BD, EDGE_BUF_LEN>(&mut left, edges.top_left, &edges.left, n);
+        } else {
+            upsample_edge::<T, BD, EDGE_BUF_LEN>(&mut left, edges.top_left, &edges.left, n);
+        }
+    } else if n <= 8 {
+        fill_edge8::<T, EDGE_BUF_LEN>(
+            &mut left,
+            &edges.left,
+            edges.top_left,
+            max_h + w as i32 + 1,
+            strength,
+        );
+    } else {
+        fill_edge::<T, EDGE_BUF_LEN>(
+            &mut left,
+            &edges.left,
+            edges.top_left,
+            n,
+            max_h + w as i32 + 1,
+            strength,
+        );
+    }
+    ipred_z3::<T, BD>(dst, stride, &left[EDGE_PAD..], w, h, dy, up);
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn predict_z2_buffered<T: Pixel, const BD: u32>(
+    dst: &mut [T],
+    stride: usize,
+    edges: &IntraEdges<T>,
+    p: &IntraPredParams,
+    p_angle: i32,
+    dx: i32,
+    dy: i32,
+    need_a: bool,
+    need_l: bool,
+) {
+    let (w, h) = (p.w, p.h);
+    let n = w + h;
+    let filter = p.enable_intra_edge_filter;
+    let ft = p.smooth_filter_type;
+    let max_w = (w as i32).min(p.max_x - p.x + 1);
+    let max_h = (h as i32).min(p.max_y - p.y + 1);
+    let corner = if filter && n >= 24 {
+        T::from_i32(filter_corner(edges.left[0], edges.top_left, edges.above[0]))
+    } else {
+        edges.top_left
+    };
+    if use_z2_small16::<T, BD>(w, h, false) {
+        let mut above = [T::default(); Z2_SMALL_LEN];
+        let mut left = [T::default(); Z2_SMALL_LEN];
+        let ua = if need_a {
+            prepare_edge8::<T, BD, Z2_SMALL_LEN>(
+                &mut above,
+                &edges.above,
+                corner,
+                w,
+                h,
+                filter,
+                ft,
+                p.have_above,
+                p_angle - 90,
+                max_w,
+                w,
+            )
+        } else {
+            false
+        };
+        let ul = if !need_l {
+            false
+        } else if h <= 8 {
+            prepare_edge8::<T, BD, Z2_SMALL_LEN>(
+                &mut left,
+                &edges.left,
+                corner,
+                w,
+                h,
+                filter,
+                ft,
+                p.have_left,
+                p_angle - 180,
+                max_h,
+                h,
+            )
+        } else {
+            let strength = if filter && p.have_left {
+                edge_filter_strength(w, h, ft, p_angle - 180)
+            } else {
+                0
+            };
+            fill_edge16::<T, Z2_SMALL_LEN>(&mut left, &edges.left, corner, max_h + 1, strength);
+            false
+        };
+        z2_small16::<T, Z2_SMALL_LEN>(dst, stride, &above, &left, w, h, dx, dy, ua, ul);
+        return;
+    }
+    let mut above = [T::default(); EDGE_BUF_LEN];
+    let mut left = [T::default(); EDGE_BUF_LEN];
+    let ua = if need_a {
+        prepare_edge::<T, BD, EDGE_BUF_LEN>(
+            &mut above,
+            &edges.above,
+            corner,
+            w,
+            h,
+            filter,
+            ft,
+            p.have_above,
+            p_angle - 90,
+            max_w,
+            w,
+        )
+    } else {
+        false
+    };
+    let ul = if need_l {
+        prepare_edge::<T, BD, EDGE_BUF_LEN>(
+            &mut left,
+            &edges.left,
+            corner,
+            w,
+            h,
+            filter,
+            ft,
+            p.have_left,
+            p_angle - 180,
+            max_h,
+            h,
+        )
+    } else {
+        false
+    };
+    ipred_z2::<T, BD>(dst, stride, &above, &left, w, h, dx, dy, ua, ul);
+}
+
+/// [`DR_INTRA_DERIVATIVE`] padded to 128 entries, indexed by angles masked
+/// to 7 bits (no bounds checks).
+const DR_DERIV128: [i32; 128] = {
+    let mut t = [0; 128];
+    let mut i = 0;
+    while i < DR_INTRA_DERIVATIVE.len() {
+        t[i] = DR_INTRA_DERIVATIVE[i];
+        i += 1;
+    }
+    t
+};
+
+/// `dsp::ipred::predict_directional` with SIMD edge filtering. Small
+/// non-upsampled 10-bit z2 blocks (the most common directional blocks)
+/// go straight to their register kernels, which filter the edges
+/// themselves, as a tail call without a stack frame; every other block
+/// goes to [`predict_directional_other`].
 #[inline(never)]
 fn predict_directional<T: Pixel, const BD: u32>(
+    dst: &mut [T],
+    stride: usize,
+    edges: &IntraEdges<T>,
+    p: &IntraPredParams,
+    p_angle: i32,
+) {
+    let (w, h) = (p.w, p.h);
+    if BD <= 10 && !is_u8::<T>() && w <= 8 && h <= 8 && p_angle > 90 && p_angle < 180 {
+        let n = w + h;
+        let filter = p.enable_intra_edge_filter;
+        let ft = p.smooth_filter_type;
+        let da = (p_angle - 90) as usize & 127;
+        let dl = (180 - p_angle) as usize & 127;
+        let dx = DR_DERIV128[dl];
+        let dy = DR_DERIV128[da];
+        // Lane (i, j) selects the above edge iff (j << 6) - (i + 1) * dx >= -64.
+        let need_a = dx <= (w as i32) * 64;
+        let need_l = (h as i32) * dx > 64;
+        let can_up = filter && n <= if ft { 8 } else { 16 };
+        if !(can_up && ((need_a && da < 40) || (need_l && dl < 40))) {
+            // w + h <= 16 < 24, so the corner filter is never active here.
+            // n <= 16: strength class 0 or 1.
+            let lut = &STRENGTH_LUT[ft as usize][(n - 1) >> 3 & 1];
+            let max_w = (w as i32).min(p.max_x - p.x + 1);
+            let max_h = (h as i32).min(p.max_y - p.y + 1);
+            let s_a = if filter && p.have_above { lut[da] as u32 } else { 0 };
+            let s_l = if filter && p.have_left { lut[dl] as u32 } else { 0 };
+            let packed = z2_small_pack(dx, dy, max_w + 1, max_h + 1, s_a, s_l);
+            z2_small16_reg::<T>(dst, stride, edges, w, h, packed);
+            return;
+        }
+    }
+    predict_directional_other::<T, BD>(dst, stride, edges, p, p_angle);
+}
+
+/// [`predict_directional`] for every block but the small register z2
+/// ones. Only the edge buffer(s) read by the selected kernel are prepared.
+#[inline(never)]
+fn predict_directional_other<T: Pixel, const BD: u32>(
     dst: &mut [T],
     stride: usize,
     edges: &IntraEdges<T>,
@@ -2158,102 +3727,176 @@ fn predict_directional<T: Pixel, const BD: u32>(
     let n = w + h;
     let filter = p.enable_intra_edge_filter;
     let ft = p.smooth_filter_type;
+    let up_max = if ft { 8 } else { 16 };
+    let lut = &STRENGTH_LUT[ft as usize][((n.wrapping_sub(1)) >> 3).min(4)];
     let max_w = (w as i32).min(p.max_x - p.x + 1);
     let max_h = (h as i32).min(p.max_y - p.y + 1);
     if p_angle < 90 {
-        let dx = DR_INTRA_DERIVATIVE[p_angle as usize];
-        let delta = p_angle - 90;
-        let up = filter && use_upsample(w, h, ft, delta);
-        let strength = if !up && filter && p.have_above {
-            edge_filter_strength(w, h, ft, delta)
-        } else {
-            0
-        };
+        let d = (90 - p_angle) as usize & 127;
+        let dx = DR_DERIV128[p_angle as usize & 127];
+        let up = filter && d < 40 && n <= up_max;
+        let strength = if !up && filter && p.have_above { lut[d] as u32 } else { 0 };
         if !up && strength == 0 {
             ipred_z1::<T, BD>(dst, stride, &edges.above, w, h, dx, false);
-            return;
-        }
-        let mut above = [T::default(); EDGE_BUF_LEN];
-        if up {
-            upsample_edge::<T, BD>(&mut above, edges.top_left, &edges.above, n);
         } else {
-            fill_edge::<T>(
-                &mut above,
-                &edges.above,
-                edges.top_left,
-                n,
-                max_w + h as i32 + 1,
-                strength,
-            );
+            predict_z1_buffered::<T, BD>(dst, stride, edges, w, h, dx, max_w, up, strength);
         }
-        ipred_z1::<T, BD>(dst, stride, &above[EDGE_PAD..], w, h, dx, up);
         return;
     }
     if p_angle > 180 {
-        let dy = DR_INTRA_DERIVATIVE[(270 - p_angle) as usize];
-        let delta = p_angle - 180;
-        let up = filter && use_upsample(w, h, ft, delta);
-        let strength = if !up && filter && p.have_left {
-            edge_filter_strength(w, h, ft, delta)
-        } else {
-            0
-        };
+        let d = (p_angle - 180) as usize & 127;
+        let dy = DR_DERIV128[(270 - p_angle) as usize & 127];
+        let up = filter && d < 40 && n <= up_max;
+        let strength = if !up && filter && p.have_left { lut[d] as u32 } else { 0 };
         if !up && strength == 0 {
             ipred_z3::<T, BD>(dst, stride, &edges.left, w, h, dy, false);
-            return;
-        }
-        let mut left = [T::default(); EDGE_BUF_LEN];
-        if up {
-            upsample_edge::<T, BD>(&mut left, edges.top_left, &edges.left, n);
         } else {
-            fill_edge::<T>(
-                &mut left,
-                &edges.left,
-                edges.top_left,
-                n,
-                max_h + w as i32 + 1,
-                strength,
-            );
+            predict_z3_buffered::<T, BD>(dst, stride, edges, w, h, dy, max_h, up, strength);
         }
-        ipred_z3::<T, BD>(dst, stride, &left[EDGE_PAD..], w, h, dy, up);
         return;
     }
-    let corner = if filter && n >= 24 {
-        T::from_i32(filter_corner(edges.left[0], edges.top_left, edges.above[0]))
+    let da = (p_angle - 90) as usize & 127;
+    let dl = (180 - p_angle) as usize & 127;
+    let dx = DR_DERIV128[dl];
+    let dy = DR_DERIV128[da];
+    // Lane (i, j) selects the above edge iff (j << 6) - (i + 1) * dx >= -64.
+    let need_a = dx <= (w as i32) * 64;
+    let need_l = (h as i32) * dx > 64;
+    predict_z2_buffered::<T, BD>(dst, stride, edges, p, p_angle, dx, dy, need_a, need_l);
+}
+
+const EDGE_FILTER_W: [[u16; 3]; 4] = [[0, 0, 16], [0, 4, 8], [0, 5, 6], [2, 4, 4]];
+
+/// Filters up to 8 edge samples in a `u16x8` register (`prev` is the
+/// splatted corner sample).
+#[inline(always)]
+fn filter_edge8_vec<T: Pixel>(src: &[T; MAX_EDGE], prev: u16x8, sz: i32, strength: u32) -> u16x8 {
+    const M: usize = 8;
+    debug_assert!(sz <= M as i32 + 1);
+    let raw = load_u16::<T, M>(src);
+    if strength == 0 || sz <= 1 {
+        return raw;
+    }
+    let lane = i16x8::from_array([0, 1, 2, 3, 4, 5, 6, 7]);
+    let last = u16x8::splat(src[(sz as usize - 2) & 7].to_u16());
+    let cur = lane.simd_gt(i16x8::splat(sz as i16 - 2)).select(last, raw);
+    let [w0, w1, w2] = EDGE_FILTER_W[strength as usize & 3].map(u16x8::splat);
+    let t0 = simd_swizzle!(prev, cur, [6, 7, 8, 9, 10, 11, 12, 13]);
+    let t1 = simd_swizzle!(prev, cur, [7, 8, 9, 10, 11, 12, 13, 14]);
+    let t3 = simd_swizzle!(cur, last, [1, 2, 3, 4, 5, 6, 7, 8]);
+    let t4 = simd_swizzle!(cur, last, [2, 3, 4, 5, 6, 7, 8, 9]);
+    let f = ((t0 + t4) * w0 + (t1 + t3) * w1 + cur * w2 + u16x8::splat(8)) >> 4;
+    lane.simd_lt(i16x8::splat(sz as i16 - 1)).select(f, raw)
+}
+
+/// 8-lane specialization of [`fill_edge`] for `n <= 8` (`sz <= 9`).
+#[inline(always)]
+fn fill_edge8<T: Pixel, const L: usize>(
+    buf: &mut [T; L],
+    src: &[T; MAX_EDGE],
+    corner: T,
+    sz: i32,
+    strength: u32,
+) {
+    const M: usize = 8;
+    const { assert!(EDGE_PAD >= M && EDGE_PAD + M <= L) };
+    let prev = u16x8::splat(corner.to_u16());
+    store_u16::<T, M>(&mut buf[EDGE_PAD - M..], prev);
+    store_u16::<T, M>(
+        &mut buf[EDGE_PAD..],
+        filter_edge8_vec(src, prev, sz, strength),
+    );
+}
+
+/// 16-lane specialization of [`fill_edge`] for `n <= 16` (`sz <= 17`).
+#[inline(always)]
+fn fill_edge16<T: Pixel, const L: usize>(
+    buf: &mut [T; L],
+    src: &[T; MAX_EDGE],
+    corner: T,
+    sz: i32,
+    strength: u32,
+) {
+    const N: usize = 16;
+    const { assert!(EDGE_PAD >= 8 && EDGE_PAD + N <= L) };
+    debug_assert!(sz <= N as i32 + 1);
+    store_u16::<T, 8>(&mut buf[EDGE_PAD - 8..], u16x8::splat(corner.to_u16()));
+    if strength == 0 || sz <= 1 {
+        buf[EDGE_PAD..EDGE_PAD + N].copy_from_slice(&src[..N]);
+        return;
+    }
+    let sz_u = sz as usize;
+    if sz_u <= 9 {
+        fill_edge8::<T, L>(buf, src, corner, sz, strength);
+        buf[EDGE_PAD + 8..EDGE_PAD + N].copy_from_slice(&src[8..N]);
+        return;
+    }
+    let lane = Simd::<i16, N>::from_array(std::array::from_fn(|l| l as i16));
+    let last = Simd::<u16, N>::splat(src[sz_u - 2].to_u16());
+    let prev0 = Simd::<u16, N>::splat(corner.to_u16());
+    let raw0 = load_u16::<T, N>(src);
+    let cur0 = lane.simd_gt(Simd::splat(sz as i16 - 2)).select(last, raw0);
+    let [w0, w1, w2] = EDGE_FILTER_W[strength as usize & 3].map(Simd::<u16, N>::splat);
+    let r = Simd::<u16, N>::splat(8);
+    let t0 = simd_swizzle!(
+        prev0,
+        cur0,
+        [14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+    );
+    let t1 = simd_swizzle!(
+        prev0,
+        cur0,
+        [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+    );
+    let t3 = simd_swizzle!(
+        cur0,
+        last,
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    );
+    let t4 = simd_swizzle!(
+        cur0,
+        last,
+        [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+    );
+    let f = ((t0 + t4) * w0 + (t1 + t3) * w1 + cur0 * w2 + r) >> 4;
+    let v = lane.simd_lt(Simd::splat(sz as i16 - 1)).select(f, raw0);
+    store_u16::<T, N>(&mut buf[EDGE_PAD..], v);
+}
+
+/// 8-lane specialization of [`upsample_edge`] for `num_px <= 8`.
+#[inline(always)]
+fn upsample_edge8<T: Pixel, const BD: u32, const L: usize>(
+    buf: &mut [T; L],
+    corner: T,
+    src: &[T; MAX_EDGE],
+    num_px: usize,
+) {
+    const N: usize = 8;
+    const { assert!(EDGE_PAD + 2 * N <= L) };
+    debug_assert!((1..=N).contains(&num_px));
+    let lane = i16x8::from_array([0, 1, 2, 3, 4, 5, 6, 7]);
+    let last = i16x8::splat(src[num_px - 1].to_i32() as i16);
+    let c = i16x8::splat(corner.to_i32() as i16);
+    let s = lane
+        .simd_ge(i16x8::splat(num_px as i16))
+        .select(last, load_i16::<T, N>(src));
+    let d0 = simd_swizzle!(c, s, [6, 7, 8, 9, 10, 11, 12, 13]);
+    let d1 = simd_swizzle!(c, s, [7, 8, 9, 10, 11, 12, 13, 14]);
+    let d3 = simd_swizzle!(s, last, [1, 2, 3, 4, 5, 6, 7, 8]);
+    let max = i16x8::splat(((1i32 << BD) - 1) as i16);
+    let filt = if BD <= 10 {
+        ((i16x8::splat(9) * (d1 + s) - d0 - d3 + i16x8::splat(8)) >> 4)
+            .simd_clamp(i16x8::splat(0), max)
     } else {
-        edges.top_left
+        let w = |v: i16x8| v.cast::<i32>();
+        ((Simd::splat(9) * (w(d1) + w(s)) - w(d0) - w(d3) + Simd::splat(8)) >> 4)
+            .simd_clamp(Simd::splat(0), Simd::splat((1 << BD) - 1))
+            .cast::<i16>()
     };
-    let mut above = [T::default(); EDGE_BUF_LEN];
-    let mut left = [T::default(); EDGE_BUF_LEN];
-    let ua = prepare_edge::<T, BD>(
-        &mut above,
-        &edges.above,
-        corner,
-        w,
-        h,
-        filter,
-        ft,
-        p.have_above,
-        p_angle - 90,
-        max_w,
-        w,
-    );
-    let ul = prepare_edge::<T, BD>(
-        &mut left,
-        &edges.left,
-        corner,
-        w,
-        h,
-        filter,
-        ft,
-        p.have_left,
-        p_angle - 180,
-        max_h,
-        h,
-    );
-    let dx = DR_INTRA_DERIVATIVE[(180 - p_angle) as usize];
-    let dy = DR_INTRA_DERIVATIVE[(p_angle - 90) as usize];
-    ipred_z2::<T, BD>(dst, stride, &above, &left, w, h, dx, dy, ua, ul);
+    let (lo, hi) = filt.interleave(s);
+    buf[EDGE_PAD - 2] = corner;
+    store_i16::<T, N>(&mut buf[EDGE_PAD - 1..], lo);
+    store_i16::<T, N>(&mut buf[EDGE_PAD - 1 + N..], hi);
 }
 
 /// Fills the directional edge buffer `buf` (spec `edge[k]`, i.e.
@@ -2267,8 +3910,8 @@ fn predict_directional<T: Pixel, const BD: u32>(
 /// keep the unfiltered samples. Samples of `src` past `n` (up to the
 /// next multiple of 16) are copied too; the kernels never read them.
 #[inline(always)]
-fn fill_edge<T: Pixel>(
-    buf: &mut [T; EDGE_BUF_LEN],
+fn fill_edge<T: Pixel, const L: usize>(
+    buf: &mut [T; L],
     src: &[T; MAX_EDGE],
     corner: T,
     n: usize,
@@ -2278,71 +3921,137 @@ fn fill_edge<T: Pixel>(
     // 16 lanes: for u8 one 16 byte store per chunk, which the 16 byte
     // table loads of the small block kernels can forward from.
     const N: usize = 16;
-    const { assert!(EDGE_PAD + MAX_EDGE <= EDGE_BUF_LEN && MAX_EDGE % N == 0) };
-    debug_assert!(n <= MAX_EDGE && n % 4 == 0 && sz <= n as i32 + 1);
-    buf[EDGE_PAD - 1] = corner;
-    let mut k = 0;
-    if strength != 0 && sz > 1 {
-        let sz = sz as usize;
-        // Spec edge[i] for i = 1..sz is filtered from edge[i - 2 ..= i + 2]
-        // clamped to 0..sz. In src indices (src[j] = edge[j + 1]): out[j]
-        // for j < sz - 1 from s[j - 2 ..= j + 2] with s[-2] = s[-1] =
-        // corner and s[j] = src[sz - 2] for j > sz - 2.
-        let lane = Simd::<u16, N>::from_array(std::array::from_fn(|l| l as u16));
-        let last = Simd::<u16, N>::splat(src[sz - 2].to_u16());
-        // (raw src[k..k + N], s[k..k + N]).
-        let load = |k: usize| {
-            if k + N > MAX_EDGE {
-                // Only reached when every lane is past sz - 2.
-                return (last, last);
-            }
-            let raw = load_u16::<T, N>(&src[k..]);
-            (
-                raw,
-                (lane + Simd::splat(k as u16))
-                    .simd_gt(Simd::splat((sz - 2) as u16))
-                    .select(last, raw),
-            )
-        };
-        let r = Simd::<u16, N>::splat(8);
-        let mut prev = Simd::<u16, N>::splat(corner.to_u16());
-        let (mut raw, mut cur) = load(0);
-        while k < sz - 1 {
-            let (next_raw, next) = load(k + N);
-            let t1 = simd_swizzle!(
-                prev,
-                cur,
-                [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
-            );
-            let t3 = simd_swizzle!(
-                cur,
-                next,
-                [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-            );
-            let f = match strength {
-                1 => ((t1 + t3) * Simd::splat(4) + cur * Simd::splat(8) + r) >> 4,
-                2 => ((t1 + t3) * Simd::splat(5) + cur * Simd::splat(6) + r) >> 4,
-                _ => {
-                    let t0 = simd_swizzle!(
-                        prev,
-                        cur,
-                        [14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
-                    );
-                    let t4 = simd_swizzle!(
-                        cur,
-                        next,
-                        [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
-                    );
-                    ((t0 + t4) * Simd::splat(2) + (t1 + cur + t3) * Simd::splat(4) + r) >> 4
-                }
-            };
-            let v = (lane + Simd::splat(k as u16))
-                .simd_lt(Simd::splat((sz - 1) as u16))
-                .select(f, raw);
-            store_u16::<T, N>(&mut buf[EDGE_PAD + k..], v);
-            (prev, cur, raw) = (cur, next, next_raw);
+    const { assert!(EDGE_PAD >= 8 && EDGE_PAD + N <= L && MAX_EDGE % N == 0) };
+    debug_assert!(
+        n <= MAX_EDGE && n % 4 == 0 && sz <= n as i32 + 1 && EDGE_PAD + n.next_multiple_of(N) <= L
+    );
+    let prev = u16x8::splat(corner.to_u16());
+    store_u16::<T, 8>(&mut buf[EDGE_PAD - 8..], prev);
+    if strength == 0 || sz <= 1 {
+        let mut k = 0;
+        while k < n {
+            buf[EDGE_PAD + k..EDGE_PAD + k + N].copy_from_slice(&src[k..k + N]);
             k += N;
         }
+        return;
+    }
+    let sz_u = sz as usize;
+    if sz_u <= 9 {
+        // Every filtered sample is in the first 8 lanes (blocks up to 8
+        // samples along the edge): filter 8 lanes only, the samples from
+        // index 8 on are copied unchanged.
+        const M: usize = 8;
+        store_u16::<T, M>(
+            &mut buf[EDGE_PAD..],
+            filter_edge8_vec(src, prev, sz, strength),
+        );
+        buf[EDGE_PAD + M..EDGE_PAD + N].copy_from_slice(&src[M..N]);
+        let mut k = N;
+        while k < n {
+            buf[EDGE_PAD + k..EDGE_PAD + k + N].copy_from_slice(&src[k..k + N]);
+            k += N;
+        }
+        return;
+    }
+    let lane = Simd::<i16, N>::from_array(std::array::from_fn(|l| l as i16));
+    let last = Simd::<u16, N>::splat(src[sz_u - 2].to_u16());
+    let prev0 = Simd::<u16, N>::splat(corner.to_u16());
+    let raw0 = load_u16::<T, N>(src);
+    let cur0 = lane.simd_gt(Simd::splat(sz as i16 - 2)).select(last, raw0);
+    if sz_u <= N + 1 {
+        // Every filtered sample is in the first 16 lanes, and all lanes at
+        // index >= 16 are clamped to `last`.
+        let [w0, w1, w2] = EDGE_FILTER_W[strength as usize & 3].map(Simd::<u16, N>::splat);
+        let r = Simd::<u16, N>::splat(8);
+        let t0 = simd_swizzle!(
+            prev0,
+            cur0,
+            [14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+        );
+        let t1 = simd_swizzle!(
+            prev0,
+            cur0,
+            [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+        );
+        let t3 = simd_swizzle!(
+            cur0,
+            last,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        );
+        let t4 = simd_swizzle!(
+            cur0,
+            last,
+            [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+        );
+        let f = ((t0 + t4) * w0 + (t1 + t3) * w1 + cur0 * w2 + r) >> 4;
+        let v = lane.simd_lt(Simd::splat(sz as i16 - 1)).select(f, raw0);
+        store_u16::<T, N>(&mut buf[EDGE_PAD..], v);
+        let mut k = N;
+        while k < n {
+            buf[EDGE_PAD + k..EDGE_PAD + k + N].copy_from_slice(&src[k..k + N]);
+            k += N;
+        }
+        return;
+    }
+    fill_edge_large::<T, L>(buf, src, n, sz, strength, prev0, raw0, cur0, last);
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn fill_edge_large<T: Pixel, const L: usize>(
+    buf: &mut [T; L],
+    src: &[T; MAX_EDGE],
+    n: usize,
+    sz: i32,
+    strength: u32,
+    mut prev: Simd<u16, 16>,
+    mut raw: Simd<u16, 16>,
+    mut cur: Simd<u16, 16>,
+    last: Simd<u16, 16>,
+) {
+    const N: usize = 16;
+    let sz_u = sz as usize;
+    let lane = Simd::<i16, N>::from_array(std::array::from_fn(|l| l as i16));
+    let [w0, w1, w2] = EDGE_FILTER_W[strength as usize & 3].map(Simd::<u16, N>::splat);
+    let r = Simd::<u16, N>::splat(8);
+    let mut k = 0;
+    while k < sz_u - 1 {
+        let (next_raw, next) = if k + 2 * N > MAX_EDGE {
+            (last, last)
+        } else {
+            let nr = load_u16::<T, N>(&src[k + N..]);
+            let nc = (lane + Simd::splat((k + N) as i16))
+                .simd_gt(Simd::splat(sz as i16 - 2))
+                .select(last, nr);
+            (nr, nc)
+        };
+        let t0 = simd_swizzle!(
+            prev,
+            cur,
+            [14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+        );
+        let t1 = simd_swizzle!(
+            prev,
+            cur,
+            [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+        );
+        let t3 = simd_swizzle!(
+            cur,
+            next,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        );
+        let t4 = simd_swizzle!(
+            cur,
+            next,
+            [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+        );
+        let f = ((t0 + t4) * w0 + (t1 + t3) * w1 + cur * w2 + r) >> 4;
+        let v = (lane + Simd::splat(k as i16))
+            .simd_lt(Simd::splat(sz as i16 - 1))
+            .select(f, raw);
+        store_u16::<T, N>(&mut buf[EDGE_PAD + k..], v);
+        (prev, cur, raw) = (cur, next, next_raw);
+        k += N;
     }
     while k < n {
         buf[EDGE_PAD + k..EDGE_PAD + k + N].copy_from_slice(&src[k..k + N]);
@@ -2356,14 +4065,14 @@ fn fill_edge<T: Pixel>(
 /// directional edge buffer `buf`. Writes spec indices
 /// `-2..=2 * numPx - 2` (and some more that the kernels never read).
 #[inline(always)]
-fn upsample_edge<T: Pixel, const BD: u32>(
-    buf: &mut [T; EDGE_BUF_LEN],
+fn upsample_edge<T: Pixel, const BD: u32, const L: usize>(
+    buf: &mut [T; L],
     corner: T,
     src: &[T; MAX_EDGE],
     num_px: usize,
 ) {
     const N: usize = MAX_UPSAMPLE_PX;
-    const { assert!(EDGE_PAD + 2 * N <= EDGE_BUF_LEN && N <= MAX_EDGE) };
+    const { assert!(EDGE_PAD + 2 * N <= L && N <= MAX_EDGE) };
     debug_assert!((1..=N).contains(&num_px));
     let lane = Simd::<i16, N>::from_array(std::array::from_fn(|l| l as i16));
     let last = Simd::<i16, N>::splat(src[num_px - 1].to_i32() as i16);
@@ -2797,6 +4506,255 @@ mod tests {
                                 (_, true) => z3_tbl::<u8, 8, 1>(d, s, l, h, dy),
                             },
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The register z2 kernels of [`z2_small16_reg`] ([`z2_tbl16_reg`] is
+    /// only dispatched where `swizzle_dyn` is fast, [`z2_reg_x86`]
+    /// elsewhere), called directly so that both are tested on every host,
+    /// against the portable `predict_intra`.
+    #[test]
+    fn z2_reg_kernels_match_portable() {
+        fn run<const BD: u32>(seed: u64, trials: usize) {
+            let mut rng = Rng(seed);
+            let mut e = IntraEdges::<u16>::default();
+            let mut tested = 0;
+            for (w, h) in [(4usize, 4usize), (4, 8), (8, 4), (8, 8)] {
+                for mode in V_PRED..=D67_PRED {
+                    for angle_delta in -3..=3 {
+                        let p_angle = MODE_TO_ANGLE[mode as usize] + angle_delta * ANGLE_STEP;
+                        if p_angle <= 90 || p_angle >= 180 {
+                            continue;
+                        }
+                        for _ in 0..trials {
+                            let c = Case::<u16>::new(&mut rng, BD);
+                            e.top_left = c.tl;
+                            e.above.copy_from_slice(c.a());
+                            e.left.copy_from_slice(c.l());
+                            let flags = rng.below(16);
+                            let x = 4 * rng.below(64) as i32;
+                            let y = 4 * rng.below(64) as i32;
+                            let p = IntraPredParams {
+                                mode,
+                                angle_delta,
+                                filter_intra_mode: None,
+                                have_left: flags & 1 != 0,
+                                have_above: flags & 2 != 0,
+                                enable_intra_edge_filter: flags & 4 != 0,
+                                smooth_filter_type: flags & 8 != 0,
+                                x,
+                                y,
+                                max_x: x + rng.below(2 * w as u32 + 2) as i32,
+                                max_y: y + rng.below(2 * h as u32 + 2) as i32,
+                                w,
+                                h,
+                                bd: BD,
+                            };
+                            // Same selection and parameters as
+                            // predict_directional.
+                            let n = w + h;
+                            let filter = p.enable_intra_edge_filter;
+                            let ft = p.smooth_filter_type;
+                            let da = (p_angle - 90) as usize;
+                            let dl = (180 - p_angle) as usize;
+                            let dx = DR_DERIV128[dl];
+                            let dy = DR_DERIV128[da];
+                            let need_a = dx <= (w as i32) * 64;
+                            let need_l = (h as i32) * dx > 64;
+                            let can_up = filter && n <= if ft { 8 } else { 16 };
+                            if can_up && ((need_a && da < 40) || (need_l && dl < 40)) {
+                                continue;
+                            }
+                            let lut = &STRENGTH_LUT[ft as usize][(n - 1) >> 3 & 1];
+                            let max_w = (w as i32).min(p.max_x - p.x + 1);
+                            let max_h = (h as i32).min(p.max_y - p.y + 1);
+                            let s_a = if filter && p.have_above { lut[da] as u32 } else { 0 };
+                            let s_l = if filter && p.have_left { lut[dl] as u32 } else { 0 };
+                            let packed = z2_small_pack(dx, dy, max_w + 1, max_h + 1, s_a, s_l);
+                            let stride = w + rng.below(9) as usize;
+                            let mut d0 = vec![0x5au16; stride * (h - 1) + w];
+                            let mut d1 = d0.clone();
+                            let mut d2 = d0.clone();
+                            crate::decoder::av1::dsp::ipred::predict_intra(&mut d0, stride, &e, &p);
+                            match (w, h) {
+                                (4, 4) => {
+                                    z2_tbl16_reg::<u16, 4, 4>(&mut d1, stride, &e, packed);
+                                    z2_reg_x86::<u16, 4, 4>(&mut d2, stride, &e, packed);
+                                }
+                                (4, _) => {
+                                    z2_tbl16_reg::<u16, 4, 8>(&mut d1, stride, &e, packed);
+                                    z2_reg_x86::<u16, 4, 8>(&mut d2, stride, &e, packed);
+                                }
+                                (_, 4) => {
+                                    z2_tbl16_reg::<u16, 8, 4>(&mut d1, stride, &e, packed);
+                                    z2_reg_x86::<u16, 8, 4>(&mut d2, stride, &e, packed);
+                                }
+                                _ => {
+                                    z2_tbl16_reg::<u16, 8, 8>(&mut d1, stride, &e, packed);
+                                    z2_reg_x86::<u16, 8, 8>(&mut d2, stride, &e, packed);
+                                }
+                            }
+                            assert!(d0 == d1, "z2_tbl16_reg mismatch {p:?}");
+                            assert!(d0 == d2, "z2_reg_x86 mismatch {p:?}");
+                            tested += 1;
+                        }
+                    }
+                }
+            }
+            assert!(tested > 0);
+        }
+        run::<10>(0x2e2_1610_5eed_0002, 40);
+        run::<8>(0x2e2_1610_5eed_0003, 10);
+    }
+
+    /// The 10-bit table lookup z2 kernel (only dispatched where
+    /// `swizzle_dyn` is fast) and the 4x4 tile kernels, called directly so
+    /// that both are tested on every host.
+    #[test]
+    fn z2_small16_kernels_match_scalar() {
+        use crate::decoder::av1::dsp::ipred as p;
+        let mut rng = Rng(0x2e2_1610_5eed_0001);
+        for bd in [8u32, 10] {
+            for (w, h) in sizes() {
+                if w > 8 || h > 16 {
+                    continue;
+                }
+                for _ in 0..6 {
+                    let c = Case::<u16>::new(&mut rng, bd);
+                    let (ab, lb) = (&c.above, &c.left);
+                    for p_angle in 91..180 {
+                        let dx = DR_INTRA_DERIVATIVE[180 - p_angle];
+                        let dy = DR_INTRA_DERIVATIVE[p_angle - 90];
+                        if dx == 0 || dy == 0 {
+                            continue;
+                        }
+                        for (ua, ul) in [(false, false), (true, false), (false, true), (true, true)]
+                        {
+                            if ul && h > 8 {
+                                continue;
+                            }
+                            let f0 = |d: &mut [u16], s| {
+                                p::ipred_z2(d, s, &ab[..], &lb[..], w, h, dx, dy, ua, ul)
+                            };
+                            macro_rules! tbl {
+                                ($w:literal, $h:literal, $ua:literal, $ul:literal) => {
+                                    |d: &mut [u16], s| {
+                                        z2_tbl16::<u16, $w, $h, $ua, $ul, EDGE_BUF_LEN>(
+                                            d, s, ab, lb, dx, dy,
+                                        )
+                                    }
+                                };
+                            }
+                            macro_rules! by_ups {
+                                ($w:literal, $h:literal) => {
+                                    match (ua, ul) {
+                                        (false, false) => cmp2(
+                                            &mut rng,
+                                            w,
+                                            h,
+                                            "z2_tbl16",
+                                            f0,
+                                            tbl!($w, $h, false, false),
+                                        ),
+                                        (true, false) => cmp2(
+                                            &mut rng,
+                                            w,
+                                            h,
+                                            "z2_tbl16",
+                                            f0,
+                                            tbl!($w, $h, true, false),
+                                        ),
+                                        (false, true) => cmp2(
+                                            &mut rng,
+                                            w,
+                                            h,
+                                            "z2_tbl16",
+                                            f0,
+                                            tbl!($w, $h, false, true),
+                                        ),
+                                        (true, true) => cmp2(
+                                            &mut rng,
+                                            w,
+                                            h,
+                                            "z2_tbl16",
+                                            f0,
+                                            tbl!($w, $h, true, true),
+                                        ),
+                                    }
+                                };
+                            }
+                            match (w, h) {
+                                (4, 4) => by_ups!(4, 4),
+                                (4, 8) => by_ups!(4, 8),
+                                (8, 4) => by_ups!(8, 4),
+                                (8, 8) => by_ups!(8, 8),
+                                (4, _) if !ul => {
+                                    if ua {
+                                        cmp2(
+                                            &mut rng,
+                                            w,
+                                            h,
+                                            "z2_tbl16",
+                                            f0,
+                                            tbl!(4, 16, true, false),
+                                        )
+                                    } else {
+                                        cmp2(
+                                            &mut rng,
+                                            w,
+                                            h,
+                                            "z2_tbl16",
+                                            f0,
+                                            tbl!(4, 16, false, false),
+                                        )
+                                    }
+                                }
+                                (_, _) if !ul => {
+                                    if ua {
+                                        cmp2(
+                                            &mut rng,
+                                            w,
+                                            h,
+                                            "z2_tbl16",
+                                            f0,
+                                            tbl!(8, 16, true, false),
+                                        )
+                                    } else {
+                                        cmp2(
+                                            &mut rng,
+                                            w,
+                                            h,
+                                            "z2_tbl16",
+                                            f0,
+                                            tbl!(8, 16, false, false),
+                                        )
+                                    }
+                                }
+                                _ => {}
+                            }
+                            let f1 = |d: &mut [u16], s| {
+                                z2_small16::<u16, EDGE_BUF_LEN>(d, s, ab, lb, w, h, dx, dy, ua, ul)
+                            };
+                            cmp2(&mut rng, w, h, "z2_small16", f0, f1);
+                            let f2 = |d: &mut [u16], s| match (ua, ul) {
+                                (false, false) => z2_tiles::<u16, false, false, EDGE_BUF_LEN>(
+                                    d, s, ab, lb, w, h, dx, dy,
+                                ),
+                                (true, false) => z2_tiles::<u16, true, false, EDGE_BUF_LEN>(
+                                    d, s, ab, lb, w, h, dx, dy,
+                                ),
+                                (false, true) => z2_tiles::<u16, false, true, EDGE_BUF_LEN>(
+                                    d, s, ab, lb, w, h, dx, dy,
+                                ),
+                                (true, true) => z2_tiles::<u16, true, true, EDGE_BUF_LEN>(
+                                    d, s, ab, lb, w, h, dx, dy,
+                                ),
+                            };
+                            cmp2(&mut rng, w, h, "z2_tiles", f0, f2);
+                        }
                     }
                 }
             }

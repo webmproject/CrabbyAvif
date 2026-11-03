@@ -45,7 +45,7 @@
 //! free, with separate primary-only / secondary-only / both variants, so
 //! that the compiler vectorizes it even for baseline x86-64 (SSE2).
 
-use crate::decoder::av1::pixel::{floor_log2, Pixel};
+use crate::decoder::av1::pixel::Pixel;
 
 /// Sentinel for unavailable source samples (outside the frame, i.e.
 /// `is_inside_filter_region` false). Larger than any valid 12-bit sample.
@@ -224,15 +224,13 @@ fn constrain(diff: i32, threshold: i32, adj: u32) -> i32 {
     }
 }
 
-/// `Max(0, damping - FloorLog2(threshold))` (0 if `threshold` is 0; the
-/// value is unused then).
-#[inline]
+/// `Max(0, damping - FloorLog2(threshold))` for `threshold > 0`. Returns
+/// `damping` for `threshold == 0` (the value is unused then, as
+/// `constrain` is 0) and 0 for (never used) negative thresholds.
+#[inline(always)]
 pub(crate) fn damping_adj(threshold: i32, damping: i32) -> u32 {
-    if threshold <= 0 {
-        0
-    } else {
-        (damping - floor_log2(threshold as u32) as i32).max(0) as u32
-    }
+    let l2 = 31 ^ (threshold as u32 | 1).leading_zeros();
+    (damping - l2 as i32).max(0) as u32
 }
 
 /// Spec 7.15.3 for one block of `w x h` samples (8x8, 4x8, 8x4 or 4x4).
@@ -710,7 +708,7 @@ pub const CDEF_PAD_STRIDE: usize = 8 + 2 * CDEF_BORDER;
 /// [`CDEF_PAD_STRIDE`]), with [`CDEF_VERY_LARGE`] for the samples that
 /// are outside the frame according to `edges`. This is the source format
 /// of [`cdef_filter`].
-#[inline]
+#[inline(always)]
 pub fn pad_block<T: Pixel>(
     tmp: &mut [u16; CDEF_PAD_STRIDE * CDEF_PAD_STRIDE],
     src: &[T],
@@ -721,15 +719,26 @@ pub fn pad_block<T: Pixel>(
 ) {
     const S: usize = CDEF_PAD_STRIDE;
     const B: usize = CDEF_BORDER;
+    tmp.fill(CDEF_VERY_LARGE);
+    assert!(w >= 4 && w <= 8 && h <= 8 && src_stride <= 0xffff_ffff);
     let r0 = if edges & CDEF_HAVE_TOP != 0 { 0 } else { B };
     let r1 = if edges & CDEF_HAVE_BOTTOM != 0 { h + 2 * B } else { h + B };
     let c0 = if edges & CDEF_HAVE_LEFT != 0 { 0 } else { B };
     let c1 = if edges & CDEF_HAVE_RIGHT != 0 { w + 2 * B } else { w + B };
-    tmp.fill(CDEF_VERY_LARGE);
+    let len = c1 - c0;
+    assert!(len >= 4 && len <= 12);
+    let mid = (len >> 1) - 2;
+    let end = len - 4;
+    let src = &src[..(r1 - 1) * src_stride + c1];
     for r in r0..r1 {
-        let s = &src[r * src_stride + c0..r * src_stride + c1];
-        for (d, v) in tmp[r * S + c0..r * S + c1].iter_mut().zip(s) {
-            *d = v.to_u16();
+        let sr = &src[r * src_stride + c0..r * src_stride + c1];
+        let dr = &mut tmp[r * S + c0..r * S + c1];
+        for off in [0, mid, end] {
+            let s4: &[T; 4] = sr[off..off + 4].try_into().unwrap();
+            let d4: &mut [u16; 4] = (&mut dr[off..off + 4]).try_into().unwrap();
+            for i in 0..4 {
+                d4[i] = s4[i].to_u16();
+            }
         }
     }
 }
@@ -813,49 +822,122 @@ pub trait CdefKernels<T: Pixel> {
 /// Spec 7.15.1 adjustment of the luma primary strength by the variance.
 #[inline(always)]
 fn adjust_strength(pri: i32, var: i32) -> i32 {
-    if var == 0 {
-        return 0;
-    }
-    let i = if (var >> 6) != 0 { floor_log2((var >> 6) as u32).min(12) as i32 } else { 0 };
-    (pri * (4 + i) + 8) >> 4
+    let v6 = (var as u32) >> 6;
+    let i = (31 - (v6 | 1).leading_zeros()).min(12) as i32;
+    ((pri * (4 + i) + 8) >> 4) * ((var != 0) as i32)
 }
 
-/// Filters one block of `p` at unit offset `(bx, by)`.
-#[inline(always)]
+/// Filters the chroma blocks (`W x H`) of one plane of a [`CdefUnit`].
 #[allow(clippy::too_many_arguments)]
-fn unit_block<T: Pixel, K: CdefKernels<T>>(
+#[inline(never)]
+fn cdef_uv_plane_wh<T: Pixel, K: CdefKernels<T>, const W: usize, const H: usize>(
     p: &mut CdefPlane<'_, T>,
-    bx: usize,
-    by: usize,
-    w: usize,
-    h: usize,
-    pri: i32,
-    sec: i32,
+    noskip: &[u8; 8],
+    dirs: &[u32; 8],
+    uv_pri: i32,
+    uv_sec: i32,
     damping: i32,
-    dir: usize,
     bd: u32,
 ) {
-    let (x, y) = (p.x0 + bx, p.y0 + by);
-    let edges = (x > 0) as u8 * CDEF_HAVE_LEFT
-        | (x + w < p.plane_w) as u8 * CDEF_HAVE_RIGHT
-        | (y > 0) as u8 * CDEF_HAVE_TOP
-        | (y + h < p.plane_h) as u8 * CDEF_HAVE_BOTTOM;
-    let s = p.src_base + by * p.src_stride + bx - CDEF_BORDER * (p.src_stride + 1);
-    let d = p.dst_base + by * p.dst_stride + bx;
-    K::filter(
-        &mut p.dst[d..],
-        p.dst_stride,
-        &p.src[s..],
-        p.src_stride,
-        w,
-        h,
-        pri,
-        sec,
-        damping,
-        dir,
-        edges,
-        bd,
-    );
+    let b_off = CDEF_BORDER * (p.src_stride + 1);
+    let src = &p.src[p.src_base - b_off..];
+    let dst = &mut p.dst[p.dst_base..];
+    let (src_stride, dst_stride) = (p.src_stride, p.dst_stride);
+    let (x0, y0, pw, ph) = (p.x0, p.y0, p.plane_w, p.plane_h);
+    let col_edges: [u8; 8] = std::array::from_fn(|c| {
+        let x = x0 + W * c;
+        (x > 0) as u8 * CDEF_HAVE_LEFT | (x + W < pw) as u8 * CDEF_HAVE_RIGHT
+    });
+    for (r, (&row, &row_dirs)) in noskip.iter().zip(dirs).enumerate() {
+        let mut mask = row;
+        if mask == 0 {
+            continue;
+        }
+        let cy = r * H;
+        let y = y0 + cy;
+        let row_edges = (y > 0) as u8 * CDEF_HAVE_TOP | (y + H < ph) as u8 * CDEF_HAVE_BOTTOM;
+        let row_src = &src[cy * src_stride..];
+        let row_dst = &mut dst[cy * dst_stride..];
+        while mask != 0 {
+            let c = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
+            let cx = c * W;
+            let dir = ((row_dirs >> (c * 4)) & 7) as usize;
+            let edges = row_edges | col_edges[c & 7];
+            K::filter(
+                &mut row_dst[cx..],
+                dst_stride,
+                &row_src[cx..],
+                src_stride,
+                W,
+                H,
+                uv_pri,
+                uv_sec,
+                damping,
+                dir,
+                edges,
+                bd,
+            );
+        }
+    }
+}
+
+/// Filters the chroma blocks of one plane of a [`CdefUnit`].
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn cdef_uv_plane<T: Pixel, K: CdefKernels<T>>(
+    p: &mut CdefPlane<'_, T>,
+    noskip: &[u8; 8],
+    dirs: &[u32; 8],
+    uv_pri: i32,
+    uv_sec: i32,
+    damping: i32,
+    ss_x: usize,
+    ss_y: usize,
+    bd: u32,
+) {
+    match (ss_x, ss_y) {
+        (1, 1) => cdef_uv_plane_wh::<T, K, 4, 4>(p, noskip, dirs, uv_pri, uv_sec, damping, bd),
+        (1, 0) => cdef_uv_plane_wh::<T, K, 4, 8>(p, noskip, dirs, uv_pri, uv_sec, damping, bd),
+        _ => cdef_uv_plane_wh::<T, K, 8, 8>(p, noskip, dirs, uv_pri, uv_sec, damping, bd),
+    }
+}
+
+/// Direction search pass for the non-skipped 8x8 blocks of one [`CdefUnit`].
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn cdef_unit_dirs<T: Pixel, K: CdefKernels<T>>(
+    src: &[T],
+    src_stride: usize,
+    noskip: &[u8; 8],
+    uv_dir_map: u32,
+    bd: u32,
+    y_dirs: &mut [u32; 8],
+    uv_dirs: &mut [u32; 8],
+    vars: &mut [[i32; 8]; 8],
+) {
+    assert!(src_stride <= 0x0fff_ffff);
+    for (r, &row) in noskip.iter().enumerate() {
+        let mut mask = row;
+        if mask == 0 {
+            continue;
+        }
+        let row_src = &src[(8 * r) * src_stride..];
+        let mut r_ydirs = 0u32;
+        let mut r_uvdirs = 0u32;
+        let r_vars = &mut vars[r];
+        while mask != 0 {
+            let c = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
+            let (y_dir, var) = K::direction(&row_src[8 * c..], src_stride, bd);
+            let yd = (y_dir & 7) as u32;
+            r_ydirs |= yd << (c * 4);
+            r_uvdirs |= ((uv_dir_map >> (yd * 4)) & 7) << (c * 4);
+            r_vars[c & 7] = var;
+        }
+        y_dirs[r] = r_ydirs;
+        uv_dirs[r] = r_uvdirs;
+    }
 }
 
 /// Spec 7.15 / 7.15.1 for the 8x8 blocks of one [`CdefUnit`]: direction
@@ -866,40 +948,114 @@ pub fn cdef_unit<T: Pixel, K: CdefKernels<T>>(u: &mut CdefUnit<'_, T>) {
     let need_dir = y_pri != 0 || uv_pri != 0;
     let y_on = y_pri != 0 || y_sec != 0;
     let uv_on = uv_pri != 0 || uv_sec != 0;
-    let uv_dirs = &CDEF_UV_DIR[ss_x & 1][ss_y & 1];
-    let (uv_w, uv_h) = (8 >> ss_x, 8 >> ss_y);
+    let uv_dir_map = if uv_pri == 0 {
+        0u32
+    } else {
+        let t = &CDEF_UV_DIR[ss_x & 1][ss_y & 1];
+        (t[0] as u32)
+            | ((t[1] as u32) << 4)
+            | ((t[2] as u32) << 8)
+            | ((t[3] as u32) << 12)
+            | ((t[4] as u32) << 16)
+            | ((t[5] as u32) << 20)
+            | ((t[6] as u32) << 24)
+            | ((t[7] as u32) << 28)
+    };
     let noskip = u.noskip;
     let [py, pu, pv] = &mut u.planes;
-    for (r, &row) in noskip.iter().enumerate() {
-        let mut mask = row;
-        while mask != 0 {
-            let c = mask.trailing_zeros() as usize;
-            mask &= mask - 1;
-            let (bx, by) = (8 * c, 8 * r);
-            let (y_dir, var) = match py {
-                Some(p) if need_dir => K::direction(
-                    &p.src[p.src_base + by * p.src_stride + bx..],
-                    p.src_stride,
-                    bd,
-                ),
-                _ => (0, 0),
-            };
-            if y_on {
-                if let Some(p) = py.as_mut() {
-                    let pri = if y_pri != 0 { adjust_strength(y_pri, var) } else { 0 };
+    let mut y_dirs = [0u32; 8];
+    let mut uv_dirs = [0u32; 8];
+    let mut vars = [[0i32; 8]; 8];
+    if let Some(p) = py.as_mut() {
+        let b_off = CDEF_BORDER * (p.src_stride + 1);
+        let src = &p.src[p.src_base - b_off..];
+        let dst = &mut p.dst[p.dst_base..];
+        let (src_stride, dst_stride) = (p.src_stride, p.dst_stride);
+        let (x0, y0, pw, ph) = (p.x0, p.y0, p.plane_w, p.plane_h);
+        if need_dir {
+            cdef_unit_dirs::<T, K>(
+                &src[b_off..],
+                src_stride,
+                &noskip,
+                uv_dir_map,
+                bd,
+                &mut y_dirs,
+                &mut uv_dirs,
+                &mut vars,
+            );
+        }
+        if y_on {
+            let col_edges: [u8; 8] = std::array::from_fn(|c| {
+                let x = x0 + 8 * c;
+                (x > 0) as u8 * CDEF_HAVE_LEFT | (x + 8 < pw) as u8 * CDEF_HAVE_RIGHT
+            });
+            let y_dir_mask = if y_pri == 0 { 0 } else { 7 };
+            for (r, &row) in noskip.iter().enumerate() {
+                let mut mask = row;
+                if mask == 0 {
+                    continue;
+                }
+                let by = 8 * r;
+                let y = y0 + by;
+                let row_edges =
+                    (y > 0) as u8 * CDEF_HAVE_TOP | (y + 8 < ph) as u8 * CDEF_HAVE_BOTTOM;
+                let row_src = &src[by * src_stride..];
+                let row_dst = &mut dst[by * dst_stride..];
+                let r_ydirs = y_dirs[r];
+                let r_vars = &vars[r];
+                while mask != 0 {
+                    let c = mask.trailing_zeros() as usize;
+                    mask &= mask - 1;
+                    let pri = if y_pri != 0 { adjust_strength(y_pri, r_vars[c & 7]) } else { 0 };
                     if pri != 0 || y_sec != 0 {
-                        let dir = if y_pri == 0 { 0 } else { y_dir };
-                        unit_block::<T, K>(p, bx, by, 8, 8, pri, y_sec, damping, dir, bd);
+                        let bx = 8 * c;
+                        let dir = ((r_ydirs >> (c * 4)) as usize) & y_dir_mask;
+                        let edges = row_edges | col_edges[c & 7];
+                        K::filter(
+                            &mut row_dst[bx..],
+                            dst_stride,
+                            &row_src[bx..],
+                            src_stride,
+                            8,
+                            8,
+                            pri,
+                            y_sec,
+                            damping,
+                            dir,
+                            edges,
+                            bd,
+                        );
                     }
                 }
             }
-            if uv_on {
-                let dir = if uv_pri == 0 { 0 } else { uv_dirs[y_dir] };
-                let (cx, cy) = (bx >> ss_x, by >> ss_y);
-                for p in [&mut *pu, &mut *pv].into_iter().flatten() {
-                    unit_block::<T, K>(p, cx, cy, uv_w, uv_h, uv_pri, uv_sec, damping - 1, dir, bd);
-                }
-            }
+        }
+    }
+    if uv_on {
+        if let Some(p) = pu.as_mut() {
+            cdef_uv_plane::<T, K>(
+                p,
+                &noskip,
+                &uv_dirs,
+                uv_pri,
+                uv_sec,
+                damping - 1,
+                ss_x,
+                ss_y,
+                bd,
+            );
+        }
+        if let Some(p) = pv.as_mut() {
+            cdef_uv_plane::<T, K>(
+                p,
+                &noskip,
+                &uv_dirs,
+                uv_pri,
+                uv_sec,
+                damping - 1,
+                ss_x,
+                ss_y,
+                bd,
+            );
         }
     }
 }
@@ -956,6 +1112,7 @@ impl<T: Pixel> CdefKernels<T> for PortableCdef {
 #[allow(clippy::needless_range_loop)]
 mod tests {
     use super::*;
+    use crate::decoder::av1::pixel::floor_log2;
 
     /// Small deterministic PRNG (xorshift64*).
     struct Rng(u64);

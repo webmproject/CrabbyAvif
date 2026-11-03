@@ -16,11 +16,30 @@
 //! preparation (spec 7.11.2.1), palette (7.11.4), chroma from luma
 //! (7.11.5) and inverse transform dispatch (7.12.3).
 
-use crate::decoder::av1::dsp::ipred::{ANGLE_STEP, MAX_EDGE, MODE_TO_ANGLE};
+use crate::decoder::av1::dsp::ipred::MAX_EDGE;
 use crate::decoder::av1::pixel::{round2, Pixel};
 use crate::decoder::av1::types::*;
 
 use super::block::{txh, txw, SbDecoder};
+
+/// Bound of a sample offset into a plane window (`PlaneWin::data`), used
+/// as a mask so that LLVM knows the offset arithmetic below cannot
+/// overflow (and drops the matching checks). A window is at most a whole
+/// frame of `stride` x `rows` samples, with `stride` and `rows` (multiples
+/// of the superblock size) at most 65536 since AV1 frame dimensions are at
+/// most 65536, so every offset is below 2^32 and the mask never changes
+/// it. (It is a no-op on 32-bit targets.)
+const OFF_MASK: usize = 0xffff_ffff;
+
+/// Mask of `stride`, `x - x0` and `y - y0` (all at most 65536, see
+/// `OFF_MASK`).
+const DIM_MASK: usize = 0x3_ffff;
+
+// The cold or rarely used out-of-line helpers of this file take an unused
+// `const DUMMY: usize` generic, always instantiated as `::<0>`. It has no
+// semantic effect; like the ones in `msac.rs` it only changes where the
+// function is monomorphized (codegen unit placement), which measurably
+// changed the generated code. Keep it unless benchmarks show otherwise.
 
 impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
     /// Reads a reconstructed (pre loop filter) sample of the current frame.
@@ -37,30 +56,25 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
     }
 
     /// Spec 7.11.2.8 `get_filter_type`.
+    #[inline(always)]
     fn get_filter_type(&self, plane: usize) -> bool {
         let b = &self.b;
-        let is_smooth = |r: usize, c: usize| -> bool {
-            let mi = self.s.mi.get(r, c);
-            let mode = if plane == 0 { mi.y_mode } else { mi.uv_mode };
-            mode.wrapping_sub(IntraMode::SMOOTH_PRED as u8) < 3
-        };
+        let sm = |m: u8| m.wrapping_sub(IntraMode::SMOOTH_PRED as u8) < 3;
         if plane == 0 {
             // (mi_row - 1, mi_col) and (mi_row, mi_col - 1) are the block's
             // above / left mode info, already loaded.
-            let sm = |m: u8| m.wrapping_sub(IntraMode::SMOOTH_PRED as u8) < 3;
             return (b.avail_u && sm(b.above_mi.y_mode)) || (b.avail_l && sm(b.left_mi.y_mode));
         }
         let (sx, sy) = (self.f.ss_x, self.f.ss_y);
-        if b.avail_u_chroma && is_smooth((b.mi_row & !sy) - 1, b.mi_col | sx) {
-            return true;
-        }
-        b.avail_l_chroma && is_smooth(b.mi_row | sy, (b.mi_col & !sx) - 1)
+        (b.avail_u_chroma && sm(self.s.mi.get((b.mi_row & !sy) - 1, b.mi_col | sx).uv_mode))
+            || (b.avail_l_chroma && sm(self.s.mi.get(b.mi_row | sy, (b.mi_col & !sx) - 1).uv_mode))
     }
 
     /// Computes the intra prediction setup of the current block
     /// (`s.ipred`, the parts of spec 7.11.2 that are the same for all
     /// transform blocks of a plane type). Called once per intra block
     /// before its transform blocks are predicted.
+    #[inline(always)]
     pub(super) fn setup_intra(&mut self) {
         let b = &self.b;
         if b.palette_size_y == 0 {
@@ -81,7 +95,8 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
     }
 
     /// Writes the per-block fields of `s.ipred[plane != 0]` in place (the
-    /// per-frame ones are set by `IntraSetup::new`).
+    /// per-frame ones are set by `IntraSetup::new`, and `above_line_y` by
+    /// `FrameState::set_sb_y`).
     #[inline(always)]
     fn intra_setup(
         &mut self,
@@ -96,34 +111,40 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         let h = txh(tx_sz);
         let use_filter = filter_intra_mode.is_some();
         // Edge samples read with both neighbors available (DC_PRED reads
-        // only the available ones).
+        // only the available ones). Since |angle_delta * 3| <= 9, only
+        // V_PRED (90) and H_PRED (180) can cross or land on 90/180.
         let (na, nl, need_filter) = if use_filter {
             (w, h, false)
         } else {
             match mode {
-                IntraMode::V_PRED
-                | IntraMode::H_PRED
-                | IntraMode::D45_PRED
-                | IntraMode::D135_PRED
-                | IntraMode::D113_PRED
-                | IntraMode::D157_PRED
-                | IntraMode::D203_PRED
-                | IntraMode::D67_PRED => {
-                    let p_angle = MODE_TO_ANGLE[mode as usize] + angle_delta * ANGLE_STEP;
-                    match p_angle {
-                        90 => (w, 0, false),
-                        180 => (0, h, false),
-                        a if a < 90 => (w + h, 0, true),
-                        a if a < 180 => (w, h, true),
-                        _ => (0, w + h, true),
+                IntraMode::V_PRED => {
+                    if angle_delta == 0 {
+                        (w, 0, false)
+                    } else if angle_delta < 0 {
+                        (w + h, 0, true)
+                    } else {
+                        (w, h, true)
                     }
                 }
+                IntraMode::H_PRED => {
+                    if angle_delta == 0 {
+                        (0, h, false)
+                    } else if angle_delta < 0 {
+                        (w, h, true)
+                    } else {
+                        (0, w + h, true)
+                    }
+                }
+                IntraMode::D45_PRED | IntraMode::D67_PRED => (w + h, 0, true),
+                IntraMode::D135_PRED | IntraMode::D113_PRED | IntraMode::D157_PRED => (w, h, true),
+                IntraMode::D203_PRED => (0, w + h, true),
                 _ => (w, h, false),
             }
         };
         let smooth_filter_type =
             need_filter && f.seq.enable_intra_edge_filter && self.get_filter_type(plane);
-        let su = &mut self.s.ipred[(plane != 0) as usize];
+        let pt = (plane != 0) as usize;
+        let su = &mut self.s.ipred[pt];
         su.p.mode = mode as u8;
         su.p.angle_delta = angle_delta;
         su.p.filter_intra_mode = filter_intra_mode;
@@ -132,6 +153,8 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         su.p.h = h;
         su.na = na;
         su.nl = nl;
+        su.na_lim = [w, na.min(w << 1)];
+        su.nl_lim = [h, nl.min(h << 1)];
         su.dc = !use_filter && mode == IntraMode::DC_PRED;
         su.need_top_left = use_filter || need_filter || mode == IntraMode::PAETH_PRED;
     }
@@ -139,6 +162,7 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
     /// Spec 7.11.2 for one transform block, using the block's
     /// `setup_intra`. Only the edge samples the selected predictor reads
     /// are derived (`ipred::edge_needs`, as dav1d's prepare_intra_edges).
+    #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn predict_intra(
         &mut self,
@@ -150,11 +174,111 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         have_above_right: bool,
         have_below_left: bool,
     ) {
+        if !have_above || !have_left {
+            let flags = (have_left as u32)
+                | ((have_above as u32) << 1)
+                | ((have_above_right as u32) << 2)
+                | ((have_below_left as u32) << 3);
+            self.predict_intra_border::<0>(plane, x, y, flags);
+            return;
+        }
+        let plane = plane.min(2);
         let pt = (plane != 0) as usize;
-        let sb_top = self.sb_y >> (self.f.ss_y & pt);
         let s = &mut *self.s;
         let su = &mut s.ipred[pt];
-        let (w, h) = (su.p.w, su.p.h);
+        su.p.x = x as i32;
+        su.p.y = y as i32;
+        let e = &mut s.edges;
+        let pl = &mut s.planes[plane];
+        let stride = pl.stride & DIM_MASK;
+        let col_off = (x - pl.x0) & DIM_MASK;
+        let row_off = ((y - pl.y0) & DIM_MASK) * stride;
+        debug_assert!(pl.stride <= DIM_MASK && x - pl.x0 <= DIM_MASK && y - pl.y0 <= DIM_MASK);
+        debug_assert!(row_off + col_off <= OFF_MASK);
+        let left_off = (row_off + col_off).wrapping_sub(1) & OFF_MASK;
+        let dst_off = left_off + 1;
+        let data = pl.data_mut();
+        // Common case (both neighbors available): `above[0]` is the
+        // top-left sample, `above[1..]` row y - 1 from column x.
+        let na = su.na;
+        if na != 0 {
+            let m_above = (su.max_x_p1 - x).min(su.na_lim[have_above_right as usize]);
+            let (src, base) = if y != su.above_line_y {
+                (&data[..], left_off.wrapping_sub(stride) & OFF_MASK)
+            } else {
+                (&s.above_line[plane][..], col_off.wrapping_sub(1) & OFF_MASK)
+            };
+            if m_above <= 16 && base + 17 <= src.len() {
+                let win = &src[base..base + 17];
+                e.top_left = win[0];
+                e.above[..16].copy_from_slice(&win[1..17]);
+                if m_above < na {
+                    let v = win[m_above];
+                    if na <= m_above + 8 {
+                        e.above[m_above..m_above + 8].copy_from_slice(&[v; 8]);
+                    } else {
+                        fill_edge::<T, 0>(&mut e.above, m_above, na, v);
+                    }
+                }
+            } else {
+                copy_above_edge_large::<T, 0>(e, src, base, m_above, na);
+            }
+        } else if su.need_top_left {
+            e.top_left = if y != su.above_line_y {
+                data[left_off.wrapping_sub(stride) & OFF_MASK]
+            } else {
+                s.above_line[plane][col_off.wrapping_sub(1) & OFF_MASK]
+            };
+        }
+        let nl = su.nl;
+        if nl != 0 {
+            let m = (su.max_y_p1 - y).min(su.nl_lim[have_below_left as usize]);
+            if m == 4 {
+                let v = gather4(&mut e.left, data, left_off, stride);
+                if 4 < nl {
+                    if nl <= 12 {
+                        e.left[4..12].copy_from_slice(&[v; 8]);
+                    } else {
+                        fill_edge::<T, 0>(&mut e.left, 4, nl, v);
+                    }
+                }
+            } else if m == 8 {
+                let v = gather8(&mut e.left, data, left_off, stride);
+                if 8 < nl {
+                    if nl <= 16 {
+                        e.left[8..16].copy_from_slice(&[v; 8]);
+                    } else {
+                        fill_edge::<T, 0>(&mut e.left, 8, nl, v);
+                    }
+                }
+            } else {
+                gather_left_edge_large::<T, 0>(&mut e.left, &data[left_off..], stride, m, nl);
+            }
+        }
+        (self.dsp.predict_intra)(&mut data[dst_off..], stride, e, &su.p);
+    }
+
+    /// `predict_intra` for a transform block without a left or an above
+    /// neighbor (`flags`: have_left, have_above, have_above_right,
+    /// have_below_left in bits 0..4).
+    #[cold]
+    #[inline(never)]
+    fn predict_intra_border<const DUMMY: usize>(
+        &mut self,
+        plane: usize,
+        x: usize,
+        y: usize,
+        flags: u32,
+    ) {
+        let have_left = (flags & 1) != 0;
+        let have_above = (flags & 2) != 0;
+        let have_above_right = (flags & 4) != 0;
+        let have_below_left = (flags & 8) != 0;
+        debug_assert!(!(have_above && have_left));
+        let plane = plane.min(2);
+        let pt = (plane != 0) as usize;
+        let s = &mut *self.s;
+        let su = &mut s.ipred[pt];
         let (na, nl) = if su.dc {
             (
                 if have_above { su.na } else { 0 },
@@ -164,8 +288,6 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
             (su.na, su.nl)
         };
         let need_top_left = su.need_top_left;
-        let max_x = su.p.max_x as usize;
-        let max_y = su.p.max_y as usize;
         let bd = su.p.bd;
         su.p.x = x as i32;
         su.p.y = y as i32;
@@ -173,87 +295,88 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         su.p.have_above = have_above;
         let e = &mut s.edges;
         let pl = &mut s.planes[plane];
-        let stride = pl.stride & 0x3_ffff;
-        let col_off = x - pl.x0;
-        let row_off = (y - pl.y0) * stride;
+        let stride = pl.stride & DIM_MASK;
+        let col_off = (x - pl.x0) & DIM_MASK;
+        let row_off = ((y - pl.y0) & DIM_MASK) * stride;
         let dst_off = row_off + col_off;
-        let full_stride = pl.stride;
         let data = pl.data_mut();
-        if have_above && have_left {
-            // Common case (both neighbors available): `above[0]` is the
-            // top-left sample, `above[1..]` row y - 1 from column x.
-            let above: &[T] = if y == sb_top && !s.above_line[plane].is_empty() {
-                &s.above_line[plane][col_off - 1..]
-            } else {
-                let a_off = row_off - stride + col_off - 1;
-                &data[a_off..a_off + stride]
-            };
-            if need_top_left {
-                e.top_left = above[0];
-            }
-            if na != 0 {
-                // Samples x..=min(max_x, x + n - 1) are read, the rest
-                // replicates the last one.
-                let m = (max_x + 1 - x).min(w << have_above_right as u32).min(na);
-                copy_above_edge(&mut e.above, &above[1..], m);
-                if m < na {
-                    fill_edge(&mut e.above, m, na, above[m]);
-                }
-            }
-            if nl != 0 {
-                let m = (max_y + 1 - y).min(h << have_below_left as u32).min(nl);
-                gather_left_edge(&mut e.left, data, dst_off - 1, stride, m);
-                if m < nl {
-                    let v = e.left[m - 1];
-                    fill_edge(&mut e.left, m, nl, v);
-                }
-            }
-            (self.dsp.predict_intra)(&mut data[dst_off..], full_stride, e, &su.p);
-            return;
-        }
         // Row y - 1: the saved unfiltered line at the top of the
         // superblock row, the current window otherwise (see `px`).
         let above_row: &[T] = if !have_above || (na == 0 && have_left && !need_top_left) {
             &[]
-        } else if y - 1 < sb_top && !s.above_line[plane].is_empty() {
-            debug_assert_eq!(y, sb_top);
-            &s.above_line[plane]
-        } else {
+        } else if y != su.above_line_y {
             let a_off = row_off - stride;
-            &data[a_off..a_off + stride]
+            &data[a_off..]
+        } else {
+            &s.above_line[plane]
         };
         if na == 0 {
         } else if !have_above {
             let v = if have_left { data[dst_off - 1] } else { T::from_i32((1 << (bd - 1)) - 1) };
-            fill_edge(&mut e.above, 0, na, v);
+            if na <= 16 {
+                e.above[..16].copy_from_slice(&[v; 16]);
+            } else {
+                fill_edge::<T, 0>(&mut e.above, 0, na, v);
+            }
         } else {
-            let above_limit = max_x.min(x + if have_above_right { 2 * w } else { w } - 1);
-            let row = &above_row[col_off..];
-            // Samples x..=above_limit are read, the rest replicates the
-            // last one.
-            let m = (above_limit + 1 - x).min(na);
-            copy_above_edge(&mut e.above, row, m);
-            if m < na {
-                fill_edge(&mut e.above, m, na, row[m - 1]);
+            let m = (su.max_x_p1 - x)
+                .min(su.na_lim[have_above_right as usize])
+                .min(MAX_EDGE);
+            if m <= 16 && col_off + 16 <= above_row.len() {
+                let win = &above_row[col_off..col_off + 16];
+                e.above[..16].copy_from_slice(win);
+                if m < na {
+                    let v = win[m - 1];
+                    if na <= m + 8 {
+                        e.above[m..m + 8].copy_from_slice(&[v; 8]);
+                    } else {
+                        fill_edge::<T, 0>(&mut e.above, m, na, v);
+                    }
+                }
+            } else {
+                let row = &above_row[col_off..col_off + m];
+                copy_above_edge(&mut e.above, row, m);
+                if m < na {
+                    fill_edge::<T, 0>(&mut e.above, m, na, row[m - 1]);
+                }
             }
         }
         if nl == 0 {
         } else if !have_left {
             let v = if have_above { above_row[col_off] } else { T::from_i32((1 << (bd - 1)) + 1) };
-            fill_edge(&mut e.left, 0, nl, v);
+            if nl <= 16 {
+                e.left[..16].copy_from_slice(&[v; 16]);
+            } else {
+                fill_edge::<T, 0>(&mut e.left, 0, nl, v);
+            }
         } else {
-            let left_limit = max_y.min(y + if have_below_left { 2 * h } else { h } - 1);
-            let m = (left_limit + 1 - y).min(nl);
-            gather_left_edge(&mut e.left, data, dst_off - 1, stride, m);
-            if m < nl {
-                let v = e.left[m - 1];
-                fill_edge(&mut e.left, m, nl, v);
+            let m = (su.max_y_p1 - y).min(su.nl_lim[have_below_left as usize]);
+            let left_off = dst_off - 1;
+            if m == 4 {
+                let v = gather4(&mut e.left, data, left_off, stride);
+                if 4 < nl {
+                    if nl <= 12 {
+                        e.left[4..12].copy_from_slice(&[v; 8]);
+                    } else {
+                        fill_edge::<T, 0>(&mut e.left, 4, nl, v);
+                    }
+                }
+            } else if m == 8 {
+                let v = gather8(&mut e.left, data, left_off, stride);
+                if 8 < nl {
+                    if nl <= 16 {
+                        e.left[8..16].copy_from_slice(&[v; 8]);
+                    } else {
+                        fill_edge::<T, 0>(&mut e.left, 8, nl, v);
+                    }
+                }
+            } else {
+                gather_left_edge_large::<T, 0>(&mut e.left, &data[left_off..], stride, m, nl);
             }
         }
         if need_top_left {
-            e.top_left = if have_above && have_left {
-                above_row[col_off - 1]
-            } else if have_above {
+            // `predict_intra` handles the case with both neighbors.
+            e.top_left = if have_above {
                 above_row[col_off]
             } else if have_left {
                 data[dst_off - 1]
@@ -261,10 +384,14 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
                 T::from_i32(1 << (bd - 1))
             };
         }
-        (self.dsp.predict_intra)(&mut data[dst_off..], full_stride, e, &su.p);
+        (self.dsp.predict_intra)(&mut data[dst_off..], stride, e, &su.p);
+        su.p.have_left = true;
+        su.p.have_above = true;
     }
 
     /// Spec 7.11.4.
+    #[cold]
+    #[inline(never)]
     pub(super) fn predict_palette(
         &mut self,
         plane: usize,
@@ -276,21 +403,23 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
     ) {
         let w = txw(tx_sz);
         let h = txh(tx_sz);
-        let palette = match plane {
+        let raw_pal = match plane {
             0 => self.b.palette_y,
             1 => self.b.palette_u,
             _ => self.b.palette_v,
         };
+        let palette = raw_pal.map(|c| T::from_i32(c as i32));
         let map = if plane == 0 { &self.sc.color_map_y } else { &self.sc.color_map_uv };
-        let pl = &mut self.s.planes[plane];
+        let pl = &mut self.s.planes[plane.min(2)];
         let stride = pl.stride;
-        let mut dst = pl.idx(start_x, start_y);
+        let data = pl.slice_mut(start_x, start_y);
         let mx = x * 4;
         let my = y * 4;
+        let mut dst = 0;
         for mrow in &map[my..my + h] {
-            let row = &mut pl.data_mut()[dst..dst + w];
+            let row = &mut data[dst..dst + w];
             for (d, &idx) in row.iter_mut().zip(&mrow[mx..mx + w]) {
-                *d = T::from_i32(palette[(idx & 7) as usize] as i32);
+                *d = palette[(idx & 7) as usize];
             }
             dst += stride;
         }
@@ -328,11 +457,11 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
             if wv > 0 && hv > 0 {
                 (self.dsp.cfl_ac)(ac, luma.slice(lx0, ly0), luma.stride, w, h, wv, hv, sx, sy);
             } else {
-                cfl_ac_corrupt(ac, luma, start_x, start_y, w, h, sx, sy, max_lx, max_ly);
+                cfl_ac_corrupt::<T, 0>(ac, luma, start_x, start_y, w, h, sx, sy, max_lx, max_ly);
             }
         }
         let ac = &s.cfl_ac[..w * h];
-        let pl = &mut s.planes[plane];
+        let pl = &mut s.planes[plane.min(2)];
         let stride = pl.stride;
         (self.dsp.cfl_pred)(
             pl.slice_mut(start_x, start_y),
@@ -346,6 +475,7 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
     }
 
     /// Spec 7.12.3 steps 2-3 (coefficients are already dequantized).
+    #[inline(always)]
     pub(super) fn reconstruct(
         &mut self,
         plane: usize,
@@ -354,15 +484,24 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         tx_sz: TxSize,
         eob: usize,
     ) {
-        let tw = txw(tx_sz).min(32);
-        let th = txh(tx_sz).min(32);
-        let pl = &mut self.s.planes[plane];
+        let pl = &mut self.s.planes[plane.min(2)];
         let stride = pl.stride;
         // Also leaves the coefficients zero for the next block.
+        if let (Some(tbl), false) = (self.dsp.itx, self.b.lossless) {
+            let ty = self.plane_tx_type as usize;
+            let f = tbl[(tx_sz as usize).min(18)][ty & 15];
+            f(
+                pl.slice_mut(x, y),
+                stride,
+                &mut self.sc.coeffs,
+                eob | (ty << 16),
+            );
+            return;
+        }
         (self.dsp.inv_txfm_add)(
             pl.slice_mut(x, y),
             stride,
-            &mut self.sc.coeffs[..tw * th],
+            &mut self.sc.coeffs,
             tx_sz,
             self.plane_tx_type,
             self.b.lossless,
@@ -382,7 +521,7 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
 #[cold]
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
-fn cfl_ac_corrupt<T: Pixel>(
+fn cfl_ac_corrupt<T: Pixel, const DUMMY: usize>(
     ac: &mut [i16],
     luma: &super::buffers::PlaneWin<T>,
     start_x: usize,
@@ -416,32 +555,71 @@ fn cfl_ac_corrupt<T: Pixel>(
     }
 }
 
-/// Copies `row[..m]` into `dst[..m]` using power-of-two vector copies
-/// (samples past `m` when `m <= 16` are overwritten by `fill_edge` or unused;
-/// `row` always has at least 64 padding samples past `max_x`).
+#[inline(never)]
+fn copy_above_edge_large<T: Pixel, const DUMMY: usize>(
+    e: &mut crate::decoder::av1::dsp::ipred::IntraEdges<T>,
+    src: &[T],
+    base: usize,
+    m: usize,
+    na: usize,
+) {
+    if m <= 32 && base + 33 <= src.len() {
+        let win = &src[base..base + 33];
+        e.top_left = win[0];
+        e.above[..32].copy_from_slice(&win[1..33]);
+        if m < na {
+            fill_edge::<T, 0>(&mut e.above, m, na, win[m]);
+        }
+        return;
+    }
+    if m <= 64 && base + 65 <= src.len() {
+        let win = &src[base..base + 65];
+        e.top_left = win[0];
+        e.above[..64].copy_from_slice(&win[1..65]);
+        if m < na {
+            fill_edge::<T, 0>(&mut e.above, m, na, win[m]);
+        }
+        return;
+    }
+    let m = m.min(MAX_EDGE);
+    let above = &src[base..base + m + 1];
+    e.top_left = above[0];
+    copy_above_edge(&mut e.above, &above[1..], m);
+    if m < na {
+        fill_edge::<T, 0>(&mut e.above, m, na, above[m]);
+    }
+}
+
+/// Copies `src` (of length `m` in `4..=MAX_EDGE`, multiple of 4) into `dst`
+/// using power-of-two vector copies without internal bounds checks.
 #[inline(always)]
-fn copy_above_edge<T: Pixel>(dst: &mut [T; MAX_EDGE], row: &[T], m: usize) {
-    debug_assert!((1..=MAX_EDGE).contains(&m));
-    if m <= 4 {
-        dst[..4].copy_from_slice(&row[..4]);
-        return;
-    }
-    if m <= 8 {
-        dst[..8].copy_from_slice(&row[..8]);
-        return;
-    }
-    if m <= 16 {
-        dst[..16].copy_from_slice(&row[..16]);
-        return;
-    }
-    let src = &row[..m];
+fn copy_above_edge<T: Pixel>(dst: &mut [T; MAX_EDGE], src: &[T], m: usize) {
+    let m = m.min(MAX_EDGE);
+    let src = &src[..m];
     let dst = &mut dst[..m];
-    if m <= 32 {
-        dst[..16].copy_from_slice(&src[..16]);
-        dst[m - 16..].copy_from_slice(&src[m - 16..]);
+    if m <= 16 {
+        if m >= 8 {
+            dst[..8].copy_from_slice(&src[..8]);
+            dst[m - 8..].copy_from_slice(&src[m - 8..]);
+        } else if m >= 4 {
+            dst[..4].copy_from_slice(&src[..4]);
+        }
+    } else if m <= 32 {
+        if m == 32 {
+            dst[..32].copy_from_slice(&src[..32]);
+        } else {
+            dst[..16].copy_from_slice(&src[..16]);
+            dst[m - 16..].copy_from_slice(&src[m - 16..]);
+        }
     } else if m <= 64 {
-        dst[..32].copy_from_slice(&src[..32]);
-        dst[m - 32..].copy_from_slice(&src[m - 32..]);
+        if m == 64 {
+            dst[..64].copy_from_slice(&src[..64]);
+        } else {
+            dst[..32].copy_from_slice(&src[..32]);
+            dst[m - 32..].copy_from_slice(&src[m - 32..]);
+        }
+    } else if m == 128 {
+        dst[..128].copy_from_slice(&src[..128]);
     } else {
         dst[..64].copy_from_slice(&src[..64]);
         dst[m - 64..].copy_from_slice(&src[m - 64..]);
@@ -449,128 +627,121 @@ fn copy_above_edge<T: Pixel>(dst: &mut [T; MAX_EDGE], row: &[T], m: usize) {
 }
 
 #[inline(always)]
-fn gather4<T: Pixel>(dst: &mut [T], data: &[T], base: usize, s1: usize, s2: usize, s3: usize) {
-    let col = &data[base..base + s3 + 1];
-    dst[..4].copy_from_slice(&[col[0], col[s1], col[s2], col[s3]]);
+fn gather4<T: Pixel>(dst: &mut [T], data: &[T], left_off: usize, s1: usize) -> T {
+    debug_assert!(left_off <= OFF_MASK);
+    let left_off = left_off & OFF_MASK;
+    let s1 = s1 & DIM_MASK;
+    let s3 = s1 * 3;
+    let col = &data[left_off..left_off + s3 + 1];
+    let v = col[s3];
+    dst[..4].copy_from_slice(&[col[0], col[s1], col[s1 * 2], v]);
+    v
 }
 
 #[inline(always)]
-fn gather8<T: Pixel>(
-    dst: &mut [T],
-    data: &[T],
-    base: usize,
-    s1: usize,
-    s2: usize,
-    s3: usize,
-    s4: usize,
-) {
-    let col = &data[base..base + s4 + s3 + 1];
-    let col1 = &col[s4..];
-    dst[0..4].copy_from_slice(&[col[0], col[s1], col[s2], col[s3]]);
-    dst[4..8].copy_from_slice(&[col1[0], col1[s1], col1[s2], col1[s3]]);
+fn gather8<T: Pixel>(dst: &mut [T], data: &[T], left_off: usize, s1: usize) -> T {
+    debug_assert!(left_off <= OFF_MASK);
+    let left_off = left_off & OFF_MASK;
+    let s1 = s1 & DIM_MASK;
+    let s3 = s1 * 3;
+    let s4 = s1 * 4;
+    let col = &data[left_off..left_off + s4 + s3 + 1];
+    dst[0..4].copy_from_slice(&[col[0], col[s1], col[s1 * 2], col[s3]]);
+    let col4 = &col[s4..];
+    let v = col4[s3];
+    dst[4..8].copy_from_slice(&[col4[0], col4[s1], col4[s1 * 2], v]);
+    v
 }
 
 #[inline(always)]
-fn gather16<T: Pixel>(
-    dst: &mut [T],
-    data: &[T],
-    base: usize,
-    s1: usize,
-    s2: usize,
-    s3: usize,
-    s4: usize,
-) {
-    let col = &data[base..base + s4 * 3 + s3 + 1];
-    let col1 = &col[s4..];
-    let col2 = &col[s4 * 2..];
-    let col3 = &col[s4 * 3..];
-    dst[0..4].copy_from_slice(&[col[0], col[s1], col[s2], col[s3]]);
-    dst[4..8].copy_from_slice(&[col1[0], col1[s1], col1[s2], col1[s3]]);
-    dst[8..12].copy_from_slice(&[col2[0], col2[s1], col2[s2], col2[s3]]);
-    dst[12..16].copy_from_slice(&[col3[0], col3[s1], col3[s2], col3[s3]]);
+fn gather16<T: Pixel>(dst: &mut [T], data: &[T], s1: usize) {
+    let s1 = s1 & DIM_MASK;
+    let s3 = s1 * 3;
+    let s4 = s1 * 4;
+    let s8 = s1 * 8;
+    let s12 = s8 + s4;
+    let col = &data[..s12 + s3 + 1];
+    dst[0..4].copy_from_slice(&[col[0], col[s1], col[s1 * 2], col[s3]]);
+    let col4 = &col[s4..];
+    dst[4..8].copy_from_slice(&[col4[0], col4[s1], col4[s1 * 2], col4[s3]]);
+    let col8 = &col[s8..];
+    dst[8..12].copy_from_slice(&[col8[0], col8[s1], col8[s1 * 2], col8[s3]]);
+    let col12 = &col[s12..];
+    dst[12..16].copy_from_slice(&[col12[0], col12[s1], col12[s1 * 2], col12[s3]]);
 }
 
-/// Gathers `m` strided left-edge samples starting at `data[base]`
-/// (`m` is always a multiple of 4 in `4..=MAX_EDGE`).
-#[inline(always)]
-fn gather_left_edge<T: Pixel>(
+#[inline(never)]
+fn gather_left_edge_large<T: Pixel, const DUMMY: usize>(
     dst: &mut [T; MAX_EDGE],
     data: &[T],
-    base: usize,
-    stride: usize,
+    s1: usize,
     m: usize,
+    nl: usize,
 ) {
-    debug_assert!((4..=MAX_EDGE).contains(&m) && m & 3 == 0);
-    let s1 = stride & 0x3_ffff;
-    let m = m.min(MAX_EDGE);
-    let s2 = s1 * 2;
-    let s3 = s1 * 3;
-    if m <= 4 {
-        gather4(dst, data, base, s1, s2, s3);
-        return;
-    }
-    let s4 = s1 * 4;
-    if m <= 8 {
-        gather8(dst, data, base, s1, s2, s3, s4);
-        return;
-    }
+    let m = (m & !3).min(MAX_EDGE);
+    let s1 = s1 & DIM_MASK;
     if m == 16 {
-        gather16(dst, data, base, s1, s2, s3, s4);
-        return;
+        gather16(dst, data, s1);
+    } else if m == 32 {
+        let s16 = s1 * 16;
+        let col = &data[..s1 * 31 + 1];
+        gather16(&mut dst[0..16], col, s1);
+        gather16(&mut dst[16..32], &col[s16..], s1);
+    } else if m <= 8 {
+        if m == 8 {
+            gather8(dst, data, 0, s1);
+        } else if m == 4 {
+            gather4(dst, data, 0, s1);
+        }
+    } else if m == 12 {
+        let s8 = s1 * 8;
+        let col = &data[..s1 * 11 + 1];
+        gather8(&mut dst[0..8], col, 0, s1);
+        gather4(&mut dst[8..12], col, s8, s1);
+    } else {
+        let s8 = s1 * 8;
+        let s16 = s1 * 16;
+        let dst_slice = &mut dst[..m];
+        let mut i = 0;
+        let mut off = 0;
+        while i + 16 <= m {
+            gather16(&mut dst_slice[i..i + 16], &data[off..], s1);
+            i += 16;
+            off += s16;
+        }
+        if (m & 8) != 0 {
+            gather8(&mut dst_slice[i..i + 8], data, off, s1);
+            i += 8;
+            off += s8;
+        }
+        if (m & 4) != 0 {
+            gather4(&mut dst_slice[i..i + 4], data, off, s1);
+        }
     }
-    if m < 16 {
-        gather8(dst, data, base, s1, s2, s3, s4);
-        gather8(&mut dst[m - 8..], data, base + (m - 8) * s1, s1, s2, s3, s4);
-        return;
-    }
-    let dst = &mut dst[..m];
-    let mut i = 0;
-    let mut off = base;
-    let s16 = s1 * 16;
-    while i + 16 <= m {
-        gather16(&mut dst[i..i + 16], data, off, s1, s2, s3, s4);
-        i += 16;
-        off += s16;
-    }
-    if i < m {
-        gather16(
-            &mut dst[m - 16..m],
-            data,
-            base + (m - 16) * s1,
-            s1,
-            s2,
-            s3,
-            s4,
-        );
+    if m < nl {
+        let v = dst[(m - 1) & (MAX_EDGE - 1)];
+        fill_edge::<T, 0>(dst, m, nl, v);
     }
 }
 
 /// Sets `edge[from..to]` to `v`, using fixed-size stores so LLVM does not
-/// emit a `memset` call (samples past `to` when `to - from <= 16` are unused).
-#[inline(always)]
-fn fill_edge<T: Pixel>(edge: &mut [T; MAX_EDGE], from: usize, to: usize, v: T) {
+/// emit a `memset` call.
+#[inline(never)]
+fn fill_edge<T: Pixel, const DUMMY: usize>(edge: &mut [T; MAX_EDGE], from: usize, to: usize, v: T) {
     debug_assert!(from < to && to <= MAX_EDGE);
-    let len = to - from;
+    let to = to.min(MAX_EDGE);
+    let from = from.min(to);
+    let dst = &mut edge[from..to];
+    let len = dst.len();
     if len <= 16 {
-        if let Some(dst) = edge.get_mut(from..from + 16) {
-            dst.copy_from_slice(&[v; 16]);
-        } else {
-            let dst = &mut edge[from..to];
-            if len >= 8 {
-                dst[..8].copy_from_slice(&[v; 8]);
-                dst[len - 8..].copy_from_slice(&[v; 8]);
-            } else if len >= 4 {
-                dst[..4].copy_from_slice(&[v; 4]);
-                dst[len - 4..].copy_from_slice(&[v; 4]);
-            } else if len > 0 {
-                dst[0] = v;
-                dst[len >> 1] = v;
-                dst[len - 1] = v;
-            }
+        if len >= 8 {
+            dst[..8].copy_from_slice(&[v; 8]);
+            dst[len - 8..].copy_from_slice(&[v; 8]);
+        } else if len >= 4 {
+            dst[..4].copy_from_slice(&[v; 4]);
         }
         return;
     }
-    let dst = &mut edge[from..to];
     if len <= 32 {
         let c = [v; 16];
         dst[..16].copy_from_slice(&c);

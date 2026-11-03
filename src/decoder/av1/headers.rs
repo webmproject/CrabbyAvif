@@ -379,6 +379,7 @@ pub struct FrameHeader {
     pub coded_lossless: bool,
     pub all_lossless: bool,
     pub lossless_array: [bool; MAX_SEGMENTS],
+    pub seg_qindex_nz: [bool; MAX_SEGMENTS],
     pub seg_qm_level: [[u8; MAX_SEGMENTS]; 3],
     pub lf: LoopFilterParams,
     pub cdef: CdefParams,
@@ -556,6 +557,7 @@ impl FrameHeader {
             coded_lossless: false,
             all_lossless: false,
             lossless_array: [false; MAX_SEGMENTS],
+            seg_qindex_nz: [false; MAX_SEGMENTS],
             seg_qm_level: [[0; MAX_SEGMENTS]; 3],
             lf: LoopFilterParams::default(),
             cdef: CdefParams::default(),
@@ -587,6 +589,7 @@ impl FrameHeader {
         fh.coded_lossless = true;
         for seg_id in 0..MAX_SEGMENTS {
             let qindex = fh.get_qindex(true, seg_id, 0);
+            fh.seg_qindex_nz[seg_id] = qindex > 0;
             let q = &fh.quant;
             let lossless = qindex == 0
                 && q.delta_q_y_dc == 0

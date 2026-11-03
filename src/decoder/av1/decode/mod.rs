@@ -26,12 +26,15 @@ pub mod recon;
 pub mod state;
 pub mod superres;
 
+use std::any::Any;
 use std::collections::VecDeque;
+use std::sync::Mutex;
 
 use crate::decoder::av1::error::{Error, Result};
 use crate::decoder::av1::headers::RestorationType;
 use crate::decoder::av1::obu::FrameData;
 use crate::decoder::av1::pixel::Pixel;
+use crate::decoder::av1::tables::cdf::CdfContext;
 use crate::decoder::av1::types::MI_SIZE;
 
 use block::{SbDecoder, Scratch};
@@ -40,6 +43,154 @@ use cdef_apply::CdefSrc;
 use lr_apply::{LrBoundary, StripeGeom};
 use state::{AboveCtx, FrameCtx, FrameState, IntraSetup, LeftCtx, LrPlane, TileState};
 use superres::Upscaler;
+
+/// Process-wide pools that keep decoder state and output planes between
+/// `av1::decode` calls, so that repeated decodes (on any thread) do not
+/// reallocate and fault in frame sized buffers.
+///
+/// `DECODER_POOL` holds up to 16 `PooledState` per sample type and
+/// `PLANE_POOL` up to 16 luma and 32 chroma planes per sample type (only
+/// filled by `recycle_planes`). The limits count entries, not bytes: the
+/// buffers are sized for the largest frame decoded so far and stay
+/// allocated for the lifetime of the process.
+static DECODER_POOL: Mutex<Vec<Box<dyn Any + Send>>> = Mutex::new(Vec::new());
+static PLANE_POOL: Mutex<Vec<Box<dyn Any + Send>>> = Mutex::new(Vec::new());
+/// Number of luma planes in `PLANE_POOL` (lets the common case of an empty
+/// pool skip the lock).
+static PLANE_POOL_LEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+struct PooledState<T: Pixel> {
+    s: FrameState<T>,
+    sc: Scratch,
+    non_direct_planes: [PlaneWin<T>; 3],
+    cdfs: Vec<Box<CdfContext>>,
+    cdef_line: [[[Vec<T>; 2]; 3]; 2],
+    cdef_srcs: [CdefSrc; 3],
+    lr_bounds: VecDeque<LrBoundary<T>>,
+    lr_free: Vec<LrBoundary<T>>,
+    lr_out: [Vec<T>; 3],
+    lr_scratch: Vec<T>,
+    lf_grid: Vec<u8>,
+    band_free: Vec<Box<BandBufs<T>>>,
+    band_carry: [PlaneWin<T>; 3],
+    order_carry: MiWin,
+    tile_workers: Vec<TileWorker<T>>,
+}
+
+impl<T: Pixel> Default for PooledState<T> {
+    fn default() -> Self {
+        Self {
+            s: FrameState::default(),
+            sc: Scratch::new(),
+            non_direct_planes: Default::default(),
+            cdfs: Vec::new(),
+            cdef_line: Default::default(),
+            cdef_srcs: Default::default(),
+            lr_bounds: VecDeque::new(),
+            lr_free: Vec::new(),
+            lr_out: Default::default(),
+            lr_scratch: Vec::new(),
+            lf_grid: Vec::new(),
+            band_free: Vec::new(),
+            band_carry: Default::default(),
+            order_carry: MiWin::default(),
+            tile_workers: Vec::new(),
+        }
+    }
+}
+
+struct TypedPlanePool<T> {
+    luma: Vec<Vec<T>>,
+    chroma: Vec<Vec<T>>,
+}
+
+fn pop_direct_planes<T: Pixel>(np: usize) -> [Vec<T>; 3] {
+    if PLANE_POOL_LEN.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+        return Default::default();
+    }
+    let mut bufs: [Vec<T>; 3] = Default::default();
+    if let Ok(mut guard) = PLANE_POOL.lock() {
+        if let Some(pool) = guard
+            .iter_mut()
+            .find_map(|b| b.downcast_mut::<TypedPlanePool<T>>())
+        {
+            if let Some(y) = pool.luma.pop() {
+                bufs[0] = y;
+                PLANE_POOL_LEN.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            for dst in &mut bufs[1..np.min(3)] {
+                if let Some(uv) = pool.chroma.pop() {
+                    *dst = uv;
+                }
+            }
+        }
+    }
+    bufs
+}
+
+pub(super) fn recycle_planes<T: Pixel>(planes: Vec<crate::decoder::av1::sink::Plane<T>>) {
+    if planes.is_empty() {
+        return;
+    }
+    let mut bufs: [Vec<T>; 3] = Default::default();
+    for (i, p) in planes.into_iter().take(3).enumerate() {
+        bufs[i] = p.data;
+    }
+    recycle_raw_planes(bufs);
+}
+
+pub(super) fn recycle_raw_planes<T: Pixel>(bufs: [Vec<T>; 3]) {
+    if bufs.iter().all(|b| b.is_empty()) {
+        return;
+    }
+    if let Ok(mut guard) = PLANE_POOL.lock() {
+        let pos = guard
+            .iter()
+            .position(|b| b.is::<TypedPlanePool<T>>())
+            .unwrap_or_else(|| {
+                guard.push(Box::new(TypedPlanePool::<T> {
+                    luma: Vec::with_capacity(16),
+                    chroma: Vec::with_capacity(32),
+                }));
+                guard.len() - 1
+            });
+        let Some(pool) = guard[pos].downcast_mut::<TypedPlanePool<T>>() else {
+            return;
+        };
+        for (i, data) in bufs.into_iter().enumerate() {
+            if data.is_empty() {
+                continue;
+            }
+            if i == 0 {
+                if pool.luma.len() < 16 {
+                    pool.luma.push(data);
+                    PLANE_POOL_LEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            } else if pool.chroma.len() < 32 {
+                pool.chroma.push(data);
+            }
+        }
+    }
+}
+
+fn pop_pooled_state<T: Pixel>() -> Box<PooledState<T>> {
+    if let Ok(mut pool) = DECODER_POOL.lock() {
+        if let Some(pos) = pool.iter().rposition(|b| b.is::<PooledState<T>>()) {
+            if let Ok(state) = pool.swap_remove(pos).downcast::<PooledState<T>>() {
+                return state;
+            }
+        }
+    }
+    Box::default()
+}
+
+fn push_pooled_state<T: Pixel>(state: Box<PooledState<T>>) {
+    if let Ok(mut pool) = DECODER_POOL.lock() {
+        if pool.len() < 16 {
+            pool.push(state);
+        }
+    }
+}
 
 /// Luma rows at the bottom of a deblocked superblock row that are
 /// post-filtered (CDEF, superres, LR) only after the next row: deblocking
@@ -80,6 +231,11 @@ pub trait RowSink<T: Pixel> {
     fn finish(&mut self, planes: Vec<crate::decoder::av1::sink::Plane<T>>) -> Result<()> {
         let _ = planes;
         Ok(())
+    }
+
+    /// Whether [`RowSink::rows_final`] should be called after each stripe.
+    fn wants_rows_final(&self) -> bool {
+        false
     }
 
     /// Only in [`RowSink::wants_frame`] mode: luma rows `0..y_end` (and
@@ -132,8 +288,9 @@ pub struct DecodeParams {
 
 struct Pipeline<'a, T: Pixel> {
     f: FrameCtx<'a>,
-    s: FrameState<T>,
-    sc: Scratch,
+    s: &'a mut FrameState<T>,
+    sc: &'a mut Scratch,
+    cdfs: &'a mut Vec<Box<CdfContext>>,
     deblock: bool,
     cdef: bool,
     lr: bool,
@@ -146,31 +303,40 @@ struct Pipeline<'a, T: Pixel> {
     mi_h: [usize; 3],
     /// Pre-CDEF rows above the current superblock row (`cdef_line[cur]`)
     /// and the bottom rows of the current one for the next row.
-    cdef_line: [Vec<[Vec<T>; 2]>; 2],
+    cdef_line: &'a mut [[[Vec<T>; 2]; 3]; 2],
     cdef_cur: usize,
-    cdef_srcs: Vec<CdefSrc>,
+    cdef_srcs: &'a mut [CdefSrc; 3],
     up: Vec<PlaneWin<T>>,
     upscalers: Vec<Upscaler>,
-    lr_bounds: VecDeque<LrBoundary<T>>,
-    lr_free: Vec<LrBoundary<T>>,
+    lr_bounds: &'a mut VecDeque<LrBoundary<T>>,
+    lr_free: &'a mut Vec<LrBoundary<T>>,
     next_stripe: usize,
     /// Next LR stripe boundary whose deblocked rows are to be saved.
     next_bound: usize,
-    lr_out: Vec<Vec<T>>,
-    lr_scratch: Vec<T>,
+    lr_out: &'a mut [Vec<T>; 3],
+    lr_out_planes: [PlaneWin<T>; 3],
+    lr_scratch: &'a mut Vec<T>,
     /// Deblocking edge parameter scratch.
-    lf_grid: Vec<u8>,
+    lf_grid: &'a mut Vec<u8>,
+    band_free: &'a mut Vec<Box<BandBufs<T>>>,
+    band_carry: &'a mut [PlaneWin<T>; 3],
+    order_carry: &'a mut MiWin,
+    tile_workers: &'a mut Vec<TileWorker<T>>,
+    mi_arrays: (bool, bool, bool),
     intrabc: bool,
     /// Decoding into full frame planes that are handed to the sink at
     /// the end (see `RowSink::wants_frame`).
     direct: bool,
+    /// Post-filtering on worker threads (see `Pipeline::run_bands`).
+    bands: bool,
     /// Pre loop restoration samples of the last columns of the previous
     /// restoration unit (in-place loop restoration).
-    lr_left: Vec<T>,
     /// DSP kernel table.
     dsp: crate::decoder::av1::dsp::Dsp<T>,
     /// First superblock row that is post-filtered and output.
     post_start: usize,
+    /// Superblock row end of the decoded region.
+    row_end: usize,
     /// Mode-info column range that needs post-filtering.
     col_range: (usize, usize),
     /// Luma rows `0..rows_end` are decoded (the whole frame unless a region
@@ -190,8 +356,7 @@ pub fn decode_frame<T: Pixel>(
     let intrabc = fh.allow_intrabc;
     let mi_cols_al = f.sb_cols * f.sb4;
     let mi_rows_al = f.sb_rows * f.sb4;
-    let mut planes = Vec::new();
-    let mut above_line = Vec::new();
+    let mut pooled = pop_pooled_state::<T>();
     let mut mi_w = [0; 3];
     let mut mi_h = [0; 3];
     let mut out_w = [0; 3];
@@ -199,122 +364,233 @@ pub fn decode_frame<T: Pixel>(
     // Without intra block copy only rows from the superblock row above
     // (minus 16) on are needed (2 * sb_px + 16 rows); the spare rows
     // make the window move (copy) only every third superblock row.
-    let direct = params.region.is_none() && !fh.use_superres && sink.wants_frame();
-    let win_rows_luma = if intrabc || direct { mi_rows_al * 4 } else { 4 * sb_px + 16 };
+    let deblock =
+        params.filters.deblock && !intrabc && (fh.lf.level[0] != 0 || fh.lf.level[1] != 0);
+    let deblock_uv = deblock && np > 1 && (fh.lf.level[2] != 0 || fh.lf.level[3] != 0);
+    let cdef = params.filters.cdef
+        && !intrabc
+        && f.seq.enable_cdef
+        && !fh.coded_lossless
+        && cdef_active(fh);
+    let need_cdef_idx = cdef;
+    let lr = params.filters.restoration && fh.lr.uses_lr;
+    let full_out = params.region.is_none() && !fh.use_superres && sink.wants_frame();
+    // Frames with post filters: the filters run on other threads (single
+    // tile frames with CDEF or loop restoration, see `Pipeline::run_bands`;
+    // multi-tile frames with any post filter, see
+    // `Pipeline::run_tiles_bands`).
+    let single_tile = fh.tile_info.rows == 1 && fh.tile_info.cols == 1;
+    let bands = full_out
+        && params.threads > 1
+        && !intrabc
+        && f.sb_rows > 1
+        && (cdef || lr || (deblock && !single_tile));
+    let tiles_bands = bands && !single_tile;
+    let direct = full_out && !bands;
+    let has_post =
+        deblock || cdef || fh.lr.uses_lr || fh.use_superres || intrabc || sink.wants_rows_final();
+    let tiles_direct = direct && !single_tile && !has_post;
+    let tiles_mt = tiles_bands || tiles_direct;
+    // In `run_bands` the rows above a superblock row are filled into its
+    // row buffer only after the row has been decoded.
+    let need_above_line = f.sb_rows > 1 && (deblock || cdef || bands);
+    let win_rows_luma = if intrabc || direct {
+        mi_rows_al * 4
+    } else if bands {
+        sb_px + BAND_TOP
+    } else {
+        4 * sb_px + 16
+    };
+    let mut direct_bufs = if direct { pop_direct_planes::<T>(np) } else { Default::default() };
+    let mut lr_out_planes: [PlaneWin<T>; 3] = Default::default();
     for p in 0..np {
         let (sx, sy) = f.sub(p);
         mi_w[p] = (f.mi_cols * 4) >> sx;
         mi_h[p] = (f.mi_rows * 4) >> sy;
         out_w[p] = (fh.upscaled_width + sx) >> sx;
         out_h[p] = (fh.frame_height + sy) >> sy;
-        // A multiple of 64 bytes, so that every row starts 64-byte aligned
-        // (PlaneWin aligns the first one).
-        let stride = (((mi_cols_al * 4) >> sx) + 64).next_multiple_of(64);
-        planes.push(PlaneWin::new(stride, win_rows_luma >> sy));
-        above_line.push(vec![T::default(); stride]);
+        let stride = ((mi_cols_al * 4) >> sx).next_multiple_of(64);
+        let lr_p = lr && !intrabc && fh.lr.frame_restoration_type[p] != RestorationType::None;
+        if direct && !lr_p {
+            let buf = std::mem::take(&mut direct_bufs[p]);
+            pooled.s.planes[p] = PlaneWin::from_vec(buf, stride, win_rows_luma >> sy);
+        } else if tiles_bands {
+            // Only the stride is used (by `band_setup`); the tile columns
+            // decode into their own windows. Keep the window consistent
+            // (no rows) while the pooled allocation is kept.
+            std::mem::swap(&mut pooled.s.planes[p], &mut pooled.non_direct_planes[p]);
+            pooled.s.planes[p].reset(stride, 0, 0, 0);
+        } else {
+            std::mem::swap(&mut pooled.s.planes[p], &mut pooled.non_direct_planes[p]);
+            let rows = if intrabc {
+                (mi_rows_al * 4) >> sy
+            } else if bands {
+                (sb_px + BAND_TOP) >> sy
+            } else {
+                (4 * sb_px + 16) >> sy
+            };
+            pooled.s.planes[p].reset(stride, rows, 0, 0);
+            if direct && lr_p {
+                let buf = std::mem::take(&mut direct_bufs[p]);
+                lr_out_planes[p] = PlaneWin::from_vec(buf, stride, (mi_rows_al * 4) >> sy);
+            }
+        }
+        if !tiles_mt {
+            if need_above_line {
+                pooled.s.above_line[p].resize(stride + 64, T::default());
+            } else {
+                pooled.s.above_line[p].clear();
+            }
+        }
     }
-    let above_w = mi_cols_al + 32;
-    let deblock =
-        params.filters.deblock && !intrabc && (fh.lf.level[0] != 0 || fh.lf.level[1] != 0);
-    let deblock_uv = deblock && np > 1 && (fh.lf.level[2] != 0 || fh.lf.level[3] != 0);
-    let s = FrameState {
-        planes,
-        above_line,
-        above_line_y: [0; 3],
-        mi: MiWin::new(
+    let mi_arrays = (deblock, deblock_uv, deblock && fh.delta_lf_present);
+    if !tiles_mt {
+        let above_w = mi_cols_al + 32;
+        pooled.s.mi.reset(
             mi_cols_al + 32,
             2 * f.sb4,
+            0,
+            0,
             f.ss_x,
             f.ss_y,
             deblock,
             deblock_uv,
             deblock && fh.delta_lf_present,
             intrabc,
-        ),
-        above: AboveCtx {
-            col0: 0,
-            level: [vec![0; above_w], vec![0; above_w], vec![0; above_w]],
-            dc: [vec![0; above_w], vec![0; above_w], vec![0; above_w]],
-            palette: [vec![[0; 8]; above_w], vec![[0; 8]; above_w]],
-        },
-        left: LeftCtx::new(),
-        cdef_idx: vec![-1; (mi_rows_al / 16 + 2) * (mi_cols_al / 16 + 2)],
-        cdef_stride: mi_cols_al / 16 + 2,
-        cdef_row0: 0,
-        cdef_col0: 0,
-        lr: [
-            LrPlane::new(fh, 0, f.ss_x, f.ss_y),
-            LrPlane::new(fh, 1, f.ss_x, f.ss_y),
-            LrPlane::new(fh, 2, f.ss_x, f.ss_y),
-        ],
-        cfl_ac: Box::new([0; crate::decoder::av1::dsp::ipred::MAX_CFL_AC]),
-        edges: crate::decoder::av1::dsp::ipred::IntraEdges::default(),
-        ipred: [IntraSetup::new(&f, 0), IntraSetup::new(&f, 1)],
-    };
-    let superres = fh.use_superres;
-    let lr = params.filters.restoration && fh.lr.uses_lr;
-    let cdef = params.filters.cdef && !intrabc && f.seq.enable_cdef && !fh.coded_lossless;
-    let mut p = Pipeline {
-        deblock,
-        cdef,
-        lr,
-        superres,
-        out_w,
-        out_h,
-        mi_w,
-        mi_h,
-        cdef_line: if cdef {
-            [0, 1].map(|_| {
-                (0..np)
-                    .map(|p| [vec![T::default(); mi_w[p]], vec![T::default(); mi_w[p]]])
-                    .collect()
-            })
-        } else {
-            [Vec::new(), Vec::new()]
-        },
-        cdef_cur: 0,
-        cdef_srcs: (0..np).map(|_| CdefSrc::new()).collect(),
-        up: Vec::new(),
-        upscalers: Vec::new(),
-        lr_bounds: VecDeque::new(),
-        lr_free: Vec::new(),
-        next_stripe: 0,
-        next_bound: 1,
-        lr_out: (0..np)
-            .map(|p| {
-                if lr && !direct && fh.lr.frame_restoration_type[p] != RestorationType::None {
-                    vec![T::default(); out_w[p] * (64 >> f.sub(p).1)]
-                } else {
-                    Vec::new()
-                }
-            })
-            .collect(),
-        lr_scratch: Vec::new(),
-        lf_grid: Vec::new(),
-        intrabc,
-        direct,
-        lr_left: Vec::new(),
-        dsp: crate::decoder::av1::dsp::Dsp::new(f.bd),
-        post_start: 0,
-        col_range: (0, usize::MAX),
-        rows_end: usize::MAX,
-        s,
-        sc: Scratch::new(),
-        f,
-    };
-    if superres {
-        for pl in 0..np {
-            let (sx, sy) = p.f.sub(pl);
-            p.upscalers.push(Upscaler::new(
-                fh.frame_width,
-                fh.upscaled_width,
-                p.f.mi_cols,
-                sx,
-            ));
-            p.up.push(PlaneWin::new(p.out_w[pl] + 16, win_rows_luma >> sy));
+        );
+        pooled
+            .s
+            .above
+            .reset(0, above_w, np, fh.allow_screen_content_tools);
+    }
+    if need_cdef_idx {
+        let cdef_len = (mi_rows_al / 16 + 2) * (mi_cols_al / 16 + 2);
+        if params.region.is_some() {
+            let pl = pooled.s.cdef_idx.len().min(cdef_len);
+            pooled.s.cdef_idx[..pl].fill(-1);
+        }
+        pooled.s.cdef_idx.resize(cdef_len, -1);
+    } else {
+        pooled.s.cdef_idx.clear();
+    }
+    pooled.s.cdef_stride = mi_cols_al / 16 + 2;
+    pooled.s.cdef_row0 = 0;
+    pooled.s.cdef_col0 = 0;
+    if fh.lr.uses_lr {
+        for (p, lp) in pooled.s.lr.iter_mut().enumerate() {
+            if p < np {
+                lp.reset(fh, p, f.ss_x, f.ss_y);
+            } else {
+                lp.units.clear();
+            }
         }
     }
-    p.run(fd, params, sink)
+    if !tiles_mt {
+        pooled.s.ipred = [IntraSetup::new(&f, 0), IntraSetup::new(&f, 1)];
+    }
+    let superres = fh.use_superres;
+    if cdef && !bands {
+        for bufs in &mut pooled.cdef_line {
+            for (pl, pair) in bufs[..np].iter_mut().enumerate() {
+                pair[0].resize(mi_w[pl], T::default());
+                pair[1].resize(mi_w[pl], T::default());
+            }
+        }
+    }
+    if lr && !direct && !bands {
+        for (p, out) in pooled.lr_out[..np].iter_mut().enumerate() {
+            if fh.lr.frame_restoration_type[p] != RestorationType::None {
+                out.resize(out_w[p] * (64 >> f.sub(p).1), T::default());
+            } else {
+                out.clear();
+            }
+        }
+    }
+    let res = {
+        let PooledState {
+            s,
+            sc,
+            cdfs,
+            cdef_line,
+            cdef_srcs,
+            lr_bounds,
+            lr_free,
+            lr_out,
+            lr_scratch,
+            lf_grid,
+            band_free,
+            band_carry,
+            order_carry,
+            tile_workers,
+            ..
+        } = &mut *pooled;
+        let mut p = Pipeline {
+            deblock,
+            cdef,
+            lr,
+            superres,
+            out_w,
+            out_h,
+            mi_w,
+            mi_h,
+            cdef_line,
+            cdef_cur: 0,
+            cdef_srcs,
+            up: Vec::new(),
+            upscalers: Vec::new(),
+            lr_bounds,
+            lr_free,
+            next_stripe: 0,
+            next_bound: 1,
+            lr_out,
+            lr_out_planes,
+            lr_scratch,
+            lf_grid,
+            band_free,
+            band_carry,
+            order_carry,
+            tile_workers,
+            mi_arrays,
+            intrabc,
+            direct,
+            bands,
+            dsp: crate::decoder::av1::dsp::Dsp::new(f.bd),
+            post_start: 0,
+            row_end: 0,
+            col_range: (0, usize::MAX),
+            rows_end: usize::MAX,
+            s,
+            sc,
+            cdfs,
+            f,
+        };
+        if superres {
+            for pl in 0..np {
+                let (sx, sy) = p.f.sub(pl);
+                p.upscalers.push(Upscaler::new(
+                    fh.frame_width,
+                    fh.upscaled_width,
+                    p.f.mi_cols,
+                    sx,
+                ));
+                p.up.push(PlaneWin::new(p.out_w[pl] + 16, win_rows_luma >> sy));
+            }
+        }
+        p.run(fd, params, sink)
+    };
+    if res.is_ok() {
+        for p in 0..np {
+            let lr_p = lr && !intrabc && fh.lr.frame_restoration_type[p] != RestorationType::None;
+            if !direct || lr_p {
+                std::mem::swap(&mut pooled.s.planes[p], &mut pooled.non_direct_planes[p]);
+            }
+        }
+        if !pooled.lr_bounds.is_empty() {
+            pooled.lr_free.extend(pooled.lr_bounds.drain(..));
+        }
+        push_pooled_state(pooled);
+    }
+    res
 }
 
 impl<'a, T: Pixel> Pipeline<'a, T> {
@@ -329,6 +605,64 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         let sb4 = f.sb4;
         let sb_rows = f.sb_rows;
         let fh = f.fh;
+        if ti.rows == 1 && ti.cols == 1 && params.region.is_none() {
+            if self.bands {
+                return self.run_bands(fd, params.threads, sink);
+            }
+            self.post_start = 0;
+            self.row_end = sb_rows;
+            self.col_range = (0, f.sb_cols * sb4);
+            self.next_stripe = 0;
+            self.next_bound = 1;
+            self.rows_end = fh.frame_height;
+            let c0 = ti.mi_col_starts[0];
+            let c1 = ti.mi_col_starts[1];
+            let mut ts = TileState::with_cdf(
+                fd.single_tile,
+                fh,
+                (ti.mi_row_starts[0], ti.mi_row_starts[1]),
+                (c0, c1),
+                self.cdfs.pop(),
+            );
+            let mut b = block::Block::default();
+            for r in 0..sb_rows {
+                let mi_row = r * sb4;
+                self.slide_windows(r);
+                self.s.left.clear();
+                let sb_y = r * self.f.sb_px;
+                self.s.set_sb_y(&self.f, sb_y);
+                {
+                    let mut dec = SbDecoder {
+                        f: &self.f,
+                        t: &mut ts,
+                        s: self.s,
+                        sc: self.sc,
+                        dsp: &self.dsp,
+                        b,
+                        recon: true,
+                        sb_y,
+                        read_deltas: false,
+                        plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+                    };
+                    let mut c = c0;
+                    while c < c1 {
+                        dec.decode_sb(mi_row, c)?;
+                        if dec.t.msac.overrun() {
+                            return Err(Error::Truncated);
+                        }
+                        c += sb4;
+                    }
+                    b = dec.b;
+                }
+                self.after_decode_row(r)?;
+                self.post_row(r, r + 1 == sb_rows, sink)?;
+            }
+            self.cdfs.push(ts.cdf);
+            if self.direct {
+                self.finish_direct(sink)?;
+            }
+            return Ok(());
+        }
         let full = SbRegion {
             row_start: 0,
             row_end: sb_rows,
@@ -380,6 +714,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         self.post_start = reg.row_start.max(tile_sb(
             ti.mi_row_starts[tile_rows_needed.iter().position(|&n| n).unwrap_or(0)],
         ));
+        self.row_end = row_end;
         self.col_range = (reg.col_start * sb4, col_end * sb4);
         self.next_stripe = (self.post_start * f.sb_px + 8) / 64;
         // Boundary k lies at luma row 64k - 8.
@@ -393,7 +728,21 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 }
             }
         }
+        if tile_jobs.len() > 1
+            && params.region.is_none()
+            && self.direct
+            && !self.has_post_filters()
+            && !sink.wants_rows_final()
+        {
+            if params.threads > 1 {
+                return self.run_tiles_direct(fd, params.threads, sink);
+            }
+            return self.run_tiles_direct_st(fd, sink);
+        }
         if params.threads > 1 && tile_jobs.len() > 1 {
+            if self.bands {
+                return self.run_tiles_bands(fd, params.threads, sink);
+            }
             return self.run_mt(
                 fd,
                 params,
@@ -414,36 +763,43 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 .find(|&t| mi_row >= ti.mi_row_starts[t] && mi_row < ti.mi_row_starts[t + 1])
                 .unwrap();
             if tr != cur_tile_row {
+                let first_tr = cur_tile_row == usize::MAX;
                 cur_tile_row = tr;
-                tiles.clear();
+                for ts in tiles.drain(..).flatten() {
+                    self.cdfs.push(ts.cdf);
+                }
                 for tc in 0..ti.cols {
                     if !needed[tr][tc] {
                         tiles.push(None);
                         continue;
                     }
-                    let data = fd.tiles[tr * ti.cols + tc];
-                    let ts = TileState::new(
+                    let data = fd.tiles()[tr * ti.cols + tc];
+                    let ts = TileState::with_cdf(
                         data,
                         fh,
                         (ti.mi_row_starts[tr], ti.mi_row_starts[tr + 1]),
                         (ti.mi_col_starts[tc], ti.mi_col_starts[tc + 1]),
+                        self.cdfs.pop(),
                     );
                     tiles.push(Some(ts));
                 }
-                // clear_above_context()
-                for a in self
-                    .s
-                    .above
-                    .level
-                    .iter_mut()
-                    .chain(self.s.above.dc.iter_mut())
-                {
-                    a.fill(0);
+                if !first_tr {
+                    // clear_above_context()
+                    for a in self
+                        .s
+                        .above
+                        .level
+                        .iter_mut()
+                        .chain(self.s.above.dc.iter_mut())
+                    {
+                        a.fill(0);
+                    }
                 }
             }
             self.slide_windows(r);
             // Decode the superblock row of every needed tile column.
             let sb_y = r * self.f.sb_px;
+            self.s.set_sb_y(&self.f, sb_y);
             for (tc, ts) in tiles.iter_mut().enumerate() {
                 let Some(ts) = ts else { continue };
                 let recon_this_tile = recon_tile[tr][tc];
@@ -488,26 +844,12 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 self.post_row(r, r + 1 == row_end, sink)?;
             }
         }
+        for ts in tiles.drain(..).flatten() {
+            self.cdfs.push(ts.cdf);
+        }
         if self.direct {
             // Hand the planes over as the output frame.
-            let planes = (0..self.f.num_planes)
-                .map(|p| {
-                    let w = std::mem::replace(&mut self.s.planes[p], PlaneWin::new(0, 0));
-                    debug_assert!(
-                        w.y0 == 0 && w.rows >= self.out_h[p] && w.stride >= self.out_w[p]
-                    );
-                    let stride = w.stride;
-                    let (data, offset) = w.into_raw();
-                    crate::decoder::av1::sink::Plane {
-                        width: self.out_w[p],
-                        height: self.out_h[p],
-                        stride,
-                        offset,
-                        data,
-                    }
-                })
-                .collect();
-            sink.finish(planes)?;
+            self.finish_direct(sink)?;
         }
         Ok(())
     }
@@ -591,22 +933,602 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         let f = &self.f;
         let m_y0 = (r * f.sb4).saturating_sub(f.sb4);
         self.s.mi.slide_to(m_y0);
-        if self.intrabc || self.direct {
+        if self.intrabc || (self.direct && !self.lr) {
             return;
         }
-        let y0 = (r * f.sb_px).saturating_sub(f.sb_px + 16);
+        // Rows still read once row `r` is decoded start 16 luma rows above
+        // it: intra prediction reads row `r * sb_px - 1`, deblocking its
+        // top edge reads 8 rows above, post filtering `post_row(r)` starts
+        // at `r * sb_px - POST_LAG` and CDEF / loop restoration read up to
+        // 3 rows above that. Keeping only those makes the window move
+        // (copy) rarely and copy few rows.
+        let y0 = (r * f.sb_px).saturating_sub(POST_LAG + 8);
         let need_end = (r + 1) * f.sb_px;
         let keep_end = r * f.sb_px;
-        for (p, pl) in self
-            .s
-            .planes
-            .iter_mut()
-            .chain(self.up.iter_mut())
-            .enumerate()
-        {
-            let sy = f.sub(p % f.num_planes).1;
+        for (p, pl) in self.s.planes[..f.num_planes].iter_mut().enumerate() {
+            if self.direct && f.fh.lr.frame_restoration_type[p] == RestorationType::None {
+                continue;
+            }
+            let sy = f.sub(p).1;
             pl.slide_to(y0 >> sy, need_end >> sy, keep_end >> sy);
         }
+        for (p, pl) in self.up.iter_mut().enumerate() {
+            let sy = f.sub(p).1;
+            pl.slide_to(y0 >> sy, need_end >> sy, keep_end >> sy);
+        }
+    }
+
+    /// Whether any in-loop filter after reconstruction changes samples
+    /// (CDEF with all strengths zero does not).
+    fn has_post_filters(&self) -> bool {
+        let fh = self.f.fh;
+        self.deblock
+            || (self.cdef && cdef_active(fh))
+            || fh.lr.uses_lr
+            || self.superres
+            || self.intrabc
+    }
+
+    /// Single tile frames with CDEF and / or loop restoration (whole frame,
+    /// output planes handed to the sink): this thread only decodes. Every
+    /// superblock row is decoded into its own row buffer (luma rows
+    /// `r * sb_px - BAND_TOP .. (r + 1) * sb_px`, intra prediction takes
+    /// the row above from `above_line`), which is then queued as a
+    /// [`RowJob`] with copies of the mode info, `cdef_idx` and restoration
+    /// units it needs. A worker runs the sequential finishing stage on the
+    /// queued rows in order ([`BandWorker::finish_row`]: fill the rows
+    /// above from the previous row, deblock, save the stripe boundaries),
+    /// which turns the row into a [`BandJob`] for the rows that are final
+    /// after deblocking (`band_rows`). The bands are independent: the
+    /// workers run CDEF on them and loop restoration (or a copy) into their
+    /// own rows of the output planes, which are split into the bands with
+    /// `split_at_mut`. When too much work is queued this thread helps.
+    fn run_bands(
+        &mut self,
+        fd: &FrameData,
+        threads: usize,
+        sink: &mut dyn RowSink<T>,
+    ) -> Result<()> {
+        let sb_rows = self.f.sb_rows;
+        let sb4 = self.f.sb4;
+        let sb_px = self.f.sb_px;
+        let fh = self.f.fh;
+        let ti = &fh.tile_info;
+        let (bp, mut out_planes) = self.band_setup();
+        // At most one worker per band after the first.
+        let max_bands = if !bp.cdef && sb_px > 64 { sb_rows * 2 } else { sb_rows };
+        let workers = (threads - 1).min(max_bands.saturating_sub(1));
+        let res = {
+            let mut rest: [&mut [T]; 3] = Default::default();
+            for (r, pl) in rest.iter_mut().zip(out_planes.iter_mut()) {
+                *r = pl.data_mut();
+            }
+            let pipe = BandPipeline::with_pooled(
+                rest,
+                std::mem::take(self.band_free),
+                std::mem::take(self.band_carry),
+                std::mem::take(self.lf_grid),
+                std::mem::take(self.lr_free),
+                workers,
+            );
+            let res = std::thread::scope(|scope| -> Result<()> {
+                // If this thread panics (e.g. while decoding), the workers
+                // must not keep waiting for rows that never come: the scope
+                // joins them before the panic propagates.
+                let _abort = AbortOnPanic(&pipe);
+                for _ in 0..workers {
+                    let (pipe, bp) = (&pipe, &bp);
+                    scope.spawn(move || pipe.work(&mut BandWorker::<T>::new(fd), bp, false, None));
+                }
+                let mut w = BandWorker::<T>::new(fd);
+                let (c0, c1) = (ti.mi_col_starts[0], ti.mi_col_starts[1]);
+                let mut ts = TileState::with_cdf(
+                    fd.single_tile,
+                    fh,
+                    (ti.mi_row_starts[0], ti.mi_row_starts[1]),
+                    (c0, c1),
+                    self.cdfs.pop(),
+                );
+                let mut b = block::Block::default();
+                let res = 'dec: {
+                    for r in 0..sb_rows {
+                        let mi_row = r * sb4;
+                        self.s.mi.slide_to(mi_row.saturating_sub(sb4));
+                        self.s.left.clear();
+                        let sb_y = r * sb_px;
+                        self.s.set_sb_y(&self.f, sb_y);
+                        let mut dec = SbDecoder {
+                            f: &self.f,
+                            t: &mut ts,
+                            s: self.s,
+                            sc: self.sc,
+                            dsp: &self.dsp,
+                            b,
+                            recon: true,
+                            sb_y,
+                            read_deltas: false,
+                            plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+                        };
+                        let mut c = c0;
+                        while c < c1 {
+                            if let Err(e) = dec.decode_sb(mi_row, c) {
+                                break 'dec Err(e);
+                            }
+                            if dec.t.msac.overrun() {
+                                break 'dec Err(Error::Truncated);
+                            }
+                            c += sb4;
+                        }
+                        b = dec.b;
+                        self.save_above_line(r);
+                        let job = self.capture_row(r, r + 1 == sb_rows, &bp, pipe.take_bufs());
+                        if pipe.push_row(job) > workers {
+                            // Too much queued: help instead of decoding ahead.
+                            pipe.work(&mut w, &bp, true, None);
+                        }
+                    }
+                    Ok(())
+                };
+                self.cdfs.push(ts.cdf);
+                pipe.close();
+                // Help with what is still queued.
+                pipe.work(&mut w, &bp, false, None);
+                res
+            });
+            pipe.reclaim_into(self.band_free, self.band_carry, self.lf_grid, self.lr_free);
+            res
+        };
+        res?;
+        self.finish_bands(out_planes, sink)
+    }
+
+    /// Multi-tile frames with post filters (whole frame, output planes
+    /// handed to the sink): the band pipeline of [`Pipeline::run_bands`]
+    /// with the rows produced by all threads. The decoding units are the
+    /// superblock rows of the tiles in raster order ([`TileJobs`]): each is
+    /// decoded with the persistent state of its tile column and copied
+    /// (pixels, mode info, `cdef_idx`, restoration units) into the row
+    /// buffer of its superblock row; a row is queued for the finishing
+    /// stage once all its tiles are in.
+    fn run_tiles_bands(
+        &mut self,
+        fd: &FrameData,
+        threads: usize,
+        sink: &mut dyn RowSink<T>,
+    ) -> Result<()> {
+        let (bp, mut out_planes) = self.band_setup();
+        let f = &self.f;
+        let ti = &f.fh.tile_info;
+        let tile_row = (0..f.sb_rows)
+            .map(|r| {
+                (0..ti.rows)
+                    .find(|&t| r * f.sb4 < ti.mi_row_starts[t + 1])
+                    .unwrap_or(ti.rows - 1)
+            })
+            .collect();
+        let ctxs = (0..ti.cols)
+            .map(|_| {
+                Mutex::new(TileCtx::from_worker(
+                    self.tile_workers.pop().unwrap_or_else(TileWorker::new),
+                ))
+            })
+            .collect();
+        let jobs = TileJobs {
+            fd,
+            ctxs,
+            slots: (0..f.sb_rows)
+                .map(|_| {
+                    Mutex::new(RowSlot {
+                        bufs: None,
+                        remaining: ti.cols,
+                    })
+                })
+                .collect(),
+            order: Mutex::new(RowOrder {
+                next: 0,
+                ready: (0..f.sb_rows).map(|_| None).collect(),
+                carry: std::mem::take(self.order_carry),
+            }),
+            meta: Mutex::new(TileMeta {
+                cdef_idx: std::mem::take(&mut self.s.cdef_idx),
+                lr: std::mem::take(&mut self.s.lr),
+            }),
+            err: Mutex::new(None),
+            tile_row,
+            mi_arrays: self.mi_arrays,
+        };
+        {
+            let mut rest: [&mut [T]; 3] = Default::default();
+            for (r, pl) in rest.iter_mut().zip(out_planes.iter_mut()) {
+                *r = pl.data_mut();
+            }
+            let pipe = BandPipeline::with_pooled(
+                rest,
+                std::mem::take(self.band_free),
+                std::mem::take(self.band_carry),
+                std::mem::take(self.lf_grid),
+                std::mem::take(self.lr_free),
+                threads,
+            );
+            // A tile's rows are decoded in order.
+            pipe.set_units(f.sb_rows * ti.cols, ti.cols, threads);
+            std::thread::scope(|scope| {
+                for _ in 1..threads {
+                    let (pipe, bp, jobs) = (&pipe, &bp, &jobs);
+                    scope.spawn(move || {
+                        pipe.work(&mut BandWorker::<T>::new(fd), bp, false, Some(jobs))
+                    });
+                }
+                pipe.work(&mut BandWorker::<T>::new(fd), &bp, false, Some(&jobs));
+            });
+            pipe.reclaim_into(self.band_free, self.band_carry, self.lf_grid, self.lr_free);
+        }
+        let TileJobs {
+            ctxs,
+            slots,
+            order,
+            meta,
+            err,
+            ..
+        } = jobs;
+        for ctx in ctxs {
+            self.tile_workers.push(
+                ctx.into_inner()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .into_worker(),
+            );
+        }
+        for slot in slots {
+            if let Some(bb) = slot
+                .into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .bufs
+            {
+                self.band_free.push(bb);
+            }
+        }
+        let order = order
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for bb in order.ready.into_iter().flatten() {
+            self.band_free.push(bb);
+        }
+        *self.order_carry = order.carry;
+        let meta = meta
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (self.s.cdef_idx, self.s.lr) = (meta.cdef_idx, meta.lr);
+        if let Some((_, e)) = err
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            return Err(e);
+        }
+        self.finish_bands(out_planes, sink)
+    }
+
+    /// Frame parameters and output planes of [`Pipeline::run_bands`] /
+    /// [`Pipeline::run_tiles_bands`] (whole frame).
+    fn band_setup(&mut self) -> (BandParams, [PlaneWin<T>; 3]) {
+        let f = &self.f;
+        let fh = f.fh;
+        self.post_start = 0;
+        self.row_end = f.sb_rows;
+        self.col_range = (0, f.sb_cols * f.sb4);
+        self.rows_end = fh.frame_height;
+        let mut bp = BandParams {
+            deblock: self.deblock,
+            cdef: self.cdef && cdef_active(fh),
+            lr: self.lr,
+            lr_on: [false; 3],
+            mi_w: self.mi_w,
+            mi_h: self.mi_h,
+            out_w: self.out_w,
+            out_h: self.out_h,
+            out_stride: [0; 3],
+            cdef_stride: self.s.cdef_stride,
+            frame_h: fh.frame_height,
+            col_range: self.col_range,
+        };
+        let mut out_planes: [PlaneWin<T>; 3] = Default::default();
+        let mut bufs = pop_direct_planes::<T>(f.num_planes);
+        for p in 0..f.num_planes {
+            bp.lr_on[p] = self.lr && fh.lr.frame_restoration_type[p] != RestorationType::None;
+            let stride = self.s.planes[p].stride;
+            bp.out_stride[p] = stride;
+            out_planes[p] = PlaneWin::from_vec(
+                std::mem::take(&mut bufs[p]),
+                stride,
+                (f.sb_rows * f.sb_px) >> f.sub(p).1,
+            );
+        }
+        (bp, out_planes)
+    }
+
+    /// Hands the output planes of the band pipeline over to the sink.
+    fn finish_bands(
+        &mut self,
+        mut out_planes: [PlaneWin<T>; 3],
+        sink: &mut dyn RowSink<T>,
+    ) -> Result<()> {
+        let planes = (0..self.f.num_planes)
+            .map(|p| {
+                let w = std::mem::take(&mut out_planes[p]);
+                let stride = w.stride;
+                let (data, offset) = w.into_raw();
+                crate::decoder::av1::sink::Plane {
+                    width: self.out_w[p],
+                    height: self.out_h[p],
+                    stride,
+                    offset,
+                    data,
+                }
+            })
+            .collect();
+        sink.finish(planes)
+    }
+
+    /// The [`RowJob`] of superblock row `r` (see [`Pipeline::run_bands`]),
+    /// called after the row has been decoded: the row buffer in
+    /// `self.s.planes` moves into the job (the next row is decoded into
+    /// `bb.planes`), with copies of the mode info rows deblocking and CDEF
+    /// read, the `cdef_idx` rows of the band and the restoration unit rows
+    /// of its stripes.
+    fn capture_row(
+        &mut self,
+        r: usize,
+        last: bool,
+        bp: &BandParams,
+        mut bb: Box<BandBufs<T>>,
+    ) -> RowJob<T> {
+        let f = &self.f;
+        let sb_px = f.sb_px;
+        for p in 0..f.num_planes {
+            let sy = f.sub(p).1;
+            if !last {
+                let stride = self.s.planes[p].stride;
+                bb.planes[p].reset(
+                    stride,
+                    (sb_px + BAND_TOP) >> sy,
+                    0,
+                    ((r + 1) * sb_px - BAND_TOP) >> sy,
+                );
+            }
+            std::mem::swap(&mut self.s.planes[p], &mut bb.planes[p]);
+        }
+        if bp.deblock || bp.cdef {
+            let (m0, m1) = band_mi_rows(f, r);
+            reset_band_mi(&mut bb.mi, &self.s.mi, f, r);
+            copy_mi_rows(&mut bb.mi, &self.s.mi, m0, m1, 0, f.mi_cols, f.ss_x, f.ss_y);
+        }
+        fill_band_meta(f, bp, &mut bb, r, last, &self.s.cdef_idx, &self.s.lr);
+        RowJob { r, last, bufs: bb }
+    }
+
+    /// Hands the frame planes over to the sink (direct mode).
+    fn finish_direct(&mut self, sink: &mut dyn RowSink<T>) -> Result<()> {
+        let f = &self.f;
+        let planes = (0..f.num_planes)
+            .map(|p| {
+                let lr_p = self.lr
+                    && !self.intrabc
+                    && f.fh.lr.frame_restoration_type[p] != RestorationType::None;
+                let w = if lr_p {
+                    std::mem::take(&mut self.lr_out_planes[p])
+                } else {
+                    std::mem::take(&mut self.s.planes[p])
+                };
+                debug_assert!(w.y0 == 0 && w.rows >= self.out_h[p] && w.stride >= self.out_w[p]);
+                let stride = w.stride;
+                let (data, offset) = w.into_raw();
+                crate::decoder::av1::sink::Plane {
+                    width: self.out_w[p],
+                    height: self.out_h[p],
+                    stride,
+                    offset,
+                    data,
+                }
+            })
+            .collect();
+        sink.finish(planes)
+    }
+
+    /// Multi-tile frames without post filters (whole frame, direct
+    /// output): the tiles are decoded in parallel, each worker into a
+    /// window of one superblock row of its tile, and every decoded
+    /// superblock row is copied into the frame planes right away (while
+    /// still in the cache), under the lock of that frame superblock row.
+    /// Nothing frame sized is allocated besides the output planes.
+    fn run_tiles_direct(
+        &mut self,
+        fd: &FrameData,
+        threads: usize,
+        sink: &mut dyn RowSink<T>,
+    ) -> Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let f = &self.f;
+        let ti = &f.fh.tile_info;
+        let np = f.num_planes;
+        let sb_px = f.sb_px;
+        let num_jobs = ti.rows * ti.cols;
+        let num_workers = threads.min(num_jobs);
+        let mi_h = self.mi_h;
+        let mut strides = [0usize; 3];
+        // The frame planes split into superblock rows.
+        let chunks: Vec<Mutex<[&mut [T]; 3]>> = {
+            let mut iters: Vec<_> = self.s.planes[..np]
+                .iter_mut()
+                .enumerate()
+                .map(|(p, pl)| {
+                    strides[p] = pl.stride;
+                    let rows = sb_px >> f.sub(p).1;
+                    pl.data_mut().chunks_mut(strides[p] * rows)
+                })
+                .collect();
+            (0..f.sb_rows)
+                .map(|_| {
+                    let mut c: [&mut [T]; 3] = Default::default();
+                    for (dst, it) in c.iter_mut().zip(iters.iter_mut()) {
+                        *dst = it.next().unwrap_or_default();
+                    }
+                    Mutex::new(c)
+                })
+                .collect()
+        };
+        let dsp = &self.dsp;
+        // Largest tiles (by coded size, a proxy for decoding time) first so a
+        // heavy tile is not started near the end while the other threads idle.
+        let mut order: Vec<usize> = (0..num_jobs).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(fd.tiles()[i].len()));
+        let next = AtomicUsize::new(0);
+        let min_failed_key = AtomicUsize::new(usize::MAX);
+        let mut workers: Vec<TileWorker<T>> = (0..num_workers)
+            .map(|_| {
+                let mut w = self.tile_workers.pop().unwrap_or_else(TileWorker::new);
+                if w.cdf.is_none() {
+                    w.cdf = self.cdfs.pop();
+                }
+                w
+            })
+            .collect();
+        let work = |w: &mut TileWorker<T>| -> Option<(usize, Error)> {
+            let mut err: Option<(usize, Error)> = None;
+            loop {
+                let j = next.fetch_add(1, Ordering::Relaxed);
+                if j >= num_jobs {
+                    break;
+                }
+                let idx = order[j];
+                let (tr, tc) = (idx / ti.cols, idx % ti.cols);
+                if let Err((key, e)) = w.decode_tile(
+                    f,
+                    dsp,
+                    fd.tiles()[idx],
+                    tr,
+                    tc,
+                    &chunks,
+                    &strides,
+                    &mi_h,
+                    &min_failed_key,
+                ) {
+                    min_failed_key.fetch_min(key, Ordering::Relaxed);
+                    if err.as_ref().is_none_or(|(k, _)| key < *k) {
+                        err = Some((key, e));
+                    }
+                }
+            }
+            err
+        };
+        let errs: Vec<Option<(usize, Error)>> = std::thread::scope(|s| {
+            let Some((first, rest)) = workers.split_first_mut() else {
+                return vec![Some((0, Error::Invalid("no tile workers")))];
+            };
+            let handles: Vec<_> = rest.iter_mut().map(|w| s.spawn(|| work(w))).collect();
+            let mut errs = vec![work(first)];
+            errs.extend(handles.into_iter().map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| Some((0, Error::Invalid("decoding thread panicked"))))
+            }));
+            errs
+        });
+        self.tile_workers.extend(workers);
+        drop(chunks);
+        if let Some((_, e)) = errs.into_iter().flatten().min_by_key(|(k, _)| *k) {
+            return Err(e);
+        }
+        self.finish_direct(sink)
+    }
+
+    /// Single-threaded counterpart of [`Pipeline::run_tiles_direct`]: decodes
+    /// each tile from top to bottom directly into `self.s.planes` using a
+    /// single pooled `CdfContext` and tile-width `MiWin`/`AboveCtx`.
+    fn run_tiles_direct_st(&mut self, fd: &FrameData, sink: &mut dyn RowSink<T>) -> Result<()> {
+        let f = &self.f;
+        let fh = f.fh;
+        let ti = &fh.tile_info;
+        let np = f.num_planes;
+        let (sb4, sb_px) = (f.sb4, f.sb_px);
+        for p in 0..np {
+            self.s.above_line[p].clear();
+        }
+        self.s.ipred = [IntraSetup::new(f, 0), IntraSetup::new(f, 1)];
+        let mut cdf = self.cdfs.pop();
+        let mut first_err: Option<(usize, Error)> = None;
+        for tr in 0..ti.rows {
+            let (mi_r0, mi_r1) = (ti.mi_row_starts[tr], ti.mi_row_starts[tr + 1]);
+            let (sb_r0, sb_r1) = (mi_r0 / sb4, mi_r1.div_ceil(sb4));
+            for tc in 0..ti.cols {
+                let (mi_c0, mi_c1) = (ti.mi_col_starts[tc], ti.mi_col_starts[tc + 1]);
+                let tile_mi_al = (mi_c1 - mi_c0).div_ceil(sb4) * sb4;
+                self.s.mi.reset(
+                    tile_mi_al + 32,
+                    2 * sb4,
+                    mi_c0,
+                    (sb_r0 * sb4).saturating_sub(sb4),
+                    f.ss_x,
+                    f.ss_y,
+                    false,
+                    false,
+                    false,
+                    false,
+                );
+                self.s
+                    .above
+                    .reset(mi_c0, tile_mi_al + 32, np, fh.allow_screen_content_tools);
+                let data = fd.tiles()[tr * ti.cols + tc];
+                let mut ts =
+                    TileState::with_cdf(data, fh, (mi_r0, mi_r1), (mi_c0, mi_c1), cdf.take());
+                for r in sb_r0..sb_r1 {
+                    let key = (r << 16) | (tr << 8) | tc;
+                    if first_err.as_ref().is_some_and(|(k, _)| key > *k) {
+                        break;
+                    }
+                    let mi_row = r * sb4;
+                    let sb_y = r * sb_px;
+                    self.s.mi.slide_to(mi_row.saturating_sub(sb4));
+                    self.s.left.clear();
+                    let mut dec = SbDecoder {
+                        f,
+                        t: &mut ts,
+                        s: &mut self.s,
+                        sc: &mut self.sc,
+                        dsp: &self.dsp,
+                        b: Default::default(),
+                        recon: true,
+                        sb_y,
+                        read_deltas: false,
+                        plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+                    };
+                    let mut c = mi_c0;
+                    let mut row_err = None;
+                    while c < mi_c1 {
+                        if let Err(e) = dec.decode_sb(mi_row, c) {
+                            row_err = Some(e);
+                            break;
+                        }
+                        if dec.t.msac.overrun() {
+                            row_err = Some(Error::Truncated);
+                            break;
+                        }
+                        c += sb4;
+                    }
+                    if let Some(e) = row_err {
+                        if first_err.as_ref().is_none_or(|(k, _)| key < *k) {
+                            first_err = Some((key, e));
+                        }
+                        break;
+                    }
+                }
+                cdf = Some(ts.cdf);
+            }
+        }
+        if let Some(c) = cdf {
+            self.cdfs.push(c);
+        }
+        if let Some((_, e)) = first_err {
+            return Err(e);
+        }
+        self.finish_direct(sink)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -639,6 +1561,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         let next_job = AtomicUsize::new(0);
         let min_failed_key = AtomicUsize::new(usize::MAX);
 
+        let mut panicked = false;
         let worker_results: Vec<
             Vec<(
                 usize,
@@ -656,7 +1579,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                             break;
                         }
                         let (tr, tc) = tile_jobs[idx];
-                        let data = fd.tiles[tr * ti.cols + tc];
+                        let data = fd.tiles()[tr * ti.cols + tc];
                         let res = Self::decode_tile_unit(
                             f,
                             dsp,
@@ -687,7 +1610,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                     break;
                 }
                 let (tr, tc) = tile_jobs[idx];
-                let data = fd.tiles[tr * ti.cols + tc];
+                let data = fd.tiles()[tr * ti.cols + tc];
                 let res = Self::decode_tile_unit(
                     f,
                     dsp,
@@ -711,10 +1634,16 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
             let mut all = Vec::with_capacity(num_workers);
             all.push(main_out);
             for h in handles {
-                all.push(h.join().unwrap());
+                match h.join() {
+                    Ok(out) => all.push(out),
+                    Err(_) => panicked = true,
+                }
             }
             all
         });
+        if panicked {
+            return Err(Error::Invalid("decoding thread panicked"));
+        }
 
         let mut tile_grid: Vec<Vec<Option<FrameState<T>>>> = (0..ti.rows)
             .map(|_| (0..ti.cols).map(|_| None).collect())
@@ -909,24 +1838,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
             }
         }
         if self.direct {
-            let planes = (0..self.f.num_planes)
-                .map(|p| {
-                    let w = std::mem::replace(&mut self.s.planes[p], PlaneWin::new(0, 0));
-                    debug_assert!(
-                        w.y0 == 0 && w.rows >= self.out_h[p] && w.stride >= self.out_w[p]
-                    );
-                    let stride = w.stride;
-                    let (data, offset) = w.into_raw();
-                    crate::decoder::av1::sink::Plane {
-                        width: self.out_w[p],
-                        height: self.out_h[p],
-                        stride,
-                        offset,
-                        data,
-                    }
-                })
-                .collect();
-            sink.finish(planes)?;
+            self.finish_direct(sink)?;
         }
         Ok(())
     }
@@ -972,15 +1884,15 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         let retain_rows = sb_r1.saturating_sub(retain_r0);
 
         let np = f.num_planes;
-        let mut planes = Vec::with_capacity(np);
+        let mut planes: [PlaneWin<T>; 3] = Default::default();
         let win_rows_luma = if !recon { 0 } else { (retain_rows + 2) * sb_px + 64 };
         for p in 0..np {
             let (sx, sy) = f.sub(p);
             let x0 = (mi_c0 * 4) >> sx;
             let y0 = (sb_r0 * sb_px) >> sy;
-            let stride = if recon { ((mi_cols_tile_al * 4) >> sx) + 64 } else { 0 };
+            let stride = if recon { ((mi_cols_tile_al * 4) >> sx).next_multiple_of(64) } else { 0 };
             let rows = if recon { (win_rows_luma >> sy) + 16 } else { 0 };
-            planes.push(PlaneWin::new_tile(stride, rows, x0, y0));
+            planes[p] = PlaneWin::new_tile(stride, rows, x0, y0);
         }
 
         let above_w = mi_cols_tile_al + 32;
@@ -990,12 +1902,13 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         let cdef_rows = (sb_r1.saturating_sub(sb_r0) * sb4) / 16 + 2;
         let cdef_stride = mi_cols_tile_al / 16 + 2;
 
+        let mut above = AboveCtx::default();
+        above.reset(mi_c0, above_w, np, fh.allow_screen_content_tools);
         let mut tile_s = FrameState {
             planes,
             // No deblocking runs while decoding the tile, so `planes[p]` holds
             // unfiltered rows directly and `above_line` is not needed.
-            above_line: vec![Vec::new(); np],
-            above_line_y: [0; 3],
+            above_line: Default::default(),
             mi: MiWin::new_tile(
                 mi_cols_tile_al + 32,
                 mi_rows,
@@ -1008,12 +1921,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 deblock && fh.delta_lf_present && recon,
                 intrabc,
             ),
-            above: AboveCtx {
-                col0: mi_c0,
-                level: [vec![0; above_w], vec![0; above_w], vec![0; above_w]],
-                dc: [vec![0; above_w], vec![0; above_w], vec![0; above_w]],
-                palette: [vec![[0; 8]; above_w], vec![[0; 8]; above_w]],
-            },
+            above,
             left: LeftCtx::new(),
             cdef_idx: vec![-1; cdef_rows * cdef_stride],
             cdef_stride,
@@ -1024,7 +1932,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 LrPlane::new(fh, 1, f.ss_x, f.ss_y),
                 LrPlane::new(fh, 2, f.ss_x, f.ss_y),
             ],
-            cfl_ac: Box::new([0; crate::decoder::av1::dsp::ipred::MAX_CFL_AC]),
+            cfl_ac: [0; crate::decoder::av1::dsp::ipred::MAX_CFL_AC],
             edges: crate::decoder::av1::dsp::ipred::IntraEdges::default(),
             ipred: [IntraSetup::new(f, 0), IntraSetup::new(f, 1)],
         };
@@ -1091,15 +1999,8 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
 
     /// Called after superblock row `r` has been reconstructed.
     fn after_decode_row(&mut self, r: usize) -> Result<()> {
+        self.save_above_line(r);
         let f = &self.f;
-        // Save the unfiltered bottom row for intra prediction of row r + 1.
-        for p in 0..f.num_planes {
-            let sy = f.sub(p).1;
-            let y = (((r + 1) * f.sb_px) >> sy) - 1;
-            let y = y.min(self.s.planes[p].y0 + self.s.planes[p].rows - 1);
-            self.s.above_line[p].copy_from_slice(self.s.planes[p].row(y));
-            self.s.above_line_y[p] = y;
-        }
         if self.deblock && r >= self.post_start {
             deblock::deblock_rows(
                 f,
@@ -1109,10 +2010,25 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 (r + 1) * f.sb4,
                 self.col_range,
                 &self.dsp,
-                &mut self.lf_grid,
+                self.lf_grid,
             );
         }
         Ok(())
+    }
+
+    /// Saves the unfiltered bottom row of superblock row `r` for intra
+    /// prediction of row r + 1 (if `above_line` is used).
+    fn save_above_line(&mut self, r: usize) {
+        let f = &self.f;
+        if r + 1 < self.row_end && !self.s.above_line[0].is_empty() {
+            for p in 0..f.num_planes {
+                let sy = f.sub(p).1;
+                let y = (((r + 1) * f.sb_px) >> sy) - 1;
+                let y = y.min(self.s.planes[p].y0 + self.s.planes[p].rows - 1);
+                let row = &self.s.planes[p].row(y)[..self.mi_w[p]];
+                self.s.above_line[p][..row.len()].copy_from_slice(row);
+            }
+        }
     }
 
     /// CDEF, superres and loop restoration after superblock row `r` has
@@ -1142,7 +2058,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         // Save the deblocked rows around the LR stripe boundaries that CDEF
         // reaches in this step (all of them are final after deblocking row
         // `r`: boundary `k` covers luma rows `64k - 10..64k - 6`).
-        if self.lr {
+        if self.lr && (!self.direct || self.cdef || self.superres || self.intrabc) {
             let lim = (f.mi_rows * 4).min((r + 1) * sb_px);
             loop {
                 let k = self.next_bound;
@@ -1215,7 +2131,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 &s.mi,
                 |r, c| cdef_idx[(r >> 4) * cs + (c >> 4)],
                 &mut s.planes,
-                &mut self.cdef_srcs,
+                self.cdef_srcs,
                 &self.cdef_line[cur],
                 &ranges[..np],
                 &dims[..np],
@@ -1242,25 +2158,27 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
             }
         }
         // Emit finished stripes.
-        let done_luma = if last { usize::MAX } else { lum1 };
-        let frame_h = f.fh.frame_height.min(self.rows_end);
-        loop {
-            let k = self.next_stripe;
-            let start = (64 * k).saturating_sub(8);
-            if start >= frame_h {
-                break;
-            }
-            let end = (64 * k + 56).min(frame_h);
-            if end > done_luma {
-                break;
-            }
-            self.emit_stripe(k, sink)?;
-            self.next_stripe += 1;
-            while let Some(b) = self.lr_bounds.front() {
-                if b.k < self.next_stripe {
-                    self.lr_free.push(self.lr_bounds.pop_front().unwrap());
-                } else {
+        if !self.direct || self.lr || (!self.intrabc && sink.wants_rows_final()) {
+            let done_luma = if last { usize::MAX } else { lum1 };
+            let frame_h = f.fh.frame_height.min(self.rows_end);
+            loop {
+                let k = self.next_stripe;
+                let start = (64 * k).saturating_sub(8);
+                if start >= frame_h {
                     break;
+                }
+                let end = (64 * k + 56).min(frame_h);
+                if end > done_luma {
+                    break;
+                }
+                self.emit_stripe(k, sink)?;
+                self.next_stripe += 1;
+                while let Some(b) = self.lr_bounds.front() {
+                    if b.k < self.next_stripe {
+                        self.lr_free.push(self.lr_bounds.pop_front().unwrap());
+                    } else {
+                        break;
+                    }
                 }
             }
         }
@@ -1291,36 +2209,62 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         let lr_on =
             |p: usize| self.lr && f.fh.lr.frame_restoration_type[p] != RestorationType::None;
         if self.direct {
-            // Restore in place; the planes are the output.
             for p in (0..np).filter(|&p| lr_on(p)) {
+                let g = &geoms[p];
                 let above = self.lr_bounds.iter().find(|b| b.k == k).map(|b| &b.rows[p]);
                 let below = self
                     .lr_bounds
                     .iter()
                     .find(|b| b.k == k + 1)
                     .map(|b| &b.rows[p]);
-                lr_apply::lr_stripe_in_place(
-                    &self.s.lr[p],
-                    &geoms[p],
-                    &mut self.s.planes[p],
-                    above,
-                    below,
-                    &mut self.lr_scratch,
-                    &mut self.lr_left,
-                    f.sub(p).1,
-                    f.bd,
-                    &self.dsp,
-                );
+                if self.intrabc {
+                    lr_apply::lr_stripe_in_place(
+                        &self.s.lr[p],
+                        g,
+                        &mut self.s.planes[p],
+                        above,
+                        below,
+                        &mut self.lr_scratch,
+                        f.sub(p).1,
+                        f.bd,
+                        &self.dsp,
+                    );
+                } else {
+                    let y_first = g.start_y.max(0) as usize;
+                    let stride = self.lr_out_planes[p].stride;
+                    let out = &mut self.lr_out_planes[p].data_mut()[y_first * stride..];
+                    lr_apply::lr_stripe(
+                        &self.s.lr[p],
+                        g,
+                        &self.s.planes[p],
+                        above,
+                        below,
+                        out,
+                        stride,
+                        &mut self.lr_scratch,
+                        f.sub(p).1,
+                        f.bd,
+                        (0, usize::MAX),
+                        &self.dsp,
+                    );
+                }
             }
             // Intra block copy reads unfiltered samples of the whole frame.
-            if !self.intrabc {
+            if !self.intrabc && sink.wants_rows_final() {
                 let y_end = (64 * k + 56).min(geoms[0].plane_h);
-                let strides: Vec<usize> = self.s.planes[..np].iter().map(|w| w.stride).collect();
-                let mut refs: Vec<&mut [T]> = self.s.planes[..np]
-                    .iter_mut()
-                    .map(|w| w.data_mut())
-                    .collect();
-                sink.rows_final(&mut refs, &strides, y_end);
+                let mut strides = [0usize; 3];
+                let (s0, s12) = self.s.planes.split_at_mut(1);
+                let (s1, s2) = s12.split_at_mut(1);
+                let (l0, l12) = self.lr_out_planes.split_at_mut(1);
+                let (l1, l2) = l12.split_at_mut(1);
+                let p0 = if lr_on(0) { &mut l0[0] } else { &mut s0[0] };
+                let p1 = if lr_on(1) { &mut l1[0] } else { &mut s1[0] };
+                let p2 = if lr_on(2) { &mut l2[0] } else { &mut s2[0] };
+                strides[0] = p0.stride;
+                strides[1] = p1.stride;
+                strides[2] = p2.stride;
+                let mut refs = [p0.data_mut(), p1.data_mut(), p2.data_mut()];
+                sink.rows_final(&mut refs[..np], &strides[..np], y_end);
             }
             return Ok(());
         }
@@ -1358,7 +2302,29 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 &self.dsp,
             );
         }
-        let mut bands = Vec::with_capacity(np);
+        let mut bands = [
+            PlaneRows {
+                y0: 0,
+                h: 0,
+                w: 0,
+                data: &[],
+                stride: 0,
+            },
+            PlaneRows {
+                y0: 0,
+                h: 0,
+                w: 0,
+                data: &[],
+                stride: 0,
+            },
+            PlaneRows {
+                y0: 0,
+                h: 0,
+                w: 0,
+                data: &[],
+                stride: 0,
+            },
+        ];
         for p in 0..np {
             let g = &geoms[p];
             let y_first = g.start_y.max(0) as usize;
@@ -1371,15 +2337,1426 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 let src = if self.superres { &self.up[p] } else { &self.s.planes[p] };
                 (&src.data()[src.idx(0, y_first)..], src.stride)
             };
-            bands.push(PlaneRows {
+            bands[p] = PlaneRows {
                 y0: y_first,
                 h: y_last + 1 - y_first,
                 w: self.out_w[p],
                 data,
                 stride,
+            };
+        }
+        sink.push(&bands[..np])
+    }
+}
+
+/// Whether CDEF changes any sample (some strength of a used preset is
+/// non-zero).
+fn cdef_active(fh: &crate::decoder::av1::headers::FrameHeader) -> bool {
+    let cd = &fh.cdef;
+    let n = (1usize << cd.bits).min(8);
+    [
+        &cd.y_pri_strength,
+        &cd.y_sec_strength,
+        &cd.uv_pri_strength,
+        &cd.uv_sec_strength,
+    ]
+    .iter()
+    .any(|s| s[..n].iter().any(|&v| v != 0))
+}
+
+/// Luma rows above superblock row `r` in its row buffer of
+/// [`Pipeline::run_bands`] (copied from the row above before deblocking):
+/// deblocking reads 7 rows above the row, the band of the row starts 8
+/// rows above it and CDEF reads 2 more above that.
+const BAND_TOP: usize = 16;
+
+/// Luma rows `lum0..lum1` of the band of superblock row `r` in
+/// [`Pipeline::run_bands`]: the rows that are final once the row has been
+/// deblocked (all of it but its last [`POST_LAG`] rows, plus the last rows
+/// of the row above, like `Pipeline::post_row`).
+fn band_rows(r: usize, last: bool, sb_px: usize) -> (usize, usize) {
+    let start = |r: usize| if r == 0 { 0 } else { r * sb_px - POST_LAG };
+    (start(r), if last { (r + 1) * sb_px } else { start(r + 1) })
+}
+
+/// Loop restoration stripes `k0..=k1` restored in the band `lum0..lum1`
+/// (stripe `k` starts at luma row `64 * k - 8`).
+fn band_stripes(lum0: usize, lum1: usize, frame_h: usize) -> (usize, usize) {
+    let k0 = (lum0 + 8) / 64;
+    let mut k1 = k0;
+    while 64 * (k1 + 1) < lum1 + 8 && 64 * (k1 + 1) < frame_h + 8 {
+        k1 += 1;
+    }
+    (k0, k1)
+}
+
+/// Mode info rows `m0..m1` a band job keeps for superblock row `r`:
+/// deblocking reads the row above the superblock row (two luma rows for
+/// subsampled chroma), the band starts 2 rows above it.
+fn band_mi_rows(f: &FrameCtx, r: usize) -> (usize, usize) {
+    (
+        (r * f.sb4).saturating_sub(2),
+        ((r + 1) * f.sb4).min(f.mi_rows),
+    )
+}
+
+/// Sets up `dst` for the mode info rows of superblock row `r`
+/// ([`band_mi_rows`], whole frame width) with the same per-block arrays
+/// as `like`.
+fn reset_band_mi(dst: &mut MiWin, like: &MiWin, f: &FrameCtx, r: usize) {
+    let (m0, m1) = band_mi_rows(f, r);
+    dst.reset(
+        f.sb_cols * f.sb4 + 32,
+        (m1 - m0).next_power_of_two(),
+        0,
+        m0,
+        f.ss_x,
+        f.ss_y,
+        !like.lf_tx[0].is_empty(),
+        !like.lf_tx[1].is_empty(),
+        !like.delta_lf.is_empty(),
+        false,
+    );
+}
+
+/// Copies mode info rows `m0..m1`, columns `c0..c1` (luma 4x4 units, even)
+/// with their deblocking transform sizes and delta LF values from `src`
+/// to `dst` (which may start at other columns).
+#[allow(clippy::too_many_arguments)]
+fn copy_mi_rows(
+    dst: &mut MiWin,
+    src: &MiWin,
+    m0: usize,
+    m1: usize,
+    c0: usize,
+    c1: usize,
+    ss_x: usize,
+    ss_y: usize,
+) {
+    let n = c1 - c0;
+    let (dc, sc) = (c0 - dst.col0, c0 - src.col0);
+    for row in m0..m1 {
+        dst.row_mut(row)[dc..dc + n].copy_from_slice(&src.row(row)[sc..sc + n]);
+        if !src.lf_tx[0].is_empty() {
+            dst.lf_tx_row_mut(0, row)[dc..dc + n]
+                .copy_from_slice(&src.lf_tx_row(0, row)[sc..sc + n]);
+        }
+        if !src.delta_lf.is_empty() {
+            let (d, s) = (dst.idx(row, c0), src.idx(row, c0));
+            dst.delta_lf[d..d + n].copy_from_slice(&src.delta_lf[s..s + n]);
+        }
+    }
+    if !src.lf_tx[1].is_empty() {
+        let (dc, sc, n) = (dc >> ss_x, sc >> ss_x, (c1 >> ss_x) - (c0 >> ss_x));
+        for r4 in (m0 >> ss_y)..((m1 + ss_y) >> ss_y) {
+            dst.lf_tx_row_mut(1, r4)[dc..dc + n].copy_from_slice(&src.lf_tx_row(1, r4)[sc..sc + n]);
+        }
+    }
+}
+
+/// Copies the `cdef_idx` rows of the band of superblock row `r` (from the
+/// frame's `cdef_idx`, `bp.cdef_stride` wide) and the restoration unit rows
+/// of its stripes (from the frame's units `lr`) into `bb`.
+fn fill_band_meta<T: Pixel>(
+    f: &FrameCtx,
+    bp: &BandParams,
+    bb: &mut BandBufs<T>,
+    r: usize,
+    last: bool,
+    cdef_idx: &[i8],
+    lr: &[LrPlane; 3],
+) {
+    let (lum0, lum1) = band_rows(r, last, f.sb_px);
+    let (k0, k1) = band_stripes(lum0, lum1, bp.frame_h);
+    for p in (0..f.num_planes).filter(|&p| bp.lr_on[p]) {
+        let sy = f.sub(p).1;
+        let lp = &lr[p];
+        let dl = &mut bb.lr[p];
+        (dl.unit_size, dl.unit_rows, dl.unit_cols) = (lp.unit_size, lp.unit_rows, lp.unit_cols);
+        dl.units.resize(lp.units.len(), Default::default());
+        let mut prev_ur = usize::MAX;
+        for k in k0..=k1 {
+            // The unit row `lr_stripe` uses for stripe k.
+            let ur = (lp.unit_rows - 1).min(((64 * k) >> sy) / lp.unit_size);
+            if ur != prev_ur {
+                prev_ur = ur;
+                let row = ur * lp.unit_cols..(ur + 1) * lp.unit_cols;
+                dl.units[row.clone()].copy_from_slice(&lp.units[row]);
+            }
+        }
+    }
+    if bp.cdef {
+        let mi_row0 = lum0 / 4;
+        let mi_row1 = (lum1 / 4).min(f.mi_rows);
+        let (cr0, cr1) = (mi_row0 >> 4, ((mi_row1 - 1) >> 4) + 1);
+        let cs = bp.cdef_stride;
+        bb.cdef_idx.clear();
+        bb.cdef_idx.extend_from_slice(&cdef_idx[cr0 * cs..cr1 * cs]);
+        bb.cdef_r0 = cr0;
+    }
+}
+
+/// A decoded superblock row of [`Pipeline::run_bands`] waiting for the
+/// finishing stage.
+struct RowJob<T: Pixel> {
+    r: usize,
+    last: bool,
+    bufs: Box<BandBufs<T>>,
+}
+
+/// State of the sequential finishing stage of [`Pipeline::run_bands`]
+/// (see [`BandWorker::finish_row`]).
+struct FinishState<'o, T: Pixel> {
+    /// The last `BAND_TOP` deblocked rows of the previous row.
+    carry: [PlaneWin<T>; 3],
+    /// Saved stripe boundaries still needed by later bands.
+    bounds: VecDeque<std::sync::Arc<LrBoundary<T>>>,
+    /// Recycled stripe boundaries.
+    free_bounds: Vec<LrBoundary<T>>,
+    /// Next stripe boundary to save.
+    next_bound: usize,
+    /// The output plane rows below the bands handed out so far.
+    rest: [&'o mut [T]; 3],
+    /// Deblocking edge parameter scratch.
+    lf_grid: Vec<u8>,
+}
+
+enum BandTask<'o, T: Pixel> {
+    Finish(RowJob<T>),
+    Band(BandJob<'o, T>),
+    /// Decoding unit (see [`UnitRunner`]).
+    Unit(usize),
+}
+
+/// Producer of the rows of a [`BandPipeline`] that runs on the workers:
+/// decoding units `0..n` (handed out in order) that queue the decoded rows
+/// in order with [`BandPipeline::push_row`].
+trait UnitRunner<'o, T: Pixel>: Sync {
+    /// Runs unit `u`; returns false (after recording the error) if it
+    /// failed, which stops handing out units.
+    fn run_unit(
+        &self,
+        w: &mut BandWorker<'_, T>,
+        bp: &BandParams,
+        u: usize,
+        pipe: &BandPipeline<'o, T>,
+    ) -> bool;
+}
+
+struct BandQueue<'o, T: Pixel> {
+    /// Decoded rows, in order.
+    rows: VecDeque<RowJob<T>>,
+    /// A worker runs the finishing stage.
+    finishing: bool,
+    bands: VecDeque<BandJob<'o, T>>,
+    bands_running: usize,
+    /// Recycled buffers.
+    free: Vec<Box<BandBufs<T>>>,
+    /// Recycled stripe boundaries returned by completed bands.
+    free_bounds: Vec<LrBoundary<T>>,
+    /// No more rows will be queued.
+    closed: bool,
+    /// Decoding units: earliest unclaimed, total, running.
+    units_next: usize,
+    units: usize,
+    units_running: usize,
+    /// Unit `u` is only handed out once unit `u - units_after` is done.
+    units_after: usize,
+    units_claimed: Vec<bool>,
+    units_done: Vec<bool>,
+    /// A unit failed: no more units are handed out.
+    stop: bool,
+    /// Bands queued beyond this many are processed before new units.
+    band_backlog: usize,
+    /// A task panicked: the workers stop (see [`AbortOnPanic`]).
+    aborted: bool,
+}
+
+/// Unblocks the other workers of a [`BandPipeline`] if a task (or the
+/// thread feeding the pipeline, see [`Pipeline::run_bands`]) panics,
+/// instead of leaving them waiting forever for its result (the panic then
+/// propagates out of the thread scope).
+struct AbortOnPanic<'a, 'o, T: Pixel>(&'a BandPipeline<'o, T>);
+
+impl<T: Pixel> Drop for AbortOnPanic<'_, '_, T> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0
+                .q
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .aborted = true;
+            self.0.cv.notify_all();
+        }
+    }
+}
+
+/// Work queue of [`Pipeline::run_bands`]: decoded rows go through the
+/// finishing stage one at a time in order, the resulting bands are
+/// processed by any worker.
+struct BandPipeline<'o, T: Pixel> {
+    q: Mutex<BandQueue<'o, T>>,
+    cv: std::sync::Condvar,
+    fin: Mutex<FinishState<'o, T>>,
+}
+
+impl<'o, T: Pixel> BandPipeline<'o, T> {
+    fn with_pooled(
+        rest: [&'o mut [T]; 3],
+        free: Vec<Box<BandBufs<T>>>,
+        carry: [PlaneWin<T>; 3],
+        lf_grid: Vec<u8>,
+        free_bounds: Vec<LrBoundary<T>>,
+        band_backlog: usize,
+    ) -> Self {
+        Self {
+            q: Mutex::new(BandQueue {
+                rows: VecDeque::new(),
+                finishing: false,
+                bands: VecDeque::new(),
+                bands_running: 0,
+                free,
+                free_bounds: Vec::new(),
+                closed: false,
+                units_next: 0,
+                units: 0,
+                units_running: 0,
+                units_after: 0,
+                units_claimed: Vec::new(),
+                units_done: Vec::new(),
+                stop: false,
+                band_backlog,
+                aborted: false,
+            }),
+            cv: std::sync::Condvar::new(),
+            fin: Mutex::new(FinishState {
+                carry,
+                bounds: VecDeque::new(),
+                free_bounds,
+                next_bound: 1,
+                rest,
+                lf_grid,
+            }),
+        }
+    }
+
+    fn reclaim_into(
+        self,
+        free_out: &mut Vec<Box<BandBufs<T>>>,
+        carry_out: &mut [PlaneWin<T>; 3],
+        lf_grid_out: &mut Vec<u8>,
+        lr_free_out: &mut Vec<LrBoundary<T>>,
+    ) {
+        let mut q = self
+            .q
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for r in q.rows {
+            q.free.push(r.bufs);
+        }
+        for b in q.bands {
+            for arc in b.bounds {
+                if let Ok(bnd) = std::sync::Arc::try_unwrap(arc) {
+                    q.free_bounds.push(bnd);
+                }
+            }
+            match b.bufs {
+                BandBuf::Owned(bufs) => q.free.push(bufs),
+                BandBuf::Shared(arc) => {
+                    if let Ok(bufs) = std::sync::Arc::try_unwrap(arc) {
+                        q.free.push(bufs);
+                    }
+                }
+            }
+        }
+        *free_out = q.free;
+        let mut fin = self
+            .fin
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for arc in fin.bounds.drain(..) {
+            if let Ok(bnd) = std::sync::Arc::try_unwrap(arc) {
+                fin.free_bounds.push(bnd);
+            }
+        }
+        fin.free_bounds.append(&mut q.free_bounds);
+        *lr_free_out = fin.free_bounds;
+        *carry_out = fin.carry;
+        *lf_grid_out = fin.lf_grid;
+    }
+
+    /// Hands out decoding units `0..units` in order to the workers (instead
+    /// of rows being pushed from outside), unit `u` only once unit
+    /// `u - after` is done; the pipeline closes once all of them ran.
+    /// Bands queued beyond `band_backlog` go first.
+    fn set_units(&self, units: usize, after: usize, band_backlog: usize) {
+        let mut q = self
+            .q
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        q.units = units;
+        q.units_after = after;
+        q.units_claimed = vec![false; units];
+        q.units_done = vec![false; units];
+        q.band_backlog = band_backlog;
+        q.closed = units == 0;
+    }
+
+    /// Buffers for the next row (recycled if possible).
+    fn take_bufs(&self) -> Box<BandBufs<T>> {
+        self.q
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .free
+            .pop()
+            .unwrap_or_default()
+    }
+
+    /// Queues a decoded row; returns the number of queued/running rows and bands.
+    fn push_row(&self, job: RowJob<T>) -> usize {
+        let mut q = self
+            .q
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        q.rows.push_back(job);
+        let n = q.rows.len() + q.bands.len() + q.bands_running;
+        drop(q);
+        self.cv.notify_one();
+        n
+    }
+
+    /// No more rows will be queued.
+    fn close(&self) {
+        self.q
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .closed = true;
+        self.cv.notify_all();
+    }
+
+    /// The next task; with `wait`, blocks until there is one or all work
+    /// is done.
+    fn next(&self, wait: bool) -> Option<BandTask<'o, T>> {
+        let mut q = self
+            .q
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        loop {
+            if q.aborted {
+                return None;
+            }
+            if !q.finishing {
+                if let Some(row) = q.rows.pop_front() {
+                    q.finishing = true;
+                    return Some(BandTask::Finish(row));
+                }
+            }
+            while q.units_next < q.units && q.units_claimed[q.units_next] {
+                q.units_next += 1;
+            }
+            let u = q.units_next;
+            let after = q.units_after;
+            let unit = u < q.units && !q.stop && (u < after || q.units_done[u - after]);
+            if !unit || q.bands.len() > q.band_backlog {
+                if let Some(b) = q.bands.pop_front() {
+                    q.bands_running += 1;
+                    return Some(BandTask::Band(b));
+                }
+            }
+            if unit {
+                q.units_claimed[u] = true;
+                q.units_next += 1;
+                q.units_running += 1;
+                return Some(BandTask::Unit(u));
+            }
+            if !q.stop && u < q.units && after > 1 {
+                let row_end = ((u / after) + 1) * after;
+                let scan_end = row_end.min(q.units);
+                if let Some(u2) = (u + 1..scan_end)
+                    .find(|&i| !q.units_claimed[i] && (i < after || q.units_done[i - after]))
+                {
+                    q.units_claimed[u2] = true;
+                    q.units_running += 1;
+                    return Some(BandTask::Unit(u2));
+                }
+            }
+            if !wait || (q.closed && q.rows.is_empty() && !q.finishing) {
+                return None;
+            }
+            q = self
+                .cv
+                .wait(q)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
+    fn run(
+        &self,
+        w: &mut BandWorker<'_, T>,
+        bp: &BandParams,
+        task: BandTask<'o, T>,
+        units: Option<&dyn UnitRunner<'o, T>>,
+    ) {
+        let _abort = AbortOnPanic(self);
+        match task {
+            BandTask::Unit(u) => {
+                let ok = units.is_some_and(|units| units.run_unit(w, bp, u, self));
+                let mut q = self
+                    .q
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                q.units_running -= 1;
+                q.units_done[u] = true;
+                q.stop |= !ok;
+                while q.units_next < q.units && q.units_claimed[q.units_next] {
+                    q.units_next += 1;
+                }
+                if (q.stop || q.units_next == q.units) && q.units_running == 0 {
+                    q.closed = true;
+                }
+                drop(q);
+                self.cv.notify_all();
+            }
+            BandTask::Finish(row) => {
+                let mut fin = self
+                    .fin
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut new_bands = Vec::with_capacity(3);
+                w.finish_row(bp, &mut fin, row, &mut new_bands);
+                let mut q = self
+                    .q
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if !q.free_bounds.is_empty() {
+                    fin.free_bounds.append(&mut q.free_bounds);
+                }
+                drop(fin);
+                q.bands.extend(new_bands);
+                q.finishing = false;
+                drop(q);
+                self.cv.notify_all();
+            }
+            BandTask::Band(mut b) => {
+                w.process(bp, &mut b);
+                let BandJob { bufs, bounds, .. } = b;
+                let mut q = self
+                    .q
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                q.bands_running -= 1;
+                for arc in bounds {
+                    if let Ok(bnd) = std::sync::Arc::try_unwrap(arc) {
+                        q.free_bounds.push(bnd);
+                    }
+                }
+                match bufs {
+                    BandBuf::Owned(bufs) => q.free.push(bufs),
+                    BandBuf::Shared(arc) => {
+                        if let Ok(bufs) = std::sync::Arc::try_unwrap(arc) {
+                            q.free.push(bufs);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Runs tasks until all work is done (`help`: finishes any queued rows
+    /// and runs bands while backlog exceeds `band_backlog`, without waiting).
+    /// `units` runs the decoding units, if any.
+    fn work(
+        &self,
+        w: &mut BandWorker<'_, T>,
+        bp: &BandParams,
+        help: bool,
+        units: Option<&dyn UnitRunner<'o, T>>,
+    ) {
+        // Also covers panics outside of `run` (in `next`).
+        let _abort = AbortOnPanic(self);
+        if help {
+            loop {
+                let t = {
+                    let mut q = self
+                        .q
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if q.aborted {
+                        None
+                    } else if !q.finishing && !q.rows.is_empty() {
+                        q.finishing = true;
+                        q.rows.pop_front().map(BandTask::Finish)
+                    } else if q.bands.len() > q.band_backlog {
+                        q.bands_running += 1;
+                        q.bands.pop_front().map(BandTask::Band)
+                    } else {
+                        None
+                    }
+                };
+                let Some(t) = t else { break };
+                self.run(w, bp, t, units);
+            }
+            return;
+        }
+        while let Some(t) = self.next(true) {
+            self.run(w, bp, t, units);
+        }
+    }
+}
+
+/// Owned buffers of one post-filter band (see [`Pipeline::run_bands`]),
+/// recycled between bands.
+#[derive(Default)]
+struct BandBufs<T: Pixel> {
+    /// The row buffer superblock row `r` was decoded and deblocked in:
+    /// luma rows `r * sb_px - BAND_TOP .. (r + 1) * sb_px` (from 0 for the
+    /// first row), which contain the band's rows and their CDEF borders.
+    planes: [PlaneWin<T>; 3],
+    /// The 2 rows above the band (pre-CDEF).
+    above: [[Vec<T>; 2]; 3],
+    /// Mode info rows of the band.
+    mi: MiWin,
+    /// `cdef_idx` rows of the band (`cdef_stride` wide, from 64x64 row
+    /// `cdef_r0`).
+    cdef_idx: Vec<i8>,
+    cdef_r0: usize,
+    /// Loop restoration units (only the unit rows of the band's stripes
+    /// are filled in).
+    lr: [LrPlane; 3],
+}
+
+enum BandBuf<T: Pixel> {
+    Owned(Box<BandBufs<T>>),
+    Shared(std::sync::Arc<Box<BandBufs<T>>>),
+}
+
+/// One band of output rows `lum0..lum1` (luma) post-filtered by a worker:
+/// CDEF in `bufs.planes`, then loop restoration (or a copy) into `out`
+/// (the output planes' rows of the band).
+struct BandJob<'o, T: Pixel> {
+    lum0: usize,
+    lum1: usize,
+    bufs: BandBuf<T>,
+    /// Loop restoration boundaries `k0..=k1 + 1` of the band's stripes
+    /// `k0..=k1` that exist.
+    bounds: Vec<std::sync::Arc<LrBoundary<T>>>,
+    out: [&'o mut [T]; 3],
+}
+
+/// Frame constants needed by the band workers.
+#[derive(Clone, Copy)]
+struct BandParams {
+    deblock: bool,
+    cdef: bool,
+    lr: bool,
+    lr_on: [bool; 3],
+    mi_w: [usize; 3],
+    mi_h: [usize; 3],
+    out_w: [usize; 3],
+    out_h: [usize; 3],
+    out_stride: [usize; 3],
+    cdef_stride: usize,
+    frame_h: usize,
+    col_range: (usize, usize),
+}
+
+struct BandWorker<'a, T: Pixel> {
+    f: FrameCtx<'a>,
+    dsp: crate::decoder::av1::dsp::Dsp<T>,
+    cdef_srcs: [CdefSrc; 3],
+    scratch: Vec<T>,
+}
+
+impl<'a, T: Pixel> BandWorker<'a, T> {
+    fn new(fd: &'a FrameData) -> Self {
+        let f = FrameCtx::new(&fd.seq, &fd.frame);
+        let dsp = crate::decoder::av1::dsp::Dsp::new(f.bd);
+        Self {
+            f,
+            dsp,
+            cdef_srcs: Default::default(),
+            scratch: Vec::new(),
+        }
+    }
+
+    /// The finishing stage of row `job.r` (rows in order): fills the rows
+    /// above the superblock row into its buffer from the previous row,
+    /// deblocks the row, keeps its last rows for the next one and saves the
+    /// stripe boundaries that became final. Pushes the row's band(s), with
+    /// their rows of the output planes taken from `fs.rest`.
+    fn finish_row<'o>(
+        &mut self,
+        bp: &BandParams,
+        fs: &mut FinishState<'o, T>,
+        job: RowJob<T>,
+        out_bands: &mut Vec<BandJob<'o, T>>,
+    ) {
+        let f = &self.f;
+        let np = f.num_planes;
+        let (sb_px, sb4) = (f.sb_px, f.sb4);
+        let RowJob { r, last, mut bufs } = job;
+        let (lum0, lum1) = band_rows(r, last, sb_px);
+        let (k0, k1) = band_stripes(lum0, lum1, bp.frame_h);
+        let b = &mut *bufs;
+        if r > 0 {
+            for p in 0..np {
+                let (c, w) = (&fs.carry[p], bp.mi_w[p]);
+                for y in c.y0..c.y0 + c.rows {
+                    b.planes[p].row_mut(y)[..w].copy_from_slice(&c.row(y)[..w]);
+                }
+            }
+        }
+        if bp.deblock {
+            deblock::deblock_rows(
+                f,
+                &b.mi,
+                &mut b.planes[..np],
+                r * sb4,
+                (r + 1) * sb4,
+                bp.col_range,
+                &self.dsp,
+                &mut fs.lf_grid,
+            );
+        }
+        for p in 0..np {
+            let sy = f.sub(p).1;
+            let w = bp.mi_w[p];
+            let pl = &b.planes[p];
+            if !last {
+                let y0 = ((r + 1) * sb_px - BAND_TOP) >> sy;
+                let n = BAND_TOP >> sy;
+                fs.carry[p].reset(pl.stride, n, 0, y0);
+                for y in y0..y0 + n {
+                    fs.carry[p].row_mut(y)[..w].copy_from_slice(&pl.row(y)[..w]);
+                }
+            }
+            let y0 = lum0 >> sy;
+            if bp.cdef && y0 >= 2 {
+                for (i, a) in b.above[p].iter_mut().enumerate() {
+                    a.clear();
+                    a.extend_from_slice(&pl.row(y0 - 2 + i)[..w]);
+                }
+            }
+        }
+        if bp.lr {
+            let lim = (f.mi_rows * 4).min((r + 1) * sb_px);
+            loop {
+                let k = fs.next_bound;
+                if 64 * k - 8 >= lim || (!last && 64 * k - 10 >= lum1) {
+                    break;
+                }
+                let mut bnd = fs.free_bounds.pop().unwrap_or_else(|| LrBoundary {
+                    k: 0,
+                    rows: Default::default(),
+                });
+                bnd.k = k;
+                for p in (0..np).filter(|&p| bp.lr_on[p]) {
+                    let sy = f.sub(p).1;
+                    let y = (64 * k - 8) >> sy;
+                    let w = bp.out_w[p];
+                    for (i, dst) in bnd.rows[p].iter_mut().enumerate() {
+                        let y = (y + i - 2).min(bp.mi_h[p] - 1);
+                        dst.clear();
+                        dst.extend_from_slice(&b.planes[p].row(y)[..w]);
+                    }
+                }
+                fs.bounds.push_back(std::sync::Arc::new(bnd));
+                fs.next_bound += 1;
+            }
+        }
+        if !bp.cdef && k1 > k0 {
+            let shared = std::sync::Arc::new(bufs);
+            for k in k0..=k1 {
+                let sub_lum0 = if k == k0 { lum0 } else { 64 * k - 8 };
+                let sub_lum1 = if k == k1 { lum1 } else { 64 * (k + 1) - 8 };
+                let is_last_sub = last && k == k1;
+                let bounds = fs
+                    .bounds
+                    .iter()
+                    .filter(|b| b.k >= k && b.k <= k + 1)
+                    .cloned()
+                    .collect();
+                let mut out: [&'o mut [T]; 3] = Default::default();
+                for p in 0..np {
+                    let sy = f.sub(p).1;
+                    let rows =
+                        if is_last_sub { usize::MAX } else { (sub_lum1 >> sy) - (sub_lum0 >> sy) };
+                    let all = std::mem::take(&mut fs.rest[p]);
+                    let n = rows.saturating_mul(bp.out_stride[p]).min(all.len());
+                    let (band, tail) = all.split_at_mut(n);
+                    out[p] = band;
+                    fs.rest[p] = tail;
+                }
+                out_bands.push(BandJob {
+                    lum0: sub_lum0,
+                    lum1: sub_lum1,
+                    bufs: BandBuf::Shared(shared.clone()),
+                    bounds,
+                    out,
+                });
+            }
+        } else {
+            let bounds = fs
+                .bounds
+                .iter()
+                .filter(|b| b.k >= k0 && b.k <= k1 + 1)
+                .cloned()
+                .collect();
+            let mut out: [&'o mut [T]; 3] = Default::default();
+            for p in 0..np {
+                let sy = f.sub(p).1;
+                let rows = if last { usize::MAX } else { (lum1 >> sy) - (lum0 >> sy) };
+                let all = std::mem::take(&mut fs.rest[p]);
+                let n = rows.saturating_mul(bp.out_stride[p]).min(all.len());
+                let (band, tail) = all.split_at_mut(n);
+                out[p] = band;
+                fs.rest[p] = tail;
+            }
+            out_bands.push(BandJob {
+                lum0,
+                lum1,
+                bufs: BandBuf::Owned(bufs),
+                bounds,
+                out,
             });
         }
-        sink.push(&bands)
+        while fs.bounds.front().is_some_and(|b| b.k <= k1) {
+            if let Some(arc) = fs.bounds.pop_front() {
+                if let Ok(bnd) = std::sync::Arc::try_unwrap(arc) {
+                    fs.free_bounds.push(bnd);
+                }
+            }
+        }
+    }
+
+    fn process(&mut self, bp: &BandParams, job: &mut BandJob<'_, T>) {
+        let f = &self.f;
+        let np = f.num_planes;
+        let (lum0, lum1) = (job.lum0, job.lum1);
+        let mut ranges = [(0usize, 0usize); 3];
+        for p in 0..np {
+            let sy = f.sub(p).1;
+            ranges[p] = (lum0 >> sy, (lum1 >> sy).min(bp.mi_h[p]));
+        }
+        // Shared buffers are only built without CDEF.
+        debug_assert!(!bp.cdef || matches!(job.bufs, BandBuf::Owned(_)));
+        if let (true, BandBuf::Owned(b)) = (bp.cdef, &mut job.bufs) {
+            let b = &mut **b;
+            let mut dims = [(0usize, 0usize); 3];
+            for p in 0..np {
+                dims[p] = (bp.mi_w[p], bp.mi_h[p]);
+            }
+            let (idx, cs, r0) = (&b.cdef_idx, bp.cdef_stride, b.cdef_r0);
+            cdef_apply::cdef_sbrow(
+                f,
+                &b.mi,
+                |r, c| idx[((r >> 4) - r0) * cs + (c >> 4)],
+                &mut b.planes[..np],
+                &mut self.cdef_srcs,
+                &b.above[..np],
+                &ranges[..np],
+                &dims[..np],
+                lum0 / 4,
+                lum1 / 4,
+                (0, f.sb_cols * f.sb4),
+                &self.dsp,
+            );
+        }
+        let b: &BandBufs<T> = match &job.bufs {
+            BandBuf::Owned(b) => b,
+            BandBuf::Shared(b) => b,
+        };
+        for p in 0..np {
+            let sy = f.sub(p).1;
+            let stride = bp.out_stride[p];
+            let oy0 = lum0 >> sy;
+            let out = &mut *job.out[p];
+            if !bp.lr_on[p] {
+                let y1 = ranges[p].1.min(bp.out_h[p]);
+                let w = bp.out_w[p];
+                for y in oy0..y1 {
+                    let d = (y - oy0) * stride;
+                    out[d..d + w].copy_from_slice(&b.planes[p].row(y)[..w]);
+                }
+                continue;
+            }
+            let mut k = (lum0 + 8) / 64;
+            while 64 * k < lum1 + 8 && 64 * k < bp.frame_h + 8 {
+                let start_y = (64 * k as isize - 8) >> sy;
+                let g = StripeGeom {
+                    start_y,
+                    end_y: start_y + (64 >> sy) - 1,
+                    plane_w: bp.out_w[p],
+                    plane_h: bp.out_h[p],
+                };
+                let y_first = start_y.max(0) as usize;
+                let above = job.bounds.iter().find(|b| b.k == k).map(|b| &b.rows[p]);
+                let below = job.bounds.iter().find(|b| b.k == k + 1).map(|b| &b.rows[p]);
+                lr_apply::lr_stripe(
+                    &b.lr[p],
+                    &g,
+                    &b.planes[p],
+                    above,
+                    below,
+                    &mut out[(y_first - oy0) * stride..],
+                    stride,
+                    &mut self.scratch,
+                    sy,
+                    f.bd,
+                    (0, usize::MAX),
+                    &self.dsp,
+                );
+                k += 1;
+            }
+        }
+    }
+}
+
+/// Persistent decoding state of one tile column in
+/// [`Pipeline::run_tiles_bands`] (set up anew at every tile row).
+struct TileCtx<'d, T: Pixel> {
+    /// Tile row the state is set up for (`usize::MAX`: none yet).
+    tr: usize,
+    ts: Option<TileState<'d>>,
+    cdf: Option<Box<CdfContext>>,
+    s: FrameState<T>,
+    sc: Scratch,
+}
+
+impl<'d, T: Pixel> TileCtx<'d, T> {
+    fn from_worker(w: TileWorker<T>) -> Self {
+        Self {
+            tr: usize::MAX,
+            ts: None,
+            cdf: w.cdf,
+            s: w.s,
+            sc: w.sc,
+        }
+    }
+
+    fn into_worker(mut self) -> TileWorker<T> {
+        if let Some(ts) = self.ts.take() {
+            self.cdf = Some(ts.cdf);
+        }
+        TileWorker {
+            s: self.s,
+            sc: self.sc,
+            cdf: self.cdf,
+        }
+    }
+
+    /// Decodes superblock row `r` of tile `(tr, tc)` (coded in `data`) into
+    /// `self.s`: planes one superblock row high (the unfiltered last row
+    /// is kept in `above_line` for the next row), mode info with the
+    /// deblocking arrays `mi_arrays` (luma / chroma transform sizes, delta
+    /// LF), a tile local `cdef_idx` (if `cdef`) and frame sized
+    /// restoration units of which the tile fills its own.
+    #[allow(clippy::too_many_arguments)]
+    fn decode_row(
+        &mut self,
+        f: &FrameCtx,
+        dsp: &crate::decoder::av1::dsp::Dsp<T>,
+        data: &'d [u8],
+        mi_arrays: (bool, bool, bool),
+        cdef: bool,
+        tr: usize,
+        tc: usize,
+        r: usize,
+    ) -> Result<()> {
+        let fh = f.fh;
+        let ti = &fh.tile_info;
+        let np = f.num_planes;
+        let (sb4, sb_px) = (f.sb4, f.sb_px);
+        let (mi_r0, mi_r1) = (ti.mi_row_starts[tr], ti.mi_row_starts[tr + 1]);
+        let (mi_c0, mi_c1) = (ti.mi_col_starts[tc], ti.mi_col_starts[tc + 1]);
+        let (sb_r0, sb_r1) = (mi_r0 / sb4, mi_r1.div_ceil(sb4));
+        let tile_mi_al = (mi_c1 - mi_c0).div_ceil(sb4) * sb4;
+        let s = &mut self.s;
+        if self.tr != tr {
+            for p in 0..np {
+                let (sx, sy) = f.sub(p);
+                let stride = ((tile_mi_al * 4) >> sx).next_multiple_of(64);
+                s.planes[p].reset(
+                    stride,
+                    sb_px >> sy,
+                    (mi_c0 * 4) >> sx,
+                    (sb_r0 * sb_px) >> sy,
+                );
+                s.above_line[p].resize(stride + 64, T::default());
+            }
+            let (lf_y, lf_uv, dlf) = mi_arrays;
+            s.mi.reset(
+                tile_mi_al + 32,
+                2 * sb4,
+                mi_c0,
+                (sb_r0 * sb4).saturating_sub(sb4),
+                f.ss_x,
+                f.ss_y,
+                lf_y,
+                lf_uv,
+                dlf,
+                false,
+            );
+            s.above
+                .reset(mi_c0, tile_mi_al + 32, np, fh.allow_screen_content_tools);
+            s.cdef_idx.clear();
+            (s.cdef_stride, s.cdef_row0, s.cdef_col0) = (0, 0, 0);
+            if cdef {
+                (s.cdef_stride, s.cdef_row0, s.cdef_col0) =
+                    (tile_mi_al / 16 + 2, sb_r0 * sb4 / 16, mi_c0 / 16);
+                s.cdef_idx
+                    .resize(((sb_r1 - sb_r0) * sb4 / 16 + 2) * s.cdef_stride, -1);
+            }
+            for (p, lp) in s.lr.iter_mut().enumerate() {
+                if fh.lr.uses_lr && p < np {
+                    lp.reset(fh, p, f.ss_x, f.ss_y);
+                } else {
+                    lp.units.clear();
+                }
+            }
+            s.ipred = [IntraSetup::new(f, 0), IntraSetup::new(f, 1)];
+            if let Some(ts) = self.ts.take() {
+                self.cdf = Some(ts.cdf);
+            }
+            self.ts = Some(TileState::with_cdf(
+                data,
+                fh,
+                (mi_r0, mi_r1),
+                (mi_c0, mi_c1),
+                self.cdf.take(),
+            ));
+            self.tr = tr;
+        }
+        let Some(ts) = self.ts.as_mut() else {
+            return Err(Error::Invalid("tile state not set up"));
+        };
+        let (mi_row, sb_y) = (r * sb4, r * sb_px);
+        s.mi.slide_to(mi_row.saturating_sub(sb4));
+        for p in 0..np {
+            s.planes[p].y0 = sb_y >> f.sub(p).1;
+        }
+        s.left.clear();
+        s.set_sb_y(f, sb_y);
+        let mut dec = SbDecoder {
+            f,
+            t: ts,
+            s: &mut *s,
+            sc: &mut self.sc,
+            dsp,
+            b: Default::default(),
+            recon: true,
+            sb_y,
+            read_deltas: false,
+            plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+        };
+        let mut c = mi_c0;
+        while c < mi_c1 {
+            dec.decode_sb(mi_row, c)?;
+            if dec.t.msac.overrun() {
+                return Err(Error::Truncated);
+            }
+            c += sb4;
+        }
+        if r + 1 < sb_r1 {
+            for p in 0..np {
+                let (sx, sy) = f.sub(p);
+                let y = ((sb_y + sb_px) >> sy) - 1;
+                let w = ((mi_c1 * 4) >> sx) - ((mi_c0 * 4) >> sx);
+                let row = &s.planes[p].row(y)[..w];
+                s.above_line[p][..w].copy_from_slice(row);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A superblock row of [`Pipeline::run_tiles_bands`] being assembled from
+/// its tiles.
+struct RowSlot<T: Pixel> {
+    bufs: Option<Box<BandBufs<T>>>,
+    /// Tiles still to be copied in.
+    remaining: usize,
+}
+
+/// Completed rows of [`Pipeline::run_tiles_bands`] waiting to be queued in
+/// order.
+struct RowOrder<T: Pixel> {
+    next: usize,
+    ready: Vec<Option<Box<BandBufs<T>>>>,
+    /// The last 2 mode info rows of the last queued row (the rows above
+    /// the next one).
+    carry: MiWin,
+}
+
+/// Frame level `cdef_idx` and restoration units assembled from the tiles.
+struct TileMeta {
+    cdef_idx: Vec<i8>,
+    lr: [LrPlane; 3],
+}
+
+/// The decoding units of [`Pipeline::run_tiles_bands`]: unit `u` decodes
+/// superblock row `u / tile_cols` of tile column `u % tile_cols`.
+struct TileJobs<'d, T: Pixel> {
+    fd: &'d FrameData<'d>,
+    ctxs: Vec<Mutex<TileCtx<'d, T>>>,
+    slots: Vec<Mutex<RowSlot<T>>>,
+    order: Mutex<RowOrder<T>>,
+    meta: Mutex<TileMeta>,
+    /// First error in decoding order (keyed like `decode_tile_unit`).
+    err: Mutex<Option<(usize, Error)>>,
+    /// Tile row of every superblock row.
+    tile_row: Vec<usize>,
+    /// Deblocking arrays of the mode info (see `TileCtx::decode_row`).
+    mi_arrays: (bool, bool, bool),
+}
+
+impl<'d, T: Pixel> TileJobs<'d, T> {
+    /// Row `r` has all its tiles: queues it, and the completed rows after
+    /// it, in order (filling in the mode info rows above each from the row
+    /// before it, and the band's `cdef_idx` rows and restoration units).
+    fn complete<'o>(
+        &self,
+        f: &FrameCtx,
+        bp: &BandParams,
+        r: usize,
+        bufs: Box<BandBufs<T>>,
+        pipe: &BandPipeline<'o, T>,
+    ) {
+        let mut o = self
+            .order
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        o.ready[r] = Some(bufs);
+        let rows = o.ready.len();
+        while o.next < rows {
+            let rr = o.next;
+            let Some(mut bb) = o.ready[rr].take() else {
+                break;
+            };
+            let last = rr + 1 == rows;
+            if bp.deblock || bp.cdef {
+                let (m0, _) = band_mi_rows(f, rr);
+                if rr > 0 {
+                    copy_mi_rows(
+                        &mut bb.mi,
+                        &o.carry,
+                        m0,
+                        rr * f.sb4,
+                        0,
+                        f.mi_cols,
+                        f.ss_x,
+                        f.ss_y,
+                    );
+                }
+                if !last {
+                    let c0 = (rr + 1) * f.sb4 - 2;
+                    let mi = &bb.mi;
+                    o.carry.reset(
+                        mi.stride,
+                        2,
+                        0,
+                        c0,
+                        f.ss_x,
+                        f.ss_y,
+                        !mi.lf_tx[0].is_empty(),
+                        !mi.lf_tx[1].is_empty(),
+                        !mi.delta_lf.is_empty(),
+                        false,
+                    );
+                    copy_mi_rows(&mut o.carry, mi, c0, c0 + 2, 0, f.mi_cols, f.ss_x, f.ss_y);
+                }
+            }
+            {
+                let m = self
+                    .meta
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                fill_band_meta(f, bp, &mut bb, rr, last, &m.cdef_idx, &m.lr);
+            }
+            pipe.push_row(RowJob {
+                r: rr,
+                last,
+                bufs: bb,
+            });
+            o.next += 1;
+        }
+    }
+}
+
+impl<'d, 'o, T: Pixel> UnitRunner<'o, T> for TileJobs<'d, T> {
+    fn run_unit(
+        &self,
+        w: &mut BandWorker<'_, T>,
+        bp: &BandParams,
+        u: usize,
+        pipe: &BandPipeline<'o, T>,
+    ) -> bool {
+        let f = &w.f;
+        let ti = &f.fh.tile_info;
+        let np = f.num_planes;
+        let (sb4, sb_px) = (f.sb4, f.sb_px);
+        let (r, tc) = (u / ti.cols, u % ti.cols);
+        let tr = self.tile_row[r];
+        let (mi_c0, mi_c1) = (ti.mi_col_starts[tc], ti.mi_col_starts[tc + 1]);
+        // The tile's previous row is done (see `BandPipeline::set_units`),
+        // so the lock is free.
+        let mut ctx = self.ctxs[tc]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let data = self.fd.tiles()[tr * ti.cols + tc];
+        if let Err(e) = ctx.decode_row(f, &w.dsp, data, self.mi_arrays, bp.cdef, tr, tc, r) {
+            let key = (r << 16) | (tr << 8) | tc;
+            let mut err = self
+                .err
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if err.as_ref().is_none_or(|(k, _)| key < *k) {
+                *err = Some((key, e));
+            }
+            return false;
+        }
+        let s = &ctx.s;
+        // The frame's cdef_idx entries and restoration units coded in this
+        // superblock row of the tile (before the row can complete).
+        if bp.cdef || bp.lr {
+            let mut m = self
+                .meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if bp.cdef {
+                let (c0, c1) = (mi_c0 / 16, mi_c1.div_ceil(16));
+                let cs = bp.cdef_stride;
+                for cr in r * sb4 / 16..((r + 1) * sb4).div_ceil(16) {
+                    let src = (cr - s.cdef_row0) * s.cdef_stride + (c0 - s.cdef_col0);
+                    m.cdef_idx[cr * cs + c0..cr * cs + c1]
+                        .copy_from_slice(&s.cdef_idx[src..src + c1 - c0]);
+                }
+            }
+            for p in (0..np).filter(|&p| bp.lr_on[p]) {
+                let (sx, sy) = f.sub(p);
+                let (dl, sl) = (&mut m.lr[p], &s.lr[p]);
+                let us = sl.unit_size;
+                // Spec 5.11.57 (read_lr): the units coded in this
+                // superblock row of the tile.
+                let ur0 = (r * sb4 * (MI_SIZE >> sy)).div_ceil(us);
+                let ur1 = sl
+                    .unit_rows
+                    .min(((r + 1) * sb4 * (MI_SIZE >> sy)).div_ceil(us));
+                let uc0 = (mi_c0 * (MI_SIZE >> sx)).div_ceil(us);
+                let uc1 = sl
+                    .unit_cols
+                    .min((mi_c1.div_ceil(sb4) * sb4 * (MI_SIZE >> sx)).div_ceil(us));
+                for ur in ur0..ur1 {
+                    let b = ur * sl.unit_cols;
+                    if uc0 < uc1 {
+                        dl.units[b + uc0..b + uc1].copy_from_slice(&sl.units[b + uc0..b + uc1]);
+                    }
+                }
+            }
+        }
+        let done = {
+            let mut slot = self.slots[r]
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let bb = slot.bufs.get_or_insert_with(|| {
+                let mut bb = pipe.take_bufs();
+                for p in 0..np {
+                    let sy = f.sub(p).1;
+                    let y0 = if r == 0 { 0 } else { (r * sb_px - BAND_TOP) >> sy };
+                    bb.planes[p].reset(bp.out_stride[p], (sb_px + BAND_TOP) >> sy, 0, y0);
+                }
+                if bp.deblock || bp.cdef {
+                    reset_band_mi(&mut bb.mi, &s.mi, f, r);
+                }
+                bb
+            });
+            for p in 0..np {
+                let (sx, sy) = f.sub(p);
+                let (x0, x1) = ((mi_c0 * 4) >> sx, (mi_c1 * 4) >> sx);
+                let y1 = (((r + 1) * sb_px) >> sy).min(bp.mi_h[p]);
+                for y in (r * sb_px) >> sy..y1 {
+                    bb.planes[p].row_mut(y)[x0..x1].copy_from_slice(&s.planes[p].row(y)[..x1 - x0]);
+                }
+            }
+            if bp.deblock || bp.cdef {
+                copy_mi_rows(
+                    &mut bb.mi,
+                    &s.mi,
+                    r * sb4,
+                    ((r + 1) * sb4).min(f.mi_rows),
+                    mi_c0,
+                    mi_c1,
+                    f.ss_x,
+                    f.ss_y,
+                );
+            }
+            slot.remaining -= 1;
+            if slot.remaining == 0 {
+                slot.bufs.take()
+            } else {
+                None
+            }
+        };
+        drop(ctx);
+        if let Some(bb) = done {
+            self.complete(f, bp, r, bb, pipe);
+        }
+        true
+    }
+}
+
+/// Per-thread state of [`Pipeline::run_tiles_direct`], reused for all
+/// tiles the thread decodes.
+struct TileWorker<T: Pixel> {
+    s: FrameState<T>,
+    sc: Scratch,
+    cdf: Option<Box<CdfContext>>,
+}
+
+impl<T: Pixel> TileWorker<T> {
+    fn new() -> Self {
+        Self {
+            s: FrameState::default(),
+            sc: Scratch::new(),
+            cdf: None,
+        }
+    }
+
+    /// Decodes tile `(tr, tc)` one superblock row at a time into
+    /// `self.s.planes` (one superblock row high, the unfiltered last row
+    /// is kept in `above_line` for the next row) and copies every row into
+    /// the frame superblock row `chunks[r]` (planes with `strides`, rows
+    /// below `mi_h` copied). Errors carry the key of the failing
+    /// superblock row in decoding order.
+    #[allow(clippy::too_many_arguments)]
+    fn decode_tile(
+        &mut self,
+        f: &FrameCtx,
+        dsp: &crate::decoder::av1::dsp::Dsp<T>,
+        data: &[u8],
+        tr: usize,
+        tc: usize,
+        chunks: &[Mutex<[&mut [T]; 3]>],
+        strides: &[usize; 3],
+        mi_h: &[usize; 3],
+        min_failed_key: &std::sync::atomic::AtomicUsize,
+    ) -> std::result::Result<(), (usize, Error)> {
+        use std::sync::atomic::Ordering;
+        let fh = f.fh;
+        let ti = &fh.tile_info;
+        let np = f.num_planes;
+        let (sb4, sb_px) = (f.sb4, f.sb_px);
+        let (mi_r0, mi_r1) = (ti.mi_row_starts[tr], ti.mi_row_starts[tr + 1]);
+        let (mi_c0, mi_c1) = (ti.mi_col_starts[tc], ti.mi_col_starts[tc + 1]);
+        let (sb_r0, sb_r1) = (mi_r0 / sb4, mi_r1.div_ceil(sb4));
+        let tile_mi_al = (mi_c1 - mi_c0).div_ceil(sb4) * sb4;
+        let s = &mut self.s;
+        let mut x_range = [(0usize, 0usize); 3];
+        for p in 0..np {
+            let (sx, sy) = f.sub(p);
+            let stride = ((tile_mi_al * 4) >> sx).next_multiple_of(64);
+            x_range[p] = ((mi_c0 * 4) >> sx, (mi_c1 * 4) >> sx);
+            s.planes[p].reset(stride, sb_px >> sy, x_range[p].0, (sb_r0 * sb_px) >> sy);
+            s.above_line[p].resize(stride + 64, T::default());
+        }
+        s.mi.reset(
+            tile_mi_al + 32,
+            2 * sb4,
+            mi_c0,
+            (sb_r0 * sb4).saturating_sub(sb4),
+            f.ss_x,
+            f.ss_y,
+            false,
+            false,
+            false,
+            false,
+        );
+        s.above
+            .reset(mi_c0, tile_mi_al + 32, np, fh.allow_screen_content_tools);
+        s.cdef_idx.clear();
+        (s.cdef_stride, s.cdef_row0, s.cdef_col0) = (0, 0, 0);
+        for lp in s.lr.iter_mut() {
+            lp.units.clear();
+        }
+        s.ipred = [IntraSetup::new(f, 0), IntraSetup::new(f, 1)];
+        let mut ts = TileState::with_cdf(data, fh, (mi_r0, mi_r1), (mi_c0, mi_c1), self.cdf.take());
+        let mut res = Ok(());
+        for r in sb_r0..sb_r1 {
+            let key = (r << 16) | (tr << 8) | tc;
+            if key > min_failed_key.load(Ordering::Relaxed) {
+                // An earlier superblock row failed: its error is reported.
+                res = Err((usize::MAX, Error::Truncated));
+                break;
+            }
+            let mi_row = r * sb4;
+            let sb_y = r * sb_px;
+            s.mi.slide_to(mi_row.saturating_sub(sb4));
+            for p in 0..np {
+                s.planes[p].y0 = sb_y >> f.sub(p).1;
+            }
+            s.left.clear();
+            s.set_sb_y(f, sb_y);
+            let mut dec = SbDecoder {
+                f,
+                t: &mut ts,
+                s: &mut *s,
+                sc: &mut self.sc,
+                dsp,
+                b: Default::default(),
+                recon: true,
+                sb_y,
+                read_deltas: false,
+                plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+            };
+            let mut c = mi_c0;
+            while c < mi_c1 {
+                if let Err(e) = dec.decode_sb(mi_row, c) {
+                    res = Err((key, e));
+                    break;
+                }
+                if dec.t.msac.overrun() {
+                    res = Err((key, Error::Truncated));
+                    break;
+                }
+                c += sb4;
+            }
+            if res.is_err() {
+                break;
+            }
+            if r + 1 < sb_r1 {
+                for p in 0..np {
+                    let h = sb_px >> f.sub(p).1;
+                    let w = x_range[p].1 - x_range[p].0;
+                    let pl = &s.planes[p];
+                    let off = (h - 1) * pl.stride;
+                    s.above_line[p][..w].copy_from_slice(&pl.data()[off..off + w]);
+                }
+            }
+            {
+                let mut dst = chunks[r]
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                for p in 0..np {
+                    let sy = f.sub(p).1;
+                    let (x0, x1) = x_range[p];
+                    let w = x1 - x0;
+                    let y0 = sb_y >> sy;
+                    let h = ((sb_y + sb_px) >> sy).min(mi_h[p]).saturating_sub(y0);
+                    let pl = &s.planes[p];
+                    let src_stride = pl.stride;
+                    let src_data = pl.data();
+                    let dst_stride = strides[p];
+                    let dst_data = &mut dst[p][x0..];
+                    for ry in 0..h {
+                        let d = ry * dst_stride;
+                        let sr = ry * src_stride;
+                        dst_data[d..d + w].copy_from_slice(&src_data[sr..sr + w]);
+                    }
+                }
+            }
+        }
+        self.cdf = Some(ts.cdf);
+        res
     }
 }
 

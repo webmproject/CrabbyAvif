@@ -44,9 +44,37 @@ fn refill_slow(buf: &[u8], mut pos: usize, mut dif: u64, mut c: i32) -> u64 {
     }
 }
 
+// The cold out-of-line helpers below (and `SymbolDecoder::refill_ret`)
+// take an unused `const DUMMY: usize` generic, always instantiated as
+// `::<0>`. It has no semantic effect: it only makes the function generic,
+// so it is monomorphized in the codegen unit of its caller instead of once
+// in this module's, which places the cold code next to its (hot) caller
+// and measurably changed the generated code. Keep it unless benchmarks
+// show otherwise.
 #[cold]
 #[inline(never)]
-fn golomb_coef_slow(buf: &[u8], pos: usize, dif: u64, state: u64) -> (u64, u64) {
+fn refill_cold<const DUMMY: usize>(buf: &[u8], pos: usize, mut dif: u64, cnt: i32) -> (u64, u64) {
+    let c = WIN_SIZE - cnt - 24;
+    debug_assert!((0..=56).contains(&c));
+    let nb = ((c >> 3) + 1) as usize;
+    if let Some(bytes) = buf.get(pos..pos + 8) {
+        let w = !u64::from_be_bytes(bytes.try_into().unwrap());
+        dif |= (w >> (56 - (c & !7))) << (c & 7);
+    } else {
+        dif = refill_slow(buf, pos, dif, c);
+    }
+    let new_cnt = (48 - (c & 7)) as u32;
+    (dif, (nb as u64) | ((new_cnt as u64) << 32))
+}
+
+#[cold]
+#[inline(never)]
+fn golomb_coef_slow<const DUMMY: usize>(
+    buf: &[u8],
+    pos: usize,
+    dif: u64,
+    state: u64,
+) -> (u64, u64) {
     let mut s = SymbolDecoder {
         raw: ByteReader { buf, pos },
         dif,
@@ -57,7 +85,7 @@ fn golomb_coef_slow(buf: &[u8], pos: usize, dif: u64, state: u64) -> (u64, u64) 
     let mut length = 0u32;
     loop {
         length += 1;
-        if s.bool() {
+        if s.bool_cold() {
             break;
         }
         if length > 32 {
@@ -69,7 +97,7 @@ fn golomb_coef_slow(buf: &[u8], pos: usize, dif: u64, state: u64) -> (u64, u64) 
     }
     let mut x = 1u32;
     for _ in 0..(length - 1) {
-        x = (x << 1) | s.bool() as u32;
+        x = (x << 1) | s.bool_cold() as u32;
     }
     let out = (s.rng as u64)
         | (((s.cnt as i8 as u8) as u64) << 16)
@@ -78,13 +106,96 @@ fn golomb_coef_slow(buf: &[u8], pos: usize, dif: u64, state: u64) -> (u64, u64) 
     (s.dif, out)
 }
 
+#[cold]
+#[inline(never)]
+fn ac_golomb_slow<const DUMMY: usize>(
+    buf: &[u8],
+    pos: usize,
+    dif: u64,
+    state: u64,
+    q2: u32,
+    dq_shift: u32,
+    cf_max: u64,
+) -> (u64, u64, i32) {
+    let mut s = SymbolDecoder {
+        raw: ByteReader { buf, pos },
+        dif,
+        rng: (state & 0xFFFF) as u32,
+        cnt: (state >> 16) as i8 as i32,
+        allow_update: false,
+    };
+    let sign = s.bool_cold();
+    let mut length = 0u32;
+    loop {
+        length += 1;
+        if s.bool_cold() {
+            break;
+        }
+        if length > 32 {
+            let out = (s.rng as u64)
+                | (((s.cnt as i8 as u8) as u64) << 16)
+                | (((s.raw.pos - pos) as u64) << 24);
+            return (s.dif, out, 0);
+        }
+    }
+    let mut x = 1u32;
+    for _ in 0..(length - 1) {
+        x = (x << 1) | s.bool_cold() as u32;
+    }
+    let q = x.wrapping_add(14) & 0xFFFFF;
+    let dq = (((q as u64 * q2 as u64) & 0xFFFFFF) >> dq_shift).min(cf_max + sign as u64) as i32;
+    let dq_signed = if sign { -dq } else { dq };
+    let out = (s.rng as u64)
+        | (((s.cnt as i8 as u8) as u64) << 16)
+        | (((s.raw.pos - pos) as u64) << 24)
+        | (((q | (1 << 31)) as u64) << 32);
+    (s.dif, out, dq_signed)
+}
+
+/// `c < v` for `c < 2^16`, `v < 2^17`, as the sign of `c - v`: the
+/// selects on it become single uop `cmovs` instead of `cmova` (two uops,
+/// two cycles of latency on Intel) in the symbol decoders' critical path.
+#[inline(always)]
+fn lt(c: u32, v: u32) -> bool {
+    (c as i32).wrapping_sub(v as i32) < 0
+}
+
+/// CDF adaptation counter update (saturating at 32).
+#[inline(always)]
+fn inc_count(count: u16) -> u16 {
+    count + (count < 32) as u16
+}
+
+const TOP_MR4: [u32; 8] = [
+    0x8000_8000,
+    0x8000_ffff,
+    0xffff_ffff,
+    0xffff_ffff,
+    0x0fff_0fff,
+    0x07ff_07ff,
+    0x03ff_03ff,
+    0x01ff_01ff,
+];
+
+const TOP_MR5: [u64; 12] = [
+    0x8000_8000_8000_8000,
+    0x8000_8000_8000_ffff,
+    0x8000_8000_ffff_ffff,
+    0x8000_ffff_ffff_ffff,
+    0xffff_ffff_ffff_ffff,
+    0xffff_ffff_ffff_ffff,
+    0xffff_ffff_ffff_ffff,
+    0xffff_ffff_ffff_ffff,
+    0x07ff_07ff_07ff_07ff,
+    0x03ff_03ff_03ff_03ff,
+    0x01ff_01ff_01ff_01ff,
+    0x00ff_00ff_00ff_00ff,
+];
+
 /// Register copy of a 4-symbol CDF (`[u16; 5]`: 3 values below 32768,
 /// 32768 and the adaptation counter), in the layout `symbol5_r` works on.
 #[derive(Clone, Copy)]
 pub struct Cdf5 {
-    #[cfg(target_arch = "x86_64")]
-    x: std::simd::u16x8,
-    #[cfg(not(target_arch = "x86_64"))]
     x: u64,
     count: u16,
 }
@@ -92,9 +203,6 @@ pub struct Cdf5 {
 impl Cdf5 {
     #[inline(always)]
     pub fn load(c: &[u16; 5]) -> Self {
-        #[cfg(target_arch = "x86_64")]
-        let x = std::simd::u16x8::from_array([c[0], c[1], c[2], c[3], 0, 0, 0, 0]);
-        #[cfg(not(target_arch = "x86_64"))]
         let x =
             (c[0] as u64) | ((c[1] as u64) << 16) | ((c[2] as u64) << 32) | ((c[3] as u64) << 48);
         Self { x, count: c[4] }
@@ -102,21 +210,15 @@ impl Cdf5 {
 
     #[inline(always)]
     pub fn store(self, c: &mut [u16; 5]) {
-        #[cfg(target_arch = "x86_64")]
-        c[..4].copy_from_slice(&self.x.as_array()[..4]);
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            c[0] = self.x as u16;
-            c[1] = (self.x >> 16) as u16;
-            c[2] = (self.x >> 32) as u16;
-            c[3] = (self.x >> 48) as u16;
-        }
+        c[0] = self.x as u16;
+        c[1] = (self.x >> 16) as u16;
+        c[2] = (self.x >> 32) as u16;
+        c[3] = (self.x >> 48) as u16;
         c[4] = self.count;
     }
 }
 
-/// Body of `symbol_simd8` / `symbol_simd16` (`L` lanes of type `$v`,
-/// `$b` the byte vector of the same width).
+/// Body of `symbol_simd8` (`8` lanes of `u16x8`).
 macro_rules! simd_symbol_body {
     ($self:ident, $cdf:ident, $l:literal, $v:ident, $b:ident) => {{
         use std::simd::prelude::*;
@@ -124,10 +226,23 @@ macro_rules! simd_symbol_body {
         let k = (n & !1).min($l);
         let c = ($self.dif >> (WIN_SIZE - 16)) as u16;
         let r = $self.rng;
-        let mut arr = [0x8000u16; $l];
-        arr[..k].copy_from_slice(&$cdf[..k]);
-        let x = $v::from_array(arr);
-        let f = $v::splat(0x8000) - x;
+        let x = if N >= $l {
+            $v::from_array(*$cdf.first_chunk::<$l>().unwrap())
+        } else {
+            let mut arr = [0u16; $l];
+            arr[..k].copy_from_slice(&$cdf[..k]);
+            $v::from_array(arr)
+        };
+        let top = const {
+            let mut t = [0u16; $l];
+            let mut i = 0;
+            while i < (N - 2) && i < $l {
+                t[i] = 0x8000;
+                i += 1;
+            }
+            $v::from_array(t)
+        };
+        let f = top.saturating_sub(x);
         let min_prob = const {
             let mut mp = [0u16; $l];
             let mut i = 0;
@@ -135,7 +250,7 @@ macro_rules! simd_symbol_body {
                 mp[i] = (EC_MIN_PROB * (N - 2 - i) as u32) as u16;
                 i += 1;
             }
-            mp
+            $v::from_array(mp)
         };
         // ((rng >> 8) * (f >> 6)) >> 1: dav1d's pmulhuw form on x86, the
         // split (f & 0xffc0) + ((f >> 6) * (r7 = (rng >> 8) & 0x7f) >> 1)
@@ -155,52 +270,65 @@ macro_rules! simd_symbol_body {
         // (measured faster there than the reductions below).
         #[cfg(target_arch = "x86_64")]
         let (ge, u, vv, val) = {
-            let v = prod + $v::from_array(min_prob);
+            let v = prod + min_prob;
             let ge = $v::splat(c).simd_ge(v);
             let ge_b = $b::from_ne_bytes(ge.to_simd().cast::<u16>().to_ne_bytes());
-            let mask = ge_b.simd_lt($b::splat(0)).to_bitmask() as u32
-                | 1u32.wrapping_shl(2 * (N - 2) as u32);
+            let mask = ge_b.simd_lt($b::splat(0)).to_bitmask() as u32 | (1u32 << (2 * (N - 2)));
             let val = (mask.trailing_zeros() >> 1) as usize;
-            let mut vs = [0u16; $l + 1];
-            vs[0] = r as u16;
-            vs[1..].copy_from_slice(v.as_array());
-            let idx = val & ($l - 1);
-            (ge, vs[idx] as u32, vs[idx + 1] as u32, val)
+            if N <= $l + 1 {
+                let mut vs = [0u16; $l + 1];
+                vs[0] = r as u16;
+                *vs[1..1 + $l].first_chunk_mut::<$l>().unwrap() = *v.as_array();
+                let idx = val.min($l - 1);
+                (ge, vs[idx] as u32, vs[idx + 1] as u32, val)
+            } else {
+                let mut vs = [0u16; $l + 2];
+                vs[0] = r as u16;
+                *vs[1..1 + $l].first_chunk_mut::<$l>().unwrap() = *v.as_array();
+                let idx = val.min($l);
+                (ge, vs[idx] as u32, vs[idx + 1] as u32, val)
+            }
         };
         // aarch64: u and v of the decoded symbol by uminv / umaxv of the
-        // compare masked lanes. Lane N - 2 (true v = 0, always <= c)
-        // carries rng (> c) for the minimum.
+        // compare masked lanes. Lanes N - 2.. have v = 0 <= c, so lt is
+        // false there without needing a special sentinel lane.
         #[cfg(not(target_arch = "x86_64"))]
         let (ge, u, vv, val) = {
-            let mut add = min_prob;
-            add[N - 2] = r as u16;
-            let v = prod + $v::from_array(add);
+            let v = prod + min_prob;
             let lt = v.simd_gt($v::splat(c));
             let lm = lt.to_simd().cast::<u16>();
-            let u = (v | !lm).reduce_min() as u32;
+            let u = ((v | !lm).reduce_min() as u32).min(r);
             let vv = (v & !lm).reduce_max() as u32;
-            // The c < v lanes are 0..val plus lane N - 2.
-            let val = lt.to_simd().cast::<i16>().reduce_sum().wrapping_neg() as usize - 1;
-            let lane = const {
-                let mut a = [0u16; $l];
-                let mut i = 0;
-                while i < $l {
-                    a[i] = i as u16;
-                    i += 1;
-                }
-                $v::from_array(a)
-            };
-            // The true compare result of lane N - 2 is c >= 0.
-            (!lt | lane.simd_eq($v::splat((N - 2) as u16)), u, vv, val)
+            let val = lt.to_simd().cast::<i16>().reduce_sum().wrapping_neg() as usize;
+            (!lt, u, vv, val)
         };
+        let new_dif = $self.dif - ((vv as u64) << (WIN_SIZE - 16));
+        let new_rng = u - vv;
+        let d = (new_rng.leading_zeros() ^ 16) as i32;
+        $self.dif = new_dif << d;
+        $self.rng = new_rng << d;
         if $self.allow_update {
             let count = $cdf[n];
             let rate = $v::splat(5 + (count >> 4));
-            let y = ge.select(x + (f >> rate), x - (x >> rate));
-            $cdf[..k].copy_from_slice(&y.as_array()[..k]);
-            $cdf[n] = count + 1 - (count >> 5);
+            let gm = ge.to_simd().cast::<u16>();
+            let y = x + ((f >> rate) & gm) - ((x >> rate) & !gm);
+            if N > $l {
+                *$cdf.first_chunk_mut::<$l>().unwrap() = *y.as_array();
+                $cdf[n] = inc_count(count);
+            } else if N == $l {
+                let mut ya = *y.as_array();
+                ya[$l - 1] = inc_count(count);
+                *$cdf.first_chunk_mut::<$l>().unwrap() = ya;
+            } else {
+                $cdf[..k].copy_from_slice(&y.as_array()[..k]);
+                $cdf[n] = inc_count(count);
+            }
         }
-        $self.norm($self.dif - ((vv as u64) << (WIN_SIZE - 16)), u - vv);
+        let cnt = $self.cnt;
+        $self.cnt = cnt - d;
+        if (cnt as u32) < (d as u32) {
+            return $self.refill_ret::<0>(val);
+        }
         val
     }};
 }
@@ -213,6 +341,10 @@ pub struct SymbolDecoder<'a> {
     cnt: i32,
     allow_update: bool,
 }
+
+#[cold]
+#[inline(always)]
+fn cold_refill() {}
 
 impl<'a> SymbolDecoder<'a> {
     /// Spec `init_symbol(sz)` over the tile data `buf`.
@@ -245,6 +377,59 @@ impl<'a> SymbolDecoder<'a> {
         self.cnt = 48 - (c & 7);
     }
 
+    /// `refill` for the tail of the SIMD symbol decoders, passing their
+    /// result through. `DUMMY`: see `refill_cold`. `black_box` keeps LLVM
+    /// from deducing that the result is `val` (a `returned` argument),
+    /// which would make callers keep `val` live across the call (in a
+    /// callee-saved register, saved / restored in the hot path) instead of
+    /// taking it from the return register. Codegen only: correctness does
+    /// not depend on it.
+    #[cold]
+    #[inline(never)]
+    fn refill_ret<const DUMMY: usize>(&mut self, val: usize) -> usize {
+        self.refill();
+        std::hint::black_box(val)
+    }
+
+    /// Copies the mutable decoding state (`pos`, `dif`, `rng`, `cnt`) from
+    /// `other`, leaving `buf` and `allow_update` untouched.
+    #[inline(always)]
+    pub fn copy_state(&mut self, other: &Self) {
+        self.raw.pos = other.raw.pos;
+        self.dif = other.dif;
+        self.rng = other.rng;
+        self.cnt = other.cnt;
+    }
+
+    /// `refill` with no function calls even on the EOF tail, so hot loops
+    /// (`coef_tokens`, sign pass) compile as true leaf functions with all
+    /// caller-saved registers available across iterations.
+    #[inline(always)]
+    fn refill_hot(&mut self) {
+        let c = WIN_SIZE - self.cnt - 24;
+        debug_assert!((0..=56).contains(&c));
+        let nb = ((c >> 3) + 1) as usize;
+        if let Some(bytes) = self.raw.buf.get(self.raw.pos..self.raw.pos + 8) {
+            let w = !u64::from_be_bytes(bytes.try_into().unwrap());
+            self.dif |= (w >> (56 - (c & !7))) << (c & 7);
+        } else {
+            cold_refill();
+            let mut pos = self.raw.pos;
+            let mut shift = c;
+            loop {
+                let b = if pos < self.raw.buf.len() { self.raw.buf[pos] ^ 0xff } else { 0xff };
+                self.dif |= (b as u64) << shift;
+                pos += 1;
+                shift -= 8;
+                if shift < 0 {
+                    break;
+                }
+            }
+        }
+        self.raw.pos += nb;
+        self.cnt = 48 - (c & 7);
+    }
+
     /// Spec `SymbolMaxBits`: bits of the tile data still unread (negative
     /// once zero padding past the end is being consumed).
     #[inline]
@@ -272,7 +457,11 @@ impl<'a> SymbolDecoder<'a> {
         self.rng = rng << d;
         self.cnt = cnt - d;
         if (cnt as u32) < (d as u32) {
-            self.refill_cold();
+            cold_refill();
+            let (dif, out) = refill_cold::<0>(self.raw.buf, self.raw.pos, self.dif, self.cnt);
+            self.dif = dif;
+            self.raw.pos += (out as u32) as usize;
+            self.cnt = (out >> 32) as i32;
         }
     }
 
@@ -285,20 +474,15 @@ impl<'a> SymbolDecoder<'a> {
         self.rng = rng << d;
         self.cnt = cnt - d;
         if (cnt as u32) < (d as u32) {
-            self.refill();
+            cold_refill();
+            self.refill_hot();
         }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn refill_cold(&mut self) {
-        self.refill();
     }
 
     /// Decodes a boolean with probability `f / 32768` of being 0, where `f`
     /// is the inverted CDF value (`32768 - cdf[0]`).
     #[inline(always)]
-    fn bool_inv(&mut self, f: u32) -> bool {
+    pub fn bool_inv(&mut self, f: u32) -> bool {
         use std::hint::select_unpredictable as sel;
         let r = self.rng;
         let dif = self.dif;
@@ -335,126 +519,203 @@ impl<'a> SymbolDecoder<'a> {
         if N == 3 {
             return self.bool_adapt(cdf.first_chunk_mut().unwrap()) as usize;
         }
-        let c = (self.dif >> (WIN_SIZE - 16)) as u32;
-        let r = self.rng >> 8;
         if N == 4 {
-            const ONES: u32 = 0x0001_0001;
-            let x = (cdf[0] as u32) | ((cdf[1] as u32) << 16);
-            let f = (0x8000 * ONES).wrapping_sub(x);
-            let v0 = ((r * ((f >> 6) & 0x3ff)) >> 1) + 8;
-            let v1 = ((r * (f >> 22)) >> 1) + 4;
-            let c0 = c < v0;
-            let c1 = c < v1;
-            let val = c0 as usize + c1 as usize;
-            let u = if c1 {
-                v1
-            } else if c0 {
-                v0
-            } else {
-                self.rng
-            };
-            let v = if c1 {
-                0
-            } else if c0 {
-                v1
-            } else {
-                v0
-            };
-            if self.allow_update {
-                let count = cdf[3];
-                let rate = 4 + (count >> 4) as u32;
-                let mr = (0xFFFFu32 >> rate) * ONES;
-                let m = ((1u64 << (16 * val)) - 1) as u32;
-                let top = m | (0x8000 * ONES);
-                let y = x
-                    .wrapping_add((top.wrapping_sub(x) >> rate) & mr)
-                    .wrapping_sub(m & mr);
-                cdf[0] = y as u16;
-                cdf[1] = (y >> 16) as u16;
-                cdf[3] = count + 1 - (count >> 5);
-            }
-            self.norm(self.dif - ((v as u64) << (WIN_SIZE - 16)), u - v);
-            return val;
+            return self.symbol4(cdf.first_chunk_mut().unwrap());
         }
         if N == 5 {
             let upd = self.allow_update;
             return self.symbol5(cdf.first_chunk_mut().unwrap(), upd);
         }
-        if N <= 9 {
-            self.symbol_simd8::<N>(cdf)
-        } else {
-            self.symbol_simd16::<N>(cdf)
+        if N == 6 {
+            return self.symbol6(cdf.first_chunk_mut().unwrap());
         }
+        if N <= 10 {
+            return self.symbol_simd8::<N>(cdf);
+        }
+        self.symbol_simd16::<N>(cdf)
     }
 
-    /// `symbol_n::<5>` (coefficient tokens). `upd` is the CDF adaptation
-    /// flag, passed as a constant by the specialized coefficient loops.
+    /// `symbol_n::<4>` (3-symbol CDFs).
+    #[inline(always)]
+    pub fn symbol4(&mut self, cdf: &mut [u16; 4]) -> usize {
+        use std::hint::select_unpredictable as sel;
+        let c = (self.dif >> (WIN_SIZE - 16)) as u32;
+        let r = self.rng >> 8;
+        let x = (cdf[0] as u32) | ((cdf[1] as u32) << 16);
+        let f = 0x8000_8000u32.wrapping_sub(x);
+        let v0 = ((r * ((f >> 6) & 0x3ff)) >> 1) + 8;
+        let v1 = ((r * (f >> 22)) >> 1) + 4;
+        let c0 = lt(c, v0);
+        let c1 = lt(c, v1);
+        let val = (c0 as u32) + (c1 as u32);
+        let u0 = sel(c0, v0, self.rng);
+        let u = sel(c1, v1, u0);
+        let vv0 = sel(c0, v1, v0);
+        let v = sel(c1, 0, vv0);
+        let new_dif = self.dif - ((v as u64) << (WIN_SIZE - 16));
+        let new_rng = u - v;
+        if self.allow_update {
+            let top = TOP_MR4[val as usize & 3];
+            let count = cdf[3];
+            let r_idx = (count >> 4) as usize & 3;
+            let rate = 4 + r_idx as u32;
+            let mr = TOP_MR4[4 + r_idx];
+            let y = x
+                .wrapping_sub(top & mr)
+                .wrapping_add((top.wrapping_sub(x) >> rate) & mr);
+            cdf[0] = y as u16;
+            cdf[1] = (y >> 16) as u16;
+            cdf[3] = inc_count(count);
+        }
+        self.norm(new_dif, new_rng);
+        val as usize
+    }
+
+    /// `symbol_n::<4>` for loops specialized on the adaptation flag.
+    #[inline(always)]
+    pub fn symbol4_c<const UPD: bool, const HOT: bool>(&mut self, cdf: &mut [u16; 4]) -> u32 {
+        use std::hint::select_unpredictable as sel;
+        let c = (self.dif >> (WIN_SIZE - 16)) as u32;
+        let r = self.rng >> 8;
+        let x = (cdf[0] as u32) | ((cdf[1] as u32) << 16);
+        let f = 0x8000_8000u32.wrapping_sub(x);
+        let v0 = ((r * ((f >> 6) & 0x3ff)) >> 1) + 8;
+        let v1 = ((r * (f >> 22)) >> 1) + 4;
+        let c0 = lt(c, v0);
+        let c1 = lt(c, v1);
+        let val = (c0 as u32) + (c1 as u32);
+        let u0 = sel(c0, v0, self.rng);
+        let u = sel(c1, v1, u0);
+        let vv0 = sel(c0, v1, v0);
+        let v = sel(c1, 0, vv0);
+        let new_dif = self.dif - ((v as u64) << (WIN_SIZE - 16));
+        let new_rng = u - v;
+        if UPD {
+            let top = TOP_MR4[val as usize & 3];
+            let count = cdf[3];
+            let r_idx = (count >> 4) as usize & 3;
+            let rate = 4 + r_idx as u32;
+            let mr = TOP_MR4[4 + r_idx];
+            let y = x
+                .wrapping_sub(top & mr)
+                .wrapping_add((top.wrapping_sub(x) >> rate) & mr);
+            cdf[0] = y as u16;
+            cdf[1] = (y >> 16) as u16;
+            cdf[3] = inc_count(count);
+        }
+        if HOT {
+            self.norm_hot(new_dif, new_rng);
+        } else {
+            self.norm(new_dif, new_rng);
+        }
+        val
+    }
+
+    /// `symbol_n::<5>` (4-symbol CDFs). `upd` is the CDF adaptation flag.
     #[inline(always)]
     fn symbol5(&mut self, cdf: &mut [u16; 5], upd: bool) -> usize {
-        let (val, y) = self.symbol5_r(Cdf5::load(cdf), upd);
+        let (val, y) = self.symbol5_r::<false>(Cdf5::load(cdf), upd);
         if upd {
             y.store(cdf);
         }
         val as usize
     }
 
+    /// `symbol_n::<6>` (5-symbol CDFs: 4 values below 32768, 32768, count).
+    #[inline(always)]
+    pub fn symbol6(&mut self, cdf: &mut [u16; 6]) -> usize {
+        use std::hint::select_unpredictable as sel;
+        let c = (self.dif >> (WIN_SIZE - 16)) as u32;
+        let r = self.rng >> 8;
+        let x = (cdf[0] as u64)
+            | ((cdf[1] as u64) << 16)
+            | ((cdf[2] as u64) << 32)
+            | ((cdf[3] as u64) << 48);
+        let f = 0x8000_8000_8000_8000u64.wrapping_sub(x);
+        let f_lo = f as u32;
+        let f_hi = (f >> 32) as u32;
+        let v0 = ((r * ((f_lo >> 6) & 0x3ff)) >> 1) + 16;
+        let v1 = ((r * (f_lo >> 22)) >> 1) + 12;
+        let v2 = ((r * ((f_hi >> 6) & 0x3ff)) >> 1) + 8;
+        let v3 = ((r * (f_hi >> 22)) >> 1) + 4;
+        let c0 = lt(c, v0);
+        let c1 = lt(c, v1);
+        let c2 = lt(c, v2);
+        let c3 = lt(c, v3);
+        let val = (c0 as u32) + (c1 as u32) + (c2 as u32) + (c3 as u32);
+        let u_lo = sel(c0, v0, self.rng);
+        let u_hi = sel(c3, v3, sel(c2, v2, v1));
+        let u = sel(c1, u_hi, u_lo);
+        let v_lo = sel(c0, v1, v0);
+        let v_hi = sel(c3, 0, sel(c2, v3, v2));
+        let v = sel(c1, v_hi, v_lo);
+        let new_dif = self.dif - ((v as u64) << (WIN_SIZE - 16));
+        let new_rng = u - v;
+        if self.allow_update {
+            let top = TOP_MR5[val as usize & 7];
+            let count = cdf[5];
+            let r_idx = (count >> 4) as usize & 3;
+            let rate = 5 + r_idx as u32;
+            let mr = TOP_MR5[8 + r_idx];
+            let y = x
+                .wrapping_sub(top & mr)
+                .wrapping_add((top.wrapping_sub(x) >> rate) & mr);
+            cdf[0] = y as u16;
+            cdf[1] = (y >> 16) as u16;
+            cdf[2] = (y >> 32) as u16;
+            cdf[3] = (y >> 48) as u16;
+            cdf[5] = inc_count(count);
+        }
+        self.norm(new_dif, new_rng);
+        val as usize
+    }
+
     /// `symbol_n::<5>` on a CDF held in registers: returns the symbol and
     /// the adapted CDF (unchanged unless `upd`).
     #[inline(always)]
-    pub fn symbol5_r(&mut self, cdf: Cdf5, upd: bool) -> (u32, Cdf5) {
-        #[cfg(target_arch = "x86_64")]
-        return self.symbol5_simd(cdf, upd);
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            let c = (self.dif >> (WIN_SIZE - 16)) as u32;
-            let r = self.rng >> 8;
-            const ONES: u64 = 0x0001_0001_0001_0001;
-            let x = cdf.x;
-            let f = (0x8000 * ONES).wrapping_sub(x);
-            let v0 = ((r * (((f as u32) >> 6) & 0x3ff)) >> 1) + 12;
-            let v1 = ((r * (((f >> 22) as u32) & 0x3ff)) >> 1) + 8;
-            let v2 = ((r * (((f >> 38) as u32) & 0x3ff)) >> 1) + 4;
-            let c0 = c < v0;
-            let c1 = c < v1;
-            let c2 = c < v2;
-            let val = c0 as u32 + c1 as u32 + c2 as u32;
-            let u = if c2 {
-                v2
-            } else if c1 {
-                v1
-            } else if c0 {
-                v0
-            } else {
-                self.rng
-            };
-            let v = if c2 {
-                0
-            } else if c1 {
-                v2
-            } else if c0 {
-                v1
-            } else {
-                v0
-            };
-            let y = if upd {
-                let count = cdf.count;
-                let rate = 5 + (count >> 4) as u32;
-                let mr = (0xFFFFu64 >> rate) * ONES;
-                let m = (1u64 << (16 * val)) - 1;
-                let top = m | (0x8000 * ONES);
-                let y = x
-                    .wrapping_add((top.wrapping_sub(x) >> rate) & mr)
-                    .wrapping_sub(m & mr);
-                Cdf5 {
-                    x: y,
-                    count: count + (count < 32) as u16,
-                }
-            } else {
-                cdf
-            };
-            self.norm_hot(self.dif - ((v as u64) << (WIN_SIZE - 16)), u - v);
-            (val, y)
+    pub fn symbol5_r<const HOT: bool>(&mut self, cdf: Cdf5, upd: bool) -> (u32, Cdf5) {
+        use std::hint::select_unpredictable as sel;
+        let c = (self.dif >> (WIN_SIZE - 16)) as u32;
+        let r = self.rng >> 8;
+        let x = cdf.x;
+        let f = 0x8000_8000_8000_8000u64.wrapping_sub(x);
+        let v0 = ((r * (((f as u32) >> 6) & 0x3ff)) >> 1) + 12;
+        let v1 = ((r * ((f as u32) >> 22)) >> 1) + 8;
+        let v2 = ((r * (((f >> 38) as u32) & 0x3ff)) >> 1) + 4;
+        let c0 = lt(c, v0);
+        let c1 = lt(c, v1);
+        let c2 = lt(c, v2);
+        let val = (c0 as u32) + (c1 as u32) + (c2 as u32);
+        let u_lo = sel(c0, v0, self.rng);
+        let u_hi = sel(c2, v2, v1);
+        let u = sel(c1, u_hi, u_lo);
+        let v_lo = sel(c0, v1, v0);
+        let v_hi = sel(c2, 0, v2);
+        let v = sel(c1, v_hi, v_lo);
+        let new_dif = self.dif - ((v as u64) << (WIN_SIZE - 16));
+        let new_rng = u - v;
+        let y = if upd {
+            let top = TOP_MR5[val as usize & 3];
+            let count = cdf.count;
+            let r_idx = (count >> 4) as usize & 3;
+            let rate = 5 + r_idx as u32;
+            let mr = TOP_MR5[8 + r_idx];
+            let y = x
+                .wrapping_sub(top & mr)
+                .wrapping_add((top.wrapping_sub(x) >> rate) & mr);
+            Cdf5 {
+                x: y,
+                count: inc_count(count),
+            }
+        } else {
+            cdf
+        };
+        if HOT {
+            self.norm_hot(new_dif, new_rng);
+        } else {
+            self.norm(new_dif, new_rng);
         }
+        (val, y)
     }
 
     /// Whether CDF adaptation is enabled.
@@ -466,99 +727,201 @@ impl<'a> SymbolDecoder<'a> {
     /// `symbol_n::<5>` for loops specialized on the adaptation flag.
     #[inline(always)]
     pub fn symbol5_c<const UPD: bool>(&mut self, cdf: &mut [u16; 5]) -> u32 {
-        self.symbol5(cdf, UPD) as u32
+        use std::hint::select_unpredictable as sel;
+        let c = (self.dif >> (WIN_SIZE - 16)) as u32;
+        let r = self.rng >> 8;
+        let loaded = Cdf5::load(cdf);
+        let x = loaded.x;
+        let f = 0x8000_8000_8000_8000u64.wrapping_sub(x);
+        let v0 = ((r * (((f as u32) >> 6) & 0x3ff)) >> 1) + 12;
+        let v1 = ((r * ((f as u32) >> 22)) >> 1) + 8;
+        let v2 = ((r * (((f >> 38) as u32) & 0x3ff)) >> 1) + 4;
+        let c0 = lt(c, v0);
+        let c1 = lt(c, v1);
+        let c2 = lt(c, v2);
+        let val = (c0 as u32) + (c1 as u32) + (c2 as u32);
+        let u0 = sel(c0, v0, self.rng);
+        let u1 = sel(c1, v1, u0);
+        let u = sel(c2, v2, u1);
+        let vv0 = sel(c0, v1, v0);
+        let vv1 = sel(c1, v2, vv0);
+        let v = sel(c2, 0, vv1);
+        let new_dif = self.dif - ((v as u64) << (WIN_SIZE - 16));
+        let new_rng = u - v;
+        if UPD {
+            let top = TOP_MR5[val as usize & 3];
+            let count = loaded.count;
+            let r_idx = (count >> 4) as usize & 3;
+            let rate = 5 + r_idx as u32;
+            let mr = TOP_MR5[8 + r_idx];
+            let y = x
+                .wrapping_sub(top & mr)
+                .wrapping_add((top.wrapping_sub(x) >> rate) & mr);
+            (Cdf5 {
+                x: y,
+                count: inc_count(count),
+            })
+            .store(cdf);
+        }
+        self.norm_hot(new_dif, new_rng);
+        val
     }
 
     /// `hi_tok` for loops specialized on the adaptation flag.
     #[inline(always)]
     pub fn hi_tok_c<const UPD: bool>(&mut self, cdf: &mut [u16; 5]) -> u32 {
         let mut tok = 3u32;
+        let mut r = Cdf5::load(cdf);
         for _ in 0..4 {
-            let br = self.symbol5(cdf, UPD) as u32;
+            let (br, y) = self.symbol5_r::<true>(r, UPD);
+            r = y;
             tok += br;
             if br < 3 {
                 break;
             }
         }
+        if UPD {
+            r.store(cdf);
+        }
         tok
     }
 
-    /// `symbol_n::<5>` with 16-bit SIMD. The latency of the rng / dif
-    /// dependency chain bounds the coefficient loop, so it is kept short:
-    /// - `v` uses dav1d's `pmulhuw` form, `((f >> 6) << 7) * (rng & 0xff00)
-    ///   >> 16`, which equals `((rng >> 8) * (f >> 6)) >> 1`.
-    /// - `u` and `v` of the decoded symbol come from horizontal min / max
-    ///   reductions (`phminposuw`) of the compare masked `v` lanes instead
-    ///   of a movemask / tzcnt / shift extraction. `v` is decreasing, so
-    ///   `v[val]` is the largest `v` with `c >= v` and `u = v[val - 1]` is
-    ///   the smallest with `c < v`; lane 4 holds `rng` (never `<= c`) so
-    ///   that the minimum is `rng` for `val == 0`. `val` itself is only
-    ///   needed off the critical path.
-    #[cfg(target_arch = "x86_64")]
-    #[inline(always)]
-    fn symbol5_simd(&mut self, cdf: Cdf5, upd: bool) -> (u32, Cdf5) {
-        use std::simd::prelude::*;
-        let c = (self.dif >> (WIN_SIZE - 16)) as u16;
-        let rng = self.rng;
-        // Lanes 4.. are 0, so f = 0x8000 and fm = 0 there.
-        let x = cdf.x;
-        let f = u16x8::splat(0x8000) - x;
-        let fm = (f & u16x8::splat(0xffc0)) << 1;
-        let r = u16x8::splat((rng & 0xff00) as u16).cast::<u32>();
-        let prod = ((fm.cast::<u32>() * r) >> 16).cast::<u16>();
-        let v = prod + u16x8::from_array([12, 8, 4, 0, rng as u16, 0, 0, 0]);
-        let ge = u16x8::splat(c).simd_ge(v);
-        let u = ge.select(u16x8::splat(0xffff), v).reduce_min() as u32;
-        let vv = ge.select(v, u16x8::splat(0)).reduce_max() as u32;
-        let ge_b = i8x16::from_ne_bytes(ge.to_simd().cast::<u16>().to_ne_bytes());
-        let val = (ge_b.simd_lt(i8x16::splat(0)).to_bitmask() as u32).trailing_zeros() >> 1;
-        let y = if upd {
-            let count = cdf.count;
-            let rate = u16x8::splat(5 + (count >> 4));
-            let y = ge.select(x + (f >> rate), x - (x >> rate));
-            // Keep lanes 4.. zero for the next use.
-            let y = y & u16x8::from_array([0xffff, 0xffff, 0xffff, 0xffff, 0, 0, 0, 0]);
-            Cdf5 {
-                x: y,
-                count: count + (count < 32) as u16,
-            }
-        } else {
-            cdf
-        };
-        self.norm_hot(self.dif - ((vv as u64) << (WIN_SIZE - 16)), u - vv);
-        (val, y)
-    }
-
-    /// `symbol_n` for `N <= 9` with 8 lanes. On x86, `u` and `v` of the
-    /// decoded symbol are read from a stack copy of `[rng, v..]` at the
-    /// index given by a movemask / tzcnt of the compare mask. Elsewhere
-    /// they come from min / max reductions (`uminv` / `umaxv` on aarch64)
-    /// of the compare masked `v` lanes, where lane `N - 2` (true `v` = 0,
-    /// always `<= c`) carries `rng` (`> c`) for the minimum.
-    #[inline(always)]
+    /// `symbol_n` for `N <= 10` with 8 lanes. On x86_64, `u` and `v` of the
+    /// decoded symbol are looked up in a stack copy of `[rng, v..]` at the
+    /// index given by the compare movemask (measured faster there); on
+    /// other targets they come from min / max reductions of the compare
+    /// masked `v` lanes.
+    #[inline(never)]
     fn symbol_simd8<const N: usize>(&mut self, cdf: &mut [u16; N]) -> usize {
         simd_symbol_body!(self, cdf, 8, u16x8, i8x16)
     }
 
-    /// `symbol_n` for `10 <= N <= 17` with 16 lanes (see symbol_simd8).
-    #[inline(always)]
+    /// `symbol_n` for `11 <= N <= 17` with two 8-lane vectors.
+    #[inline(never)]
     fn symbol_simd16<const N: usize>(&mut self, cdf: &mut [u16; N]) -> usize {
-        simd_symbol_body!(self, cdf, 16, u16x16, i8x32)
+        use std::simd::prelude::*;
+        let n = N - 1;
+        let k2 = (n & !1) - 8;
+        let c = (self.dif >> (WIN_SIZE - 16)) as u16;
+        let r = self.rng;
+        let x0 = u16x8::from_array(*cdf.first_chunk::<8>().unwrap());
+        let x1 = if N >= 16 {
+            u16x8::from_array(*cdf[8..16].first_chunk::<8>().unwrap())
+        } else {
+            let mut arr1 = [0u16; 8];
+            arr1[..k2].copy_from_slice(&cdf[8..8 + k2]);
+            u16x8::from_array(arr1)
+        };
+        let top1 = const {
+            let mut t = [0u16; 8];
+            let mut i = 0;
+            while i < 8 && i + 8 < (N - 2) {
+                t[i] = 0x8000;
+                i += 1;
+            }
+            u16x8::from_array(t)
+        };
+        let f0 = u16x8::splat(0x8000) - x0;
+        let f1 = top1.saturating_sub(x1);
+        let (mp0, mp1) = const {
+            let mut m0 = [0u16; 8];
+            let mut m1 = [0u16; 8];
+            let mut i = 0;
+            while i < 8 {
+                if i < N - 2 {
+                    m0[i] = (EC_MIN_PROB * (N - 2 - i) as u32) as u16;
+                }
+                if i + 8 < N - 2 {
+                    m1[i] = (EC_MIN_PROB * (N - 2 - (i + 8)) as u32) as u16;
+                }
+                i += 1;
+            }
+            (u16x8::from_array(m0), u16x8::from_array(m1))
+        };
+        #[cfg(target_arch = "x86_64")]
+        let (ge0, ge1, u, vv, val) = {
+            let mask_ffc0 = u16x8::splat(0xffc0);
+            let rr = u16x8::splat((r & 0xff00) as u16).cast::<u32>();
+            let fm0 = (f0 & mask_ffc0) << 1;
+            let fm1 = (f1 & mask_ffc0) << 1;
+            let v0 = ((fm0.cast::<u32>() * rr) >> 16).cast::<u16>() + mp0;
+            let v1 = ((fm1.cast::<u32>() * rr) >> 16).cast::<u16>() + mp1;
+            let vc = u16x8::splat(c);
+            let ge0 = vc.simd_ge(v0);
+            let ge1 = vc.simd_ge(v1);
+            let b0 = i8x16::from_ne_bytes(ge0.to_simd().cast::<u16>().to_ne_bytes());
+            let b1 = i8x16::from_ne_bytes(ge1.to_simd().cast::<u16>().to_ne_bytes());
+            let m0 = b0.simd_lt(i8x16::splat(0)).to_bitmask() as u32;
+            let m1 = b1.simd_lt(i8x16::splat(0)).to_bitmask() as u32;
+            let mask = m0 | (m1 << 16) | (1u32 << (2 * (N - 2)));
+            let val = (mask.trailing_zeros() >> 1) as usize;
+            let mut vs = [0u16; 17];
+            vs[0] = r as u16;
+            *vs[1..9].first_chunk_mut::<8>().unwrap() = *v0.as_array();
+            *vs[9..17].first_chunk_mut::<8>().unwrap() = *v1.as_array();
+            let idx = val.min(15);
+            (ge0, ge1, vs[idx] as u32, vs[idx + 1] as u32, val)
+        };
+        #[cfg(not(target_arch = "x86_64"))]
+        let (ge0, ge1, u, vv, val) = {
+            let r7 = u16x8::splat(((r >> 8) & 0x7f) as u16);
+            let mask_ffc0 = u16x8::splat(0xffc0);
+            let v0 = (f0 & mask_ffc0) + (((f0 >> 6) * r7) >> 1) + mp0;
+            let v1 = (f1 & mask_ffc0) + (((f1 >> 6) * r7) >> 1) + mp1;
+            let vc = u16x8::splat(c);
+            let lt0 = v0.simd_gt(vc);
+            let lt1 = v1.simd_gt(vc);
+            let lm0 = lt0.to_simd().cast::<u16>();
+            let lm1 = lt1.to_simd().cast::<u16>();
+            let u = ((v0 | !lm0).simd_min(v1 | !lm1).reduce_min() as u32).min(r);
+            let vv = (v0 & !lm0).simd_max(v1 & !lm1).reduce_max() as u32;
+            let val = (lt0.to_simd().cast::<i16>() + lt1.to_simd().cast::<i16>())
+                .reduce_sum()
+                .wrapping_neg() as usize;
+            (!lt0, !lt1, u, vv, val)
+        };
+        let new_dif = self.dif - ((vv as u64) << (WIN_SIZE - 16));
+        let new_rng = u - vv;
+        let d = (new_rng.leading_zeros() ^ 16) as i32;
+        self.dif = new_dif << d;
+        self.rng = new_rng << d;
+        if self.allow_update {
+            let count = cdf[n];
+            let rate = u16x8::splat(5 + (count >> 4));
+            let gm0 = ge0.to_simd().cast::<u16>();
+            let gm1 = ge1.to_simd().cast::<u16>();
+            let y0 = x0 + ((f0 >> rate) & gm0) - ((x0 >> rate) & !gm0);
+            let y1 = x1 + ((f1 >> rate) & gm1) - ((x1 >> rate) & !gm1);
+            *cdf.first_chunk_mut::<8>().unwrap() = *y0.as_array();
+            if N > 16 {
+                *cdf[8..16].first_chunk_mut::<8>().unwrap() = *y1.as_array();
+                cdf[n] = inc_count(count);
+            } else if N == 16 {
+                let mut ya1 = *y1.as_array();
+                ya1[7] = inc_count(count);
+                *cdf[8..16].first_chunk_mut::<8>().unwrap() = ya1;
+            } else {
+                cdf[8..8 + k2].copy_from_slice(&y1.as_array()[..k2]);
+                cdf[n] = inc_count(count);
+            }
+        }
+        let cnt = self.cnt;
+        self.cnt = cnt - d;
+        if (cnt as u32) < (d as u32) {
+            return self.refill_ret::<0>(val);
+        }
+        val
     }
 
     /// Coefficient `coeff_br` loop: starting from level 3, adds up to four
     /// `coeff_br` symbols (stopping after one below 3). Returns the level.
     #[inline(always)]
     pub fn hi_tok(&mut self, cdf: &mut [u16; 5]) -> u32 {
-        let mut tok = 3u32;
-        for _ in 0..4 {
-            let br = self.symbol_n(cdf) as u32;
-            tok += br;
-            if br < 3 {
-                break;
-            }
+        if self.allow_update {
+            self.hi_tok_c::<true>(cdf)
+        } else {
+            self.hi_tok_c::<false>(cdf)
         }
-        tok
     }
 
     /// Golomb code used for coefficient levels above 14: returns the
@@ -567,7 +930,7 @@ impl<'a> SymbolDecoder<'a> {
     #[inline(always)]
     pub fn golomb_coef(&mut self) -> Option<u32> {
         let state = (self.rng as u64) | (((self.cnt as i8 as u8) as u64) << 16);
-        let (dif, out) = golomb_coef_slow(self.raw.buf, self.raw.pos, self.dif, state);
+        let (dif, out) = golomb_coef_slow::<0>(self.raw.buf, self.raw.pos, self.dif, state);
         self.dif = dif;
         self.rng = (out & 0xFFFF) as u32;
         self.cnt = ((out >> 16) as u8 as i8) as i32;
@@ -578,6 +941,28 @@ impl<'a> SymbolDecoder<'a> {
         } else {
             Some(x)
         }
+    }
+
+    /// Reads an equiprobable sign bit followed by `golomb_coef` and
+    /// dequantizes an AC coefficient with `tok == 15`. Returns `(q | (1 << 31), dq)`
+    /// or `(0, 0)` on an invalid stream.
+    #[inline(always)]
+    pub fn ac_golomb(&mut self, q2: u32, dq_shift: u32, cf_max: u64) -> (u32, i32) {
+        let state = (self.rng as u64) | (((self.cnt as i8 as u8) as u64) << 16);
+        let (dif, out, dq) = ac_golomb_slow::<0>(
+            self.raw.buf,
+            self.raw.pos,
+            self.dif,
+            state,
+            q2,
+            dq_shift,
+            cf_max,
+        );
+        self.dif = dif;
+        self.rng = (out & 0xFFFF) as u32;
+        self.cnt = ((out >> 16) as u8 as i8) as i32;
+        self.raw.pos += ((out >> 24) & 0xFF) as usize;
+        ((out >> 32) as u32, dq)
     }
 
     fn symbol_generic(&mut self, cdf: &mut [u16]) -> usize {
@@ -637,13 +1022,16 @@ impl<'a> SymbolDecoder<'a> {
             let count = cdf[2];
             let rate = 4 + (count >> 4) as u32;
             cdf[0] = sel(ret, p0 + (f >> rate), p0 - (p0 >> rate)) as u16;
-            cdf[2] = count + 1 - (count >> 5);
+            cdf[2] = inc_count(count);
         }
         self.norm(new_dif, new_rng);
         !ret
     }
 
-    /// Spec `read_bool()` (equiprobable, no adaptation).
+    /// Spec `read_bool()` (equiprobable, no adaptation). Only used by the
+    /// tests: the decoder uses `literal`, `bool_cold` and the
+    /// `bool_store_neg*` variants.
+    #[cfg(test)]
     #[inline(always)]
     pub fn bool(&mut self) -> bool {
         use std::hint::select_unpredictable as sel;
@@ -658,13 +1046,93 @@ impl<'a> SymbolDecoder<'a> {
         !ret
     }
 
+    /// Reads an equiprobable sign bit and stores `if sign { -d } else { d }`
+    /// to `*dst` before renormalization so `dif`, `vw`, and `d` do not stay
+    /// live across `refill`.
+    #[inline(always)]
+    pub fn bool_store_neg(&mut self, dst: &mut i32, d: i32) {
+        use std::hint::select_unpredictable as sel;
+        let r = self.rng;
+        let dif = self.dif;
+        let v = ((r >> 8) << 7) + EC_MIN_PROB;
+        let vw = (v as u64) << (WIN_SIZE - 16);
+        let ret = dif >= vw;
+        let new_dif = sel(ret, dif.wrapping_sub(vw), dif);
+        let new_rng = sel(ret, r.wrapping_sub(v), v);
+        *dst = sel(ret, d, -d);
+        self.norm_hot(new_dif, new_rng);
+    }
+
+    /// Like `bool_store_neg`, clamping `d` to `cf_max + sign` before negating.
+    #[inline(always)]
+    pub fn bool_store_neg_qm(&mut self, dst: &mut i32, d: u32, cf_max: u32) {
+        use std::hint::select_unpredictable as sel;
+        let r = self.rng;
+        let dif = self.dif;
+        let v = ((r >> 8) << 7) + EC_MIN_PROB;
+        let vw = (v as u64) << (WIN_SIZE - 16);
+        let ret = dif >= vw;
+        let new_dif = sel(ret, dif.wrapping_sub(vw), dif);
+        let new_rng = sel(ret, r.wrapping_sub(v), v);
+        let pos = d.min(cf_max) as i32;
+        let neg = -(d.min(cf_max + 1) as i32);
+        *dst = sel(ret, pos, neg);
+        self.norm_hot(new_dif, new_rng);
+    }
+
+    /// Spec `read_bool()` with out-of-line refill (`norm`), for
+    /// `golomb_coef_slow` and `ac_golomb_slow`.
+    #[inline(always)]
+    fn bool_cold(&mut self) -> bool {
+        use std::hint::select_unpredictable as sel;
+        let r = self.rng;
+        let dif = self.dif;
+        let v = ((r >> 8) << 7) + EC_MIN_PROB;
+        let vw = (v as u64) << (WIN_SIZE - 16);
+        let ret = dif >= vw;
+        let new_dif = sel(ret, dif.wrapping_sub(vw), dif);
+        let new_rng = sel(ret, r.wrapping_sub(v), v);
+        self.norm(new_dif, new_rng);
+        !ret
+    }
+
     /// Spec `read_literal(n)` / `L(n)`.
     #[inline]
     pub fn literal(&mut self, n: u32) -> u32 {
+        use std::hint::select_unpredictable as sel;
+        if n == 0 {
+            return 0;
+        }
+        let mut r = self.rng;
+        let mut dif = self.dif;
+        let mut cnt = self.cnt;
+        let mut pos = self.raw.pos;
+        let buf = self.raw.buf;
         let mut x = 0;
         for _ in 0..n {
-            x = 2 * x + self.bool() as u32;
+            let v = ((r >> 8) << 7) + EC_MIN_PROB;
+            let vw = (v as u64) << (WIN_SIZE - 16);
+            let ret = dif >= vw;
+            let new_dif = sel(ret, dif.wrapping_sub(vw), dif);
+            let new_rng = sel(ret, r.wrapping_sub(v), v);
+            x = (x << 1) | (!ret as u32);
+            let d = (new_rng.leading_zeros() ^ 16) as i32;
+            dif = new_dif << d;
+            r = new_rng << d;
+            let old_cnt = cnt;
+            cnt = old_cnt - d;
+            if (old_cnt as u32) < (d as u32) {
+                cold_refill();
+                let (d_out, out) = refill_cold::<0>(buf, pos, dif, cnt);
+                dif = d_out;
+                pos += (out as u32) as usize;
+                cnt = (out >> 32) as i32;
+            }
         }
+        self.raw.pos = pos;
+        self.dif = dif;
+        self.rng = r;
+        self.cnt = cnt;
         x
     }
 
@@ -681,23 +1149,6 @@ impl<'a> SymbolDecoder<'a> {
         }
         let extra = self.literal(1);
         (v << 1) - m + extra
-    }
-
-    /// Spec `read_golomb()` used by coefficient decoding.
-    pub fn golomb(&mut self) -> u32 {
-        let mut num_bits = 0u32;
-        while !self.bool() {
-            num_bits += 1;
-            if num_bits >= 32 {
-                // Invalid stream; avoid overflow.
-                return u32::MAX >> 1;
-            }
-        }
-        let mut x = 1u32;
-        for _ in 0..num_bits {
-            x = 2 * x + self.bool() as u32;
-        }
-        x - 1
     }
 }
 
@@ -788,6 +1239,30 @@ mod tests {
                 cdf[n] += (cdf[n] < 32) as u16;
             }
             symbol as usize
+        }
+
+        /// Spec `read_bool()`.
+        fn bool(&mut self) -> bool {
+            self.symbol(&mut [1 << 14, 1 << 15, 0], false) == 1
+        }
+
+        /// The Golomb reader of `golomb_coef`: returns the spec's `x`
+        /// (value plus one) or `None` for a prefix longer than 32 bits.
+        fn golomb_coef(&mut self) -> Option<u32> {
+            let mut length = 0;
+            loop {
+                length += 1;
+                if self.bool() {
+                    let mut x = 1u32;
+                    for _ in 0..length - 1 {
+                        x = (x << 1) | self.bool() as u32;
+                    }
+                    return Some(x);
+                }
+                if length > 32 {
+                    return None;
+                }
+            }
         }
     }
 
@@ -898,6 +1373,107 @@ mod tests {
                                 }
                             };
                             assert_eq!(ga, gb);
+                        }
+                    }
+                    assert_eq!(a.symbol_max_bits(), b.max_bits, "len {len} iter {i}");
+                }
+            }
+        }
+    }
+
+    /// Exercises `literal`, `ac_golomb`, `bool_store_neg[_qm]`,
+    /// `symbol4_c` and `symbol5_c` against the spec decoder, with short
+    /// buffers so that the refill tail past the end of the data is hit.
+    #[test]
+    fn specialized_readers_match_spec() {
+        let mut seed = 4242u32;
+        let mut rnd = || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            seed >> 8
+        };
+        for len in [0usize, 1, 2, 7, 9, 33, 400] {
+            let data: Vec<u8> = (0..len).map(|_| rnd() as u8).collect();
+            for update in [false, true] {
+                let mut a = SymbolDecoder::new(&data, !update);
+                let mut b = SpecDecoder::new(&data);
+                let mut c4a = [10000u16, 22000, 32768, 0];
+                let mut c4b = c4a;
+                let mut c5a = [8000u16, 16000, 24000, 32768, 0];
+                let mut c5b = c5a;
+                for i in 0..2000 {
+                    match rnd() % 6 {
+                        0 => {
+                            let n = 1 + rnd() % 32;
+                            let la = a.literal(n);
+                            let mut lb = 0u32;
+                            for _ in 0..n {
+                                lb = (lb << 1) | b.bool() as u32;
+                            }
+                            assert_eq!(la, lb, "len {len} iter {i} n {n}");
+                        }
+                        1 => {
+                            let q2 = 1 + rnd() % 30000;
+                            let dq_shift = rnd() % 3;
+                            // (1 << (7 + bd)) - 1 for bd 8, 10, 12.
+                            let cf_max = [(1u64 << 15) - 1, (1 << 17) - 1, (1 << 19) - 1]
+                                [(rnd() % 3) as usize];
+                            let (qa, dqa) = a.ac_golomb(q2, dq_shift, cf_max);
+                            let sign = b.bool();
+                            let (qb, dqb) = match b.golomb_coef() {
+                                None => (0, 0),
+                                Some(x) => {
+                                    let q = x.wrapping_add(14) & 0xFFFFF;
+                                    let dq =
+                                        (((q as u64 * q2 as u64) & 0xFFFFFF) >> dq_shift) as i64;
+                                    let dq = if sign { -dq } else { dq };
+                                    let dq = dq.clamp(-(cf_max as i64) - 1, cf_max as i64);
+                                    (q | (1 << 31), dq as i32)
+                                }
+                            };
+                            assert_eq!((qa, dqa), (qb, dqb), "len {len} iter {i}");
+                        }
+                        2 => {
+                            let d = (rnd() % 100000) as i32;
+                            let mut dst = 0;
+                            a.bool_store_neg(&mut dst, d);
+                            let sign = b.bool();
+                            assert_eq!(dst, if sign { -d } else { d }, "len {len} iter {i}");
+                        }
+                        3 => {
+                            let d = rnd() % 600000;
+                            let cf_max = [(1u32 << 15) - 1, (1 << 17) - 1, (1 << 19) - 1]
+                                [(rnd() % 3) as usize];
+                            let mut dst = 0;
+                            a.bool_store_neg_qm(&mut dst, d, cf_max);
+                            let sign = b.bool();
+                            let expected = if sign {
+                                -(d.min(cf_max + 1) as i32)
+                            } else {
+                                d.min(cf_max) as i32
+                            };
+                            assert_eq!(dst, expected, "len {len} iter {i}");
+                        }
+                        4 => {
+                            let hot = rnd() % 2 == 0;
+                            let sa = match (update, hot) {
+                                (false, false) => a.symbol4_c::<false, false>(&mut c4a),
+                                (false, true) => a.symbol4_c::<false, true>(&mut c4a),
+                                (true, false) => a.symbol4_c::<true, false>(&mut c4a),
+                                (true, true) => a.symbol4_c::<true, true>(&mut c4a),
+                            };
+                            let sb = b.symbol(&mut c4b, update);
+                            assert_eq!(sa as usize, sb, "len {len} iter {i}");
+                            assert_eq!(c4a, c4b);
+                        }
+                        _ => {
+                            let sa = if update {
+                                a.symbol5_c::<true>(&mut c5a)
+                            } else {
+                                a.symbol5_c::<false>(&mut c5a)
+                            };
+                            let sb = b.symbol(&mut c5b, update);
+                            assert_eq!(sa as usize, sb, "len {len} iter {i}");
+                            assert_eq!(c5a, c5b);
                         }
                     }
                     assert_eq!(a.symbol_max_bits(), b.max_bits, "len {len} iter {i}");

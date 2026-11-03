@@ -58,7 +58,7 @@ pub struct CdefSrc {
 impl CdefSrc {
     pub fn new() -> Self {
         Self {
-            buf: Box::new(()),
+            buf: Box::new(Vec::<u8>::new()),
             stride: 0,
             y0: 0,
             x0: 0,
@@ -69,13 +69,16 @@ impl CdefSrc {
     }
 
     /// The copy as `Vec<T>` (emptied if it held another sample type).
+    #[inline(always)]
     fn data_mut<T: Pixel>(&mut self) -> &mut Vec<T> {
         if !self.buf.is::<Vec<T>>() {
             self.buf = Box::new(Vec::<T>::new());
+            return self.buf.downcast_mut::<Vec<T>>().unwrap();
         }
         self.buf.downcast_mut::<Vec<T>>().unwrap()
     }
 
+    #[inline(always)]
     fn data<T: Pixel>(&self) -> &[T] {
         self.buf.downcast_ref::<Vec<T>>().map_or(&[], |v| &v[..])
     }
@@ -95,9 +98,77 @@ fn copy_n<T: Copy, const N: usize>(dst: &mut [T], src: &[T]) {
     *d = *s;
 }
 
+/// Fills one row of a full-width strip copy (`W` = 64 or 32, `WB = W + 2`,
+/// `S = W + 4`).
+#[inline(always)]
+fn fill_row_const<T: Pixel, const W: usize, const WB: usize, const S: usize>(
+    drow: &mut [T; S],
+    line: &[T],
+    x0: usize,
+    left_from_prev: bool,
+) {
+    const B: usize = CDEF_BORDER;
+    if x0 >= B {
+        if left_from_prev {
+            drow[0] = drow[W];
+            drow[1] = drow[W + 1];
+            copy_n::<T, WB>(&mut drow[B..], &line[x0..]);
+        } else {
+            copy_n::<T, S>(drow, &line[x0 - B..]);
+        }
+    } else {
+        copy_n::<T, WB>(&mut drow[B..], &line[x0..]);
+    }
+}
+
+/// Fast path of [`build_strip`] for interior/full-width strips (`w == W`,
+/// `r_end == x0 + W + B`, `stride == S`).
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn build_strip_const<T: Pixel, const W: usize, const WB: usize, const S: usize>(
+    data: &mut [T],
+    pl: &PlaneWin<T>,
+    above: &[Vec<T>; 2],
+    y0: usize,
+    ya0: usize,
+    ya1: usize,
+    x0: usize,
+    plane_h: usize,
+    can_left_from_prev: bool,
+    prev_ya0: usize,
+    prev_ya1: usize,
+) {
+    const B: usize = CDEF_BORDER;
+    let prev_len = prev_ya1.saturating_sub(prev_ya0);
+    if ya0 == y0 && y0 >= B {
+        for r in 0..B {
+            let y = y0 - B + r;
+            if y < plane_h {
+                let drow: &mut [T; S] = (&mut data[r * S..(r + 1) * S]).try_into().unwrap();
+                let left = can_left_from_prev && y.wrapping_sub(prev_ya0) < prev_len;
+                fill_row_const::<T, W, WB, S>(drow, &above[r], x0, left);
+            }
+        }
+    }
+    let y_start = ya0.saturating_sub(B).max(y0);
+    let y_end = (ya1 + B).min(plane_h);
+    if y_start >= y_end {
+        return;
+    }
+    assert!(x0 + WB <= pl.stride);
+    let r0 = y_start - y0 + B;
+    let r1 = y_end - y0 + B;
+    for (i, drow) in data[r0 * S..r1 * S].chunks_exact_mut(S).enumerate() {
+        let y = y_start + i;
+        let drow: &mut [T; S] = drow.try_into().unwrap();
+        let left = can_left_from_prev && y.wrapping_sub(prev_ya0) < prev_len;
+        fill_row_const::<T, W, WB, S>(drow, pl.row(y), x0, left);
+    }
+}
+
 /// Fills one row of a strip copy (see [`build_strip`]): `line` is the
 /// plane row, `drow` the copy row.
-#[inline(always)]
+#[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn fill_strip_row<T: Pixel>(
     drow: &mut [T],
@@ -164,8 +235,7 @@ fn build_strip<T: Pixel>(
     let prev_w = src.prev_w;
     let prev_ya0 = src.prev_ya0;
     let prev_ya1 = src.prev_ya1;
-    let same_layout = src.stride == stride && src.data::<T>().len() == len;
-    let can_left_from_prev = has_left && x0 >= B && prev_w >= B && same_layout;
+    let prev_stride = src.stride;
     src.stride = stride;
     src.y0 = y0;
     src.x0 = x0;
@@ -173,10 +243,47 @@ fn build_strip<T: Pixel>(
     src.prev_ya0 = ya0;
     src.prev_ya1 = ya1;
     let data = src.data_mut::<T>();
+    let same_layout = prev_stride == stride && data.len() == len;
+    let can_left_from_prev = has_left && x0 >= B && prev_w >= B && same_layout;
     // Every sample inside the frame is written below, so the buffer is
     // only resized.
     if data.len() != len {
         data.resize(len, T::default());
+    }
+    let r_end_x = (x1 + B).min(plane_w);
+    if (!can_left_from_prev || prev_w == w) && (x0 == 0 || x0 >= B) {
+        if max_w == 64 && w == 64 && r_end_x == x0 + 66 {
+            build_strip_const::<T, 64, 66, 68>(
+                data,
+                pl,
+                above,
+                y0,
+                ya0,
+                ya1,
+                x0,
+                plane_h,
+                can_left_from_prev,
+                prev_ya0,
+                prev_ya1,
+            );
+            return;
+        }
+        if max_w == 32 && w == 32 && r_end_x == x0 + 34 {
+            build_strip_const::<T, 32, 34, 36>(
+                data,
+                pl,
+                above,
+                y0,
+                ya0,
+                ya1,
+                x0,
+                plane_h,
+                can_left_from_prev,
+                prev_ya0,
+                prev_ya1,
+            );
+            return;
+        }
     }
     let r_start = ya0 - y0;
     let r_end = ya1 - y0 + 2 * B;
@@ -283,17 +390,14 @@ pub fn cdef_sbrow<T: Pixel>(
                     let mut any = false;
                     let mut r = ur;
                     while r < ur_end {
-                        let m0 = mi.row(r);
-                        let m1 = mi.row(r + 1);
+                        let m0 = &mi.row(r)[c0..c1];
+                        let m1 = &mi.row(r + 1)[c0..c1];
                         let mut mask = 0u8;
-                        let mut bit = 1u8;
-                        let mut c = c0;
-                        while c < c1 {
-                            if !(m0[c].skip && m1[c].skip && m0[c + 1].skip && m1[c + 1].skip) {
-                                mask |= bit;
+                        for (i, (p0, p1)) in m0.chunks_exact(2).zip(m1.chunks_exact(2)).enumerate()
+                        {
+                            if !(p0[0].skip && p1[0].skip && p0[1].skip && p1[1].skip) {
+                                mask |= 1 << i;
                             }
-                            bit <<= 1;
-                            c += 2;
                         }
                         if mask != 0 {
                             u.noskip[(r - ur) >> 1] = mask;

@@ -58,16 +58,15 @@ pub type LoopFilterEdgeFn<T> =
 /// [`cdef::cdef_unit`].
 pub type CdefUnitFn<T> = fn(&mut cdef::CdefUnit<'_, T>);
 /// Wiener filter, see [`lr::wiener_filter`].
-pub type WienerFn<T> = fn(&mut [T], usize, &[T], usize, usize, usize, &[[i32; 3]; 2], u32);
+pub type WienerFn<T> = fn(&mut [T], usize, &[&[T]], usize, usize, &[[i32; 3]; 2], u32);
 /// Self guided filter, see [`lr::sgr_filter`].
-pub type SgrFn<T> = fn(&mut [T], usize, &[T], usize, usize, usize, usize, [i32; 2], u32);
+pub type SgrFn<T> = fn(&mut [T], usize, &[&[T]], usize, usize, usize, [i32; 2], u32);
 
 /// Table of the kernels used by the decoder for one pixel type.
 ///
-/// The decoder only calls kernels through this table. [`Dsp::new`] fills
-/// it with the portable implementations; SIMD versions can be selected
-/// here at runtime (e.g. from CPU feature detection) without any change
-/// to the decoding logic.
+/// The decoder only calls kernels through this table. [`Dsp::new`] initializes
+/// it with `Self::simd(bd)`, while `Dsp::portable(bd)` provides the scalar
+/// implementation.
 #[derive(Clone, Copy)]
 pub struct Dsp<T: Pixel> {
     pub inv_txfm_add: InvTxfmAddFn<T>,
@@ -79,6 +78,10 @@ pub struct Dsp<T: Pixel> {
     pub cdef_unit: CdefUnitFn<T>,
     pub wiener: WienerFn<T>,
     pub sgr: SgrFn<T>,
+    /// Per `[tx_size][tx_type]` inverse transform entries for `eob >= 1`
+    /// and not lossless (see [`simd::itx::itx_table`]), if available;
+    /// [`Dsp::inv_txfm_add`] is used otherwise.
+    pub itx: Option<&'static [[simd::itx::ItxFn<T>; 16]; 19]>,
 }
 
 impl<T: Pixel> Dsp<T> {
@@ -110,6 +113,7 @@ impl<T: Pixel> Dsp<T> {
             cdef_unit: cdef::cdef_unit::<T, simd::cdef::SimdCdef<BD>>,
             wiener: simd::lr::wiener_filter_bd::<T, BD>,
             sgr: simd::lr::sgr_filter_bd::<T, BD>,
+            itx: Some(simd::itx::itx_table::<T, BD>()),
         }
     }
 
@@ -125,6 +129,7 @@ impl<T: Pixel> Dsp<T> {
             cdef_unit: cdef::cdef_unit::<T, cdef::PortableCdef>,
             wiener: lr::wiener_filter::<T>,
             sgr: lr::sgr_filter::<T>,
+            itx: None,
         }
     }
 }

@@ -80,7 +80,19 @@ fn next_obu(data: &[u8]) -> Result<(Obu<'_>, &[u8])> {
 pub struct FrameData<'a> {
     pub seq: SequenceHeader,
     pub frame: FrameHeader,
+    pub single_tile: &'a [u8],
     pub tiles: Vec<&'a [u8]>,
+}
+
+impl<'a> FrameData<'a> {
+    #[inline(always)]
+    pub fn tiles(&self) -> &[&'a [u8]] {
+        if self.tiles.is_empty() {
+            std::slice::from_ref(&self.single_tile)
+        } else {
+            &self.tiles
+        }
+    }
 }
 
 /// Parses a `tile_group_obu(sz)` payload (spec 5.11.1) and stores the
@@ -88,16 +100,18 @@ pub struct FrameData<'a> {
 fn parse_tile_group<'a>(
     data: &'a [u8],
     fh: &FrameHeader,
-    tiles: &mut [Option<&'a [u8]>],
+    single_tile: &mut &'a [u8],
+    tiles: &mut Vec<&'a [u8]>,
 ) -> Result<bool> {
     let ti = &fh.tile_info;
     let num_tiles = ti.cols * ti.rows;
-    let mut r = BitReader::new(data);
-    let mut tile_start_and_end_present = false;
-    if num_tiles > 1 {
-        tile_start_and_end_present = r.flag()?;
+    if num_tiles == 1 {
+        *single_tile = data;
+        return Ok(true);
     }
-    let (tg_start, tg_end) = if num_tiles == 1 || !tile_start_and_end_present {
+    let mut r = BitReader::new(data);
+    let tile_start_and_end_present = r.flag()?;
+    let (tg_start, tg_end) = if !tile_start_and_end_present {
         (0, num_tiles - 1)
     } else {
         let bits = ti.cols_log2 + ti.rows_log2;
@@ -107,7 +121,7 @@ fn parse_tile_group<'a>(
         return Err(Error::Invalid("tile group range"));
     }
     // Tile groups must arrive in order (tg_start == TileNum).
-    if tg_start != tiles.iter().take_while(|t| t.is_some()).count() {
+    if tg_start != tiles.len() {
         return Err(Error::Invalid("tile group start"));
     }
     r.byte_align();
@@ -126,7 +140,7 @@ fn parse_tile_group<'a>(
             s + 1
         };
         let tile = data.get(pos..pos + size).ok_or(Error::Truncated)?;
-        tiles[tile_num] = Some(tile);
+        tiles.push(tile);
         pos += size;
     }
     Ok(tg_end == num_tiles - 1)
@@ -136,7 +150,9 @@ fn parse_tile_group<'a>(
 pub fn parse_first_frame(mut data: &[u8]) -> Result<FrameData<'_>> {
     let mut seq: Option<SequenceHeader> = None;
     let mut frame: Option<FrameHeader> = None;
-    let mut tiles: Vec<Option<&[u8]>> = Vec::new();
+    let mut single_tile: &[u8] = &[];
+    let mut tiles: Vec<&[u8]> = Vec::new();
+    let mut complete = false;
     while !data.is_empty() {
         let (obu, rest) = next_obu(data)?;
         data = rest;
@@ -165,29 +181,36 @@ pub fn parse_first_frame(mut data: &[u8]) -> Result<FrameData<'_>> {
                 let s = seq
                     .as_ref()
                     .ok_or(Error::Invalid("frame before sequence header"))?;
-                let mut header_bits = 0;
                 if frame.is_none() {
-                    let (fh, bits) =
+                    let (fh, header_bits) =
                         FrameHeader::parse(obu.payload, s, obu.temporal_id, obu.spatial_id)?;
-                    tiles = vec![None; fh.tile_info.cols * fh.tile_info.rows];
+                    let num_tiles = fh.tile_info.cols * fh.tile_info.rows;
+                    if num_tiles > 1 {
+                        tiles.reserve(num_tiles);
+                    }
+                    if obu.obu_type == OBU_FRAME {
+                        let offset = header_bits.div_ceil(8);
+                        let tg = obu.payload.get(offset..).ok_or(Error::Truncated)?;
+                        if parse_tile_group(tg, &fh, &mut single_tile, &mut tiles)? {
+                            return Ok(FrameData {
+                                seq: seq.take().ok_or(Error::Invalid("no sequence header"))?,
+                                frame: fh,
+                                single_tile,
+                                tiles,
+                            });
+                        }
+                    }
                     frame = Some(fh);
-                    header_bits = bits;
                 } else if obu.obu_type == OBU_FRAME {
                     return Err(Error::Invalid("unexpected frame OBU"));
-                }
-                if obu.obu_type == OBU_FRAME {
-                    let offset = header_bits.div_ceil(8);
-                    let tg = obu.payload.get(offset..).ok_or(Error::Truncated)?;
-                    if parse_tile_group(tg, frame.as_ref().unwrap(), &mut tiles)? {
-                        break;
-                    }
                 }
             }
             OBU_TILE_GROUP => {
                 let fh = frame
                     .as_ref()
                     .ok_or(Error::Invalid("tile group before frame header"))?;
-                if parse_tile_group(obu.payload, fh, &mut tiles)? {
+                if parse_tile_group(obu.payload, fh, &mut single_tile, &mut tiles)? {
+                    complete = true;
                     break;
                 }
             }
@@ -198,9 +221,13 @@ pub fn parse_first_frame(mut data: &[u8]) -> Result<FrameData<'_>> {
     }
     let seq = seq.ok_or(Error::Invalid("no sequence header"))?;
     let frame = frame.ok_or(Error::Invalid("no frame header"))?;
-    let tiles = tiles
-        .into_iter()
-        .collect::<Option<Vec<_>>>()
-        .ok_or(Error::Truncated)?;
-    Ok(FrameData { seq, frame, tiles })
+    if !complete {
+        return Err(Error::Truncated);
+    }
+    Ok(FrameData {
+        seq,
+        frame,
+        single_tile,
+        tiles,
+    })
 }

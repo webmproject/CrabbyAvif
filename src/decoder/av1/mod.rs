@@ -110,8 +110,11 @@ pub struct DecodeOptions {
     /// is [`DEFAULT_MAX_FRAME_PIXELS`] (16384 x 16384, libavif's default
     /// limit).
     pub max_frame_pixels: usize,
-    /// Maximum number of threads used for tile decoding. `1` (the
-    /// default) decodes on the calling thread; `0` uses
+    /// Maximum number of threads used for decoding: tiles of multi-tile
+    /// frames are decoded in parallel, and the post filters (deblocking,
+    /// CDEF, loop restoration) of whole frames run on worker threads in
+    /// horizontal bands (also for single-tile frames). `1` (the default)
+    /// decodes on the calling thread; `0` uses
     /// [`std::thread::available_parallelism`].
     pub threads: usize,
 }
@@ -376,6 +379,17 @@ pub fn header_summary(data: &[u8]) -> Result<String> {
 /// Decodes the first frame (which must be an intra frame) of a stream of
 /// OBUs (low overhead bitstream format, e.g. the payload of an AVIF item).
 pub fn decode(data: &[u8], opts: &DecodeOptions) -> Result<Frame> {
+    Ok(decode_with_info(data, opts)?.1)
+}
+
+/// Decodes the first frame and returns both its header [`ImageInfo`] and
+/// the decoded [`Frame`] in a single header parse.
+///
+/// Meant for callers that need the image properties together with the
+/// frame (instead of [`probe`] followed by [`decode`], which parses the
+/// headers twice) and that hand the frame back with [`recycle_frame`]
+/// once they are done with it.
+pub fn decode_with_info(data: &[u8], opts: &DecodeOptions) -> Result<(ImageInfo, Frame)> {
     let fd = obu::parse_first_frame(data)?;
     let info = info_from(&fd.seq, &fd.frame);
     if info.width.saturating_mul(info.height) > opts.max_frame_pixels {
@@ -383,26 +397,43 @@ pub fn decode(data: &[u8], opts: &DecodeOptions) -> Result<Frame> {
             "frame larger than DecodeOptions::max_frame_pixels",
         ));
     }
-    if info.bit_depth == 8 {
+    let frame = if info.bit_depth == 8 {
         let planes = decode_typed::<u8>(&fd, &info, opts)?;
         let (w, h) = (planes[0].width, planes[0].height);
-        Ok(Frame {
+        Frame {
             width: w,
             height: h,
             bit_depth: 8,
             layout: info.layout,
             planes: Planes::U8(planes),
-        })
+        }
     } else {
         let planes = decode_typed::<u16>(&fd, &info, opts)?;
         let (w, h) = (planes[0].width, planes[0].height);
-        Ok(Frame {
+        Frame {
             width: w,
             height: h,
             bit_depth: info.bit_depth,
             layout: info.layout,
             planes: Planes::U16(planes),
-        })
+        }
+    };
+    Ok((info, frame))
+}
+
+/// Returns the plane buffers of `frame` to the internal decoder pool so the
+/// next [`decode`] call on the same or another thread can reuse them without
+/// reallocating or page-faulting.
+///
+/// For callers that recycle frames (e.g. that copy the decoded samples
+/// out and then drop the frame): without calls to this function the
+/// plane pool stays empty and every decode allocates its output planes.
+/// The pool keeps at most 16 luma and 32 chroma planes per sample type
+/// for the lifetime of the process.
+pub fn recycle_frame(frame: Frame) {
+    match frame.planes {
+        Planes::U8(planes) => decode::recycle_planes(planes),
+        Planes::U16(planes) => decode::recycle_planes(planes),
     }
 }
 
@@ -431,27 +462,27 @@ fn decode_typed<T: Pixel>(
     }
     let np = if info.layout == ChromaLayout::Mono { 1 } else { 3 };
     let (ssx, ssy) = info.layout.sub();
-    let mut plane_dims = Vec::new();
-    let mut crops = Vec::new();
-    let mut out_dims = Vec::new();
+    let mut plane_dims = [(0usize, 0usize); 3];
+    let mut crops = [PlaneCrop::default(); 3];
+    let mut out_dims = [(0usize, 0usize); 3];
     for p in 0..np {
         let (sx, sy) = if p == 0 { (0, 0) } else { (ssx, ssy) };
-        plane_dims.push(((info.width + sx) >> sx, (info.height + sy) >> sy));
+        plane_dims[p] = ((info.width + sx) >> sx, (info.height + sy) >> sy);
         let x0 = crop.x >> sx;
         let y0 = crop.y >> sy;
         let x1 = (crop.x + crop.width + sx) >> sx;
         let y1 = (crop.y + crop.height + sy) >> sy;
-        crops.push(PlaneCrop {
+        crops[p] = PlaneCrop {
             x0,
             y0,
             w: x1 - x0,
             h: y1 - y0,
-        });
-        if opts.output_size.is_some() {
-            out_dims.push(((ow + sx) >> sx, (oh + sy) >> sy));
+        };
+        out_dims[p] = if opts.output_size.is_some() {
+            ((ow + sx) >> sx, (oh + sy) >> sy)
         } else {
-            out_dims.push((x1 - x0, y1 - y0));
-        }
+            (x1 - x0, y1 - y0)
+        };
     }
     let fh = &fd.frame;
     let grain = if opts.apply_film_grain && fh.film_grain.apply_grain {
@@ -470,7 +501,7 @@ fn decode_typed<T: Pixel>(
     } else {
         None
     };
-    let mut sink = OutputSink::<T>::new(&plane_dims, crops, &out_dims, grain, info.bit_depth);
+    let mut sink = OutputSink::<T>::new(&plane_dims[..np], crops, out_dims, grain);
     let region = if opts.crop.is_some() { Some(sb_region(fd, &crop)) } else { None };
     let threads = if opts.threads == 0 {
         std::thread::available_parallelism()

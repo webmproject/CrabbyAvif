@@ -96,7 +96,7 @@ pub const MAX_TX_DEPTH: [u8; 22] = [
 /// `BLOCK_INVALID` (only reached for rectangular block sizes, which
 /// the spec never looks up).
 #[rustfmt::skip]
-pub static PARTITION_SUBSIZE: [[Option<BlockSize>; 22]; 10] = [
+pub const PARTITION_SUBSIZE: [[Option<BlockSize>; 22]; 10] = [
     [
         Some(BlockSize::B4x4), None, None, Some(BlockSize::B8x8), None, None,
         Some(BlockSize::B16x16), None, None, Some(BlockSize::B32x32), None, None,
@@ -155,7 +155,7 @@ pub static PARTITION_SUBSIZE: [[Option<BlockSize>; 22]; 10] = [
 /// is the spec's `BLOCK_INVALID` (a block size / subsampling
 /// combination that cannot occur in a conformant stream).
 #[rustfmt::skip]
-pub static SUBSAMPLED_SIZE: [[[Option<BlockSize>; 2]; 2]; 22] = [
+pub const SUBSAMPLED_SIZE: [[[Option<BlockSize>; 2]; 2]; 22] = [
     [
         [Some(BlockSize::B4x4), Some(BlockSize::B4x4)],
         [Some(BlockSize::B4x4), Some(BlockSize::B4x4)],
@@ -315,7 +315,7 @@ pub const MODE_TO_TXFM: [TxType; 14] = [
 /// (spec section 5.11.40, Compute transform type function).
 /// Indexed by `[tx_set][tx_type]`; `true` if the type is allowed.
 #[rustfmt::skip]
-pub static TX_TYPE_IN_SET_INTRA: [[bool; 16]; 3] = [
+pub const TX_TYPE_IN_SET_INTRA: [[bool; 16]; 3] = [
     [
         true, false, false, false, false, false, false, false, false, false, false, false, false,
         false, false, false,
@@ -334,7 +334,7 @@ pub static TX_TYPE_IN_SET_INTRA: [[bool; 16]; 3] = [
 /// (spec section 5.11.40, Compute transform type function).
 /// Indexed by `[tx_set][tx_type]`; `true` if the type is allowed.
 #[rustfmt::skip]
-pub static TX_TYPE_IN_SET_INTER: [[bool; 16]; 4] = [
+pub const TX_TYPE_IN_SET_INTER: [[bool; 16]; 4] = [
     [
         true, false, false, false, false, false, false, false, false, false, false, false, false,
         false, false, false,
@@ -411,7 +411,7 @@ pub const PALETTE_COLOR_HASH_MULTIPLIERS: [u8; 3] = [1, 2, 2];
 
 /// `Coeff_Base_Ctx_Offset[TX_SIZES_ALL][5][5]` (spec section 8.3.2, Cdf selection process).
 #[rustfmt::skip]
-pub static COEFF_BASE_CTX_OFFSET: [[[u8; 5]; 5]; 19] = [
+pub const COEFF_BASE_CTX_OFFSET: [[[u8; 5]; 5]; 19] = [
     [
         [0, 1, 6, 6, 0],
         [1, 6, 6, 21, 0],
@@ -553,7 +553,7 @@ pub const COEFF_BASE_POS_CTX_OFFSET: [u8; 3] = [26, 31, 36];
 
 /// `Mag_Ref_Offset_With_Tx_Class[3][3][2]` (spec section 8.3.2, Cdf selection process).
 #[rustfmt::skip]
-pub static MAG_REF_OFFSET_WITH_TX_CLASS: [[[u8; 2]; 3]; 3] = [
+pub const MAG_REF_OFFSET_WITH_TX_CLASS: [[[u8; 2]; 3]; 3] = [
     [
         [0, 1],
         [1, 0],
@@ -573,7 +573,7 @@ pub static MAG_REF_OFFSET_WITH_TX_CLASS: [[[u8; 2]; 3]; 3] = [
 
 /// `Sig_Ref_Diff_Offset[3][SIG_REF_DIFF_OFFSET_NUM][2]` (spec section 9.3, Conversion tables).
 #[rustfmt::skip]
-pub static SIG_REF_DIFF_OFFSET: [[[u8; 2]; 5]; 3] = [
+pub const SIG_REF_DIFF_OFFSET: [[[u8; 2]; 5]; 3] = [
     [
         [0, 1],
         [1, 0],

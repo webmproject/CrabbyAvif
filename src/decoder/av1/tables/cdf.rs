@@ -22,8 +22,8 @@
 
 /// Spec `init_coeff_cdfs`: selects the default coefficient CDF set from
 /// `base_q_idx`.
-#[inline]
-pub fn coeff_cdf_q_ctx(base_q_idx: u8) -> usize {
+#[inline(always)]
+pub const fn coeff_cdf_q_ctx(base_q_idx: u8) -> usize {
     match base_q_idx {
         0..=20 => 0,
         21..=60 => 1,
@@ -5120,7 +5120,8 @@ pub static DEFAULT_COEFF_BR_CDF: [[[[[u16; 5]; 21]; 2]; 5]; 4] = [
 /// `Default_` prefix and `_Cdf` suffix; the dimensions are those of the
 /// default tables (the coefficient CDFs drop the leading q context
 /// dimension, the MV CDFs only keep the intrabc MV context).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C, align(64))]
 pub struct CdfContext {
     /// Initialised from [`DEFAULT_INTRA_FRAME_Y_MODE_CDF`].
     pub intra_frame_y_mode: [[[u16; 14]; 5]; 5],
@@ -5289,11 +5290,22 @@ pub struct CdfContext {
     pub coeff_br: [[[[u16; 5]; 21]; 2]; 5],
 }
 
+pub static DEFAULT_CDF_CONTEXT: [CdfContext; 4] = [
+    CdfContext::from_q_ctx(0),
+    CdfContext::from_q_ctx(1),
+    CdfContext::from_q_ctx(2),
+    CdfContext::from_q_ctx(3),
+];
+
 impl CdfContext {
     /// Returns the default CDFs for a frame with the given `base_q_idx`
     /// (spec `init_non_coeff_cdfs` followed by `init_coeff_cdfs`).
-    pub fn new(base_q_idx: u8) -> Self {
-        let q = coeff_cdf_q_ctx(base_q_idx);
+    #[inline(always)]
+    pub const fn new(base_q_idx: u8) -> Self {
+        DEFAULT_CDF_CONTEXT[coeff_cdf_q_ctx(base_q_idx)]
+    }
+
+    const fn from_q_ctx(q: usize) -> Self {
         CdfContext {
             intra_frame_y_mode: DEFAULT_INTRA_FRAME_Y_MODE_CDF,
             uv_mode_cfl_not_allowed: DEFAULT_UV_MODE_CFL_NOT_ALLOWED_CDF,

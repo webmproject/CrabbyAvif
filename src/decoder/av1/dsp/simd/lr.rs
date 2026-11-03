@@ -196,8 +196,7 @@ fn widen_row<T: Pixel>(src: &[T], dst: &mut [i16]) {
 pub fn wiener_filter<T: Pixel>(
     dst: &mut [T],
     dst_stride: usize,
-    src: &[T],
-    src_stride: usize,
+    src: &[&[T]],
     w: usize,
     h: usize,
     coeffs: &[[i32; 3]; 2],
@@ -226,10 +225,7 @@ pub fn wiener_filter<T: Pixel>(
     // per chunk are plain vector loads.
     let mut wide = [0i16; WIDE_LEN];
     let mut hpass = |r: usize, out: &mut [i16; LR_MAX_W]| {
-        widen_row(
-            &src[r * src_stride..r * src_stride + w + 2 * LR_BORDER],
-            &mut wide,
-        );
+        widen_row(&src[r][..w + 2 * LR_BORDER], &mut wide);
         for c in (0..w).step_by(N) {
             let p = |t: usize| I16s::from_slice(&wide[c + t..]);
             let s = madd(p(0) + p(6), p(1) + p(5), hf[0], hf[1])
@@ -362,8 +358,7 @@ fn sgr_a2(z: I32s) -> I32s {
 ///   these are computed modulo 2^32 in `u32` lanes.
 #[inline(always)]
 fn box_ab_row<T: Pixel, const R: usize>(
-    src: &[T],
-    src_stride: usize,
+    src: &[&[T]],
     i: isize,
     w: usize,
     s: u32,
@@ -375,10 +370,7 @@ fn box_ab_row<T: Pixel, const R: usize>(
     // Leftmost padded column used: rectangle column -1 - R.
     let col0 = LR_BORDER - 1 - R;
     let row0 = (i + LR_BORDER as isize - R as isize) as usize;
-    let row = |dy: usize| {
-        let start = (row0 + dy) * src_stride + col0;
-        &src[start..start + ncols]
-    };
+    let row = |dy: usize| &src[row0 + dy][col0..col0 + ncols];
     let rows: [&[T]; 5] = [row(0), row(1), row(2), row(R + 1), row(2 * R)];
 
     // Vertical sums of c and c * c over the 2R+1 rows around row i.
@@ -467,8 +459,7 @@ fn weigh_row<const K0: i32, const K1: i32>(bs: &BoxScratch, w: usize, out: &mut 
 /// Row `i` of the r = 2 pass, weighted 5, 6.
 #[allow(clippy::too_many_arguments)]
 fn r2_row<T: Pixel>(
-    src: &[T],
-    src_stride: usize,
+    src: &[&[T]],
     i: isize,
     w: usize,
     s: u32,
@@ -476,7 +467,7 @@ fn r2_row<T: Pixel>(
     bs: &mut BoxScratch,
     out: &mut WeightedRow,
 ) {
-    box_ab_row::<T, 2>(src, src_stride, i, w, s, bd, bs);
+    box_ab_row::<T, 2>(src, i, w, s, bd, bs);
     weigh_row::<5, 6>(bs, w, out);
 }
 
@@ -484,8 +475,7 @@ fn r2_row<T: Pixel>(
 /// (`out444`).
 #[allow(clippy::too_many_arguments)]
 fn r1_row<T: Pixel>(
-    src: &[T],
-    src_stride: usize,
+    src: &[&[T]],
     i: isize,
     w: usize,
     s: u32,
@@ -494,7 +484,7 @@ fn r1_row<T: Pixel>(
     out343: &mut WeightedRow,
     out444: &mut WeightedRow,
 ) {
-    box_ab_row::<T, 1>(src, src_stride, i, w, s, bd, bs);
+    box_ab_row::<T, 1>(src, i, w, s, bd, bs);
     weigh_row::<3, 4>(bs, w, out343);
     weigh_row::<4, 4>(bs, w, out444);
 }
@@ -514,8 +504,7 @@ fn box_out(a: I16s, b: I32s, px: I16s, shift: u32) -> I32s {
 pub fn sgr_filter<T: Pixel>(
     dst: &mut [T],
     dst_stride: usize,
-    src: &[T],
-    src_stride: usize,
+    src: &[&[T]],
     w: usize,
     h: usize,
     set: usize,
@@ -556,54 +545,24 @@ pub fn sgr_filter<T: Pixel>(
     let mut p444 = [WeightedRow::new(), WeightedRow::new(), WeightedRow::new()];
 
     if r0 != 0 {
-        r2_row(src, src_stride, -1, w, s0, bd, &mut bs, &mut p0[0]);
-        r2_row(src, src_stride, 1, w, s0, bd, &mut bs, &mut p0[1]);
+        r2_row(src, -1, w, s0, bd, &mut bs, &mut p0[0]);
+        r2_row(src, 1, w, s0, bd, &mut bs, &mut p0[1]);
     }
     if r1 != 0 {
-        r1_row(
-            src,
-            src_stride,
-            -1,
-            w,
-            s1,
-            bd,
-            &mut bs,
-            &mut p343[0],
-            &mut p444[0],
-        );
-        r1_row(
-            src,
-            src_stride,
-            0,
-            w,
-            s1,
-            bd,
-            &mut bs,
-            &mut p343[1],
-            &mut p444[1],
-        );
+        r1_row(src, -1, w, s1, bd, &mut bs, &mut p343[0], &mut p444[0]);
+        r1_row(src, 0, w, s1, bd, &mut bs, &mut p343[1], &mut p444[1]);
     }
 
     for i in 0..h {
         let odd = i & 1 == 1;
         if r0 != 0 && !odd && i >= 2 {
             cur0 ^= 1;
-            r2_row(
-                src,
-                src_stride,
-                i as isize + 1,
-                w,
-                s0,
-                bd,
-                &mut bs,
-                &mut p0[cur0],
-            );
+            r2_row(src, i as isize + 1, w, s0, bd, &mut bs, &mut p0[cur0]);
         }
         if r1 != 0 {
             let k = (i + 2) % 3;
             r1_row(
                 src,
-                src_stride,
                 i as isize + 1,
                 w,
                 s1,
@@ -616,8 +575,7 @@ pub fn sgr_filter<T: Pixel>(
         let (prev, next) = (&p0[cur0 ^ 1], &p0[cur0]);
         let (t, m, d) = (&p343[i % 3], &p444[(i + 1) % 3], &p343[(i + 2) % 3]);
 
-        let pr = (i + LR_BORDER) * src_stride + LR_BORDER;
-        let px_row = &src[pr..pr + w];
+        let px_row = &src[i + LR_BORDER][LR_BORDER..LR_BORDER + w];
         let out = &mut dst[i * dst_stride..i * dst_stride + w];
         for c in (0..w).step_by(N) {
             let px = load_px_tail(&px_row[c..]);
@@ -667,6 +625,15 @@ mod narrow {
     type U16s = Simd<u16, N>;
     type I32s = Simd<i32, N>;
     type U32s = Simd<u32, N>;
+    // 4-lane types of the non-aarch64 tail of `ab_from_vsum`.
+    #[cfg(not(target_arch = "aarch64"))]
+    type I16x4 = Simd<i16, 4>;
+    #[cfg(not(target_arch = "aarch64"))]
+    type U16x4 = Simd<u16, 4>;
+    #[cfg(not(target_arch = "aarch64"))]
+    type I32x4 = Simd<i32, 4>;
+    #[cfg(not(target_arch = "aarch64"))]
+    type U32x4 = Simd<u32, 4>;
     type RingRow = [I16s; LR_CHUNKS];
 
     /// Lane indices interleaving two `N` lane vectors.
@@ -739,11 +706,11 @@ mod narrow {
     /// on 256-bit vectors leave the sums (they work within 128-bit lanes),
     /// and `packssdw` of the two halves restores the natural order, so the
     /// `vperm2i128` / `vpermq` fix-ups of [`madd`] + [`narrow_sat`] go away.
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     const Q: [usize; N] = [0, 1, 2, 3, 8, 9, 10, 11, 4, 5, 6, 7, 12, 13, 14, 15];
     /// In-lane interleave of two `N` lane vectors: `punpcklwd` then
     /// `punpckhwd` of every 128-bit lane.
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     const INTERLEAVE_P: [usize; 2 * N] = {
         let mut t = [0; 2 * N];
         let mut i = 0;
@@ -756,10 +723,10 @@ mod narrow {
     };
 
     /// `a * fa + b * fb` per lane (exact), for splat factors `fa` and `fb`,
-    /// with the result lanes in the order [`Q`] on x86 (natural order on
-    /// aarch64). Only combine the result with other `madd_p` results and
-    /// splats, and narrow it with [`narrow_sat_p`].
-    #[cfg(not(target_arch = "aarch64"))]
+    /// with the result lanes in the order [`Q`] on 256-bit x86 (natural order
+    /// on 128-bit SSE2 and aarch64). Only combine the result with other `madd_p`
+    /// results and splats, and narrow it with [`narrow_sat_p`].
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     #[inline(always)]
     fn madd_p(a: I16s, b: I16s, fa: I16s, fb: I16s) -> I32s {
         let x: Simd<i16, { 2 * N }> = simd_swizzle!(a, b, INTERLEAVE_P);
@@ -773,20 +740,20 @@ mod narrow {
         even + odd
     }
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     #[inline(always)]
     fn madd_p(a: I16s, b: I16s, fa: I16s, fb: I16s) -> I32s {
         madd(a, b, fa, fb)
     }
 
     /// [`narrow_sat`] of a vector in [`madd_p`] order, giving natural order.
-    /// On x86 the reorder is a `<4 x u64>` `[0, 2, 1, 3]` shuffle (`vpermq`)
+    /// On 256-bit x86 the reorder is a `<4 x u64>` `[0, 2, 1, 3]` shuffle (`vpermq`)
     /// after `narrow_sat`, which keeps `narrow_sat`'s `clamp + trunc` intact
     /// for `packssdw` selection and then cancels its trailing `vpermq`.
     #[inline(always)]
     fn narrow_sat_p(v: I32s) -> I16s {
         let n = narrow_sat(v);
-        #[cfg(not(target_arch = "aarch64"))]
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
         let n = {
             let q = Simd::<u64, 4>::from_ne_bytes(n.to_ne_bytes());
             let q: Simd<u64, 4> = simd_swizzle!(q, [0, 2, 1, 3]);
@@ -850,6 +817,15 @@ mod narrow {
             .cast::<i16>()
     }
 
+    /// 4-lane [`narrow_sat`].
+    #[cfg(not(target_arch = "aarch64"))]
+    #[inline(always)]
+    fn narrow_sat4(v: I32x4) -> I16x4 {
+        v.simd_max(I32x4::splat(i16::MIN as i32))
+            .simd_min(I32x4::splat(i16::MAX as i32))
+            .cast::<i16>()
+    }
+
     /// `Clip3(0, max, v)` as `i16` lanes, for `max < 2^15`. Saturating to
     /// `i16` first does not change the result.
     #[inline(always)]
@@ -883,10 +859,12 @@ mod narrow {
         ring: [RingRow; 8],
         /// Self guided weighted rows: `r = 2` pass (5, 6).
         p0: [WeightedRow; 2],
-        /// Self guided weighted rows: `r = 1` pass (3, 4).
+        /// Self guided weighted rows: `r = 1` pass (accumulated `3, 4` + `4, 4`).
         p343: [WeightedRow; 3],
-        /// Self guided weighted rows: `r = 1` pass (4, 4).
-        m444: [WeightedRow; 2],
+        /// Self guided vertical box sums (3 and 5 rows) and raw `A`/`B` row.
+        bs3: BoxSums,
+        bs5: BoxSums,
+        ab: AbRow,
     }
 
     impl Scratch {
@@ -896,8 +874,30 @@ mod narrow {
                 ring: [[I16s::from_array([0; N]); LR_CHUNKS]; 8],
                 p0: [R; 2],
                 p343: [R; 3],
-                m444: [R; 2],
+                bs3: BoxSums::new(),
+                bs5: BoxSums::new(),
+                ab: AbRow::new(),
             })
+        }
+    }
+
+    /// Number of box sum columns to compute when `ncols` are needed from
+    /// columns `col0..` of the padded source rows `0..h + 2 * LR_BORDER`:
+    /// `ncols` rounded up to a multiple of 8 (`super::N`) if every row is
+    /// long enough for full-chunk / half-chunk SIMD loads (see
+    /// [`crate::decoder::av1::dsp::lr::LR_SRC_SLACK`]), so that the scalar
+    /// tail loads are skipped. The extra columns only feed lanes that are
+    /// never used.
+    #[inline(always)]
+    fn box_cols<T>(src: &[&[T]], h: usize, col0: usize, ncols: usize) -> usize {
+        let full = ncols.next_multiple_of(super::N);
+        if src[..h + 2 * LR_BORDER]
+            .iter()
+            .all(|r| r.len() >= col0 + full)
+        {
+            full
+        } else {
+            ncols
         }
     }
 
@@ -973,12 +973,18 @@ mod narrow {
         const ROUND0: u32 = 3;
         let chunks = w / N;
         let c_tail = chunks * N;
-        assert!(w <= LR_MAX_W && chunks <= LR_CHUNKS && src_row.len() >= w + 6);
+        assert!(
+            w <= LR_MAX_W
+                && chunks <= LR_CHUNKS
+                && src_row.len() >= w + 6
+                && src_row.len() >= c_tail + 6
+        );
+        let src_chunks = &src_row[..c_tail + 6];
         if BD == 8 {
             let bias8 = I16s::splat(4 - (1 << 14));
             for (k, out_slot) in out[..chunks].iter_mut().enumerate() {
                 let c = k * N;
-                let win = &src_row[c..c + N + 6];
+                let win = &src_chunks[c..c + N + 6];
                 let p1 = load_px(&win[1..]);
                 let p2 = load_px(&win[2..]);
                 let p3 = load_px(&win[3..]);
@@ -1017,8 +1023,9 @@ mod narrow {
         // as `4 * (rnd0 / 4)` (exact).
         let four = I16s::splat(4);
         let rnd0_q = I16s::splat((rnd0_s / 4) as i16);
-        let lo0 = I16s::splat((-offset - mid) as i16);
-        let hi0 = I16s::splat((limit - offset - mid) as i16);
+        const {
+            assert!(BD == 8 || BD == 10);
+        }
         let hsum = |p0: I16s, p1: I16s, p2: I16s, p3: I16s, p4: I16s, p5: I16s, p6: I16s| -> I32s {
             if TAP5 {
                 madd_p(p1 + p5, p2 + p4, hf[1], hf[2]) + madd_p(p3, four, hf[3], rnd0_q)
@@ -1026,9 +1033,13 @@ mod narrow {
                 madd_p(p0 + p6, p1 + p5, hf[0], hf[1]) + madd_p(p2 + p4, p3, hf[2], hf[3]) + rnd0
             }
         };
+        // For BD == 10, the clamp range `[-offset - mid, limit - offset - mid]`
+        // is `[-2^14, 2^14 - 1]`, which is `[-2^15, 2^15 - 1] >> 1`, so
+        // saturating `s >> (ROUND0 - 1)` to `i16` (`packssdw`) and shifting right
+        // by 1 (`psraw $1`) performs both `>> ROUND0` and the clamp.
         for (k, out_slot) in out[..chunks].iter_mut().enumerate() {
             let c = k * N;
-            let win = &src_row[c..c + N + 6];
+            let win = &src_chunks[c..c + N + 6];
             let p1 = load_px(&win[1..]);
             let p2 = load_px(&win[2..]);
             let p3 = load_px(&win[3..]);
@@ -1036,14 +1047,12 @@ mod narrow {
             let p5 = load_px(&win[5..]);
             let (p0, p6) = if TAP5 { (p1, p5) } else { (load_px(&win[0..]), load_px(&win[6..])) };
             let s = hsum(p0, p1, p2, p3, p4, p5, p6);
-            let v = narrow_sat_p(s >> ROUND0 as i32).simd_max(lo0).simd_min(hi0);
-            *out_slot = v;
+            *out_slot = narrow_sat_p(s >> (ROUND0 as i32 - 1)) >> 1;
         }
         if c_tail < w {
             let [p0, p1, p2, p3, p4, p5, p6] = load_wiener_tail(&src_row[c_tail..]);
             let s = hsum(p0, p1, p2, p3, p4, p5, p6);
-            let v = narrow_sat_p(s >> ROUND0 as i32).simd_max(lo0).simd_min(hi0);
-            out[chunks] = v;
+            out[chunks] = narrow_sat_p(s >> (ROUND0 as i32 - 1)) >> 1;
         }
     }
 
@@ -1142,8 +1151,7 @@ mod narrow {
     pub fn wiener_filter<T: Pixel, const BD: u32>(
         dst: &mut [T],
         dst_stride: usize,
-        src: &[T],
-        src_stride: usize,
+        src: &[&[T]],
         w: usize,
         h: usize,
         coeffs: &[[i32; 3]; 2],
@@ -1197,22 +1205,28 @@ mod narrow {
 
         // 5-tap vertical fast path (all chroma Wiener filters and many luma units
         // have coeffs[0][0] == 0): only h + 4 rows of the horizontal pass are needed.
-        if coeffs[0][0] == 0 {
+        #[inline(always)]
+        fn run_v5<T: Pixel, const BD: u32, const H5: bool>(
+            dst: &mut [T],
+            dst_stride: usize,
+            src: &[&[T]],
+            w: usize,
+            h: usize,
+            swidth: usize,
+            hf: &[I16s; 4],
+            vf: &[I16s; 4],
+            vf32: &[I16s; 4],
+            k256: I16s,
+            rnd1_q: I16s,
+            max_px: I16s,
+            ring: &mut [RingRow; 8],
+        ) {
+            const ROUND1: u32 = 11;
             for r in 1..5 {
-                let srow = &src[r * src_stride..r * src_stride + swidth];
-                if h5 {
-                    wiener_hpass_row::<T, BD, true>(srow, w, &hf, &mut ring[r & 7]);
-                } else {
-                    wiener_hpass_row::<T, BD, false>(srow, w, &hf, &mut ring[r & 7]);
-                }
+                wiener_hpass_row::<T, BD, H5>(&src[r][..swidth], w, hf, &mut ring[r & 7]);
             }
             for r in 0..h {
-                let srow = &src[(r + 5) * src_stride..(r + 5) * src_stride + swidth];
-                if h5 {
-                    wiener_hpass_row::<T, BD, true>(srow, w, &hf, &mut ring[(r + 5) & 7]);
-                } else {
-                    wiener_hpass_row::<T, BD, false>(srow, w, &hf, &mut ring[(r + 5) & 7]);
-                }
+                wiener_hpass_row::<T, BD, H5>(&src[r + 5][..swidth], w, hf, &mut ring[(r + 5) & 7]);
                 let r1 = &ring[(r + 1) & 7];
                 let r2 = &ring[(r + 2) & 7];
                 let r3 = &ring[(r + 3) & 7];
@@ -1220,7 +1234,7 @@ mod narrow {
                 let r5 = &ring[(r + 5) & 7];
                 let out = &mut dst[r * dst_stride..r * dst_stride + w];
                 if BD == 8 {
-                    wiener_vpass_row_u8::<T, true>([r1, r1, r2, r3, r4, r5, r5], &vf32, out, w);
+                    wiener_vpass_row_u8::<T, true>([r1, r1, r2, r3, r4, r5, r5], vf32, out, w);
                     continue;
                 }
                 // Rounding folded into the second `madd` as 256 * (rnd1 / 256).
@@ -1243,50 +1257,71 @@ mod narrow {
                     store_px_tail(&mut out[c..], v);
                 }
             }
-            return;
         }
 
-        for (r, slot) in ring.iter_mut().enumerate().take(6) {
-            let srow = &src[r * src_stride..r * src_stride + swidth];
-            if h5 {
-                wiener_hpass_row::<T, BD, true>(srow, w, &hf, slot);
-            } else {
-                wiener_hpass_row::<T, BD, false>(srow, w, &hf, slot);
+        #[inline(always)]
+        fn run_v7<T: Pixel, const BD: u32, const H5: bool>(
+            dst: &mut [T],
+            dst_stride: usize,
+            src: &[&[T]],
+            w: usize,
+            h: usize,
+            swidth: usize,
+            hf: &[I16s; 4],
+            vf: &[I16s; 4],
+            vf32: &[I16s; 4],
+            rnd1: I32s,
+            max_px: I16s,
+            ring: &mut [RingRow; 8],
+        ) {
+            const ROUND1: u32 = 11;
+            for (r, slot) in ring.iter_mut().enumerate().take(6) {
+                wiener_hpass_row::<T, BD, H5>(&src[r][..swidth], w, hf, slot);
+            }
+            for r in 0..h {
+                wiener_hpass_row::<T, BD, H5>(&src[r + 6][..swidth], w, hf, &mut ring[(r + 6) & 7]);
+                let [r0, r1, r2, r3, r4, r5, r6]: [&RingRow; 7] =
+                    std::array::from_fn(|t| &ring[(r + t) & 7]);
+                let out = &mut dst[r * dst_stride..r * dst_stride + w];
+                if BD == 8 {
+                    wiener_vpass_row_u8::<T, false>([r0, r1, r2, r3, r4, r5, r6], vf32, out, w);
+                    continue;
+                }
+                let vsum = |k: usize| {
+                    madd_p(
+                        ld_row(r0, k) + ld_row(r6, k),
+                        ld_row(r1, k) + ld_row(r5, k),
+                        vf[0],
+                        vf[1],
+                    ) + madd_p(ld_row(r2, k) + ld_row(r4, k), ld_row(r3, k), vf[2], vf[3])
+                        + rnd1
+                };
+                for k in 0..w / N {
+                    let c = k * N;
+                    let v = clip_px_p(vsum(k) >> ROUND1 as i32, max_px);
+                    store_px(&mut out[c..], v);
+                }
+                let (k, c) = (w / N, w / N * N);
+                if c < w {
+                    let v = clip_px_p(vsum(k) >> ROUND1 as i32, max_px);
+                    store_px_tail(&mut out[c..], v);
+                }
             }
         }
-        for r in 0..h {
-            let srow = &src[(r + 6) * src_stride..(r + 6) * src_stride + swidth];
-            if h5 {
-                wiener_hpass_row::<T, BD, true>(srow, w, &hf, &mut ring[(r + 6) & 7]);
-            } else {
-                wiener_hpass_row::<T, BD, false>(srow, w, &hf, &mut ring[(r + 6) & 7]);
-            }
-            let [r0, r1, r2, r3, r4, r5, r6]: [&RingRow; 7] =
-                std::array::from_fn(|t| &ring[(r + t) & 7]);
-            let out = &mut dst[r * dst_stride..r * dst_stride + w];
-            if BD == 8 {
-                wiener_vpass_row_u8::<T, false>([r0, r1, r2, r3, r4, r5, r6], &vf32, out, w);
-                continue;
-            }
-            let vsum = |k: usize| {
-                madd_p(
-                    ld_row(r0, k) + ld_row(r6, k),
-                    ld_row(r1, k) + ld_row(r5, k),
-                    vf[0],
-                    vf[1],
-                ) + madd_p(ld_row(r2, k) + ld_row(r4, k), ld_row(r3, k), vf[2], vf[3])
-                    + rnd1
-            };
-            for k in 0..w / N {
-                let c = k * N;
-                let v = clip_px_p(vsum(k) >> ROUND1 as i32, max_px);
-                store_px(&mut out[c..], v);
-            }
-            let (k, c) = (w / N, w / N * N);
-            if c < w {
-                let v = clip_px_p(vsum(k) >> ROUND1 as i32, max_px);
-                store_px_tail(&mut out[c..], v);
-            }
+
+        match (coeffs[0][0] == 0, h5) {
+            (true, true) => run_v5::<T, BD, true>(
+                dst, dst_stride, src, w, h, swidth, &hf, &vf, &vf32, k256, rnd1_q, max_px, ring,
+            ),
+            (true, false) => run_v5::<T, BD, false>(
+                dst, dst_stride, src, w, h, swidth, &hf, &vf, &vf32, k256, rnd1_q, max_px, ring,
+            ),
+            (false, true) => run_v7::<T, BD, true>(
+                dst, dst_stride, src, w, h, swidth, &hf, &vf, &vf32, rnd1, max_px, ring,
+            ),
+            (false, false) => run_v7::<T, BD, false>(
+                dst, dst_stride, src, w, h, swidth, &hf, &vf, &vf32, rnd1, max_px, ring,
+            ),
         }
     }
 
@@ -1368,6 +1403,17 @@ mod narrow {
             9 => (x << 3) + x,
             25 => (x << 4) + (x << 3) + x,
             _ => x * I32s::splat(K),
+        }
+    }
+
+    /// 4-lane [`mul_const`].
+    #[cfg(not(target_arch = "aarch64"))]
+    #[inline(always)]
+    fn mul_const4<const K: i32>(x: I32x4) -> I32x4 {
+        match K {
+            9 => (x << 3) + x,
+            25 => (x << 4) + (x << 3) + x,
+            _ => x * I32x4::splat(K),
         }
     }
 
@@ -1470,20 +1516,24 @@ mod narrow {
         sgr_x_u16(z).cast()
     }
 
+    #[cfg(test)]
+    pub(super) fn sgr_x_from_p(p: I32s, s: u32) -> I32s {
+        XFromP::new(s).x(p).cast()
+    }
+
     /// Initializes `bs` with the vertical sum of `c` and `c * c` over the 3
     /// rows starting at `row0` (`col0 .. col0 + ncols`).
     #[inline(always)]
     fn vsum_init3<T: Pixel>(
-        src: &[T],
-        src_stride: usize,
+        src: &[&[T]],
         row0: usize,
         col0: usize,
         ncols: usize,
         bs: &mut BoxSums,
     ) {
-        let r0 = &src[row0 * src_stride + col0..row0 * src_stride + col0 + ncols];
-        let r1 = &src[(row0 + 1) * src_stride + col0..(row0 + 1) * src_stride + col0 + ncols];
-        let r2 = &src[(row0 + 2) * src_stride + col0..(row0 + 2) * src_stride + col0 + ncols];
+        let r0 = &src[row0][col0..col0 + ncols];
+        let r1 = &src[row0 + 1][col0..col0 + ncols];
+        let r2 = &src[row0 + 2][col0..col0 + ncols];
         let mut c = 0;
         while c + N <= ncols {
             let (p0, p1, p2) = (load_px(&r0[c..]), load_px(&r1[c..]), load_px(&r2[c..]));
@@ -1492,6 +1542,18 @@ mod narrow {
             sum.copy_to_slice(&mut bs.sum[c..c + N]);
             sq.copy_to_slice(&mut bs.sq[c..c + N]);
             c += N;
+        }
+        if c + super::N <= ncols {
+            let (p0, p1, p2) = (
+                super::load_px(&r0[c..]),
+                super::load_px(&r1[c..]),
+                super::load_px(&r2[c..]),
+            );
+            let sum = p0 + p1 + p2;
+            let sq = super::madd(p0, p1, p0, p1) + super::mul_wide(p2, p2);
+            sum.copy_to_slice(&mut bs.sum[c..c + super::N]);
+            sq.copy_to_slice(&mut bs.sq[c..c + super::N]);
+            c += super::N;
         }
         if c < ncols {
             let (p0, p1, p2) = (
@@ -1510,16 +1572,15 @@ mod narrow {
     /// `row_new` using `p_new^2 - p_old^2 = (p_new + p_old) * (p_new - p_old)`.
     #[inline(always)]
     fn vsum_slide1<T: Pixel>(
-        src: &[T],
-        src_stride: usize,
+        src: &[&[T]],
         row_old: usize,
         row_new: usize,
         col0: usize,
         ncols: usize,
         bs: &mut BoxSums,
     ) {
-        let ro = &src[row_old * src_stride + col0..row_old * src_stride + col0 + ncols];
-        let rn = &src[row_new * src_stride + col0..row_new * src_stride + col0 + ncols];
+        let ro = &src[row_old][col0..col0 + ncols];
+        let rn = &src[row_new][col0..col0 + ncols];
         let mut c = 0;
         while c + N <= ncols {
             let (po, pn) = (load_px(&ro[c..]), load_px(&rn[c..]));
@@ -1529,6 +1590,16 @@ mod narrow {
             sum.copy_to_slice(&mut bs.sum[c..c + N]);
             sq.copy_to_slice(&mut bs.sq[c..c + N]);
             c += N;
+        }
+        if c + super::N <= ncols {
+            let (po, pn) = (super::load_px(&ro[c..]), super::load_px(&rn[c..]));
+            let diff = pn - po;
+            let sum = super::I16s::from_slice(&bs.sum[c..c + super::N]) + diff;
+            let sq =
+                super::I32s::from_slice(&bs.sq[c..c + super::N]) + super::mul_wide(pn + po, diff);
+            sum.copy_to_slice(&mut bs.sum[c..c + super::N]);
+            sq.copy_to_slice(&mut bs.sq[c..c + super::N]);
+            c += super::N;
         }
         if c < ncols {
             let (po, pn) = (load_px_or_zero(&ro[c..]), load_px_or_zero(&rn[c..]));
@@ -1545,8 +1616,7 @@ mod narrow {
     #[allow(clippy::too_many_arguments)]
     #[inline(always)]
     fn vsum_slide1_and_5<T: Pixel>(
-        src: &[T],
-        src_stride: usize,
+        src: &[&[T]],
         row_old: usize,
         row_new1: usize,
         row_new2: usize,
@@ -1554,9 +1624,9 @@ mod narrow {
         bs3: &mut BoxSums,
         bs5: &mut BoxSums,
     ) {
-        let ro = &src[row_old * src_stride..row_old * src_stride + ncols];
-        let rn1 = &src[row_new1 * src_stride..row_new1 * src_stride + ncols];
-        let rn2 = &src[row_new2 * src_stride..row_new2 * src_stride + ncols];
+        let ro = &src[row_old][..ncols];
+        let rn1 = &src[row_new1][..ncols];
+        let rn2 = &src[row_new2][..ncols];
         let mut c = 0;
         while c + N <= ncols {
             let (po, p1, p2) = (load_px(&ro[c..]), load_px(&rn1[c..]), load_px(&rn2[c..]));
@@ -1568,6 +1638,21 @@ mod narrow {
             (s3 + p1 + p2).copy_to_slice(&mut bs5.sum[c..c + N]);
             (q3 + madd(p1, p2, p1, p2)).copy_to_slice(&mut bs5.sq[c..c + N]);
             c += N;
+        }
+        if c + super::N <= ncols {
+            let (po, p1, p2) = (
+                super::load_px(&ro[c..]),
+                super::load_px(&rn1[c..]),
+                super::load_px(&rn2[c..]),
+            );
+            let s3 = super::I16s::from_slice(&bs3.sum[c..c + super::N]);
+            let q3 = super::I32s::from_slice(&bs3.sq[c..c + super::N]);
+            let diff = p1 - po;
+            (s3 + diff).copy_to_slice(&mut bs3.sum[c..c + super::N]);
+            (q3 + super::mul_wide(p1 + po, diff)).copy_to_slice(&mut bs3.sq[c..c + super::N]);
+            (s3 + p1 + p2).copy_to_slice(&mut bs5.sum[c..c + super::N]);
+            (q3 + super::madd(p1, p2, p1, p2)).copy_to_slice(&mut bs5.sq[c..c + super::N]);
+            c += super::N;
         }
         if c < ncols {
             let (po, p1, p2) = (
@@ -1588,16 +1673,15 @@ mod narrow {
     /// Adds two outer source rows `row_a` and `row_b` to `bs3` into `bs5`.
     #[inline(always)]
     fn vsum_add2<T: Pixel>(
-        src: &[T],
-        src_stride: usize,
+        src: &[&[T]],
         row_a: usize,
         row_b: usize,
         ncols: usize,
         bs3: &BoxSums,
         bs5: &mut BoxSums,
     ) {
-        let ra = &src[row_a * src_stride..row_a * src_stride + ncols];
-        let rb = &src[row_b * src_stride..row_b * src_stride + ncols];
+        let ra = &src[row_a][..ncols];
+        let rb = &src[row_b][..ncols];
         let mut c = 0;
         while c + N <= ncols {
             let (pa, pb) = (load_px(&ra[c..]), load_px(&rb[c..]));
@@ -1606,6 +1690,14 @@ mod narrow {
             (s3 + pa + pb).copy_to_slice(&mut bs5.sum[c..c + N]);
             (q3 + madd(pa, pb, pa, pb)).copy_to_slice(&mut bs5.sq[c..c + N]);
             c += N;
+        }
+        if c + super::N <= ncols {
+            let (pa, pb) = (super::load_px(&ra[c..]), super::load_px(&rb[c..]));
+            let s3 = super::I16s::from_slice(&bs3.sum[c..c + super::N]);
+            let q3 = super::I32s::from_slice(&bs3.sq[c..c + super::N]);
+            (s3 + pa + pb).copy_to_slice(&mut bs5.sum[c..c + super::N]);
+            (q3 + super::madd(pa, pb, pa, pb)).copy_to_slice(&mut bs5.sq[c..c + super::N]);
+            c += super::N;
         }
         if c < ncols {
             let (pa, pb) = (load_px_or_zero(&ra[c..]), load_px_or_zero(&rb[c..]));
@@ -1621,8 +1713,7 @@ mod narrow {
     #[allow(clippy::too_many_arguments)]
     #[inline(always)]
     fn vsum_slide2<T: Pixel>(
-        src: &[T],
-        src_stride: usize,
+        src: &[&[T]],
         row_old0: usize,
         row_old1: usize,
         row_new0: usize,
@@ -1630,10 +1721,10 @@ mod narrow {
         ncols: usize,
         bs: &mut BoxSums,
     ) {
-        let ro0 = &src[row_old0 * src_stride..row_old0 * src_stride + ncols];
-        let ro1 = &src[row_old1 * src_stride..row_old1 * src_stride + ncols];
-        let rn0 = &src[row_new0 * src_stride..row_new0 * src_stride + ncols];
-        let rn1 = &src[row_new1 * src_stride..row_new1 * src_stride + ncols];
+        let ro0 = &src[row_old0][..ncols];
+        let ro1 = &src[row_old1][..ncols];
+        let rn0 = &src[row_new0][..ncols];
+        let rn1 = &src[row_new1][..ncols];
         let mut c = 0;
         while c + N <= ncols {
             let (po0, po1) = (load_px(&ro0[c..]), load_px(&ro1[c..]));
@@ -1644,6 +1735,17 @@ mod narrow {
             sum.copy_to_slice(&mut bs.sum[c..c + N]);
             sq.copy_to_slice(&mut bs.sq[c..c + N]);
             c += N;
+        }
+        if c + super::N <= ncols {
+            let (po0, po1) = (super::load_px(&ro0[c..]), super::load_px(&ro1[c..]));
+            let (pn0, pn1) = (super::load_px(&rn0[c..]), super::load_px(&rn1[c..]));
+            let (d0, d1) = (pn0 - po0, pn1 - po1);
+            let sum = super::I16s::from_slice(&bs.sum[c..c + super::N]) + d0 + d1;
+            let sq = super::I32s::from_slice(&bs.sq[c..c + super::N])
+                + super::madd(pn0 + po0, pn1 + po1, d0, d1);
+            sum.copy_to_slice(&mut bs.sum[c..c + super::N]);
+            sq.copy_to_slice(&mut bs.sq[c..c + super::N]);
+            c += super::N;
         }
         if c < ncols {
             let (po0, po1) = (load_px_or_zero(&ro0[c..]), load_px_or_zero(&ro1[c..]));
@@ -1656,17 +1758,134 @@ mod narrow {
         }
     }
 
-    /// Computes one raw row of `A`/`B` arrays (`ab.a`, `ab.b`) from the vertical
-    /// box sums `(sums, sqs)` with radius `R` and scale `s` (spec 7.17.3).
+    /// `x = 256 - A2(z)` of spec 7.17.3 from `p = a * n - d * d` (any sign)
+    /// and the scale `s`, with `z = min(255, Round2(max(p, 0) * s, 20))`.
+    #[derive(Clone, Copy)]
+    struct XFromP {
+        /// Smallest `p` giving `z >= 255`.
+        #[cfg(target_arch = "aarch64")]
+        pmax: I32s,
+        #[cfg(target_arch = "aarch64")]
+        sv: I32s,
+        /// `s` in `0..4096`.
+        #[cfg(not(target_arch = "aarch64"))]
+        sv16: I16s,
+        /// `2 * s` in `0..8192`, so `(pl * s) >> 15 == mul_hi_i16(pl, 2 * s)`.
+        #[cfg(not(target_arch = "aarch64"))]
+        sv2: I16s,
+        /// `8160 / s + 1`: clamping `ph` to `ph_max` keeps `ph * s` in `i16`
+        /// while still reaching `d = z + 1 >= 256`.
+        #[cfg(not(target_arch = "aarch64"))]
+        ph_max: I16s,
+        /// 4-lane versions of `sv16`, `sv2` and `ph_max` for [`Self::x4`].
+        #[cfg(not(target_arch = "aarch64"))]
+        sv16_4: I16x4,
+        #[cfg(not(target_arch = "aarch64"))]
+        sv2_4: I16x4,
+        #[cfg(not(target_arch = "aarch64"))]
+        ph_max4: I16x4,
+    }
+
+    impl XFromP {
+        #[inline(always)]
+        fn new(s: u32) -> Self {
+            debug_assert!(s > 0 && s < 1 << 12);
+            #[cfg(not(target_arch = "aarch64"))]
+            let ph_max = (8160 / s + 1) as i16;
+            #[cfg(target_arch = "aarch64")]
+            {
+                let pmax = ((255u32 << SGRPROJ_MTABLE_BITS) - (1 << (SGRPROJ_MTABLE_BITS - 1)))
+                    .div_ceil(s);
+                Self {
+                    pmax: I32s::splat(pmax as i32),
+                    sv: I32s::splat(s as i32),
+                }
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                Self {
+                    sv16: I16s::splat(s as i16),
+                    sv2: I16s::splat((s << 1) as i16),
+                    ph_max: I16s::splat(ph_max),
+                    sv16_4: I16x4::splat(s as i16),
+                    sv2_4: I16x4::splat((s << 1) as i16),
+                    ph_max4: I16x4::splat(ph_max),
+                }
+            }
+        }
+
+        /// On aarch64: `p` is clamped to `[0, pmax]`, which also gives
+        /// `z <= 255` (see [`ab_from_vsum`]), and `x` is found with table
+        /// lookups ([`sgr_x_u16`]).
+        #[cfg(target_arch = "aarch64")]
+        #[inline(always)]
+        fn x(self, p: I32s) -> I16s {
+            let p = (p & !(p >> 31)).simd_min(self.pmax);
+            let z = (p * self.sv + I32s::splat(1 << (SGRPROJ_MTABLE_BITS - 1)))
+                >> SGRPROJ_MTABLE_BITS as i32;
+            sgr_x_u16(z)
+        }
+
+        /// Without `pmulld`, `pminsd` and `pshufb` (SSE2):
+        ///
+        /// * With `p = ph * 2^15 + pl` (`ph = p >> 15` signed, `pl` in
+        ///   `[0, 2^15)`), `d = z + 1 = ((ph * s + ((pl * s) >> 15) + 48) >> 5)`
+        ///   is evaluated entirely in `i16` lanes (`I16s`): clamping `ph` to
+        ///   `[-1, ph_max]` keeps `ph * s` in `i16`, and `(pl * s) >> 15` is
+        ///   a single signed high-multiply `pmulhw(pl, 2 * s)`.
+        /// * Clamping `d16` to `[1, 256]` and converting to `f32`, one
+        ///   Newton-Raphson step from the IEEE-754 bit approximation
+        ///   `r0 = from_bits(0x80f0_0100 - d.to_bits()) ≈ 16 / d` computes
+        ///   `q = r0 * (32 - d * r0) ≈ 256 / d`, which rounds to the exact
+        ///   `SGR_X[z]` for all `0 <= z <= 254` (and `1` at `z = 255`, where
+        ///   subtracting `d16 >> 8` yields `0`) without any `divps`.
+        #[cfg(not(target_arch = "aarch64"))]
+        #[inline(always)]
+        fn x(self, p: I32s) -> I16s {
+            const MAGIC: f32 = (3 << 22) as f32;
+            const RECIP_BIAS: u32 = 0x80f0_0100;
+            let ph = narrow_sat(p >> 15)
+                .simd_max(I16s::splat(-1))
+                .simd_min(self.ph_max);
+            let pl = narrow_sat(p & I32s::splat(0x7fff));
+            let pl_hi = ((pl.cast::<i32>() * self.sv2.cast::<i32>()) >> 16).cast::<i16>();
+            let d16 = ((ph * self.sv16 + pl_hi + I16s::splat(48)) >> 5)
+                .simd_max(I16s::splat(1))
+                .simd_min(I16s::splat(256));
+            let d = d16.cast::<f32>();
+            let r0 = Simd::<f32, N>::from_bits(U32s::splat(RECIP_BIAS) - d.to_bits());
+            let q = r0 * (Simd::splat(32.0) - d * r0) + Simd::splat(MAGIC);
+            narrow_sat(q.to_bits().cast::<i32>() - I32s::splat(MAGIC.to_bits() as i32)) - (d16 >> 8)
+        }
+
+        /// 4-lane version of [`Self::x`], operating on a single 128-bit `f32x4` /
+        /// `i32x4` register for the 2-column tail (`w..w + 2`) of [`ab_from_vsum`].
+        #[cfg(not(target_arch = "aarch64"))]
+        #[inline(always)]
+        fn x4(self, p: I32x4) -> I16x4 {
+            const MAGIC: f32 = (3 << 22) as f32;
+            const RECIP_BIAS: u32 = 0x80f0_0100;
+            let ph = narrow_sat4(p >> 15)
+                .simd_max(I16x4::splat(-1))
+                .simd_min(self.ph_max4);
+            let pl = narrow_sat4(p & I32x4::splat(0x7fff));
+            let pl_hi = ((pl.cast::<i32>() * self.sv2_4.cast::<i32>()) >> 16).cast::<i16>();
+            let d16 = ((ph * self.sv16_4 + pl_hi + I16x4::splat(48)) >> 5)
+                .simd_max(I16x4::splat(1))
+                .simd_min(I16x4::splat(256));
+            let d = d16.cast::<f32>();
+            let r0 = Simd::<f32, 4>::from_bits(U32x4::splat(RECIP_BIAS) - d.to_bits());
+            let q = r0 * (Simd::splat(32.0) - d * r0) + Simd::splat(MAGIC);
+            narrow_sat4(q.to_bits().cast::<i32>() - I32x4::splat(MAGIC.to_bits() as i32))
+                - (d16 >> 8)
+        }
+    }
+
+    /// Computes one raw row of `X = 256 - A` and `B` arrays (`ab.a`, `ab.b`) from
+    /// the vertical box sums `(sums, sqs)` with radius `R` and scale `s` (spec 7.17.3).
     ///
-    /// Ranges: box sums `b <= 25 * 4095` and `a <= 25 * 4095^2` (i32);
-    /// `d = Round2(b, bd - 8) <= 6398` (i16). All products fit in 32 bits:
-    /// * `p * s` once `p` is clamped to `pmax`, the smallest value giving
-    ///   `z >= 255` (larger `z` are clamped to 255 by the spec): `p * s +
-    ///   2^19 < 255 * 2^20 + s`, which also gives `z <= 255` directly.
-    /// * `(256 - a2) * b * one_over_n <= 255 * 25 * 4095 * 164` (`R = 2`) or
-    ///   `255 * 9 * 4095 * 455` (`R = 1`), both below `2^32 - 2^11`, so
-    ///   these are computed modulo 2^32 in `i32` lanes.
+    /// Storing `x = 256 - a2` instead of `a2` lets [`box_out`] compute `f - u`
+    /// (`u = px << 4`) directly as `Round2(b - x * px, shift)`.
     #[inline(always)]
     fn ab_from_vsum<const BD: u32, const R: usize>(
         sums: &[i16],
@@ -1677,14 +1896,14 @@ mod narrow {
     ) {
         let d = 2 * R + 1;
         assert!(w <= LR_MAX_W && sums.len() >= SUM_LEN - 1 && sqs.len() >= SUM_LEN - 1);
-        let pmax = I32s::splat(
-            ((255u32 << SGRPROJ_MTABLE_BITS) - (1 << (SGRPROJ_MTABLE_BITS - 1))).div_ceil(s) as i32,
-        );
-        let sv = I32s::splat(s as i32);
-        let rnd_z = I32s::splat(1 << (SGRPROJ_MTABLE_BITS - 1));
-        let one_over_n_u16 = U16s::splat(one_over_n(R) as u16);
-        let rnd_r = I32s::splat(1 << (SGRPROJ_RECIP_BITS - 1));
-        for j in (0..w + 2).step_by(N) {
+        let xc = XFromP::new(s);
+        let mut j = 0;
+        // On aarch64 the last (at most 4) columns use a full chunk too: its
+        // table lookups are cheaper than the latency bound 4-lane float tail.
+        // The extra lanes read stale box sums (within `SUM_LEN`) and write
+        // `ab` columns past `w + 2` (within `AB_LEN`) that are never used.
+        let tail = if cfg!(target_arch = "aarch64") { 0 } else { 4 };
+        while j + tail < w + 2 {
             let sum_win = &sums[j..j + N + 4];
             let sq_win = &sqs[j..j + N + 4];
             let mut bsum = I16s::from_slice(&sum_win[..N]);
@@ -1703,24 +1922,80 @@ mod narrow {
                     (bsum + I16s::splat(1 << (SH_B - 1))) >> SH_B,
                 )
             };
-            let an = if R == 1 { mul_const::<9>(a) } else { mul_const::<25>(a) };
-            let p = an - mul_wide(dd, dd);
-            // max(p, 0), then clamp to pmax which also gives z <= 255.
-            let p = (p & !(p >> 31)).simd_min(pmax);
-            let z = (p * sv + rnd_z) >> SGRPROJ_MTABLE_BITS as i32;
-            let x = sgr_x_u16(z);
-            let a2 = I16s::splat(1 << SGRPROJ_SGR_BITS) - x;
-            let prod = if R == 2 {
-                // x <= 255 and one_over_n(2) == 164, so x * 164 <= 41820 fits u16.
-                (x.cast::<u16>() * one_over_n_u16).cast::<i32>() * bsum.cast::<i32>()
+            let an = if R == 1 {
+                mul_const::<9>(a)
+            } else if BD == 8 {
+                mul_const::<25>(a)
             } else {
-                // one_over_n(1) == 455 == 91 * 5, and x * 91 <= 23205 fits i16.
-                const { assert!(one_over_n(1) == 91 * 5) };
-                mul_const::<5>(mul_wide(x * I16s::splat(91), bsum))
+                // `16 * a = (asum + 8) & !15`; keeping `16 * a` as a bitwise mask
+                // prevents LLVM from folding `16 * a + 9 * a` into `a * 25` (which
+                // SSE2 lowers to `pmuludq` + shuffles instead of shifts and adds).
+                ((asum + I32s::splat(8)) & I32s::splat(-16)) + mul_const::<9>(a)
             };
-            let b2 = (prod + rnd_r) >> SGRPROJ_RECIP_BITS as i32;
-            a2.copy_to_slice(&mut ab.a[j..j + N]);
+            let p = an - mul_wide(dd, dd);
+            let x = xc.x(p);
+            let b2 = if R == 2 {
+                // one_over_n(2) == 164 == 41 * 4, and x * 41 <= 10455 fits i16;
+                // factor 4 cancels 2 bits of the right shift by SGRPROJ_RECIP_BITS.
+                const { assert!(one_over_n(2) == 41 * 4) };
+                const SH: i32 = SGRPROJ_RECIP_BITS as i32 - 2;
+                (mul_wide(x * I16s::splat(41), bsum) + I32s::splat(1 << (SH - 1))) >> SH
+            } else {
+                // one_over_n(1) == 455 == 91 * 5; for BD <= 10, x * 91 <= 23205 and
+                // bsum * 5 <= 45 * 1023 = 46035 both fit in u16.
+                const { assert!(one_over_n(1) == 91 * 5 && BD <= 10) };
+                const SH: u32 = SGRPROJ_RECIP_BITS;
+                let x91 = (x.cast::<u16>() * U16s::splat(91)).cast::<u32>();
+                let b5 = (bsum.cast::<u16>() * U16s::splat(5)).cast::<u32>();
+                ((x91 * b5 + U32s::splat(1 << (SH - 1))) >> SH).cast::<i32>()
+            };
+            x.copy_to_slice(&mut ab.a[j..j + N]);
             b2.copy_to_slice(&mut ab.b[j..j + N]);
+            j += N;
+        }
+        // Not needed on aarch64, where `tail` is 0.
+        #[cfg(not(target_arch = "aarch64"))]
+        if j < w + 2 {
+            let sum_win = &sums[j..j + 4 + 4];
+            let sq_win = &sqs[j..j + 4 + 4];
+            let mut bsum = I16x4::from_slice(&sum_win[..4]);
+            let mut asum = I32x4::from_slice(&sq_win[..4]);
+            for k in 1..d {
+                bsum += I16x4::from_slice(&sum_win[k..k + 4]);
+                asum += I32x4::from_slice(&sq_win[k..k + 4]);
+            }
+            let (a, dd) = if BD == 8 {
+                (asum, bsum)
+            } else {
+                const SH_A: i32 = 4;
+                const SH_B: i16 = 2;
+                (
+                    (asum + I32x4::splat(1 << (SH_A - 1))) >> SH_A,
+                    (bsum + I16x4::splat(1 << (SH_B - 1))) >> SH_B,
+                )
+            };
+            let an = if R == 1 {
+                mul_const4::<9>(a)
+            } else if BD == 8 {
+                mul_const4::<25>(a)
+            } else {
+                ((asum + I32x4::splat(8)) & I32x4::splat(-16)) + mul_const4::<9>(a)
+            };
+            let p = an - dd.cast::<i32>() * dd.cast::<i32>();
+            let x = xc.x4(p);
+            let b2 = if R == 2 {
+                const SH: i32 = SGRPROJ_RECIP_BITS as i32 - 2;
+                ((x * I16x4::splat(41)).cast::<i32>() * bsum.cast::<i32>()
+                    + I32x4::splat(1 << (SH - 1)))
+                    >> SH
+            } else {
+                const SH: u32 = SGRPROJ_RECIP_BITS;
+                let x91 = (x.cast::<u16>() * U16x4::splat(91)).cast::<u32>();
+                let b5 = (bsum.cast::<u16>() * U16x4::splat(5)).cast::<u32>();
+                ((x91 * b5 + U32x4::splat(1 << (SH - 1))) >> SH).cast::<i32>()
+            };
+            x.copy_to_slice(&mut ab.a[j..j + 4]);
+            b2.copy_to_slice(&mut ab.b[j..j + 4]);
         }
     }
 
@@ -1753,10 +2028,12 @@ mod narrow {
         }
     }
 
-    /// Fused horizontal weighting for the `r = 1` pass: writes both `out343`
-    /// (weights 3, 4) and `out444` (weights 4, 4) in one pass over `ab`.
+    /// Fused horizontal weighting for the `r = 1` pass: accumulates the `(4, 4)`
+    /// weights of the current row directly into the previous row's `(3, 4)`
+    /// weights in `tm_accum` (`tm = p343_prev + m444_cur`), and writes the current
+    /// row's `(3, 4)` weights into `out343`.
     #[inline(always)]
-    fn weigh_r1(ab: &AbRow, w: usize, out343: &mut WeightedRow, out444: &mut WeightedRow) {
+    fn weigh_r1(ab: &AbRow, w: usize, tm_accum: &mut WeightedRow, out343: &mut WeightedRow) {
         assert!(w <= LR_MAX_W);
         for (k, c) in (0..w).step_by(N).enumerate() {
             let a_win = &ab.a[c..c + N + 2];
@@ -1773,124 +2050,176 @@ mod narrow {
             let sb02 = b0 + b2;
             let sb444 = (sb02 + b1) << 2;
             let sb343 = sb444 - sb02;
+            tm_accum.a[k] += sa444;
+            tm_accum.b[k] += sb444;
             out343.a[k] = sa343;
             out343.b[k] = sb343;
-            out444.a[k] = sa444;
-            out444.b[k] = sb444;
         }
     }
 
-    /// `Round2(a * px + b, shift)` of the box filter output, in `0..=16368`
-    /// for `BD <= 10`.
+    /// Mutable references `(a[i], a[j])` for distinct indices `i != j`.
     #[inline(always)]
-    fn box_out(a: I16s, b: I32s, px: I16s, shift: u32) -> I16s {
-        narrow_sat((mul_wide(a, px) + b + I32s::splat(1 << (shift - 1))) >> shift as i32)
+    fn two_mut<T>(a: &mut [T], i: usize, j: usize) -> (&mut T, &mut T) {
+        if i < j {
+            let (l, r) = a.split_at_mut(j);
+            (&mut l[i], &mut r[0])
+        } else {
+            let (l, r) = a.split_at_mut(i);
+            (&mut r[0], &mut l[j])
+        }
+    }
+
+    /// `f - (px << 4) = Round2(b - x * px, shift)` of the box filter output
+    /// (since `a = (256 << (shift - 4)) - x`, `(a * px) >> shift` contributes
+    /// `px << 4` plus `(-x * px) >> shift`).
+    #[inline(always)]
+    fn box_out(x: I16s, b: I32s, px: I16s, shift: u32) -> I16s {
+        narrow_sat((b - mul_wide(x, px) + I32s::splat(1 << (shift - 1))) >> shift as i32)
+    }
+
+    /// Filters one output row `out` from its source pixels `px_row` and the
+    /// weighted rows `[prev, next, tm, d]` (see [`sgr_filter_both`]).
+    ///
+    /// `P0` selects the `r = 2` pass: 0 = off, 1 = odd row (`next` only),
+    /// 2 = even row (`prev + next`); `P1` enables the `r = 1` pass (`tm + d`,
+    /// where `tm = t + m`). `w0` / `w2` are the projection weights of the
+    /// `r = 2` / `r = 1` passes (the weight of a disabled pass is 0 and is
+    /// not read). Const parameters
+    /// keep each loop body in one basic block, so that the widening multiplies
+    /// are selected as such.
+    #[inline(always)]
+    fn sgr_finish_row<T: Pixel, const P0: u8, const P1: bool>(
+        px_row: &[T],
+        out: &mut [T],
+        rows: [&WeightedRow; 4],
+        wts: &ChunkWeights,
+        max_px: I16s,
+    ) {
+        let w = out.len();
+        assert!(w <= LR_MAX_W && px_row.len() >= w);
+        let [prev, next, tm, d] = rows;
+        let shift = SGRPROJ_RST_BITS + SGRPROJ_PRJ_BITS;
+        let rnd = I32s::splat(1 << (shift - 1));
+        let rnd16 = I16s::splat(1 << (shift - 1));
+        let one = I16s::splat(1);
+        // Since w0 + w1 + w2 == 2^7, w1 * (px << 4) + w0 * f0 + w2 * f1
+        // equals (px << 11) + w0 * (f0 - (px << 4)) + w2 * (f1 - (px << 4)).
+        let step = |px: I16s, k: usize| -> I16s {
+            let f0 = match P0 {
+                1 => box_out(
+                    next.ld_a(k),
+                    next.ld_b(k),
+                    px,
+                    SGRPROJ_SGR_BITS + 4 - SGRPROJ_RST_BITS,
+                ),
+                _ => box_out(
+                    prev.ld_a(k) + next.ld_a(k),
+                    prev.ld_b(k) + next.ld_b(k),
+                    px,
+                    SGRPROJ_SGR_BITS + 5 - SGRPROJ_RST_BITS,
+                ),
+            };
+            // For BD <= 10, `|(b - x * px + 256) >> 8| <= 32609 < i16::MAX`, so
+            // packing before the final `>> 1` is exact and blocks LLVM's InstCombine
+            // from pushing `madd_p`'s `INTERLEAVE` shuffle through `narrow_sat` into i32.
+            const SH1: i32 = (SGRPROJ_SGR_BITS + 5 - SGRPROJ_RST_BITS) as i32;
+            let x1 = tm.ld_a(k) + d.ld_a(k);
+            let b1 = tm.ld_b(k) + d.ld_b(k);
+            let f1 =
+                narrow_sat((b1 - mul_wide(x1, px) + I32s::splat(1 << (SH1 - 1))) >> (SH1 - 1)) >> 1;
+            let (w0, w2) = (wts.w0[k], wts.w2[k]);
+            let v = match (P0 != 0, P1) {
+                (true, true) => madd_p(f0, f1, w0, w2) + rnd,
+                (true, false) => madd_p(f0, rnd16, w0, one),
+                _ => madd_p(f1, rnd16, w2, one),
+            };
+            (px + narrow_sat_p(v >> shift as i32))
+                .simd_max(I16s::splat(0))
+                .simd_min(max_px)
+        };
+        for k in 0..w / N {
+            let c = k * N;
+            store_px(&mut out[c..], step(load_px(&px_row[c..]), k));
+        }
+        let (k, c) = (w / N, w / N * N);
+        if c < w {
+            store_px_tail(&mut out[c..], step(load_px_or_zero(&px_row[c..w]), k));
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
     fn sgr_filter_both<T: Pixel, const BD: u32>(
         dst: &mut [T],
         dst_stride: usize,
-        src: &[T],
-        src_stride: usize,
+        src: &[&[T]],
         w: usize,
         h: usize,
         s0: u32,
         s1: u32,
-        w0: I16s,
-        w2: I16s,
+        wts: &ChunkWeights,
     ) {
         assert!(w <= LR_MAX_W);
         let max_px = I16s::splat(((1i32 << BD) - 1) as i16);
-        let ncols = w + 6;
-        let mut bs3 = BoxSums::new();
-        let mut bs5 = BoxSums::new();
-        let mut ab = AbRow::new();
+        let ncols = box_cols(src, h, 0, w + 6);
         let mut scratch = ScratchGuard::take();
-        let Scratch { p0, p343, m444, .. } = &mut *scratch;
+        let Scratch {
+            p0,
+            p343,
+            bs3,
+            bs5,
+            ab,
+            ..
+        } = &mut *scratch;
         let mut cur0 = 0;
 
         // Row -1: r1 uses padded rows 1..=3, r2 uses padded rows 0..=4.
-        vsum_init3(src, src_stride, 1, 0, ncols, &mut bs3);
-        ab_from_vsum::<BD, 1>(&bs3.sum[1..], &bs3.sq[1..], w, s1, &mut ab);
-        weigh_row::<3, 4>(&ab, w, &mut p343[0]);
-        vsum_add2(src, src_stride, 0, 4, ncols, &bs3, &mut bs5);
-        ab_from_vsum::<BD, 2>(&bs5.sum, &bs5.sq, w, s0, &mut ab);
-        weigh_row::<5, 6>(&ab, w, &mut p0[0]);
+        vsum_init3(src, 1, 0, ncols, bs3);
+        ab_from_vsum::<BD, 1>(&bs3.sum[1..], &bs3.sq[1..], w, s1, ab);
+        weigh_row::<3, 4>(ab, w, &mut p343[0]);
+        vsum_add2(src, 0, 4, ncols, bs3, bs5);
+        ab_from_vsum::<BD, 2>(&bs5.sum, &bs5.sq, w, s0, ab);
+        weigh_row::<5, 6>(ab, w, &mut p0[0]);
 
         // Row 0: r1 slides from padded rows 1..=3 to 2..=4.
-        vsum_slide1(src, src_stride, 1, 4, 0, ncols, &mut bs3);
-        ab_from_vsum::<BD, 1>(&bs3.sum[1..], &bs3.sq[1..], w, s1, &mut ab);
-        weigh_r1(&ab, w, &mut p343[1], &mut m444[0]);
+        vsum_slide1(src, 1, 4, 0, ncols, bs3);
+        ab_from_vsum::<BD, 1>(&bs3.sum[1..], &bs3.sq[1..], w, s1, ab);
+        {
+            let (tm0, out1) = two_mut(p343, 0, 1);
+            weigh_r1(ab, w, tm0, out1);
+        }
 
-        let mut k3 = 2usize;
+        let mut t_idx = 0usize;
+        let mut m_idx = 1usize;
+        let mut d_idx = 2usize;
         for i in 0..h {
             let odd = i & 1 == 1;
             if !odd {
                 // Row i + 1 (odd): r2 uses padded rows i+2..=i+6, r1 slides to i+3..=i+5.
-                vsum_slide1_and_5(
-                    src,
-                    src_stride,
-                    i + 2,
-                    i + 5,
-                    i + 6,
-                    ncols,
-                    &mut bs3,
-                    &mut bs5,
-                );
+                vsum_slide1_and_5(src, i + 2, i + 5, i + 6, ncols, bs3, bs5);
                 cur0 ^= 1;
-                ab_from_vsum::<BD, 2>(&bs5.sum, &bs5.sq, w, s0, &mut ab);
-                weigh_row::<5, 6>(&ab, w, &mut p0[cur0]);
+                ab_from_vsum::<BD, 2>(&bs5.sum, &bs5.sq, w, s0, ab);
+                weigh_row::<5, 6>(ab, w, &mut p0[cur0]);
             } else {
                 // Row i + 1 (even): r1 slides from padded rows i+2..=i+4 to i+3..=i+5.
-                vsum_slide1(src, src_stride, i + 2, i + 5, 0, ncols, &mut bs3);
+                vsum_slide1(src, i + 2, i + 5, 0, ncols, bs3);
             }
-            ab_from_vsum::<BD, 1>(&bs3.sum[1..], &bs3.sq[1..], w, s1, &mut ab);
-            weigh_r1(&ab, w, &mut p343[k3], &mut m444[(i + 1) & 1]);
+            ab_from_vsum::<BD, 1>(&bs3.sum[1..], &bs3.sq[1..], w, s1, ab);
+            {
+                let (tm_next, out_d) = two_mut(p343, m_idx, d_idx);
+                weigh_r1(ab, w, tm_next, out_d);
+            }
 
             let (prev, next) = (&p0[cur0 ^ 1], &p0[cur0]);
-            let t_idx = if k3 == 2 { 0 } else { k3 + 1 };
-            let (t, m, d) = (&p343[t_idx], &m444[i & 1], &p343[k3]);
-            k3 = t_idx;
+            let (tm, d) = (&p343[t_idx], &p343[d_idx]);
+            (t_idx, m_idx, d_idx) = (m_idx, d_idx, t_idx);
 
-            let pr = (i + LR_BORDER) * src_stride + LR_BORDER;
-            let px_row = &src[pr..pr + w];
+            let px_row = &src[i + LR_BORDER][LR_BORDER..LR_BORDER + w];
             let out = &mut dst[i * dst_stride..i * dst_stride + w];
-            let shift = SGRPROJ_RST_BITS + SGRPROJ_PRJ_BITS;
-            let rnd = I32s::splat(1 << (shift - 1));
-            // Since w0 + w1 + w2 == 2^7, w1 * (px << 4) + w0 * f0 + w2 * f1
-            // equals (px << 11) + w0 * (f0 - (px << 4)) + w2 * (f1 - (px << 4)).
-            let step = |px: I16s, k: usize| -> I16s {
-                let u = px << SGRPROJ_RST_BITS as i16;
-                let na = next.ld_a(k);
-                let nb = next.ld_b(k);
-                let f0 = if odd {
-                    box_out(na, nb, px, SGRPROJ_SGR_BITS + 4 - SGRPROJ_RST_BITS)
-                } else {
-                    let pa = prev.ld_a(k);
-                    let pb = prev.ld_b(k);
-                    box_out(
-                        pa + na,
-                        pb + nb,
-                        px,
-                        SGRPROJ_SGR_BITS + 5 - SGRPROJ_RST_BITS,
-                    )
-                };
-                let a = t.ld_a(k) + m.ld_a(k) + d.ld_a(k);
-                let b = t.ld_b(k) + m.ld_b(k) + d.ld_b(k);
-                let f1 = box_out(a, b, px, SGRPROJ_SGR_BITS + 5 - SGRPROJ_RST_BITS);
-                let v = madd_p(f0 - u, f1 - u, w0, w2) + rnd;
-                (px + narrow_sat_p(v >> shift as i32))
-                    .simd_max(I16s::splat(0))
-                    .simd_min(max_px)
-            };
-            for k in 0..w / N {
-                let c = k * N;
-                store_px(&mut out[c..], step(load_px(&px_row[c..]), k));
-            }
-            let (k, c) = (w / N, w / N * N);
-            if c < w {
-                store_px_tail(&mut out[c..], step(load_px_or_zero(&px_row[c..]), k));
+            let rows = [prev, next, tm, d];
+            if odd {
+                sgr_finish_row::<T, 1, true>(px_row, out, rows, wts, max_px);
+            } else {
+                sgr_finish_row::<T, 2, true>(px_row, out, rows, wts, max_px);
             }
         }
     }
@@ -1899,64 +2228,47 @@ mod narrow {
     fn sgr_filter_r1<T: Pixel, const BD: u32>(
         dst: &mut [T],
         dst_stride: usize,
-        src: &[T],
-        src_stride: usize,
+        src: &[&[T]],
         w: usize,
         h: usize,
         s1: u32,
-        w2: I16s,
+        wts: &ChunkWeights,
     ) {
         assert!(w <= LR_MAX_W);
         let max_px = I16s::splat(((1i32 << BD) - 1) as i16);
-        let ncols = w + 4;
         let col0 = LR_BORDER - 2;
-        let mut bs3 = BoxSums::new();
-        let mut ab = AbRow::new();
+        let ncols = box_cols(src, h, col0, w + 4);
         let mut scratch = ScratchGuard::take();
-        let Scratch { p343, m444, .. } = &mut *scratch;
+        let Scratch { p343, bs3, ab, .. } = &mut *scratch;
 
-        vsum_init3(src, src_stride, 1, col0, ncols, &mut bs3);
-        ab_from_vsum::<BD, 1>(&bs3.sum, &bs3.sq, w, s1, &mut ab);
-        weigh_row::<3, 4>(&ab, w, &mut p343[0]);
+        vsum_init3(src, 1, col0, ncols, bs3);
+        ab_from_vsum::<BD, 1>(&bs3.sum, &bs3.sq, w, s1, ab);
+        weigh_row::<3, 4>(ab, w, &mut p343[0]);
 
-        vsum_slide1(src, src_stride, 1, 4, col0, ncols, &mut bs3);
-        ab_from_vsum::<BD, 1>(&bs3.sum, &bs3.sq, w, s1, &mut ab);
-        weigh_r1(&ab, w, &mut p343[1], &mut m444[0]);
+        vsum_slide1(src, 1, 4, col0, ncols, bs3);
+        ab_from_vsum::<BD, 1>(&bs3.sum, &bs3.sq, w, s1, ab);
+        {
+            let (tm0, out1) = two_mut(p343, 0, 1);
+            weigh_r1(ab, w, tm0, out1);
+        }
 
-        let mut k3 = 2usize;
+        let mut t_idx = 0usize;
+        let mut m_idx = 1usize;
+        let mut d_idx = 2usize;
         for i in 0..h {
-            vsum_slide1(src, src_stride, i + 2, i + 5, col0, ncols, &mut bs3);
-            ab_from_vsum::<BD, 1>(&bs3.sum, &bs3.sq, w, s1, &mut ab);
-            weigh_r1(&ab, w, &mut p343[k3], &mut m444[(i + 1) & 1]);
+            vsum_slide1(src, i + 2, i + 5, col0, ncols, bs3);
+            ab_from_vsum::<BD, 1>(&bs3.sum, &bs3.sq, w, s1, ab);
+            {
+                let (tm_next, out_d) = two_mut(p343, m_idx, d_idx);
+                weigh_r1(ab, w, tm_next, out_d);
+            }
 
-            let t_idx = if k3 == 2 { 0 } else { k3 + 1 };
-            let (t, m, d) = (&p343[t_idx], &m444[i & 1], &p343[k3]);
-            k3 = t_idx;
+            let (tm, d) = (&p343[t_idx], &p343[d_idx]);
+            (t_idx, m_idx, d_idx) = (m_idx, d_idx, t_idx);
 
-            let pr = (i + LR_BORDER) * src_stride + LR_BORDER;
-            let px_row = &src[pr..pr + w];
+            let px_row = &src[i + LR_BORDER][LR_BORDER..LR_BORDER + w];
             let out = &mut dst[i * dst_stride..i * dst_stride + w];
-            let shift = SGRPROJ_RST_BITS + SGRPROJ_PRJ_BITS;
-            let rnd16 = I16s::splat(1 << (shift - 1));
-            let one = I16s::splat(1);
-            let step = |px: I16s, k: usize| -> I16s {
-                let u = px << SGRPROJ_RST_BITS as i16;
-                let a = t.ld_a(k) + m.ld_a(k) + d.ld_a(k);
-                let b = t.ld_b(k) + m.ld_b(k) + d.ld_b(k);
-                let f1 = box_out(a, b, px, SGRPROJ_SGR_BITS + 5 - SGRPROJ_RST_BITS);
-                let v = madd_p(f1 - u, rnd16, w2, one);
-                (px + narrow_sat_p(v >> shift as i32))
-                    .simd_max(I16s::splat(0))
-                    .simd_min(max_px)
-            };
-            for k in 0..w / N {
-                let c = k * N;
-                store_px(&mut out[c..], step(load_px(&px_row[c..]), k));
-            }
-            let (k, c) = (w / N, w / N * N);
-            if c < w {
-                store_px_tail(&mut out[c..], step(load_px_or_zero(&px_row[c..]), k));
-            }
+            sgr_finish_row::<T, 0, true>(px_row, out, [tm, tm, tm, d], wts, max_px);
         }
     }
 
@@ -1964,72 +2276,43 @@ mod narrow {
     fn sgr_filter_r2<T: Pixel, const BD: u32>(
         dst: &mut [T],
         dst_stride: usize,
-        src: &[T],
-        src_stride: usize,
+        src: &[&[T]],
         w: usize,
         h: usize,
         s0: u32,
-        w0: I16s,
+        wts: &ChunkWeights,
     ) {
         assert!(w <= LR_MAX_W);
         let max_px = I16s::splat(((1i32 << BD) - 1) as i16);
-        let ncols = w + 6;
-        let mut bs3 = BoxSums::new();
-        let mut bs5 = BoxSums::new();
-        let mut ab = AbRow::new();
+        let ncols = box_cols(src, h, 0, w + 6);
         let mut scratch = ScratchGuard::take();
-        let Scratch { p0, .. } = &mut *scratch;
+        let Scratch {
+            p0, bs3, bs5, ab, ..
+        } = &mut *scratch;
         let mut cur0 = 0;
 
-        vsum_init3(src, src_stride, 1, 0, ncols, &mut bs3);
-        vsum_add2(src, src_stride, 0, 4, ncols, &bs3, &mut bs5);
-        ab_from_vsum::<BD, 2>(&bs5.sum, &bs5.sq, w, s0, &mut ab);
-        weigh_row::<5, 6>(&ab, w, &mut p0[0]);
+        vsum_init3(src, 1, 0, ncols, bs3);
+        vsum_add2(src, 0, 4, ncols, bs3, bs5);
+        ab_from_vsum::<BD, 2>(&bs5.sum, &bs5.sq, w, s0, ab);
+        weigh_row::<5, 6>(ab, w, &mut p0[0]);
 
         for i in 0..h {
             let odd = i & 1 == 1;
             if !odd {
-                vsum_slide2(src, src_stride, i, i + 1, i + 5, i + 6, ncols, &mut bs5);
+                vsum_slide2(src, i, i + 1, i + 5, i + 6, ncols, bs5);
                 cur0 ^= 1;
-                ab_from_vsum::<BD, 2>(&bs5.sum, &bs5.sq, w, s0, &mut ab);
-                weigh_row::<5, 6>(&ab, w, &mut p0[cur0]);
+                ab_from_vsum::<BD, 2>(&bs5.sum, &bs5.sq, w, s0, ab);
+                weigh_row::<5, 6>(ab, w, &mut p0[cur0]);
             }
             let (prev, next) = (&p0[cur0 ^ 1], &p0[cur0]);
 
-            let pr = (i + LR_BORDER) * src_stride + LR_BORDER;
-            let px_row = &src[pr..pr + w];
+            let px_row = &src[i + LR_BORDER][LR_BORDER..LR_BORDER + w];
             let out = &mut dst[i * dst_stride..i * dst_stride + w];
-            let shift = SGRPROJ_RST_BITS + SGRPROJ_PRJ_BITS;
-            let rnd16 = I16s::splat(1 << (shift - 1));
-            let one = I16s::splat(1);
-            let step = |px: I16s, k: usize| -> I16s {
-                let u = px << SGRPROJ_RST_BITS as i16;
-                let na = next.ld_a(k);
-                let nb = next.ld_b(k);
-                let f0 = if odd {
-                    box_out(na, nb, px, SGRPROJ_SGR_BITS + 4 - SGRPROJ_RST_BITS)
-                } else {
-                    let pa = prev.ld_a(k);
-                    let pb = prev.ld_b(k);
-                    box_out(
-                        pa + na,
-                        pb + nb,
-                        px,
-                        SGRPROJ_SGR_BITS + 5 - SGRPROJ_RST_BITS,
-                    )
-                };
-                let v = madd_p(f0 - u, rnd16, w0, one);
-                (px + narrow_sat_p(v >> shift as i32))
-                    .simd_max(I16s::splat(0))
-                    .simd_min(max_px)
-            };
-            for k in 0..w / N {
-                let c = k * N;
-                store_px(&mut out[c..], step(load_px(&px_row[c..]), k));
-            }
-            let (k, c) = (w / N, w / N * N);
-            if c < w {
-                store_px_tail(&mut out[c..], step(load_px_or_zero(&px_row[c..]), k));
+            let rows = [prev, next, next, next];
+            if odd {
+                sgr_finish_row::<T, 1, false>(px_row, out, rows, wts, max_px);
+            } else {
+                sgr_finish_row::<T, 2, false>(px_row, out, rows, wts, max_px);
             }
         }
     }
@@ -2047,29 +2330,70 @@ mod narrow {
     pub fn sgr_filter<T: Pixel, const BD: u32>(
         dst: &mut [T],
         dst_stride: usize,
-        src: &[T],
-        src_stride: usize,
+        src: &[&[T]],
         w: usize,
         h: usize,
         set: usize,
         xqd: [i32; 2],
+    ) {
+        sgr_filter_units::<T, BD>(dst, dst_stride, src, w, h, set, &[(w, xqd)]);
+    }
+
+    /// Per output chunk projection weights `(w0, w2)` (see [`sgr_finish_row`]).
+    pub(super) struct ChunkWeights {
+        w0: [I16s; LR_CHUNKS],
+        w2: [I16s; LR_CHUNKS],
+    }
+
+    /// [`sgr_filter`] for a run of horizontally adjacent restoration units
+    /// with the same `set`: `units` lists the width and `xqd` of each unit
+    /// from left to right, `w` is their total width, and every width but the
+    /// last is a multiple of 16. The box sums and the `A` / `B` arrays do
+    /// not depend on `xqd`, so they are computed once for the whole run
+    /// (exactly as for each unit: they only depend on the source samples
+    /// within 3 columns of each output column); only the final projection
+    /// uses the weights of the unit of each output column.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub fn sgr_filter_units<T: Pixel, const BD: u32>(
+        dst: &mut [T],
+        dst_stride: usize,
+        src: &[&[T]],
+        w: usize,
+        h: usize,
+        set: usize,
+        units: &[(usize, [i32; 2])],
     ) {
         check_rect(w, h);
         const { assert!(BD == 8 || BD == 10) };
         let r0 = SGR_PARAMS[set][0] as usize;
         let r1 = SGR_PARAMS[set][2] as usize;
         let [s0, s1] = SGR_SCALE[set];
-        let w0 = if r0 != 0 { xqd[0] } else { 0 };
-        let w1 = if r1 != 0 { xqd[1] } else { (1 << SGRPROJ_PRJ_BITS) - w0 };
-        let w2 = (1 << SGRPROJ_PRJ_BITS) - w0 - w1;
-        let (w0, w2) = (I16s::splat(w0 as i16), I16s::splat(w2 as i16));
+        let zero = I16s::splat(0);
+        let mut wts = ChunkWeights {
+            w0: [zero; LR_CHUNKS],
+            w2: [zero; LR_CHUNKS],
+        };
+        let mut k = 0;
+        let mut total = 0;
+        for (i, &(uw, xqd)) in units.iter().enumerate() {
+            debug_assert!(i + 1 == units.len() || uw % N == 0);
+            let w0 = if r0 != 0 { xqd[0] } else { 0 };
+            let w1 = if r1 != 0 { xqd[1] } else { (1 << SGRPROJ_PRJ_BITS) - w0 };
+            let w2 = (1 << SGRPROJ_PRJ_BITS) - w0 - w1;
+            let (w0, w2) = (I16s::splat(w0 as i16), I16s::splat(w2 as i16));
+            let end = (k + uw.div_ceil(N)).min(LR_CHUNKS);
+            wts.w0[k..end].fill(w0);
+            wts.w2[k..end].fill(w2);
+            k = end;
+            total += uw;
+        }
+        assert_eq!(total, w);
 
         match (r0 != 0, r1 != 0) {
-            (true, true) => {
-                sgr_filter_both::<T, BD>(dst, dst_stride, src, src_stride, w, h, s0, s1, w0, w2)
-            }
-            (false, true) => sgr_filter_r1::<T, BD>(dst, dst_stride, src, src_stride, w, h, s1, w2),
-            (true, false) => sgr_filter_r2::<T, BD>(dst, dst_stride, src, src_stride, w, h, s0, w0),
+            (true, true) => sgr_filter_both::<T, BD>(dst, dst_stride, src, w, h, s0, s1, &wts),
+            (false, true) => sgr_filter_r1::<T, BD>(dst, dst_stride, src, w, h, s1, &wts),
+            (true, false) => sgr_filter_r2::<T, BD>(dst, dst_stride, src, w, h, s0, &wts),
             (false, false) => {}
         }
     }
@@ -2086,18 +2410,20 @@ mod narrow {
 pub fn wiener_filter_bd<T: Pixel, const BD: u32>(
     dst: &mut [T],
     dst_stride: usize,
-    src: &[T],
-    src_stride: usize,
+    src: &[&[T]],
     w: usize,
     h: usize,
     coeffs: &[[i32; 3]; 2],
     bd: u32,
 ) {
     debug_assert_eq!(bd, BD);
+    // The decoder uses `u8` pixels iff the bit depth is 8. The tests also
+    // run `u16` pixels at bit depth 8, which every kernel supports.
+    debug_assert!(cfg!(test) || (T::MAX_BITDEPTH == 8) == (BD == 8));
     match BD {
-        8 => narrow::wiener_filter::<T, 8>(dst, dst_stride, src, src_stride, w, h, coeffs),
-        10 => narrow::wiener_filter::<T, 10>(dst, dst_stride, src, src_stride, w, h, coeffs),
-        _ => wiener_filter(dst, dst_stride, src, src_stride, w, h, coeffs, BD),
+        8 => narrow::wiener_filter::<T, 8>(dst, dst_stride, src, w, h, coeffs),
+        10 => narrow::wiener_filter::<T, 10>(dst, dst_stride, src, w, h, coeffs),
+        _ => wiener_filter(dst, dst_stride, src, w, h, coeffs, BD),
     }
 }
 
@@ -2105,8 +2431,7 @@ pub fn wiener_filter_bd<T: Pixel, const BD: u32>(
 pub fn sgr_filter_bd<T: Pixel, const BD: u32>(
     dst: &mut [T],
     dst_stride: usize,
-    src: &[T],
-    src_stride: usize,
+    src: &[&[T]],
     w: usize,
     h: usize,
     set: usize,
@@ -2114,10 +2439,60 @@ pub fn sgr_filter_bd<T: Pixel, const BD: u32>(
     bd: u32,
 ) {
     debug_assert_eq!(bd, BD);
+    // The decoder uses `u8` pixels iff the bit depth is 8. The tests also
+    // run `u16` pixels at bit depth 8, which every kernel supports.
+    debug_assert!(cfg!(test) || (T::MAX_BITDEPTH == 8) == (BD == 8));
     match BD {
-        8 => narrow::sgr_filter::<T, 8>(dst, dst_stride, src, src_stride, w, h, set, xqd),
-        10 => narrow::sgr_filter::<T, 10>(dst, dst_stride, src, src_stride, w, h, set, xqd),
-        _ => sgr_filter(dst, dst_stride, src, src_stride, w, h, set, xqd, BD),
+        8 => narrow::sgr_filter::<T, 8>(dst, dst_stride, src, w, h, set, xqd),
+        10 => narrow::sgr_filter::<T, 10>(dst, dst_stride, src, w, h, set, xqd),
+        _ => sgr_filter(dst, dst_stride, src, w, h, set, xqd, BD),
+    }
+}
+
+/// Self guided filter of a run of adjacent restoration units with the
+/// same parameter set (see [`narrow::sgr_filter_units`]): `units` holds
+/// the width and `xqd` of each unit, `w` their total width (at most
+/// `LR_MAX_W`), and every width but the last is a multiple of 16.
+/// Equivalent to [`sgr_filter_bd`] on each unit.
+#[allow(clippy::too_many_arguments)]
+pub fn sgr_filter_units<T: Pixel>(
+    dst: &mut [T],
+    dst_stride: usize,
+    src: &[&[T]],
+    w: usize,
+    h: usize,
+    set: usize,
+    units: &[(usize, [i32; 2])],
+    bd: u32,
+) {
+    match bd {
+        8 if T::MAX_BITDEPTH == 8 => {
+            narrow::sgr_filter_units::<T, 8>(dst, dst_stride, src, w, h, set, units)
+        }
+        10 if T::MAX_BITDEPTH != 8 => {
+            narrow::sgr_filter_units::<T, 10>(dst, dst_stride, src, w, h, set, units)
+        }
+        _ => {
+            let mut x = 0;
+            let mut rows: [&[T]; crate::decoder::av1::dsp::lr::LR_MAX_H + 2 * LR_BORDER] =
+                [&[]; crate::decoder::av1::dsp::lr::LR_MAX_H + 2 * LR_BORDER];
+            for &(uw, xqd) in units {
+                for (d, s) in rows.iter_mut().zip(src) {
+                    *d = &s[x..];
+                }
+                sgr_filter(
+                    &mut dst[x..],
+                    dst_stride,
+                    &rows[..src.len()],
+                    uw,
+                    h,
+                    set,
+                    xqd,
+                    bd,
+                );
+                x += uw;
+            }
+        }
     }
 }
 
@@ -2128,6 +2503,11 @@ mod tests {
         self as portable, LR_MAX_H, SGRPROJ_XQD_MAX, SGRPROJ_XQD_MIN, SGR_A2, WIENER_TAPS_MAX,
         WIENER_TAPS_MIN,
     };
+
+    /// The rows of a padded source buffer with row stride `stride`.
+    fn rows_of<T>(buf: &[T], stride: usize) -> Vec<&[T]> {
+        buf.chunks(stride).collect()
+    }
 
     /// Small deterministic PRNG (xorshift64*).
     struct Rng(u64);
@@ -2195,20 +2575,25 @@ mod tests {
         bd: u32,
         n_random: usize,
         what: &str,
-        f: &dyn Fn(bool, &mut [T], usize, &[T], usize, usize, usize),
+        f: &dyn Fn(bool, &mut [T], usize, &[&[T]], usize, usize),
     ) {
         for (w, h) in sizes(rng, n_random) {
             let stride = w + 2 * LR_BORDER + rng.range(0, 5) as usize;
-            // The buffer ends right after the last padded sample.
-            let len = stride * (h + 2 * LR_BORDER - 1) + w + 2 * LR_BORDER;
+            // The buffer ends right after the last padded sample, or
+            // `LR_SRC_SLACK` samples later (full-vector loads at row ends).
+            let slack = [0, portable::LR_SRC_SLACK][rng.range(0, 1) as usize];
+            let len = stride * (h + 2 * LR_BORDER - 1) + w + 2 * LR_BORDER + slack;
             let src = make_src::<T>(rng, len, bd);
+            let rows: Vec<&[T]> = (0..h + 2 * LR_BORDER)
+                .map(|r| &src[r * stride..(r * stride + w + 2 * LR_BORDER + slack).min(len)])
+                .collect();
             let dst_stride = w + rng.range(0, 3) as usize;
             let dst_len = dst_stride * (h - 1) + w;
             let fill = T::from_i32(rng.range(0, (1 << bd) - 1) as i32);
             let mut got = vec![fill; dst_len];
             let mut want = vec![fill; dst_len];
-            f(true, &mut got, dst_stride, &src, stride, w, h);
-            f(false, &mut want, dst_stride, &src, stride, w, h);
+            f(true, &mut got, dst_stride, &rows, w, h);
+            f(false, &mut want, dst_stride, &rows, w, h);
             assert!(got == want, "{what} bd={bd} {w}x{h}");
         }
     }
@@ -2230,11 +2615,11 @@ mod tests {
                 }
             }
             let what = format!("wiener {coeffs:?}");
-            compare::<T>(&mut rng, bd, 8, &what, &|simd, d, ds, s, ss, w, h| {
+            compare::<T>(&mut rng, bd, 8, &what, &|simd, d, ds, s, w, h| {
                 if simd {
-                    wiener_filter(d, ds, s, ss, w, h, &coeffs, bd)
+                    wiener_filter(d, ds, s, w, h, &coeffs, bd)
                 } else {
-                    portable::wiener_filter(d, ds, s, ss, w, h, &coeffs, bd)
+                    portable::wiener_filter(d, ds, s, w, h, &coeffs, bd)
                 }
             });
         }
@@ -2265,11 +2650,11 @@ mod tests {
                 }
             }
             let what = format!("wiener_bd {coeffs:?}");
-            compare::<T>(&mut rng, BD, 8, &what, &|simd, d, ds, s, ss, w, h| {
+            compare::<T>(&mut rng, BD, 8, &what, &|simd, d, ds, s, w, h| {
                 if simd {
-                    wiener_filter_bd::<T, BD>(d, ds, s, ss, w, h, &coeffs, BD)
+                    wiener_filter_bd::<T, BD>(d, ds, s, w, h, &coeffs, BD)
                 } else {
-                    portable::wiener_filter(d, ds, s, ss, w, h, &coeffs, BD)
+                    portable::wiener_filter(d, ds, s, w, h, &coeffs, BD)
                 }
             });
         }
@@ -2316,8 +2701,8 @@ mod tests {
                     .collect();
                 let mut got = vec![0u8; w * h];
                 let mut want = vec![0u8; w * h];
-                wiener_filter_bd::<u8, 8>(&mut got, w, &src, stride, w, h, &coeffs, 8);
-                portable::wiener_filter(&mut want, w, &src, stride, w, h, &coeffs, 8);
+                wiener_filter_bd::<u8, 8>(&mut got, w, &rows_of(&src, stride), w, h, &coeffs, 8);
+                portable::wiener_filter(&mut want, w, &rows_of(&src, stride), w, h, &coeffs, 8);
                 assert!(got == want, "{coeffs:?} mode={mode}");
             }
         }
@@ -2358,11 +2743,11 @@ mod tests {
             for _ in 0..2 {
                 let xqd = random_xqd(&mut rng, set);
                 let what = format!("sgr set={set} xqd={xqd:?}");
-                compare::<T>(&mut rng, bd, 4, &what, &|simd, d, ds, s, ss, w, h| {
+                compare::<T>(&mut rng, bd, 4, &what, &|simd, d, ds, s, w, h| {
                     if simd {
-                        sgr_filter(d, ds, s, ss, w, h, set, xqd, bd)
+                        sgr_filter(d, ds, s, w, h, set, xqd, bd)
                     } else {
-                        portable::sgr_filter(d, ds, s, ss, w, h, set, xqd, bd)
+                        portable::sgr_filter(d, ds, s, w, h, set, xqd, bd)
                     }
                 });
             }
@@ -2375,11 +2760,11 @@ mod tests {
             for _ in 0..2 {
                 let xqd = random_xqd(&mut rng, set);
                 let what = format!("sgr_bd set={set} xqd={xqd:?}");
-                compare::<T>(&mut rng, BD, 4, &what, &|simd, d, ds, s, ss, w, h| {
+                compare::<T>(&mut rng, BD, 4, &what, &|simd, d, ds, s, w, h| {
                     if simd {
-                        sgr_filter_bd::<T, BD>(d, ds, s, ss, w, h, set, xqd, BD)
+                        sgr_filter_bd::<T, BD>(d, ds, s, w, h, set, xqd, BD)
                     } else {
-                        portable::sgr_filter(d, ds, s, ss, w, h, set, xqd, BD)
+                        portable::sgr_filter(d, ds, s, w, h, set, xqd, BD)
                     }
                 });
             }
@@ -2423,9 +2808,18 @@ mod tests {
                     let mut got = vec![T::default(); w * h];
                     let mut got_bd = vec![T::default(); w * h];
                     let mut want = vec![T::default(); w * h];
-                    sgr_filter(&mut got, w, &src, stride, w, h, set, xqd, BD);
-                    sgr_filter_bd::<T, BD>(&mut got_bd, w, &src, stride, w, h, set, xqd, BD);
-                    portable::sgr_filter(&mut want, w, &src, stride, w, h, set, xqd, BD);
+                    sgr_filter(&mut got, w, &rows_of(&src, stride), w, h, set, xqd, BD);
+                    sgr_filter_bd::<T, BD>(
+                        &mut got_bd,
+                        w,
+                        &rows_of(&src, stride),
+                        w,
+                        h,
+                        set,
+                        xqd,
+                        BD,
+                    );
+                    portable::sgr_filter(&mut want, w, &rows_of(&src, stride), w, h, set, xqd, BD);
                     assert!(got == want, "bd={BD} set={set} xqd={xqd:?}");
                     assert!(got_bd == want, "bd_spec bd={BD} set={set} xqd={xqd:?}");
                 }
@@ -2436,6 +2830,51 @@ mod tests {
     #[test]
     fn sgr_bd_matches_portable_8bit() {
         run_sgr_bd::<u8, 8>(0x4444_5678_9abc_def1);
+    }
+
+    /// [`sgr_filter_units`] on a run of units equals [`sgr_filter_bd`] on
+    /// each unit.
+    fn run_sgr_units<T: Pixel, const BD: u32>(seed: u64) {
+        let mut rng = Rng(seed);
+        for iter in 0..24 {
+            let set = iter % SGR_PARAMS.len();
+            let n = 1 + rng.range(0, 5) as usize;
+            let unit = [16, 32, 64, 128][rng.range(0, 3) as usize];
+            let mut units: Vec<(usize, [i32; 2])> =
+                (0..n).map(|_| (unit, random_xqd(&mut rng, set))).collect();
+            let last = rng.range(1, unit as i64 * 3 / 2) as usize;
+            units.last_mut().unwrap().0 = last;
+            let w: usize = units.iter().map(|u| u.0).sum();
+            if w > LR_MAX_W {
+                continue;
+            }
+            let h = 1 + rng.range(0, 63) as usize;
+            let stride = w + 2 * LR_BORDER;
+            let src = make_src::<T>(
+                &mut rng,
+                stride * (h + 2 * LR_BORDER) + portable::LR_SRC_SLACK,
+                BD,
+            );
+            let rows = rows_of(&src, stride);
+            let rows = &rows[..h + 2 * LR_BORDER];
+            let mut got = vec![T::default(); w * h];
+            let mut want = vec![T::default(); w * h];
+            sgr_filter_units(&mut got, w, rows, w, h, set, &units, BD);
+            let mut x = 0;
+            for &(uw, xqd) in &units {
+                let urows: Vec<&[T]> = rows.iter().map(|r| &r[x..]).collect();
+                sgr_filter_bd::<T, BD>(&mut want[x..], w, &urows, uw, h, set, xqd, BD);
+                x += uw;
+            }
+            assert!(got == want, "bd={BD} set={set} units={units:?} h={h}");
+        }
+    }
+
+    #[test]
+    fn sgr_units_match_per_unit() {
+        run_sgr_units::<u8, 8>(0x7777_5678_9abc_def1);
+        run_sgr_units::<u16, 10>(0x8888_5678_9abc_def1);
+        run_sgr_units::<u16, 12>(0x9999_5678_9abc_def1);
     }
 
     #[test]
@@ -2491,13 +2930,22 @@ mod tests {
                 .enumerate()
             {
                 tw[k] = time(&mut || {
-                    wiener_filter_bd::<T, BD>(&mut dst, w, &src, stride, w, h, coeffs, BD)
+                    wiener_filter_bd::<T, BD>(&mut dst, w, &rows_of(&src, stride), w, h, coeffs, BD)
                 });
             }
             let mut ts = [0f64; 3];
             for (k, set) in [0usize, 10, 14].into_iter().enumerate() {
                 ts[k] = time(&mut || {
-                    sgr_filter_bd::<T, BD>(&mut dst, w, &src, stride, w, h, set, [-32, 31], BD)
+                    sgr_filter_bd::<T, BD>(
+                        &mut dst,
+                        w,
+                        &rows_of(&src, stride),
+                        w,
+                        h,
+                        set,
+                        [-32, 31],
+                        BD,
+                    )
                 });
             }
             println!(
@@ -2538,6 +2986,38 @@ mod tests {
                 I32s::splat(SGR_A2[z as usize] as i32),
                 "z={z}"
             );
+        }
+    }
+
+    /// `x` from `p` (any sign, `|p| < 2^26`) equals the spec's for every
+    /// scale: all `p` near the `z` steps are checked, the rest sparsely.
+    #[test]
+    fn sgr_x_from_p() {
+        let max_p: i64 = 1 << 26;
+        for &s in SGR_SCALE.iter().flatten().filter(|&&s| s != 0) {
+            let want = |p: i64| -> i32 {
+                let z = ((p.max(0) * s as i64 + (1 << (SGRPROJ_MTABLE_BITS - 1)))
+                    >> SGRPROJ_MTABLE_BITS)
+                    .min(255);
+                256 - SGR_A2[z as usize] as i32
+            };
+            let mut ps: Vec<i64> = (-max_p + 1..max_p).step_by(4099).collect();
+            ps.extend([-max_p + 1, -1, 0, 1, max_p - 1]);
+            // Around every step of z (and x).
+            for z in 0..=256i64 {
+                let p0 = ((z << SGRPROJ_MTABLE_BITS) - (1 << (SGRPROJ_MTABLE_BITS - 1))) / s as i64;
+                ps.extend(p0 - 3..p0 + 4);
+            }
+            for chunk in ps.chunks(16) {
+                let mut a = [0i32; 16];
+                for (d, &p) in a.iter_mut().zip(chunk) {
+                    *d = p.clamp(-max_p + 1, max_p - 1) as i32;
+                }
+                let got = narrow::sgr_x_from_p(Simd::from_array(a), s);
+                for (k, &p) in a.iter().enumerate() {
+                    assert_eq!(got[k], want(p as i64), "s={s} p={p}");
+                }
+            }
         }
     }
 

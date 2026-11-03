@@ -163,18 +163,34 @@ pub const SM_WEIGHTS_TX_64X64: [u8; 64] = [
     18, 16, 15, 13, 12, 10, 9, 8, 7, 6, 6, 5, 5, 4, 4, 4,
 ];
 
+/// Returns `t` with `src` copied to `t[at..at + src.len()]` (for building
+/// `SM_WEIGHTS_ALL` at compile time).
+const fn copy_weights(mut t: [u8; 128], src: &[u8], at: usize) -> [u8; 128] {
+    let mut i = 0;
+    while i < src.len() {
+        t[at + i] = src[i];
+        i += 1;
+    }
+    t
+}
+
+/// Concatenated smooth weights indexed by `[n..2 * n]` for `n` in
+/// `{4, 8, 16, 32, 64}` (`Sm_Weights_Tx_NxN`, copied from the tables
+/// above at compile time).
+const SM_WEIGHTS_ALL: [u8; 128] = {
+    let t = copy_weights([0; 128], &SM_WEIGHTS_TX_4X4, 4);
+    let t = copy_weights(t, &SM_WEIGHTS_TX_8X8, 8);
+    let t = copy_weights(t, &SM_WEIGHTS_TX_16X16, 16);
+    let t = copy_weights(t, &SM_WEIGHTS_TX_32X32, 32);
+    copy_weights(t, &SM_WEIGHTS_TX_64X64, 64)
+};
+
 /// Returns the smooth weights table for a dimension of `n` samples
 /// (`n` in 4, 8, 16, 32, 64), i.e. `Sm_Weights_Tx_NxN`.
-#[inline]
+#[inline(always)]
 pub fn sm_weights(n: usize) -> &'static [u8] {
-    match n {
-        4 => &SM_WEIGHTS_TX_4X4,
-        8 => &SM_WEIGHTS_TX_8X8,
-        16 => &SM_WEIGHTS_TX_16X16,
-        32 => &SM_WEIGHTS_TX_32X32,
-        64 => &SM_WEIGHTS_TX_64X64,
-        _ => panic!("invalid smooth prediction size {n}"),
-    }
+    debug_assert!(matches!(n, 4 | 8 | 16 | 32 | 64));
+    &SM_WEIGHTS_ALL[n..2 * n]
 }
 
 /// Spec `Intra_Filter_Taps[INTRA_FILTER_MODES][8][7]`.
@@ -579,6 +595,7 @@ fn check_block4<T, const W: usize>(
     let stride = stride & 0xffff_ffff;
     let h4 = h >> 2;
     assert!(stride >= W && (1..=16).contains(&h4) && h == h4 * 4);
+    let stride = stride.max(W);
     (&mut dst[..(4 * h4 - 1) * stride + W], stride, h4)
 }
 
@@ -588,17 +605,39 @@ fn row_mut<T, const W: usize>(dst: &mut [T], off: usize) -> &mut [T; W] {
     (&mut dst[off..off + W]).try_into().unwrap()
 }
 
+/// Returns 4 consecutive `W`-sample rows starting at row `4 * i` in `dst`
+/// (`i < 16`, `stride >= W` checked by [`check_block4`]).
+#[inline(always)]
+fn row4_mut<T, const W: usize>(
+    dst: &mut [T],
+    i: usize,
+    stride: usize,
+) -> (&mut [T; W], &mut [T; W], &mut [T; W], &mut [T; W]) {
+    let s3 = stride * 3;
+    let base = (i & 15) * (stride * 4);
+    let win = &mut dst[base..base + s3 + W];
+    let (r0, win) = win.split_at_mut(stride);
+    let (r1, win) = win.split_at_mut(stride);
+    let (r2, r3) = win.split_at_mut(stride);
+    (
+        (&mut r0[..W]).try_into().unwrap(),
+        (&mut r1[..W]).try_into().unwrap(),
+        (&mut r2[..W]).try_into().unwrap(),
+        r3.try_into().unwrap(),
+    )
+}
+
 /// Fills a `W x h` block with a single value (4 rows per iteration).
 #[inline(always)]
 fn fill_w<T: Pixel, const W: usize>(dst: &mut [T], stride: usize, h: usize, v: T) {
     let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
     let src = [v; W];
     for i4 in 0..h4 {
-        let base = 4 * i4 * stride;
-        *row_mut::<T, W>(dst, base) = src;
-        *row_mut::<T, W>(dst, base + stride) = src;
-        *row_mut::<T, W>(dst, base + 2 * stride) = src;
-        *row_mut::<T, W>(dst, base + 3 * stride) = src;
+        let (r0, r1, r2, r3) = row4_mut::<T, W>(dst, i4, stride);
+        *r0 = src;
+        *r1 = src;
+        *r2 = src;
+        *r3 = src;
     }
 }
 
@@ -688,11 +727,11 @@ fn v_w<T: Pixel, const W: usize>(dst: &mut [T], stride: usize, above: &[T], h: u
     let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
     let src: [T; W] = above[..W].try_into().unwrap();
     for i4 in 0..h4 {
-        let base = 4 * i4 * stride;
-        *row_mut::<T, W>(dst, base) = src;
-        *row_mut::<T, W>(dst, base + stride) = src;
-        *row_mut::<T, W>(dst, base + 2 * stride) = src;
-        *row_mut::<T, W>(dst, base + 3 * stride) = src;
+        let (r0, r1, r2, r3) = row4_mut::<T, W>(dst, i4, stride);
+        *r0 = src;
+        *r1 = src;
+        *r2 = src;
+        *r3 = src;
     }
 }
 
@@ -704,13 +743,13 @@ pub fn ipred_h<T: Pixel>(dst: &mut [T], stride: usize, left: &[T], w: usize, h: 
 #[inline(always)]
 fn h_w<T: Pixel, const W: usize>(dst: &mut [T], stride: usize, left: &[T], h: usize) {
     let (dst, stride, h4) = check_block4::<T, W>(dst, stride, h);
-    let left = &left[..4 * h4];
-    for i4 in 0..h4 {
-        let base = 4 * i4 * stride;
-        *row_mut::<T, W>(dst, base) = [left[4 * i4]; W];
-        *row_mut::<T, W>(dst, base + stride) = [left[4 * i4 + 1]; W];
-        *row_mut::<T, W>(dst, base + 2 * stride) = [left[4 * i4 + 2]; W];
-        *row_mut::<T, W>(dst, base + 3 * stride) = [left[4 * i4 + 3]; W];
+    let left4 = left[..4 * h4].as_chunks::<4>().0;
+    for (i4, &[l0, l1, l2, l3]) in left4.iter().enumerate() {
+        let (r0, r1, r2, r3) = row4_mut::<T, W>(dst, i4, stride);
+        *r0 = [l0; W];
+        *r1 = [l1; W];
+        *r2 = [l2; W];
+        *r3 = [l3; W];
     }
 }
 
@@ -917,15 +956,34 @@ pub fn filter_corner<T: Pixel>(left0: T, top_left: T, above0: T) -> i32 {
 /// spec's if/else chains by the `strength_tables` test).
 #[inline]
 pub fn edge_filter_strength(w: usize, h: usize, filter_type: bool, delta: i32) -> u32 {
-    let d = delta.unsigned_abs();
-    let blk_wh = w + h;
-    let class = (blk_wh > 8) as usize
-        + (blk_wh > 16) as usize
-        + (blk_wh > 24) as usize
-        + (blk_wh > 32) as usize;
-    let t = &STRENGTH_THRESHOLDS[filter_type as usize][class];
-    (d >= t[0] as u32) as u32 + (d >= t[1] as u32) as u32 + (d >= t[2] as u32) as u32
+    // class = #{8, 16, 24, 32 < w + h} = (w + h - 1) >> 3, at most 4. All
+    // thresholds are below 128, so |delta| saturates there.
+    let class = ((w + h).max(1) - 1) >> 3;
+    let d = delta.unsigned_abs().min(127) as usize;
+    STRENGTH_LUT[filter_type as usize][class.min(4)][d] as u32
 }
+
+/// [`edge_filter_strength`] by `[filter_type][class][min(|delta|, 127)]`.
+pub(super) const STRENGTH_LUT: [[[u8; 128]; 5]; 2] = {
+    let mut lut = [[[0u8; 128]; 5]; 2];
+    let mut ft = 0;
+    while ft < 2 {
+        let mut class = 0;
+        while class < 5 {
+            let t = &STRENGTH_THRESHOLDS[ft][class];
+            let mut d = 0;
+            while d < 128 {
+                lut[ft][class][d] = (d >= t[0] as usize) as u8
+                    + (d >= t[1] as usize) as u8
+                    + (d >= t[2] as usize) as u8;
+                d += 1;
+            }
+            class += 1;
+        }
+        ft += 1;
+    }
+    lut
+};
 
 /// Thresholds of [`edge_filter_strength`] by `[filter_type][class]`, with
 /// class 0..=4 for `w + h` in `..=8`, `..=16`, `..=24`, `..=32`, `33..`.
@@ -1484,6 +1542,15 @@ mod tests {
 
     use super::*;
     use crate::decoder::av1::pixel::clip3;
+
+    #[test]
+    fn sm_weights_match_spec_tables() {
+        assert_eq!(sm_weights(4), &SM_WEIGHTS_TX_4X4[..]);
+        assert_eq!(sm_weights(8), &SM_WEIGHTS_TX_8X8[..]);
+        assert_eq!(sm_weights(16), &SM_WEIGHTS_TX_16X16[..]);
+        assert_eq!(sm_weights(32), &SM_WEIGHTS_TX_32X32[..]);
+        assert_eq!(sm_weights(64), &SM_WEIGHTS_TX_64X64[..]);
+    }
 
     /// Offset of spec index 0 in the reference edge arrays.
     const OFF: i32 = 16;

@@ -23,29 +23,15 @@ use crate::decoder::av1::pixel::Pixel;
 /// A window of rows of one plane. Row `y` (absolute, in plane samples) is
 /// stored at data row `y - y0`.
 ///
-/// The sample storage starts at a 64-byte aligned address (`data()` is
-/// an offset view into a slightly larger allocation), so with strides
-/// that are multiples of 64 bytes every row starts on a cache line and
-/// full-width vector stores of 32 / 64 sample rows do not split lines.
-#[derive(Clone)]
+/// The samples are a plain `Vec` (`data()[0]` is sample (x0, y0)); its
+/// start has no alignment guarantee beyond that of `T`.
+#[derive(Clone, Default)]
 pub struct PlaneWin<T> {
     buf: Vec<T>,
-    /// Elements of `buf` before the first (64-byte aligned) sample.
-    off: usize,
     pub stride: usize,
     pub x0: usize,
     pub y0: usize,
     pub rows: usize,
-}
-
-/// Allocates `n` default samples starting at a 64-byte aligned address:
-/// returns the allocation and the offset (in elements) of that start.
-fn alloc_aligned<T: Pixel>(n: usize) -> (Vec<T>, usize) {
-    let sz = std::mem::size_of::<T>();
-    let buf = vec![T::default(); n + 64 / sz];
-    let addr = buf.as_ptr() as usize;
-    let off = ((64 - addr % 64) % 64) / sz;
-    (buf, off)
 }
 
 impl<T: Pixel> PlaneWin<T> {
@@ -53,11 +39,33 @@ impl<T: Pixel> PlaneWin<T> {
         Self::new_tile(stride, rows, 0, 0)
     }
 
-    pub fn new_tile(stride: usize, rows: usize, x0: usize, y0: usize) -> Self {
-        let (buf, off) = alloc_aligned(stride * rows);
+    pub fn from_vec(mut buf: Vec<T>, stride: usize, rows: usize) -> Self {
+        Self::fit(&mut buf, stride * rows);
         Self {
             buf,
-            off,
+            stride,
+            x0: 0,
+            y0: 0,
+            rows,
+        }
+    }
+
+    /// Resizes `buf` to `n` samples. A buffer that has to grow is
+    /// replaced by a zeroed allocation (`calloc`: fresh pages are zero
+    /// already) instead of being filled, which for frame sized planes
+    /// would write (and fault in) every page once more before decoding.
+    fn fit(buf: &mut Vec<T>, n: usize) {
+        if buf.capacity() < n {
+            *buf = vec![T::default(); n];
+        } else {
+            buf.resize(n, T::default());
+        }
+    }
+
+    pub fn new_tile(stride: usize, rows: usize, x0: usize, y0: usize) -> Self {
+        let buf = vec![T::default(); stride * rows];
+        Self {
+            buf,
             stride,
             x0,
             y0,
@@ -65,21 +73,30 @@ impl<T: Pixel> PlaneWin<T> {
         }
     }
 
+    pub fn reset(&mut self, stride: usize, rows: usize, x0: usize, y0: usize) {
+        Self::fit(&mut self.buf, stride * rows);
+        self.stride = stride;
+        self.x0 = x0;
+        self.y0 = y0;
+        self.rows = rows;
+    }
+
     /// The samples: `data()[0]` is sample (x0, y0), rows `stride` apart.
     #[inline(always)]
     pub fn data(&self) -> &[T] {
-        &self.buf[self.off..]
+        &self.buf
     }
 
     #[inline(always)]
     pub fn data_mut(&mut self) -> &mut [T] {
-        &mut self.buf[self.off..]
+        &mut self.buf
     }
 
     /// The allocation and the offset of sample (x0, y0) in it (for
-    /// handing the plane over without a copy).
+    /// handing the plane over without a copy). The offset is always 0
+    /// (kept so that `sink::Plane::offset` stays meaningful).
     pub fn into_raw(self) -> (Vec<T>, usize) {
-        (self.buf, self.off)
+        (self.buf, 0)
     }
 
     #[inline(always)]
@@ -96,33 +113,39 @@ impl<T: Pixel> PlaneWin<T> {
             self.x0,
             self.stride
         );
-        (y - self.y0) * self.stride + (x - self.x0)
+        debug_assert!(self.stride <= 0x3_ffff);
+        // Each term is masked to 18 bits: AV1 planes are at most 65536
+        // samples wide / high, so window rows, columns and strides (plus
+        // padding) always fit, and the masks are no-ops for valid
+        // coordinates. They let the compiler prove that the index
+        // arithmetic cannot overflow, which keeps it simple in the
+        // inlined hot loops. Out-of-window coordinates are caught by the
+        // debug assertions above (in release builds they alias to another
+        // in-bounds index or fail the slice bounds check).
+        ((y - self.y0) & 0x3_ffff) * (self.stride & 0x3_ffff) + ((x - self.x0) & 0x3_ffff)
     }
-
-    // The accessors below index `buf` with `off` folded into the index
-    // (one add) instead of slicing `data()` first (an extra bounds check).
 
     #[inline(always)]
     pub fn get(&self, x: usize, y: usize) -> T {
-        self.buf[self.off + self.idx(x, y)]
+        self.buf[self.idx(x, y)]
     }
 
     #[inline(always)]
     pub fn set(&mut self, x: usize, y: usize, v: T) {
-        let i = self.off + self.idx(x, y);
+        let i = self.idx(x, y);
         self.buf[i] = v;
     }
 
     /// Slice starting at sample (x, y) (rows continue with `stride`).
     #[inline(always)]
     pub fn slice_mut(&mut self, x: usize, y: usize) -> &mut [T] {
-        let i = self.off + self.idx(x, y);
+        let i = self.idx(x, y);
         &mut self.buf[i..]
     }
 
     #[inline(always)]
     pub fn slice(&self, x: usize, y: usize) -> &[T] {
-        let i = self.off + self.idx(x, y);
+        let i = self.idx(x, y);
         &self.buf[i..]
     }
 
@@ -135,7 +158,7 @@ impl<T: Pixel> PlaneWin<T> {
             self.y0,
             self.rows
         );
-        let i = self.off + (y - self.y0) * self.stride;
+        let i = (y - self.y0) * self.stride;
         &self.buf[i..i + self.stride]
     }
 
@@ -147,7 +170,7 @@ impl<T: Pixel> PlaneWin<T> {
             self.y0,
             self.rows
         );
-        let i = self.off + (y - self.y0) * self.stride;
+        let i = (y - self.y0) * self.stride;
         &mut self.buf[i..i + self.stride]
     }
 
@@ -170,9 +193,8 @@ impl<T: Pixel> PlaneWin<T> {
             .saturating_sub(new_y0)
             .min(self.rows.saturating_sub(shift));
         if keep > 0 {
-            let (s, o) = (self.stride, self.off);
-            self.buf
-                .copy_within(o + shift * s..o + (shift + keep) * s, o);
+            let s = self.stride;
+            self.buf.copy_within(shift * s..(shift + keep) * s, 0);
         }
         self.y0 = new_y0;
     }
@@ -204,7 +226,7 @@ impl MiInfo {
 
 /// Window of mode info rows (in 4x4 units). `rows` is a power of two
 /// (`2 * sb4`), so rows wrap in place without copying on `slide_to`.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct MiWin {
     pub data: Vec<MiInfo>,
     /// `LoopfilterTxSizes` for luma (`0`) and chroma (`1`, subsampled
@@ -253,26 +275,74 @@ impl MiWin {
         delta_lf: bool,
         intrabc: bool,
     ) -> Self {
+        let mut w = Self::default();
+        w.reset(
+            stride, rows, col0, y0, ss_x, ss_y, deblock_y, deblock_uv, delta_lf, intrabc,
+        );
+        w
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn reset(
+        &mut self,
+        stride: usize,
+        rows: usize,
+        col0: usize,
+        y0: usize,
+        ss_x: usize,
+        ss_y: usize,
+        deblock_y: bool,
+        deblock_uv: bool,
+        delta_lf: bool,
+        intrabc: bool,
+    ) {
         debug_assert!(rows.is_power_of_two());
         let n = stride * rows;
         let uv_stride = stride >> ss_x;
         let uv_rows = rows >> ss_y;
-        Self {
-            data: vec![MiInfo::default(); n],
-            lf_tx: [
-                if deblock_y { vec![0; n] } else { Vec::new() },
-                if deblock_uv { vec![0; uv_stride * uv_rows] } else { Vec::new() },
-            ],
-            lf_stride: [stride, uv_stride],
-            lf_mask: [rows - 1, uv_rows - 1],
-            delta_lf: if delta_lf { vec![[0; 4]; n] } else { Vec::new() },
-            mv: if intrabc { vec![[0; 2]; n] } else { Vec::new() },
-            stride,
-            col0,
-            y0,
-            rows,
-            row_mask: rows - 1,
+        let uv_n = uv_stride * uv_rows;
+        if intrabc {
+            let pl = self.data.len().min(n);
+            self.data[..pl].fill(MiInfo::default());
         }
+        self.data.resize(n, MiInfo::default());
+        if deblock_y {
+            if self.lf_tx[0].capacity() < n {
+                self.lf_tx[0] = vec![0; n];
+            } else {
+                self.lf_tx[0].resize(n, 0);
+            }
+        } else {
+            self.lf_tx[0].clear();
+        }
+        if deblock_uv {
+            if self.lf_tx[1].capacity() < uv_n {
+                self.lf_tx[1] = vec![0; uv_n];
+            } else {
+                self.lf_tx[1].resize(uv_n, 0);
+            }
+        } else {
+            self.lf_tx[1].clear();
+        }
+        self.lf_stride = [stride, uv_stride];
+        self.lf_mask = [rows - 1, uv_rows - 1];
+        if delta_lf {
+            self.delta_lf.resize(n, [0; 4]);
+        } else {
+            self.delta_lf.clear();
+        }
+        if intrabc {
+            let pl = self.mv.len().min(n);
+            self.mv[..pl].fill([0; 2]);
+            self.mv.resize(n, [0; 2]);
+        } else {
+            self.mv.clear();
+        }
+        self.stride = stride;
+        self.col0 = col0;
+        self.y0 = y0;
+        self.rows = rows;
+        self.row_mask = rows - 1;
     }
 
     #[inline(always)]
