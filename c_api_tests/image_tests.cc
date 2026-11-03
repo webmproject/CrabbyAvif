@@ -219,6 +219,73 @@ TEST(ImageTest, MetadataFunctions) {
   }
 }
 
+TEST(RWDataTest, Set) {
+  AvifRwData rw_data;
+  const uint8_t data[] = {1, 2, 3, 4, 5};
+  ASSERT_EQ(avifRWDataSet(&rw_data, data, sizeof(data)), AVIF_RESULT_OK);
+  ASSERT_EQ(rw_data.size, sizeof(data));
+  EXPECT_NE(rw_data.data, data);
+  EXPECT_EQ(memcmp(rw_data.data, data, sizeof(data)), 0);
+
+  // Overwrite with smaller, larger and same sized data.
+  for (const std::vector<uint8_t>& new_data :
+       {std::vector<uint8_t>{6, 7}, std::vector<uint8_t>(100, 8),
+        std::vector<uint8_t>(100, 9)}) {
+    ASSERT_EQ(avifRWDataSet(&rw_data, new_data.data(), new_data.size()),
+              AVIF_RESULT_OK);
+    ASSERT_EQ(rw_data.size, new_data.size());
+    EXPECT_EQ(memcmp(rw_data.data, new_data.data(), new_data.size()), 0);
+  }
+
+  avifRWDataFree(&rw_data);
+  EXPECT_EQ(rw_data.data, nullptr);
+  EXPECT_EQ(rw_data.size, 0u);
+}
+
+TEST(RWDataTest, SetFromOwnBuffer) {
+  AvifRwData rw_data;
+  std::vector<uint8_t> data(16);
+  for (size_t i = 0; i < data.size(); ++i) data[i] = static_cast<uint8_t>(i);
+  ASSERT_EQ(avifRWDataSet(&rw_data, data.data(), data.size()), AVIF_RESULT_OK);
+
+  // The source points into the buffer that is being replaced.
+  ASSERT_EQ(avifRWDataSet(&rw_data, rw_data.data + 4, 8), AVIF_RESULT_OK);
+  ASSERT_EQ(rw_data.size, 8u);
+  EXPECT_EQ(memcmp(rw_data.data, data.data() + 4, 8), 0);
+
+  // Same size as the existing buffer.
+  ASSERT_EQ(avifRWDataSet(&rw_data, rw_data.data, rw_data.size),
+            AVIF_RESULT_OK);
+  ASSERT_EQ(rw_data.size, 8u);
+  EXPECT_EQ(memcmp(rw_data.data, data.data() + 4, 8), 0);
+}
+
+TEST(RWDataTest, SetEmpty) {
+  AvifRwData rw_data;
+  const uint8_t data[] = {1, 2, 3};
+  ASSERT_EQ(avifRWDataSet(&rw_data, data, sizeof(data)), AVIF_RESULT_OK);
+  ASSERT_EQ(avifRWDataSet(&rw_data, nullptr, 0), AVIF_RESULT_OK);
+  EXPECT_EQ(rw_data.data, nullptr);
+  EXPECT_EQ(rw_data.size, 0u);
+  // The AvifRwData destructor frees rw_data again, which must be a no-op.
+}
+
+TEST(RWDataTest, Realloc) {
+  AvifRwData rw_data;
+  const uint8_t data[] = {1, 2, 3};
+  ASSERT_EQ(avifRWDataSet(&rw_data, data, sizeof(data)), AVIF_RESULT_OK);
+  ASSERT_EQ(avifRWDataRealloc(&rw_data, 6), AVIF_RESULT_OK);
+  ASSERT_EQ(rw_data.size, 6u);
+  const uint8_t expected_grown[] = {1, 2, 3, 0, 0, 0};
+  EXPECT_EQ(memcmp(rw_data.data, expected_grown, sizeof(expected_grown)), 0);
+  ASSERT_EQ(avifRWDataRealloc(&rw_data, 2), AVIF_RESULT_OK);
+  ASSERT_EQ(rw_data.size, 2u);
+  EXPECT_EQ(memcmp(rw_data.data, data, 2), 0);
+  ASSERT_EQ(avifRWDataRealloc(&rw_data, 0), AVIF_RESULT_OK);
+  EXPECT_EQ(rw_data.data, nullptr);
+  EXPECT_EQ(rw_data.size, 0u);
+}
+
 TEST(ImageTest, NullCases) {
   ImagePtr src(avifImageCreateEmpty());
   ImagePtr dst(avifImageCreateEmpty());
@@ -254,6 +321,7 @@ TEST(ImageTest, NullCases) {
   EXPECT_NE(avifRWDataSet(nullptr, nullptr, 10), AVIF_RESULT_OK);
   EXPECT_NE(avifRWDataSet(&rw_data, nullptr, 10), AVIF_RESULT_OK);
   EXPECT_NE(avifRWDataSet(nullptr, raw_data, 10), AVIF_RESULT_OK);
+  EXPECT_NE(avifRWDataSet(nullptr, nullptr, 0), AVIF_RESULT_OK);
 
   // This should not crash.
   avifRWDataFree(nullptr);

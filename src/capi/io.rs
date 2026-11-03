@@ -75,6 +75,13 @@ pub unsafe extern "C" fn crabby_avifRWDataRealloc(
     if raw.size == newSize {
         return avifResult::Ok;
     }
+    if newSize == 0 {
+        // SAFETY: Pre-conditions are met to call this function.
+        unsafe {
+            crabby_avifRWDataFree(raw);
+        }
+        return avifResult::Ok;
+    }
     // Ok to use size as capacity here since we use reserve_exact.
     let mut newData: Vec<u8> = Vec::new();
     if newData.try_reserve_exact(newSize).is_err() {
@@ -107,18 +114,30 @@ pub unsafe extern "C" fn crabby_avifRWDataSet(
     data: *const u8,
     size: usize,
 ) -> avifResult {
+    check_pointer!(raw);
     if size != 0 {
-        check_pointer!(raw);
         check_pointer!(data);
+        // Copy the data into a new buffer directly instead of calling crabby_avifRWDataRealloc(),
+        // which would zero the new buffer before it is overwritten.
+        let mut newData: Vec<u8> = Vec::new();
+        if newData.try_reserve_exact(size).is_err() {
+            return avifResult::OutOfMemory;
+        }
+        // SAFETY: data is guaranteed to point to size bytes because of the pre-conditions, and
+        // try_reserve_exact() verified that size <= isize::MAX.
+        let source = unsafe { std::slice::from_raw_parts(data, size) };
+        #[allow(clippy::disallowed_methods)]
+        newData.extend_from_slice(source);
+        // Free the old buffer only after the copy, in case data points into it.
         // SAFETY: Pre-conditions are met to call this function.
-        let res = unsafe { crabby_avifRWDataRealloc(raw, size) };
-        if res != avifResult::Ok {
-            return res;
-        }
-        // SAFETY: The pointers are guaranteed to be valid because of the pre-conditions.
         unsafe {
-            std::ptr::copy_nonoverlapping(data, (*raw).data, size);
+            crabby_avifRWDataFree(raw);
         }
+        let raw = deref_mut!(raw);
+        let mut b = newData.into_boxed_slice();
+        raw.data = b.as_mut_ptr();
+        std::mem::forget(b);
+        raw.size = size;
     } else {
         // SAFETY: Pre-conditions are met to call this function.
         unsafe {
@@ -140,6 +159,8 @@ pub unsafe extern "C" fn crabby_avifRWDataFree(raw: *mut avifRWData) {
     }
     // SAFETY: The pointers are guaranteed to be valid because of the pre-conditions.
     let _ = unsafe { Box::from_raw(std::slice::from_raw_parts_mut(raw.data, raw.size)) };
+    raw.data = std::ptr::null_mut();
+    raw.size = 0;
 }
 
 pub type avifIODestroyFunc = Option<unsafe extern "C" fn(io: *mut avifIO)>;
