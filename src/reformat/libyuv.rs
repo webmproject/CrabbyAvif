@@ -721,26 +721,28 @@ pub(crate) fn process_alpha(rgb: &mut rgb::Image, multiply: bool) -> AvifResult<
         Format::Rgba | Format::Bgra => {}
         _ => return AvifError::not_implemented(),
     }
-    let result = unsafe {
-        if multiply {
-            ARGBAttenuate(
-                rgb.pixels_mut(),
-                i32_from_u32(rgb.row_bytes)?,
-                rgb.pixels_mut(),
-                i32_from_u32(rgb.row_bytes)?,
-                i32_from_u32(rgb.width)?,
-                i32_from_u32(rgb.height)?,
-            )
-        } else {
-            ARGBUnattenuate(
-                rgb.pixels_mut(),
-                i32_from_u32(rgb.row_bytes)?,
-                rgb.pixels_mut(),
-                i32_from_u32(rgb.row_bytes)?,
-                i32_from_u32(rgb.width)?,
-                i32_from_u32(rgb.height)?,
-            )
-        }
+    if !rgb.has_valid_pixels() {
+        return AvifError::reformat_failed();
+    }
+    let pixels = rgb.pixels_mut();
+    if pixels.is_null() {
+        return AvifError::reformat_failed();
+    }
+    let row_bytes = i32_from_u32(rgb.row_bytes)?;
+    let width = i32_from_u32(rgb.width)?;
+    let height = i32_from_u32(rgb.height)?;
+    let result = if multiply {
+        // libyuv explicitly supports in-place `src_argb == dst_argb` for `ARGBAttenuate`.
+        // SAFETY: `rgb.has_valid_pixels()` verified `pixels` is non-null, uniquely borrowed via
+        // `&mut *rgb`, and valid for reads and writes of `height` rows of `row_bytes` bytes
+        // (`>= width * 4`).
+        unsafe { ARGBAttenuate(pixels, row_bytes, pixels, row_bytes, width, height) }
+    } else {
+        // libyuv explicitly supports in-place `src_argb == dst_argb` for `ARGBUnattenuate`.
+        // SAFETY: `rgb.has_valid_pixels()` verified `pixels` is non-null, uniquely borrowed via
+        // `&mut *rgb`, and valid for reads and writes of `height` rows of `row_bytes` bytes
+        // (`>= width * 4`).
+        unsafe { ARGBUnattenuate(pixels, row_bytes, pixels, row_bytes, width, height) }
     };
     if result == 0 {
         Ok(())
