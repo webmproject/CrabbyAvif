@@ -58,11 +58,25 @@ struct ExpectedImageInfo<'a> {
     alpha_obu_size: usize,
 }
 
-fn verify_info(expected_info: &ExpectedImageInfo, image: &Image) {
+fn verify_info(expected_info: &ExpectedImageInfo, image: &Image, after_decode: bool) {
     assert_eq!(image.width, expected_info.width);
     assert_eq!(image.height, expected_info.height);
-    assert_eq!(image.depth, expected_info.depth);
-    assert_eq!(image.yuv_format, expected_info.yuv_format);
+    if cfg!(feature = "android_mediacodec") && after_decode {
+        // Android MediaCodec always outputs 4:2:0 images, either 8-bit or P010.
+        if expected_info.depth == 8 {
+            assert_eq!(image.depth, 8);
+            assert!(matches!(
+                image.yuv_format,
+                PixelFormat::Yuv420 | PixelFormat::AndroidNv12
+            ));
+        } else {
+            assert_eq!(image.depth, 16);
+            assert_eq!(image.yuv_format, PixelFormat::AndroidP010);
+        }
+    } else {
+        assert_eq!(image.depth, expected_info.depth);
+        assert_eq!(image.yuv_format, expected_info.yuv_format);
+    }
     assert_eq!(image.alpha_present, expected_info.alpha_present);
     assert_eq!(image.yuv_range, expected_info.yuv_range);
     assert_eq!(image.color_primaries, expected_info.color_primaries.into());
@@ -83,6 +97,10 @@ fn test_conformance(index: usize) {
     let filename = get_test_file(expected_info.filename);
     let mut decoder = decoder::Decoder::default();
     decoder.settings.strictness = decoder::Strictness::None;
+    if cfg!(feature = "android_mediacodec") && expected_info.depth > 8 {
+        decoder.settings.android_mediacodec_output_color_format =
+            AndroidMediaCodecOutputColorFormat::P010;
+    }
     decoder.set_io_file(&filename).expect("Failed to set IO");
     let res = decoder.parse();
     assert!(res.is_ok());
@@ -95,18 +113,34 @@ fn test_conformance(index: usize) {
         decoder.io_stats().alpha_obu_size
     );
     let image = decoder.image().expect("image was none");
-    verify_info(expected_info, image);
+    verify_info(expected_info, image, false);
     if !HAS_DECODER {
         return;
     }
     let res = decoder.next_image();
+    if cfg!(feature = "android_mediacodec") {
+        if expected_info.depth > 10 {
+            // Android MediaCodec does not support 12-bit AV1 decoding.
+            assert!(res.is_err());
+            return;
+        }
+        if expected_info.color_obu_size > 2 * 1024 * 1024
+            && !filename.contains("grid")
+            && res.is_err()
+        {
+            // Some Android MediaCodec decoders (such as c2.android.av1.decoder
+            // on API 34) cap the input buffer size at 2 MiB for 2048x858
+            // images, which is too small for these lossless AV1 payloads.
+            return;
+        }
+    }
     assert!(res.is_ok());
     let image = decoder.image().expect("image was none");
 
     // Link-U 422 files have wrong subsampling in the Avif header(decoded one
     // is right).
     if !filename.contains("Link-U") || !filename.contains("yuv422") {
-        verify_info(expected_info, image);
+        verify_info(expected_info, image, true);
     }
 }
 
