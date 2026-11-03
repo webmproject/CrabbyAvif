@@ -1494,7 +1494,9 @@ INSTANTIATE_TEST_SUITE_P(
             "white_2x2_multiple_iloc_entries_for_same_item.avif",
             AVIF_STRICT_MULTIPLE_ILOC_ENTRIES_FOR_SAME_ITEM_DISALLOWED},
         StrictnessTestParams{"white_2x2_invalid_exif.avif",
-                             AVIF_STRICT_EXIF_VALID}));
+                             AVIF_STRICT_EXIF_VALID},
+        StrictnessTestParams{"clap_irot_imir_non_essential.avif",
+                             AVIF_STRICT_ESSENTIAL_TRANSFORMATIVE_PROPERTIES}));
 
 struct SatoTestParams {
   const char* filename;

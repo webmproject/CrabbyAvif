@@ -1715,9 +1715,22 @@ fn heic_monochrome_gainmap() {
 
 #[test]
 fn clap_irot_imir_non_essential() {
+    // MIAF requires transformative properties to be marked as essential. This is enforced by
+    // default.
     let mut decoder = get_decoder("clap_irot_imir_non_essential.avif");
     let res = decoder.parse();
     assert!(res.is_err());
+
+    // Excluding EssentialTransformativeProperties accepts the file and applies the properties.
+    let mut decoder = get_decoder("clap_irot_imir_non_essential.avif");
+    decoder.settings.strictness = decoder::Strictness::SpecificExclude(vec![
+        decoder::StrictnessFlag::EssentialTransformativeProperties,
+    ]);
+    assert_eq!(decoder.parse(), Ok(()));
+    let image = decoder.image().expect("image was none");
+    assert!(image.clap.is_some());
+    assert!(image.irot_angle.is_some());
+    assert!(image.imir_axis.is_some());
 }
 
 struct ExpectedOverlayImageInfo<'a> {
@@ -2048,7 +2061,11 @@ fn identity_derivation_invalid(filename: &str) -> AvifResult<()> {
             decoder::StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed
         ),
         ("white_2x2_invalid_exif.avif", decoder::StrictnessFlag::ExifValid),
-        ("heic/blue_hevc_brand_without_moov.heic", decoder::StrictnessFlag::HevcBrandRequiresMoov)
+        ("heic/blue_hevc_brand_without_moov.heic", decoder::StrictnessFlag::HevcBrandRequiresMoov),
+        (
+            "clap_irot_imir_non_essential.avif",
+            decoder::StrictnessFlag::EssentialTransformativeProperties
+        )
     ],
     [DAV1D, NATIVE]
 )]

@@ -629,6 +629,7 @@ fn insert_item_if_not_exists(id: u32, items: &mut Items) {
 pub(crate) fn construct_items(
     meta: &MetaBox,
     multiple_iloc_entries_for_same_item_disallowed: bool,
+    essential_transformative_properties: bool,
 ) -> AvifResult<Items> {
     let mut items: Items = BTreeMap::new();
     for iinf in &meta.iinf {
@@ -712,23 +713,30 @@ pub(crate) fn construct_items(
             match (&meta.iprp.properties[property_index - 1], essential) {
                 (ItemProperty::Unknown(_), true) => item.has_unsupported_essential_property = true,
                 (ItemProperty::AV1LayeredImageIndexing(_), true) => {
-                    return AvifError::bmff_parse_failed(
-                        "invalid essential property"
-                    );
+                    return AvifError::bmff_parse_failed("invalid essential property");
                 }
                 (
-                    ItemProperty::OperatingPointSelector(_)
-                    | ItemProperty::LayerSelector(_)
-                    // MIAF 2019/Amd. 2:2021: Section 7.3.9:
-                    //   All transformative properties associated with coded and derived images
-                    //   shall be marked as essential.
-                    | ItemProperty::CleanAperture(_)
-                    | ItemProperty::ImageRotation(_)
-                    | ItemProperty::ImageMirror(_),
+                    ItemProperty::OperatingPointSelector(_) | ItemProperty::LayerSelector(_),
                     false,
                 ) => {
                     return AvifError::bmff_parse_failed(
-                        "required essential property not marked as essential"
+                        "required essential property not marked as essential",
+                    );
+                }
+                // MIAF 2019/Amd. 2:2021: Section 7.3.9:
+                //   All transformative properties associated with coded and derived images
+                //   shall be marked as essential.
+                // This is a MIAF (not HEIF) requirement that some files in the wild do not
+                // follow. When StrictnessFlag::EssentialTransformativeProperties is disabled, the
+                // property is applied anyway.
+                (
+                    ItemProperty::CleanAperture(_)
+                    | ItemProperty::ImageRotation(_)
+                    | ItemProperty::ImageMirror(_),
+                    false,
+                ) if essential_transformative_properties => {
+                    return AvifError::bmff_parse_failed(
+                        "required essential property not marked as essential",
                     );
                 }
                 (property, _) => item.properties.try_push(property.try_clone()?)?,

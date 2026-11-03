@@ -254,6 +254,7 @@ pub enum StrictnessFlag {
     MultipleIlocEntriesForSameItemDisallowed,
     ExifValid, // Fail if the exif payload is invalid.
     HevcBrandRequiresMoov,
+    EssentialTransformativeProperties,
 }
 
 #[derive(Debug, Default)]
@@ -289,6 +290,10 @@ impl Strictness {
 
     fn multiple_iloc_entries_for_same_item_disallowed(&self) -> bool {
         self.contains(StrictnessFlag::MultipleIlocEntriesForSameItemDisallowed)
+    }
+
+    fn essential_transformative_properties(&self) -> bool {
+        self.contains(StrictnessFlag::EssentialTransformativeProperties)
     }
 
     pub(crate) fn hevc_brand_requires_moov(&self) -> bool {
@@ -1515,6 +1520,9 @@ impl Decoder {
                 self.settings
                     .strictness
                     .multiple_iloc_entries_for_same_item_disallowed(),
+                self.settings
+                    .strictness
+                    .essential_transformative_properties(),
             )?;
             if avif_boxes.ftyp.has_tmap() && !self.items.values().any(|x| x.item_type == "tmap") {
                 return AvifError::bmff_parse_failed("tmap was required but not found");
@@ -1558,6 +1566,9 @@ impl Decoder {
                             self.settings
                                 .strictness
                                 .multiple_iloc_entries_for_same_item_disallowed(),
+                            self.settings
+                                .strictness
+                                .essential_transformative_properties(),
                         )?;
                         Self::search_exif_or_xmp_metadata(
                             &mut color_track_items,

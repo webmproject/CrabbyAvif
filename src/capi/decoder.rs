@@ -213,6 +213,9 @@ impl TryFrom<&avifDecoder> for Settings {
             if (decoder.strictFlags & AVIF_STRICT_HEVC_BRAND_REQUIRES_MOOV) != 0 {
                 flags.try_push(StrictnessFlag::HevcBrandRequiresMoov)?;
             }
+            if (decoder.strictFlags & AVIF_STRICT_ESSENTIAL_TRANSFORMATIVE_PROPERTIES) != 0 {
+                flags.try_push(StrictnessFlag::EssentialTransformativeProperties)?;
+            }
             Strictness::SpecificInclude(flags)
         };
         let image_content_to_decode_flags: ImageContentType = match decoder.imageContentToDecode {

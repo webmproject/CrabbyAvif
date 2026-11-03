@@ -3773,9 +3773,7 @@ mod heic {
             color_primaries: None,
             transfer_characteristics: None,
             matrix_coefficients: None,
-            // The clap, irot and imir properties are not marked as essential, which CrabbyAvif
-            // rejects even when strictness is disabled.
-            support: HeicSupport::ParseUnsupported,
+            support: HeicSupport::Supported,
         },
         // index: 58
         HeicExpectedImageInfo {
