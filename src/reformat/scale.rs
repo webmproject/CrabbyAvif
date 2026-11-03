@@ -183,11 +183,32 @@ impl Image {
         if width == 0 || height == 0 {
             return AvifError::invalid_argument();
         }
+        let validate_plane = |img: &Image, plane: Plane| -> AvifResult<PlaneData> {
+            let pd = img.plane_data(plane).ok_or(AvifError::NoContent)?;
+            if pd.width == 0 || pd.height == 0 {
+                return AvifError::no_content();
+            }
+            let min_row_bytes = checked_mul!(pd.width, pd.pixel_size)?;
+            if pd.row_bytes < min_row_bytes {
+                return AvifError::no_content();
+            }
+            if img.depth > 8 {
+                if pd.row_bytes % 2 != 0 {
+                    return AvifError::no_content();
+                }
+                let _ = img.row16(plane, pd.height - 1)?;
+            } else {
+                let _ = img.row(plane, pd.height - 1)?;
+            }
+            Ok(pd)
+        };
         let planes = category.planes();
         let src = if category != Category::Alpha && self.yuv_format == PixelFormat::AndroidP010 {
             // P010 images cannot be scaled using ScalePlane_12 since the U and V planes are
             // interleaved. Convert them into I010 and then scale each plane using
             // ScalePlane_12.
+            let src_y_pd = validate_plane(self, Plane::Y)?;
+            let src_uv_pd = validate_plane(self, Plane::U)?;
             let mut i010 = image::Image {
                 width: self.width,
                 height: self.height,
@@ -196,8 +217,9 @@ impl Image {
                 ..image::Image::default()
             };
             i010.allocate_planes(Category::Color)?;
-            let src_y_pd = self.plane_data(Plane::Y).ok_or(AvifError::NoContent)?;
-            let src_uv_pd = self.plane_data(Plane::U).ok_or(AvifError::NoContent)?;
+            let dst_y_pd = validate_plane(&i010, Plane::Y)?;
+            let dst_u_pd = validate_plane(&i010, Plane::U)?;
+            let dst_v_pd = validate_plane(&i010, Plane::V)?;
             let src_y = self.planes[Plane::Y.as_usize()]
                 .as_ref()
                 .ok_or(AvifError::NoContent)?
@@ -206,9 +228,6 @@ impl Image {
                 .as_ref()
                 .ok_or(AvifError::NoContent)?
                 .ptr16();
-            let dst_y_pd = i010.plane_data(Plane::Y).ok_or(AvifError::NoContent)?;
-            let dst_u_pd = i010.plane_data(Plane::U).ok_or(AvifError::NoContent)?;
-            let dst_v_pd = i010.plane_data(Plane::V).ok_or(AvifError::NoContent)?;
             let dst_y = i010.planes[Plane::Y.as_usize()]
                 .as_mut()
                 .ok_or(AvifError::NoContent)?
@@ -289,8 +308,10 @@ impl Image {
             && (self.yuv_format == PixelFormat::AndroidNv12
                 || self.yuv_format == PixelFormat::AndroidNv21)
         {
-            let src_y_pd = src.plane_data(Plane::Y).ok_or(AvifError::NoContent)?;
-            let src_uv_pd = src.plane_data(Plane::U).ok_or(AvifError::NoContent)?;
+            let src_y_pd = validate_plane(&src, Plane::Y)?;
+            let src_uv_pd = validate_plane(&src, Plane::U)?;
+            let dst_y_pd = validate_plane(self, Plane::Y)?;
+            let dst_uv_pd = validate_plane(self, Plane::U)?;
             let src_y = src.planes[Plane::Y.as_usize()]
                 .as_ref()
                 .ok_or(AvifError::NoContent)?
@@ -299,8 +320,6 @@ impl Image {
                 .as_ref()
                 .ok_or(AvifError::NoContent)?
                 .ptr();
-            let dst_y_pd = self.plane_data(Plane::Y).ok_or(AvifError::NoContent)?;
-            let dst_uv_pd = self.plane_data(Plane::U).ok_or(AvifError::NoContent)?;
             let dst_y = self.planes[Plane::Y.as_usize()]
                 .as_mut()
                 .ok_or(AvifError::NoContent)?
@@ -339,8 +358,8 @@ impl Image {
             if !src.has_plane(*plane) || !self.has_plane(*plane) {
                 continue;
             }
-            let src_pd = src.plane_data(*plane).unwrap();
-            let dst_pd = self.plane_data(*plane).unwrap();
+            let src_pd = validate_plane(&src, *plane)?;
+            let dst_pd = validate_plane(self, *plane)?;
             // SAFETY: This function calls into libyuv which is a C++ library. We pass in pointers
             // and strides to rust slices that are guaranteed to be valid.
             //
