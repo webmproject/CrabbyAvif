@@ -752,15 +752,37 @@ pub(crate) fn process_alpha(rgb: &mut rgb::Image, multiply: bool) -> AvifResult<
 }
 
 pub(crate) fn convert_to_half_float(rgb: &mut rgb::Image, scale: f32) -> AvifResult<Option<()>> {
+    if !rgb.has_valid_pixels()
+        || rgb.depth <= 8
+        || matches!(rgb.format, Format::Rgb565 | Format::Rgba1010102)
+    {
+        return AvifError::invalid_argument();
+    }
+    let row_bytes = i32_from_u32(rgb.row_bytes)?;
+    let width_channels = i32_from_u32(checked_mul!(rgb.width, rgb.channel_count())?)?;
+    let height = i32_from_u32(rgb.height)?;
+    let pixels = rgb
+        .pixels
+        .as_mut()
+        .ok_or(AvifError::InvalidArgument)?
+        .ptr16_mut();
+    if pixels.is_null() {
+        return AvifError::invalid_argument();
+    }
+    // Note: `HalfFloatPlane` takes `src_stride_y` and `dst_stride_y` in bytes, and supports
+    // in-place conversion (`src_y == dst_y`).
+    // SAFETY: `rgb.has_valid_pixels()`, `rgb.depth > 8`, and `ptr16_mut()` verified that `pixels`
+    // is a non-null, 2-byte aligned, uniquely borrowed `u16` buffer with even `row_bytes` covering
+    // `height` rows of `width_channels` `u16` elements.
     let res = unsafe {
         HalfFloatPlane(
-            rgb.pixels_mut() as *const u16,
-            i32_from_u32(rgb.row_bytes)?,
-            rgb.pixels_mut() as *mut u16,
-            i32_from_u32(rgb.row_bytes)?,
+            pixels,
+            row_bytes,
+            pixels,
+            row_bytes,
             scale,
-            i32_from_u32(rgb.width * rgb.channel_count())?,
-            i32_from_u32(rgb.height)?,
+            width_channels,
+            height,
         )
     };
     if res == 0 {
