@@ -891,33 +891,63 @@ pub(crate) fn rgb_to_yuv(rgb: &rgb::Image, image: &mut image::Image) -> AvifResu
         Some(conversion_function) => conversion_function,
         None => return Ok(None), // Not implemented.
     };
-    let plane_u8 = image.plane_ptrs_mut();
+    if rgb.width != image.width || rgb.height != image.height || !rgb.has_valid_pixels() {
+        return AvifError::reformat_failed();
+    }
+    match conversion_function {
+        RGBToYUVConversionFunction::RGBToY(_) => {
+            let _ = validate_plane(image, Plane::Y)?;
+        }
+        RGBToYUVConversionFunction::RGBToYUV(_) => {
+            for plane in YUV_PLANES {
+                let _ = validate_plane(image, plane)?;
+            }
+        }
+    }
+    let rgb_ptr = rgb.pixels();
+    if rgb_ptr.is_null() {
+        return AvifError::reformat_failed();
+    }
     let plane_row_bytes = image.plane_row_bytes()?;
+    let plane_u8 = image.plane_ptrs_mut();
     let width = i32_from_u32(image.width)?;
     let height = i32_from_u32(image.height)?;
     let rgb_row_bytes = i32_from_u32(rgb.row_bytes)?;
-    let result = unsafe {
-        match conversion_function {
-            RGBToYUVConversionFunction::RGBToY(func) => func(
-                rgb.pixels(),
-                rgb_row_bytes,
-                plane_u8[0],
-                plane_row_bytes[0],
-                width,
-                height,
-            ),
-            RGBToYUVConversionFunction::RGBToYUV(func) => func(
-                rgb.pixels(),
-                rgb_row_bytes,
-                plane_u8[0],
-                plane_row_bytes[0],
-                plane_u8[1],
-                plane_row_bytes[1],
-                plane_u8[2],
-                plane_row_bytes[2],
-                width,
-                height,
-            ),
+    let result = match conversion_function {
+        RGBToYUVConversionFunction::RGBToY(func) => {
+            let y_ptr = plane_u8[0];
+            let y_stride = plane_row_bytes[0];
+            // SAFETY: `rgb.has_valid_pixels()` verified `rgb_ptr` is non-null and valid for reads
+            // of `height` rows of `rgb_row_bytes` bytes; `validate_plane` verified `y_ptr` is a
+            // non-null, uniquely borrowed 8-bit luma plane covering `width x height` with
+            // `y_stride` bytes per row.
+            unsafe { func(rgb_ptr, rgb_row_bytes, y_ptr, y_stride, width, height) }
+        }
+        RGBToYUVConversionFunction::RGBToYUV(func) => {
+            let y_ptr = plane_u8[0];
+            let y_stride = plane_row_bytes[0];
+            let u_ptr = plane_u8[1];
+            let u_stride = plane_row_bytes[1];
+            let v_ptr = plane_u8[2];
+            let v_stride = plane_row_bytes[2];
+            // SAFETY: `rgb.has_valid_pixels()` verified `rgb_ptr` is non-null and valid for reads
+            // of `height` rows of `rgb_row_bytes` bytes; `validate_plane` verified `y_ptr`,
+            // `u_ptr`, and `v_ptr` are non-null, disjoint, uniquely borrowed 8-bit YUV planes
+            // covering `width x height` with valid row strides.
+            unsafe {
+                func(
+                    rgb_ptr,
+                    rgb_row_bytes,
+                    y_ptr,
+                    y_stride,
+                    u_ptr,
+                    u_stride,
+                    v_ptr,
+                    v_stride,
+                    width,
+                    height,
+                )
+            }
         }
     };
     if result == 0 {
