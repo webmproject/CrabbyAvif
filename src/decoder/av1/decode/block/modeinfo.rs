@@ -100,6 +100,39 @@ fn zero_ctx4(a1: &mut [u8], b1: &mut [u8], a2: &mut [u8], b2: &mut [u8], pos: us
     }
 }
 
+/// Sets the chroma `LoopfilterTxSizes` of block `b` (if it has chroma
+/// and deblocking is on), where `col0` is the first luma column of `mi`.
+#[inline(always)]
+fn fill_chroma_lf_tx(
+    mi: &mut crate::decoder::av1::decode::buffers::MiWin,
+    f: &FrameCtx<'_>,
+    b: &Block,
+    col0: usize,
+) {
+    if b.has_chroma && !mi.lf_tx[1].is_empty() {
+        let uv_tx = crate::decoder::av1::decode::deblock::lf_code(if b.lossless {
+            TxSize::Tx4x4 as u8
+        } else {
+            f.uv_tx_size[b.bsize as usize] as u8
+        });
+        let (sx, sy) = (f.ss_x, f.ss_y);
+        let r4_0 = b.mi_row >> sy;
+        let r4_end = (r4_0 + ((b.bh4 + sy) >> sy)).min((f.mi_rows + sy) >> sy);
+        let c4_0 = (b.mi_col >> sx) - (col0 >> sx);
+        let uv_w = (b.bw4 + sx) >> sx;
+        fill_mi_rows(
+            &mut mi.lf_tx[1],
+            mi.lf_stride[1],
+            mi.lf_mask[1],
+            r4_0,
+            r4_end,
+            c4_0,
+            uv_w,
+            uv_tx,
+        );
+    }
+}
+
 /// Sets `w` (1, 2, 4, 8, 16 or 32) entries from column `c0` in rows
 /// `r0..r_end` of a 2D ring buffer with `row_mask + 1` rows. Only `r0` is
 /// wrapped (`r0 & row_mask`); rows `r0..r_end` are then written
@@ -241,7 +274,7 @@ fn fill_mi_rows2<U: Copy>(
     }
 }
 
-impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
+impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
     /// Decodes the superblock at (r, c) (in 4x4 units): clear_cdef,
     /// clear_block_decoded_flags, read_lr and decode_partition.
     pub fn decode_sb(&mut self, r: usize, c: usize) -> Result<()> {
@@ -262,8 +295,19 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         self.read_deltas = fh.delta_q_present;
         self.update_quant();
         self.read_lr(r, c);
+        let start_block =
+            if let crate::decoder::av1::decode::stage::DecoderStage::Parse(log) = &self.stage {
+                log.blocks.len()
+            } else {
+                0
+            };
         self.decode_partition(r, c, self.f.sb_size)
-            .map_err(Error::Invalid)
+            .map_err(Error::Invalid)?;
+        if let crate::decoder::av1::decode::stage::DecoderStage::Parse(log) = &mut self.stage {
+            let num_blocks = log.blocks.len() - start_block;
+            log.sbs.push((r, c, num_blocks));
+        }
+        Ok(())
     }
 
     pub(crate) fn clear_block_decoded_flags(&mut self, r: usize, c: usize) {
@@ -640,6 +684,16 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
         } else if self.recon {
             self.setup_intra();
         }
+        if matches!(
+            self.stage,
+            crate::decoder::av1::decode::stage::DecoderStage::Parse(..)
+        ) {
+            let fty = self.get_filter_type(0);
+            let ftuv = if self.b.has_chroma { self.get_filter_type(1) } else { false };
+            if let crate::decoder::av1::decode::stage::DecoderStage::Parse(log) = &mut self.stage {
+                log.record_block(&self.b, self.sc, self.f, fty, ftuv);
+            }
+        }
         self.residual()
     }
 
@@ -713,28 +767,7 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
                     info,
                     y_tx,
                 );
-                if b.has_chroma && !mi.lf_tx[1].is_empty() {
-                    let uv_tx = crate::decoder::av1::decode::deblock::lf_code(if b.lossless {
-                        TxSize::Tx4x4 as u8
-                    } else {
-                        f.uv_tx_size[b.bsize as usize] as u8
-                    });
-                    let (sx, sy) = (f.ss_x, f.ss_y);
-                    let r4_0 = b.mi_row >> sy;
-                    let r4_end = (r4_0 + ((b.bh4 + sy) >> sy)).min((f.mi_rows + sy) >> sy);
-                    let c4_0 = (b.mi_col >> sx) - (col0 >> sx);
-                    let uv_w = (b.bw4 + sx) >> sx;
-                    fill_mi_rows(
-                        &mut mi.lf_tx[1],
-                        mi.lf_stride[1],
-                        mi.lf_mask[1],
-                        r4_0,
-                        r4_end,
-                        c4_0,
-                        uv_w,
-                        uv_tx,
-                    );
-                }
+                fill_chroma_lf_tx(mi, f, b, col0);
             } else if mi.mv.is_empty() {
                 fill_mi_rows(
                     &mut mi.data,
@@ -806,28 +839,7 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
                     y_tx,
                 );
             }
-            if b.has_chroma && !mi.lf_tx[1].is_empty() {
-                let uv_tx = crate::decoder::av1::decode::deblock::lf_code(if b.lossless {
-                    TxSize::Tx4x4 as u8
-                } else {
-                    f.uv_tx_size[b.bsize as usize] as u8
-                });
-                let (sx, sy) = (f.ss_x, f.ss_y);
-                let r4_0 = b.mi_row >> sy;
-                let r4_end = (r4_0 + ((b.bh4 + sy) >> sy)).min((f.mi_rows + sy) >> sy);
-                let c4_0 = (b.mi_col >> sx) - (col0 >> sx);
-                let uv_w = (b.bw4 + sx) >> sx;
-                fill_mi_rows(
-                    &mut mi.lf_tx[1],
-                    mi.lf_stride[1],
-                    mi.lf_mask[1],
-                    r4_0,
-                    r4_end,
-                    c4_0,
-                    uv_w,
-                    uv_tx,
-                );
-            }
+            fill_chroma_lf_tx(mi, f, b, col0);
             if !mi.delta_lf.is_empty() {
                 let dlf = [
                     self.t.delta_lf[0] as i8,
@@ -1679,16 +1691,31 @@ fn color_map_n<const N: usize>(
     w: usize,
     h: usize,
 ) {
-    for i in 1..(h + w - 1) {
-        let j_max = i.min(w - 1);
-        let j_min = (i + 1).saturating_sub(h);
-        for j in (j_min..=j_max).rev() {
-            let r = i - j;
-            let (ctx, order) = color_order::<N>(map, r, j);
-            let idx = msac.symbol_n(&mut cdfs[ctx]);
-            map[r][j] = order[idx];
+    let mut m = msac.clone();
+    if m.allow_update() {
+        for i in 1..(h + w - 1) {
+            let j_max = i.min(w - 1);
+            let j_min = (i + 1).saturating_sub(h);
+            for j in (j_min..=j_max).rev() {
+                let r = i - j;
+                let (ctx, order) = color_order::<N>(map, r, j);
+                let idx = m.symbol_palette_hot::<N, true>(&mut cdfs[ctx]);
+                map[r][j] = order[idx];
+            }
+        }
+    } else {
+        for i in 1..(h + w - 1) {
+            let j_max = i.min(w - 1);
+            let j_min = (i + 1).saturating_sub(h);
+            for j in (j_min..=j_max).rev() {
+                let r = i - j;
+                let (ctx, order) = color_order::<N>(map, r, j);
+                let idx = m.symbol_palette_hot::<N, false>(&mut cdfs[ctx]);
+                map[r][j] = order[idx];
+            }
         }
     }
+    msac.copy_state(&m);
 }
 
 /// Spec `get_palette_color_context` for a palette of `N - 1` colors,

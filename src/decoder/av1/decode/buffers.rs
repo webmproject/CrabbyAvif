@@ -35,6 +35,10 @@ pub struct PlaneWin<T> {
 }
 
 impl<T: Pixel> PlaneWin<T> {
+    pub fn is_empty(&self) -> bool {
+        self.rows == 0
+    }
+
     pub fn new(stride: usize, rows: usize) -> Self {
         Self::new_tile(stride, rows, 0, 0)
     }

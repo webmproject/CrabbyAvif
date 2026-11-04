@@ -41,7 +41,7 @@ const DIM_MASK: usize = 0x3_ffff;
 // function is monomorphized (codegen unit placement), which measurably
 // changed the generated code. Keep it unless benchmarks show otherwise.
 
-impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
+impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
     /// Reads a reconstructed (pre loop filter) sample of the current frame.
     /// Rows above the current superblock row come from the saved line.
     #[inline(always)]
@@ -57,7 +57,10 @@ impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
 
     /// Spec 7.11.2.8 `get_filter_type`.
     #[inline(always)]
-    fn get_filter_type(&self, plane: usize) -> bool {
+    pub(crate) fn get_filter_type(&self, plane: usize) -> bool {
+        if self.stage.is_recon() {
+            return self.filter_type[plane.min(1)];
+        }
         let b = &self.b;
         let sm = |m: u8| m.wrapping_sub(IntraMode::SMOOTH_PRED as u8) < 3;
         if plane == 0 {

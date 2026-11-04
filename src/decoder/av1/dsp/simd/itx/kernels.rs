@@ -45,6 +45,25 @@ pub(super) fn idct4_nz4<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
     t[3] = v5;
 }
 
+/// Inverse DCT4 with inputs `2..` zero.
+#[rustfmt::skip]
+pub(super) fn idct4_nz2<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
+    let t: &mut [V; 4] = (&mut t[..4]).try_into().unwrap();
+    let i0 = t[0];
+    let v0 = i0.m1(2896);
+    let i1 = t[1];
+    let v1 = i1.m1(1567);
+    let v2 = i1.m1(3784);
+    let v3 = r.apply(v0 + v2);
+    let v4 = r.apply(v0 - v2);
+    let v5 = r.apply(v0 + v1);
+    let v6 = r.apply(v0 - v1);
+    t[0] = v3;
+    t[1] = v5;
+    t[2] = v6;
+    t[3] = v4;
+}
+
 /// Inverse DCT8.
 #[rustfmt::skip]
 pub(super) fn idct8_nz8<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
@@ -134,6 +153,39 @@ pub(super) fn idct8_nz4<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
     t[5] = v22;
     t[6] = v20;
     t[7] = v18;
+}
+
+/// Inverse DCT8 with inputs `2..` zero.
+#[rustfmt::skip]
+pub(super) fn idct8_nz2<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
+    let t: &mut [V; 8] = (&mut t[..8]).try_into().unwrap();
+    let i1 = t[1];
+    let v0 = i1.m1_h0(799);
+    let v1 = i1.m1_h0(4017);
+    let v2 = r.apply(v0);
+    let v3 = r.apply(v1);
+    let v4 = v3.m2(2896, v2, -2896);
+    let v5 = v3.m2(2896, v2, 2896);
+    let i0 = t[0];
+    let v6 = i0.m1_h0(2896);
+    let v7 = r.apply(v6);
+    let v8 = r.apply(v6);
+    let v9 = r.apply(v7 + v3);
+    let v10 = r.apply(v7 - v3);
+    let v11 = r.apply(v8 + v5);
+    let v12 = r.apply(v8 - v5);
+    let v13 = r.apply(v8 + v4);
+    let v14 = r.apply(v8 - v4);
+    let v15 = r.apply(v7 + v2);
+    let v16 = r.apply(v7 - v2);
+    t[0] = v9;
+    t[1] = v11;
+    t[2] = v13;
+    t[3] = v15;
+    t[4] = v16;
+    t[5] = v14;
+    t[6] = v12;
+    t[7] = v10;
 }
 
 /// Inverse DCT16.
@@ -435,6 +487,67 @@ pub(super) fn idct16_nz4<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
     t[13] = v46;
     t[14] = v44;
     t[15] = v42;
+}
+
+/// Inverse DCT16 with inputs `2..` zero.
+#[rustfmt::skip]
+pub(super) fn idct16_nz2<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
+    let t: &mut [V; 16] = (&mut t[..16]).try_into().unwrap();
+    let i1 = t[1];
+    let v0 = i1.m1_h0(401);
+    let v1 = i1.m1_h0(4076);
+    let v2 = r.apply(v0);
+    let v3 = r.apply(v1);
+    let v4 = v3.m2_h0(1567, v2, -3784);
+    let v5 = v3.m2_h0(3784, v2, 1567);
+    let v6 = r.apply(v2);
+    let v7 = r.apply(v4);
+    let v8 = r.apply(v3);
+    let v9 = r.apply(v5);
+    let v10 = v9.m2(2896, v7, -2896);
+    let v11 = v9.m2(2896, v7, 2896);
+    let v12 = v8.m2(2896, v6, -2896);
+    let v13 = v8.m2(2896, v6, 2896);
+    let i0 = t[0];
+    let v14 = i0.m1_h0(2896);
+    let v15 = r.apply(v14);
+    let v16 = r.apply(v14);
+    let v17 = r.apply(v15);
+    let v18 = r.apply(v16);
+    let v19 = r.apply(v16);
+    let v20 = r.apply(v15);
+    let v21 = r.apply(v17 + v8);
+    let v22 = r.apply(v17 - v8);
+    let v23 = r.apply(v18 + v9);
+    let v24 = r.apply(v18 - v9);
+    let v25 = r.apply(v19 + v11);
+    let v26 = r.apply(v19 - v11);
+    let v27 = r.apply(v20 + v13);
+    let v28 = r.apply(v20 - v13);
+    let v29 = r.apply(v20 + v12);
+    let v30 = r.apply(v20 - v12);
+    let v31 = r.apply(v19 + v10);
+    let v32 = r.apply(v19 - v10);
+    let v33 = r.apply(v18 + v7);
+    let v34 = r.apply(v18 - v7);
+    let v35 = r.apply(v17 + v6);
+    let v36 = r.apply(v17 - v6);
+    t[0] = v21;
+    t[1] = v23;
+    t[2] = v25;
+    t[3] = v27;
+    t[4] = v29;
+    t[5] = v31;
+    t[6] = v33;
+    t[7] = v35;
+    t[8] = v36;
+    t[9] = v34;
+    t[10] = v32;
+    t[11] = v30;
+    t[12] = v28;
+    t[13] = v26;
+    t[14] = v24;
+    t[15] = v22;
 }
 
 #[inline(never)]
@@ -1287,7 +1400,6 @@ pub(super) fn idct32_nz4<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
     let v11 = v9.m2(2896, v7, 2896);
     let v12 = v8.m2(2896, v6, -2896);
     let v13 = v8.m2(2896, v6, 2896);
-    let t = std::hint::black_box(&mut *t);
     let i0 = t[0];
     let v14 = i0.m1_h0(2896);
     let v15 = r.apply(v14);
@@ -1360,6 +1472,123 @@ pub(super) fn idct32_nz4<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
     let b15 = t[16];
     t[15] = r.apply(v22 + b15);
     t[16] = r.apply(v22 - b15);
+}
+
+/// Inverse DCT32 with inputs `2..` zero.
+#[rustfmt::skip]
+pub(super) fn idct32_nz2<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
+    let t: &mut [V; 32] = (&mut t[..32]).try_into().unwrap();
+    let i1 = t[1];
+    let v0 = i1.m1_h0(201);
+    let v1 = i1.m1_h0(4091);
+    let v2 = r.apply(v0);
+    let v3 = r.apply(v1);
+    let v4 = v3.m2_h0(799, v2, -4017);
+    let v5 = v3.m2_h0(4017, v2, 799);
+    let v6 = r.apply(v2);
+    let v7 = r.apply(v4);
+    let v8 = r.apply(v3);
+    let v9 = r.apply(v5);
+    let v10 = v9.m2_h0(1567, v7, -3784);
+    let v11 = v9.m2_h0(3784, v7, 1567);
+    let v12 = v8.m2_h0(1567, v6, -3784);
+    let v13 = v8.m2_h0(3784, v6, 1567);
+    let v14 = r.apply(v6);
+    let v15 = r.apply(v7);
+    let v16 = r.apply(v10);
+    let v17 = r.apply(v12);
+    let v18 = r.apply(v8);
+    let v19 = r.apply(v9);
+    let v20 = r.apply(v11);
+    let v21 = r.apply(v13);
+    let v22 = v21.m2(2896, v17, -2896);
+    let v23 = v21.m2(2896, v17, 2896);
+    let v24 = v20.m2(2896, v16, -2896);
+    let v25 = v20.m2(2896, v16, 2896);
+    let v26 = v19.m2(2896, v15, -2896);
+    let v27 = v19.m2(2896, v15, 2896);
+    let v28 = v18.m2(2896, v14, -2896);
+    let v29 = v18.m2(2896, v14, 2896);
+    let i0 = t[0];
+    let v30 = i0.m1_h0(2896);
+    let v31 = r.apply(v30);
+    let v32 = r.apply(v30);
+    let v33 = r.apply(v31);
+    let v34 = r.apply(v32);
+    let v35 = r.apply(v32);
+    let v36 = r.apply(v31);
+    let v37 = r.apply(v33);
+    let v38 = r.apply(v34);
+    let v39 = r.apply(v35);
+    let v40 = r.apply(v36);
+    let v41 = r.apply(v36);
+    let v42 = r.apply(v35);
+    let v43 = r.apply(v34);
+    let v44 = r.apply(v33);
+    let v45 = r.apply(v37 + v18);
+    let v46 = r.apply(v37 - v18);
+    let v47 = r.apply(v38 + v19);
+    let v48 = r.apply(v38 - v19);
+    let v49 = r.apply(v39 + v20);
+    let v50 = r.apply(v39 - v20);
+    let v51 = r.apply(v40 + v21);
+    let v52 = r.apply(v40 - v21);
+    let v53 = r.apply(v41 + v23);
+    let v54 = r.apply(v41 - v23);
+    let v55 = r.apply(v42 + v25);
+    let v56 = r.apply(v42 - v25);
+    let v57 = r.apply(v43 + v27);
+    let v58 = r.apply(v43 - v27);
+    let v59 = r.apply(v44 + v29);
+    let v60 = r.apply(v44 - v29);
+    let v61 = r.apply(v44 + v28);
+    let v62 = r.apply(v44 - v28);
+    let v63 = r.apply(v43 + v26);
+    let v64 = r.apply(v43 - v26);
+    let v65 = r.apply(v42 + v24);
+    let v66 = r.apply(v42 - v24);
+    let v67 = r.apply(v41 + v22);
+    let v68 = r.apply(v41 - v22);
+    let v69 = r.apply(v40 + v17);
+    let v70 = r.apply(v40 - v17);
+    let v71 = r.apply(v39 + v16);
+    let v72 = r.apply(v39 - v16);
+    let v73 = r.apply(v38 + v15);
+    let v74 = r.apply(v38 - v15);
+    let v75 = r.apply(v37 + v14);
+    let v76 = r.apply(v37 - v14);
+    t[0] = v45;
+    t[1] = v47;
+    t[2] = v49;
+    t[3] = v51;
+    t[4] = v53;
+    t[5] = v55;
+    t[6] = v57;
+    t[7] = v59;
+    t[8] = v61;
+    t[9] = v63;
+    t[10] = v65;
+    t[11] = v67;
+    t[12] = v69;
+    t[13] = v71;
+    t[14] = v73;
+    t[15] = v75;
+    t[16] = v76;
+    t[17] = v74;
+    t[18] = v72;
+    t[19] = v70;
+    t[20] = v68;
+    t[21] = v66;
+    t[22] = v64;
+    t[23] = v62;
+    t[24] = v60;
+    t[25] = v58;
+    t[26] = v56;
+    t[27] = v54;
+    t[28] = v52;
+    t[29] = v50;
+    t[30] = v48;
+    t[31] = v46;
 }
 
 #[inline(never)]
@@ -2441,15 +2670,243 @@ pub(super) fn idct64_nz4<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
     t[52] = v47;
     t[59] = v44;
     t[1] = t[2];
-    t[2] = V::splat(0);
-    t[3] = V::splat(0);
-    idct32_nz4(t, r);
+    idct32_nz2(t, r);
     for i in 0..32 {
         let a = t[i];
         let b = t[63 - i];
         t[i] = r.apply(a + b);
         t[63 - i] = r.apply(a - b);
     }
+}
+
+/// Inverse DCT64 with inputs `2..` zero.
+#[rustfmt::skip]
+pub(super) fn idct64_nz2<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
+    let t: &mut [V; 64] = (&mut t[..64]).try_into().unwrap();
+    let i1 = t[1];
+    let v0 = i1.m1_h0(101);
+    let v1 = i1.m1_h0(4095);
+    let v2 = r.apply(v0);
+    let v3 = r.apply(v1);
+    let v4 = v3.m2_h0(401, v2, -4076);
+    let v5 = v3.m2_h0(4076, v2, 401);
+    let v6 = r.apply(v2);
+    let v7 = r.apply(v4);
+    let v8 = r.apply(v3);
+    let v9 = r.apply(v5);
+    let v10 = v9.m2_h0(799, v7, -4017);
+    let v11 = v9.m2_h0(4017, v7, 799);
+    let v12 = v8.m2_h0(799, v6, -4017);
+    let v13 = v8.m2_h0(4017, v6, 799);
+    let v14 = r.apply(v6);
+    let v15 = r.apply(v7);
+    let v16 = r.apply(v10);
+    let v17 = r.apply(v12);
+    let v18 = r.apply(v8);
+    let v19 = r.apply(v9);
+    let v20 = r.apply(v11);
+    let v21 = r.apply(v13);
+    let v22 = v21.m2_h0(1567, v17, -3784);
+    let v23 = v21.m2_h0(3784, v17, 1567);
+    let v24 = v20.m2_h0(1567, v16, -3784);
+    let v25 = v20.m2_h0(3784, v16, 1567);
+    let v26 = v19.m2_h0(1567, v15, -3784);
+    let v27 = v19.m2_h0(3784, v15, 1567);
+    let v28 = v18.m2_h0(1567, v14, -3784);
+    let v29 = v18.m2_h0(3784, v14, 1567);
+    let v30 = r.apply(v14);
+    let v31 = r.apply(v18);
+    let v32 = r.apply(v15);
+    let v33 = r.apply(v19);
+    let v34 = r.apply(v16);
+    let v35 = r.apply(v20);
+    let v36 = r.apply(v17);
+    let v37 = r.apply(v21);
+    let v38 = r.apply(v22);
+    let v39 = r.apply(v23);
+    let v40 = r.apply(v24);
+    let v41 = r.apply(v25);
+    let v42 = r.apply(v26);
+    let v43 = r.apply(v27);
+    let v44 = r.apply(v28);
+    let v45 = r.apply(v29);
+    let v46 = v45.m2(2896, v44, -2896);
+    let v47 = v45.m2(2896, v44, 2896);
+    let v48 = v43.m2(2896, v42, -2896);
+    let v49 = v43.m2(2896, v42, 2896);
+    let v50 = v41.m2(2896, v40, -2896);
+    let v51 = v41.m2(2896, v40, 2896);
+    let v52 = v39.m2(2896, v38, -2896);
+    let v53 = v39.m2(2896, v38, 2896);
+    let v54 = v37.m2(2896, v36, -2896);
+    let v55 = v37.m2(2896, v36, 2896);
+    let v56 = v35.m2(2896, v34, -2896);
+    let v57 = v35.m2(2896, v34, 2896);
+    let v58 = v33.m2(2896, v32, -2896);
+    let v59 = v33.m2(2896, v32, 2896);
+    let v60 = v31.m2(2896, v30, -2896);
+    let v61 = v31.m2(2896, v30, 2896);
+    let t = std::hint::black_box(&mut *t);
+    let i0 = t[0];
+    let v62 = i0.m1_h0(2896);
+    let v63 = r.apply(v62);
+    let v64 = r.apply(v62);
+    let v65 = r.apply(v63);
+    let v66 = r.apply(v64);
+    let v67 = r.apply(v64);
+    let v68 = r.apply(v63);
+    let v69 = r.apply(v65);
+    let v70 = r.apply(v66);
+    let v71 = r.apply(v67);
+    let v72 = r.apply(v68);
+    let v73 = r.apply(v68);
+    let v74 = r.apply(v67);
+    let v75 = r.apply(v66);
+    let v76 = r.apply(v65);
+    let v77 = r.apply(v69);
+    let v78 = r.apply(v70);
+    let v79 = r.apply(v71);
+    let v80 = r.apply(v72);
+    let v81 = r.apply(v73);
+    let v82 = r.apply(v74);
+    let v83 = r.apply(v75);
+    let v84 = r.apply(v76);
+    let v85 = r.apply(v76);
+    let v86 = r.apply(v75);
+    let v87 = r.apply(v74);
+    let v88 = r.apply(v73);
+    let v89 = r.apply(v72);
+    let v90 = r.apply(v71);
+    let v91 = r.apply(v70);
+    let v92 = r.apply(v69);
+    let v93 = r.apply(v77 + v31);
+    let v94 = r.apply(v77 - v31);
+    let v95 = r.apply(v78 + v33);
+    let v96 = r.apply(v78 - v33);
+    let v97 = r.apply(v79 + v35);
+    let v98 = r.apply(v79 - v35);
+    let v99 = r.apply(v80 + v37);
+    let v100 = r.apply(v80 - v37);
+    let v101 = r.apply(v81 + v39);
+    let v102 = r.apply(v81 - v39);
+    let v103 = r.apply(v82 + v41);
+    let v104 = r.apply(v82 - v41);
+    let v105 = r.apply(v83 + v43);
+    let v106 = r.apply(v83 - v43);
+    let v107 = r.apply(v84 + v45);
+    let v108 = r.apply(v84 - v45);
+    let v109 = r.apply(v85 + v47);
+    let v110 = r.apply(v85 - v47);
+    let v111 = r.apply(v86 + v49);
+    let v112 = r.apply(v86 - v49);
+    let v113 = r.apply(v87 + v51);
+    let v114 = r.apply(v87 - v51);
+    let v115 = r.apply(v88 + v53);
+    let v116 = r.apply(v88 - v53);
+    let v117 = r.apply(v89 + v55);
+    let v118 = r.apply(v89 - v55);
+    let v119 = r.apply(v90 + v57);
+    let v120 = r.apply(v90 - v57);
+    let v121 = r.apply(v91 + v59);
+    let v122 = r.apply(v91 - v59);
+    let v123 = r.apply(v92 + v61);
+    let v124 = r.apply(v92 - v61);
+    let v125 = r.apply(v92 + v60);
+    let v126 = r.apply(v92 - v60);
+    let v127 = r.apply(v91 + v58);
+    let v128 = r.apply(v91 - v58);
+    let v129 = r.apply(v90 + v56);
+    let v130 = r.apply(v90 - v56);
+    let v131 = r.apply(v89 + v54);
+    let v132 = r.apply(v89 - v54);
+    let v133 = r.apply(v88 + v52);
+    let v134 = r.apply(v88 - v52);
+    let v135 = r.apply(v87 + v50);
+    let v136 = r.apply(v87 - v50);
+    let v137 = r.apply(v86 + v48);
+    let v138 = r.apply(v86 - v48);
+    let v139 = r.apply(v85 + v46);
+    let v140 = r.apply(v85 - v46);
+    let v141 = r.apply(v84 + v44);
+    let v142 = r.apply(v84 - v44);
+    let v143 = r.apply(v83 + v42);
+    let v144 = r.apply(v83 - v42);
+    let v145 = r.apply(v82 + v40);
+    let v146 = r.apply(v82 - v40);
+    let v147 = r.apply(v81 + v38);
+    let v148 = r.apply(v81 - v38);
+    let v149 = r.apply(v80 + v36);
+    let v150 = r.apply(v80 - v36);
+    let v151 = r.apply(v79 + v34);
+    let v152 = r.apply(v79 - v34);
+    let v153 = r.apply(v78 + v32);
+    let v154 = r.apply(v78 - v32);
+    let v155 = r.apply(v77 + v30);
+    let v156 = r.apply(v77 - v30);
+    t[0] = v93;
+    t[1] = v95;
+    t[2] = v97;
+    t[3] = v99;
+    t[4] = v101;
+    t[5] = v103;
+    t[6] = v105;
+    t[7] = v107;
+    t[8] = v109;
+    t[9] = v111;
+    t[10] = v113;
+    t[11] = v115;
+    t[12] = v117;
+    t[13] = v119;
+    t[14] = v121;
+    t[15] = v123;
+    t[16] = v125;
+    t[17] = v127;
+    t[18] = v129;
+    t[19] = v131;
+    t[20] = v133;
+    t[21] = v135;
+    t[22] = v137;
+    t[23] = v139;
+    t[24] = v141;
+    t[25] = v143;
+    t[26] = v145;
+    t[27] = v147;
+    t[28] = v149;
+    t[29] = v151;
+    t[30] = v153;
+    t[31] = v155;
+    t[32] = v156;
+    t[33] = v154;
+    t[34] = v152;
+    t[35] = v150;
+    t[36] = v148;
+    t[37] = v146;
+    t[38] = v144;
+    t[39] = v142;
+    t[40] = v140;
+    t[41] = v138;
+    t[42] = v136;
+    t[43] = v134;
+    t[44] = v132;
+    t[45] = v130;
+    t[46] = v128;
+    t[47] = v126;
+    t[48] = v124;
+    t[49] = v122;
+    t[50] = v120;
+    t[51] = v118;
+    t[52] = v116;
+    t[53] = v114;
+    t[54] = v112;
+    t[55] = v110;
+    t[56] = v108;
+    t[57] = v106;
+    t[58] = v104;
+    t[59] = v102;
+    t[60] = v100;
+    t[61] = v98;
+    t[62] = v96;
+    t[63] = v94;
 }
 
 /// Inverse ADST8.
@@ -2562,6 +3019,85 @@ pub(super) fn iadst8_nz4<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
     t[5] = v34;
     t[6] = v28;
     t[7] = v35;
+}
+
+/// Inverse ADST8 with inputs `2..` zero.
+#[rustfmt::skip]
+pub(super) fn iadst8_nz2<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
+    let t: &mut [V; 8] = (&mut t[..8]).try_into().unwrap();
+    let i0 = t[0];
+    let v0 = i0.m1_h0(-4076);
+    let v1 = i0.m1_h0(401);
+    let v2 = r.apply(v1);
+    let v3 = r.apply(v0);
+    let i1 = t[1];
+    let v4 = i1.m1_h0(3920);
+    let v5 = i1.m1_h0(1189);
+    let v6 = r.apply(v5);
+    let v7 = r.apply(-v5);
+    let v8 = r.apply(v4);
+    let v9 = r.apply(-v4);
+    let v10 = v2.m2(1567, v3, -3784);
+    let v11 = v2.m2(3784, v3, 1567);
+    let v12 = v9.m2(3784, v7, -1567);
+    let v13 = v9.m2(1567, v7, 3784);
+    let v14 = r.apply(v2 + v6);
+    let v15 = r.apply(v2 - v6);
+    let v16 = r.apply(v3 + v8);
+    let v17 = r.apply(v3 - v8);
+    let v18 = v15.m2(2896, v17, -2896);
+    let v19 = v15.m2(2896, v17, 2896);
+    let v20 = r.apply(v11 + v12);
+    let v21 = r.apply(v11 - v12);
+    let v22 = r.apply(v10 + v13);
+    let v23 = r.apply(v10 - v13);
+    let v24 = v21.m2(2896, v23, -2896);
+    let v25 = v21.m2(2896, v23, 2896);
+    let v26 = -v20;
+    let v27 = -v19;
+    let v28 = -v24;
+    let v29 = -v16;
+    t[0] = v14;
+    t[1] = v26;
+    t[2] = v25;
+    t[3] = v27;
+    t[4] = v18;
+    t[5] = v28;
+    t[6] = v22;
+    t[7] = v29;
+}
+
+/// Inverse ADST8 with inputs `1..` zero.
+#[rustfmt::skip]
+pub(super) fn iadst8_nz1<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
+    let t: &mut [V; 8] = (&mut t[..8]).try_into().unwrap();
+    let i0 = t[0];
+    let v0 = i0.m1_h0(-4076);
+    let v1 = i0.m1_h0(401);
+    let v2 = r.apply(v1);
+    let v3 = r.apply(v0);
+    let v4 = v2.m2_h0(1567, v3, -3784);
+    let v5 = v2.m2_h0(3784, v3, 1567);
+    let v6 = r.apply(v2);
+    let v7 = r.apply(v3);
+    let v8 = v6.m2(2896, v7, -2896);
+    let v9 = v6.m2(2896, v7, 2896);
+    let v10 = r.apply(v5);
+    let v11 = r.apply(v4);
+    let v12 = v10.m2(2896, v11, -2896);
+    let v13 = v10.m2(2896, v11, 2896);
+    let v14 = -v10;
+    let v15 = -v9;
+    let v16 = -v12;
+    let v17 = -v7;
+    t[0] = v6;
+    t[1] = v14;
+    t[2] = v13;
+    t[3] = v15;
+    t[4] = v8;
+    t[5] = v16;
+    t[6] = v11;
+    t[7] = v17;
 }
 
 /// Inverse ADST16.
@@ -2932,4 +3468,155 @@ pub(super) fn iadst16_nz4<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
     t[13] = v82;
     t[14] = v66;
     t[15] = v83;
+}
+
+/// Inverse ADST16 with inputs `2..` zero.
+#[rustfmt::skip]
+pub(super) fn iadst16_nz2<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
+    let t: &mut [V; 16] = (&mut t[..16]).try_into().unwrap();
+    let i0 = t[0];
+    let v0 = i0.m1_h0(-4091);
+    let v1 = i0.m1_h0(201);
+    let v2 = r.apply(v1);
+    let v3 = r.apply(v0);
+    let v4 = v2.m2_h0(799, v3, -4017);
+    let v5 = v2.m2_h0(4017, v3, 799);
+    let i1 = t[1];
+    let v6 = i1.m1_h0(4052);
+    let v7 = i1.m1_h0(601);
+    let v8 = r.apply(v7);
+    let v9 = r.apply(-v7);
+    let v10 = r.apply(v6);
+    let v11 = r.apply(-v6);
+    let v12 = v11.m2_h0(2276, v9, -3406);
+    let v13 = v11.m2_h0(3406, v9, 2276);
+    let v14 = r.apply(v2);
+    let v15 = r.apply(v3);
+    let v16 = r.apply(v8);
+    let v17 = r.apply(-v8);
+    let v18 = r.apply(v10);
+    let v19 = r.apply(-v10);
+    let v20 = v14.m2(1567, v15, -3784);
+    let v21 = v14.m2(3784, v15, 1567);
+    let v22 = v19.m2(3784, v17, -1567);
+    let v23 = v19.m2(1567, v17, 3784);
+    let v24 = r.apply(v5);
+    let v25 = r.apply(v4);
+    let v26 = r.apply(v12);
+    let v27 = r.apply(-v12);
+    let v28 = r.apply(v13);
+    let v29 = r.apply(-v13);
+    let v30 = v24.m2(1567, v25, -3784);
+    let v31 = v24.m2(3784, v25, 1567);
+    let v32 = v29.m2(3784, v27, -1567);
+    let v33 = v29.m2(1567, v27, 3784);
+    let v34 = r.apply(v14 + v16);
+    let v35 = r.apply(v14 - v16);
+    let v36 = r.apply(v15 + v18);
+    let v37 = r.apply(v15 - v18);
+    let v38 = v35.m2(2896, v37, -2896);
+    let v39 = v35.m2(2896, v37, 2896);
+    let v40 = r.apply(v21 + v22);
+    let v41 = r.apply(v21 - v22);
+    let v42 = r.apply(v20 + v23);
+    let v43 = r.apply(v20 - v23);
+    let v44 = v41.m2(2896, v43, -2896);
+    let v45 = v41.m2(2896, v43, 2896);
+    let v46 = r.apply(v24 + v26);
+    let v47 = r.apply(v24 - v26);
+    let v48 = r.apply(v25 + v28);
+    let v49 = r.apply(v25 - v28);
+    let v50 = v47.m2(2896, v49, -2896);
+    let v51 = v47.m2(2896, v49, 2896);
+    let v52 = r.apply(v31 + v32);
+    let v53 = r.apply(v31 - v32);
+    let v54 = r.apply(v30 + v33);
+    let v55 = r.apply(v30 - v33);
+    let v56 = v53.m2(2896, v55, -2896);
+    let v57 = v53.m2(2896, v55, 2896);
+    let v58 = -v46;
+    let v59 = -v40;
+    let v60 = -v57;
+    let v61 = -v39;
+    let v62 = -v50;
+    let v63 = -v44;
+    let v64 = -v54;
+    let v65 = -v36;
+    t[0] = v34;
+    t[1] = v58;
+    t[2] = v52;
+    t[3] = v59;
+    t[4] = v45;
+    t[5] = v60;
+    t[6] = v51;
+    t[7] = v61;
+    t[8] = v38;
+    t[9] = v62;
+    t[10] = v56;
+    t[11] = v63;
+    t[12] = v42;
+    t[13] = v64;
+    t[14] = v48;
+    t[15] = v65;
+}
+
+/// Inverse ADST16 with inputs `1..` zero.
+#[rustfmt::skip]
+pub(super) fn iadst16_nz1<V: TxLanes>(t: &mut [V], r: Clamp<V>) {
+    let t: &mut [V; 16] = (&mut t[..16]).try_into().unwrap();
+    let i0 = t[0];
+    let v0 = i0.m1_h0(-4091);
+    let v1 = i0.m1_h0(201);
+    let v2 = r.apply(v1);
+    let v3 = r.apply(v0);
+    let v4 = v2.m2_h0(799, v3, -4017);
+    let v5 = v2.m2_h0(4017, v3, 799);
+    let v6 = r.apply(v2);
+    let v7 = r.apply(v3);
+    let v8 = v6.m2_h0(1567, v7, -3784);
+    let v9 = v6.m2_h0(3784, v7, 1567);
+    let v10 = r.apply(v5);
+    let v11 = r.apply(v4);
+    let v12 = v10.m2_h0(1567, v11, -3784);
+    let v13 = v10.m2_h0(3784, v11, 1567);
+    let v14 = r.apply(v6);
+    let v15 = r.apply(v7);
+    let v16 = v14.m2(2896, v15, -2896);
+    let v17 = v14.m2(2896, v15, 2896);
+    let v18 = r.apply(v9);
+    let v19 = r.apply(v8);
+    let v20 = v18.m2(2896, v19, -2896);
+    let v21 = v18.m2(2896, v19, 2896);
+    let v22 = r.apply(v10);
+    let v23 = r.apply(v11);
+    let v24 = v22.m2(2896, v23, -2896);
+    let v25 = v22.m2(2896, v23, 2896);
+    let v26 = r.apply(v13);
+    let v27 = r.apply(v12);
+    let v28 = v26.m2(2896, v27, -2896);
+    let v29 = v26.m2(2896, v27, 2896);
+    let v30 = -v22;
+    let v31 = -v18;
+    let v32 = -v29;
+    let v33 = -v17;
+    let v34 = -v24;
+    let v35 = -v20;
+    let v36 = -v27;
+    let v37 = -v15;
+    t[0] = v14;
+    t[1] = v30;
+    t[2] = v26;
+    t[3] = v31;
+    t[4] = v21;
+    t[5] = v32;
+    t[6] = v25;
+    t[7] = v33;
+    t[8] = v16;
+    t[9] = v34;
+    t[10] = v28;
+    t[11] = v35;
+    t[12] = v19;
+    t[13] = v36;
+    t[14] = v23;
+    t[15] = v37;
 }

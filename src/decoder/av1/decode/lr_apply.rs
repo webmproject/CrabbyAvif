@@ -48,14 +48,20 @@ fn copy_padded_row<T: Copy>(d: &mut [T], row: &[T], x0: usize, x1: usize, pw: us
         (x0 - B, 0)
     } else {
         let pad_l = B - x0;
-        d[..pad_l].fill(row[0]);
+        let v = row[0];
+        for x in &mut d[..pad_l] {
+            *x = v;
+        }
         (0, pad_l)
     };
     let end = (x1 + B).min(pw);
     let copy_len = end - src_start;
     d[dst_start..dst_start + copy_len].copy_from_slice(&row[src_start..end]);
     if x1 + B > pw {
-        d[dst_start + copy_len..].fill(row[pw - 1]);
+        let v = row[pw - 1];
+        for x in &mut d[dst_start + copy_len..] {
+            *x = v;
+        }
     }
 }
 
@@ -141,66 +147,35 @@ pub fn lr_stripe<T: Pixel>(
             && matches!(unit.typ, RestorationType::Wiener | RestorationType::Sgrproj);
         unit_col += 1;
         if !filtered {
-            // Unfiltered: the CDEF output.
-            for i in 0..h {
-                out[i * out_stride + x0..i * out_stride + x1]
-                    .copy_from_slice(&cdef_data[i * cdef_stride + x0..i * cdef_stride + x1]);
-            }
-            continue;
-        }
-        // A run of interior self guided units with the same parameter set
-        // is filtered in one call (box sums and `A` / `B` are shared).
-        if matches!(unit.typ, RestorationType::Sgrproj)
-            && x0 >= LR_BORDER
-            && x1 + LR_BORDER <= pw
-            && w % 16 == 0
-        {
-            let mut units = [(0usize, [0i32; 2]); LR_MAX_W / 16];
-            units[0] = (w, unit.sgr_xqd);
-            let (mut n, mut gx1) = (1, x1);
-            while unit_col < lr.unit_cols && n < units.len() && units[n - 1].0 % 16 == 0 {
-                let cx0 = unit_col * unit_size;
-                if cx0 >= pw {
+            // Unfiltered: coalesce any run of adjacent unfiltered units into a
+            // single row-by-row (or whole-stripe) copy of the CDEF output.
+            let mut span_x1 = x1;
+            while unit_col < lr.unit_cols {
+                let nx0 = unit_col * unit_size;
+                if nx0 >= pw {
                     break;
                 }
-                let cx1 = unit_x1(unit_col);
-                let u = &lr.units[unit_row * lr.unit_cols + unit_col];
-                if !(matches!(u.typ, RestorationType::Sgrproj)
-                    && u.sgr_set == unit.sgr_set
-                    && cx0 < cols.1
-                    && cx1 > cols.0
-                    && cx1 + LR_BORDER <= pw
-                    && cx1 - x0 <= LR_MAX_W)
-                {
+                let nx1 = unit_x1(unit_col);
+                let nu = &lr.units[unit_row * lr.unit_cols + unit_col];
+                let nfiltered = nx0 < cols.1
+                    && nx1 > cols.0
+                    && matches!(nu.typ, RestorationType::Wiener | RestorationType::Sgrproj);
+                if nfiltered {
                     break;
                 }
-                units[n] = (cx1 - cx0, u.sgr_xqd);
-                n += 1;
-                gx1 = cx1;
+                span_x1 = nx1;
                 unit_col += 1;
             }
-            if n > 1 {
-                let mut rows: [&[T]; LR_MAX_H + 2 * LR_BORDER] = [&[]; LR_MAX_H + 2 * LR_BORDER];
-                let off = x0 - LR_BORDER;
-                for (r, d) in rows[..srows].iter_mut().enumerate() {
-                    *d = if (LR_BORDER..LR_BORDER + h).contains(&r) {
-                        &cdef_data[(r - LR_BORDER) * cdef_stride + off..]
-                    } else {
-                        &stripe_src_row(g, cdef, above, below, y_first, r)[off..]
-                    };
+            if x0 == 0 && span_x1 == pw && out_stride == pw && cdef_stride == pw {
+                out[..h * pw].copy_from_slice(&cdef_data[..h * pw]);
+            } else {
+                for i in 0..h {
+                    out[i * out_stride + x0..i * out_stride + span_x1].copy_from_slice(
+                        &cdef_data[i * cdef_stride + x0..i * cdef_stride + span_x1],
+                    );
                 }
-                sgr_filter_units(
-                    &mut out[x0..],
-                    out_stride,
-                    &rows[..srows],
-                    gx1 - x0,
-                    h,
-                    unit.sgr_set as usize,
-                    &units[..n],
-                    bd,
-                );
-                continue;
             }
+            continue;
         }
         // Padded source rows of this unit (columns x0 - LR_BORDER ..
         // x1 + LR_BORDER). Away from the plane's left and right edges they
@@ -224,6 +199,62 @@ pub fn lr_stripe<T: Pixel>(
             }
             for (r, d) in rows[..srows].iter_mut().enumerate().skip(LR_BORDER + h) {
                 *d = &stripe_src_row(g, cdef, above, below, y_first, r)[off..];
+            }
+            // A run of interior self guided units with the same parameter set
+            // is filtered in one call (box sums and `A` / `B` are shared).
+            if matches!(unit.typ, RestorationType::Sgrproj)
+                && w % 16 == 0
+                && unit_col < lr.unit_cols
+            {
+                let can_merge = |uc: usize, cur_w: usize| -> Option<(usize, [i32; 2])> {
+                    if cur_w % 16 != 0 {
+                        return None;
+                    }
+                    let cx0 = uc * unit_size;
+                    if cx0 >= pw {
+                        return None;
+                    }
+                    let cx1 = unit_x1(uc);
+                    let u = &lr.units[unit_row * lr.unit_cols + uc];
+                    if matches!(u.typ, RestorationType::Sgrproj)
+                        && u.sgr_set == unit.sgr_set
+                        && cx0 < cols.1
+                        && cx1 > cols.0
+                        && cx1 + LR_BORDER <= pw
+                        && cx1 - x0 <= LR_MAX_W
+                    {
+                        Some((cx1, u.sgr_xqd))
+                    } else {
+                        None
+                    }
+                };
+                if let Some((mut gx1, second_xqd)) = can_merge(unit_col, w) {
+                    let mut units = [(0usize, [0i32; 2]); LR_MAX_W / 16];
+                    units[0] = (w, unit.sgr_xqd);
+                    units[1] = (gx1 - x1, second_xqd);
+                    let mut n = 2;
+                    unit_col += 1;
+                    while unit_col < lr.unit_cols && n < units.len() {
+                        let Some((cx1, xqd)) = can_merge(unit_col, units[n - 1].0) else {
+                            break;
+                        };
+                        units[n] = (cx1 - gx1, xqd);
+                        n += 1;
+                        gx1 = cx1;
+                        unit_col += 1;
+                    }
+                    sgr_filter_units(
+                        &mut out[x0..],
+                        out_stride,
+                        &rows[..srows],
+                        gx1 - x0,
+                        h,
+                        unit.sgr_set as usize,
+                        &units[..n],
+                        bd,
+                    );
+                    continue;
+                }
             }
         } else {
             let sstride = w + 2 * LR_BORDER;

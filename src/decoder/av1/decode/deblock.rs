@@ -251,7 +251,7 @@ fn deblock_rows_var<T: Pixel>(
         let (vl, rest) = rest.split_at_mut(nv);
         let (col_has, rest) = rest.split_at_mut(n_c);
         let (hs, hl) = rest.split_at_mut(n_c);
-        col_has.fill(0);
+        fill_u8(col_has, 0);
         let r4_0 = mi_row0 >> sy;
         let c4_0 = col0 >> sx;
         let yp0 = r4_0 * MI_SIZE - y0;
@@ -310,7 +310,7 @@ fn deblock_rows_var<T: Pixel>(
             let r4 = r4_0 + ri;
             let trow = mi.lf_tx_row(pt, r4);
             let prow = mi.lf_tx_row(pt, r4 - 1);
-            hs.fill(0);
+            fill_u8(hs, 0);
             let mut any = false;
             let mut ci = 0;
             while ci < n_c {
@@ -347,6 +347,23 @@ fn deblock_rows_var<T: Pixel>(
     }
 }
 
+/// Fills `dst` with `val` 16 bytes at a time without calling `slice::fill`
+/// (`<[u8] as SpecFill<u8>>::spec_fill` is compiled `-Copt-level=z` in Android's
+/// prebuilt `libcore` and never inlines).
+#[inline(always)]
+fn fill_u8(dst: &mut [u8], val: u8) {
+    let v = V16::splat(val);
+    let mut i = 0;
+    while i + 16 <= dst.len() {
+        v.copy_to_slice(&mut dst[i..i + 16]);
+        i += 16;
+    }
+    while i < dst.len() {
+        dst[i] = val;
+        i += 1;
+    }
+}
+
 /// Vertical edge kernel sizes of the 4x4 rows `r4_0..r4_0 + n_r` and
 /// columns `c4_0..c4_0 + n_c` of plane type `pt`, row major into `vs`
 /// (`ncp`, a multiple of 16, per row). `any[ci]` is non-zero for the
@@ -364,10 +381,10 @@ fn v_edge_sizes<const CHROMA: bool>(
     vs: &mut [u8],
     any: &mut [u8],
 ) {
+    debug_assert!(n_r > 0);
     let k15 = V16::splat(15);
     let pos = (LANES + V16::splat((c4_0 & 15) as u8)) & k15;
     let any = &mut any[..ncp];
-    any.fill(0);
     let all = Mask::<i8, 16>::splat(true);
     let last = LANES.simd_lt(V16::splat((n_c - (ncp - 16)) as u8));
     for ri in 0..n_r {
@@ -386,7 +403,8 @@ fn v_edge_sizes<const CHROMA: bool>(
             let sz = edge_sizes::<CHROMA>(cur & k15, prev, pos, valid);
             sz.copy_to_slice(&mut out[ci..ci + 16]);
             let a = &mut any[ci..ci + 16];
-            (V16::from_slice(a) | sz).copy_to_slice(a);
+            let acc = if ri == 0 { sz } else { V16::from_slice(a) | sz };
+            acc.copy_to_slice(a);
             ci += 16;
         }
     }
@@ -546,7 +564,7 @@ fn deblock_rows_const<T: Pixel>(
             );
         }
         if lvl_h != 0 {
-            hl.fill(lvl_h);
+            fill_u8(&mut hl[..ncp], lvl_h);
             let pl = &mut planes[0];
             let (stride, y0) = (pl.stride, pl.y0);
             for ri in 0..n_r {
@@ -613,8 +631,8 @@ fn deblock_rows_const<T: Pixel>(
         limits_lut,
         f.bd,
     );
-    hl_u.fill(lvl_u);
-    hl_v.fill(lvl_v);
+    fill_u8(&mut hl_u[..ncp], lvl_u);
+    fill_u8(&mut hl_v[..ncp], lvl_v);
     for ri in 0..n_r {
         let r4 = r4_0 + ri;
         if r4 == 0 || !h_edge_sizes::<true>(mi, 1, r4, c4_0, n_c, ncp, hs) {

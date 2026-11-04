@@ -32,10 +32,80 @@ pub const fn coeff_cdf_q_ctx(base_q_idx: u8) -> usize {
     }
 }
 
+/// 16-byte-aligned 4-symbol coefficient CDF row (`coeff_base` / `coeff_br`)
+/// stored in pre-inverted packed register form: `f` holds `(32768 - c0) |
+/// ((32768 - c1) << 16) | ((32768 - c2) << 32)` (with bits 48..63 zero) and
+/// `cb` holds `80 + min(count, 32)` so `cb >> 4` gives the adaptation rate
+/// `5..=7` directly and each row loads/stores via a single 16-byte `ldp`/`stp`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C, align(16))]
+pub struct CdfRow5 {
+    pub f: u64,
+    pub cb: u64,
+}
+
+impl CdfRow5 {
+    #[inline(always)]
+    pub const fn from_spec(s: [u16; 5]) -> Self {
+        let f = ((32768u16.wrapping_sub(s[0])) as u64)
+            | (((32768u16.wrapping_sub(s[1])) as u64) << 16)
+            | (((32768u16.wrapping_sub(s[2])) as u64) << 32);
+        let cnt = if s[4] < 32 { s[4] as u64 } else { 32 };
+        Self { f, cb: 80 + cnt }
+    }
+
+    #[inline(always)]
+    pub const fn to_spec(self) -> [u16; 5] {
+        [
+            32768u16.wrapping_sub(self.f as u16),
+            32768u16.wrapping_sub((self.f >> 16) as u16),
+            32768u16.wrapping_sub((self.f >> 32) as u16),
+            32768,
+            (self.cb.wrapping_sub(80)) as u16,
+        ]
+    }
+}
+
+impl PartialEq<[u16; 5]> for CdfRow5 {
+    fn eq(&self, other: &[u16; 5]) -> bool {
+        self.to_spec() == *other
+    }
+}
+
+const fn wrap_coeff_rows<const N: usize>(src: &[[[[u16; 5]; N]; 2]; 5]) -> [[[CdfRow5; N]; 2]; 5] {
+    let mut out = [[[CdfRow5 { f: 0, cb: 80 }; N]; 2]; 5];
+    let mut a = 0;
+    while a < 5 {
+        let mut b = 0;
+        while b < 2 {
+            let mut c = 0;
+            while c < N {
+                out[a][b][c] = CdfRow5::from_spec(src[a][b][c]);
+                c += 1;
+            }
+            b += 1;
+        }
+        a += 1;
+    }
+    out
+}
+
 /// Visits every CDF row of a (possibly nested) CDF array.
 trait CdfRows {
     fn for_each_row(&self, f: &mut dyn FnMut(&[u16]));
     fn for_each_row_mut(&mut self, f: &mut dyn FnMut(&mut [u16]));
+}
+
+impl CdfRows for CdfRow5 {
+    fn for_each_row(&self, f: &mut dyn FnMut(&[u16])) {
+        let r = self.to_spec();
+        f(&r);
+    }
+    fn for_each_row_mut(&mut self, f: &mut dyn FnMut(&mut [u16])) {
+        let mut r = self.to_spec();
+        f(&mut r);
+        *self = Self::from_spec(r);
+    }
 }
 
 impl<const N: usize> CdfRows for [u16; N] {
@@ -5123,16 +5193,68 @@ pub static DEFAULT_COEFF_BR_CDF: [[[[[u16; 5]; 21]; 2]; 5]; 4] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C, align(64))]
 pub struct CdfContext {
+    /// Initialised from [`DEFAULT_COEFF_BASE_EOB_CDF`]`[q_ctx]`.
+    pub coeff_base_eob: [[[[u16; 4]; 4]; 2]; 5],
+    /// Initialised from [`DEFAULT_COEFF_BR_CDF`]`[q_ctx]`.
+    pub coeff_br: [[[CdfRow5; 21]; 2]; 5],
+    /// Initialised from [`DEFAULT_COEFF_BASE_CDF`]`[q_ctx]`.
+    pub coeff_base: [[[CdfRow5; 42]; 2]; 5],
+    /// Initialised from [`DEFAULT_EOB_PT_64_CDF`]`[q_ctx]`.
+    pub eob_pt_64: [[[u16; 8]; 2]; 2],
+    /// Initialised from [`DEFAULT_ANGLE_DELTA_CDF`].
+    pub angle_delta: [[u16; 8]; 8],
+    /// Initialised from [`DEFAULT_INTRA_TX_TYPE_SET1_CDF`].
+    pub intra_tx_type_set1: [[[u16; 8]; 13]; 2],
+    /// Initialised from [`DEFAULT_PALETTE_Y_SIZE_CDF`].
+    pub palette_y_size: [[u16; 8]; 7],
+    /// Initialised from [`DEFAULT_PALETTE_UV_SIZE_CDF`].
+    pub palette_uv_size: [[u16; 8]; 7],
+    /// Initialised from [`DEFAULT_PALETTE_SIZE_7_Y_COLOR_CDF`].
+    pub palette_size_7_y_color: [[u16; 8]; 5],
+    /// Initialised from [`DEFAULT_PALETTE_SIZE_7_UV_COLOR_CDF`].
+    pub palette_size_7_uv_color: [[u16; 8]; 5],
+    /// Initialised from [`DEFAULT_TX_16X16_CDF`].
+    pub tx_16x16: [[u16; 4]; 3],
+    /// Initialised from [`DEFAULT_TX_32X32_CDF`].
+    pub tx_32x32: [[u16; 4]; 3],
+    /// Initialised from [`DEFAULT_TX_64X64_CDF`].
+    pub tx_64x64: [[u16; 4]; 3],
+    /// Initialised from [`DEFAULT_RESTORATION_TYPE_CDF`].
+    pub restoration_type: [u16; 4],
+    /// Initialised from [`DEFAULT_PALETTE_SIZE_3_Y_COLOR_CDF`].
+    pub palette_size_3_y_color: [[u16; 4]; 5],
+    /// Initialised from [`DEFAULT_PALETTE_SIZE_3_UV_COLOR_CDF`].
+    pub palette_size_3_uv_color: [[u16; 4]; 5],
     /// Initialised from [`DEFAULT_INTRA_FRAME_Y_MODE_CDF`].
     pub intra_frame_y_mode: [[[u16; 14]; 5]; 5],
     /// Initialised from [`DEFAULT_UV_MODE_CFL_NOT_ALLOWED_CDF`].
     pub uv_mode_cfl_not_allowed: [[u16; 14]; 13],
     /// Initialised from [`DEFAULT_UV_MODE_CFL_ALLOWED_CDF`].
     pub uv_mode_cfl_allowed: [[u16; 15]; 13],
-    /// Initialised from [`DEFAULT_ANGLE_DELTA_CDF`].
-    pub angle_delta: [[u16; 8]; 8],
-    /// Initialised from [`DEFAULT_INTRABC_CDF`].
-    pub intrabc: [u16; 3],
+    /// Initialised from [`DEFAULT_CFL_ALPHA_CDF`].
+    pub cfl_alpha: [[u16; 17]; 6],
+    /// Initialised from [`DEFAULT_CFL_SIGN_CDF`].
+    pub cfl_sign: [u16; 9],
+    /// Initialised from [`DEFAULT_INTRA_TX_TYPE_SET2_CDF`].
+    pub intra_tx_type_set2: [[[u16; 6]; 13]; 3],
+    /// Initialised from [`DEFAULT_TXB_SKIP_CDF`]`[q_ctx]`.
+    pub txb_skip: [[[u16; 3]; 13]; 5],
+    /// Initialised from [`DEFAULT_DC_SIGN_CDF`]`[q_ctx]`.
+    pub dc_sign: [[[u16; 3]; 3]; 2],
+    /// Initialised from [`DEFAULT_EOB_PT_16_CDF`]`[q_ctx]`.
+    pub eob_pt_16: [[[u16; 6]; 2]; 2],
+    /// Initialised from [`DEFAULT_EOB_PT_32_CDF`]`[q_ctx]`.
+    pub eob_pt_32: [[[u16; 7]; 2]; 2],
+    /// Initialised from [`DEFAULT_EOB_PT_128_CDF`]`[q_ctx]`.
+    pub eob_pt_128: [[[u16; 9]; 2]; 2],
+    /// Initialised from [`DEFAULT_EOB_PT_256_CDF`]`[q_ctx]`.
+    pub eob_pt_256: [[[u16; 10]; 2]; 2],
+    /// Initialised from [`DEFAULT_EOB_PT_512_CDF`]`[q_ctx]`.
+    pub eob_pt_512: [[u16; 11]; 2],
+    /// Initialised from [`DEFAULT_EOB_PT_1024_CDF`]`[q_ctx]`.
+    pub eob_pt_1024: [[u16; 12]; 2],
+    /// Initialised from [`DEFAULT_EOB_EXTRA_CDF`]`[q_ctx]`.
+    pub eob_extra: [[[[u16; 3]; 9]; 2]; 5],
     /// Initialised from [`DEFAULT_PARTITION_W8_CDF`].
     pub partition_w8: [[u16; 5]; 4],
     /// Initialised from [`DEFAULT_PARTITION_W16_CDF`].
@@ -5143,25 +5265,21 @@ pub struct CdfContext {
     pub partition_w64: [[u16; 11]; 4],
     /// Initialised from [`DEFAULT_PARTITION_W128_CDF`].
     pub partition_w128: [[u16; 9]; 4],
-    /// Initialised from [`DEFAULT_SEGMENT_ID_CDF`].
-    pub segment_id: [[u16; 9]; 3],
+    /// Initialised from [`DEFAULT_SKIP_CDF`].
+    pub skip: [[u16; 3]; 3],
     /// Initialised from [`DEFAULT_TX_8X8_CDF`].
     pub tx_8x8: [[u16; 3]; 3],
-    /// Initialised from [`DEFAULT_TX_16X16_CDF`].
-    pub tx_16x16: [[u16; 4]; 3],
-    /// Initialised from [`DEFAULT_TX_32X32_CDF`].
-    pub tx_32x32: [[u16; 4]; 3],
-    /// Initialised from [`DEFAULT_TX_64X64_CDF`].
-    pub tx_64x64: [[u16; 4]; 3],
-    /// Initialised from [`DEFAULT_TXFM_SPLIT_CDF`].
-    /// Used by intra block copy blocks (`is_inter == 1`).
-    pub txfm_split: [[u16; 3]; 21],
+    /// Initialised from [`DEFAULT_SEGMENT_ID_CDF`].
+    pub segment_id: [[u16; 9]; 3],
     /// Initialised from [`DEFAULT_FILTER_INTRA_MODE_CDF`].
     pub filter_intra_mode: [u16; 6],
     /// Initialised from [`DEFAULT_FILTER_INTRA_CDF`].
     pub filter_intra: [[u16; 3]; 22],
-    /// Initialised from [`DEFAULT_SKIP_CDF`].
-    pub skip: [[u16; 3]; 3],
+    /// Initialised from [`DEFAULT_INTRABC_CDF`].
+    pub intrabc: [u16; 3],
+    /// Initialised from [`DEFAULT_TXFM_SPLIT_CDF`].
+    /// Used by intra block copy blocks (`is_inter == 1`).
+    pub txfm_split: [[u16; 3]; 21],
     /// Initialised from [`DEFAULT_MV_JOINT_CDF`].
     /// MV joint CDF for `MvCtx == MV_INTRABC_CONTEXT` (the only MV
     /// context used in intra frames).
@@ -5199,36 +5317,24 @@ pub struct CdfContext {
     pub palette_y_mode: [[[u16; 3]; 3]; 7],
     /// Initialised from [`DEFAULT_PALETTE_UV_MODE_CDF`].
     pub palette_uv_mode: [[u16; 3]; 2],
-    /// Initialised from [`DEFAULT_PALETTE_Y_SIZE_CDF`].
-    pub palette_y_size: [[u16; 8]; 7],
-    /// Initialised from [`DEFAULT_PALETTE_UV_SIZE_CDF`].
-    pub palette_uv_size: [[u16; 8]; 7],
     /// Initialised from [`DEFAULT_PALETTE_SIZE_2_Y_COLOR_CDF`].
     pub palette_size_2_y_color: [[u16; 3]; 5],
-    /// Initialised from [`DEFAULT_PALETTE_SIZE_3_Y_COLOR_CDF`].
-    pub palette_size_3_y_color: [[u16; 4]; 5],
     /// Initialised from [`DEFAULT_PALETTE_SIZE_4_Y_COLOR_CDF`].
     pub palette_size_4_y_color: [[u16; 5]; 5],
     /// Initialised from [`DEFAULT_PALETTE_SIZE_5_Y_COLOR_CDF`].
     pub palette_size_5_y_color: [[u16; 6]; 5],
     /// Initialised from [`DEFAULT_PALETTE_SIZE_6_Y_COLOR_CDF`].
     pub palette_size_6_y_color: [[u16; 7]; 5],
-    /// Initialised from [`DEFAULT_PALETTE_SIZE_7_Y_COLOR_CDF`].
-    pub palette_size_7_y_color: [[u16; 8]; 5],
     /// Initialised from [`DEFAULT_PALETTE_SIZE_8_Y_COLOR_CDF`].
     pub palette_size_8_y_color: [[u16; 9]; 5],
     /// Initialised from [`DEFAULT_PALETTE_SIZE_2_UV_COLOR_CDF`].
     pub palette_size_2_uv_color: [[u16; 3]; 5],
-    /// Initialised from [`DEFAULT_PALETTE_SIZE_3_UV_COLOR_CDF`].
-    pub palette_size_3_uv_color: [[u16; 4]; 5],
     /// Initialised from [`DEFAULT_PALETTE_SIZE_4_UV_COLOR_CDF`].
     pub palette_size_4_uv_color: [[u16; 5]; 5],
     /// Initialised from [`DEFAULT_PALETTE_SIZE_5_UV_COLOR_CDF`].
     pub palette_size_5_uv_color: [[u16; 6]; 5],
     /// Initialised from [`DEFAULT_PALETTE_SIZE_6_UV_COLOR_CDF`].
     pub palette_size_6_uv_color: [[u16; 7]; 5],
-    /// Initialised from [`DEFAULT_PALETTE_SIZE_7_UV_COLOR_CDF`].
-    pub palette_size_7_uv_color: [[u16; 8]; 5],
     /// Initialised from [`DEFAULT_PALETTE_SIZE_8_UV_COLOR_CDF`].
     pub palette_size_8_uv_color: [[u16; 9]; 5],
     /// Initialised from [`DEFAULT_DELTA_Q_CDF`].
@@ -5239,10 +5345,6 @@ pub struct CdfContext {
     /// Indexed by the loop filter delta index `i` (`FRAME_LF_COUNT`
     /// copies, used when `delta_lf_multi == 1`).
     pub delta_lf_multi: [[u16; 5]; 4],
-    /// Initialised from [`DEFAULT_INTRA_TX_TYPE_SET1_CDF`].
-    pub intra_tx_type_set1: [[[u16; 8]; 13]; 2],
-    /// Initialised from [`DEFAULT_INTRA_TX_TYPE_SET2_CDF`].
-    pub intra_tx_type_set2: [[[u16; 6]; 13]; 3],
     /// Initialised from [`DEFAULT_INTER_TX_TYPE_SET1_CDF`].
     /// Used by intra block copy blocks (`is_inter == 1`).
     pub inter_tx_type_set1: [[u16; 17]; 2],
@@ -5252,42 +5354,10 @@ pub struct CdfContext {
     /// Initialised from [`DEFAULT_INTER_TX_TYPE_SET3_CDF`].
     /// Used by intra block copy blocks (`is_inter == 1`).
     pub inter_tx_type_set3: [[u16; 3]; 4],
-    /// Initialised from [`DEFAULT_CFL_SIGN_CDF`].
-    pub cfl_sign: [u16; 9],
-    /// Initialised from [`DEFAULT_CFL_ALPHA_CDF`].
-    pub cfl_alpha: [[u16; 17]; 6],
     /// Initialised from [`DEFAULT_USE_WIENER_CDF`].
     pub use_wiener: [u16; 3],
     /// Initialised from [`DEFAULT_USE_SGRPROJ_CDF`].
     pub use_sgrproj: [u16; 3],
-    /// Initialised from [`DEFAULT_RESTORATION_TYPE_CDF`].
-    pub restoration_type: [u16; 4],
-    /// Initialised from [`DEFAULT_TXB_SKIP_CDF`]`[q_ctx]`.
-    pub txb_skip: [[[u16; 3]; 13]; 5],
-    /// Initialised from [`DEFAULT_EOB_PT_16_CDF`]`[q_ctx]`.
-    pub eob_pt_16: [[[u16; 6]; 2]; 2],
-    /// Initialised from [`DEFAULT_EOB_PT_32_CDF`]`[q_ctx]`.
-    pub eob_pt_32: [[[u16; 7]; 2]; 2],
-    /// Initialised from [`DEFAULT_EOB_PT_64_CDF`]`[q_ctx]`.
-    pub eob_pt_64: [[[u16; 8]; 2]; 2],
-    /// Initialised from [`DEFAULT_EOB_PT_128_CDF`]`[q_ctx]`.
-    pub eob_pt_128: [[[u16; 9]; 2]; 2],
-    /// Initialised from [`DEFAULT_EOB_PT_256_CDF`]`[q_ctx]`.
-    pub eob_pt_256: [[[u16; 10]; 2]; 2],
-    /// Initialised from [`DEFAULT_EOB_PT_512_CDF`]`[q_ctx]`.
-    pub eob_pt_512: [[u16; 11]; 2],
-    /// Initialised from [`DEFAULT_EOB_PT_1024_CDF`]`[q_ctx]`.
-    pub eob_pt_1024: [[u16; 12]; 2],
-    /// Initialised from [`DEFAULT_EOB_EXTRA_CDF`]`[q_ctx]`.
-    pub eob_extra: [[[[u16; 3]; 9]; 2]; 5],
-    /// Initialised from [`DEFAULT_DC_SIGN_CDF`]`[q_ctx]`.
-    pub dc_sign: [[[u16; 3]; 3]; 2],
-    /// Initialised from [`DEFAULT_COEFF_BASE_EOB_CDF`]`[q_ctx]`.
-    pub coeff_base_eob: [[[[u16; 4]; 4]; 2]; 5],
-    /// Initialised from [`DEFAULT_COEFF_BASE_CDF`]`[q_ctx]`.
-    pub coeff_base: [[[[u16; 5]; 42]; 2]; 5],
-    /// Initialised from [`DEFAULT_COEFF_BR_CDF`]`[q_ctx]`.
-    pub coeff_br: [[[[u16; 5]; 21]; 2]; 5],
 }
 
 pub static DEFAULT_CDF_CONTEXT: [CdfContext; 4] = [
@@ -5303,6 +5373,132 @@ impl CdfContext {
     #[inline(always)]
     pub const fn new(base_q_idx: u8) -> Self {
         DEFAULT_CDF_CONTEXT[coeff_cdf_q_ctx(base_q_idx)]
+    }
+
+    /// In-place, tool-conditional re-initialization of CDF tables for a frame.
+    pub fn init_for_frame(
+        &mut self,
+        fh: &crate::decoder::av1::headers::FrameHeader,
+        seq: &crate::decoder::av1::headers::SequenceHeader,
+    ) {
+        let q_ctx = coeff_cdf_q_ctx(fh.quant.base_q_idx);
+        let src = &DEFAULT_CDF_CONTEXT[q_ctx];
+
+        // Active core intra/skip/partition
+        self.intra_frame_y_mode = src.intra_frame_y_mode;
+        self.angle_delta = src.angle_delta;
+        self.partition_w8 = src.partition_w8;
+        self.partition_w16 = src.partition_w16;
+        self.partition_w32 = src.partition_w32;
+        self.partition_w64 = src.partition_w64;
+        if seq.use_128x128_superblock {
+            self.partition_w128 = src.partition_w128;
+        }
+        self.skip = src.skip;
+
+        // Chroma / CFL
+        if !seq.color.mono_chrome {
+            self.uv_mode_cfl_not_allowed = src.uv_mode_cfl_not_allowed;
+            self.uv_mode_cfl_allowed = src.uv_mode_cfl_allowed;
+            self.cfl_sign = src.cfl_sign;
+            self.cfl_alpha = src.cfl_alpha;
+        }
+
+        // Transform size
+        if fh.tx_mode == crate::decoder::av1::headers::TxMode::Select {
+            self.tx_8x8 = src.tx_8x8;
+            self.tx_16x16 = src.tx_16x16;
+            self.tx_32x32 = src.tx_32x32;
+            self.tx_64x64 = src.tx_64x64;
+        }
+
+        // Intra transform type
+        self.intra_tx_type_set1 = src.intra_tx_type_set1;
+        self.intra_tx_type_set2 = src.intra_tx_type_set2;
+
+        // q-indexed coefficient CDFs
+        self.txb_skip = src.txb_skip;
+        self.eob_pt_16 = src.eob_pt_16;
+        if !fh.coded_lossless {
+            self.eob_pt_32 = src.eob_pt_32;
+            self.eob_pt_64 = src.eob_pt_64;
+            self.eob_pt_128 = src.eob_pt_128;
+            self.eob_pt_256 = src.eob_pt_256;
+            self.eob_pt_512 = src.eob_pt_512;
+            self.eob_pt_1024 = src.eob_pt_1024;
+        }
+        self.eob_extra = src.eob_extra;
+        self.dc_sign = src.dc_sign;
+        self.coeff_base_eob = src.coeff_base_eob;
+        self.coeff_base = src.coeff_base;
+        self.coeff_br = src.coeff_br;
+
+        // Intrabc / MVs
+        if fh.allow_intrabc {
+            self.intrabc = src.intrabc;
+            self.txfm_split = src.txfm_split;
+            self.mv_joint = src.mv_joint;
+            self.mv_class = src.mv_class;
+            self.mv_class0_bit = src.mv_class0_bit;
+            self.mv_class0_fr = src.mv_class0_fr;
+            self.mv_class0_hp = src.mv_class0_hp;
+            self.mv_sign = src.mv_sign;
+            self.mv_bit = src.mv_bit;
+            self.mv_fr = src.mv_fr;
+            self.mv_hp = src.mv_hp;
+            self.inter_tx_type_set1 = src.inter_tx_type_set1;
+            self.inter_tx_type_set2 = src.inter_tx_type_set2;
+            self.inter_tx_type_set3 = src.inter_tx_type_set3;
+        }
+
+        // Palette tables (18 tables)
+        if fh.allow_screen_content_tools {
+            self.palette_y_mode = src.palette_y_mode;
+            self.palette_uv_mode = src.palette_uv_mode;
+            self.palette_y_size = src.palette_y_size;
+            self.palette_uv_size = src.palette_uv_size;
+            self.palette_size_2_y_color = src.palette_size_2_y_color;
+            self.palette_size_3_y_color = src.palette_size_3_y_color;
+            self.palette_size_4_y_color = src.palette_size_4_y_color;
+            self.palette_size_5_y_color = src.palette_size_5_y_color;
+            self.palette_size_6_y_color = src.palette_size_6_y_color;
+            self.palette_size_7_y_color = src.palette_size_7_y_color;
+            self.palette_size_8_y_color = src.palette_size_8_y_color;
+            self.palette_size_2_uv_color = src.palette_size_2_uv_color;
+            self.palette_size_3_uv_color = src.palette_size_3_uv_color;
+            self.palette_size_4_uv_color = src.palette_size_4_uv_color;
+            self.palette_size_5_uv_color = src.palette_size_5_uv_color;
+            self.palette_size_6_uv_color = src.palette_size_6_uv_color;
+            self.palette_size_7_uv_color = src.palette_size_7_uv_color;
+            self.palette_size_8_uv_color = src.palette_size_8_uv_color;
+        }
+
+        // Filter intra
+        if seq.enable_filter_intra {
+            self.filter_intra_mode = src.filter_intra_mode;
+            self.filter_intra = src.filter_intra;
+        }
+
+        // Segmentation
+        if fh.seg.enabled {
+            self.segment_id = src.segment_id;
+        }
+
+        // Delta Q / Delta LF
+        if fh.delta_q_present {
+            self.delta_q = src.delta_q;
+        }
+        if fh.delta_lf_present {
+            self.delta_lf = src.delta_lf;
+            self.delta_lf_multi = src.delta_lf_multi;
+        }
+
+        // Loop restoration
+        if fh.lr.uses_lr {
+            self.use_wiener = src.use_wiener;
+            self.use_sgrproj = src.use_sgrproj;
+            self.restoration_type = src.restoration_type;
+        }
     }
 
     const fn from_q_ctx(q: usize) -> Self {
@@ -5377,8 +5573,8 @@ impl CdfContext {
             eob_extra: DEFAULT_EOB_EXTRA_CDF[q],
             dc_sign: DEFAULT_DC_SIGN_CDF[q],
             coeff_base_eob: DEFAULT_COEFF_BASE_EOB_CDF[q],
-            coeff_base: DEFAULT_COEFF_BASE_CDF[q],
-            coeff_br: DEFAULT_COEFF_BR_CDF[q],
+            coeff_base: wrap_coeff_rows(&DEFAULT_COEFF_BASE_CDF[q]),
+            coeff_br: wrap_coeff_rows(&DEFAULT_COEFF_BR_CDF[q]),
         }
     }
 
@@ -5669,7 +5865,37 @@ mod tests {
             r[n - 1] = 7;
         });
         cdf.for_each_row(|r| assert_eq!(r[r.len() - 1], 7));
-        assert_eq!(cdf.coeff_br[4][1][20][4], 7);
+        assert_eq!(cdf.coeff_br[4][1][20].to_spec()[4], 7);
         assert_eq!(cdf.mv_bit[1][9][2], 7);
+    }
+
+    #[test]
+    fn init_for_frame_with_all_tools_resets_all_rows() {
+        // Minimal 150x150 8-bit AV1 keyframe OBU stream (headers only).
+        const OBU: [u8; 39] = [
+            18, 0, 10, 14, 0, 0, 0, 3, 188, 172, 169, 181, 242, 32, 33, 160, 208, 128, 50, 19, 16,
+            0, 131, 128, 0, 0, 128, 0, 0, 0, 235, 197, 166, 46, 12, 13, 209, 81, 64,
+        ];
+        let fd = crate::decoder::av1::obu::parse_first_frame(&OBU).unwrap();
+        let mut seq = fd.seq;
+        let mut fh = fd.frame;
+        seq.use_128x128_superblock = true;
+        seq.color.mono_chrome = false;
+        seq.enable_filter_intra = true;
+        fh.tx_mode = crate::decoder::av1::headers::TxMode::Select;
+        fh.coded_lossless = false;
+        fh.allow_intrabc = true;
+        fh.allow_screen_content_tools = true;
+        fh.seg.enabled = true;
+        fh.delta_q_present = true;
+        fh.delta_lf_present = true;
+        fh.lr.uses_lr = true;
+        for q in [0u8, 40, 100, 200] {
+            fh.quant.base_q_idx = q;
+            let mut cdf = CdfContext::new(255 - q);
+            cdf.for_each_row_mut(|r| r.fill(7));
+            cdf.init_for_frame(&fh, &seq);
+            assert_eq!(cdf, CdfContext::new(q), "base_q_idx={q}");
+        }
     }
 }

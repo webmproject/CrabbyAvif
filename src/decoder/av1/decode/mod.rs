@@ -23,6 +23,7 @@ pub mod deblock;
 pub mod intrabc;
 pub mod lr_apply;
 pub mod recon;
+pub mod stage;
 pub mod state;
 pub mod superres;
 
@@ -59,11 +60,28 @@ static PLANE_POOL: Mutex<Vec<Box<dyn Any + Send>>> = Mutex::new(Vec::new());
 /// pool skip the lock).
 static PLANE_POOL_LEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+struct BandWorkerScratch<T: Pixel> {
+    cdef_srcs: [CdefSrc; 3],
+    scratch: Vec<T>,
+    lr_band_out: [Vec<T>; 3],
+}
+
+impl<T: Pixel> Default for BandWorkerScratch<T> {
+    fn default() -> Self {
+        Self {
+            cdef_srcs: Default::default(),
+            scratch: Vec::new(),
+            lr_band_out: Default::default(),
+        }
+    }
+}
+
 struct PooledState<T: Pixel> {
     s: FrameState<T>,
     sc: Scratch,
     non_direct_planes: [PlaneWin<T>; 3],
     cdfs: Vec<Box<CdfContext>>,
+    stub_cdf: Option<Box<CdfContext>>,
     cdef_line: [[[Vec<T>; 2]; 3]; 2],
     cdef_srcs: [CdefSrc; 3],
     lr_bounds: VecDeque<LrBoundary<T>>,
@@ -73,8 +91,11 @@ struct PooledState<T: Pixel> {
     lf_grid: Vec<u8>,
     band_free: Vec<Box<BandBufs<T>>>,
     band_carry: [PlaneWin<T>; 3],
+    band_scratches: Vec<BandWorkerScratch<T>>,
     order_carry: MiWin,
     tile_workers: Vec<TileWorker<T>>,
+    recon_sc: Scratch,
+    pipe_chunks_free: Vec<stage::LogChunk>,
 }
 
 impl<T: Pixel> Default for PooledState<T> {
@@ -84,6 +105,7 @@ impl<T: Pixel> Default for PooledState<T> {
             sc: Scratch::new(),
             non_direct_planes: Default::default(),
             cdfs: Vec::new(),
+            stub_cdf: None,
             cdef_line: Default::default(),
             cdef_srcs: Default::default(),
             lr_bounds: VecDeque::new(),
@@ -93,8 +115,11 @@ impl<T: Pixel> Default for PooledState<T> {
             lf_grid: Vec::new(),
             band_free: Vec::new(),
             band_carry: Default::default(),
+            band_scratches: Vec::new(),
             order_carry: MiWin::default(),
             tile_workers: Vec::new(),
+            recon_sc: Scratch::new(),
+            pipe_chunks_free: Vec::new(),
         }
     }
 }
@@ -291,6 +316,7 @@ struct Pipeline<'a, T: Pixel> {
     s: &'a mut FrameState<T>,
     sc: &'a mut Scratch,
     cdfs: &'a mut Vec<Box<CdfContext>>,
+    stub_cdf: &'a mut Option<Box<CdfContext>>,
     deblock: bool,
     cdef: bool,
     lr: bool,
@@ -320,6 +346,7 @@ struct Pipeline<'a, T: Pixel> {
     lf_grid: &'a mut Vec<u8>,
     band_free: &'a mut Vec<Box<BandBufs<T>>>,
     band_carry: &'a mut [PlaneWin<T>; 3],
+    band_scratches: &'a mut Vec<BandWorkerScratch<T>>,
     order_carry: &'a mut MiWin,
     tile_workers: &'a mut Vec<TileWorker<T>>,
     mi_arrays: (bool, bool, bool),
@@ -342,6 +369,9 @@ struct Pipeline<'a, T: Pixel> {
     /// Luma rows `0..rows_end` are decoded (the whole frame unless a region
     /// is decoded).
     rows_end: usize,
+    recon_sc: &'a mut Scratch,
+    pipe_chunks_free: &'a mut Vec<stage::LogChunk>,
+    direct_bufs: [Vec<T>; 3],
 }
 
 pub fn decode_frame<T: Pixel>(
@@ -380,11 +410,8 @@ pub fn decode_frame<T: Pixel>(
     // multi-tile frames with any post filter, see
     // `Pipeline::run_tiles_bands`).
     let single_tile = fh.tile_info.rows == 1 && fh.tile_info.cols == 1;
-    let bands = full_out
-        && params.threads > 1
-        && !intrabc
-        && f.sb_rows > 1
-        && (cdef || lr || (deblock && !single_tile));
+    let bands =
+        full_out && params.threads > 1 && !intrabc && f.sb_rows > 1 && (cdef || lr || deblock);
     let tiles_bands = bands && !single_tile;
     let direct = full_out && !bands;
     let has_post =
@@ -403,6 +430,13 @@ pub fn decode_frame<T: Pixel>(
     };
     let mut direct_bufs = if direct { pop_direct_planes::<T>(np) } else { Default::default() };
     let mut lr_out_planes: [PlaneWin<T>; 3] = Default::default();
+    let direct_pipe_split = direct
+        && single_tile
+        && params.threads > 1
+        && !intrabc
+        && !fh.use_superres
+        && f.sb_rows > 1
+        && !has_post;
     for p in 0..np {
         let (sx, sy) = f.sub(p);
         mi_w[p] = (f.mi_cols * 4) >> sx;
@@ -412,8 +446,10 @@ pub fn decode_frame<T: Pixel>(
         let stride = ((mi_cols_al * 4) >> sx).next_multiple_of(64);
         let lr_p = lr && !intrabc && fh.lr.frame_restoration_type[p] != RestorationType::None;
         if direct && !lr_p {
-            let buf = std::mem::take(&mut direct_bufs[p]);
-            pooled.s.planes[p] = PlaneWin::from_vec(buf, stride, win_rows_luma >> sy);
+            if !direct_pipe_split {
+                let buf = std::mem::take(&mut direct_bufs[p]);
+                pooled.s.planes[p] = PlaneWin::from_vec(buf, stride, win_rows_luma >> sy);
+            }
         } else if tiles_bands {
             // Only the stride is used (by `band_setup`); the tile columns
             // decode into their own windows. Keep the window consistent
@@ -511,6 +547,7 @@ pub fn decode_frame<T: Pixel>(
             s,
             sc,
             cdfs,
+            stub_cdf,
             cdef_line,
             cdef_srcs,
             lr_bounds,
@@ -520,8 +557,11 @@ pub fn decode_frame<T: Pixel>(
             lf_grid,
             band_free,
             band_carry,
+            band_scratches,
             order_carry,
             tile_workers,
+            recon_sc,
+            pipe_chunks_free,
             ..
         } = &mut *pooled;
         let mut p = Pipeline {
@@ -548,6 +588,7 @@ pub fn decode_frame<T: Pixel>(
             lf_grid,
             band_free,
             band_carry,
+            band_scratches,
             order_carry,
             tile_workers,
             mi_arrays,
@@ -562,7 +603,11 @@ pub fn decode_frame<T: Pixel>(
             s,
             sc,
             cdfs,
+            stub_cdf,
             f,
+            recon_sc,
+            pipe_chunks_free,
+            direct_bufs,
         };
         if superres {
             for pl in 0..np {
@@ -593,6 +638,218 @@ pub fn decode_frame<T: Pixel>(
     res
 }
 
+/// Byte threshold at which Stage P flushes an in-progress `LogChunk` to
+/// Stage R mid-row. Keeping chunks small (~8 KiB) lets Stage R overlap
+/// with Stage P within the first and last superblock rows (and on small
+/// direct-pipe frames) while keeping recycled chunk buffers in L2 cache.
+const LOG_CHUNK_FLUSH_BYTES: usize = 8 * 1024;
+
+/// Process-wide pool of persistent background worker threads (up to 16),
+/// avoiding OS thread creation/teardown, `mmap_lock` contention, and 0-PELT
+/// Little-core placement across repeated single-tile `run_direct_pipe` and
+/// `run_bands_pipe` decodes.
+struct PersistentWorker {
+    tx: std::sync::mpsc::Sender<Box<dyn FnOnce() + Send>>,
+}
+
+static WORKER_POOL: Mutex<Vec<PersistentWorker>> = Mutex::new(Vec::new());
+
+fn pop_persistent_worker() -> PersistentWorker {
+    if let Ok(mut pool) = WORKER_POOL.lock() {
+        if let Some(w) = pool.pop() {
+            return w;
+        }
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<Box<dyn FnOnce() + Send>>();
+    std::thread::spawn(move || {
+        while let Ok(job) = rx.recv() {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+        }
+    });
+    PersistentWorker { tx }
+}
+
+fn push_persistent_worker(w: PersistentWorker) {
+    if let Ok(mut pool) = WORKER_POOL.lock() {
+        if pool.len() < 16 {
+            pool.push(w);
+        }
+    }
+}
+
+struct WorkerDoneGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for WorkerDoneGuard {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+struct ActiveWorkerGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for ActiveWorkerGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+/// Ensures `handoff_state` reaches a terminal state (`2` handed off or `3`
+/// finished/aborted without handoff) even if the worker exits early or panics.
+struct HandoffGuard(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+impl Drop for HandoffGuard {
+    fn drop(&mut self) {
+        let mut cur = self.0.load(std::sync::atomic::Ordering::Relaxed);
+        while cur < 2 {
+            match self.0.compare_exchange_weak(
+                cur,
+                3,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => cur = actual,
+            }
+        }
+    }
+}
+
+/// Stage R reconstruction state transferred from a worker thread back to the
+/// main (Prime-core) thread once Stage P finishes entropy parsing.
+struct ReconHandoff<T: Pixel> {
+    first: stage::PipeMsg<T>,
+    rx: std::sync::mpsc::Receiver<stage::PipeMsg<T>>,
+    cursor: stage::LogCursor,
+    stub_ts: TileState<'static>,
+    r_state: FrameState<T>,
+    r_sc: Scratch,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn step_bands_recon_msg<T: Pixel>(
+    msg: stage::PipeMsg<T>,
+    cursor: &mut stage::LogCursor,
+    f: &FrameCtx,
+    stub_ts: &mut TileState,
+    r_state: &mut FrameState<T>,
+    r_sc: &mut Scratch,
+    dsp: &crate::decoder::av1::dsp::Dsp<T>,
+    sb4: usize,
+    sb_px: usize,
+    sb_rows: usize,
+    bp: &BandParams,
+    pipe: &BandPipeline<T>,
+    r_w: &mut BandWorker<'_, T>,
+    backlog_limit: usize,
+    recycle_tx: &std::sync::mpsc::Sender<stage::LogChunk>,
+) -> Result<()> {
+    match msg {
+        stage::PipeMsg::Chunk(mut chunk) => {
+            decode_log_chunk(&chunk, cursor, f, stub_ts, r_state, r_sc, dsp, sb4)?;
+            chunk.clear();
+            let _ = recycle_tx.send(chunk);
+            if pipe.queued_tasks() > backlog_limit {
+                pipe.work(r_w, bp, true, None);
+            }
+        }
+        stage::PipeMsg::RowEnd {
+            r,
+            last,
+            bufs,
+            chunk,
+        } => {
+            if let Some(mut chunk) = chunk {
+                decode_log_chunk(&chunk, cursor, f, stub_ts, r_state, r_sc, dsp, sb4)?;
+                chunk.clear();
+                let _ = recycle_tx.send(chunk);
+                if pipe.queued_tasks() > backlog_limit {
+                    pipe.work(r_w, bp, true, None);
+                }
+            }
+            if r + 1 < sb_rows && !r_state.above_line[0].is_empty() {
+                for p in 0..f.num_planes {
+                    let sy = f.sub(p).1;
+                    let y = (((r + 1) * f.sb_px) >> sy) - 1;
+                    let y = y.min(r_state.planes[p].y0 + r_state.planes[p].rows - 1);
+                    let row = &r_state.planes[p].row(y)[..bp.mi_w[p]];
+                    r_state.above_line[p][..row.len()].copy_from_slice(row);
+                }
+            }
+            let Some(mut bb) = bufs else {
+                return Err(Error::Invalid("missing bufs in RowEnd"));
+            };
+            for p in 0..f.num_planes {
+                let sy = f.sub(p).1;
+                if !last {
+                    let stride = r_state.planes[p].stride;
+                    bb.planes[p].reset(
+                        stride,
+                        (sb_px + BAND_TOP) >> sy,
+                        0,
+                        ((r + 1) * sb_px - BAND_TOP) >> sy,
+                    );
+                }
+                std::mem::swap(&mut r_state.planes[p], &mut bb.planes[p]);
+            }
+            let job = RowJob { r, last, bufs: bb };
+            if pipe.push_row(job) > backlog_limit && !last {
+                pipe.work(r_w, bp, true, None);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn decode_log_chunk<T: Pixel>(
+    chunk: &stage::LogChunk,
+    cursor: &mut stage::LogCursor,
+    f: &FrameCtx,
+    stub_ts: &mut TileState,
+    r_state: &mut FrameState<T>,
+    r_sc: &mut Scratch,
+    dsp: &crate::decoder::av1::dsp::Dsp<T>,
+    sb4: usize,
+) -> Result<()> {
+    cursor.reset();
+    let sb_mask = !(sb4 - 1);
+    let mut prev_sb_y = usize::MAX;
+    let mut b = block::Block::default();
+    for &(mi_row, mi_col, num_blocks) in &chunk.sbs {
+        let sb_y = (mi_row & sb_mask) << 2;
+        if sb_y != prev_sb_y {
+            prev_sb_y = sb_y;
+            r_state.set_sb_y(f, sb_y);
+        }
+        let mut dec = SbDecoder {
+            f,
+            t: stub_ts,
+            s: r_state,
+            sc: r_sc,
+            dsp,
+            b,
+            recon: true,
+            sb_y,
+            read_deltas: false,
+            plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+            stage: stage::DecoderStage::Recon(chunk, cursor),
+            filter_type: [false; 2],
+        };
+        dec.clear_block_decoded_flags(mi_row, mi_col);
+        for _ in 0..num_blocks {
+            dec.decode_recon_block(chunk)?;
+        }
+        b = dec.b;
+    }
+    if cursor.block_idx != chunk.blocks.len()
+        || cursor.palette_idx != chunk.palettes.len()
+        || cursor.tx_header_idx != chunk.tx_headers.len()
+        || cursor.tx_entry_idx != chunk.tx_entries.len()
+    {
+        return Err(Error::Invalid("pipeline chunk length mismatch"));
+    }
+    Ok(())
+}
+
 impl<'a, T: Pixel> Pipeline<'a, T> {
     fn run(
         &mut self,
@@ -609,6 +866,27 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
             if self.bands {
                 return self.run_bands(fd, params.threads, sink);
             }
+            let use_split = params.threads >= 2
+                && !self.intrabc
+                && !fh.use_superres
+                && sb_rows >= 2
+                && self.direct
+                && !self.has_post_filters()
+                && !sink.wants_rows_final();
+            if use_split {
+                return self.run_direct_pipe(fd, sink);
+            }
+            if self.s.planes[0].is_empty() {
+                let mi_cols_al = f.sb_cols * f.sb4;
+                let mi_rows_al = f.sb_rows * f.sb4;
+                let win_rows_luma = mi_rows_al * 4;
+                for p in 0..f.num_planes {
+                    let (sx, sy) = f.sub(p);
+                    let stride = ((mi_cols_al * 4) >> sx).next_multiple_of(64);
+                    let buf = std::mem::take(&mut self.direct_bufs[p]);
+                    self.s.planes[p] = PlaneWin::from_vec(buf, stride, win_rows_luma >> sy);
+                }
+            }
             self.post_start = 0;
             self.row_end = sb_rows;
             self.col_range = (0, f.sb_cols * sb4);
@@ -620,6 +898,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
             let mut ts = TileState::with_cdf(
                 fd.single_tile,
                 fh,
+                f.seq,
                 (ti.mi_row_starts[0], ti.mi_row_starts[1]),
                 (c0, c1),
                 self.cdfs.pop(),
@@ -643,6 +922,8 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                         sb_y,
                         read_deltas: false,
                         plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+                        stage: stage::DecoderStage::Fused,
+                        filter_type: [false; 2],
                     };
                     let mut c = c0;
                     while c < c1 {
@@ -777,6 +1058,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                     let ts = TileState::with_cdf(
                         data,
                         fh,
+                        self.f.seq,
                         (ti.mi_row_starts[tr], ti.mi_row_starts[tr + 1]),
                         (ti.mi_col_starts[tc], ti.mi_col_starts[tc + 1]),
                         self.cdfs.pop(),
@@ -826,6 +1108,8 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                     sb_y,
                     read_deltas: false,
                     plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+                    stage: stage::DecoderStage::Fused,
+                    filter_type: [false; 2],
                 };
                 let mut c = c0;
                 while c < c1 {
@@ -994,37 +1278,50 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         let sb_px = self.f.sb_px;
         let fh = self.f.fh;
         let ti = &fh.tile_info;
-        let (bp, mut out_planes) = self.band_setup();
+        let use_split = threads >= 2 && !self.intrabc && !fh.use_superres && sb_rows >= 2;
+        if use_split {
+            return self.run_bands_pipe(fd, threads, sink);
+        }
+        let (bp, out_planes) = self.band_setup();
         // At most one worker per band after the first.
         let max_bands = if !bp.cdef && sb_px > 64 { sb_rows * 2 } else { sb_rows };
         let workers = (threads - 1).min(max_bands.saturating_sub(1));
-        let res = {
-            let mut rest: [&mut [T]; 3] = Default::default();
-            for (r, pl) in rest.iter_mut().zip(out_planes.iter_mut()) {
-                *r = pl.data_mut();
-            }
+        let (res, out_planes) = {
             let pipe = BandPipeline::with_pooled(
-                rest,
+                out_planes,
                 std::mem::take(self.band_free),
                 std::mem::take(self.band_carry),
                 std::mem::take(self.lf_grid),
                 std::mem::take(self.lr_free),
                 workers,
             );
+            let mut worker_scratches: Vec<BandWorkerScratch<T>> = (0..workers)
+                .map(|_| self.band_scratches.pop().unwrap_or_default())
+                .collect();
+            let main_sc = self.band_scratches.pop().unwrap_or_default();
             let res = std::thread::scope(|scope| -> Result<()> {
                 // If this thread panics (e.g. while decoding), the workers
                 // must not keep waiting for rows that never come: the scope
                 // joins them before the panic propagates.
                 let _abort = AbortOnPanic(&pipe);
-                for _ in 0..workers {
+                let mut handles = Vec::with_capacity(workers);
+                for sc in worker_scratches.drain(..) {
                     let (pipe, bp) = (&pipe, &bp);
-                    scope.spawn(move || pipe.work(&mut BandWorker::<T>::new(fd), bp, false, None));
+                    handles.push(scope.spawn(move || {
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                            let _abort = AbortOnPanic(pipe);
+                            let mut w = BandWorker::<T>::with_scratch(&fd.seq, &fd.frame, sc);
+                            pipe.work(&mut w, bp, false, None);
+                            pipe.return_scratch(w.into_scratch());
+                        }));
+                    }));
                 }
-                let mut w = BandWorker::<T>::new(fd);
+                let mut w = BandWorker::<T>::with_scratch(&fd.seq, &fd.frame, main_sc);
                 let (c0, c1) = (ti.mi_col_starts[0], ti.mi_col_starts[1]);
                 let mut ts = TileState::with_cdf(
                     fd.single_tile,
                     fh,
+                    self.f.seq,
                     (ti.mi_row_starts[0], ti.mi_row_starts[1]),
                     (c0, c1),
                     self.cdfs.pop(),
@@ -1048,6 +1345,8 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                             sb_y,
                             read_deltas: false,
                             plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+                            stage: stage::DecoderStage::Fused,
+                            filter_type: [false; 2],
                         };
                         let mut c = c0;
                         while c < c1 {
@@ -1071,15 +1370,788 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 };
                 self.cdfs.push(ts.cdf);
                 pipe.close();
-                // Help with what is still queued.
-                pipe.work(&mut w, &bp, false, None);
-                res
+                if res.is_err() {
+                    pipe.abort();
+                    while handles.iter().any(|h| !h.is_finished()) {
+                        for _ in 0..64 {
+                            std::hint::spin_loop();
+                        }
+                    }
+                    std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+                } else {
+                    // Help with what is still queued without sleeping.
+                    pipe.work_spin(&mut w, &bp, None, || {
+                        handles.iter().all(|h| h.is_finished())
+                    });
+                }
+                pipe.return_scratch(w.into_scratch());
+                drop(handles);
+                res?;
+                if pipe.is_aborted() {
+                    return Err(Error::Invalid("decoding thread panicked"));
+                }
+                Ok(())
             });
-            pipe.reclaim_into(self.band_free, self.band_carry, self.lf_grid, self.lr_free);
-            res
+            let out_planes = pipe.reclaim_into(
+                self.band_free,
+                self.band_carry,
+                self.lf_grid,
+                self.lr_free,
+                self.band_scratches,
+            );
+            (res, out_planes)
         };
         res?;
         self.finish_bands(out_planes, sink)
+    }
+
+    fn run_bands_pipe(
+        &mut self,
+        fd: &FrameData,
+        threads: usize,
+        sink: &mut dyn RowSink<T>,
+    ) -> Result<()> {
+        let sb_rows = self.f.sb_rows;
+        let sb4 = self.f.sb4;
+        let sb_px = self.f.sb_px;
+        let fh = self.f.fh;
+        let ti = &fh.tile_info;
+        let (bp, out_planes) = self.band_setup();
+        let max_bands = if !bp.cdef && sb_px > 64 { sb_rows * 2 } else { sb_rows };
+        let workers = (threads.saturating_sub(2)).min(max_bands.saturating_sub(1));
+
+        // Unbounded channel so Stage P on the main thread never sleeps on
+        // backpressure (sleeping decays PELT utilization on heterogeneous
+        // ARM big.LITTLE cores and causes wakeup migration off the Prime
+        // core while mid cores are frequency-capped below misfit).
+        let (tx, rx) = std::sync::mpsc::channel::<stage::PipeMsg<T>>();
+        let (recycle_tx, recycle_rx) = std::sync::mpsc::channel::<stage::LogChunk>();
+
+        let r_planes = std::mem::take(&mut self.s.planes);
+        let r_above_line = std::mem::take(&mut self.s.above_line);
+        let mut r_sc = std::mem::take(self.recon_sc);
+        let (c0, c1) = (ti.mi_col_starts[0], ti.mi_col_starts[1]);
+
+        let pipe = std::sync::Arc::new(BandPipeline::with_pooled(
+            out_planes,
+            std::mem::take(self.band_free),
+            std::mem::take(self.band_carry),
+            std::mem::take(self.lf_grid),
+            std::mem::take(self.lr_free),
+            workers,
+        ));
+        let shared = std::sync::Arc::new((self.f.seq.clone(), self.f.fh.clone(), bp));
+        type ReconOut<T> = Result<([PlaneWin<T>; 3], [Vec<T>; 3], Scratch, Box<CdfContext>)>;
+        let r_slot: std::sync::Arc<Mutex<Option<ReconOut<T>>>> =
+            std::sync::Arc::new(Mutex::new(None));
+        let handoff_state = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let handoff_slot: std::sync::Arc<Mutex<Option<ReconHandoff<T>>>> =
+            std::sync::Arc::new(Mutex::new(None));
+        let active_workers = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(workers + 1));
+
+        let mut pws = Vec::with_capacity(workers + 1);
+        for _ in 0..workers {
+            let pw = pop_persistent_worker();
+            let pipe_w = pipe.clone();
+            let shared_w = shared.clone();
+            let sc_w = self.band_scratches.pop().unwrap_or_default();
+            let active_guard = ActiveWorkerGuard(active_workers.clone());
+            let _ = pw.tx.send(Box::new(move || {
+                let _active = active_guard;
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    let _abort = AbortOnPanic(&pipe_w);
+                    let mut w = BandWorker::<T>::with_scratch(&shared_w.0, &shared_w.1, sc_w);
+                    pipe_w.work(&mut w, &shared_w.2, false, None);
+                    pipe_w.return_scratch(w.into_scratch());
+                }));
+            }));
+            pws.push(pw);
+        }
+
+        let r_pw = pop_persistent_worker();
+        let pipe_r = pipe.clone();
+        let shared_r = shared.clone();
+        let r_sc_worker = self.band_scratches.pop().unwrap_or_default();
+        let stub_cdf = self.stub_cdf.take();
+        let r_slot_w = r_slot.clone();
+        let handoff_state_w = handoff_state.clone();
+        let handoff_slot_w = handoff_slot.clone();
+        let recycle_tx_w = recycle_tx.clone();
+        let active_guard_r = ActiveWorkerGuard(active_workers.clone());
+        let _ = r_pw.tx.send(Box::new(move || {
+            let _active = active_guard_r;
+            let handoff_guard = HandoffGuard(handoff_state_w.clone());
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let _abort = AbortOnPanic(&pipe_r);
+                let f_w = FrameCtx::new(&shared_r.0, &shared_r.1);
+                let bp_w = &shared_r.2;
+                let dsp_w = crate::decoder::av1::dsp::Dsp::<T>::new(f_w.bd);
+                let mut cursor = stage::LogCursor::default();
+                let mut r_w = BandWorker::<T>::with_scratch(&shared_r.0, &shared_r.1, r_sc_worker);
+                let mut stub_ts = TileState::stub_with_cdf((0, f_w.mi_rows), (c0, c1), stub_cdf);
+                let mut r_state = FrameState::<T> {
+                    planes: r_planes,
+                    above_line: r_above_line,
+                    ipred: [IntraSetup::new(&f_w, 0), IntraSetup::new(&f_w, 1)],
+                    edges: Default::default(),
+                    cfl_ac: [0; crate::decoder::av1::dsp::ipred::MAX_CFL_AC],
+                    ..Default::default()
+                };
+                let mut handed_off = false;
+                let r_res = 'recon: {
+                    loop {
+                        if pipe_r.is_aborted() {
+                            break;
+                        }
+                        if handoff_state_w.load(std::sync::atomic::Ordering::Acquire) == 1 {
+                            match rx.recv() {
+                                Ok(first) => {
+                                    *handoff_slot_w
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                        Some(ReconHandoff {
+                                            first,
+                                            rx,
+                                            cursor,
+                                            stub_ts,
+                                            r_state,
+                                            r_sc,
+                                        });
+                                    handoff_state_w.store(2, std::sync::atomic::Ordering::Release);
+                                    handed_off = true;
+                                    break 'recon Ok(None);
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        let msg = match rx.try_recv() {
+                            Ok(m) => m,
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                pipe_r.work(&mut r_w, bp_w, true, None);
+                                if handoff_state_w.load(std::sync::atomic::Ordering::Acquire) == 1 {
+                                    continue;
+                                }
+                                match rx.recv() {
+                                    Ok(m) => m,
+                                    Err(_) => break,
+                                }
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                        };
+                        if let Err(e) = step_bands_recon_msg(
+                            msg,
+                            &mut cursor,
+                            &f_w,
+                            &mut stub_ts,
+                            &mut r_state,
+                            &mut r_sc,
+                            &dsp_w,
+                            sb4,
+                            sb_px,
+                            sb_rows,
+                            bp_w,
+                            &pipe_r,
+                            &mut r_w,
+                            workers,
+                            &recycle_tx_w,
+                        ) {
+                            break 'recon Err(e);
+                        }
+                    }
+                    Ok(Some((
+                        r_state.planes,
+                        r_state.above_line,
+                        r_sc,
+                        stub_ts.cdf,
+                    )))
+                };
+                match r_res {
+                    Ok(None) => {
+                        debug_assert!(handed_off);
+                        drop(handoff_guard);
+                        pipe_r.work(&mut r_w, bp_w, false, None);
+                    }
+                    Ok(Some(done_state)) => {
+                        *r_slot_w
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            Some(Ok(done_state));
+                        drop(handoff_guard);
+                        pipe_r.close();
+                        pipe_r.work(&mut r_w, bp_w, false, None);
+                    }
+                    Err(e) => {
+                        pipe_r.abort();
+                        *r_slot_w
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Err(e));
+                        drop(handoff_guard);
+                    }
+                }
+                pipe_r.return_scratch(r_w.into_scratch());
+            }));
+        }));
+        pws.push(r_pw);
+
+        let main_sc = self.band_scratches.pop().unwrap_or_default();
+        let res = (|| -> Result<()> {
+            let _guard = AbortOnPanic(&pipe);
+            let mut ts = TileState::with_cdf(
+                fd.single_tile,
+                fh,
+                self.f.seq,
+                (ti.mi_row_starts[0], ti.mi_row_starts[1]),
+                (c0, c1),
+                self.cdfs.pop(),
+            );
+            let mut next_chunk = || {
+                recycle_rx
+                    .try_recv()
+                    .ok()
+                    .or_else(|| self.pipe_chunks_free.pop())
+                    .unwrap_or_default()
+            };
+            let mut current_chunk = next_chunk();
+            let mut b = block::Block::default();
+            let p_res = 'dec: {
+                for r in 0..sb_rows {
+                    let mi_row = r * sb4;
+                    self.s.mi.slide_to(mi_row.saturating_sub(sb4));
+                    self.s.left.clear();
+                    let sb_y = r * sb_px;
+                    self.s.set_sb_y(&self.f, sb_y);
+                    {
+                        let mut dec = SbDecoder {
+                            f: &self.f,
+                            t: &mut ts,
+                            s: self.s,
+                            sc: self.sc,
+                            dsp: &self.dsp,
+                            b,
+                            recon: false,
+                            sb_y,
+                            read_deltas: false,
+                            plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+                            stage: stage::DecoderStage::Parse(&mut current_chunk),
+                            filter_type: [false; 2],
+                        };
+                        let mut c = c0;
+                        while c < c1 {
+                            if let Err(e) = dec.decode_sb(mi_row, c) {
+                                break 'dec Err(e);
+                            }
+                            if dec.t.msac.overrun() {
+                                break 'dec Err(Error::Truncated);
+                            }
+                            c += sb4;
+                            if let stage::DecoderStage::Parse(ref mut chunk) = dec.stage {
+                                if chunk.approx_size() >= LOG_CHUNK_FLUSH_BYTES {
+                                    if tx
+                                        .send(stage::PipeMsg::Chunk(std::mem::take(*chunk)))
+                                        .is_err()
+                                    {
+                                        break 'dec Err(Error::Invalid("pipeline receiver closed"));
+                                    }
+                                    **chunk = next_chunk();
+                                }
+                            }
+                        }
+                        b = dec.b;
+                    }
+                    let tail_chunk = if !current_chunk.is_empty() {
+                        let chunk = std::mem::take(&mut current_chunk);
+                        current_chunk = next_chunk();
+                        Some(chunk)
+                    } else {
+                        None
+                    };
+                    let mut bb = pipe.take_bufs();
+                    if bp.deblock || bp.cdef {
+                        let (m0, m1) = band_mi_rows(&self.f, r);
+                        reset_band_mi(&mut bb.mi, &self.s.mi, &self.f, r);
+                        copy_mi_rows(
+                            &mut bb.mi,
+                            &self.s.mi,
+                            m0,
+                            m1,
+                            0,
+                            self.f.mi_cols,
+                            self.f.ss_x,
+                            self.f.ss_y,
+                        );
+                    }
+                    fill_band_meta(
+                        &self.f,
+                        &bp,
+                        &mut bb,
+                        r,
+                        r + 1 == sb_rows,
+                        &self.s.cdef_idx,
+                        &self.s.lr,
+                    );
+                    if tx
+                        .send(stage::PipeMsg::RowEnd {
+                            r,
+                            last: r + 1 == sb_rows,
+                            bufs: Some(bb),
+                            chunk: tail_chunk,
+                        })
+                        .is_err()
+                    {
+                        break 'dec Err(Error::Invalid("pipeline receiver closed"));
+                    }
+                }
+                Ok(())
+            };
+            self.cdfs.push(ts.cdf);
+            drop(tx);
+            if !current_chunk.is_empty() {
+                current_chunk.clear();
+            }
+            if self.pipe_chunks_free.len() < 16 && current_chunk.sbs.capacity() > 0 {
+                self.pipe_chunks_free.push(current_chunk);
+            }
+
+            let mut p_w = BandWorker::<T>::with_scratch(&fd.seq, &fd.frame, main_sc);
+            let mut took_over: Option<ReconOut<T>> = None;
+            if p_res.is_err() {
+                pipe.abort();
+                while active_workers.load(std::sync::atomic::Ordering::Acquire) != 0 {
+                    for _ in 0..64 {
+                        std::hint::spin_loop();
+                    }
+                }
+            } else {
+                let _ = handoff_state.compare_exchange(
+                    0,
+                    1,
+                    std::sync::atomic::Ordering::AcqRel,
+                    std::sync::atomic::Ordering::Acquire,
+                );
+                while handoff_state.load(std::sync::atomic::Ordering::Acquire) < 2 {
+                    match pipe.try_next() {
+                        SpinPoll::Task(t) => pipe.run(&mut p_w, &bp, t, None),
+                        SpinPoll::Done => break,
+                        SpinPoll::Idle | SpinPoll::Contended => {
+                            for _ in 0..16 {
+                                std::hint::spin_loop();
+                            }
+                        }
+                    }
+                }
+                if handoff_state.load(std::sync::atomic::Ordering::Acquire) == 2 {
+                    let ho = handoff_slot
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take();
+                    if let Some(mut ho) = ho {
+                        let takeover_res = (|| -> Result<()> {
+                            step_bands_recon_msg(
+                                ho.first,
+                                &mut ho.cursor,
+                                &self.f,
+                                &mut ho.stub_ts,
+                                &mut ho.r_state,
+                                &mut ho.r_sc,
+                                &self.dsp,
+                                sb4,
+                                sb_px,
+                                sb_rows,
+                                &bp,
+                                &pipe,
+                                &mut p_w,
+                                workers + 1,
+                                &recycle_tx,
+                            )?;
+                            while let Ok(msg) = ho.rx.recv() {
+                                if pipe.is_aborted() {
+                                    break;
+                                }
+                                step_bands_recon_msg(
+                                    msg,
+                                    &mut ho.cursor,
+                                    &self.f,
+                                    &mut ho.stub_ts,
+                                    &mut ho.r_state,
+                                    &mut ho.r_sc,
+                                    &self.dsp,
+                                    sb4,
+                                    sb_px,
+                                    sb_rows,
+                                    &bp,
+                                    &pipe,
+                                    &mut p_w,
+                                    workers + 1,
+                                    &recycle_tx,
+                                )?;
+                            }
+                            Ok(())
+                        })();
+                        match takeover_res {
+                            Ok(()) => {
+                                pipe.close();
+                                took_over = Some(Ok((
+                                    ho.r_state.planes,
+                                    ho.r_state.above_line,
+                                    ho.r_sc,
+                                    ho.stub_ts.cdf,
+                                )));
+                            }
+                            Err(e) => {
+                                pipe.abort();
+                                took_over = Some(Err(e));
+                            }
+                        }
+                    } else {
+                        pipe.abort();
+                        took_over = Some(Err(Error::Invalid("missing handoff state")));
+                    }
+                }
+                if took_over.as_ref().is_none_or(|r| r.is_ok()) {
+                    pipe.work_spin(&mut p_w, &bp, None, || {
+                        active_workers.load(std::sync::atomic::Ordering::Acquire) == 0
+                    });
+                } else {
+                    while active_workers.load(std::sync::atomic::Ordering::Acquire) != 0 {
+                        for _ in 0..64 {
+                            std::hint::spin_loop();
+                        }
+                    }
+                }
+            }
+            pipe.return_scratch(p_w.into_scratch());
+            for pw in pws {
+                push_persistent_worker(pw);
+            }
+            let r_res = match took_over {
+                Some(r) => r,
+                None => r_slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                    .ok_or(Error::Invalid("pipeline worker panicked"))?,
+            };
+            pipe.close();
+            if p_res.is_err() {
+                if let Err(r_err) = r_res {
+                    return Err(r_err);
+                }
+                p_res?;
+            }
+            let (planes, above_line, sc, returned_cdf) = r_res?;
+            if pipe.is_aborted() {
+                return Err(Error::Invalid("pipeline worker panicked"));
+            }
+            *self.stub_cdf = Some(returned_cdf);
+            self.s.planes = planes;
+            self.s.above_line = above_line;
+            *self.recon_sc = sc;
+            Ok(())
+        })();
+        let out_planes = pipe.reclaim_into(
+            self.band_free,
+            self.band_carry,
+            self.lf_grid,
+            self.lr_free,
+            self.band_scratches,
+        );
+
+        drop(recycle_tx);
+        while let Ok(chunk) = recycle_rx.try_recv() {
+            if self.pipe_chunks_free.len() < 16 {
+                self.pipe_chunks_free.push(chunk);
+            }
+        }
+
+        res?;
+        self.finish_bands(out_planes, sink)
+    }
+
+    fn run_direct_pipe(&mut self, fd: &FrameData, sink: &mut dyn RowSink<T>) -> Result<()> {
+        let f = &self.f;
+        let ti = &f.fh.tile_info;
+        let sb4 = f.sb4;
+        let sb_px = f.sb_px;
+        let sb_rows = f.sb_rows;
+        let fh = f.fh;
+
+        self.post_start = 0;
+        self.row_end = sb_rows;
+        self.col_range = (0, f.sb_cols * sb4);
+        self.next_stripe = 0;
+        self.next_bound = 1;
+        self.rows_end = fh.frame_height;
+
+        let c0 = ti.mi_col_starts[0];
+        let c1 = ti.mi_col_starts[1];
+
+        // Unbounded channel so Stage P on the main thread never sleeps on
+        // backpressure (sleeping decays PELT utilization on heterogeneous
+        // ARM big.LITTLE cores and causes wakeup migration off the Prime
+        // core while mid cores are frequency-capped below misfit).
+        let (tx, rx) = std::sync::mpsc::channel::<stage::PipeMsg<T>>();
+        let (recycle_tx, recycle_rx) = std::sync::mpsc::channel::<stage::LogChunk>();
+
+        let mut direct_bufs = std::mem::take(&mut self.direct_bufs);
+        let mut r_sc = std::mem::take(self.recon_sc);
+        let np = f.num_planes;
+        let mi_cols_al = f.sb_cols * f.sb4;
+        let mi_rows_al = f.sb_rows * f.sb4;
+        let win_rows_luma = mi_rows_al * 4;
+
+        let stub_cdf = self.stub_cdf.take();
+        type DirectDone<T> = ([PlaneWin<T>; 3], Scratch, Box<CdfContext>);
+        type DirectOut<T> = Result<Option<DirectDone<T>>>;
+        let out_slot: std::sync::Arc<Mutex<Option<DirectOut<T>>>> =
+            std::sync::Arc::new(Mutex::new(None));
+        let handoff_state = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let handoff_slot: std::sync::Arc<Mutex<Option<ReconHandoff<T>>>> =
+            std::sync::Arc::new(Mutex::new(None));
+        let done_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let out_slot_w = out_slot.clone();
+        let handoff_state_w = handoff_state.clone();
+        let handoff_slot_w = handoff_slot.clone();
+        let done_guard = WorkerDoneGuard(done_flag.clone());
+        let seq_owned = f.seq.clone();
+        let fh_owned = f.fh.clone();
+        let recycle_tx_w = recycle_tx.clone();
+        let worker = pop_persistent_worker();
+        let _ = worker.tx.send(Box::new(move || {
+            let _done = done_guard;
+            let _handoff = HandoffGuard(handoff_state_w.clone());
+            if let Ok(r) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || -> DirectOut<T> {
+                    let f_w = FrameCtx::new(&seq_owned, &fh_owned);
+                    let dsp_w = crate::decoder::av1::dsp::Dsp::<T>::new(f_w.bd);
+                    let mut cursor = stage::LogCursor::default();
+                    let mut stub_ts =
+                        TileState::stub_with_cdf((0, f_w.mi_rows), (c0, c1), stub_cdf);
+                    let mut r_planes: [PlaneWin<T>; 3] = Default::default();
+                    for p in 0..np {
+                        let sy = f_w.sub(p).1;
+                        let stride = ((mi_cols_al * 4) >> f_w.sub(p).0).next_multiple_of(64);
+                        let buf = std::mem::take(&mut direct_bufs[p]);
+                        r_planes[p] = PlaneWin::from_vec(buf, stride, win_rows_luma >> sy);
+                    }
+                    let mut r_state = FrameState::<T> {
+                        planes: r_planes,
+                        above_line: Default::default(),
+                        ipred: [IntraSetup::new(&f_w, 0), IntraSetup::new(&f_w, 1)],
+                        edges: Default::default(),
+                        cfl_ac: [0; crate::decoder::av1::dsp::ipred::MAX_CFL_AC],
+                        ..Default::default()
+                    };
+                    loop {
+                        if handoff_state_w.load(std::sync::atomic::Ordering::Acquire) == 1 {
+                            match rx.recv() {
+                                Ok(first) => {
+                                    *handoff_slot_w
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                        Some(ReconHandoff {
+                                            first,
+                                            rx,
+                                            cursor,
+                                            stub_ts,
+                                            r_state,
+                                            r_sc,
+                                        });
+                                    handoff_state_w.store(2, std::sync::atomic::Ordering::Release);
+                                    return Ok(None);
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        let Ok(msg) = rx.recv() else { break };
+                        if let stage::PipeMsg::Chunk(mut chunk) = msg {
+                            decode_log_chunk(
+                                &chunk,
+                                &mut cursor,
+                                &f_w,
+                                &mut stub_ts,
+                                &mut r_state,
+                                &mut r_sc,
+                                &dsp_w,
+                                sb4,
+                            )?;
+                            chunk.clear();
+                            let _ = recycle_tx_w.send(chunk);
+                        }
+                    }
+                    Ok(Some((r_state.planes, r_sc, stub_ts.cdf)))
+                }))
+            {
+                *out_slot_w
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(r);
+            }
+        }));
+
+        let mut ts = TileState::with_cdf(
+            fd.single_tile,
+            fh,
+            f.seq,
+            (ti.mi_row_starts[0], ti.mi_row_starts[1]),
+            (c0, c1),
+            self.cdfs.pop(),
+        );
+        let mut next_chunk = || {
+            recycle_rx
+                .try_recv()
+                .ok()
+                .or_else(|| self.pipe_chunks_free.pop())
+                .unwrap_or_default()
+        };
+        let mut current_chunk = next_chunk();
+        let mut b = block::Block::default();
+        let p_res = 'dec: {
+            for r in 0..sb_rows {
+                let mi_row = r * sb4;
+                self.s.mi.slide_to(mi_row.saturating_sub(sb4));
+                self.s.left.clear();
+                let sb_y = r * sb_px;
+                self.s.set_sb_y(&self.f, sb_y);
+                {
+                    let mut dec = SbDecoder {
+                        f: &self.f,
+                        t: &mut ts,
+                        s: self.s,
+                        sc: self.sc,
+                        dsp: &self.dsp,
+                        b,
+                        recon: false,
+                        sb_y,
+                        read_deltas: false,
+                        plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+                        stage: stage::DecoderStage::Parse(&mut current_chunk),
+                        filter_type: [false; 2],
+                    };
+                    let mut c = c0;
+                    while c < c1 {
+                        if let Err(e) = dec.decode_sb(mi_row, c) {
+                            break 'dec Err(e);
+                        }
+                        if dec.t.msac.overrun() {
+                            break 'dec Err(Error::Truncated);
+                        }
+                        c += sb4;
+                        if let stage::DecoderStage::Parse(ref mut chunk) = dec.stage {
+                            if chunk.approx_size() >= LOG_CHUNK_FLUSH_BYTES {
+                                if tx
+                                    .send(stage::PipeMsg::Chunk(std::mem::take(*chunk)))
+                                    .is_err()
+                                {
+                                    break 'dec Err(Error::Invalid("pipeline receiver closed"));
+                                }
+                                **chunk = next_chunk();
+                            }
+                        }
+                    }
+                    b = dec.b;
+                }
+            }
+            if !current_chunk.is_empty() {
+                let chunk = std::mem::take(&mut current_chunk);
+                if tx.send(stage::PipeMsg::Chunk(chunk)).is_err() {
+                    break 'dec Err(Error::Invalid("pipeline receiver closed"));
+                }
+            } else if self.pipe_chunks_free.len() < 16 && current_chunk.sbs.capacity() > 0 {
+                self.pipe_chunks_free.push(current_chunk);
+            }
+            Ok(())
+        };
+        self.cdfs.push(ts.cdf);
+        drop(tx);
+
+        let mut took_over: Option<Result<DirectDone<T>>> = None;
+        if p_res.is_ok() {
+            let _ = handoff_state.compare_exchange(
+                0,
+                1,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            );
+            while handoff_state.load(std::sync::atomic::Ordering::Acquire) < 2 {
+                std::hint::spin_loop();
+            }
+            if handoff_state.load(std::sync::atomic::Ordering::Acquire) == 2 {
+                let ho = handoff_slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                if let Some(mut ho) = ho {
+                    let takeover_res = (|| -> Result<DirectDone<T>> {
+                        let mut step = |msg: stage::PipeMsg<T>| -> Result<()> {
+                            if let stage::PipeMsg::Chunk(mut chunk) = msg {
+                                decode_log_chunk(
+                                    &chunk,
+                                    &mut ho.cursor,
+                                    &self.f,
+                                    &mut ho.stub_ts,
+                                    &mut ho.r_state,
+                                    &mut ho.r_sc,
+                                    &self.dsp,
+                                    sb4,
+                                )?;
+                                chunk.clear();
+                                if self.pipe_chunks_free.len() < 16 {
+                                    self.pipe_chunks_free.push(chunk);
+                                }
+                            }
+                            Ok(())
+                        };
+                        step(ho.first)?;
+                        while let Ok(msg) = ho.rx.recv() {
+                            step(msg)?;
+                        }
+                        Ok((ho.r_state.planes, ho.r_sc, ho.stub_ts.cdf))
+                    })();
+                    took_over = Some(takeover_res);
+                } else {
+                    took_over = Some(Err(Error::Invalid("missing handoff state")));
+                }
+            }
+        }
+
+        while !done_flag.load(std::sync::atomic::Ordering::Acquire) {
+            std::hint::spin_loop();
+        }
+        drop(recycle_tx);
+        while let Ok(chunk) = recycle_rx.try_recv() {
+            if self.pipe_chunks_free.len() < 16 {
+                self.pipe_chunks_free.push(chunk);
+            }
+        }
+        let r_opt = out_slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if r_opt.is_some() {
+            push_persistent_worker(worker);
+        }
+        let r_res: Result<DirectDone<T>> = match took_over {
+            Some(r) => r,
+            None => match r_opt {
+                Some(Ok(Some(done))) => Ok(done),
+                Some(Ok(None)) => Err(Error::Invalid("missing direct pipeline output")),
+                Some(Err(e)) => Err(e),
+                None => Err(Error::Invalid("pipeline worker panicked")),
+            },
+        };
+        if p_res.is_err() {
+            if let Err(r_err) = r_res {
+                return Err(r_err);
+            }
+            p_res?;
+        }
+        let (planes, sc, returned_cdf) = r_res?;
+        *self.stub_cdf = Some(returned_cdf);
+        self.s.planes = planes;
+        *self.recon_sc = sc;
+        if self.direct {
+            self.finish_direct(sink)?;
+        }
+        Ok(())
     }
 
     /// Multi-tile frames with post filters (whole frame, output planes
@@ -1096,7 +2168,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         threads: usize,
         sink: &mut dyn RowSink<T>,
     ) -> Result<()> {
-        let (bp, mut out_planes) = self.band_setup();
+        let (bp, out_planes) = self.band_setup();
         let f = &self.f;
         let ti = &f.fh.tile_info;
         let tile_row = (0..f.sb_rows)
@@ -1137,13 +2209,9 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
             tile_row,
             mi_arrays: self.mi_arrays,
         };
-        {
-            let mut rest: [&mut [T]; 3] = Default::default();
-            for (r, pl) in rest.iter_mut().zip(out_planes.iter_mut()) {
-                *r = pl.data_mut();
-            }
+        let (aborted, out_planes) = {
             let pipe = BandPipeline::with_pooled(
-                rest,
+                out_planes,
                 std::mem::take(self.band_free),
                 std::mem::take(self.band_carry),
                 std::mem::take(self.lf_grid),
@@ -1152,17 +2220,40 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
             );
             // A tile's rows are decoded in order.
             pipe.set_units(f.sb_rows * ti.cols, ti.cols, threads);
+            let mut worker_scratches: Vec<BandWorkerScratch<T>> = (1..threads)
+                .map(|_| self.band_scratches.pop().unwrap_or_default())
+                .collect();
+            let main_sc = self.band_scratches.pop().unwrap_or_default();
             std::thread::scope(|scope| {
-                for _ in 1..threads {
+                let mut handles = Vec::with_capacity(threads.saturating_sub(1));
+                for sc in worker_scratches.drain(..) {
                     let (pipe, bp, jobs) = (&pipe, &bp, &jobs);
-                    scope.spawn(move || {
-                        pipe.work(&mut BandWorker::<T>::new(fd), bp, false, Some(jobs))
-                    });
+                    handles.push(scope.spawn(move || {
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                            let _abort = AbortOnPanic(pipe);
+                            let mut w = BandWorker::<T>::with_scratch(&fd.seq, &fd.frame, sc);
+                            pipe.work(&mut w, bp, false, Some(jobs));
+                            pipe.return_scratch(w.into_scratch());
+                        }));
+                    }));
                 }
-                pipe.work(&mut BandWorker::<T>::new(fd), &bp, false, Some(&jobs));
+                let mut main_w = BandWorker::<T>::with_scratch(&fd.seq, &fd.frame, main_sc);
+                pipe.work_spin(&mut main_w, &bp, Some(&jobs), || {
+                    handles.iter().all(|h| h.is_finished())
+                });
+                pipe.return_scratch(main_w.into_scratch());
+                drop(handles);
             });
-            pipe.reclaim_into(self.band_free, self.band_carry, self.lf_grid, self.lr_free);
-        }
+            let aborted = pipe.is_aborted();
+            let out_planes = pipe.reclaim_into(
+                self.band_free,
+                self.band_carry,
+                self.lf_grid,
+                self.lr_free,
+                self.band_scratches,
+            );
+            (aborted, out_planes)
+        };
         let TileJobs {
             ctxs,
             slots,
@@ -1203,6 +2294,9 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
         {
             return Err(e);
+        }
+        if aborted {
+            return Err(Error::Invalid("decoding thread panicked"));
         }
         self.finish_bands(out_planes, sink)
     }
@@ -1419,18 +2513,41 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
             }
             err
         };
-        let errs: Vec<Option<(usize, Error)>> = std::thread::scope(|s| {
+        let mut slots: Vec<Option<Option<(usize, Error)>>> =
+            (0..workers.len().saturating_sub(1)).map(|_| None).collect();
+        let mut main_err: Option<(usize, Error)> = None;
+        std::thread::scope(|s| {
             let Some((first, rest)) = workers.split_first_mut() else {
-                return vec![Some((0, Error::Invalid("no tile workers")))];
+                main_err = Some((0, Error::Invalid("no tile workers")));
+                return;
             };
-            let handles: Vec<_> = rest.iter_mut().map(|w| s.spawn(|| work(w))).collect();
-            let mut errs = vec![work(first)];
-            errs.extend(handles.into_iter().map(|h| {
-                h.join()
-                    .unwrap_or_else(|_| Some((0, Error::Invalid("decoding thread panicked"))))
-            }));
-            errs
+            let handles: Vec<_> = rest
+                .iter_mut()
+                .zip(slots.iter_mut())
+                .map(|(w, slot)| {
+                    s.spawn(|| {
+                        if let Ok(r) =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(w)))
+                        {
+                            *slot = Some(r);
+                        }
+                    })
+                })
+                .collect();
+            main_err = work(first);
+            while handles.iter().any(|h| !h.is_finished()) {
+                for _ in 0..64 {
+                    std::hint::spin_loop();
+                }
+            }
+            std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+            drop(handles);
         });
+        let mut errs = Vec::with_capacity(workers.len().max(1));
+        errs.push(main_err);
+        errs.extend(slots.into_iter().map(|slot| {
+            slot.unwrap_or_else(|| Some((0, Error::Invalid("decoding thread panicked"))))
+        }));
         self.tile_workers.extend(workers);
         drop(chunks);
         if let Some((_, e)) = errs.into_iter().flatten().min_by_key(|(k, _)| *k) {
@@ -1476,8 +2593,14 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                     .above
                     .reset(mi_c0, tile_mi_al + 32, np, fh.allow_screen_content_tools);
                 let data = fd.tiles()[tr * ti.cols + tc];
-                let mut ts =
-                    TileState::with_cdf(data, fh, (mi_r0, mi_r1), (mi_c0, mi_c1), cdf.take());
+                let mut ts = TileState::with_cdf(
+                    data,
+                    fh,
+                    self.f.seq,
+                    (mi_r0, mi_r1),
+                    (mi_c0, mi_c1),
+                    cdf.take(),
+                );
                 for r in sb_r0..sb_r1 {
                     let key = (r << 16) | (tr << 8) | tc;
                     if first_err.as_ref().is_some_and(|(k, _)| key > *k) {
@@ -1498,6 +2621,8 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                         sb_y,
                         read_deltas: false,
                         plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+                        stage: stage::DecoderStage::Fused,
+                        filter_type: [false; 2],
                     };
                     let mut c = mi_c0;
                     let mut row_err = None;
@@ -1562,45 +2687,49 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         let min_failed_key = AtomicUsize::new(usize::MAX);
 
         let mut panicked = false;
-        let worker_results: Vec<
-            Vec<(
-                usize,
-                usize,
-                std::result::Result<FrameState<T>, (usize, Error)>,
-            )>,
-        > = std::thread::scope(|s| {
+        type MtBatch<T> = Vec<(
+            usize,
+            usize,
+            std::result::Result<FrameState<T>, (usize, Error)>,
+        )>;
+        let mut slots: Vec<Option<MtBatch<T>>> = (1..num_workers).map(|_| None).collect();
+        let main_out: MtBatch<T> = std::thread::scope(|s| {
             let mut handles = Vec::with_capacity(num_workers.saturating_sub(1));
-            for _ in 1..num_workers {
+            for slot in slots.iter_mut() {
                 handles.push(s.spawn(|| {
-                    let mut out = Vec::new();
-                    loop {
-                        let idx = next_job.fetch_add(1, Ordering::Relaxed);
-                        if idx >= num_jobs {
-                            break;
+                    if let Ok(out) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut out = Vec::new();
+                        loop {
+                            let idx = next_job.fetch_add(1, Ordering::Relaxed);
+                            if idx >= num_jobs {
+                                break;
+                            }
+                            let (tr, tc) = tile_jobs[idx];
+                            let data = fd.tiles()[tr * ti.cols + tc];
+                            let res = Self::decode_tile_unit(
+                                f,
+                                dsp,
+                                data,
+                                tr,
+                                tc,
+                                recon_tile[tr][tc],
+                                deblock,
+                                deblock_uv,
+                                row_end,
+                                col_end,
+                                post_start,
+                                has_region,
+                                &min_failed_key,
+                            );
+                            if let Err((key, _)) = &res {
+                                min_failed_key.fetch_min(*key, Ordering::Relaxed);
+                            }
+                            out.push((tr, tc, res));
                         }
-                        let (tr, tc) = tile_jobs[idx];
-                        let data = fd.tiles()[tr * ti.cols + tc];
-                        let res = Self::decode_tile_unit(
-                            f,
-                            dsp,
-                            data,
-                            tr,
-                            tc,
-                            recon_tile[tr][tc],
-                            deblock,
-                            deblock_uv,
-                            row_end,
-                            col_end,
-                            post_start,
-                            has_region,
-                            &min_failed_key,
-                        );
-                        if let Err((key, _)) = &res {
-                            min_failed_key.fetch_min(*key, Ordering::Relaxed);
-                        }
-                        out.push((tr, tc, res));
+                        out
+                    })) {
+                        *slot = Some(out);
                     }
-                    out
                 }));
             }
             let mut main_out = Vec::new();
@@ -1631,16 +2760,23 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 }
                 main_out.push((tr, tc, res));
             }
-            let mut all = Vec::with_capacity(num_workers);
-            all.push(main_out);
-            for h in handles {
-                match h.join() {
-                    Ok(out) => all.push(out),
-                    Err(_) => panicked = true,
+            while handles.iter().any(|h| !h.is_finished()) {
+                for _ in 0..64 {
+                    std::hint::spin_loop();
                 }
             }
-            all
+            std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+            drop(handles);
+            main_out
         });
+        let mut worker_results = Vec::with_capacity(num_workers);
+        worker_results.push(main_out);
+        for slot in slots {
+            match slot {
+                Some(out) => worker_results.push(out),
+                None => panicked = true,
+            }
+        }
         if panicked {
             return Err(Error::Invalid("decoding thread panicked"));
         }
@@ -1843,7 +2979,8 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         Ok(())
     }
 
-    /// Decodes a single tile `(tr, tc)` as an independent AV1 unit into its own compact `FrameState<T>`.
+    /// Decodes a single tile `(tr, tc)` as an independent AV1 unit into its own compact
+    /// `FrameState<T>`.
     #[allow(clippy::too_many_arguments)]
     fn decode_tile_unit(
         f: &FrameCtx<'a>,
@@ -1937,7 +3074,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
             ipred: [IntraSetup::new(f, 0), IntraSetup::new(f, 1)],
         };
 
-        let mut ts = TileState::new(data, fh, (mi_r0, mi_r1), (mi_c0, mi_c1));
+        let mut ts = TileState::new(data, fh, f.seq, (mi_r0, mi_r1), (mi_c0, mi_c1));
         let mut sc = Scratch::new();
 
         for r in sb_r0..sb_r1 {
@@ -1981,6 +3118,8 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 sb_y,
                 read_deltas: false,
                 plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+                stage: stage::DecoderStage::Fused,
+                filter_type: [false; 2],
             };
             let mut c = mi_c0;
             while c < mi_c1 {
@@ -2506,7 +3645,7 @@ struct RowJob<T: Pixel> {
 
 /// State of the sequential finishing stage of [`Pipeline::run_bands`]
 /// (see [`BandWorker::finish_row`]).
-struct FinishState<'o, T: Pixel> {
+struct FinishState<T: Pixel> {
     /// The last `BAND_TOP` deblocked rows of the previous row.
     carry: [PlaneWin<T>; 3],
     /// Saved stripe boundaries still needed by later bands.
@@ -2515,23 +3654,28 @@ struct FinishState<'o, T: Pixel> {
     free_bounds: Vec<LrBoundary<T>>,
     /// Next stripe boundary to save.
     next_bound: usize,
-    /// The output plane rows below the bands handed out so far.
-    rest: [&'o mut [T]; 3],
     /// Deblocking edge parameter scratch.
     lf_grid: Vec<u8>,
 }
 
-enum BandTask<'o, T: Pixel> {
+enum BandTask<T: Pixel> {
     Finish(RowJob<T>),
-    Band(BandJob<'o, T>),
+    Band(BandJob<T>),
     /// Decoding unit (see [`UnitRunner`]).
     Unit(usize),
+}
+
+enum SpinPoll<T: Pixel> {
+    Task(BandTask<T>),
+    Idle,
+    Done,
+    Contended,
 }
 
 /// Producer of the rows of a [`BandPipeline`] that runs on the workers:
 /// decoding units `0..n` (handed out in order) that queue the decoded rows
 /// in order with [`BandPipeline::push_row`].
-trait UnitRunner<'o, T: Pixel>: Sync {
+trait UnitRunner<T: Pixel>: Sync {
     /// Runs unit `u`; returns false (after recording the error) if it
     /// failed, which stops handing out units.
     fn run_unit(
@@ -2539,16 +3683,16 @@ trait UnitRunner<'o, T: Pixel>: Sync {
         w: &mut BandWorker<'_, T>,
         bp: &BandParams,
         u: usize,
-        pipe: &BandPipeline<'o, T>,
+        pipe: &BandPipeline<T>,
     ) -> bool;
 }
 
-struct BandQueue<'o, T: Pixel> {
+struct BandQueue<T: Pixel> {
     /// Decoded rows, in order.
     rows: VecDeque<RowJob<T>>,
     /// A worker runs the finishing stage.
     finishing: bool,
-    bands: VecDeque<BandJob<'o, T>>,
+    bands: VecDeque<BandJob<T>>,
     bands_running: usize,
     /// Recycled buffers.
     free: Vec<Box<BandBufs<T>>>,
@@ -2576,9 +3720,9 @@ struct BandQueue<'o, T: Pixel> {
 /// thread feeding the pipeline, see [`Pipeline::run_bands`]) panics,
 /// instead of leaving them waiting forever for its result (the panic then
 /// propagates out of the thread scope).
-struct AbortOnPanic<'a, 'o, T: Pixel>(&'a BandPipeline<'o, T>);
+struct AbortOnPanic<'a, T: Pixel>(&'a BandPipeline<T>);
 
-impl<T: Pixel> Drop for AbortOnPanic<'_, '_, T> {
+impl<T: Pixel> Drop for AbortOnPanic<'_, T> {
     fn drop(&mut self) {
         if std::thread::panicking() {
             self.0
@@ -2594,15 +3738,17 @@ impl<T: Pixel> Drop for AbortOnPanic<'_, '_, T> {
 /// Work queue of [`Pipeline::run_bands`]: decoded rows go through the
 /// finishing stage one at a time in order, the resulting bands are
 /// processed by any worker.
-struct BandPipeline<'o, T: Pixel> {
-    q: Mutex<BandQueue<'o, T>>,
+struct BandPipeline<T: Pixel> {
+    q: Mutex<BandQueue<T>>,
     cv: std::sync::Condvar,
-    fin: Mutex<FinishState<'o, T>>,
+    fin: Mutex<FinishState<T>>,
+    out_planes: Mutex<[PlaneWin<T>; 3]>,
+    returned_scratches: Mutex<Vec<BandWorkerScratch<T>>>,
 }
 
-impl<'o, T: Pixel> BandPipeline<'o, T> {
+impl<T: Pixel> BandPipeline<T> {
     fn with_pooled(
-        rest: [&'o mut [T]; 3],
+        out_planes: [PlaneWin<T>; 3],
         free: Vec<Box<BandBufs<T>>>,
         carry: [PlaneWin<T>; 3],
         lf_grid: Vec<u8>,
@@ -2634,27 +3780,41 @@ impl<'o, T: Pixel> BandPipeline<'o, T> {
                 bounds: VecDeque::new(),
                 free_bounds,
                 next_bound: 1,
-                rest,
                 lf_grid,
             }),
+            out_planes: Mutex::new(out_planes),
+            returned_scratches: Mutex::new(Vec::with_capacity(8)),
+        }
+    }
+
+    fn return_scratch(&self, sc: BandWorkerScratch<T>) {
+        let mut guard = self
+            .returned_scratches
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.len() < 16 {
+            guard.push(sc);
         }
     }
 
     fn reclaim_into(
-        self,
+        &self,
         free_out: &mut Vec<Box<BandBufs<T>>>,
         carry_out: &mut [PlaneWin<T>; 3],
         lf_grid_out: &mut Vec<u8>,
         lr_free_out: &mut Vec<LrBoundary<T>>,
-    ) {
+        scratches_out: &mut Vec<BandWorkerScratch<T>>,
+    ) -> [PlaneWin<T>; 3] {
         let mut q = self
             .q
-            .into_inner()
+            .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for r in q.rows {
+        let drained_rows: Vec<_> = q.rows.drain(..).collect();
+        for r in drained_rows {
             q.free.push(r.bufs);
         }
-        for b in q.bands {
+        let drained_bands: Vec<_> = q.bands.drain(..).collect();
+        for b in drained_bands {
             for arc in b.bounds {
                 if let Ok(bnd) = std::sync::Arc::try_unwrap(arc) {
                     q.free_bounds.push(bnd);
@@ -2669,20 +3829,39 @@ impl<'o, T: Pixel> BandPipeline<'o, T> {
                 }
             }
         }
-        *free_out = q.free;
+        *free_out = std::mem::take(&mut q.free);
         let mut fin = self
             .fin
-            .into_inner()
+            .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for arc in fin.bounds.drain(..) {
+        let drained_bounds: Vec<_> = fin.bounds.drain(..).collect();
+        for arc in drained_bounds {
             if let Ok(bnd) = std::sync::Arc::try_unwrap(arc) {
                 fin.free_bounds.push(bnd);
             }
         }
         fin.free_bounds.append(&mut q.free_bounds);
-        *lr_free_out = fin.free_bounds;
-        *carry_out = fin.carry;
-        *lf_grid_out = fin.lf_grid;
+        *lr_free_out = std::mem::take(&mut fin.free_bounds);
+        *carry_out = std::mem::take(&mut fin.carry);
+        *lf_grid_out = std::mem::take(&mut fin.lf_grid);
+        drop(fin);
+        drop(q);
+        {
+            let mut scs = self
+                .returned_scratches
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for sc in scs.drain(..) {
+                if scratches_out.len() < 16 {
+                    scratches_out.push(sc);
+                }
+            }
+        }
+        let mut out_planes = self
+            .out_planes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut *out_planes)
     }
 
     /// Hands out decoding units `0..units` in order to the workers (instead
@@ -2702,14 +3881,33 @@ impl<'o, T: Pixel> BandPipeline<'o, T> {
         q.closed = units == 0;
     }
 
-    /// Buffers for the next row (recycled if possible).
+    /// Buffers for the next row (recycled if possible), without blocking on
+    /// the queue lock so the main thread is not put to sleep.
     fn take_bufs(&self) -> Box<BandBufs<T>> {
+        loop {
+            match self.q.try_lock() {
+                Ok(mut q) => return q.free.pop().unwrap_or_default(),
+                Err(std::sync::TryLockError::Poisoned(p)) => {
+                    return p.into_inner().free.pop().unwrap_or_default();
+                }
+                Err(std::sync::TryLockError::WouldBlock) => std::hint::spin_loop(),
+            }
+        }
+    }
+
+    fn abort(&self) {
         self.q
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .free
-            .pop()
-            .unwrap_or_default()
+            .aborted = true;
+        self.cv.notify_all();
+    }
+
+    fn is_aborted(&self) -> bool {
+        self.q
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .aborted
     }
 
     /// Queues a decoded row; returns the number of queued/running rows and bands.
@@ -2725,6 +3923,49 @@ impl<'o, T: Pixel> BandPipeline<'o, T> {
         n
     }
 
+    fn queued_tasks(&self) -> usize {
+        let q = self
+            .q
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        q.rows.len() + q.bands.len() + q.bands_running
+    }
+
+    /// Runs the available tasks without ever blocking (not even on the
+    /// queue lock), spinning instead of sleeping until all pipeline work
+    /// and worker threads have finished. Used on the thread that decodes:
+    /// a sleeping thread may be woken on a slower core (see
+    /// `Pipeline::run_bands_pipe`).
+    fn work_spin(
+        &self,
+        w: &mut BandWorker<'_, T>,
+        bp: &BandParams,
+        units: Option<&dyn UnitRunner<T>>,
+        threads_done: impl Fn() -> bool,
+    ) {
+        let _abort = AbortOnPanic(self);
+        loop {
+            match self.try_next() {
+                SpinPoll::Task(t) => {
+                    self.run(w, bp, t, units);
+                    continue;
+                }
+                SpinPoll::Done => break,
+                SpinPoll::Idle | SpinPoll::Contended => {}
+            }
+            // Back off so that the workers get the queue lock.
+            for _ in 0..64 {
+                std::hint::spin_loop();
+            }
+        }
+        while !threads_done() {
+            for _ in 0..64 {
+                std::hint::spin_loop();
+            }
+        }
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+    }
+
     /// No more rows will be queued.
     fn close(&self) {
         self.q
@@ -2736,7 +3977,7 @@ impl<'o, T: Pixel> BandPipeline<'o, T> {
 
     /// The next task; with `wait`, blocks until there is one or all work
     /// is done.
-    fn next(&self, wait: bool) -> Option<BandTask<'o, T>> {
+    fn next(&self, wait: bool) -> Option<BandTask<T>> {
         let mut q = self
             .q
             .lock()
@@ -2745,6 +3986,49 @@ impl<'o, T: Pixel> BandPipeline<'o, T> {
             if q.aborted {
                 return None;
             }
+            if let Some(t) = Self::pick(&mut q) {
+                return Some(t);
+            }
+            if !wait || (q.closed && q.rows.is_empty() && !q.finishing) {
+                return None;
+            }
+            q = self
+                .cv
+                .wait(q)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
+    /// Non-blocking poll for `work_spin`: checks task availability and full
+    /// pipeline completion atomically under `self.q` so a row pushed right
+    /// before `close()` cannot be missed.
+    fn try_next(&self) -> SpinPoll<T> {
+        let mut q = match self.q.try_lock() {
+            Ok(q) => q,
+            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return SpinPoll::Contended,
+        };
+        if q.aborted {
+            return SpinPoll::Done;
+        }
+        if let Some(t) = Self::pick(&mut q) {
+            return SpinPoll::Task(t);
+        }
+        if q.closed
+            && q.rows.is_empty()
+            && !q.finishing
+            && q.bands.is_empty()
+            && q.bands_running == 0
+            && q.units_running == 0
+        {
+            return SpinPoll::Done;
+        }
+        SpinPoll::Idle
+    }
+
+    /// Claims the next available task, if any.
+    fn pick(q: &mut BandQueue<T>) -> Option<BandTask<T>> {
+        {
             if !q.finishing {
                 if let Some(row) = q.rows.pop_front() {
                     q.finishing = true;
@@ -2780,13 +4064,7 @@ impl<'o, T: Pixel> BandPipeline<'o, T> {
                     return Some(BandTask::Unit(u2));
                 }
             }
-            if !wait || (q.closed && q.rows.is_empty() && !q.finishing) {
-                return None;
-            }
-            q = self
-                .cv
-                .wait(q)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            None
         }
     }
 
@@ -2794,8 +4072,8 @@ impl<'o, T: Pixel> BandPipeline<'o, T> {
         &self,
         w: &mut BandWorker<'_, T>,
         bp: &BandParams,
-        task: BandTask<'o, T>,
-        units: Option<&dyn UnitRunner<'o, T>>,
+        task: BandTask<T>,
+        units: Option<&dyn UnitRunner<T>>,
     ) {
         let _abort = AbortOnPanic(self);
         match task {
@@ -2838,7 +4116,7 @@ impl<'o, T: Pixel> BandPipeline<'o, T> {
                 self.cv.notify_all();
             }
             BandTask::Band(mut b) => {
-                w.process(bp, &mut b);
+                w.process(bp, &mut b, &self.out_planes);
                 let BandJob { bufs, bounds, .. } = b;
                 let mut q = self
                     .q
@@ -2870,7 +4148,7 @@ impl<'o, T: Pixel> BandPipeline<'o, T> {
         w: &mut BandWorker<'_, T>,
         bp: &BandParams,
         help: bool,
-        units: Option<&dyn UnitRunner<'o, T>>,
+        units: Option<&dyn UnitRunner<T>>,
     ) {
         // Also covers panics outside of `run` (in `next`).
         let _abort = AbortOnPanic(self);
@@ -2907,7 +4185,7 @@ impl<'o, T: Pixel> BandPipeline<'o, T> {
 /// Owned buffers of one post-filter band (see [`Pipeline::run_bands`]),
 /// recycled between bands.
 #[derive(Default)]
-struct BandBufs<T: Pixel> {
+pub(crate) struct BandBufs<T: Pixel> {
     /// The row buffer superblock row `r` was decoded and deblocked in:
     /// luma rows `r * sb_px - BAND_TOP .. (r + 1) * sb_px` (from 0 for the
     /// first row), which contain the band's rows and their CDEF borders.
@@ -2931,16 +4209,15 @@ enum BandBuf<T: Pixel> {
 }
 
 /// One band of output rows `lum0..lum1` (luma) post-filtered by a worker:
-/// CDEF in `bufs.planes`, then loop restoration (or a copy) into `out`
-/// (the output planes' rows of the band).
-struct BandJob<'o, T: Pixel> {
+/// CDEF in `bufs.planes`, then loop restoration (or a copy) into the
+/// band's rows of `BandPipeline::out_planes`.
+struct BandJob<T: Pixel> {
     lum0: usize,
     lum1: usize,
     bufs: BandBuf<T>,
     /// Loop restoration boundaries `k0..=k1 + 1` of the band's stripes
     /// `k0..=k1` that exist.
     bounds: Vec<std::sync::Arc<LrBoundary<T>>>,
-    out: [&'o mut [T]; 3],
 }
 
 /// Frame constants needed by the band workers.
@@ -2963,33 +4240,38 @@ struct BandParams {
 struct BandWorker<'a, T: Pixel> {
     f: FrameCtx<'a>,
     dsp: crate::decoder::av1::dsp::Dsp<T>,
-    cdef_srcs: [CdefSrc; 3],
-    scratch: Vec<T>,
+    sc: BandWorkerScratch<T>,
 }
 
 impl<'a, T: Pixel> BandWorker<'a, T> {
     fn new(fd: &'a FrameData) -> Self {
-        let f = FrameCtx::new(&fd.seq, &fd.frame);
+        Self::with_scratch(&fd.seq, &fd.frame, BandWorkerScratch::default())
+    }
+
+    fn with_scratch(
+        seq: &'a crate::decoder::av1::headers::SequenceHeader,
+        fh: &'a crate::decoder::av1::headers::FrameHeader,
+        sc: BandWorkerScratch<T>,
+    ) -> Self {
+        let f = FrameCtx::new(seq, fh);
         let dsp = crate::decoder::av1::dsp::Dsp::new(f.bd);
-        Self {
-            f,
-            dsp,
-            cdef_srcs: Default::default(),
-            scratch: Vec::new(),
-        }
+        Self { f, dsp, sc }
+    }
+
+    fn into_scratch(self) -> BandWorkerScratch<T> {
+        self.sc
     }
 
     /// The finishing stage of row `job.r` (rows in order): fills the rows
     /// above the superblock row into its buffer from the previous row,
     /// deblocks the row, keeps its last rows for the next one and saves the
-    /// stripe boundaries that became final. Pushes the row's band(s), with
-    /// their rows of the output planes taken from `fs.rest`.
-    fn finish_row<'o>(
+    /// stripe boundaries that became final. Pushes the row's band(s).
+    fn finish_row(
         &mut self,
         bp: &BandParams,
-        fs: &mut FinishState<'o, T>,
+        fs: &mut FinishState<T>,
         job: RowJob<T>,
-        out_bands: &mut Vec<BandJob<'o, T>>,
+        out_bands: &mut Vec<BandJob<T>>,
     ) {
         let f = &self.f;
         let np = f.num_planes;
@@ -3069,30 +4351,17 @@ impl<'a, T: Pixel> BandWorker<'a, T> {
             for k in k0..=k1 {
                 let sub_lum0 = if k == k0 { lum0 } else { 64 * k - 8 };
                 let sub_lum1 = if k == k1 { lum1 } else { 64 * (k + 1) - 8 };
-                let is_last_sub = last && k == k1;
                 let bounds = fs
                     .bounds
                     .iter()
                     .filter(|b| b.k >= k && b.k <= k + 1)
                     .cloned()
                     .collect();
-                let mut out: [&'o mut [T]; 3] = Default::default();
-                for p in 0..np {
-                    let sy = f.sub(p).1;
-                    let rows =
-                        if is_last_sub { usize::MAX } else { (sub_lum1 >> sy) - (sub_lum0 >> sy) };
-                    let all = std::mem::take(&mut fs.rest[p]);
-                    let n = rows.saturating_mul(bp.out_stride[p]).min(all.len());
-                    let (band, tail) = all.split_at_mut(n);
-                    out[p] = band;
-                    fs.rest[p] = tail;
-                }
                 out_bands.push(BandJob {
                     lum0: sub_lum0,
                     lum1: sub_lum1,
                     bufs: BandBuf::Shared(shared.clone()),
                     bounds,
-                    out,
                 });
             }
         } else {
@@ -3102,22 +4371,11 @@ impl<'a, T: Pixel> BandWorker<'a, T> {
                 .filter(|b| b.k >= k0 && b.k <= k1 + 1)
                 .cloned()
                 .collect();
-            let mut out: [&'o mut [T]; 3] = Default::default();
-            for p in 0..np {
-                let sy = f.sub(p).1;
-                let rows = if last { usize::MAX } else { (lum1 >> sy) - (lum0 >> sy) };
-                let all = std::mem::take(&mut fs.rest[p]);
-                let n = rows.saturating_mul(bp.out_stride[p]).min(all.len());
-                let (band, tail) = all.split_at_mut(n);
-                out[p] = band;
-                fs.rest[p] = tail;
-            }
             out_bands.push(BandJob {
                 lum0,
                 lum1,
                 bufs: BandBuf::Owned(bufs),
                 bounds,
-                out,
             });
         }
         while fs.bounds.front().is_some_and(|b| b.k <= k1) {
@@ -3129,7 +4387,12 @@ impl<'a, T: Pixel> BandWorker<'a, T> {
         }
     }
 
-    fn process(&mut self, bp: &BandParams, job: &mut BandJob<'_, T>) {
+    fn process(
+        &mut self,
+        bp: &BandParams,
+        job: &mut BandJob<T>,
+        out_planes: &Mutex<[PlaneWin<T>; 3]>,
+    ) {
         let f = &self.f;
         let np = f.num_planes;
         let (lum0, lum1) = (job.lum0, job.lum1);
@@ -3152,7 +4415,7 @@ impl<'a, T: Pixel> BandWorker<'a, T> {
                 &b.mi,
                 |r, c| idx[((r >> 4) - r0) * cs + (c >> 4)],
                 &mut b.planes[..np],
-                &mut self.cdef_srcs,
+                &mut self.sc.cdef_srcs,
                 &b.above[..np],
                 &ranges[..np],
                 &dims[..np],
@@ -3166,47 +4429,88 @@ impl<'a, T: Pixel> BandWorker<'a, T> {
             BandBuf::Owned(b) => b,
             BandBuf::Shared(b) => b,
         };
+        let mut lr_rows = [0usize; 3];
+        let lim = (lum1 + 8).min(bp.frame_h + 8);
+        for p in 0..np {
+            if !bp.lr_on[p] {
+                continue;
+            }
+            let sy = f.sub(p).1;
+            let w = bp.out_w[p];
+            let out_h = bp.out_h[p];
+            let oy0 = lum0 >> sy;
+            let mut k = (lum0 + 8) / 64;
+            if 64 * k >= lim || w == 0 || oy0 >= out_h {
+                continue;
+            }
+            let k_last = (lim - 1) / 64;
+            let end_y_last = (((64 * k_last as isize - 8) >> sy) + (64 >> sy)).max(0) as usize;
+            let cap_rows = end_y_last.min(out_h).saturating_sub(oy0);
+            if cap_rows == 0 {
+                continue;
+            }
+            let need = cap_rows * w;
+            if self.sc.lr_band_out[p].len() < need {
+                self.sc.lr_band_out[p].resize(need, T::default());
+            }
+            let mut max_y = oy0;
+            while 64 * k < lim {
+                let start_y = (64 * k as isize - 8) >> sy;
+                let end_y = start_y + (64 >> sy) - 1;
+                let g = StripeGeom {
+                    start_y,
+                    end_y,
+                    plane_w: w,
+                    plane_h: out_h,
+                };
+                let y_first = start_y.max(0) as usize;
+                let y_end = ((end_y + 1).max(0) as usize).min(out_h);
+                if y_end > y_first {
+                    max_y = max_y.max(y_end);
+                    let above = job.bounds.iter().find(|b| b.k == k).map(|b| &b.rows[p]);
+                    let below = job.bounds.iter().find(|b| b.k == k + 1).map(|b| &b.rows[p]);
+                    lr_apply::lr_stripe(
+                        &b.lr[p],
+                        &g,
+                        &b.planes[p],
+                        above,
+                        below,
+                        &mut self.sc.lr_band_out[p][(y_first - oy0) * w..],
+                        w,
+                        &mut self.sc.scratch,
+                        sy,
+                        f.bd,
+                        (0, usize::MAX),
+                        &self.dsp,
+                    );
+                }
+                k += 1;
+            }
+            lr_rows[p] = max_y - oy0;
+        }
+        let mut out_guard = out_planes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for p in 0..np {
             let sy = f.sub(p).1;
             let stride = bp.out_stride[p];
+            let w = bp.out_w[p];
             let oy0 = lum0 >> sy;
-            let out = &mut *job.out[p];
+            let out_data = out_guard[p].data_mut();
             if !bp.lr_on[p] {
                 let y1 = ranges[p].1.min(bp.out_h[p]);
-                let w = bp.out_w[p];
                 for y in oy0..y1 {
-                    let d = (y - oy0) * stride;
-                    out[d..d + w].copy_from_slice(&b.planes[p].row(y)[..w]);
+                    let d = y * stride;
+                    out_data[d..d + w].copy_from_slice(&b.planes[p].row(y)[..w]);
                 }
-                continue;
-            }
-            let mut k = (lum0 + 8) / 64;
-            while 64 * k < lum1 + 8 && 64 * k < bp.frame_h + 8 {
-                let start_y = (64 * k as isize - 8) >> sy;
-                let g = StripeGeom {
-                    start_y,
-                    end_y: start_y + (64 >> sy) - 1,
-                    plane_w: bp.out_w[p],
-                    plane_h: bp.out_h[p],
-                };
-                let y_first = start_y.max(0) as usize;
-                let above = job.bounds.iter().find(|b| b.k == k).map(|b| &b.rows[p]);
-                let below = job.bounds.iter().find(|b| b.k == k + 1).map(|b| &b.rows[p]);
-                lr_apply::lr_stripe(
-                    &b.lr[p],
-                    &g,
-                    &b.planes[p],
-                    above,
-                    below,
-                    &mut out[(y_first - oy0) * stride..],
-                    stride,
-                    &mut self.scratch,
-                    sy,
-                    f.bd,
-                    (0, usize::MAX),
-                    &self.dsp,
-                );
-                k += 1;
+            } else {
+                let n_rows = lr_rows[p];
+                let src = &self.sc.lr_band_out[p];
+                for r in 0..n_rows {
+                    let d = (oy0 + r) * stride;
+                    let s = r * w;
+                    out_data[d..d + w].copy_from_slice(&src[s..s + w]);
+                }
             }
         }
     }
@@ -3321,6 +4625,7 @@ impl<'d, T: Pixel> TileCtx<'d, T> {
             self.ts = Some(TileState::with_cdf(
                 data,
                 fh,
+                f.seq,
                 (mi_r0, mi_r1),
                 (mi_c0, mi_c1),
                 self.cdf.take(),
@@ -3348,6 +4653,8 @@ impl<'d, T: Pixel> TileCtx<'d, T> {
             sb_y,
             read_deltas: false,
             plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+            stage: stage::DecoderStage::Fused,
+            filter_type: [false; 2],
         };
         let mut c = mi_c0;
         while c < mi_c1 {
@@ -3414,13 +4721,13 @@ impl<'d, T: Pixel> TileJobs<'d, T> {
     /// Row `r` has all its tiles: queues it, and the completed rows after
     /// it, in order (filling in the mode info rows above each from the row
     /// before it, and the band's `cdef_idx` rows and restoration units).
-    fn complete<'o>(
+    fn complete(
         &self,
         f: &FrameCtx,
         bp: &BandParams,
         r: usize,
         bufs: Box<BandBufs<T>>,
-        pipe: &BandPipeline<'o, T>,
+        pipe: &BandPipeline<T>,
     ) {
         let mut o = self
             .order
@@ -3483,13 +4790,13 @@ impl<'d, T: Pixel> TileJobs<'d, T> {
     }
 }
 
-impl<'d, 'o, T: Pixel> UnitRunner<'o, T> for TileJobs<'d, T> {
+impl<'d, T: Pixel> UnitRunner<T> for TileJobs<'d, T> {
     fn run_unit(
         &self,
         w: &mut BandWorker<'_, T>,
         bp: &BandParams,
         u: usize,
-        pipe: &BandPipeline<'o, T>,
+        pipe: &BandPipeline<T>,
     ) -> bool {
         let f = &w.f;
         let ti = &f.fh.tile_info;
@@ -3679,7 +4986,14 @@ impl<T: Pixel> TileWorker<T> {
             lp.units.clear();
         }
         s.ipred = [IntraSetup::new(f, 0), IntraSetup::new(f, 1)];
-        let mut ts = TileState::with_cdf(data, fh, (mi_r0, mi_r1), (mi_c0, mi_c1), self.cdf.take());
+        let mut ts = TileState::with_cdf(
+            data,
+            fh,
+            f.seq,
+            (mi_r0, mi_r1),
+            (mi_c0, mi_c1),
+            self.cdf.take(),
+        );
         let mut res = Ok(());
         for r in sb_r0..sb_r1 {
             let key = (r << 16) | (tr << 8) | tc;
@@ -3707,6 +5021,8 @@ impl<T: Pixel> TileWorker<T> {
                 sb_y,
                 read_deltas: false,
                 plane_tx_type: crate::decoder::av1::types::TxType::DCT_DCT,
+                stage: stage::DecoderStage::Fused,
+                filter_type: [false; 2],
             };
             let mut c = mi_c0;
             while c < mi_c1 {
@@ -3763,4 +5079,162 @@ impl<T: Pixel> TileWorker<T> {
 #[allow(unused)]
 fn unsupported() -> Error {
     Error::Unsupported("")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::decoder::av1::{decode, DecodeOptions};
+
+    // Minimal 150x150 (3 superblock rows) 8-bit AV1 keyframe OBU stream.
+    const OBU_150X150: [u8; 39] = [
+        18, 0, 10, 14, 0, 0, 0, 3, 188, 172, 169, 181, 242, 32, 33, 160, 208, 128, 50, 19, 16, 0,
+        131, 128, 0, 0, 128, 0, 0, 0, 235, 197, 166, 46, 12, 13, 209, 81, 64,
+    ];
+
+    #[test]
+    fn multithreaded_thread_counts_match_single_threaded() {
+        let ref_frame = decode(
+            &OBU_150X150,
+            &DecodeOptions {
+                threads: 1,
+                ..Default::default()
+            },
+        )
+        .expect("single-threaded decode");
+        for threads in [2, 3, 4, 6] {
+            for _ in 0..8 {
+                let got = decode(
+                    &OBU_150X150,
+                    &DecodeOptions {
+                        threads,
+                        ..Default::default()
+                    },
+                )
+                .expect("multithreaded decode");
+                assert_eq!(got, ref_frame, "mismatch for threads={threads}");
+            }
+        }
+    }
+
+    #[test]
+    fn handoff_guard_marks_terminal_state() {
+        for initial in [0u8, 1] {
+            let state = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(initial));
+            drop(HandoffGuard(state.clone()));
+            assert_eq!(state.load(std::sync::atomic::Ordering::Acquire), 3);
+        }
+        let handed_off = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(2));
+        drop(HandoffGuard(handed_off.clone()));
+        assert_eq!(handed_off.load(std::sync::atomic::Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn work_spin_drains_final_row_pushed_before_close() {
+        let fd = crate::decoder::av1::obu::parse_first_frame(&OBU_150X150).unwrap();
+        let stride = 192usize;
+        let sb_px = 64usize;
+        let bp = BandParams {
+            deblock: false,
+            cdef: false,
+            lr: false,
+            lr_on: [false; 3],
+            mi_w: [152, 76, 76],
+            mi_h: [152, 76, 76],
+            out_w: [150, 75, 75],
+            out_h: [150, 75, 75],
+            out_stride: [stride, stride, stride],
+            cdef_stride: 0,
+            frame_h: 150,
+            col_range: (0, 38),
+        };
+        for _ in 0..64 {
+            let out_planes = [
+                PlaneWin::from_vec(vec![0u8; stride * 192], stride, 192),
+                PlaneWin::from_vec(vec![0u8; stride * 96], stride, 96),
+                PlaneWin::from_vec(vec![0u8; stride * 96], stride, 96),
+            ];
+            let pipe = BandPipeline::<u8>::with_pooled(
+                out_planes,
+                Vec::new(),
+                Default::default(),
+                Vec::new(),
+                Vec::new(),
+                0,
+            );
+            std::thread::scope(|scope| {
+                let pipe_ref = &pipe;
+                let prod = scope.spawn(move || {
+                    std::thread::yield_now();
+                    for r in 0..3 {
+                        let last = r == 2;
+                        let mut bb = Box::<BandBufs<u8>>::default();
+                        for p in 0..3 {
+                            let sy = usize::from(p > 0);
+                            let y0 = if r == 0 { 0 } else { (r * sb_px - BAND_TOP) >> sy };
+                            let rows = if r == 0 { sb_px >> sy } else { (sb_px + BAND_TOP) >> sy };
+                            bb.planes[p].reset(stride, rows, 0, y0);
+                            bb.planes[p].data_mut().fill((r as u8 + 1) * 10 + p as u8);
+                        }
+                        pipe_ref.push_row(RowJob { r, last, bufs: bb });
+                    }
+                    pipe_ref.close();
+                });
+                let mut w = BandWorker::<u8>::new(&fd);
+                pipe.work_spin(&mut w, &bp, None, || prod.is_finished());
+                drop(prod);
+            });
+            let mut free = Vec::new();
+            let mut carry = Default::default();
+            let mut lf = Vec::new();
+            let mut lr_free = Vec::new();
+            let mut scs = Vec::new();
+            let out = pipe.reclaim_into(&mut free, &mut carry, &mut lf, &mut lr_free, &mut scs);
+            let out_y = out[0].data();
+            // Every row including the final superblock row (y = 149) must be written.
+            assert_eq!(out_y[0], 10);
+            assert_eq!(out_y[149 * stride], 30);
+            assert_eq!(out_y[149 * stride + 149], 30);
+        }
+    }
+
+    #[test]
+    fn scoped_worker_panic_aborts_without_panicking_scope() {
+        let fd = crate::decoder::av1::obu::parse_first_frame(&OBU_150X150).unwrap();
+        let bp = BandParams {
+            deblock: false,
+            cdef: false,
+            lr: false,
+            lr_on: [false; 3],
+            mi_w: [64, 32, 32],
+            mi_h: [64, 32, 32],
+            out_w: [64, 32, 32],
+            out_h: [64, 32, 32],
+            out_stride: [64, 64, 64],
+            cdef_stride: 0,
+            frame_h: 64,
+            col_range: (0, 16),
+        };
+        let pipe = BandPipeline::<u8>::with_pooled(
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Vec::new(),
+            Vec::new(),
+            1,
+        );
+        std::thread::scope(|scope| {
+            let pipe_ref = &pipe;
+            let h = scope.spawn(move || {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _abort = AbortOnPanic(pipe_ref);
+                    panic!("simulated worker panic");
+                }));
+            });
+            let mut w = BandWorker::<u8>::new(&fd);
+            pipe.work_spin(&mut w, &bp, None, || h.is_finished());
+            drop(h);
+        });
+        assert!(pipe.is_aborted());
+    }
 }

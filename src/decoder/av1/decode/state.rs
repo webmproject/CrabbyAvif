@@ -26,6 +26,7 @@ use crate::decoder::av1::types::*;
 use super::buffers::{MiWin, PlaneWin};
 
 /// Immutable per-frame parameters derived from the headers.
+#[derive(Clone, Copy)]
 pub struct FrameCtx<'a> {
     pub seq: &'a SequenceHeader,
     pub fh: &'a FrameHeader,
@@ -165,15 +166,17 @@ impl<'a> TileState<'a> {
     pub fn new(
         data: &'a [u8],
         fh: &FrameHeader,
+        seq: &SequenceHeader,
         rows: (usize, usize),
         cols: (usize, usize),
     ) -> Self {
-        Self::with_cdf(data, fh, rows, cols, None)
+        Self::with_cdf(data, fh, seq, rows, cols, None)
     }
 
     pub fn with_cdf(
         data: &'a [u8],
         fh: &FrameHeader,
+        seq: &SequenceHeader,
         rows: (usize, usize),
         cols: (usize, usize),
         cdf: Option<Box<CdfContext>>,
@@ -183,13 +186,8 @@ impl<'a> TileState<'a> {
             WIENER_TAPS_MID[1] as i32,
             WIENER_TAPS_MID[2] as i32,
         ]; 2]; 3];
-        let cdf = match cdf {
-            Some(mut c) => {
-                *c = CdfContext::new(fh.quant.base_q_idx);
-                c
-            }
-            None => Box::new(CdfContext::new(fh.quant.base_q_idx)),
-        };
+        let mut cdf = cdf.unwrap_or_else(|| Box::new(CdfContext::new(0)));
+        cdf.init_for_frame(fh, seq);
         Self {
             msac: SymbolDecoder::new(data, fh.disable_cdf_update),
             cdf,
@@ -202,6 +200,34 @@ impl<'a> TileState<'a> {
             ref_sgr_xqd: [[SGRPROJ_XQD_MID[0] as i32, SGRPROJ_XQD_MID[1] as i32]; 3],
             ref_lr_wiener: INIT_WIENER,
         }
+    }
+
+    pub fn stub_with_cdf(
+        rows: (usize, usize),
+        cols: (usize, usize),
+        cdf: Option<Box<CdfContext>>,
+    ) -> Self {
+        const INIT_WIENER: [[[i32; 3]; 2]; 3] = [[[
+            WIENER_TAPS_MID[0] as i32,
+            WIENER_TAPS_MID[1] as i32,
+            WIENER_TAPS_MID[2] as i32,
+        ]; 2]; 3];
+        Self {
+            msac: SymbolDecoder::new(&[], true),
+            cdf: cdf.unwrap_or_else(|| Box::new(CdfContext::new(0))),
+            mi_row_start: rows.0,
+            mi_row_end: rows.1,
+            mi_col_start: cols.0,
+            mi_col_end: cols.1,
+            current_qindex: 0,
+            delta_lf: [0; FRAME_LF_COUNT],
+            ref_sgr_xqd: [[SGRPROJ_XQD_MID[0] as i32, SGRPROJ_XQD_MID[1] as i32]; 3],
+            ref_lr_wiener: INIT_WIENER,
+        }
+    }
+
+    pub fn stub(rows: (usize, usize), cols: (usize, usize)) -> Self {
+        Self::stub_with_cdf(rows, cols, None)
     }
 }
 
@@ -266,7 +292,8 @@ pub fn sgr_radius(set: usize, pass: usize) -> i32 {
 /// Above context arrays (indexed by 4x4 column of the plane relative to `col0 >> sx`).
 #[derive(Default)]
 pub struct AboveCtx {
-    /// Starting luma 4x4 column of this context buffer (0 for full frame, `mi_col_start` for a tile).
+    /// Starting luma 4x4 column of this context buffer (0 for full frame, `mi_col_start` for a
+    /// tile).
     pub col0: usize,
     pub level: [Vec<u8>; 3],
     pub dc: [Vec<u8>; 3],

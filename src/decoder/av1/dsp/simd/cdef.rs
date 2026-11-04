@@ -772,19 +772,16 @@ pub(super) fn cdef_direction<T: Pixel>(src: &[T], stride: usize) -> (usize, i32)
     // its variance.
     let max_lh = lo.simd_max(hi);
     let min_lh = lo.simd_min(hi);
-    let best = if cfg!(target_arch = "x86_64") {
-        let m = max_lh.simd_max(simd_swizzle!(max_lh, [2, 3, 0, 1]));
-        m.simd_max(simd_swizzle!(m, [1, 0, 3, 2]))
-    } else {
-        i32x4::splat(max_lh.reduce_max())
-    };
+    let var = (max_lh - min_lh) >> 10;
+    let m = max_lh.simd_max(simd_swizzle!(max_lh, [2, 3, 0, 1]));
+    let best = m.simd_max(simd_swizzle!(m, [1, 0, 3, 2]));
     let eq_lo = lo.simd_eq(best);
     let eq_any = eq_lo | hi.simd_eq(best);
     let dir_tag = eq_any.select(
         i32x4::from_array([11 << 24, 9 << 24, 10 << 24, 8 << 24]),
         i32x4::splat(0),
     ) | eq_lo.select(i32x4::splat(4 << 24), i32x4::splat(0));
-    let r = (dir_tag | ((max_lh - min_lh) >> 10)).reduce_max() as u32;
+    let r = (dir_tag | var).reduce_max() as u32;
     (((!r >> 24) & 7) as usize, (r & 0xff_ffff) as i32)
 }
 
@@ -2295,19 +2292,21 @@ mod dir16 {
         let v1s_on = R == 1 && SEC && (is_v1(sec_d[0]) || is_v1(sec_d[1]));
         let v2p_on = R == 1 && PRI && DIR == 6;
         let v2s_on = R == 1 && SEC && (sec_d[0] == 6 || sec_d[1] == 6);
+        // An explicit loop rather than `std::array::from_fn`, whose closure
+        // LLVM outlines on aarch64 (a call and a stack round trip per block).
         let vert = |on: bool, dy: usize, s: Simd<u16, LANES>, adj: u16| -> [Simd<i16, LANES>; 10] {
+            let mut v = [Simd::splat(0); 10];
             if on {
-                std::array::from_fn(|j| {
-                    constrain_diff(
+                for (j, vj) in v.iter_mut().enumerate() {
+                    *vj = constrain_diff(
                         load8::<T, LANES>(&rows, j + dy, 2),
                         load8::<T, LANES>(&rows, j, 2),
                         s,
                         adj,
-                    )
-                })
-            } else {
-                [Simd::splat(0); 10]
+                    );
+                }
             }
+            v
         };
         let v1p = vert(v1p_on, 1, k.pri_str, k.pri_adj);
         let v1s = vert(v1s_on, 1, k.sec_str, k.sec_adj);

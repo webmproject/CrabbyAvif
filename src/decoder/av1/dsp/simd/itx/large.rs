@@ -24,8 +24,9 @@
 use std::simd::prelude::*;
 
 use super::{
-    add_row16, col_identity_rnd4, identity, kernels, last_nz_lane, last_nz_lane16, rect2,
-    row_shift, select, transpose_e, visit_rows, Clamp, Params, RowLanes, TxLanes, S16,
+    add_row16, amap, col_identity_rnd4, dct_adst_small, iadst4, iadst4_nz1, identity, kernels,
+    last_nz_lane, last_nz_lane16, rect2, row_shift, select, transpose_e, visit_rows, Clamp, Kern,
+    Params, RowLanes, TxLanes, S16,
 };
 use crate::decoder::av1::dsp::itx::Tx1d;
 use crate::decoder::av1::pixel::Pixel;
@@ -162,27 +163,28 @@ fn row_pass16_sub4<
     } else {
         rows.iter().rposition(|&r| r != zero).map_or(0, |l| l + 1)
     };
+    let nz = if p.eob_cols == 1 { 1 } else { last_nz_lane(col_or) };
     if BD > 8 {
         // 10 bits: 16-bit lanes are exact if `rows_fit_s16`.
-        let tile16 = transpose_e(rows.map(super::sat16));
+        let tile16 = transpose_e(amap(rows, super::sat16));
         if rows_fit_s16(tile16) {
-            let tile16 = tile16.map(S16);
-            if p.row_kind == Tx1d::Dct && (col_or[1] | col_or[2] | col_or[3]) == 0 {
+            let tile16 = amap(tile16, S16);
+            if p.row_kind == Tx1d::Dct && nz == 1 {
                 row_dc::<S16<4>, 4, W, H, CN, 4>(tile16[0], 0, buf, 16);
             } else {
-                sub4_tail::<S16<4>, W, H, CN>(tile16, buf, p, 16);
+                sub4_tail::<S16<4>, W, H, CN>(tile16, nz, buf, p, 16);
             }
         } else {
-            row_pass16_sub4_32::<BD, W, H, CN>(rows, col_or, buf, p);
+            row_pass16_sub4_32::<BD, W, H, CN>(rows, nz, buf, p);
         }
         return nz_rows;
     }
     let tile = V::load_tile(rows);
-    if p.row_kind == Tx1d::Dct && (col_or[1] | col_or[2] | col_or[3]) == 0 {
+    if p.row_kind == Tx1d::Dct && nz == 1 {
         row_dc::<V, 4, W, H, CN, 4>(tile[0], 0, buf, BD + 8);
         return nz_rows;
     }
-    sub4_tail::<V, W, H, CN>(tile, buf, p, BD + 8);
+    sub4_tail::<V, W, H, CN>(tile, nz, buf, p, BD + 8);
     nz_rows
 }
 
@@ -192,15 +194,15 @@ fn row_pass16_sub4<
 #[inline(never)]
 fn row_pass16_sub4_32<const BD: u32, const W: usize, const H: usize, const CN: usize>(
     rows: [Simd<i32, 4>; 4],
-    col_or: Simd<i32, 4>,
+    nz: usize,
     buf: &mut Cols<CN, 4>,
     p: &Params,
 ) {
     let tile = <Simd<i32, 4> as RowLanes<4>>::load_tile(rows);
-    if p.row_kind == Tx1d::Dct && (col_or[1] | col_or[2] | col_or[3]) == 0 {
+    if p.row_kind == Tx1d::Dct && nz == 1 {
         row_dc::<Simd<i32, 4>, 4, W, H, CN, 4>(tile[0], 0, buf, BD + 8);
     } else {
-        sub4_tail::<Simd<i32, 4>, W, H, CN>(tile, buf, p, BD + 8);
+        sub4_tail::<Simd<i32, 4>, W, H, CN>(tile, nz, buf, p, BD + 8);
     }
 }
 
@@ -221,12 +223,13 @@ fn rnd_tile<U: RowLanes<N>, const N: usize, const M: usize>(
     o
 }
 
-/// Rest of [`row_pass16_sub4`]: the `nz4` row transforms of the (at most)
-/// 4 rows in `tile` (`tile[j]` lane `l` = input `j` of row `l`) with
+/// Rest of [`row_pass16_sub4`]: the `nz <= 4` row transforms of the (at
+/// most) 4 rows in `tile` (`tile[j]` lane `l` = input `j` of row `l`) with
 /// intermediate clamping to `row_bits`, stored to `buf`.
 #[inline(always)]
 fn sub4_tail<U: RowLanes<4>, const W: usize, const H: usize, const CN: usize>(
     tile: [U; 4],
+    nz: usize,
     buf: &mut Cols<CN, 4>,
     p: &Params,
     row_bits: u32,
@@ -242,7 +245,23 @@ fn sub4_tail<U: RowLanes<4>, const W: usize, const H: usize, const CN: usize>(
         }
         *d = s;
     }
-    run_nz4(p.row_kind, &mut t, row_clamp);
+    if W == 4 {
+        run_small::<U, 4>(
+            p.row_kind,
+            nz.min(4),
+            t.first_chunk_mut::<4>().unwrap(),
+            row_clamp,
+        );
+    } else if W == 8 {
+        run_small::<U, 8>(
+            p.row_kind,
+            nz.min(4),
+            t.first_chunk_mut::<8>().unwrap(),
+            row_clamp,
+        );
+    } else {
+        select::<U>(p.row_kind, const { W.ilog2() as usize }, nz)(&mut t, row_clamp);
+    }
     if CN == 8 && W >= 8 {
         for j0 in (0..W / 8).map(|k| k * 8) {
             let o0 = rnd_tile::<U, 4, 4>(&t, j0, col_clamp, rshift);
@@ -782,19 +801,62 @@ fn row_pass_identity16<
     nz_rows
 }
 
-/// Runs the `nz4` 1D transform of length `N` (4..=64) in place on `t`.
-#[inline(always)]
-fn run_nz4<V: TxLanes, const N: usize>(kind: Tx1d, t: &mut [V; N], clamp: Clamp<V>) {
+/// Inline 4-point or 8-point 1D transform on a register array `t`,
+/// given that only the first `nz` (`1 <= nz <= N`) inputs can be non-zero.
+// Not inlined with debug assertions (unoptimized and sanitizer builds),
+// where every inlined copy keeps its own stack slots and the frames of
+// the callers would exceed the default 2 MiB thread stack.
+#[cfg_attr(debug_assertions, inline(never))]
+#[cfg_attr(not(debug_assertions), inline(always))]
+fn run_small<V: TxLanes, const N: usize>(kind: Tx1d, nz: usize, t: &mut [V; N], clamp: Clamp<V>) {
     use kernels::*;
-    match (N, kind == Tx1d::Adst) {
-        (4, false) => idct4_nz4(t, clamp),
-        (4, true) => super::iadst4(t, clamp),
-        (8, false) => idct8_nz4(t, clamp),
-        (8, true) => iadst8_nz4(t, clamp),
-        (16, false) => idct16_nz4(t, clamp),
-        (16, true) => iadst16_nz4(t, clamp),
-        (32, _) => idct32_nz4(t, clamp),
-        _ => idct64_nz4(t, clamp),
+    debug_assert!(N == 4 || N == 8);
+    if N == 4 {
+        if kind == Tx1d::Adst {
+            if nz <= 1 {
+                iadst4_nz1(t, clamp);
+            } else {
+                iadst4(t, clamp);
+            }
+        } else if nz <= 2 {
+            idct4_nz2(t, clamp);
+        } else {
+            dct_adst_small(Tx1d::Dct, true, t, clamp);
+        }
+        return;
+    }
+    if kind == Tx1d::Adst {
+        match nz {
+            0 | 1 => iadst8_nz1(t, clamp),
+            2 => iadst8_nz2(t, clamp),
+            3 | 4 => dct_adst_small(Tx1d::Adst, true, t, clamp),
+            _ => dct_adst_small(Tx1d::Adst, false, t, clamp),
+        }
+    } else {
+        match nz {
+            0..=2 => idct8_nz2(t, clamp),
+            3 | 4 => dct_adst_small(Tx1d::Dct, true, t, clamp),
+            _ => dct_adst_small(Tx1d::Dct, false, t, clamp),
+        }
+    }
+}
+
+/// Runs the column transform of height `H` on `c`: inline on register
+/// arrays for `H <= 8`, and via the pre-selected `kernel` for `H >= 16`.
+#[inline(always)]
+fn run_col<V: TxLanes, const H: usize>(
+    kind: Tx1d,
+    nz: usize,
+    kernel: Kern<V>,
+    c: &mut [V; H],
+    clamp: Clamp<V>,
+) {
+    if H == 4 {
+        run_small::<V, 4>(kind, nz, c.first_chunk_mut::<4>().unwrap(), clamp);
+    } else if H == 8 {
+        run_small::<V, 8>(kind, nz, c.first_chunk_mut::<8>().unwrap(), clamp);
+    } else {
+        kernel(c, clamp);
     }
 }
 
@@ -940,10 +1002,11 @@ fn col_pass16<
         return;
     }
     let log2h = const { H.ilog2() as usize };
-    // The kernel reads the first `next_power_of_two(nz_rows).max(4) <=
-    // ROWS` entries (rows at or beyond nz_rows are zero) and overwrites
-    // all `H`.
-    let kernel = select::<S16<N>>(p.col_kind, log2h, nz_rows.min(ROWS));
+    let nz = nz_rows.min(ROWS);
+    // The kernel reads at most the first `nz` (rounded up to its tier <=
+    // ROWS; rows at or beyond nz_rows are zero) entries and overwrites all
+    // `H`.
+    let kernel = select::<S16<N>>(p.col_kind, log2h, nz);
     let clamp = Clamp::<S16<N>>::bits(16);
     if ROWS == H {
         if N == 8 && W >= 16 && w_active >= 16 {
@@ -952,21 +1015,21 @@ fn col_pass16<
                 let (c0, c1) = pair.split_at_mut(H);
                 let c0: &mut [S16<N>; H] = c0.try_into().unwrap();
                 let c1: &mut [S16<N>; H] = c1.try_into().unwrap();
-                kernel(c0, clamp);
-                kernel(c1, clamp);
+                run_col::<S16<N>, H>(p.col_kind, nz, kernel, c0, clamp);
+                run_col::<S16<N>, H>(p.col_kind, nz, kernel, c1, clamp);
                 add_cols16_pair::<T, N, W, H, BD>(dst, stride, j0, c0, c1, flip_lr, flip_ud);
             }
             if w_active % 16 != 0 {
                 let j0 = w_active - 8;
                 let c: &mut [S16<N>; H] = (&mut buf.v[(j0 / 8) * H..][..H]).try_into().unwrap();
-                kernel(c, clamp);
+                run_col::<S16<N>, H>(p.col_kind, nz, kernel, c, clamp);
                 add_cols16_one::<T, N, W, H, BD>(dst, stride, j0, c, flip_lr, flip_ud);
             }
             return;
         }
         for j0 in (0..w_active / N).map(|k| k * N) {
             let c: &mut [S16<N>; H] = (&mut buf.v[(j0 / N) * H..][..H]).try_into().unwrap();
-            kernel(c, clamp);
+            run_col::<S16<N>, H>(p.col_kind, nz, kernel, c, clamp);
             add_cols16_one::<T, N, W, H, BD>(dst, stride, j0, c, flip_lr, flip_ud);
         }
     } else {
@@ -976,23 +1039,14 @@ fn col_pass16<
             for j0 in (0..w_active / 16).map(|k| k * 16) {
                 tmp0[..ROWS].copy_from_slice(&buf.v[(j0 / 8) * ROWS..][..ROWS]);
                 tmp1[..ROWS].copy_from_slice(&buf.v[(j0 / 8 + 1) * ROWS..][..ROWS]);
-                if ROWS == 4 {
-                    run_nz4(p.col_kind, &mut tmp0, clamp);
-                    run_nz4(p.col_kind, &mut tmp1, clamp);
-                } else {
-                    kernel(&mut tmp0, clamp);
-                    kernel(&mut tmp1, clamp);
-                }
+                run_col::<S16<N>, H>(p.col_kind, nz, kernel, &mut tmp0, clamp);
+                run_col::<S16<N>, H>(p.col_kind, nz, kernel, &mut tmp1, clamp);
                 add_cols16_pair::<T, N, W, H, BD>(dst, stride, j0, &tmp0, &tmp1, flip_lr, flip_ud);
             }
             if w_active % 16 != 0 {
                 let j0 = w_active - 8;
                 tmp0[..ROWS].copy_from_slice(&buf.v[(j0 / 8) * ROWS..][..ROWS]);
-                if ROWS == 4 {
-                    run_nz4(p.col_kind, &mut tmp0, clamp);
-                } else {
-                    kernel(&mut tmp0, clamp);
-                }
+                run_col::<S16<N>, H>(p.col_kind, nz, kernel, &mut tmp0, clamp);
                 add_cols16_one::<T, N, W, H, BD>(dst, stride, j0, &tmp0, flip_lr, flip_ud);
             }
             return;
@@ -1001,11 +1055,7 @@ fn col_pass16<
         for j0 in (0..w_active / N).map(|k| k * N) {
             let g = &buf.v[(j0 / N) * ROWS..][..ROWS];
             tmp[..ROWS].copy_from_slice(g);
-            if ROWS == 4 {
-                run_nz4(p.col_kind, &mut tmp, clamp);
-            } else {
-                kernel(&mut tmp, clamp);
-            }
+            run_col::<S16<N>, H>(p.col_kind, nz, kernel, &mut tmp, clamp);
             add_cols16_one::<T, N, W, H, BD>(dst, stride, j0, &tmp, flip_lr, flip_ud);
         }
     }

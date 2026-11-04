@@ -99,6 +99,7 @@ class Net:
 
     def __init__(self, n, nz, lanes=False, in_map=None):
         self.n = n
+        self.nz = nz
         self.lanes = lanes
         self.in_map = in_map
         self.lines = []
@@ -113,7 +114,7 @@ class Net:
             self.bound[f"i{i}"] = LANE_IN_BOUND
 
     def barrier(self):
-        if self.lanes == "simd" and self.loaded:
+        if self.lanes == "simd" and self.loaded and (self.nz > 2 or self.n > 32):
             self.pending_barrier = True
 
     def use(self, v):
@@ -677,10 +678,7 @@ def dct64_simd(nz, out):
     ] + s_tail.lines + [
         f"t[{i}] = t[{2 * i}];" for i in range(1, nz // 2)
     ]
-    if nz == 4:
-        lines.append("t[2] = V::splat(0);")
-        lines.append("t[3] = V::splat(0);")
-    even_nz = max(4, nz // 2)
+    even_nz = max(2, nz // 2)
     lines.append(f"idct32_nz{even_nz}(t, r);")
     lines.append("for i in 0..32 {")
     lines.append("    let a = t[i];")
@@ -722,7 +720,7 @@ def main_simd():
     out.append("")
     out.append("use super::{Clamp, TxLanes};")
     out.append("")
-    dct_variants = {2: [4], 3: [8, 4], 4: [16, 8, 4]}
+    dct_variants = {2: [4, 2], 3: [8, 4, 2], 4: [16, 8, 4, 2]}
     for N, nzs in dct_variants.items():
         for nz in nzs:
             n = 1 << N
@@ -730,12 +728,14 @@ def main_simd():
             emit_simd(f"idct{n}_nz{nz}", doc, n, dct(N, nz, "simd"), out)
     for nz in [32, 16, 8, 4]:
         dct32_simd(nz, out)
+    emit_simd("idct32_nz2", "Inverse DCT32 with inputs `2..` zero.", 32, dct(5, 2, "simd"), out)
     for nz in [32, 16, 8, 4]:
         dct64_simd(nz, out)
-    for nz in [8, 4]:
+    emit_simd("idct64_nz2", "Inverse DCT64 with inputs `2..` zero.", 64, dct(6, 2, "simd"), out)
+    for nz in [8, 4, 2, 1]:
         doc = f"Inverse ADST8 with inputs `{nz}..` zero." if nz < 8 else "Inverse ADST8."
         emit_simd(f"iadst8_nz{nz}", doc, 8, adst8(nz, "simd"), out)
-    for nz in [16, 8, 4]:
+    for nz in [16, 8, 4, 2, 1]:
         doc = f"Inverse ADST16 with inputs `{nz}..` zero." if nz < 16 else "Inverse ADST16."
         emit_simd(f"iadst16_nz{nz}", doc, 16, adst16(nz, "simd"), out)
     sys.stdout.write("\n".join(out) + "\n")

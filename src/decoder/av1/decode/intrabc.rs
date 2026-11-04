@@ -59,7 +59,7 @@ fn lower_mv_precision(mv: &mut [i32; 2]) {
     }
 }
 
-impl<'a, 'b, T: Pixel> SbDecoder<'a, 'b, T> {
+impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
     fn mv_inside(&self, r: isize, c: isize) -> bool {
         c >= self.t.mi_col_start as isize
             && c < self.t.mi_col_end as isize

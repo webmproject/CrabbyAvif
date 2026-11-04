@@ -49,7 +49,7 @@ fn valid16<const LINES: usize>() -> M {
 }
 
 /// Bit depth scaled thresholds (see `dsp::loopfilter::Thresholds`),
-/// splatted.
+/// splatted (or per 4-lane half for 2-segment pairs).
 struct Th {
     limit: V,
     blimit: V,
@@ -65,6 +65,20 @@ impl Th {
             limit: s(limits.limit),
             blimit: s(limits.blimit),
             thresh: s(limits.thresh),
+        }
+    }
+
+    #[inline(always)]
+    fn pair<const BD: u32>(l0: FilterLimits, l1: FilterLimits) -> Self {
+        let shift = BD - 8;
+        let h = |a: i32, b: i32| {
+            let (v0, v1) = ((a << shift) as i16, (b << shift) as i16);
+            V::from_array([v0, v0, v0, v0, v1, v1, v1, v1])
+        };
+        Th {
+            limit: h(l0.limit, l1.limit),
+            blimit: h(l0.blimit, l1.blimit),
+            thresh: h(l0.thresh, l1.thresh),
         }
     }
 }
@@ -169,12 +183,9 @@ fn load_row4_16<T: Pixel, const LINES: usize>(win: &[T], pos: usize, stride: usi
     V::from_ne_bytes(Simd::<u64, 2>::from_array([r0, r1]).to_ne_bytes())
 }
 
-/// Loads 4 columns for `LINES` (4 or 8) rows starting at `pos` and
-/// transposes them into 4 column vectors.
 #[inline(always)]
-fn load_cols4<T: Pixel, const LINES: usize>(buf: &[T], pos: usize, stride: usize) -> [V; 4] {
-    let stride = stride & 0x0fff_ffff;
-    let win = &buf[pos..][..(LINES - 1) * stride + 4];
+fn load_cols4_win<T: Pixel, const LINES: usize>(win: &[T], stride: usize) -> [V; 4] {
+    assert!(stride <= 0x0fff_ffff && win.len() >= (LINES - 1) * stride + 4);
     transpose4([
         load_row4_16::<T, LINES>(win, 0, stride),
         load_row4_16::<T, LINES>(win, stride, stride),
@@ -183,17 +194,9 @@ fn load_cols4<T: Pixel, const LINES: usize>(buf: &[T], pos: usize, stride: usize
     ])
 }
 
-/// Transposes 4 column vectors and stores 4 columns for `LINES` (4 or 8)
-/// rows starting at `pos`.
 #[inline(always)]
-fn store_cols4<T: Pixel, const LINES: usize>(
-    buf: &mut [T],
-    pos: usize,
-    stride: usize,
-    cols: [V; 4],
-) {
-    let stride = stride & 0x0fff_ffff;
-    let win = &mut buf[pos..][..(LINES - 1) * stride + 4];
+fn store_cols4_win<T: Pixel, const LINES: usize>(win: &mut [T], stride: usize, cols: [V; 4]) {
+    assert!(stride <= 0x0fff_ffff && win.len() >= (LINES - 1) * stride + 4);
     let v = transpose4(cols);
     for (k, &vk) in v.iter().enumerate() {
         let [r0, r1] = Simd::<u64, 2>::from_ne_bytes(vk.to_ne_bytes()).to_array();
@@ -205,13 +208,21 @@ fn store_cols4<T: Pixel, const LINES: usize>(
 }
 
 #[inline(always)]
-fn load_cols8<T: Pixel, const LINES: usize, const K: usize>(
-    buf: &[T],
-    pos: usize,
+fn load_cols8_win<T: Pixel, const LINES: usize, const K: usize>(
+    win: &[T],
     stride: usize,
 ) -> [V; 8] {
-    let stride = stride & 0x0fff_ffff;
-    let win = &buf[pos..][..(LINES - 1) * stride + K];
+    assert!(stride <= 0x0fff_ffff && win.len() >= (LINES - 1) * stride + K);
+    if LINES == 4 {
+        let [t0, t1, t2, t3] = transpose4([
+            load::<T, K>(&win[0..]),
+            load::<T, K>(&win[stride..]),
+            load::<T, K>(&win[2 * stride..]),
+            load::<T, K>(&win[3 * stride..]),
+        ]);
+        let hi = |v: V| simd_swizzle!(v, [4, 5, 6, 7, 4, 5, 6, 7]);
+        return [t0, t1, t2, t3, hi(t0), hi(t1), hi(t2), hi(t3)];
+    }
     let mut v = [V::splat(0); 8];
     for (k, vk) in v[..LINES].iter_mut().enumerate() {
         *vk = load::<T, K>(&win[k * stride..]);
@@ -220,14 +231,25 @@ fn load_cols8<T: Pixel, const LINES: usize, const K: usize>(
 }
 
 #[inline(always)]
-fn store_cols8<T: Pixel, const LINES: usize, const K: usize>(
-    buf: &mut [T],
-    pos: usize,
+fn store_cols8_win<T: Pixel, const LINES: usize, const K: usize>(
+    win: &mut [T],
     stride: usize,
     cols: [V; 8],
 ) {
-    let stride = stride & 0x0fff_ffff;
-    let win = &mut buf[pos..][..(LINES - 1) * stride + K];
+    assert!(stride <= 0x0fff_ffff && win.len() >= (LINES - 1) * stride + K);
+    if LINES == 4 {
+        let pair = |a: V, b: V| simd_swizzle!(a, b, [0, 1, 2, 3, 8, 9, 10, 11]);
+        let rows = transpose4([
+            pair(cols[0], cols[4]),
+            pair(cols[1], cols[5]),
+            pair(cols[2], cols[6]),
+            pair(cols[3], cols[7]),
+        ]);
+        for (k, &rk) in rows.iter().enumerate() {
+            store::<T, K>(&mut win[k * stride..], rk);
+        }
+        return;
+    }
     let v = transpose(cols);
     for (k, &vk) in v[..LINES].iter().enumerate() {
         store::<T, K>(&mut win[k * stride..], vk);
@@ -251,6 +273,8 @@ fn abd16(a: V, b: V) -> V {
 fn filter<const BD: u32, const SIZE: usize>(
     s: &mut [V; 14],
     valid: M,
+    wide: M,
+    w16: M,
     th: &Th,
     load_outer: impl FnOnce() -> ([V; 3], [V; 3]),
 ) -> usize {
@@ -261,10 +285,11 @@ fn filter<const BD: u32, const SIZE: usize>(
     let inner = abd16(p1, p0).simd_max(abd16(q1, q0));
     let mut m_lim = inner;
     if SIZE >= 6 {
-        m_lim = m_lim.simd_max(abd16(p2, p1)).simd_max(abd16(q2, q1));
-    }
-    if SIZE >= 8 {
-        m_lim = m_lim.simd_max(abd16(p3, p2)).simd_max(abd16(q3, q2));
+        let mut ext = abd16(p2, p1).simd_max(abd16(q2, q1));
+        if SIZE >= 8 {
+            ext = ext.simd_max(abd16(p3, p2)).simd_max(abd16(q3, q2));
+        }
+        m_lim = m_lim.simd_max(wide.select(ext, V::splat(0)));
     }
     let e = (abd16(p0, q0) << 1) + (abd16(p1, q1) >> 1);
     let filt = valid & m_lim.simd_le(th.limit) & e.simd_le(th.blimit);
@@ -277,7 +302,7 @@ fn filter<const BD: u32, const SIZE: usize>(
         if SIZE >= 8 {
             f = f.simd_max(abd16(p3, p0)).simd_max(abd16(q3, q0));
         }
-        filt & f.simd_le(flat_th)
+        filt & wide & f.simd_le(flat_th)
     } else {
         M::splat(false)
     };
@@ -325,7 +350,7 @@ fn filter<const BD: u32, const SIZE: usize>(
             s[8] = blend(s[8], flat, p0 + k(2) * (q0 + q1) + k(3) * q2 + k(4), 3);
             return 2;
         }
-        let flat2 = if SIZE == 16 {
+        let (flat2, any_flat2) = if SIZE == 16 && (flat & w16).any() {
             let ([p6, p5, p4], [q4, q5, q6]) = load_outer();
             s[1] = p5;
             s[2] = p4;
@@ -334,8 +359,9 @@ fn filter<const BD: u32, const SIZE: usize>(
             let mut f = abd16(p4, p0).simd_max(abd16(q4, q0));
             f = f.simd_max(abd16(p5, p0)).simd_max(abd16(q5, q0));
             f = f.simd_max(abd16(p6, p0)).simd_max(abd16(q6, q0));
-            let flat2 = flat & f.simd_le(flat_th);
-            if flat2.any() {
+            let flat2 = flat & w16 & f.simd_le(flat_th);
+            let any_flat2 = flat2.any();
+            if any_flat2 {
                 let (p6, p5, p4, p3, p2, p1, p0) = (
                     p6.cast::<u16>(),
                     p5.cast::<u16>(),
@@ -379,9 +405,9 @@ fn filter<const BD: u32, const SIZE: usize>(
                 t = t - p1 - q3 + q6 + q6;
                 s[12] = blend(s[12], flat2, t, 4);
             }
-            flat2
+            (flat2, any_flat2)
         } else {
-            M::splat(false)
+            (M::splat(false), false)
         };
         let flat8 = flat & !flat2;
         if flat8.any() {
@@ -408,7 +434,7 @@ fn filter<const BD: u32, const SIZE: usize>(
             t = t - p1 - q1 + q2 + q3;
             s[9] = blend(s[9], flat8, t, 3);
         }
-        return if SIZE == 16 && flat2.any() { 6 } else { 3 };
+        return if SIZE == 16 && any_flat2 { 6 } else { 3 };
     }
     2
 }
@@ -445,14 +471,14 @@ fn vertical_bd<T: Pixel, const BD: u32>(
     filter_size: u32,
     limits: FilterLimits,
 ) {
-    let th = Th::new::<BD>(limits);
+    assert!(stride <= 0x0fff_ffff);
     let start = y * stride + x;
     let n = len & !3;
     match filter_size {
-        4 => vertical::<T, BD, 4>(buf, start, stride, n, &th),
-        6 => vertical::<T, BD, 6>(buf, start, stride, n, &th),
-        8 => vertical::<T, BD, 8>(buf, start, stride, n, &th),
-        16 => vertical::<T, BD, 16>(buf, start, stride, n, &th),
+        4 => vertical::<T, BD, 4>(buf, start, stride, n, limits),
+        6 => vertical::<T, BD, 6>(buf, start, stride, n, limits),
+        8 => vertical::<T, BD, 8>(buf, start, stride, n, limits),
+        16 => vertical::<T, BD, 16>(buf, start, stride, n, limits),
         _ => panic!("invalid loop filter size {filter_size}"),
     }
     if n < len {
@@ -467,39 +493,157 @@ fn vchunk16<T: Pixel, const BD: u32, const SIZE: usize, const LINES: usize>(
     stride: usize,
     th: &Th,
 ) {
+    assert!(stride <= 0x0fff_ffff);
     let mut s = [V::splat(0); 14];
-    if SIZE == 4 {
-        s[5..9].copy_from_slice(&load_cols4::<T, LINES>(buf, rows - 2, stride));
-    } else if SIZE == 6 {
-        let v = load_cols8::<T, LINES, 6>(buf, rows - 3, stride);
-        s[4..10].copy_from_slice(&v[..6]);
-    } else {
-        // SIZE == 8 or SIZE == 16: load the inner 8 columns (-4..4) first.
-        s[3..11].copy_from_slice(&load_cols8::<T, LINES, 8>(buf, rows - 4, stride));
+    let all = M::splat(true);
+    if SIZE != 16 {
+        let r = match SIZE {
+            4 => 2,
+            6 => 3,
+            _ => 4,
+        };
+        let win = &mut buf[rows - r..][..(LINES - 1) * stride + 2 * r];
+        if SIZE == 4 {
+            s[5..9].copy_from_slice(&load_cols4_win::<T, LINES>(win, stride));
+        } else if SIZE == 6 {
+            let v = load_cols8_win::<T, LINES, 6>(win, stride);
+            s[4..10].copy_from_slice(&v[..6]);
+        } else {
+            s[3..11].copy_from_slice(&load_cols8_win::<T, LINES, 8>(win, stride));
+        }
+        let m = filter::<BD, SIZE>(&mut s, valid16::<LINES>(), all, all, th, || {
+            ([V::splat(0); 3], [V::splat(0); 3])
+        });
+        if m == 0 {
+            return;
+        }
+        if m <= 2 {
+            store_cols4_win::<T, LINES>(&mut win[r - 2..], stride, [s[5], s[6], s[7], s[8]]);
+        } else if SIZE == 8 && m == 3 {
+            store_cols8_win::<T, LINES, 8>(
+                win,
+                stride,
+                [s[3], s[4], s[5], s[6], s[7], s[8], s[9], s[10]],
+            );
+        }
+        return;
     }
-    let m = filter::<BD, SIZE>(&mut s, valid16::<LINES>(), th, || {
-        let lo = load_cols4::<T, LINES>(buf, rows - 7, stride);
-        let hi = load_cols4::<T, LINES>(buf, rows + 3, stride);
+    // SIZE == 16: single slice window for -7..7, load inner 8 columns (-4..4) first.
+    let win = &mut buf[rows - 7..][..(LINES - 1) * stride + 14];
+    s[3..11].copy_from_slice(&load_cols8_win::<T, LINES, 8>(&win[3..], stride));
+    let m = filter::<BD, SIZE>(&mut s, valid16::<LINES>(), all, all, th, || {
+        let lo = load_cols4_win::<T, LINES>(win, stride);
+        let hi = load_cols4_win::<T, LINES>(&win[10..], stride);
         ([lo[0], lo[1], lo[2]], [hi[1], hi[2], hi[3]])
     });
     if m == 0 {
         return;
     }
-    let z = V::splat(0);
     if m <= 2 {
-        store_cols4::<T, LINES>(buf, rows - 2, stride, [s[5], s[6], s[7], s[8]]);
-    } else if SIZE >= 8 && m == 3 {
-        store_cols8::<T, LINES, 6>(
-            buf,
-            rows - 3,
+        store_cols4_win::<T, LINES>(&mut win[5..], stride, [s[5], s[6], s[7], s[8]]);
+    } else if m == 3 {
+        store_cols8_win::<T, LINES, 8>(
+            &mut win[3..],
             stride,
-            [s[4], s[5], s[6], s[7], s[8], s[9], z, z],
+            [s[3], s[4], s[5], s[6], s[7], s[8], s[9], s[10]],
         );
-    } else if SIZE == 16 {
-        store_cols4::<T, LINES>(buf, rows - 6, stride, [s[1], s[2], s[3], s[4]]);
-        store_cols8::<T, LINES, 8>(
-            buf,
-            rows - 2,
+    } else {
+        store_cols4_win::<T, LINES>(&mut win[1..], stride, [s[1], s[2], s[3], s[4]]);
+        store_cols8_win::<T, LINES, 8>(
+            &mut win[5..],
+            stride,
+            [s[5], s[6], s[7], s[8], s[9], s[10], s[11], s[12]],
+        );
+    }
+}
+
+#[inline(always)]
+fn masks_th16<const BD: u32, const SIZE: usize>(
+    sz: [u8; 2],
+    lv: [u8; 2],
+    lut: &[FilterLimits; 64],
+) -> (M, M, Th) {
+    let half = |b0: bool, b1: bool| M::from_array([b0, b0, b0, b0, b1, b1, b1, b1]);
+    let wide = if SIZE >= 6 { half(sz[0] > 4, sz[1] > 4) } else { M::splat(false) };
+    let w16 = if SIZE == 16 { half(sz[0] == 16, sz[1] == 16) } else { M::splat(false) };
+    let f0 = lut[(lv[0] & 63) as usize];
+    let th = if lv[0] == lv[1] {
+        Th::new::<BD>(f0)
+    } else {
+        Th::pair::<BD>(f0, lut[(lv[1] & 63) as usize])
+    };
+    (wide, w16, th)
+}
+
+/// Filters two consecutive active 4-line segments (`8` lines total) across a
+/// vertical edge when their sizes or levels differ.
+#[inline(never)]
+fn vpair16<T: Pixel, const BD: u32, const SIZE: usize>(
+    buf: &mut [T],
+    rows: usize,
+    stride: usize,
+    sz: [u8; 2],
+    lv: [u8; 2],
+    lut: &[FilterLimits; 64],
+) {
+    assert!(stride <= 0x0fff_ffff);
+    let (wide, w16, th) = masks_th16::<BD, SIZE>(sz, lv, lut);
+    let valid = M::splat(true);
+    let mut s = [V::splat(0); 14];
+    if SIZE != 16 {
+        let r = match SIZE {
+            4 => 2,
+            6 => 3,
+            _ => 4,
+        };
+        let win = &mut buf[rows - r..][..7 * stride + 2 * r];
+        if SIZE == 4 {
+            s[5..9].copy_from_slice(&load_cols4_win::<T, 8>(win, stride));
+        } else if SIZE == 6 {
+            let v = load_cols8_win::<T, 8, 6>(win, stride);
+            s[4..10].copy_from_slice(&v[..6]);
+        } else {
+            s[3..11].copy_from_slice(&load_cols8_win::<T, 8, 8>(win, stride));
+        }
+        let m = filter::<BD, SIZE>(&mut s, valid, wide, w16, &th, || {
+            ([V::splat(0); 3], [V::splat(0); 3])
+        });
+        if m == 0 {
+            return;
+        }
+        if m <= 2 {
+            store_cols4_win::<T, 8>(&mut win[r - 2..], stride, [s[5], s[6], s[7], s[8]]);
+        } else if SIZE == 8 && m == 3 {
+            store_cols8_win::<T, 8, 8>(
+                win,
+                stride,
+                [s[3], s[4], s[5], s[6], s[7], s[8], s[9], s[10]],
+            );
+        }
+        return;
+    }
+    let win = &mut buf[rows - 7..][..7 * stride + 14];
+    s[3..11].copy_from_slice(&load_cols8_win::<T, 8, 8>(&win[3..], stride));
+    let m = filter::<BD, SIZE>(&mut s, valid, wide, w16, &th, || {
+        let lo = load_cols4_win::<T, 8>(win, stride);
+        let hi = load_cols4_win::<T, 8>(&win[10..], stride);
+        ([lo[0], lo[1], lo[2]], [hi[1], hi[2], hi[3]])
+    });
+    if m == 0 {
+        return;
+    }
+    if m <= 2 {
+        store_cols4_win::<T, 8>(&mut win[5..], stride, [s[5], s[6], s[7], s[8]]);
+    } else if m == 3 {
+        store_cols8_win::<T, 8, 8>(
+            &mut win[3..],
+            stride,
+            [s[3], s[4], s[5], s[6], s[7], s[8], s[9], s[10]],
+        );
+    } else {
+        store_cols4_win::<T, 8>(&mut win[1..], stride, [s[1], s[2], s[3], s[4]]);
+        store_cols8_win::<T, 8, 8>(
+            &mut win[5..],
             stride,
             [s[5], s[6], s[7], s[8], s[9], s[10], s[11], s[12]],
         );
@@ -515,15 +659,16 @@ fn vertical<T: Pixel, const BD: u32, const SIZE: usize>(
     start: usize,
     stride: usize,
     len: usize,
-    th: &Th,
+    limits: FilterLimits,
 ) {
+    let th = Th::new::<BD>(limits);
     let mut i = 0;
     while i + 8 <= len {
-        vchunk16::<T, BD, SIZE, 8>(buf, start + i * stride, stride, th);
+        vchunk16::<T, BD, SIZE, 8>(buf, start + i * stride, stride, &th);
         i += 8;
     }
     if i < len {
-        vchunk16::<T, BD, SIZE, 4>(buf, start + i * stride, stride, th);
+        vchunk16::<T, BD, SIZE, 4>(buf, start + i * stride, stride, &th);
     }
 }
 
@@ -559,16 +704,16 @@ fn horizontal_bd<T: Pixel, const BD: u32>(
     filter_size: u32,
     limits: FilterLimits,
 ) {
-    let th = Th::new::<BD>(limits);
+    assert!(stride <= 0x0fff_ffff);
     let start = y * stride + x;
     // The decoder only filters multiples of 4 lines; any other remainder
     // is left to the portable kernel.
     let n = len & !3;
     match filter_size {
-        4 => horizontal::<T, BD, 4>(buf, start, stride, n, &th),
-        6 => horizontal::<T, BD, 6>(buf, start, stride, n, &th),
-        8 => horizontal::<T, BD, 8>(buf, start, stride, n, &th),
-        16 => horizontal::<T, BD, 16>(buf, start, stride, n, &th),
+        4 => horizontal::<T, BD, 4>(buf, start, stride, n, limits),
+        6 => horizontal::<T, BD, 6>(buf, start, stride, n, limits),
+        8 => horizontal::<T, BD, 8>(buf, start, stride, n, limits),
+        16 => horizontal::<T, BD, 16>(buf, start, stride, n, limits),
         _ => panic!("invalid loop filter size {filter_size}"),
     }
     if n < len {
@@ -583,26 +728,41 @@ fn hchunk16<T: Pixel, const BD: u32, const SIZE: usize, const LINES: usize>(
     stride: usize,
     th: &Th,
 ) {
-    let stride = stride & 0x0fff_ffff;
+    assert!(stride <= 0x0fff_ffff);
     let mut s = [V::splat(0); 14];
-    if SIZE == 4 {
-        let win = &buf[pos - 2 * stride..][..3 * stride + LINES];
-        for k in 0..4 {
-            s[5 + k] = load::<T, LINES>(&win[k * stride..]);
+    let all = M::splat(true);
+    if SIZE != 16 {
+        let r = match SIZE {
+            4 => 2,
+            6 => 3,
+            _ => 4,
+        };
+        let win = &mut buf[pos - r * stride..][..(2 * r - 1) * stride + LINES];
+        for k in 0..2 * r {
+            s[7 - r + k] = load::<T, LINES>(&win[k * stride..]);
         }
-    } else if SIZE == 6 {
-        let win = &buf[pos - 3 * stride..][..5 * stride + LINES];
-        for k in 0..6 {
-            s[4 + k] = load::<T, LINES>(&win[k * stride..]);
+        let m = filter::<BD, SIZE>(&mut s, valid16::<LINES>(), all, all, th, || {
+            ([V::splat(0); 3], [V::splat(0); 3])
+        });
+        if m == 0 {
+            return;
         }
-    } else {
-        let win = &buf[pos - 4 * stride..][..7 * stride + LINES];
-        for k in 0..8 {
-            s[3 + k] = load::<T, LINES>(&win[k * stride..]);
+        if m <= 2 {
+            for k in 0..4 {
+                store::<T, LINES>(&mut win[(r - 2 + k) * stride..], s[5 + k]);
+            }
+        } else if SIZE == 8 && m == 3 {
+            for k in 0..6 {
+                store::<T, LINES>(&mut win[(1 + k) * stride..], s[4 + k]);
+            }
         }
+        return;
     }
-    let m = filter::<BD, SIZE>(&mut s, valid16::<LINES>(), th, || {
-        let win = &buf[pos - 7 * stride..][..13 * stride + LINES];
+    let win = &mut buf[pos - 7 * stride..][..13 * stride + LINES];
+    for k in 0..8 {
+        s[3 + k] = load::<T, LINES>(&win[(3 + k) * stride..]);
+    }
+    let m = filter::<BD, SIZE>(&mut s, valid16::<LINES>(), all, all, th, || {
         (
             [
                 load::<T, LINES>(&win[0..]),
@@ -619,20 +779,95 @@ fn hchunk16<T: Pixel, const BD: u32, const SIZE: usize, const LINES: usize>(
     if m == 0 {
         return;
     }
-    if m == 2 {
-        let win = &mut buf[pos - 2 * stride..][..3 * stride + LINES];
+    if m <= 2 {
         for k in 0..4 {
-            store::<T, LINES>(&mut win[k * stride..], s[5 + k]);
+            store::<T, LINES>(&mut win[(5 + k) * stride..], s[5 + k]);
         }
-    } else if SIZE >= 8 && m == 3 {
-        let win = &mut buf[pos - 3 * stride..][..5 * stride + LINES];
+    } else if m == 3 {
         for k in 0..6 {
-            store::<T, LINES>(&mut win[k * stride..], s[4 + k]);
+            store::<T, LINES>(&mut win[(4 + k) * stride..], s[4 + k]);
         }
-    } else if SIZE == 16 {
-        let win = &mut buf[pos - 6 * stride..][..11 * stride + LINES];
+    } else {
         for k in 0..12 {
-            store::<T, LINES>(&mut win[k * stride..], s[1 + k]);
+            store::<T, LINES>(&mut win[(1 + k) * stride..], s[1 + k]);
+        }
+    }
+}
+
+/// Filters two consecutive active 4-line segments (`8` columns total) across a
+/// horizontal edge when their sizes or levels differ.
+#[inline(never)]
+fn hpair16<T: Pixel, const BD: u32, const SIZE: usize>(
+    buf: &mut [T],
+    pos: usize,
+    stride: usize,
+    sz: [u8; 2],
+    lv: [u8; 2],
+    lut: &[FilterLimits; 64],
+) {
+    assert!(stride <= 0x0fff_ffff);
+    let (wide, w16, th) = masks_th16::<BD, SIZE>(sz, lv, lut);
+    let valid = M::splat(true);
+    let mut s = [V::splat(0); 14];
+    if SIZE != 16 {
+        let r = match SIZE {
+            4 => 2,
+            6 => 3,
+            _ => 4,
+        };
+        let win = &mut buf[pos - r * stride..][..(2 * r - 1) * stride + 8];
+        for k in 0..2 * r {
+            s[7 - r + k] = load::<T, 8>(&win[k * stride..]);
+        }
+        let m = filter::<BD, SIZE>(&mut s, valid, wide, w16, &th, || {
+            ([V::splat(0); 3], [V::splat(0); 3])
+        });
+        if m == 0 {
+            return;
+        }
+        if m <= 2 {
+            for k in 0..4 {
+                store::<T, 8>(&mut win[(r - 2 + k) * stride..], s[5 + k]);
+            }
+        } else if SIZE == 8 && m == 3 {
+            for k in 0..6 {
+                store::<T, 8>(&mut win[(1 + k) * stride..], s[4 + k]);
+            }
+        }
+        return;
+    }
+    let win = &mut buf[pos - 7 * stride..][..13 * stride + 8];
+    for k in 0..8 {
+        s[3 + k] = load::<T, 8>(&win[(3 + k) * stride..]);
+    }
+    let m = filter::<BD, SIZE>(&mut s, valid, wide, w16, &th, || {
+        (
+            [
+                load::<T, 8>(&win[0..]),
+                load::<T, 8>(&win[stride..]),
+                load::<T, 8>(&win[2 * stride..]),
+            ],
+            [
+                load::<T, 8>(&win[11 * stride..]),
+                load::<T, 8>(&win[12 * stride..]),
+                load::<T, 8>(&win[13 * stride..]),
+            ],
+        )
+    });
+    if m == 0 {
+        return;
+    }
+    if m <= 2 {
+        for k in 0..4 {
+            store::<T, 8>(&mut win[(5 + k) * stride..], s[5 + k]);
+        }
+    } else if m == 3 {
+        for k in 0..6 {
+            store::<T, 8>(&mut win[(4 + k) * stride..], s[4 + k]);
+        }
+    } else {
+        for k in 0..12 {
+            store::<T, 8>(&mut win[(1 + k) * stride..], s[1 + k]);
         }
     }
 }
@@ -644,15 +879,16 @@ fn horizontal<T: Pixel, const BD: u32, const SIZE: usize>(
     start: usize,
     stride: usize,
     len: usize,
-    th: &Th,
+    limits: FilterLimits,
 ) {
+    let th = Th::new::<BD>(limits);
     let mut j = 0;
     while j + 8 <= len {
-        hchunk16::<T, BD, SIZE, 8>(buf, start + j, stride, th);
+        hchunk16::<T, BD, SIZE, 8>(buf, start + j, stride, &th);
         j += 8;
     }
     if j < len {
-        hchunk16::<T, BD, SIZE, 4>(buf, start + j, stride, th);
+        hchunk16::<T, BD, SIZE, 4>(buf, start + j, stride, &th);
     }
 }
 
@@ -805,7 +1041,7 @@ mod lanes8 {
                 s[8] = blend(s[8], flat, p0 + k(2) * (q0 + q1) + k(3) * q2 + k(4), 3);
                 return 2;
             }
-            let flat2 = if SIZE == 16 && (flat & w16).any() {
+            let (flat2, any_flat2) = if SIZE == 16 && (flat & w16).any() {
                 let ([p6, p5, p4], [q4, q5, q6]) = load_outer();
                 s[1] = p5;
                 s[2] = p4;
@@ -815,14 +1051,15 @@ mod lanes8 {
                 f = f.simd_max(abd(p5, p0)).simd_max(abd(q5, q0));
                 f = f.simd_max(abd(p6, p0)).simd_max(abd(q6, q0));
                 let flat2 = flat & w16 & f.simd_le(one);
-                if flat2.any() && HALVES && N == 16 {
+                let any_flat2 = flat2.any();
+                if any_flat2 && HALVES && N == 16 {
                     let v = [p6, p5, p4, p3, p2, p1, p0, q0, q1, q2, q3, q4, q5, q6];
                     let lo = flat16_h(widen_all::<N, false, 14>(&v));
                     let hi = flat16_h(widen_all::<N, true, 14>(&v));
                     for i in 0..12 {
                         s[1 + i] = flat2.select(from16(pack16(lo[i], hi[i])), s[1 + i]);
                     }
-                } else if flat2.any() {
+                } else if any_flat2 {
                     let mut t = k(7) * p6.cast::<u16>()
                         + k(2) * add2(p5, p4)
                         + add2(p3, p2)
@@ -853,19 +1090,20 @@ mod lanes8 {
                     t = t + add2(q6, q6) - add2(p1, q3);
                     s[12] = blend(s[12], flat2, t, 4);
                 }
-                flat2
+                (flat2, any_flat2)
             } else {
-                MB::splat(false)
+                (MB::splat(false), false)
             };
             let flat8 = flat & !flat2;
-            if flat8.any() && HALVES && N == 16 {
+            let any_flat8 = flat8.any();
+            if any_flat8 && HALVES && N == 16 {
                 let v = [p3, p2, p1, p0, q0, q1, q2, q3];
                 let lo = flat8_h(widen_all::<N, false, 8>(&v));
                 let hi = flat8_h(widen_all::<N, true, 8>(&v));
                 for i in 0..6 {
                     s[4 + i] = flat8.select(from16(pack16(lo[i], hi[i])), s[4 + i]);
                 }
-            } else if flat8.any() {
+            } else if any_flat8 {
                 let (p3, p2, p1, p0, q0, q1, q2, q3) = (
                     p3.cast::<u16>(),
                     p2.cast::<u16>(),
@@ -889,7 +1127,7 @@ mod lanes8 {
                 t = t - p1 - q1 + q2 + q3;
                 s[9] = blend(s[9], flat8, t, 3);
             }
-            return if SIZE == 16 && flat2.any() { 6 } else { 3 };
+            return if SIZE == 16 && any_flat2 { 6 } else { 3 };
         }
         2
     }
@@ -1087,7 +1325,7 @@ mod lanes8 {
         pos: usize,
         stride: usize,
     ) -> [B<N>; 4] {
-        let stride = stride & 0x0fff_ffff;
+        assert!(stride <= 0x0fff_ffff);
         let win = &buf[pos..][..(LINES - 1) * stride + 4];
         transpose4::<N>([
             load_row4_8::<T, N, LINES>(win, 0, stride),
@@ -1106,7 +1344,7 @@ mod lanes8 {
         stride: usize,
         cols: [B<N>; 4],
     ) {
-        let stride = stride & 0x0fff_ffff;
+        assert!(stride <= 0x0fff_ffff);
         let win = &mut buf[pos..][..(LINES - 1) * stride + 4];
         let v = transpose4::<N>(cols);
         for (k, vk) in v.iter().enumerate() {
@@ -1163,7 +1401,7 @@ mod lanes8 {
         pos: usize,
         stride: usize,
     ) -> [B<N>; 8] {
-        let stride = stride & 0x0fff_ffff;
+        assert!(stride <= 0x0fff_ffff);
         let win = &buf[pos..][..(LINES - 1) * stride + K];
         let mut v = [B::<N>::splat(0); 8];
         let rows = if LINES < 8 { LINES } else { 8 };
@@ -1191,7 +1429,7 @@ mod lanes8 {
         stride: usize,
         cols: [B<N>; 8],
     ) {
-        let stride = stride & 0x0fff_ffff;
+        assert!(stride <= 0x0fff_ffff);
         let win = &mut buf[pos..][..(LINES - 1) * stride + K];
         let v = transpose8::<N>(cols);
         let rows = if LINES < 8 { LINES } else { 8 };
@@ -1293,7 +1531,7 @@ mod lanes8 {
         valid: MB<N>,
         th: &Th8<N>,
     ) {
-        let stride = stride & 0x0fff_ffff;
+        assert!(stride <= 0x0fff_ffff);
         let mut s = [B::<N>::splat(0); 14];
         if SIZE == 4 {
             let win = &buf[pos - 2 * stride..][..3 * stride + LINES];
@@ -1358,6 +1596,7 @@ mod lanes8 {
         len: usize,
         l: FilterLimits,
     ) {
+        assert!(stride <= 0x0fff_ffff);
         let mut i = 0;
         if len >= 16 {
             let t16 = Th8::<16>::new(l);
@@ -1394,6 +1633,7 @@ mod lanes8 {
         len: usize,
         l: FilterLimits,
     ) {
+        assert!(stride <= 0x0fff_ffff);
         let mut j = 0;
         if len >= 16 {
             let t16 = Th8::<16>::new(l);
@@ -1598,11 +1838,9 @@ mod grp {
         Simd::<u64, N8>::from_array(a).to_ne_bytes()
     }
 
-    /// Columns `0..4` of the `N` lines starting at `pos`.
+    /// Columns `0..4` of the `N` lines in `win` (`len >= (N - 1) * stride + 4`).
     #[inline(always)]
-    fn load_cols4<T: Pixel>(buf: &[T], pos: usize, stride: usize) -> [B; 4] {
-        let stride = stride & 0x0fff_ffff;
-        let win = &buf[pos..][..(N - 1) * stride + 4];
+    fn load_cols4_win<T: Pixel>(win: &[T], stride: usize) -> [B; 4] {
         let v = [
             line4(win, 0, stride),
             line4(win, 1, stride),
@@ -1620,11 +1858,17 @@ mod grp {
         [k0, k1, k2, k3]
     }
 
-    /// Columns `0..8` of the `N` lines starting at `pos`.
+    /// Columns `0..4` of the `N` lines starting at `pos`.
+    #[cfg(test)]
     #[inline(always)]
-    fn load_cols8<T: Pixel>(buf: &[T], pos: usize, stride: usize) -> [B; 8] {
-        let stride = stride & 0x0fff_ffff;
-        let win = &buf[pos..][..(N - 1) * stride + 8];
+    fn load_cols4<T: Pixel>(buf: &[T], pos: usize, stride: usize) -> [B; 4] {
+        assert!(stride <= 0x0fff_ffff);
+        load_cols4_win(&buf[pos..][..(N - 1) * stride + 4], stride)
+    }
+
+    /// Columns `0..8` of the `N` lines in `win` (`len >= (N - 1) * stride + 8`).
+    #[inline(always)]
+    fn load_cols8_win<T: Pixel>(win: &[T], stride: usize) -> [B; 8] {
         let v: [B; 8] = arr8!(d => line8(win, d, stride));
         let (a0, b0) = zip::<1>(v[0], v[1]);
         let (a1, b1) = zip::<1>(v[2], v[3]);
@@ -1645,11 +1889,17 @@ mod grp {
         [k0, k1, k2, k3, k4, k5, k6, k7]
     }
 
-    /// Stores 4 columns to the `N` lines starting at `pos`.
+    /// Columns `0..8` of the `N` lines starting at `pos`.
+    #[cfg(test)]
     #[inline(always)]
-    fn store_cols4<T: Pixel>(buf: &mut [T], pos: usize, stride: usize, c: [B; 4]) {
-        let stride = stride & 0x0fff_ffff;
-        let win = &mut buf[pos..][..(N - 1) * stride + 4];
+    fn load_cols8<T: Pixel>(buf: &[T], pos: usize, stride: usize) -> [B; 8] {
+        assert!(stride <= 0x0fff_ffff);
+        load_cols8_win(&buf[pos..][..(N - 1) * stride + 8], stride)
+    }
+
+    /// Stores 4 columns into `win` (`len >= (N - 1) * stride + 4`).
+    #[inline(always)]
+    fn store_cols4_win<T: Pixel>(win: &mut [T], stride: usize, c: [B; 4]) {
         // [r: c0 c1] for rows 0..8 / 8..16
         let (a0, a1) = zip::<1>(c[0], c[1]);
         let (b0, b1) = zip::<1>(c[2], c[3]);
@@ -1666,6 +1916,14 @@ mod grp {
                 st4(&mut win[(16 + r) * stride..], a[k][4 + d]);
             }
         });
+    }
+
+    /// Stores 4 columns to the `N` lines starting at `pos`.
+    #[cfg(test)]
+    #[inline(always)]
+    fn store_cols4<T: Pixel>(buf: &mut [T], pos: usize, stride: usize, c: [B; 4]) {
+        assert!(stride <= 0x0fff_ffff);
+        store_cols4_win(&mut buf[pos..][..(N - 1) * stride + 4], stride, c);
     }
 
     /// Stores the 4 bytes of `x` (in memory order) as samples.
@@ -1688,11 +1946,9 @@ mod grp {
         }
     }
 
-    /// Stores 8 columns to the `N` lines starting at `pos`.
+    /// Stores 8 columns into `win` (`len >= (N - 1) * stride + 8`).
     #[inline(always)]
-    fn store_cols8<T: Pixel>(buf: &mut [T], pos: usize, stride: usize, c: &[B; 8]) {
-        let stride = stride & 0x0fff_ffff;
-        let win = &mut buf[pos..][..(N - 1) * stride + 8];
+    fn store_cols8_win<T: Pixel>(win: &mut [T], stride: usize, c: &[B; 8]) {
         // s1[2i + y]: [r: c2i c2i+1] for rows 8y..8y+8
         let mut s1 = [B::splat(0); 8];
         for i in 0..4 {
@@ -1723,6 +1979,14 @@ mod grp {
                 st8(&mut win[(16 + r) * stride..], a[k][2 + q]);
             }
         });
+    }
+
+    /// Stores 8 columns to the `N` lines starting at `pos`.
+    #[cfg(test)]
+    #[inline(always)]
+    fn store_cols8<T: Pixel>(buf: &mut [T], pos: usize, stride: usize, c: &[B; 8]) {
+        assert!(stride <= 0x0fff_ffff);
+        store_cols8_win(&mut buf[pos..][..(N - 1) * stride + 8], stride, c);
     }
 
     /// Per lane masks and thresholds of a group with segment sizes `sz`
@@ -1765,28 +2029,53 @@ mod grp {
         lv: [u8; GS],
         lut: &[FilterLimits; 64],
     ) {
+        assert!(stride <= 0x0fff_ffff);
         let (valid, wide, w16, th) = masks_th::<SIZE>(sz, lv, lut);
         let mut s = [B::splat(0); 14];
         if SIZE == 4 {
-            s[5..9].copy_from_slice(&load_cols4(buf, pos - 2, stride));
-        } else {
-            s[3..11].copy_from_slice(&load_cols8(buf, pos - 4, stride));
+            let win = &mut buf[pos - 2..][..(N - 1) * stride + 4];
+            s[5..9].copy_from_slice(&load_cols4_win(win, stride));
+            let m = filter::<N, SIZE>(&mut s, valid, wide, w16, &th, || {
+                ([B::splat(0); 3], [B::splat(0); 3])
+            });
+            if m != 0 {
+                store_cols4_win(win, stride, [s[5], s[6], s[7], s[8]]);
+            }
+            return;
         }
+        if SIZE != 16 {
+            let win = &mut buf[pos - 4..][..(N - 1) * stride + 8];
+            s[3..11].copy_from_slice(&load_cols8_win(win, stride));
+            let m = filter::<N, SIZE>(&mut s, valid, wide, w16, &th, || {
+                ([B::splat(0); 3], [B::splat(0); 3])
+            });
+            if m == 0 {
+                return;
+            }
+            if m <= 2 {
+                store_cols4_win(&mut win[2..], stride, [s[5], s[6], s[7], s[8]]);
+            } else if SIZE >= 8 && m == 3 {
+                store_cols8_win(win, stride, s[3..11].try_into().unwrap());
+            }
+            return;
+        }
+        let win = &mut buf[pos - 7..][..(N - 1) * stride + 14];
+        s[3..11].copy_from_slice(&load_cols8_win(&win[3..], stride));
         let m = filter::<N, SIZE>(&mut s, valid, wide, w16, &th, || {
-            let lo = load_cols4(buf, pos - 7, stride);
-            let hi = load_cols4(buf, pos + 3, stride);
+            let lo = load_cols4_win(win, stride);
+            let hi = load_cols4_win(&win[10..], stride);
             ([lo[0], lo[1], lo[2]], [hi[1], hi[2], hi[3]])
         });
         if m == 0 {
             return;
         }
         if m <= 2 {
-            store_cols4(buf, pos - 2, stride, [s[5], s[6], s[7], s[8]]);
-        } else if SIZE >= 8 && m == 3 {
-            store_cols8(buf, pos - 4, stride, s[3..11].try_into().unwrap());
-        } else if SIZE == 16 {
-            store_cols4(buf, pos - 6, stride, [s[1], s[2], s[3], s[4]]);
-            store_cols8(buf, pos - 2, stride, s[5..13].try_into().unwrap());
+            store_cols4_win(&mut win[5..], stride, [s[5], s[6], s[7], s[8]]);
+        } else if m == 3 {
+            store_cols8_win(&mut win[3..], stride, s[3..11].try_into().unwrap());
+        } else {
+            store_cols4_win(&mut win[1..], stride, [s[1], s[2], s[3], s[4]]);
+            store_cols8_win(&mut win[5..], stride, s[5..13].try_into().unwrap());
         }
     }
 
@@ -1801,7 +2090,7 @@ mod grp {
         lut: &[FilterLimits; 64],
     ) {
         let (valid, wide, w16, th) = masks_th::<SIZE>(sz, lv, lut);
-        let stride = stride & 0x0fff_ffff;
+        assert!(stride <= 0x0fff_ffff);
         let row = |win: &[T], k: usize| B::from_array(ld::<T, N>(&win[k * stride..]));
         let mut s = [B::splat(0); 14];
         if SIZE == 4 {
@@ -2018,8 +2307,70 @@ pub fn filter_horizontal_edge_bd<T: Pixel, const BD: u32>(
     horizontal_bd::<T, BD>(buf, stride, x, y, len, filter_size, limits);
 }
 
+/// Index of the first segment `k >= i` with a non-zero size (or
+/// `sizes.len()`), 8 segments at a time in scalar SWAR registers (avoids
+/// NEON-to-GPR `fmov` latency and handles 8-segment chroma edges directly).
+#[inline(always)]
+fn skip_zero(sizes: &[u8], mut i: usize) -> usize {
+    while i + 8 <= sizes.len() {
+        let w = u64::from_le_bytes(sizes[i..i + 8].try_into().unwrap());
+        if w != 0 {
+            return i + (w.trailing_zeros() as usize >> 3);
+        }
+        i += 8;
+    }
+    if i + 4 <= sizes.len() {
+        let w = u32::from_le_bytes(sizes[i..i + 4].try_into().unwrap());
+        if w != 0 {
+            return i + (w.trailing_zeros() as usize >> 3);
+        }
+        i += 4;
+    }
+    while i < sizes.len() && sizes[i] == 0 {
+        i += 1;
+    }
+    i
+}
+
+/// End of the run of segments from `i` with the size and level of segment
+/// `i` (exclusive), 8 segments at a time in scalar SWAR registers. Starting
+/// the word scan at `i` (where `sizes[i] == s && levels[i] == l` is already
+/// true) keeps 8/16/32-segment edges aligned to whole `u64` words.
+#[inline(always)]
+fn run_end(sizes: &[u8], levels: &[u8], i: usize) -> usize {
+    let (s, l) = (sizes[i], levels[i]);
+    let levels = &levels[..sizes.len()];
+    let s8 = u64::from_le_bytes([s; 8]);
+    let l8 = u64::from_le_bytes([l; 8]);
+    let mut j = i;
+    while j + 8 <= sizes.len() {
+        let sw = u64::from_le_bytes(sizes[j..j + 8].try_into().unwrap());
+        let lw = u64::from_le_bytes(levels[j..j + 8].try_into().unwrap());
+        let diff = (sw ^ s8) | (lw ^ l8);
+        if diff != 0 {
+            return j + (diff.trailing_zeros() as usize >> 3);
+        }
+        j += 8;
+    }
+    if j + 4 <= sizes.len() {
+        let sw = u32::from_le_bytes(sizes[j..j + 4].try_into().unwrap());
+        let lw = u32::from_le_bytes(levels[j..j + 4].try_into().unwrap());
+        let diff = (sw ^ (s8 as u32)) | (lw ^ (l8 as u32));
+        if diff != 0 {
+            return j + (diff.trailing_zeros() as usize >> 3);
+        }
+        j += 4;
+    }
+    j = j.max(i + 1);
+    while j < sizes.len() && sizes[j] == s && levels[j] == l {
+        j += 1;
+    }
+    j
+}
+
 /// Tail of [`filter_v_edge_bd`] (and all of it when `BD != 8`, so it is
 /// not `#[cold]`: it is the whole edge loop of high bit depth streams).
+/// Caller guarantees `i < sizes.len()` and `sizes[i] != 0`.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn filter_v_edge_tail_bd<T: Pixel, const BD: u32>(
@@ -2032,21 +2383,15 @@ fn filter_v_edge_tail_bd<T: Pixel, const BD: u32>(
     lut: &[FilterLimits; 64],
     mut i: usize,
 ) {
-    while i < sizes.len() {
-        let s = sizes[i];
-        if s == 0 {
-            i += 1;
-            continue;
-        }
-        let l = levels[i];
-        let mut j = i + 1;
-        while j < sizes.len() && sizes[j] == s && levels[j] == l {
-            j += 1;
-        }
-        let start = (y + 4 * i) * stride + x;
-        let len = 4 * (j - i);
-        let limits = lut[(l & 63) as usize];
+    assert!(stride <= 0x0fff_ffff);
+    let levels = &levels[..sizes.len()];
+    loop {
+        let (s, l) = (sizes[i], levels[i]);
+        let mut j = run_end(sizes, levels, i);
         if BD == 8 {
+            let start = (y + 4 * i) * stride + x;
+            let len = 4 * (j - i);
+            let limits = lut[(l & 63) as usize];
             match s {
                 4 => lanes8::vertical::<T, 4>(buf, start, stride, len, limits),
                 6 => lanes8::vertical::<T, 6>(buf, start, stride, len, limits),
@@ -2054,15 +2399,38 @@ fn filter_v_edge_tail_bd<T: Pixel, const BD: u32>(
                 _ => lanes8::vertical::<T, 16>(buf, start, stride, len, limits),
             }
         } else {
-            let th = Th::new::<BD>(limits);
-            match s {
-                4 => vertical::<T, BD, 4>(buf, start, stride, len, &th),
-                6 => vertical::<T, BD, 6>(buf, start, stride, len, &th),
-                8 => vertical::<T, BD, 8>(buf, start, stride, len, &th),
-                _ => vertical::<T, BD, 16>(buf, start, stride, len, &th),
+            let nseg = j - i;
+            let s2 = if (nseg & 1) != 0 && j < sizes.len() { sizes[j] } else { 0 };
+            let fuse = s2 != 0 && !((s == 6 && s2 > 6) || (s2 == 6 && s > 6));
+            let run_segs = if fuse { nseg - 1 } else { nseg };
+            if run_segs > 0 {
+                let start = (y + 4 * i) * stride + x;
+                let len = 4 * run_segs;
+                let limits = lut[(l & 63) as usize];
+                match s {
+                    4 => vertical::<T, BD, 4>(buf, start, stride, len, limits),
+                    6 => vertical::<T, BD, 6>(buf, start, stride, len, limits),
+                    8 => vertical::<T, BD, 8>(buf, start, stride, len, limits),
+                    _ => vertical::<T, BD, 16>(buf, start, stride, len, limits),
+                }
+            }
+            if fuse {
+                let pos = (y + 4 * (j - 1)) * stride + x;
+                let lv = [l, levels[j]];
+                let sz = [s, s2];
+                match s.max(s2) {
+                    4 => vpair16::<T, BD, 4>(buf, pos, stride, sz, lv, lut),
+                    6 => vpair16::<T, BD, 6>(buf, pos, stride, sz, lv, lut),
+                    8 => vpair16::<T, BD, 8>(buf, pos, stride, sz, lv, lut),
+                    _ => vpair16::<T, BD, 16>(buf, pos, stride, sz, lv, lut),
+                }
+                j += 1;
             }
         }
-        i = j;
+        i = skip_zero(sizes, j);
+        if i >= sizes.len() {
+            break;
+        }
     }
 }
 
@@ -2094,6 +2462,7 @@ pub fn filter_v_edge_bd<T: Pixel, const BD: u32>(
     } else {
         0
     };
+    let i = skip_zero(sizes, i);
     if i < sizes.len() {
         filter_v_edge_tail_bd::<T, BD>(buf, stride, x, y, sizes, levels, lut, i);
     }
@@ -2101,6 +2470,7 @@ pub fn filter_v_edge_bd<T: Pixel, const BD: u32>(
 
 /// Tail of [`filter_h_edge_bd`] (and all of it when `BD != 8`, so it is
 /// not `#[cold]`: it is the whole edge loop of high bit depth streams).
+/// Caller guarantees `i < sizes.len()` and `sizes[i] != 0`.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn filter_h_edge_tail_bd<T: Pixel, const BD: u32>(
@@ -2113,21 +2483,15 @@ fn filter_h_edge_tail_bd<T: Pixel, const BD: u32>(
     lut: &[FilterLimits; 64],
     mut i: usize,
 ) {
-    while i < sizes.len() {
-        let s = sizes[i];
-        if s == 0 {
-            i += 1;
-            continue;
-        }
-        let l = levels[i];
-        let mut j = i + 1;
-        while j < sizes.len() && sizes[j] == s && levels[j] == l {
-            j += 1;
-        }
-        let start = y * stride + x + 4 * i;
-        let len = 4 * (j - i);
-        let limits = lut[(l & 63) as usize];
+    assert!(stride <= 0x0fff_ffff);
+    let levels = &levels[..sizes.len()];
+    loop {
+        let (s, l) = (sizes[i], levels[i]);
+        let mut j = run_end(sizes, levels, i);
         if BD == 8 {
+            let start = y * stride + x + 4 * i;
+            let len = 4 * (j - i);
+            let limits = lut[(l & 63) as usize];
             match s {
                 4 => lanes8::horizontal::<T, 4>(buf, start, stride, len, limits),
                 6 => lanes8::horizontal::<T, 6>(buf, start, stride, len, limits),
@@ -2135,15 +2499,38 @@ fn filter_h_edge_tail_bd<T: Pixel, const BD: u32>(
                 _ => lanes8::horizontal::<T, 16>(buf, start, stride, len, limits),
             }
         } else {
-            let th = Th::new::<BD>(limits);
-            match s {
-                4 => horizontal::<T, BD, 4>(buf, start, stride, len, &th),
-                6 => horizontal::<T, BD, 6>(buf, start, stride, len, &th),
-                8 => horizontal::<T, BD, 8>(buf, start, stride, len, &th),
-                _ => horizontal::<T, BD, 16>(buf, start, stride, len, &th),
+            let nseg = j - i;
+            let s2 = if (nseg & 1) != 0 && j < sizes.len() { sizes[j] } else { 0 };
+            let fuse = s2 != 0 && !((s == 6 && s2 > 6) || (s2 == 6 && s > 6));
+            let run_segs = if fuse { nseg - 1 } else { nseg };
+            if run_segs > 0 {
+                let start = y * stride + x + 4 * i;
+                let len = 4 * run_segs;
+                let limits = lut[(l & 63) as usize];
+                match s {
+                    4 => horizontal::<T, BD, 4>(buf, start, stride, len, limits),
+                    6 => horizontal::<T, BD, 6>(buf, start, stride, len, limits),
+                    8 => horizontal::<T, BD, 8>(buf, start, stride, len, limits),
+                    _ => horizontal::<T, BD, 16>(buf, start, stride, len, limits),
+                }
+            }
+            if fuse {
+                let pos = y * stride + x + 4 * (j - 1);
+                let lv = [l, levels[j]];
+                let sz = [s, s2];
+                match s.max(s2) {
+                    4 => hpair16::<T, BD, 4>(buf, pos, stride, sz, lv, lut),
+                    6 => hpair16::<T, BD, 6>(buf, pos, stride, sz, lv, lut),
+                    8 => hpair16::<T, BD, 8>(buf, pos, stride, sz, lv, lut),
+                    _ => hpair16::<T, BD, 16>(buf, pos, stride, sz, lv, lut),
+                }
+                j += 1;
             }
         }
-        i = j;
+        i = skip_zero(sizes, j);
+        if i >= sizes.len() {
+            break;
+        }
     }
 }
 
@@ -2170,6 +2557,7 @@ pub fn filter_h_edge_bd<T: Pixel, const BD: u32>(
     } else {
         0
     };
+    let i = skip_zero(sizes, i);
     if i < sizes.len() {
         filter_h_edge_tail_bd::<T, BD>(buf, stride, x, y, sizes, levels, lut, i);
     }
