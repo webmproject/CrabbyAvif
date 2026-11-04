@@ -390,60 +390,89 @@ impl Image {
             }
             let src_pd = validate_plane(&src, *plane)?;
             let dst_pd = validate_plane(self, *plane)?;
-            // SAFETY: This function calls into libyuv which is a C++ library. We pass in pointers
-            // and strides to rust slices that are guaranteed to be valid.
-            //
-            // libyuv versions >= 1880 reports a return value here. Older versions do not. Ignore
+            let src_width = i32_from_u32(src_pd.width)?;
+            let src_height = i32_from_u32(src_pd.height)?;
+            let dst_width = i32_from_u32(dst_pd.width)?;
+            let dst_height = i32_from_u32(dst_pd.height)?;
+            // libyuv versions >= 1880 report a return value here. Older versions do not. Ignore
             // the return value for now.
-            #[allow(clippy::let_unit_value)]
-            let _ret = unsafe {
-                if src.depth > 8 {
-                    let source_ptr = src.planes[plane.as_usize()].unwrap_ref().ptr16();
-                    let dst_ptr = self.planes[plane.as_usize()].unwrap_mut().ptr16_mut();
+            if src.depth > 8 {
+                let source_ptr = src.planes[plane.as_usize()]
+                    .as_ref()
+                    .ok_or(AvifError::NoContent)?
+                    .ptr16();
+                let dst_ptr = self.planes[plane.as_usize()]
+                    .as_mut()
+                    .ok_or(AvifError::NoContent)?
+                    .ptr16_mut();
+                if source_ptr.is_null() || dst_ptr.is_null() {
+                    return AvifError::no_content();
+                }
+                let src_stride = i32_from_u32(src_pd.row_bytes / 2)?;
+                let dst_stride = i32_from_u32(dst_pd.row_bytes / 2)?;
+                // SAFETY: `validate_plane` and the null check above verified that `source_ptr`
+                // points to a valid, 2-byte aligned `u16` plane of `src_width x src_height` with
+                // `src_stride` `u16` elements per row, and `self.allocate_planes` allocated a
+                // fresh, disjoint, 2-byte aligned `Pixels::Buffer16` at `dst_ptr` covering
+                // `dst_width x dst_height` with `dst_stride` `u16` elements per row.
+                #[allow(clippy::let_unit_value)]
+                let _ret = unsafe {
                     ScalePlane_12(
                         source_ptr,
-                        i32_from_u32(src_pd.row_bytes / 2)?,
-                        i32_from_u32(src_pd.width)?,
-                        i32_from_u32(src_pd.height)?,
+                        src_stride,
+                        src_width,
+                        src_height,
                         dst_ptr,
-                        i32_from_u32(dst_pd.row_bytes / 2)?,
-                        i32_from_u32(dst_pd.width)?,
-                        i32_from_u32(dst_pd.height)?,
+                        dst_stride,
+                        dst_width,
+                        dst_height,
                         FilterMode_kFilterBox,
                     )
-                } else {
-                    let source_ptr = src.planes[plane.as_usize()].unwrap_ref().ptr();
-                    let dst_ptr = self.planes[plane.as_usize()].unwrap_mut().ptr_mut();
-                    ScalePlane(
-                        source_ptr,
-                        i32_from_u32(src_pd.row_bytes)?,
-                        i32_from_u32(src_pd.width)?,
-                        i32_from_u32(src_pd.height)?,
-                        dst_ptr,
-                        i32_from_u32(dst_pd.row_bytes)?,
-                        i32_from_u32(dst_pd.width)?,
-                        i32_from_u32(dst_pd.height)?,
-                        if cfg!(feature = "android_mediacodec") {
-                            // On Android:
-                            // * For chroma planes: always use bilinear filter for chroma planes.
-                            //   libyuv uses only bilinear filtering for NV12Scale. So in order to
-                            //   be consistent between Nv12 and Yuv420, we need to use bilinear
-                            //   filter here so that the output looks the same irrespective of the
-                            //   decoder's color format.
-                            // * For luma planes: use bilinear filter when the scale factor is
-                            //   large. This avoids some grid like artifacts when scaling down by a
-                            //   large factor ( >= 25 ). See b/447547190.
-                            if *plane == Plane::U || *plane == Plane::V || scale_factor >= 25 {
-                                FilterMode_kFilterBilinear
-                            } else {
-                                FilterMode_kFilterBox
-                            }
-                        } else {
-                            FilterMode_kFilterBox
-                        },
-                    )
+                };
+            } else {
+                let source_ptr = src.planes[plane.as_usize()]
+                    .as_ref()
+                    .ok_or(AvifError::NoContent)?
+                    .ptr();
+                let dst_ptr = self.planes[plane.as_usize()]
+                    .as_mut()
+                    .ok_or(AvifError::NoContent)?
+                    .ptr_mut();
+                if source_ptr.is_null() || dst_ptr.is_null() {
+                    return AvifError::no_content();
                 }
-            };
+                let src_stride = i32_from_u32(src_pd.row_bytes)?;
+                let dst_stride = i32_from_u32(dst_pd.row_bytes)?;
+                let filter = if cfg!(feature = "android_mediacodec") {
+                    // On Android:
+                    // * For chroma planes: always use bilinear filter for chroma planes.
+                    //   libyuv uses only bilinear filtering for NV12Scale. So in order to
+                    //   be consistent between Nv12 and Yuv420, we need to use bilinear
+                    //   filter here so that the output looks the same irrespective of the
+                    //   decoder's color format.
+                    // * For luma planes: use bilinear filter when the scale factor is
+                    //   large. This avoids some grid like artifacts when scaling down by a
+                    //   large factor ( >= 25 ). See b/447547190.
+                    if *plane == Plane::U || *plane == Plane::V || scale_factor >= 25 {
+                        FilterMode_kFilterBilinear
+                    } else {
+                        FilterMode_kFilterBox
+                    }
+                } else {
+                    FilterMode_kFilterBox
+                };
+                // SAFETY: `validate_plane` and the null check above verified that `source_ptr`
+                // points to a valid `u8` plane of `src_width x src_height` with `src_stride` bytes
+                // per row, and `self.allocate_planes` allocated a fresh, disjoint `Pixels::Buffer`
+                // at `dst_ptr` covering `dst_width x dst_height` with `dst_stride` bytes per row.
+                #[allow(clippy::let_unit_value)]
+                let _ret = unsafe {
+                    ScalePlane(
+                        source_ptr, src_stride, src_width, src_height, dst_ptr, dst_stride,
+                        dst_width, dst_height, filter,
+                    )
+                };
+            }
         }
         Ok(())
     }
