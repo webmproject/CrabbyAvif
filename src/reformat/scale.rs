@@ -345,22 +345,35 @@ impl Image {
                 .as_mut()
                 .ok_or(AvifError::NoContent)?
                 .ptr_mut();
-            // SAFETY: This function calls into libyuv which is a C++ library. We pass in pointers
-            // and strides to rust slices that are guaranteed to be valid.
+            if src_y.is_null() || src_uv.is_null() || dst_y.is_null() || dst_uv.is_null() {
+                return AvifError::no_content();
+            }
+            let src_stride_y = i32_from_u32(src_y_pd.row_bytes)?;
+            let src_stride_uv = i32_from_u32(src_uv_pd.row_bytes)?;
+            let src_width = i32_from_u32(src_y_pd.width)?;
+            let src_height = i32_from_u32(src_y_pd.height)?;
+            let dst_stride_y = i32_from_u32(dst_y_pd.row_bytes)?;
+            let dst_stride_uv = i32_from_u32(dst_uv_pd.row_bytes)?;
+            let dst_width = i32_from_u32(dst_y_pd.width)?;
+            let dst_height = i32_from_u32(dst_y_pd.height)?;
+            // SAFETY: `validate_plane` and the null checks above verified that `src_y` and
+            // `src_uv` are valid 8-bit luma and interleaved UV buffers for `src_width x
+            // src_height`, and `self.allocate_planes` allocated fresh, disjoint `Pixels::Buffer`
+            // planes `dst_y` and `dst_uv` large enough for `dst_width x dst_height`.
             let ret = unsafe {
                 NV12Scale(
                     src_y,
-                    i32_from_u32(src_y_pd.row_bytes)?,
+                    src_stride_y,
                     src_uv,
-                    i32_from_u32(src_uv_pd.row_bytes)?,
-                    i32_from_u32(src_y_pd.width)?,
-                    i32_from_u32(src_y_pd.height)?,
+                    src_stride_uv,
+                    src_width,
+                    src_height,
                     dst_y,
-                    i32_from_u32(dst_y_pd.row_bytes)?,
+                    dst_stride_y,
                     dst_uv,
-                    i32_from_u32(dst_uv_pd.row_bytes)?,
-                    i32_from_u32(dst_y_pd.width)?,
-                    i32_from_u32(dst_y_pd.height)?,
+                    dst_stride_uv,
+                    dst_width,
+                    dst_height,
                     FilterMode_kFilterBox,
                 )
             };
