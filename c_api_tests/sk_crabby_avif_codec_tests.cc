@@ -482,6 +482,36 @@ TEST(SkCrabbyAvifCodecTest, ChangeAndroidMediaCodecOutputColorFormatReDecodes) {
   }
 }
 
+TEST(SkCrabbyAvifCodecTest, Unaligned16BitPlanes) {
+  ImagePtr image(avifImageCreate(4, 4, 10, AVIF_PIXEL_FORMAT_YUV420));
+  ASSERT_NE(image, nullptr);
+
+  std::vector<uint8_t> buffer(256, 0);
+  // Set an unaligned Y plane pointer (not 2-byte aligned).
+  image->yuvPlanes[0] = buffer.data() + 1;
+  image->yuvRowBytes[0] = 8;
+  image->yuvPlanes[1] = buffer.data() + 64;
+  image->yuvRowBytes[1] = 4;
+  image->yuvPlanes[2] = buffer.data() + 128;
+  image->yuvRowBytes[2] = 4;
+
+  EXPECT_NE(avifImageScale(image.get(), 2, 2, nullptr), AVIF_RESULT_OK);
+
+  avifRGBImage rgb;
+  avifRGBImageSetDefaults(&rgb, image.get());
+  ASSERT_EQ(avifRGBImageAllocatePixels(&rgb), AVIF_RESULT_OK);
+  EXPECT_NE(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+
+  // Valid YUV planes, but unaligned 10-bit RGB destination.
+  image->yuvPlanes[0] = buffer.data();
+  uint8_t* orig_rgb_pixels = rgb.pixels;
+  rgb.pixels = orig_rgb_pixels + 1;
+  EXPECT_NE(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+
+  rgb.pixels = orig_rgb_pixels;
+  avifRGBImageFreePixels(&rgb);
+}
+
 }  // namespace
 }  // namespace avif
 
