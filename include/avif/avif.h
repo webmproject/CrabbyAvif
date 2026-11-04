@@ -1006,27 +1006,24 @@ avifResult crabby_avifRGBImageAllocatePixels(avifRGBImage *rgb);
 void crabby_avifRGBImageFreePixels(avifRGBImage *rgb);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if name is not null, it has to be a valid C-style string.
+/// If `name` is non-null, it must point to a valid, nul-terminated C string that remains valid for
+/// reads for the duration of this call. Passing null is safe and returns `avifCodecChoice::Auto`.
 avifCodecChoice crabby_avifCodecChoiceFromName(const char *name);
 
-/// # Safety
-/// C API function that does not do any unsafe operations.
 const char *crabby_avifCodecName(avifCodecChoice _choice, avifCodecFlags requiredFlags);
 
-/// # Safety
-/// C API function that does not do any unsafe operations.
 const char *crabby_avifPixelFormatToString(avifPixelFormat format);
 
-/// # Safety
-/// C API function.
 const char *crabby_avifResultToString(avifResult res);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if cropRect is not null, it has to point to a valid avifCropRect object.
-/// - if clap is not null, it has to point to a valid avifCleanApertureBox object.
-/// - if diag is not null, it has to point to a valid avifDiagnostics object.
+/// - If both `cropRect` and `clap` are non-null:
+///   - `clap` must be properly aligned and point to an initialized `avifCleanApertureBox` valid
+///     for shared reads during this call.
+///   - `cropRect` must be properly aligned and point to an initialized `avifCropRect` valid for
+///     exclusive writes during this call, without aliasing `clap`.
+/// - Passing null for either `cropRect` or `clap` is safe and returns `AVIF_FALSE`. `_diag` is
+///   unused and may be null.
 avifBool crabby_avifCropRectConvertCleanApertureBox(avifCropRect *cropRect,
                                                     const avifCleanApertureBox *clap,
                                                     uint32_t imageW,
@@ -1035,10 +1032,13 @@ avifBool crabby_avifCropRectConvertCleanApertureBox(avifCropRect *cropRect,
                                                     avifDiagnostics *_diag);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if cropRect is not null, it has to point to a valid avifCropRect object.
-/// - if clap is not null, it has to point to a valid avifCleanApertureBox object.
-/// - if diag is not null, it has to point to a valid avifDiagnostics object.
+/// - If both `clap` and `cropRect` are non-null:
+///   - `cropRect` must be properly aligned and point to an initialized `avifCropRect` valid for
+///     shared reads during this call.
+///   - `clap` must be properly aligned and point to an initialized `avifCleanApertureBox` valid
+///     for exclusive writes during this call, without aliasing `cropRect`.
+/// - Passing null for either `clap` or `cropRect` is safe and returns `AVIF_FALSE`. `_diag` is
+///   unused and may be null.
 avifBool crabby_avifCleanApertureBoxConvertCropRect(avifCleanApertureBox *clap,
                                                     const avifCropRect *cropRect,
                                                     uint32_t imageW,
@@ -1047,31 +1047,36 @@ avifBool crabby_avifCleanApertureBoxConvertCropRect(avifCleanApertureBox *clap,
                                                     avifDiagnostics *_diag);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if info is not null, it has to point to a valid avifPixelFormatInfo object.
+/// If `info` is non-null, it must be properly aligned and point to an initialized
+/// `avifPixelFormatInfo` valid for exclusive writes during this call. Passing null is safe and is
+/// a no-op.
 void crabby_avifGetPixelFormatInfo(avifPixelFormat format, avifPixelFormatInfo *info);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if diag is not null, it has to point to a valid avifDiagnostics object.
+/// If `diag` is non-null, it must be properly aligned and point to an initialized
+/// `avifDiagnostics` valid for exclusive writes during this call. Passing null is safe and is a
+/// no-op.
 void crabby_avifDiagnosticsClearError(avifDiagnostics *diag);
 
 /// # Safety
-/// C API function.
+/// Allocates `size` zero-initialized bytes via the system allocator and returns a raw pointer that
+/// must eventually be freed with `crabby_avifFree`. Returns null if `size == 0` or if allocation
+/// fails. Safe for any `size` value; retained as `unsafe` because it performs raw FFI allocation
+/// and existing C-API Rust callers invoke it inside `unsafe` blocks under `-Dwarnings`.
 void *crabby_avifAlloc(size_t size);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if p is not null, it has to point to a buffer allocated by crabby_avifAlloc.
+/// If `p` is non-null, it must be a pointer previously returned by `crabby_avifAlloc` (or standard
+/// C `malloc`/`calloc`/`realloc`) that has not yet been freed, and must not be used after this
+/// call. Passing null is safe and is a no-op.
 void crabby_avifFree(void *p);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if outBuffer is not null, it has to be point a valid char buffer of size at least 256.
+/// If `outBuffer` is non-null, it must point to a writable `c_char` allocation of at least 256
+/// bytes (which may be uninitialized prior to this call) that does not overlap internal allocations
+/// and remains valid for writes during this call. Passing null is safe and is a no-op.
 void crabby_avifCodecVersions(char *outBuffer);
 
-/// # Safety
-/// C API function that does not perform any unsafe operations.
 unsigned int crabby_avifLibYUVVersion();
 
 } // extern "C"
