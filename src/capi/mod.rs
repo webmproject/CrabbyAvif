@@ -26,32 +26,52 @@ pub mod io;
 pub mod reformat;
 pub mod types;
 
+/// Dereferences a non-null `*const T` into `&T`.
+///
+/// # Safety (macro caller invariant)
+/// `$ptr` must be non-null (verified via `check_pointer!` / `check_pointer_or_return!` or an
+/// explicit `.is_null()` check prior to invoking this macro), properly aligned, pointing to an
+/// initialized `T`, and valid for shared reads without mutable aliasing for the lifetime of the
+/// returned reference.
 #[macro_export]
 macro_rules! deref_const {
     ($ptr:expr) => {{
-        // The extra curly braces here is necessary to make this whole macro into a single
-        // expression.
-        assert!(!$ptr.is_null());
-        // SAFETY: The pointer is guaranteed to be valid and non-null.
-        unsafe { &*($ptr) }
+        // The extra curly braces make this whole macro into a single expression, and binding
+        // `ptr` ensures `$ptr` is evaluated only once.
+        let ptr = $ptr;
+        assert!(!ptr.is_null());
+        // SAFETY: `ptr` is non-null (verified by `assert!` above), and the macro caller upholds
+        // that `ptr` is properly aligned, initialized, and valid for shared reads without mutable
+        // aliasing.
+        unsafe { &*ptr }
     }};
 }
 
+/// Dereferences a non-null `*mut T` into `&mut T`.
+///
+/// # Safety (macro caller invariant)
+/// `$ptr` must be non-null (verified via `check_pointer!` / `check_pointer_or_return!` or an
+/// explicit `.is_null()` check prior to invoking this macro), properly aligned, pointing to an
+/// initialized `T`, and uniquely valid for reads and writes without any aliasing references for
+/// the lifetime of the returned mutable reference.
 #[macro_export]
 macro_rules! deref_mut {
     ($ptr:expr) => {{
-        // The extra curly braces here is necessary to make this whole macro into a single
-        // expression.
-        assert!(!$ptr.is_null());
-        // SAFETY: The pointer is guaranteed to be valid and non-null.
-        unsafe { &mut *($ptr) }
+        // The extra curly braces make this whole macro into a single expression, and binding
+        // `ptr` ensures `$ptr` is evaluated only once.
+        let ptr = $ptr;
+        assert!(!ptr.is_null());
+        // SAFETY: `ptr` is non-null (verified by `assert!` above), and the macro caller upholds
+        // that `ptr` is properly aligned, initialized, and uniquely valid for exclusive mutable
+        // access.
+        unsafe { &mut *ptr }
     }};
 }
 
 #[macro_export]
 macro_rules! check_pointer {
     ($ptr:expr) => {
-        if $ptr.is_null() {
+        if ($ptr).is_null() {
             return avifResult::InvalidArgument;
         }
     };
@@ -60,7 +80,7 @@ macro_rules! check_pointer {
 #[macro_export]
 macro_rules! check_pointer_or_return {
     ($ptr:expr) => {
-        if $ptr.is_null() {
+        if ($ptr).is_null() {
             return;
         }
     };
