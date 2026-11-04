@@ -29,6 +29,9 @@ use crate::internal_utils::*;
 use crate::utils::pixels::Pixels;
 use crate::*;
 
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+
 #[derive(Default)]
 pub struct Native {
     config: Option<DecoderConfig>,
@@ -100,31 +103,64 @@ fn decode_payload(av1_payload: &[u8], options: &av1::DecodeOptions) -> AvifResul
     Ok(DecodedFrame { info, frame })
 }
 
-// Decodes each payload on its own thread (the first one on the calling thread) and returns the
-// results in the same order as |payloads|.
+// Decodes |payloads| on |thread_count| threads, each one repeatedly picking the next payload to
+// decode, and copies the decoded frames into |grid_image_helper| on the calling thread in the same
+// order as |payloads|.
 fn decode_payloads_in_parallel(
     payloads: &[Vec<u8>],
     options: &av1::DecodeOptions,
-) -> AvifResult<Vec<AvifResult<DecodedFrame>>> {
-    let Some((first, rest)) = payloads.split_first() else {
-        return Ok(Vec::new());
-    };
+    thread_count: usize,
+    grid_image_helper: &mut GridImageHelper,
+) -> AvifResult<()> {
+    // Frames decoded before all the previous ones were, waiting for their turn.
+    let mut frames: Vec<Option<DecodedFrame>> = create_vec_exact(payloads.len())?;
+    for _ in payloads {
+        frames.try_push(None)?;
+    }
+    let next_index = AtomicUsize::new(0);
     std::thread::scope(|scope| {
-        let mut handles = create_vec_exact(rest.len())?;
-        for payload in rest {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut handles = create_vec_exact(thread_count)?;
+        for _ in 0..thread_count {
+            let sender = sender.clone();
+            let next_index = &next_index;
             let handle = std::thread::Builder::new()
-                .spawn_scoped(scope, move || decode_payload(payload, options))
+                .spawn_scoped(scope, move || loop {
+                    let index = next_index.fetch_add(1, Ordering::Relaxed);
+                    let Some(payload) = payloads.get(index) else {
+                        break;
+                    };
+                    let frame = decode_payload(payload, options);
+                    let is_err = frame.is_err();
+                    // Sending fails if the receiver is gone because of an error.
+                    if sender.send((index, frame)).is_err() || is_err {
+                        break;
+                    }
+                })
                 .map_err(AvifError::map_unknown_error)?;
             handles.try_push(handle)?;
         }
-        let mut frames = create_vec_exact(payloads.len())?;
-        frames.try_push(decode_payload(first, options))?;
-        for handle in handles {
-            frames.try_push(handle.join().unwrap_or_else(|_| {
-                AvifError::unknown_error("native: decoding thread panicked")
-            }))?;
+        drop(sender);
+        let mut next_frame = 0;
+        for (index, frame) in receiver.iter() {
+            // Fail as soon as any cell fails, even if previous cells are still being decoded.
+            *frames
+                .get_mut(index)
+                .ok_or(AvifError::UnknownError("native: invalid cell index".into()))? =
+                Some(frame?);
+            while let Some(frame) = frames.get_mut(next_frame).and_then(Option::take) {
+                let mut cell_image = Image::default();
+                Native::frame_to_image(frame, &mut cell_image, grid_image_helper.category, true)?;
+                grid_image_helper.copy_from_cell_image(&mut cell_image)?;
+                next_frame += 1;
+            }
         }
-        Ok(frames)
+        for handle in handles {
+            if handle.join().is_err() {
+                return AvifError::unknown_error("native: decoding thread panicked");
+            }
+        }
+        Ok(())
     })
 }
 
@@ -253,15 +289,17 @@ impl Decoder for Native {
         spatial_id: u8,
         grid_image_helper: &mut GridImageHelper,
     ) -> AvifResult<()> {
-        let options = self.decode_options(spatial_id)?;
-        let config = self.config.as_ref().ok_or(AvifError::InvalidArgument)?;
-        let max_threads = usize_from_u32(config.max_threads)?.max(1);
-        // Decode the cells in batches of max_threads cells in parallel. This also bounds the
-        // number of decoded cells that are held in memory at any given time.
-        for batch in payloads.chunks(max_threads) {
-            for frame in decode_payloads_in_parallel(batch, &options)? {
+        let mut options = self.decode_options(spatial_id)?;
+        let thread_count = options.threads.min(payloads.len());
+        if thread_count > 1 {
+            // Decode several cells in parallel rather than each cell with several threads.
+            options.threads = 1;
+            decode_payloads_in_parallel(payloads, &options, thread_count, grid_image_helper)?;
+        } else {
+            for payload in payloads {
+                let frame = decode_payload(payload, &options)?;
                 let mut cell_image = Image::default();
-                Self::frame_to_image(frame?, &mut cell_image, grid_image_helper.category, true)?;
+                Self::frame_to_image(frame, &mut cell_image, grid_image_helper.category, true)?;
                 grid_image_helper.copy_from_cell_image(&mut cell_image)?;
             }
         }
