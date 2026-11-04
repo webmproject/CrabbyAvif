@@ -512,6 +512,36 @@ TEST(SkCrabbyAvifCodecTest, Unaligned16BitPlanes) {
   avifRGBImageFreePixels(&rgb);
 }
 
+TEST(SkCrabbyAvifCodecTest, OddStride16BitPlanes) {
+  ImagePtr image(avifImageCreate(4, 4, 10, AVIF_PIXEL_FORMAT_YUV420));
+  ASSERT_NE(image, nullptr);
+
+  std::vector<uint8_t> buffer(256, 0);
+  // Set aligned pointers with an odd row stride on a 10-bit plane.
+  image->yuvPlanes[0] = buffer.data();
+  image->yuvRowBytes[0] = 9;
+  image->yuvPlanes[1] = buffer.data() + 64;
+  image->yuvRowBytes[1] = 4;
+  image->yuvPlanes[2] = buffer.data() + 128;
+  image->yuvRowBytes[2] = 4;
+
+  EXPECT_NE(avifImageScale(image.get(), 2, 2, nullptr), AVIF_RESULT_OK);
+
+  avifRGBImage rgb;
+  avifRGBImageSetDefaults(&rgb, image.get());
+  ASSERT_EQ(avifRGBImageAllocatePixels(&rgb), AVIF_RESULT_OK);
+  EXPECT_NE(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+
+  // Valid YUV planes, but odd-stride 10-bit RGB destination.
+  image->yuvRowBytes[0] = 8;
+  uint32_t orig_rgb_row_bytes = rgb.rowBytes;
+  rgb.rowBytes = orig_rgb_row_bytes + 1;
+  EXPECT_NE(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+
+  rgb.rowBytes = orig_rgb_row_bytes;
+  avifRGBImageFreePixels(&rgb);
+}
+
 }  // namespace
 }  // namespace avif
 

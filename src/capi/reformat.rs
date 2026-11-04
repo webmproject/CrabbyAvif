@@ -246,6 +246,12 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
                 dst.yuvPlanes[2] as *mut u16,
                 dst.alphaPlane as *mut u16,
             ];
+            let raw_row_bytes = [
+                dst.yuvRowBytes[0],
+                dst.yuvRowBytes[1],
+                dst.yuvRowBytes[2],
+                dst.alphaRowBytes,
+            ];
             let dst_row_bytes = [
                 dst.yuvRowBytes[0] / 2,
                 dst.yuvRowBytes[1] / 2,
@@ -253,7 +259,10 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
                 dst.alphaRowBytes / 2,
             ];
             let dst_ptr = dst_planes[plane.as_usize()];
-            if dst_ptr.is_null() || !dst_ptr.is_aligned() {
+            if dst_ptr.is_null()
+                || !dst_ptr.is_aligned()
+                || !raw_row_bytes[plane.as_usize()].is_multiple_of(2)
+            {
                 return AvifError::invalid_argument();
             }
             for y in 0..plane_data.height {
