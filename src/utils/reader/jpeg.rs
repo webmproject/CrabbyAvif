@@ -223,6 +223,9 @@ fn get_gainmap(
                         Ok(Some(headroom)) if headroom > 0.0 => {
                             metadata.alternate_hdr_headroom = headroom.into();
                             metadata.max = [headroom.into(); 3];
+                            if metadata.is_valid().is_err() {
+                                return Ok(None);
+                            }
                         }
                         _ => return Ok(None),
                     }
