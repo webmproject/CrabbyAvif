@@ -2022,7 +2022,7 @@ fn b_497926602(codec: CodecChoice) -> AvifResult<()> {
 
 #[test_matrix(
     [
-        ("white_iden_chain_with_imir.avif", false, false),
+        ("white_iden_chain_with_imir.avif", false, true),
         ("white_iden_chain_with_imir_primary.avif", false, true),
         ("white_iden_irot.avif", true, false)
     ],

@@ -528,11 +528,21 @@ pub(crate) fn replace_transformative_properties(
     Ok(())
 }
 
+pub(crate) fn has_transformative_properties(properties: &[ItemProperty]) -> bool {
+    properties.iter().any(|p| {
+        matches!(
+            p,
+            ItemProperty::ImageRotation(_)
+                | ItemProperty::ImageMirror(_)
+                | ItemProperty::CleanAperture(_)
+        )
+    })
+}
+
 // Accumulation of several sets of transformative properties applied one after the other to an
 // image (for example along a chain of 'iden' derived image items). It is represented as a crop
 // of the original image, followed by a counter-clockwise rotation of 90 * rotation degrees,
 // followed by a mirroring about a vertical axis if mirror is true.
-#[allow(dead_code)]
 pub(crate) struct Transformation {
     width: u32,
     height: u32,
@@ -541,7 +551,6 @@ pub(crate) struct Transformation {
     mirror: bool,
 }
 
-#[allow(dead_code)]
 impl Transformation {
     pub(crate) fn create(width: u32, height: u32) -> Self {
         Self {

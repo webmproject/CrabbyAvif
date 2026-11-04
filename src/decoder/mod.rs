@@ -642,6 +642,7 @@ impl Decoder {
         &mut self,
         gainmap_id: u32,
         tonemap_id: u32,
+        tonemap_properties: Option<&[ItemProperty]>,
         #[allow(unused_variables)] color_item_id: u32, // This parameter is unused in some configurations.
     ) -> AvifResult<()> {
         let gainmap_item = self
@@ -666,13 +667,14 @@ impl Decoder {
             .items
             .get(&tonemap_id)
             .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
-        if let Some(nclx) = find_nclx(&tonemap_item.properties)? {
+        let tonemap_properties = tonemap_properties.unwrap_or(&tonemap_item.properties);
+        if let Some(nclx) = find_nclx(tonemap_properties)? {
             self.gainmap.alt_color_primaries = nclx.color_primaries;
             self.gainmap.alt_transfer_characteristics = nclx.transfer_characteristics;
             self.gainmap.alt_matrix_coefficients = nclx.matrix_coefficients;
             self.gainmap.alt_yuv_range = nclx.yuv_range;
         }
-        if let Some(icc) = find_icc(&tonemap_item.properties)? {
+        if let Some(icc) = find_icc(tonemap_properties)? {
             self.gainmap.alt_icc = icc.try_clone()?;
         }
 
@@ -687,7 +689,7 @@ impl Decoder {
         // HEIC is enabled.
         #[cfg(not(feature = "heic"))]
         {
-            if let Some(ispe) = find_property!(tonemap_item.properties, ImageSpatialExtents) {
+            if let Some(ispe) = find_property!(tonemap_properties, ImageSpatialExtents) {
                 let color_item = self
                     .items
                     .get(&color_item_id)
@@ -704,10 +706,10 @@ impl Decoder {
             }
             // HEIC files created by Apple have some of these properties set in the Tonemap item.
             // So these checks are skipped when HEIC is enabled.
-            if find_property!(tonemap_item.properties, PixelAspectRatio).is_some()
-                || find_property!(tonemap_item.properties, CleanAperture).is_some()
-                || find_property!(tonemap_item.properties, ImageRotation).is_some()
-                || find_property!(tonemap_item.properties, ImageMirror).is_some()
+            if find_property!(tonemap_properties, PixelAspectRatio).is_some()
+                || find_property!(tonemap_properties, CleanAperture).is_some()
+                || find_property!(tonemap_properties, ImageRotation).is_some()
+                || find_property!(tonemap_properties, ImageMirror).is_some()
             {
                 return AvifError::invalid_tone_mapped_image("");
             }
@@ -1056,22 +1058,114 @@ impl Decoder {
         AvifError::no_content()
     }
 
-    fn resolve_identity_item(&mut self, mut item_id: u32) -> AvifResult<u32> {
+    // Resolves a chain of 'iden' (identity transformation) derived image items to the underlying
+    // non-identity image item, iteratively composing transformative properties from the innermost
+    // item outward. Returns the resolved item ID and, if any 'iden' items were traversed, a copy
+    // of the resolved item's properties with its transformative properties replaced by the
+    // composed ones.
+    //
+    // ISO/IEC 23008-12 (HEIF) Section 6.3 ("Derivation of an output image of an image item"):
+    //   - For a coded image item, the reconstructed image is the output of the decoding process;
+    //     for a derived image item, the operation of the derived image item is applied to its
+    //     input images to form the reconstructed image.
+    //   - "The output image of an image item is derived from the reconstructed image of the image
+    //     item as follows: if the image item has no transformative item properties, the output
+    //     image is identical to the reconstructed image; otherwise..." its sequence of
+    //     transformative item properties is applied to the reconstructed image.
+    //
+    // ISO/IEC 23008-12 (HEIF) Section 6.6.1 ("Derived images and derived image items - General"):
+    //   "The image items used as input to a derived image item are output images of other image
+    //   items, which may be coded image items or derived image items. The output image of a
+    //   derived image item is obtained, also as defined in 6.3, by applying transformative item
+    //   properties to the reconstructed image."
+    //
+    // ISO/IEC 23008-12 (HEIF) Section 6.6.2.1 ("Identity derivation"):
+    //   "A derived image item of the item_type value 'iden' (identity transformation) may be used
+    //   when it is desired to use transformative properties to derive an image item. The derived
+    //   image item shall have no item body (i.e. no extents), and reference_count for the 'dimg'
+    //   item reference of a 'iden' derived image item shall be equal to 1."
+    //
+    // Note on MIAF: ISO/IEC 23000-22 Section 7.3.11.2 states:
+    //   "Any derived image item of the item_type value 'iden' shall not be derived from an image
+    //   item of item_type value 'iden'."
+    // However, even in MIAF both a coded/derived base item and a single 'iden' item derived from
+    // it may each carry transformative properties that compose iteratively, and general HEIF
+    // ('mif1'/'heic') as well as non-strict AVIF files in the wild allow chaining multiple 'iden'
+    // items.
+    fn resolve_identity_item(
+        &self,
+        mut item_id: u32,
+    ) -> AvifResult<(u32, Option<Vec<ItemProperty>>)> {
+        // Collect the chain of identity items, from the outermost one.
+        let mut identity_item_ids: Vec<u32> = Vec::new();
         loop {
             let item = self.items.get(&item_id).unwrap();
             if !item.is_identity_item() {
                 break;
             }
-
-            let mut transformative_properties = Vec::new();
-            replace_transformative_properties(&item.properties, &mut transformative_properties)?;
-            // Set the item to that of the derived item and copy over the transformative
-            // properties.
-            item_id = item.source_item_ids[0];
-            let item = self.items.get_mut(&item_id).unwrap();
-            replace_transformative_properties(&transformative_properties, &mut item.properties)?;
+            if identity_item_ids.contains(&item_id) {
+                return AvifError::bmff_parse_failed("cycle in iden items");
+            }
+            identity_item_ids.try_push(item_id)?;
+            item_id = *item
+                .source_item_ids
+                .first()
+                .ok_or(AvifError::BmffParseFailed("missing dimg for iden".into()))?;
+            if !self.items.contains_key(&item_id) {
+                return AvifError::bmff_parse_failed("missing dimg item for iden");
+            }
         }
-        Ok(item_id)
+        if identity_item_ids.is_empty() {
+            return Ok((item_id, None));
+        }
+        // The transformative properties of each item in the chain apply to the output of the
+        // item it derives from, starting from the coded item. Compute the equivalent
+        // transformative properties for the resolved item without mutating `self.items`, since
+        // multiple items (for example thumbnails or chained `iden` items) may reference the same
+        // underlying item.
+        let item = self.items.get(&item_id).unwrap();
+        let mut levels: Vec<&[ItemProperty]> = Vec::new();
+        if has_transformative_properties(&item.properties) {
+            levels.try_push(&item.properties)?;
+        }
+        for identity_item_id in identity_item_ids.iter().rev() {
+            let properties = &self.items.get(identity_item_id).unwrap().properties;
+            if has_transformative_properties(properties) {
+                levels.try_push(properties)?;
+            }
+        }
+        let transformative_properties = match levels.len() {
+            0 => Vec::new(),
+            // Copy the properties as is, to support fractional clean apertures.
+            1 => {
+                let mut transformative_properties = Vec::new();
+                replace_transformative_properties(levels[0], &mut transformative_properties)?;
+                transformative_properties
+            }
+            _ => {
+                let mut transformation = Transformation::create(item.width, item.height);
+                for properties in levels {
+                    transformation.apply(properties)?;
+                }
+                transformation.properties()?
+            }
+        };
+        let mut properties = create_vec_exact(checked_add!(
+            item.properties.len(),
+            transformative_properties.len()
+        )?)?;
+        for property in &item.properties {
+            if !matches!(
+                property,
+                ItemProperty::ImageRotation(_)
+                    | ItemProperty::ImageMirror(_)
+                    | ItemProperty::CleanAperture(_)
+            ) {
+                properties.try_push(property.try_clone()?)?;
+            }
+        }
+        replace_transformative_properties(&transformative_properties, &mut properties)?;
+        Ok((item_id, Some(properties)))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1218,6 +1312,8 @@ impl Decoder {
             ..Image::default()
         };
 
+        let (color_item_id, mut resolved_color_properties) =
+            self.resolve_identity_item(color_item_id)?;
         self.read_and_parse_item(color_item_id, DecodingItem::COLOR)?;
 
         let mut item_ids: [u32; DecodingItem::COUNT] = [0; DecodingItem::COUNT];
@@ -1242,8 +1338,10 @@ impl Decoder {
             self.harvest_and_validate_gainmap_properties(
                 gainmap_id,
                 /* tonemap_id= */ color_item_id,
+                resolved_color_properties.as_deref(),
                 item_ids[DecodingItem::COLOR.usize()],
             )?;
+            resolved_color_properties = None;
             self.gainmap.metadata = self.tile_info[DecodingItem::COLOR.usize()].gainmap_metadata;
             self.gainmap_present = true;
 
@@ -1410,11 +1508,16 @@ impl Decoder {
             self.gainmap.image.chroma_sample_position = codec_config.chroma_sample_position();
         }
 
-        let color_properties = &self
-            .items
-            .get(&item_ids[DecodingItem::COLOR.usize()])
-            .unwrap()
-            .properties;
+        let color_properties = match &resolved_color_properties {
+            Some(properties) => properties,
+            None => {
+                &self
+                    .items
+                    .get(&item_ids[DecodingItem::COLOR.usize()])
+                    .unwrap()
+                    .properties
+            }
+        };
         let alpha_properties = if item_ids[DecodingItem::ALPHA.usize()] != 0 {
             Some(
                 &self
@@ -1670,7 +1773,6 @@ impl Decoder {
                         &avif_boxes.ftyp,
                         &avif_boxes.meta,
                     )?;
-                    let primary_item_id = self.resolve_identity_item(primary_item_id)?;
                     self.prepare_still_image_item(
                         primary_item_id,
                         /* allow_gainmap= */ true,
@@ -1701,9 +1803,8 @@ impl Decoder {
                             Err(AvifError::NoContent) => continue,
                             Err(err) => return Err(err),
                         };
-                        let resolved_id = self.resolve_identity_item(parsed_id)?;
-                        if !self.thumbnail_item_ids.contains(&resolved_id) {
-                            self.thumbnail_item_ids.try_push(resolved_id)?;
+                        if !self.thumbnail_item_ids.contains(&parsed_id) {
+                            self.thumbnail_item_ids.try_push(parsed_id)?;
                         }
                     }
                     if self.thumbnail_item_ids.is_empty() {
@@ -2903,5 +3004,71 @@ mod tests {
             DecodingItem::ALL.map(|c| c.usize()),
             DecodingItem::ALL_USIZE
         );
+    }
+
+    #[test]
+    fn resolve_identity_item_chained_does_not_mutate_items() {
+        // Coded item 1 (irot=1) <- iden item 2 (imir=0) <- iden item 3 (irot=1).
+        // Resolving item 2 and then item 3 must not mutate item 1's properties in place (which
+        // would apply item 2's transform twice when resolving item 3).
+        let mut decoder = Decoder::default();
+        decoder.items.insert(
+            1,
+            Item {
+                id: 1,
+                item_type: "av01".into(),
+                width: 100,
+                height: 50,
+                properties: vec![ItemProperty::ImageRotation(1)],
+                ..Item::default()
+            },
+        );
+        decoder.items.insert(
+            2,
+            Item {
+                id: 2,
+                item_type: "iden".into(),
+                width: 50,
+                height: 100,
+                source_item_ids: vec![1],
+                properties: vec![ItemProperty::ImageMirror(0)],
+                ..Item::default()
+            },
+        );
+        decoder.items.insert(
+            3,
+            Item {
+                id: 3,
+                item_type: "iden".into(),
+                width: 100,
+                height: 50,
+                source_item_ids: vec![2],
+                properties: vec![ItemProperty::ImageRotation(1)],
+                ..Item::default()
+            },
+        );
+
+        let (resolved_1, props_1) = decoder.resolve_identity_item(1).unwrap();
+        assert_eq!(resolved_1, 1);
+        assert!(props_1.is_none());
+
+        let (resolved_2, props_2) = decoder.resolve_identity_item(2).unwrap();
+        assert_eq!(resolved_2, 1);
+        let props_2 = props_2.unwrap();
+        assert_eq!(find_property!(&props_2, ImageRotation), Some(&1));
+        assert_eq!(find_property!(&props_2, ImageMirror), Some(&0));
+        assert!(find_property!(&props_2, CleanAperture).is_none());
+
+        let (resolved_3, props_3) = decoder.resolve_identity_item(3).unwrap();
+        assert_eq!(resolved_3, 1);
+        let props_3 = props_3.unwrap();
+        assert!(find_property!(&props_3, ImageRotation).is_none());
+        assert_eq!(find_property!(&props_3, ImageMirror), Some(&0));
+        assert!(find_property!(&props_3, CleanAperture).is_none());
+
+        // Coded item 1's original properties remain untouched.
+        let item_1_props = &decoder.items.get(&1).unwrap().properties;
+        assert_eq!(item_1_props.len(), 1);
+        assert_eq!(find_property!(item_1_props, ImageRotation), Some(&1));
     }
 }
