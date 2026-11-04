@@ -16,6 +16,7 @@ use crate::decoder::*;
 use crate::internal_utils::stream::*;
 use crate::internal_utils::*;
 use crate::parser::mp4box::*;
+use crate::utils::clap::*;
 use crate::utils::pixels::ChannelIdc;
 use crate::*;
 
@@ -528,27 +529,73 @@ pub(crate) fn replace_transformative_properties(
 }
 
 // Accumulation of several sets of transformative properties applied one after the other to an
-// image (for example along a chain of 'iden' derived image items). It is represented as a
-// counter-clockwise rotation of 90 * rotation degrees, followed by a mirroring about a vertical
-// axis if mirror is true.
+// image (for example along a chain of 'iden' derived image items). It is represented as a crop
+// of the original image, followed by a counter-clockwise rotation of 90 * rotation degrees,
+// followed by a mirroring about a vertical axis if mirror is true.
 #[allow(dead_code)]
 pub(crate) struct Transformation {
+    width: u32,
+    height: u32,
+    crop: CropRect,
     rotation: u8,
     mirror: bool,
 }
 
 #[allow(dead_code)]
 impl Transformation {
-    pub(crate) fn create() -> Self {
+    pub(crate) fn create(width: u32, height: u32) -> Self {
         Self {
+            width,
+            height,
+            crop: CropRect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
             rotation: 0,
             mirror: false,
         }
     }
 
+    fn displayed_size(&self) -> (u32, u32) {
+        if self.rotation % 2 == 1 {
+            (self.crop.height, self.crop.width)
+        } else {
+            (self.crop.width, self.crop.height)
+        }
+    }
+
     // Applies the given transformative properties on top of the current transformation, in the
-    // order mandated by ISO/IEC 23008-12 Section 6.5.1: irot, then imir.
-    pub(crate) fn apply(&mut self, properties: &[ItemProperty]) {
+    // order mandated by ISO/IEC 23008-12 Section 6.5.1: clap, then irot, then imir.
+    pub(crate) fn apply(&mut self, properties: &[ItemProperty]) -> AvifResult<()> {
+        if let Some(clap) = find_property!(properties, CleanAperture) {
+            let (mut w, mut h) = self.displayed_size();
+            // The chroma subsampling constraints do not apply to intermediate crops, so use
+            // Yuv444. Fractional crop rectangles cannot be composed.
+            let rect = CropRect::create_from(clap, w, h, PixelFormat::Yuv444)
+                .or(AvifError::not_implemented())?;
+            // Map the crop rectangle from the displayed image back to self.crop, by undoing the
+            // mirroring and then the rotation. CropRect::create_from() guarantees that the
+            // rectangle lies within the w x h image, so none of these operations overflow.
+            let (mut x0, mut y0, mut x1, mut y1) =
+                (rect.x, rect.y, rect.x + rect.width, rect.y + rect.height);
+            if self.mirror {
+                (x0, x1) = (w - x1, w - x0);
+            }
+            for _ in 0..self.rotation {
+                // A counter-clockwise rotation maps (x, y) in a h x w image to (y, h - x) in a
+                // w x h image. Undo it.
+                (x0, y0, x1, y1) = (h - y1, x0, h - y0, x1);
+                (w, h) = (h, w);
+            }
+            self.crop = CropRect {
+                x: self.crop.x + x0,
+                y: self.crop.y + y0,
+                width: x1 - x0,
+                height: y1 - y0,
+            };
+        }
         if let Some(angle) = find_property!(properties, ImageRotation) {
             let angle = *angle % 4;
             // Mirroring then rotating counter-clockwise is the same as rotating clockwise then
@@ -567,11 +614,25 @@ impl Transformation {
             }
             self.mirror = !self.mirror;
         }
+        Ok(())
     }
 
     // Returns the transformative properties equivalent to this transformation.
     pub(crate) fn properties(&self) -> AvifResult<Vec<ItemProperty>> {
         let mut properties = Vec::new();
+        if self.crop.x != 0
+            || self.crop.y != 0
+            || self.crop.width != self.width
+            || self.crop.height != self.height
+        {
+            let clap = CleanAperture::create_from(
+                &self.crop,
+                self.width,
+                self.height,
+                PixelFormat::Yuv444,
+            )?;
+            properties.try_push(ItemProperty::CleanAperture(clap))?;
+        }
         if self.rotation != 0 {
             properties.try_push(ItemProperty::ImageRotation(self.rotation))?;
         }
@@ -836,12 +897,81 @@ pub(crate) fn construct_items(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::UFraction;
+
+    fn clap(width: u32, height: u32, horiz_off: i32, vert_off: i32) -> ItemProperty {
+        ItemProperty::CleanAperture(CleanAperture {
+            width: UFraction(width, 1),
+            height: UFraction(height, 1),
+            horiz_off: UFraction(horiz_off as u32, 1),
+            vert_off: UFraction(vert_off as u32, 1),
+        })
+    }
+
+    fn crop(x: u32, y: u32, width: u32, height: u32) -> CropRect {
+        CropRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn transformation_nested_clap_irot() {
+        let mut transformation = Transformation::create(1280, 720);
+        transformation
+            .apply(&[clap(300, 300, 0, 0), ItemProperty::ImageRotation(1)])
+            .unwrap();
+        transformation
+            .apply(&[clap(150, 150, 0, 0), ItemProperty::ImageRotation(1)])
+            .unwrap();
+        assert_eq!(transformation.crop, crop(565, 285, 150, 150));
+        assert_eq!(transformation.rotation, 2);
+        assert!(!transformation.mirror);
+        let properties = transformation.properties().unwrap();
+        assert_eq!(properties.len(), 2);
+        let clap = find_property!(&properties, CleanAperture).unwrap();
+        assert_eq!(clap.width, UFraction(150, 1));
+        assert_eq!(clap.height, UFraction(150, 1));
+        assert_eq!(find_property!(&properties, ImageRotation), Some(&2));
+    }
+
+    #[test]
+    fn transformation_clap_after_irot() {
+        let mut transformation = Transformation::create(100, 50);
+        transformation
+            .apply(&[ItemProperty::ImageRotation(1)])
+            .unwrap();
+        // Top-left 10x20 corner of the rotated 50x100 image, which is the top-right corner of
+        // the original image.
+        transformation.apply(&[clap(10, 20, -20, -40)]).unwrap();
+        assert_eq!(transformation.crop, crop(80, 0, 20, 10));
+        assert_eq!(transformation.rotation, 1);
+    }
+
+    #[test]
+    fn transformation_clap_after_imir() {
+        let mut transformation = Transformation::create(100, 50);
+        transformation
+            .apply(&[ItemProperty::ImageMirror(1)])
+            .unwrap();
+        // Top-left 10x20 corner of the vertically flipped image.
+        transformation.apply(&[clap(10, 20, -45, -15)]).unwrap();
+        assert_eq!(transformation.crop, crop(0, 30, 10, 20));
+        assert_eq!(transformation.rotation, 2);
+        assert!(transformation.mirror);
+    }
 
     #[test]
     fn transformation_imir_then_irot() {
-        let mut transformation = Transformation::create();
-        transformation.apply(&[ItemProperty::ImageMirror(0)]);
-        transformation.apply(&[ItemProperty::ImageRotation(1)]);
+        let mut transformation = Transformation::create(100, 50);
+        transformation
+            .apply(&[ItemProperty::ImageMirror(0)])
+            .unwrap();
+        transformation
+            .apply(&[ItemProperty::ImageRotation(1)])
+            .unwrap();
         assert_eq!(transformation.rotation, 3);
         assert!(transformation.mirror);
         let properties = transformation.properties().unwrap();
