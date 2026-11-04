@@ -527,6 +527,61 @@ pub(crate) fn replace_transformative_properties(
     Ok(())
 }
 
+// Accumulation of several sets of transformative properties applied one after the other to an
+// image (for example along a chain of 'iden' derived image items). It is represented as a
+// counter-clockwise rotation of 90 * rotation degrees, followed by a mirroring about a vertical
+// axis if mirror is true.
+#[allow(dead_code)]
+pub(crate) struct Transformation {
+    rotation: u8,
+    mirror: bool,
+}
+
+#[allow(dead_code)]
+impl Transformation {
+    pub(crate) fn create() -> Self {
+        Self {
+            rotation: 0,
+            mirror: false,
+        }
+    }
+
+    // Applies the given transformative properties on top of the current transformation, in the
+    // order mandated by ISO/IEC 23008-12 Section 6.5.1: irot, then imir.
+    pub(crate) fn apply(&mut self, properties: &[ItemProperty]) {
+        if let Some(angle) = find_property!(properties, ImageRotation) {
+            let angle = *angle % 4;
+            // Mirroring then rotating counter-clockwise is the same as rotating clockwise then
+            // mirroring.
+            self.rotation = if self.mirror {
+                (self.rotation + 4 - angle) % 4
+            } else {
+                (self.rotation + angle) % 4
+            };
+        }
+        if let Some(axis) = find_property!(properties, ImageMirror) {
+            // Mirroring about a horizontal axis is the same as rotating by 180 degrees then
+            // mirroring about a vertical axis.
+            if *axis == 1 {
+                self.rotation = (self.rotation + 2) % 4;
+            }
+            self.mirror = !self.mirror;
+        }
+    }
+
+    // Returns the transformative properties equivalent to this transformation.
+    pub(crate) fn properties(&self) -> AvifResult<Vec<ItemProperty>> {
+        let mut properties = Vec::new();
+        if self.rotation != 0 {
+            properties.try_push(ItemProperty::ImageRotation(self.rotation))?;
+        }
+        if self.mirror {
+            properties.try_push(ItemProperty::ImageMirror(0))?;
+        }
+        Ok(properties)
+    }
+}
+
 // Returns the depth information from either the codec configuration property or
 // the PixelInformationProperty, or an error if the information cannot be found.
 // Item::validate_properties() checks for cross-property consistency.
@@ -776,4 +831,22 @@ pub(crate) fn construct_items(
         }
     }
     Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transformation_imir_then_irot() {
+        let mut transformation = Transformation::create();
+        transformation.apply(&[ItemProperty::ImageMirror(0)]);
+        transformation.apply(&[ItemProperty::ImageRotation(1)]);
+        assert_eq!(transformation.rotation, 3);
+        assert!(transformation.mirror);
+        let properties = transformation.properties().unwrap();
+        assert_eq!(find_property!(&properties, ImageRotation), Some(&3));
+        assert_eq!(find_property!(&properties, ImageMirror), Some(&0));
+        assert!(find_property!(&properties, CleanAperture).is_none());
+    }
 }
