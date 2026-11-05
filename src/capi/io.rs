@@ -19,6 +19,7 @@ use std::os::raw::c_char;
 use std::os::raw::c_void;
 
 use crate::decoder::GenericIO;
+use crate::internal_utils::check_slice_from_raw_parts_safety;
 use crate::internal_utils::create_vec_exact;
 use crate::internal_utils::io::DecoderFileIO;
 use crate::internal_utils::io::DecoderRawIO;
@@ -32,6 +33,10 @@ pub struct avifROData {
     pub size: usize,
 }
 
+/// Read-write byte buffer used across the C API.
+///
+/// Safety invariant for Rust conversions (`TryFrom<&avifRWData>`): whenever `size > 0`, `data`
+/// must be non-null and point to at least `size` initialized readable bytes (`size <= isize::MAX`).
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct avifRWData {
@@ -42,7 +47,7 @@ pub struct avifRWData {
 impl From<&Vec<u8>> for avifRWData {
     fn from(v: &Vec<u8>) -> Self {
         avifRWData {
-            data: v.as_ptr() as *mut u8,
+            data: if v.is_empty() { std::ptr::null_mut() } else { v.as_ptr() as *mut u8 },
             size: v.len(),
         }
     }
@@ -52,19 +57,27 @@ impl TryFrom<&avifRWData> for Vec<u8> {
     type Error = AvifError;
     fn try_from(data: &avifRWData) -> AvifResult<Vec<u8>> {
         if data.size == 0 {
-            Ok(Vec::new())
-        } else {
-            let slice = unsafe { std::slice::from_raw_parts(data.data, data.size) };
-            let mut vec = create_vec_exact(data.size)?;
-            vec.try_extend_from_slice(slice)?;
-            Ok(vec)
+            return Ok(Vec::new());
         }
+        if !check_slice_from_raw_parts_safety(data.data, data.size) {
+            return AvifError::invalid_argument();
+        }
+        let mut vec = create_vec_exact(data.size)?;
+        // SAFETY: `data.size > 0`, `data.data` is non-null, `data.size <= isize::MAX`, and valid
+        // `avifRWData` instances uphold that `data.data` points to `data.size` initialized bytes.
+        let slice = unsafe { std::slice::from_raw_parts(data.data, data.size) };
+        vec.try_extend_from_slice(slice)?;
+        Ok(vec)
     }
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if raw is not null, it has to point to a valid avifRWData object.
+/// - If `raw` is non-null, it must be properly aligned and point to a valid, initialized
+///   `avifRWData` valid for exclusive reads and writes during this call.
+/// - Within `*raw`, `raw.data` must either be null (with `raw.size == 0`) or a pointer previously
+///   allocated by `crabby_avifRWDataRealloc` / `crabby_avifRWDataSet` with length `raw.size` that
+///   has not yet been freed.
+/// - Passing null for `raw` is safe and returns `avifResult::InvalidArgument`.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRWDataRealloc(
     raw: *mut avifRWData,
@@ -88,26 +101,33 @@ pub unsafe extern "C" fn crabby_avifRWDataRealloc(
         return avifResult::OutOfMemory;
     }
     if !raw.data.is_null() {
-        // SAFETY: raw.data and raw.size are guaranteed to be valid. This code is basically
-        // free()'ing the manually managed memory.
-        let oldData = unsafe { Box::from_raw(std::slice::from_raw_parts_mut(raw.data, raw.size)) };
+        let old_slice = std::ptr::slice_from_raw_parts_mut(raw.data, raw.size);
+        // SAFETY: By caller precondition, a non-null `raw.data` was allocated as a `Box<[u8]>` of
+        // length `raw.size` by `crabby_avifRWDataRealloc` / `crabby_avifRWDataSet` and has not yet
+        // been freed.
+        let oldData = unsafe { Box::from_raw(old_slice) };
         let sizeToCopy = std::cmp::min(newSize, oldData.len());
-        #[allow(clippy::disallowed_methods)]
-        newData.extend_from_slice(&oldData[..sizeToCopy]);
+        if let Some(prefix) = oldData.get(..sizeToCopy) {
+            #[allow(clippy::disallowed_methods)]
+            newData.extend_from_slice(prefix);
+        }
     }
     #[allow(clippy::disallowed_methods)]
     newData.resize(newSize, 0);
-    let mut b = newData.into_boxed_slice();
-    raw.data = b.as_mut_ptr();
-    std::mem::forget(b);
+    raw.data = Box::into_raw(newData.into_boxed_slice()) as *mut u8;
     raw.size = newSize;
     avifResult::Ok
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if raw is not null, it has to point to a valid avifRWData object.
-/// - if data is not null, it has to point to a valid buffer of size bytes.
+/// - If `raw` is non-null, it must be properly aligned and point to a valid, initialized
+///   `avifRWData` whose non-null `raw.data` was allocated by `crabby_avifRWDataRealloc` /
+///   `crabby_avifRWDataSet` with length `raw.size`.
+/// - When `size > 0`, `data` (if non-null) must point to at least `size` initialized bytes valid
+///   for reads during this call (`size <= isize::MAX`, and may alias `raw.data`).
+/// - When `size == 0`, `data` is not dereferenced (may be null) and any existing buffer in `raw`
+///   is freed. Passing null for `raw`, or null for `data` when `size > 0`, returns
+///   `avifResult::InvalidArgument`.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRWDataSet(
     raw: *mut avifRWData,
@@ -115,52 +135,56 @@ pub unsafe extern "C" fn crabby_avifRWDataSet(
     size: usize,
 ) -> avifResult {
     check_pointer!(raw);
+    let mut new_data: Vec<u8> = Vec::new();
     if size != 0 {
-        check_pointer!(data);
+        if !check_slice_from_raw_parts_safety(data, size) {
+            return avifResult::InvalidArgument;
+        }
         // Copy the data into a new buffer directly instead of calling crabby_avifRWDataRealloc(),
         // which would zero the new buffer before it is overwritten.
-        let mut newData: Vec<u8> = Vec::new();
-        if newData.try_reserve_exact(size).is_err() {
+        if new_data.try_reserve_exact(size).is_err() {
             return avifResult::OutOfMemory;
         }
-        // SAFETY: data is guaranteed to point to size bytes because of the pre-conditions, and
-        // try_reserve_exact() verified that size <= isize::MAX.
-        let source = unsafe { std::slice::from_raw_parts(data, size) };
+        // SAFETY: `data` is non-null, `size <= isize::MAX`, and the caller guarantees `data`
+        // points to at least `size` initialized bytes valid for shared reads during this call.
+        let src = unsafe { std::slice::from_raw_parts(data, size) };
         #[allow(clippy::disallowed_methods)]
-        newData.extend_from_slice(source);
-        // Free the old buffer only after the copy, in case data points into it.
-        // SAFETY: Pre-conditions are met to call this function.
-        unsafe {
-            crabby_avifRWDataFree(raw);
-        }
+        new_data.extend_from_slice(src);
+    }
+    // Free the old buffer only after the copy, in case `data` points into it.
+    // SAFETY: `raw` is non-null, and the caller guarantees it points to a valid `avifRWData` whose
+    // non-null `data` was allocated by `crabby_avifRWDataRealloc` / `crabby_avifRWDataSet`.
+    unsafe {
+        crabby_avifRWDataFree(raw);
+    }
+    if size != 0 {
         let raw = deref_mut!(raw);
-        let mut b = newData.into_boxed_slice();
-        raw.data = b.as_mut_ptr();
-        std::mem::forget(b);
+        raw.data = Box::into_raw(new_data.into_boxed_slice()) as *mut u8;
         raw.size = size;
-    } else {
-        // SAFETY: Pre-conditions are met to call this function.
-        unsafe {
-            crabby_avifRWDataFree(raw);
-        }
     }
     avifResult::Ok
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if raw is not null, it has to point to a valid avifRWData object.
+/// - If `raw` is non-null, it must be properly aligned and point to a valid, initialized
+///   `avifRWData` whose non-null `raw.data` was allocated by `crabby_avifRWDataRealloc` /
+///   `crabby_avifRWDataSet` with length `raw.size` and has not yet been freed.
+/// - Passing null for `raw` (or an `avifRWData` with null `data`) is safe and is a no-op.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRWDataFree(raw: *mut avifRWData) {
     check_pointer_or_return!(raw);
     let raw = deref_mut!(raw);
     if raw.data.is_null() {
+        raw.size = 0;
         return;
     }
-    // SAFETY: The pointers are guaranteed to be valid because of the pre-conditions.
-    let _ = unsafe { Box::from_raw(std::slice::from_raw_parts_mut(raw.data, raw.size)) };
+    let slice_ptr = std::ptr::slice_from_raw_parts_mut(raw.data, raw.size);
     raw.data = std::ptr::null_mut();
     raw.size = 0;
+    // SAFETY: By caller precondition, `slice_ptr` was allocated as a `Box<[u8]>` of length
+    // `raw.size` by `crabby_avifRWDataRealloc` / `crabby_avifRWDataSet`, and resetting `raw.data`
+    // to null above prevents double-free on subsequent calls.
+    let _ = unsafe { Box::from_raw(slice_ptr) };
 }
 
 pub type avifIODestroyFunc = Option<unsafe extern "C" fn(io: *mut avifIO)>;
@@ -189,13 +213,17 @@ pub struct avifIO {
     data: *mut c_void,
 }
 
-pub struct avifIOWrapper {
+/// Rust `decoder::IO` adapter around a C `avifIO` pointer.
+///
+/// Invariant: `io` is either null or a valid pointer to an initialized `avifIO` (whose `read` and
+/// optional `destroy` callbacks uphold the C `avifIO` contract) that outlives this wrapper.
+pub(crate) struct avifIOWrapper {
     data: avifROData,
     io: *mut avifIO,
 }
 
 impl avifIOWrapper {
-    pub fn create(io: *mut avifIO) -> Self {
+    pub(crate) fn create(io: *mut avifIO) -> Self {
         Self {
             io,
             data: Default::default(),
@@ -207,7 +235,9 @@ impl Drop for avifIOWrapper {
     fn drop(&mut self) {
         if !self.io.is_null() {
             if let Some(destroy) = deref_const!(self.io).destroy {
-                // SAFETY: Calling into a C function.
+                // SAFETY: `self.io` is non-null and, by `crabby_avifDecoderSetIO`'s preconditions,
+                // points to a valid `avifIO` whose `destroy` callback may be invoked once when the
+                // decoder releases or replaces its IO.
                 unsafe {
                     destroy(self.io);
                 }
@@ -219,45 +249,60 @@ impl Drop for avifIOWrapper {
 impl crate::decoder::IO for avifIOWrapper {
     #[cfg_attr(feature = "disable_cfi", sanitize(cfi = "off"))]
     fn read(&mut self, offset: u64, size: usize) -> AvifResult<&[u8]> {
-        // SAFETY: Calling into a C function.
-        let res = unsafe {
-            ((*self.io).read)(self.io, 0, offset, size, &mut self.data as *mut avifROData)
-        };
+        if self.io.is_null() {
+            return AvifError::io_not_set();
+        }
+        let read_fn = deref_const!(self.io).read;
+        let out = &mut self.data as *mut avifROData;
+        // SAFETY: `self.io` is non-null and points to a valid `avifIO` per
+        // `crabby_avifDecoderSetIO`'s preconditions, and `out` points to `self.data` which is a
+        // valid writable `avifROData` for the duration of this call.
+        let res = unsafe { read_fn(self.io, 0, offset, size, out) };
         if res != avifResult::Ok {
             let err: AvifError = res.into();
             return Err(err);
         }
         if self.data.size == 0 {
             Ok(&[])
-        } else if self.data.data.is_null() {
-            AvifError::unknown_error("data pointer was null but size was not zero")
+        } else if !check_slice_from_raw_parts_safety(self.data.data, self.data.size) {
+            AvifError::unknown_error("invalid data pointer or size returned by avifIO read")
         } else {
-            // SAFETY: The pointers are guaranteed to be valid based on the checks above.
+            // SAFETY: `self.data.data` is non-null, `self.data.size <= isize::MAX`, and the C
+            // `avifIO::read` contract guarantees the returned buffer remains valid and unmodified
+            // until the next `read` or `destroy` call on `self.io` (both of which require `&mut
+            // self`, tying the returned slice lifetime `&[u8]` to `&mut self`).
             Ok(unsafe { std::slice::from_raw_parts(self.data.data, self.data.size) })
         }
     }
     fn size_hint(&self) -> u64 {
+        if self.io.is_null() {
+            return 0;
+        }
         deref_const!(self.io).sizeHint
     }
     fn persistent(&self) -> bool {
+        if self.io.is_null() {
+            return false;
+        }
         deref_const!(self.io).persistent != 0
     }
 }
 
-pub struct avifCIOWrapper {
+pub(crate) struct avifCIOWrapper {
     io: GenericIO,
     buf: Vec<u8>,
 }
 
-/// # Safety
-/// Unused C API function.
 #[no_mangle]
-unsafe extern "C" fn cioDestroy(_io: *mut avifIO) {}
+extern "C" fn cioDestroy(_io: *mut avifIO) {}
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if io is not null, it has to point to a valid avifIO object.
-/// - if out is not null, it has to point to a valid avifROData object.
+/// - If `io` is non-null, it must point to a valid, initialized `avifIO` whose non-null `data`
+///   field points to a valid `avifCIOWrapper` for exclusive access during this call.
+/// - If `out` is non-null, it must point to a valid, initialized `avifROData` writable during this
+///   call and non-aliasing with `io` and `io.data`.
+/// - Passing null for `io` or `out` (or an `avifIO` with null `data`) safely returns
+///   `avifResult::IoError`.
 #[no_mangle]
 unsafe extern "C" fn cioRead(
     io: *mut avifIO,
@@ -277,23 +322,20 @@ unsafe extern "C" fn cioRead(
     match cio.io.read(offset, size) {
         Ok(data) => {
             cio.buf.clear();
-            if cio.buf.try_reserve_exact(data.len()).is_err() {
+            if cio.buf.try_extend_from_slice(data).is_err() {
                 return avifResult::OutOfMemory;
             }
-            #[allow(clippy::disallowed_methods)]
-            cio.buf.extend_from_slice(data);
         }
         Err(_) => return avifResult::IoError,
     }
-    deref_mut!(out).data = cio.buf.as_ptr();
-    deref_mut!(out).size = cio.buf.len();
+    let out = deref_mut!(out);
+    out.data = if cio.buf.is_empty() { std::ptr::null() } else { cio.buf.as_ptr() };
+    out.size = cio.buf.len();
     avifResult::Ok
 }
 
-/// # Safety
-/// Unused C API function.
 #[no_mangle]
-unsafe extern "C" fn cioWrite(
+extern "C" fn cioWrite(
     _io: *mut avifIO,
     _writeFlags: u32,
     _offset: u64,
@@ -304,18 +346,21 @@ unsafe extern "C" fn cioWrite(
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if data is not null, it has to be a valid buffer of size bytes.
+/// - If `data` is non-null and `size <= isize::MAX as usize`, `data` must point to at least `size`
+///   initialized bytes that remain valid and unmodified for shared reads until the returned
+///   `avifIO` is destroyed with `crabby_avifIODestroy`.
+/// - Passing null for `data` or `size > isize::MAX as usize` safely returns null.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifIOCreateMemoryReader(
     data: *const u8,
     size: usize,
 ) -> *mut avifIO {
-    if data.is_null() {
+    if !check_slice_from_raw_parts_safety(data, size) {
         return std::ptr::null_mut();
     }
     let cio = Box::new(avifCIOWrapper {
-        // SAFETY: The pointers are guaranteed to be valid because of the pre-conditions.
+        // SAFETY: `data` is non-null, `size <= isize::MAX`, and the caller guarantees `data`
+        // points to `size` initialized bytes that outlive the returned `avifIO` reader.
         io: Box::new(unsafe { DecoderRawIO::create(data, size) }),
         buf: Vec::new(),
     });
@@ -331,15 +376,20 @@ pub unsafe extern "C" fn crabby_avifIOCreateMemoryReader(
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if filename is not null, it has to be a valid C-style string.
+/// If `filename` is non-null, it must point to a valid, nul-terminated C string valid for reads
+/// during this call. Passing null (or invalid UTF-8 / a file that cannot be opened) safely returns
+/// null.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifIOCreateFileReader(filename: *const c_char) -> *mut avifIO {
     if filename.is_null() {
         return std::ptr::null_mut();
     }
-    // SAFETY: filename is guaranteed to be a valid C-style string based on the pre-condition.
-    let filename = String::from(unsafe { CStr::from_ptr(filename) }.to_str().unwrap_or(""));
+    // SAFETY: `filename` is non-null (checked above), and the caller guarantees it points to a
+    // valid, nul-terminated C string valid for reads during this call.
+    let Ok(filename) = (unsafe { CStr::from_ptr(filename) }).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let filename = String::from(filename);
     let file_io = match DecoderFileIO::create(&filename) {
         Ok(x) => x,
         Err(_) => return std::ptr::null_mut(),
@@ -360,17 +410,20 @@ pub unsafe extern "C" fn crabby_avifIOCreateFileReader(filename: *const c_char) 
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if io is not null, it has to point to a valid avifIO object.
+/// If `io` is non-null, it must be a pointer previously returned by
+/// `crabby_avifIOCreateMemoryReader` or `crabby_avifIOCreateFileReader` that has not yet been
+/// destroyed, and must not be accessed after this call. Passing null is safe and is a no-op.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifIODestroy(io: *mut avifIO) {
     check_pointer_or_return!(io);
-    // SAFETY: the pointers are guaranteed to be valid based on the pre-condition.
-    unsafe {
-        let data = (*io).data as *mut avifCIOWrapper;
-        if !data.is_null() {
-            let _ = Box::from_raw(data);
-        }
-        let _ = Box::from_raw(io);
+    // SAFETY: `io` is non-null and, by caller precondition, was allocated via `Box::into_raw` in
+    // `crabby_avifIOCreateMemoryReader` or `crabby_avifIOCreateFileReader` and has not yet been
+    // freed.
+    let io_box = unsafe { Box::from_raw(io) };
+    let data = io_box.data as *mut avifCIOWrapper;
+    if !data.is_null() {
+        // SAFETY: When non-null, `io_box.data` was allocated via `Box::into_raw` on a
+        // `Box<avifCIOWrapper>` when `io` was created and has not yet been freed.
+        let _ = unsafe { Box::from_raw(data) };
     }
 }

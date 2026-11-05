@@ -331,6 +331,10 @@ using avifBool = int;
 
 using avifStrictFlags = uint32_t;
 
+/// Read-write byte buffer used across the C API.
+///
+/// Safety invariant for Rust conversions (`TryFrom<&avifRWData>`): whenever `size > 0`, `data`
+/// must be non-null and point to at least `size` initialized readable bytes (`size <= isize::MAX`).
 struct avifRWData {
     uint8_t *data;
     size_t size;
@@ -907,33 +911,43 @@ avifResult crabby_avifImageSetMetadataXMP(avifImage *image, const uint8_t *xmp, 
 avifResult crabby_avifImageSetProfileICC(avifImage *image, const uint8_t *icc, size_t iccSize);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if raw is not null, it has to point to a valid avifRWData object.
+/// - If `raw` is non-null, it must be properly aligned and point to a valid, initialized
+///   `avifRWData` valid for exclusive reads and writes during this call.
+/// - Within `*raw`, `raw.data` must either be null (with `raw.size == 0`) or a pointer previously
+///   allocated by `crabby_avifRWDataRealloc` / `crabby_avifRWDataSet` with length `raw.size` that
+///   has not yet been freed.
+/// - Passing null for `raw` is safe and returns `avifResult::InvalidArgument`.
 avifResult crabby_avifRWDataRealloc(avifRWData *raw, size_t newSize);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if raw is not null, it has to point to a valid avifRWData object.
-/// - if data is not null, it has to point to a valid buffer of size bytes.
+/// - If `raw` is non-null, it must be properly aligned and point to a valid, initialized
+///   `avifRWData` whose non-null `raw.data` was allocated by `crabby_avifRWDataRealloc` /
+///   `crabby_avifRWDataSet` with length `raw.size`.
+/// - When `size > 0`, `data` (if non-null) must point to at least `size` initialized bytes valid
+///   for reads during this call (`size <= isize::MAX`, and may alias `raw.data`).
+/// - When `size == 0`, `data` is not dereferenced (may be null) and any existing buffer in `raw`
+///   is freed. Passing null for `raw`, or null for `data` when `size > 0`, returns
+///   `avifResult::InvalidArgument`.
 avifResult crabby_avifRWDataSet(avifRWData *raw, const uint8_t *data, size_t size);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if raw is not null, it has to point to a valid avifRWData object.
+/// - If `raw` is non-null, it must be properly aligned and point to a valid, initialized
+///   `avifRWData` whose non-null `raw.data` was allocated by `crabby_avifRWDataRealloc` /
+///   `crabby_avifRWDataSet` with length `raw.size` and has not yet been freed.
+/// - Passing null for `raw` (or an `avifRWData` with null `data`) is safe and is a no-op.
 void crabby_avifRWDataFree(avifRWData *raw);
 
-/// # Safety
-/// Unused C API function.
 void cioDestroy(avifIO *_io);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if io is not null, it has to point to a valid avifIO object.
-/// - if out is not null, it has to point to a valid avifROData object.
+/// - If `io` is non-null, it must point to a valid, initialized `avifIO` whose non-null `data`
+///   field points to a valid `avifCIOWrapper` for exclusive access during this call.
+/// - If `out` is non-null, it must point to a valid, initialized `avifROData` writable during this
+///   call and non-aliasing with `io` and `io.data`.
+/// - Passing null for `io` or `out` (or an `avifIO` with null `data`) safely returns
+///   `avifResult::IoError`.
 avifResult cioRead(avifIO *io, uint32_t _readFlags, uint64_t offset, size_t size, avifROData *out);
 
-/// # Safety
-/// Unused C API function.
 avifResult cioWrite(avifIO *_io,
                     uint32_t _writeFlags,
                     uint64_t _offset,
@@ -941,18 +955,22 @@ avifResult cioWrite(avifIO *_io,
                     size_t _size);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if data is not null, it has to be a valid buffer of size bytes.
+/// - If `data` is non-null and `size <= isize::MAX as usize`, `data` must point to at least `size`
+///   initialized bytes that remain valid and unmodified for shared reads until the returned
+///   `avifIO` is destroyed with `crabby_avifIODestroy`.
+/// - Passing null for `data` or `size > isize::MAX as usize` safely returns null.
 avifIO *crabby_avifIOCreateMemoryReader(const uint8_t *data, size_t size);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if filename is not null, it has to be a valid C-style string.
+/// If `filename` is non-null, it must point to a valid, nul-terminated C string valid for reads
+/// during this call. Passing null (or invalid UTF-8 / a file that cannot be opened) safely returns
+/// null.
 avifIO *crabby_avifIOCreateFileReader(const char *filename);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if io is not null, it has to point to a valid avifIO object.
+/// If `io` is non-null, it must be a pointer previously returned by
+/// `crabby_avifIOCreateMemoryReader` or `crabby_avifIOCreateFileReader` that has not yet been
+/// destroyed, and must not be accessed after this call. Passing null is safe and is a no-op.
 void crabby_avifIODestroy(avifIO *io);
 
 /// # Safety
