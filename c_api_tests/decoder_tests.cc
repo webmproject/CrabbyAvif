@@ -1666,6 +1666,61 @@ TEST(DecoderTest, ThumbnailMaxExtentProgressiveAndLsel) {
             AVIF_RESULT_NO_IMAGES_REMAINING);
 }
 
+struct NativeDecodableParam {
+  const char* file_name;
+  avifDecoderSource source;
+  avifBool allow_progressive;
+  bool native_decodable;
+};
+
+class NativeDecodableTest
+    : public testing::TestWithParam<NativeDecodableParam> {};
+
+TEST_P(NativeDecodableTest, ParseAndDecode) {
+  const NativeDecodableParam& param = GetParam();
+  const bool native_available =
+      avifCodecChoiceFromName("native") == AVIF_CODEC_CHOICE_NATIVE;
+  const avifBool expected_native_decodable =
+      (param.native_decodable && native_available) ? AVIF_TRUE : AVIF_FALSE;
+  auto decoder = CreateDecoder(param.file_name);
+  ASSERT_NE(decoder, nullptr);
+  decoder->strictFlags = AVIF_STRICT_DISABLED;
+  decoder->requestedSource = param.source;
+  decoder->allowProgressive = param.allow_progressive;
+  decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_ALL;
+  EXPECT_EQ(decoder->nativeDecodable, AVIF_FALSE);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->nativeDecodable, expected_native_decodable);
+  if (!expected_native_decodable) {
+    return;
+  }
+  decoder->codecChoice = AVIF_CODEC_CHOICE_NATIVE;
+  EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  // The value is kept after decoding.
+  EXPECT_EQ(decoder->nativeDecodable, expected_native_decodable);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    NativeDecodableTestInstance, NativeDecodableTest,
+    testing::ValuesIn(std::vector<NativeDecodableParam>{
+        {"white_1x1.avif", AVIF_DECODER_SOURCE_AUTO, AVIF_FALSE, true},
+        {"alpha.avif", AVIF_DECODER_SOURCE_AUTO, AVIF_FALSE, true},
+        {"sofa_grid1x5_420.avif", AVIF_DECODER_SOURCE_AUTO, AVIF_FALSE, true},
+        {"overlay_yellow_bg.avif", AVIF_DECODER_SOURCE_AUTO, AVIF_FALSE, true},
+        {"seine_sdr_gainmap_srgb.avif", AVIF_DECODER_SOURCE_AUTO, AVIF_FALSE,
+         true},
+        {"colors-animated-8bpc.avif", AVIF_DECODER_SOURCE_AUTO, AVIF_FALSE,
+         false},
+        {"colors-animated-8bpc.avif", AVIF_DECODER_SOURCE_PRIMARY_ITEM,
+         AVIF_FALSE, true},
+        {"progressive/progressive_quality_change.avif",
+         AVIF_DECODER_SOURCE_AUTO, AVIF_FALSE, false},
+        {"progressive/progressive_quality_change.avif",
+         AVIF_DECODER_SOURCE_AUTO, AVIF_TRUE, false},
+        {"progressive/tiger_3layer_1res.avif", AVIF_DECODER_SOURCE_AUTO,
+         AVIF_FALSE, false},
+    }));
+
 INSTANTIATE_TEST_SUITE_P(
     Codecs, DecoderTest, testing::ValuesIn(GetCodecChoices()),
     [](const testing::TestParamInfo<avifCodecChoice>& info) {

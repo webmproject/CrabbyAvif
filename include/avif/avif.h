@@ -491,6 +491,10 @@ struct avifDecoder {
     AndroidMediaCodecOutputColorFormat androidMediaCodecOutputColorFormat;
     CompressionFormat compressionFormat;
     avifBool allowSampleTransform;
+    /// Output param. Set by avifDecoderParse(). AVIF_TRUE if the parsed source can be decoded with
+    /// the native AV1 decoder (AVIF_CODEC_CHOICE_NATIVE), AVIF_FALSE otherwise (or if the native
+    /// AV1 decoder is not available).
+    avifBool nativeDecodable;
     Box<Decoder> rust_decoder;
     avifImage image_object;
     avifGainMap gainmap_object;
