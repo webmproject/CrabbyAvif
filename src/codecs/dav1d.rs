@@ -221,6 +221,26 @@ impl Dav1d {
         }
     }
 
+    fn send_data(&self, data: &mut Dav1dDataWrapper) -> AvifResult<i32> {
+        let context = self
+            .context
+            .ok_or_else(|| AvifError::UnknownError("dav1d context is not initialized".into()))?;
+        let data_ptr = data.mut_ptr();
+        // SAFETY: `context` is a valid non-null `*mut Dav1dContext` opened by `dav1d_open` and
+        // owned by `self`, and `data_ptr` points to a valid `Dav1dData` managed by `data`.
+        Ok(unsafe { dav1d_send_data(context, data_ptr) })
+    }
+
+    fn get_picture(&self, picture: &mut Dav1dPictureWrapper) -> AvifResult<i32> {
+        let context = self
+            .context
+            .ok_or_else(|| AvifError::UnknownError("dav1d context is not initialized".into()))?;
+        let picture_ptr = picture.mut_ptr();
+        // SAFETY: `context` is a valid non-null `*mut Dav1dContext` opened by `dav1d_open` and
+        // owned by `self`, and `picture_ptr` points to a valid zero-initialized `Dav1dPicture`.
+        Ok(unsafe { dav1d_get_picture(context, picture_ptr) })
+    }
+
     fn picture_to_image(
         &self,
         dav1d_picture: &Dav1dPicture,
@@ -310,26 +330,24 @@ impl Dav1d {
         if self.context.is_none() {
             self.initialize_impl(false)?;
         }
-        let mut res;
-        let context = self.context.unwrap();
-        let mut payloads_iter = payloads.iter().peekable();
+        let mut payloads_iter = payloads.iter();
         let mut data = Dav1dDataWrapper::default();
         let max_retries = 500;
         let mut retries = 0;
         while !grid_image_helper.is_grid_complete()? {
-            if !data.has_data() && payloads_iter.peek().is_some() {
-                data.wrap(payloads_iter.next().unwrap())?;
+            if !data.has_data() {
+                if let Some(payload) = payloads_iter.next() {
+                    data.wrap(payload)?;
+                }
             }
             if data.has_data() {
-                // # Safety: Calling a C function with valid parameters.
-                res = unsafe { dav1d_send_data(context, data.mut_ptr()) };
+                let res = self.send_data(&mut data)?;
                 if res != 0 && res != DAV1D_EAGAIN {
                     return AvifError::unknown_error(format!("dav1d_send_data returned {res}"));
                 }
             }
             let mut picture = Dav1dPictureWrapper::default();
-            // # Safety: Calling a C function with valid parameters.
-            res = unsafe { dav1d_get_picture(context, picture.mut_ptr()) };
+            let res = self.get_picture(&mut picture)?;
             if res != 0 && res != DAV1D_EAGAIN {
                 return AvifError::unknown_error(format!("dav1d_get_picture returned {res}"));
             } else if res == 0 && picture.use_layer(spatial_id) {
@@ -358,8 +376,7 @@ impl Dav1d {
     fn flush(&mut self) -> AvifResult<()> {
         loop {
             let mut picture = Dav1dPictureWrapper::default();
-            // # Safety: Calling a C function with valid parameters.
-            let res = unsafe { dav1d_get_picture(self.context.unwrap(), picture.mut_ptr()) };
+            let res = self.get_picture(&mut picture)?;
             if res < 0 && res != DAV1D_EAGAIN {
                 return AvifError::unknown_error(format!("error draining buffered frames {res}"));
             }
@@ -415,16 +432,14 @@ impl Decoder for Dav1d {
         let next_picture: Option<Dav1dPictureWrapper>;
         loop {
             if data.has_data() {
-                // # Safety: Calling a C function with valid parameters.
-                let res = unsafe { dav1d_send_data(self.context.unwrap(), data.mut_ptr()) };
+                let res = self.send_data(&mut data)?;
                 if res < 0 && res != DAV1D_EAGAIN {
                     return AvifError::unknown_error(format!("dav1d_send_data returned {res}"));
                 }
             }
 
             let mut picture = Dav1dPictureWrapper::default();
-            // # Safety: Calling a C function with valid parameters.
-            let res = unsafe { dav1d_get_picture(self.context.unwrap(), picture.mut_ptr()) };
+            let res = self.get_picture(&mut picture)?;
             if res == DAV1D_EAGAIN {
                 if data.has_data() {
                     continue;
@@ -446,7 +461,11 @@ impl Decoder for Dav1d {
         } else {
             return AvifError::unknown_error("");
         }
-        self.picture_to_image(self.picture.unwrap_ref().get(), image, category, true)?;
+        let picture = self
+            .picture
+            .as_ref()
+            .ok_or_else(|| AvifError::UnknownError("".into()))?;
+        self.picture_to_image(picture.get(), image, category, true)?;
         Ok(())
     }
 
@@ -473,28 +492,26 @@ impl Decoder for Dav1d {
         if self.context.is_none() {
             self.initialize_impl(false)?;
         }
-        let mut res;
-        let context = self.context.unwrap();
-        let mut payloads_iter = payloads.iter().peekable();
+        let mut payloads_iter = payloads.iter();
         let mut data = Dav1dDataWrapper::default();
         let max_retries = 500;
         let mut retries = 0;
         let mut got_picture_count = 0;
         let next_picture: Option<Dav1dPictureWrapper>;
         loop {
-            if !data.has_data() && payloads_iter.peek().is_some() {
-                data.wrap(payloads_iter.next().unwrap())?;
+            if !data.has_data() {
+                if let Some(payload) = payloads_iter.next() {
+                    data.wrap(payload)?;
+                }
             }
             if data.has_data() {
-                // # Safety: Calling a C function with valid parameters.
-                res = unsafe { dav1d_send_data(context, data.mut_ptr()) };
+                let res = self.send_data(&mut data)?;
                 if res != 0 && res != DAV1D_EAGAIN {
                     return AvifError::unknown_error(format!("dav1d_send_data returned {res}"));
                 }
             }
             let mut picture = Dav1dPictureWrapper::default();
-            // # Safety: Calling a C function with valid parameters.
-            res = unsafe { dav1d_get_picture(context, picture.mut_ptr()) };
+            let res = self.get_picture(&mut picture)?;
             if res != 0 && res != DAV1D_EAGAIN {
                 return AvifError::unknown_error(format!("dav1d_get_picture returned {res}"));
             } else if res == 0 && picture.use_layer(spatial_id) {
@@ -523,7 +540,11 @@ impl Decoder for Dav1d {
         }
         // In this case, the source image from the caller is used for both color and alpha planes,
         // so do not overwrite the yuv_range field when processing the alpha plane.
-        self.picture_to_image(self.picture.unwrap_ref().get(), image, category, false)?;
+        let picture = self
+            .picture
+            .as_ref()
+            .ok_or_else(|| AvifError::UnknownError("".into()))?;
+        self.picture_to_image(picture.get(), image, category, false)?;
         Ok(())
     }
 }
