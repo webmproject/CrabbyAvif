@@ -168,11 +168,12 @@ impl Dav1d {
         if self.context.is_some() {
             return Ok(());
         }
-        let config = self.config.unwrap_ref();
+        let config = self.config.as_ref().ok_or(AvifError::InvalidArgument)?;
         let mut settings_uninit: MaybeUninit<Dav1dSettings> = MaybeUninit::uninit();
-        // # Safety: Calling a C function with valid parameters.
-        unsafe { dav1d_default_settings(settings_uninit.as_mut_ptr()) };
-        // # Safety: settings_uninit was initialized in the C function above.
+        let settings_mut_ptr = settings_uninit.as_mut_ptr();
+        // SAFETY: `settings_mut_ptr` is a valid, aligned, non-null pointer to `settings_uninit`.
+        unsafe { dav1d_default_settings(settings_mut_ptr) };
+        // SAFETY: `dav1d_default_settings` completely initialized `settings_uninit`.
         let mut settings = unsafe { settings_uninit.assume_init() };
         if low_latency {
             settings.max_frame_delay = 1;
@@ -196,24 +197,28 @@ impl Dav1d {
             frame_size_limit
         };
 
-        let mut dec = MaybeUninit::uninit();
-        // # Safety: Calling a C function with valid parameters.
-        let ret = unsafe { dav1d_open(dec.as_mut_ptr(), (&settings) as *const _) };
-        if ret != 0 {
+        let mut dec: *mut Dav1dContext = std::ptr::null_mut();
+        let dec_ptr: *mut *mut Dav1dContext = &mut dec;
+        let settings_ptr: *const Dav1dSettings = &settings;
+        // SAFETY: `dec_ptr` and `settings_ptr` are valid non-null pointers to initialized stack
+        // variables; `settings` was populated by `dav1d_default_settings` and valid config values.
+        let ret = unsafe { dav1d_open(dec_ptr, settings_ptr) };
+        if ret != 0 || dec.is_null() {
             return AvifError::unknown_error(format!("dav1d_open returned {ret}"));
         }
-        // # Safety: dec was initialized in the C function above.
-        self.context = Some(unsafe { dec.assume_init() });
+        self.context = Some(dec);
         Ok(())
     }
 
     fn drop_impl(&mut self) {
         self.picture = None;
-        if let Some(mut context) = self.context {
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { dav1d_close(&mut context) };
+        if let Some(mut context) = self.context.take() {
+            let context_ptr: *mut *mut Dav1dContext = &mut context;
+            // SAFETY: `context` was returned by a successful `dav1d_open` call and has not yet
+            // been closed (`self.context.take()` ensures single close). `self.picture` was dropped
+            // above before closing the decoder context.
+            unsafe { dav1d_close(context_ptr) };
         }
-        self.context = None;
     }
 
     fn picture_to_image(
@@ -366,9 +371,15 @@ impl Dav1d {
     }
 
     pub(crate) fn version() -> String {
-        let version = match unsafe { CStr::from_ptr(dav1d_version()) }.to_str() {
-            Ok(s) => s.to_owned(),
-            Err(_) => String::new(),
+        // SAFETY: `dav1d_version` has no preconditions and returns a static NUL-terminated string.
+        let version_ptr = unsafe { dav1d_version() };
+        let version = if version_ptr.is_null() {
+            String::new()
+        } else {
+            // SAFETY: `version_ptr` was checked to be non-null above and points to a static
+            // NUL-terminated string literal owned by libdav1d.
+            let version_cstr = unsafe { CStr::from_ptr(version_ptr) };
+            version_cstr.to_str().unwrap_or_default().to_owned()
         };
         format!("dav1d: {version}")
     }
