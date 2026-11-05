@@ -190,23 +190,35 @@ fn add_aom_pkts_to_output_samples(
     let mut got_frame = false;
     let mut iter: aom_codec_iter_t = std::ptr::null_mut();
     loop {
-        // # Safety: Calling a C function with valid parameters.
-        let pkt = unsafe { aom_codec_get_cx_data(ctx as *mut _, &mut iter as *mut _) };
+        let ctx_ptr: *mut aom_codec_ctx_t = ctx;
+        let iter_ptr: *mut aom_codec_iter_t = &mut iter;
+        // SAFETY: `ctx_ptr` points to an initialized `aom_codec_ctx_t` and `iter_ptr` points to a
+        // valid stack `aom_codec_iter_t` initialized to null per libaom's iteration protocol.
+        let pkt = unsafe { aom_codec_get_cx_data(ctx_ptr, iter_ptr) };
         if pkt.is_null() {
             break;
         }
-        // # Safety: pkt is guaranteed to be not null (checked) and valid (libaom API contract).
-        let pkt = unsafe { *pkt };
+        // SAFETY: `pkt` was checked to be non-null above, and libaom guarantees the returned
+        // packet pointer is valid and aligned until the next codec call on `ctx`.
+        let pkt = unsafe { &*pkt };
         if pkt.kind != aom_codec_cx_pkt_kind_AOM_CODEC_CX_FRAME_PKT {
             continue;
         }
-        // # Safety: pkt.data is a union. pkt.kind == AOM_CODEC_CX_FRAME_PKT guarantees
-        // that pkt.data.frame is the active field of the union (per libaom API contract).
-        // So this access is safe.
+        // SAFETY: `pkt.data` is a C union; `pkt.kind == AOM_CODEC_CX_FRAME_PKT` guarantees that
+        // `pkt.data.frame` is the active initialized variant per libaom's API contract.
         let frame = unsafe { &pkt.data.frame };
-        // # Safety: buf and sz are guaranteed to be valid as per libaom API contract. So
-        // it is safe to construct a slice from it.
-        let encoded_data = unsafe { std::slice::from_raw_parts(frame.buf as *const u8, frame.sz) };
+        let encoded_data = if frame.sz == 0 {
+            &[][..]
+        } else {
+            if frame.buf.is_null() || frame.sz > isize::MAX as usize {
+                return AvifError::unknown_error("libaom returned invalid frame buffer");
+            }
+            let buf_ptr = frame.buf as *const u8;
+            // SAFETY: `frame.buf` is non-null, `u8` has alignment 1, `frame.sz <= isize::MAX`,
+            // and libaom guarantees `frame.buf` points to `frame.sz` initialized bytes valid
+            // until the next codec call on `ctx`.
+            unsafe { std::slice::from_raw_parts(buf_ptr, frame.sz) }
+        };
         let sync = (frame.flags & AOM_FRAME_IS_KEY) != 0;
         let sample_data_range = 0..encoded_data.len();
         output_samples.try_push(Sample::create_from(encoded_data, sample_data_range, sync)?)?;
@@ -719,8 +731,9 @@ impl Encoder for Aom {
         output_samples: &[crate::encoder::Sample],
     ) -> AvifResult<CodecConfiguration> {
         // Harvest codec configuration from AV1 sequence header.
+        let first_sample = output_samples.first().ok_or(AvifError::NoContent)?;
         Ok(CodecConfiguration::Av1(
-            Av1SequenceHeader::parse_from_obus(output_samples[0].sample_data())?.config,
+            Av1SequenceHeader::parse_from_obus(first_sample.sample_data())?.config,
         ))
     }
 }
