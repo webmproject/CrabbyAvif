@@ -111,6 +111,14 @@ pub(crate) trait TxLanes:
         self.m2(ka, b, kb)
     }
 
+    /// `Round2(a * ka + b * kb, 12)` narrowed modulo 2^16 on 16-bit lanes
+    /// (matching dav1d's `ITX_MUL2X_PACK` with `flags & 2 != 0` on non-conformant
+    /// inputs; identical to [`Self::m2`] on conformant inputs).
+    #[inline(always)]
+    fn m2_wrap(self, ka: i32, b: Self, kb: i32) -> Self {
+        self.m2(ka, b, kb)
+    }
+
     /// `Round2(sum(a[i] * k[i]), 12)`.
     #[inline(always)]
     fn dot_rnd12<const K: usize>(a: [Self; K], k: [i32; K]) -> Self {
@@ -368,15 +376,16 @@ fn pmadd16(ab: Simd<i16, 16>, ka: i32, kb: i32) -> Simd<i32, 8> {
     simd_swizzle!(p, [0, 2, 4, 6, 8, 10, 12, 14]) + simd_swizzle!(p, [1, 3, 5, 7, 9, 11, 13, 15])
 }
 
-/// `Round2(sum(a[i] * k[i]), 12)` of `i16` lanes narrowed with saturation,
-/// computed with interleaves + `pmaddwd` + `psrad` + `packssdw` (the
-/// sequence of dav1d's x86 `ITX_MULSUB_2W`), instead of widening every
-/// input to `i32` and `pmulld`. Pairs of inputs share one `pmaddwd`; an
-/// odd input is paired with a vector of ones times the rounding constant.
-/// Every lane of `pmaddwd` is exact: `|a| <= 2^15` and `|k| <= 2^14`.
+/// `Round2(sum(a[i] * k[i]), 12)` of `i16` lanes narrowed with saturation
+/// (or modulo 2^16 when `WRAP` is true, matching dav1d's `ITX_MUL2X_PACK`
+/// with `flags & 2 != 0`), computed with interleaves + `pmaddwd` + `psrad` +
+/// `packssdw` (the sequence of dav1d's x86 `ITX_MULSUB_2W`), instead of
+/// widening every input to `i32` and `pmulld`. Pairs of inputs share one
+/// `pmaddwd`; an odd input is paired with a vector of ones times the rounding
+/// constant. Every lane of `pmaddwd` is exact: `|a| <= 2^15` and `|k| <= 2^14`.
 /// Returns `None` for unsupported lane counts.
 #[inline(always)]
-fn dot_rnd12_pmadd<const N: usize, const K: usize>(
+fn dot_rnd12_pmadd<const N: usize, const K: usize, const WRAP: bool>(
     a: [Simd<i16, N>; K],
     k: [i32; K],
 ) -> Option<Simd<i16, N>> {
@@ -385,7 +394,10 @@ fn dot_rnd12_pmadd<const N: usize, const K: usize>(
     }
     if K == 3 {
         let k1a = k[1] / 2;
-        return dot_rnd12_pmadd([a[0], a[1], a[1], a[2]], [k[0], k1a, k[1] - k1a, k[2]]);
+        return dot_rnd12_pmadd::<N, 4, WRAP>(
+            [a[0], a[1], a[1], a[2]],
+            [k[0], k1a, k[1] - k1a, k[2]],
+        );
     }
     let ones = Simd::<i16, N>::splat(1);
     // Pairs (a[2j], a[2j + 1]) with constants, plus the rounding term.
@@ -418,7 +430,11 @@ fn dot_rnd12_pmadd<const N: usize, const K: usize>(
             lo += pmadd16(l, kx, ky);
             hi += pmadd16(h, kx, ky);
         }
-        let (lo, hi) = (sat16(lo >> 12), sat16(hi >> 12));
+        let (lo, hi) = if WRAP {
+            ((lo >> 12).cast::<i16>(), (hi >> 12).cast::<i16>())
+        } else {
+            (sat16(lo >> 12), sat16(hi >> 12))
+        };
         // In-lane `vpackssdw` order.
         let r = simd_swizzle!(
             lo,
@@ -436,7 +452,12 @@ fn dot_rnd12_pmadd<const N: usize, const K: usize>(
             lo += pmadd8(l, kx, ky);
             hi += pmadd8(h, kx, ky);
         }
-        let r = simd_swizzle!(sat16(lo >> 12), sat16(hi >> 12), [0, 1, 2, 3, 4, 5, 6, 7]);
+        let (lo, hi) = if WRAP {
+            ((lo >> 12).cast::<i16>(), (hi >> 12).cast::<i16>())
+        } else {
+            (sat16(lo >> 12), sat16(hi >> 12))
+        };
+        let r = simd_swizzle!(lo, hi, [0, 1, 2, 3, 4, 5, 6, 7]);
         return Some(r.resize::<N>(0));
     }
     let mut s = Simd::<i32, 4>::splat(if rnd_in_pairs { 0 } else { 1 << 11 });
@@ -445,7 +466,8 @@ fn dot_rnd12_pmadd<const N: usize, const K: usize>(
         let xy = simd_swizzle!(x.resize::<4>(0), y.resize::<4>(0), [0, 4, 1, 5, 2, 6, 3, 7]);
         s += pmadd8(xy, kx, ky);
     }
-    Some(sat16(s >> 12).resize::<N>(0))
+    let r = if WRAP { (s >> 12).cast::<i16>() } else { sat16(s >> 12) };
+    Some(r.resize::<N>(0))
 }
 
 /// Narrows `i32` lanes to `i16` with saturation (`packssdw`).
@@ -488,7 +510,7 @@ fn mul_rnd12<const N: usize, const FORCE_CORR: bool>(a: Simd<i16, N>, k: i32) ->
             return r;
         }
     }
-    if let Some(r) = dot_rnd12_pmadd([a], [k]) {
+    if let Some(r) = dot_rnd12_pmadd::<N, 1, false>([a], [k]) {
         return r;
     }
     narrow_rnd12(a.cast::<i32>() * Simd::splat(k))
@@ -551,7 +573,7 @@ impl<const N: usize> TxLanes for S16<N> {
         if let Some(r) = dot_rnd12_wrap::<N, 2, false>([self.0, b.0], [ka, kb]) {
             return S16(r);
         }
-        if let Some(r) = dot_rnd12_pmadd([self.0, b.0], [ka, kb]) {
+        if let Some(r) = dot_rnd12_pmadd::<N, 2, false>([self.0, b.0], [ka, kb]) {
             return S16(r);
         }
         S16(narrow_rnd12(
@@ -566,11 +588,21 @@ impl<const N: usize> TxLanes for S16<N> {
         self.m2(ka, b, kb)
     }
     #[inline(always)]
+    fn m2_wrap(self, ka: i32, b: Self, kb: i32) -> Self {
+        if let Some(r) = dot_rnd12_wrap::<N, 2, false>([self.0, b.0], [ka, kb]) {
+            return S16(r);
+        }
+        if let Some(r) = dot_rnd12_pmadd::<N, 2, true>([self.0, b.0], [ka, kb]) {
+            return S16(r);
+        }
+        self.m2(ka, b, kb)
+    }
+    #[inline(always)]
     fn dot_rnd12<const K: usize>(a: [Self; K], k: [i32; K]) -> Self {
         if let Some(r) = dot_rnd12_wrap::<N, K, false>(amap(a, |a| a.0), k) {
             return S16(r);
         }
-        if let Some(r) = dot_rnd12_pmadd(amap(a, |a| a.0), k) {
+        if let Some(r) = dot_rnd12_pmadd::<N, K, false>(amap(a, |a| a.0), k) {
             return S16(r);
         }
         let mut s = a[0].0.cast::<i32>() * Simd::splat(k[0]);
@@ -1688,10 +1720,10 @@ fn iadst8_tail<V: TxLanes>(
     let v13 = r.apply(v3 - v7);
     let v14 = r.apply(v2 + v6);
     let v15 = r.apply(v2 - v6);
-    let v16 = v9.m2(1567, v11, -3784);
-    let v17 = v9.m2(3784, v11, 1567);
-    let v18 = v15.m2(3784, v13, -1567);
-    let v19 = v15.m2(1567, v13, 3784);
+    let v16 = v9.m2_wrap(1567, v11, -3784);
+    let v17 = v9.m2_wrap(3784, v11, 1567);
+    let v18 = v15.m2_wrap(3784, v13, -1567);
+    let v19 = v15.m2_wrap(1567, v13, 3784);
     let v20 = r.apply(v8 + v12);
     let v21 = r.apply(v8 - v12);
     let v22 = r.apply(v17 + v18);
@@ -1760,10 +1792,10 @@ fn dct_adst_small<V: TxLanes, const N: usize>(kind: Tx1d, le4: bool, t: &mut [V;
         (false, false) => {
             let [i4, i5, i6, i7] = [t[4], t[5], t[6], t[7]];
             idct8_tail(
-                i1.m2(799, i7, -4017),
-                i1.m2(4017, i7, 799),
-                i5.m2(3406, i3, -2276),
-                i5.m2(2276, i3, 3406),
+                i1.m2_wrap(799, i7, -4017),
+                i1.m2_wrap(4017, i7, 799),
+                i5.m2_wrap(3406, i3, -2276),
+                i5.m2_wrap(2276, i3, 3406),
                 i0.m2(2896, i4, -2896),
                 i0.m2(2896, i4, 2896),
                 i2.m2(1567, i6, -3784),
@@ -1785,14 +1817,14 @@ fn dct_adst_small<V: TxLanes, const N: usize>(kind: Tx1d, le4: bool, t: &mut [V;
         (true, false) => {
             let [i4, i5, i6, i7] = [t[4], t[5], t[6], t[7]];
             iadst8_tail(
-                i7.m2(401, i0, -4076),
-                i7.m2(4076, i0, 401),
-                i5.m2(1931, i2, -3612),
-                i5.m2(3612, i2, 1931),
-                i3.m2(3166, i4, -2598),
-                i3.m2(2598, i4, 3166),
-                i1.m2(3920, i6, -1189),
-                i1.m2(1189, i6, 3920),
+                i7.m2_wrap(401, i0, -4076),
+                i7.m2_wrap(4076, i0, 401),
+                i5.m2_wrap(1931, i2, -3612),
+                i5.m2_wrap(3612, i2, 1931),
+                i3.m2_wrap(3166, i4, -2598),
+                i3.m2_wrap(2598, i4, 3166),
+                i1.m2_wrap(3920, i6, -1189),
+                i1.m2_wrap(1189, i6, 3920),
                 c,
             )
         }

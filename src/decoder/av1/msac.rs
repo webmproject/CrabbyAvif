@@ -130,10 +130,7 @@ fn golomb_coef_very_slow(
         rng = rng.wrapping_sub(v) << s1;
         cnt -= s1 as i32;
         if length > 32 {
-            let out = (rng as u64)
-                | (((cnt as u8) as u64) << 16)
-                | ((cur_pos.wrapping_sub(pos) as u64) << 24);
-            return (dif, out);
+            break;
         }
     }
     let n_suf = length - 1;
@@ -249,10 +246,7 @@ fn sign_golomb_very_slow(
         rng = rng.wrapping_sub(v) << s1;
         cnt -= s1 as i32;
         if length > 32 {
-            let out = (rng as u64)
-                | (((cnt as u8) as u64) << 16)
-                | ((cur_pos.wrapping_sub(pos) as u64) << 24);
-            return (dif, out);
+            break;
         }
     }
     let n_suf = length - 1;
@@ -1407,8 +1401,8 @@ impl<'a> SymbolDecoder<'a> {
     }
 
     /// Golomb code used for coefficient levels above 14: returns the
-    /// decoded value plus one (the spec's `x`), or `None` for a prefix
-    /// longer than 32 bits.
+    /// decoded value plus one (the spec's `x`), clamping the prefix
+    /// length at 32 bits like `dav1d`.
     #[inline(always)]
     pub fn golomb_coef(&mut self) -> Option<u32> {
         if self.cnt >= 1 {
@@ -1428,12 +1422,7 @@ impl<'a> SymbolDecoder<'a> {
         self.rng = (out & 0xFFFF) as u32;
         self.cnt = ((out >> 16) as i8) as i32;
         self.raw.pos += ((out >> 24) & 0xFF) as usize;
-        let x = (out >> 32) as u32;
-        if x == 0 {
-            None
-        } else {
-            Some(x)
-        }
+        Some((out >> 32) as u32)
     }
 
     /// Reads an equiprobable sign bit followed by `golomb_coef` and
@@ -1761,20 +1750,17 @@ mod tests {
         }
 
         /// The Golomb reader of `golomb_coef`: returns the spec's `x`
-        /// (value plus one) or `None` for a prefix longer than 32 bits.
+        /// (value plus one), clamping the prefix length at 32 bits like `dav1d`.
         fn golomb_coef(&mut self) -> Option<u32> {
             let mut length = 0;
             loop {
                 length += 1;
-                if self.bool() {
+                if self.bool() || length > 32 {
                     let mut x = 1u32;
                     for _ in 0..length - 1 {
                         x = (x << 1) | self.bool() as u32;
                     }
                     return Some(x);
-                }
-                if length > 32 {
-                    return None;
                 }
             }
         }
@@ -1871,21 +1857,7 @@ mod tests {
                         }
                         _ => {
                             let ga = a.golomb_coef();
-                            let mut length = 0;
-                            let gb = loop {
-                                length += 1;
-                                if b.symbol(&mut [1 << 14, 1 << 15, 0], false) == 1 {
-                                    let mut x = 1u32;
-                                    for _ in 0..length - 1 {
-                                        x = (x << 1)
-                                            | b.symbol(&mut [1 << 14, 1 << 15, 0], false) as u32;
-                                    }
-                                    break Some(x);
-                                }
-                                if length > 32 {
-                                    break None;
-                                }
-                            };
+                            let gb = b.golomb_coef();
                             assert_eq!(ga, gb);
                         }
                     }

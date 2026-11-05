@@ -60,7 +60,7 @@ impl ColorConfig {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SequenceHeader {
     pub seq_profile: u32,
     pub still_picture: bool,
@@ -105,6 +105,11 @@ impl SequenceHeader {
         }
         s.still_picture = r.flag()?;
         s.reduced_still_picture_header = r.flag()?;
+        if s.reduced_still_picture_header && !s.still_picture {
+            return Err(Error::Invalid(
+                "reduced_still_picture_header without still_picture",
+            ));
+        }
         if s.reduced_still_picture_header {
             let _seq_level_idx = r.f(5)?;
             s.operating_points.push((0, false));
@@ -114,8 +119,8 @@ impl SequenceHeader {
                 let _num_units_in_display_tick = r.f(32)?;
                 let _time_scale = r.f(32)?;
                 s.equal_picture_interval = r.flag()?;
-                if s.equal_picture_interval {
-                    let _ = r.uvlc()?;
+                if s.equal_picture_interval && r.uvlc()? == u32::MAX {
+                    return Err(Error::Invalid("num_ticks_per_picture_minus_1"));
                 }
                 s.decoder_model_info_present = r.flag()?;
             }
@@ -130,6 +135,9 @@ impl SequenceHeader {
             let cnt = r.f(5)? + 1;
             for _ in 0..cnt {
                 let idc = r.f(12)?;
+                if idc != 0 && (idc & 0xff == 0 || idc & 0xf00 == 0) {
+                    return Err(Error::Invalid("operating_point_idc"));
+                }
                 let seq_level_idx = r.f(5)?;
                 if seq_level_idx > 7 {
                     let _seq_tier = r.f(1)?;
@@ -201,6 +209,7 @@ impl SequenceHeader {
         s.enable_restoration = r.flag()?;
         s.color = Self::parse_color_config(&mut r, s.seq_profile)?;
         s.film_grain_params_present = r.flag()?;
+        let _ = r.bit()?;
         Ok(s)
     }
 
@@ -239,6 +248,9 @@ impl SequenceHeader {
             && c.matrix_coefficients == MC_IDENTITY
         {
             c.color_range = true;
+            if seq_profile != 1 && !(seq_profile == 2 && c.bit_depth == 12) {
+                return Err(Error::Invalid("4:4:4 not allowed in profile"));
+            }
         } else {
             c.color_range = r.flag()?;
             match seq_profile {
@@ -500,15 +512,19 @@ impl FrameHeader {
             (seq.max_frame_width as usize, seq.max_frame_height as usize)
         };
         // superres_params()
-        let use_superres = seq.enable_superres && r.flag()?;
-        let superres_denom = if use_superres {
-            r.f(SUPERRES_DENOM_BITS)? + SUPERRES_DENOM_MIN
+        let use_superres_flag = seq.enable_superres && r.flag()?;
+        let upscaled_width = frame_width;
+        let superres_denom = if use_superres_flag {
+            let d = r.f(SUPERRES_DENOM_BITS)? + SUPERRES_DENOM_MIN;
+            frame_width = ((upscaled_width * SUPERRES_NUM as usize + (d as usize / 2))
+                / d as usize)
+                .max(upscaled_width.min(16));
+            d
         } else {
             SUPERRES_NUM
         };
-        let upscaled_width = frame_width;
-        frame_width = (upscaled_width * SUPERRES_NUM as usize + (superres_denom as usize / 2))
-            / superres_denom as usize;
+        let use_superres = frame_width != upscaled_width;
+        let superres_denom = if use_superres { superres_denom } else { SUPERRES_NUM };
         // compute_image_size()
         let mi_cols = 2 * ((frame_width + 7) >> 3);
         let mi_rows = 2 * ((frame_height + 7) >> 3);
@@ -518,8 +534,7 @@ impl FrameHeader {
         } else {
             (upscaled_width, frame_height)
         };
-        let allow_intrabc =
-            allow_screen_content_tools && upscaled_width == frame_width && r.flag()?;
+        let allow_intrabc = allow_screen_content_tools && !use_superres_flag && r.flag()?;
 
         let _disable_frame_end_update_cdf =
             if seq.reduced_still_picture_header || disable_cdf_update {
@@ -613,10 +628,7 @@ impl FrameHeader {
                 }
             }
         }
-        fh.all_lossless = fh.coded_lossless && fh.frame_width == fh.upscaled_width;
-        if fh.coded_lossless && fh.delta_q_present {
-            return Err(Error::Invalid("delta_q_present in a lossless frame"));
-        }
+        fh.all_lossless = fh.coded_lossless && !use_superres_flag;
         fh.parse_loop_filter_params(&mut r, cc)?;
         fh.parse_cdef_params(&mut r, seq)?;
         fh.parse_lr_params(&mut r, seq)?;
@@ -692,7 +704,7 @@ impl FrameHeader {
         } else {
             let mut widest_tile_sb = 0;
             let mut start = 0;
-            while start < sb_cols {
+            while start < sb_cols && ti.mi_col_starts.len() < MAX_TILE_COLS {
                 ti.mi_col_starts.push((start << sb_shift) as usize);
                 let max_width = (sb_cols - start).min(max_tile_width_sb);
                 let size_sb = r.ns(max_width)? + 1;
@@ -709,7 +721,7 @@ impl FrameHeader {
             }
             let max_tile_height_sb = (max_tile_area_sb / widest_tile_sb).max(1);
             let mut start = 0;
-            while start < sb_rows {
+            while start < sb_rows && ti.mi_row_starts.len() < MAX_TILE_ROWS {
                 ti.mi_row_starts.push((start << sb_shift) as usize);
                 let max_height = (sb_rows - start).min(max_tile_height_sb);
                 let size_sb = r.ns(max_height)? + 1;
@@ -967,6 +979,12 @@ impl FrameHeader {
                 if i > 0 && fg.point_cr_value[i] <= fg.point_cr_value[i - 1] {
                     return Err(Error::Invalid("point_cr_value not increasing"));
                 }
+            }
+            if cc.subsampling_x
+                && cc.subsampling_y
+                && (fg.num_cb_points != 0) != (fg.num_cr_points != 0)
+            {
+                return Err(Error::Invalid("uv points mismatch in 4:2:0"));
             }
         }
         fg.grain_scaling_minus_8 = r.f(2)? as u8;

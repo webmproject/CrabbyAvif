@@ -102,6 +102,9 @@ impl<'a> BitReader<'a> {
             let byte = self.f(8)? as u64;
             value |= (byte & 0x7f) << (i * 7);
             if byte & 0x80 == 0 {
+                if value > u32::MAX as u64 {
+                    return Err(Error::Invalid("leb128 overflow"));
+                }
                 return Ok(value);
             }
         }

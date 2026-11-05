@@ -485,11 +485,16 @@ fn decode_typed<T: Pixel>(
         };
     }
     let fh = &fd.frame;
-    let grain = if opts.apply_film_grain && fh.film_grain.apply_grain {
-        let c = &fd.seq.color;
+    let fg = &fh.film_grain;
+    let c = &fd.seq.color;
+    let has_grain = fg.num_y_points > 0
+        || fg.num_cb_points > 0
+        || fg.num_cr_points > 0
+        || (fg.clip_to_restricted_range && fg.chroma_scaling_from_luma && !c.mono_chrome);
+    let grain = if opts.apply_film_grain && fg.apply_grain && has_grain {
         Some((
             FilmGrain::new(
-                &fh.film_grain,
+                fg,
                 c.bit_depth,
                 c.mono_chrome,
                 c.subsampling_x,

@@ -29,7 +29,6 @@ const MAX_REF_MV_STACK_SIZE: usize = 8;
 const REF_CAT_LEVEL: u32 = 640;
 const MV_BORDER: i32 = 128;
 const INTRABC_DELAY_PIXELS: i32 = 256;
-const INTRABC_DELAY_SB64: i64 = 4;
 
 /// Bilinear entry of Subpel_Filters (index 3).
 const BILINEAR: [[i32; 8]; 16] = {
@@ -276,72 +275,58 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
         if joint == 1 || joint == 3 {
             diff[1] = self.read_mv_component(1);
         }
-        self.b.mv = [pred[0] + diff[0], pred[1] + diff[1]];
-        if !self.is_mv_valid() {
+        // Match dav1d's read_mv_residual (int16_t wrapping addition) and
+        // intra block copy clipping to the current tile and decoded superblocks.
+        let mvy = pred[0].wrapping_add(diff[0]) as i16 as i32;
+        let mvx = pred[1].wrapping_add(diff[1]) as i16 as i32;
+        let b = &self.b;
+        let t = &*self.t;
+        let f = self.f;
+        let border_left = (t.mi_col_start * MI_SIZE) as i32
+            + if b.has_chroma && b.bw4 < 2 && f.ss_x != 0 { 4 } else { 0 };
+        let border_top = (t.mi_row_start * MI_SIZE) as i32
+            + if b.has_chroma && b.bh4 < 2 && f.ss_y != 0 { 4 } else { 0 };
+        let bx = (b.mi_col * MI_SIZE) as i32;
+        let by = (b.mi_row * MI_SIZE) as i32;
+        let bw = (b.bw4 * MI_SIZE) as i32;
+        let bh = (b.bh4 * MI_SIZE) as i32;
+        let mut src_left = bx + (mvx >> 3);
+        let mut src_top = by + (mvy >> 3);
+        let mut src_right = src_left + bw;
+        let mut src_bottom = src_top + bh;
+        let border_right = (((t.mi_col_end + b.bw4 - 1) & !(b.bw4 - 1)) * MI_SIZE) as i32;
+        if src_left < border_left {
+            src_right += border_left - src_left;
+            src_left = border_left;
+        } else if src_right > border_right {
+            src_left -= src_right - border_right;
+            src_right = border_right;
+        }
+        if src_top < border_top {
+            src_bottom += border_top - src_top;
+            src_top = border_top;
+        }
+        let sbx = ((b.mi_col & !(f.sb4 - 1)) * MI_SIZE) as i32;
+        let sby = ((b.mi_row & !(f.sb4 - 1)) * MI_SIZE) as i32;
+        let sb_size = f.sb_px as i32;
+        if src_bottom > sby && src_right > sbx {
+            if src_top - border_top >= src_bottom - sby {
+                src_top -= src_bottom - sby;
+                src_bottom = sby;
+            } else if src_left - border_left >= src_right - sbx {
+                src_left -= src_right - sbx;
+                src_right = sbx;
+            }
+        }
+        if src_bottom > sby + sb_size {
+            src_top -= src_bottom - (sby + sb_size);
+            src_bottom = sby + sb_size;
+        }
+        if src_bottom > sby && src_right > sbx {
             return Err(Error::Invalid("intra block copy motion vector"));
         }
+        self.b.mv = [(src_top - by) * 8, (src_left - bx) * 8];
         Ok(())
-    }
-
-    /// Spec `is_mv_valid(0)` (6.10.25) for an intra block copy block: the
-    /// vector must be integer, point inside the tile, at already decoded
-    /// superblocks at least `INTRABC_DELAY_SB64` away (wavefront
-    /// constraint). Conformant streams always satisfy it; checking it keeps
-    /// the prediction inside the decoded area.
-    fn is_mv_valid(&self) -> bool {
-        let b = &self.b;
-        let t = &self.t;
-        let mv = b.mv;
-        if mv[0].abs() >= 1 << 14 || mv[1].abs() >= 1 << 14 {
-            return false;
-        }
-        if (mv[0] & 7) != 0 || (mv[1] & 7) != 0 {
-            return false;
-        }
-        let bw = BLOCK_WIDTH[b.bsize as usize] as i64;
-        let bh = BLOCK_HEIGHT[b.bsize as usize] as i64;
-        let mi = MI_SIZE as i64;
-        let delta_row = (mv[0] >> 3) as i64;
-        let delta_col = (mv[1] >> 3) as i64;
-        let mut src_top = b.mi_row as i64 * mi + delta_row;
-        let mut src_left = b.mi_col as i64 * mi + delta_col;
-        let src_bottom = src_top + bh;
-        let src_right = src_left + bw;
-        if b.has_chroma {
-            if bw < 8 && self.f.ss_x != 0 {
-                src_left -= 4;
-            }
-            if bh < 8 && self.f.ss_y != 0 {
-                src_top -= 4;
-            }
-        }
-        if src_top < t.mi_row_start as i64 * mi
-            || src_left < t.mi_col_start as i64 * mi
-            || src_bottom > t.mi_row_end as i64 * mi
-            || src_right > t.mi_col_end as i64 * mi
-        {
-            return false;
-        }
-        let sb128 = self.f.sb4 == 32;
-        let sb_h = (self.f.sb4 * MI_SIZE) as i64;
-        let active_sb_row = (b.mi_row as i64 * mi) / sb_h;
-        let active_sb64_col = (b.mi_col as i64 * mi) >> 6;
-        let src_sb_row = (src_bottom - 1) / sb_h;
-        let src_sb64_col = (src_right - 1) >> 6;
-        let total_sb64_per_row = ((t.mi_col_end as i64 - t.mi_col_start as i64 - 1) >> 4) + 1;
-        let active_sb64 = active_sb_row * total_sb64_per_row + active_sb64_col;
-        let src_sb64 = src_sb_row * total_sb64_per_row + src_sb64_col;
-        if src_sb64 >= active_sb64 - INTRABC_DELAY_SB64 {
-            return false;
-        }
-        let gradient = 1 + INTRABC_DELAY_SB64 + sb128 as i64;
-        let wf_offset = gradient * (active_sb_row - src_sb_row);
-        if src_sb_row > active_sb_row
-            || src_sb64_col >= active_sb64_col - INTRABC_DELAY_SB64 + wf_offset
-        {
-            return false;
-        }
-        true
     }
 
     fn read_mv_component(&mut self, comp: usize) -> i32 {
@@ -408,8 +393,10 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
             let pl = &mut self.s.planes[plane];
             let min_x = pl.x0 as i32;
             let min_y = pl.y0 as i32;
-            let inside =
-                ix >= min_x && iy >= min_y && ix + w as i32 <= last_x && iy + h as i32 <= last_y;
+            let inside = ix >= min_x
+                && iy >= min_y
+                && ix + w as i32 <= last_x + 1
+                && iy + h as i32 <= last_y + 1;
             let stride = pl.stride;
             let mut dst = pl.idx(base_x, base_y);
             if fx == 0 && fy == 0 && inside {

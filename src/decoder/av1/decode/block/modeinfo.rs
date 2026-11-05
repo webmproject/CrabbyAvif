@@ -1092,10 +1092,8 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
             let max = self.f.fh.seg.last_active_seg_id as i32 + 1;
             let id = neg_deinterleave(v, pred, max);
             // Conformance: 0 <= segment_id <= LastActiveSegId (6.10.8).
-            if !(0..max).contains(&id) {
-                return Err("segment_id");
-            }
-            self.b.segment_id = id as usize;
+            // Match dav1d by clamping out-of-range segment IDs to 0 on non-conformant streams.
+            self.b.segment_id = if (0..max).contains(&id) { id as usize } else { 0 };
         }
         Ok(())
     }

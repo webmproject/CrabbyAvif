@@ -40,9 +40,7 @@ struct Obu<'a> {
 /// Splits the next OBU off `data`. Returns the OBU and the remaining data.
 fn next_obu(data: &[u8]) -> Result<(Obu<'_>, &[u8])> {
     let mut r = BitReader::new(data);
-    if r.bit()? != 0 {
-        return Err(Error::Invalid("obu_forbidden_bit"));
-    }
+    let _obu_forbidden_bit = r.bit()?;
     let obu_type = r.f(4)?;
     let has_extension = r.flag()?;
     let has_size = r.flag()?;
@@ -146,6 +144,27 @@ fn parse_tile_group<'a>(
     Ok(tg_end == num_tiles - 1)
 }
 
+/// Validates a `metadata_obu()` payload (spec 5.8.1) to match `dav1d`.
+fn parse_metadata(data: &[u8]) -> Result<()> {
+    const OBU_META_HDR_CLL: u64 = 1;
+    const OBU_META_HDR_MDCV: u64 = 2;
+    let mut r = BitReader::new(data);
+    match r.leb128()? {
+        OBU_META_HDR_CLL => {
+            let _ = r.f(32)?;
+            let _ = r.bit()?;
+        }
+        OBU_META_HDR_MDCV => {
+            for _ in 0..6 {
+                let _ = r.f(32)?;
+            }
+            let _ = r.bit()?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Parses OBUs until the first frame is complete.
 pub fn parse_first_frame(mut data: &[u8]) -> Result<FrameData<'_>> {
     let mut seq: Option<SequenceHeader> = None;
@@ -173,37 +192,44 @@ pub fn parse_first_frame(mut data: &[u8]) -> Result<FrameData<'_>> {
         }
         match obu.obu_type {
             OBU_SEQUENCE_HEADER => {
-                if frame.is_none() {
-                    seq = Some(SequenceHeader::parse(obu.payload)?);
+                let new_seq = SequenceHeader::parse(obu.payload)?;
+                if seq.as_ref() != Some(&new_seq) {
+                    frame = None;
+                    single_tile = &[];
+                    tiles.clear();
                 }
+                seq = Some(new_seq);
             }
             OBU_FRAME_HEADER | OBU_REDUNDANT_FRAME_HEADER | OBU_FRAME => {
                 let s = seq
                     .as_ref()
                     .ok_or(Error::Invalid("frame before sequence header"))?;
-                if frame.is_none() {
-                    let (fh, header_bits) =
-                        FrameHeader::parse(obu.payload, s, obu.temporal_id, obu.spatial_id)?;
-                    let num_tiles = fh.tile_info.cols * fh.tile_info.rows;
-                    if num_tiles > 1 {
-                        tiles.reserve(num_tiles);
-                    }
-                    if obu.obu_type == OBU_FRAME {
-                        let offset = header_bits.div_ceil(8);
-                        let tg = obu.payload.get(offset..).ok_or(Error::Truncated)?;
-                        if parse_tile_group(tg, &fh, &mut single_tile, &mut tiles)? {
-                            return Ok(FrameData {
-                                seq: seq.take().ok_or(Error::Invalid("no sequence header"))?,
-                                frame: fh,
-                                single_tile,
-                                tiles,
-                            });
-                        }
-                    }
-                    frame = Some(fh);
-                } else if obu.obu_type == OBU_FRAME {
-                    return Err(Error::Invalid("unexpected frame OBU"));
+                if obu.obu_type == OBU_REDUNDANT_FRAME_HEADER && frame.is_some() {
+                    continue;
                 }
+                single_tile = &[];
+                tiles.clear();
+                let (fh, header_bits) =
+                    FrameHeader::parse(obu.payload, s, obu.temporal_id, obu.spatial_id)?;
+                let num_tiles = fh.tile_info.cols * fh.tile_info.rows;
+                if num_tiles > 1 {
+                    tiles.reserve(num_tiles);
+                }
+                if obu.obu_type == OBU_FRAME {
+                    let offset = header_bits.div_ceil(8);
+                    let tg = obu.payload.get(offset..).ok_or(Error::Truncated)?;
+                    if parse_tile_group(tg, &fh, &mut single_tile, &mut tiles)? {
+                        return Ok(FrameData {
+                            seq: seq.take().ok_or(Error::Invalid("no sequence header"))?,
+                            frame: fh,
+                            single_tile,
+                            tiles,
+                        });
+                    }
+                } else if header_bits >= obu.payload.len() * 8 {
+                    return Err(Error::Truncated);
+                }
+                frame = Some(fh);
             }
             OBU_TILE_GROUP => {
                 let fh = frame
@@ -214,7 +240,8 @@ pub fn parse_first_frame(mut data: &[u8]) -> Result<FrameData<'_>> {
                     break;
                 }
             }
-            OBU_TEMPORAL_DELIMITER | OBU_METADATA | OBU_PADDING => {}
+            OBU_METADATA => parse_metadata(obu.payload)?,
+            OBU_TEMPORAL_DELIMITER | OBU_PADDING => {}
             OBU_TILE_LIST => return Err(Error::Unsupported("large scale tile")),
             _ => {}
         }
