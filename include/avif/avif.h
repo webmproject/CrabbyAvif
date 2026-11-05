@@ -622,85 +622,111 @@ struct avifPixelFormatInfo {
 
 extern "C" {
 
-/// # Safety
-/// Used by the C API to create an avifDecoder object with default values.
 avifDecoder *crabby_avifDecoderCreate();
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
-/// - if io is not null, it has to point to a valid avifIO object.
+/// - If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+///   `avifDecoder` valid for exclusive access during this call.
+/// - If `io` is non-null, it must point to a valid, initialized `avifIO` whose callbacks uphold the
+///   C `avifIO` contract and that remains valid until `decoder` is destroyed or its IO is replaced.
+/// - Passing null for either `decoder` or `io` is safe and is a no-op.
 void crabby_avifDecoderSetIO(avifDecoder *decoder, avifIO *io);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
-/// - if filename is not null, it has to point to a valid C-style string.
+/// - If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+///   `avifDecoder` valid for exclusive access during this call.
+/// - If `filename` is non-null, it must point to a valid, nul-terminated C string valid for reads
+///   during this call.
+/// - Passing null for `decoder` or `filename` safely returns `avifResult::InvalidArgument`.
 avifResult crabby_avifDecoderSetIOFile(avifDecoder *decoder, const char *filename);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
-/// - if data is not null, it has to be a valid buffer of size bytes.
+/// - If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+///   `avifDecoder` valid for exclusive access during this call.
+/// - If `data` is non-null and `size <= isize::MAX as usize`, `data` must point to at least `size`
+///   initialized bytes that remain valid and unmodified until `decoder` is destroyed or its IO is
+///   replaced.
+/// - Passing null for `decoder` or `data` (or `size > isize::MAX as usize`) safely returns
+///   `avifResult::InvalidArgument`.
 avifResult crabby_avifDecoderSetIOMemory(avifDecoder *decoder, const uint8_t *data, size_t size);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
+/// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+/// `avifDecoder` valid for exclusive writes during this call. Passing null safely returns
+/// `avifResult::InvalidArgument`.
 avifResult crabby_avifDecoderSetSource(avifDecoder *decoder, avifDecoderSource source);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
+/// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+/// `avifDecoder` valid for exclusive access during this call (and any configured memory/custom IO
+/// on `decoder` must still satisfy its lifetime/callback invariants). Passing null safely returns
+/// `avifResult::InvalidArgument`.
 avifResult crabby_avifDecoderParse(avifDecoder *decoder);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
+/// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+/// `avifDecoder` valid for exclusive access during this call. Passing null safely returns
+/// `avifResult::InvalidArgument`.
 avifResult crabby_avifDecoderNextImage(avifDecoder *decoder);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
+/// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+/// `avifDecoder` valid for exclusive access during this call. Passing null safely returns
+/// `avifResult::InvalidArgument`.
 avifResult crabby_avifDecoderNthImage(avifDecoder *decoder, uint32_t frameIndex);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
-/// - if outTiming is not null, it has to point to a valid ImageTiming object.
+/// - If both `decoder` and `outTiming` are non-null:
+///   - `decoder` must be properly aligned and point to a valid, initialized `avifDecoder` valid for
+///     shared reads during this call.
+///   - `outTiming` must be properly aligned and point to a valid, initialized `ImageTiming` valid
+///     for exclusive writes during this call, without aliasing `decoder`.
+/// - Passing null for either `decoder` or `outTiming` safely returns
+///   `avifResult::InvalidArgument`.
 avifResult crabby_avifDecoderNthImageTiming(const avifDecoder *decoder,
                                             uint32_t frameIndex,
                                             avifImageTiming *outTiming);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
-/// - if outProperties is not null, it has to point to a valid avifImage object.
+/// - If both `decoder` and `outProperties` are non-null:
+///   - `decoder` must be properly aligned and point to a valid, initialized `avifDecoder` valid for
+///     shared reads during this call.
+///   - `outProperties` must be properly aligned and point to a valid, initialized `avifImage`
+///     (whose owned planes, if any, were allocated by `crabby_avifAlloc`) valid for exclusive
+///     access during this call, without aliasing `decoder`.
+/// - Passing null for either `decoder` or `outProperties` safely returns
+///   `avifResult::InvalidArgument`.
 ///
 /// Only properties that do not require an allocation are populated. On success, any planes
-/// previously allocated in outProperties are freed.
+/// previously allocated in `outProperties` are freed.
 avifResult crabby_avifDecoderNthImageProperties(const avifDecoder *decoder,
                                                 uint32_t frameIndex,
                                                 avifImage *outProperties);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
+/// If `decoder` is non-null, it must be a pointer previously returned by `crabby_avifDecoderCreate`
+/// that has not yet been destroyed, and neither `decoder` nor any borrowed pointers into it (such
+/// as `decoder->image`) may be accessed after this call. Passing null is safe and is a no-op.
 void crabby_avifDecoderDestroy(avifDecoder *decoder);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
-/// - if image is not null, it has to point to a valid avifImage object.
+/// - If both `decoder` and `image` are non-null, they must be properly aligned, non-aliasing
+///   pointers to valid, initialized `avifDecoder` and `avifImage` objects valid for exclusive
+///   access during this call.
+/// - Passing null for either `decoder` or `image` safely returns `avifResult::InvalidArgument`.
 ///
 /// This function does not support decoding gainmaps.
 avifResult crabby_avifDecoderRead(avifDecoder *decoder, avifImage *image);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
-/// - if image is not null, it has to point to a valid avifImage object.
-/// - if data is not null, it has to be a valid buffer of size bytes.
+/// - If `decoder` and `image` are non-null, they must be properly aligned, non-aliasing pointers to
+///   valid, initialized `avifDecoder` and `avifImage` objects valid for exclusive access during
+///   this call.
+/// - If `data` is non-null and `size <= isize::MAX as usize`, `data` must point to at least `size`
+///   initialized bytes that remain valid and unmodified until `decoder` is destroyed or its IO is
+///   replaced.
+/// - Passing null for `decoder`, `image`, or `data` (or `size > isize::MAX as usize`) safely
+///   returns `avifResult::InvalidArgument`.
 ///
 /// This function does not support decoding gainmaps.
 avifResult crabby_avifDecoderReadMemory(avifDecoder *decoder,
@@ -709,45 +735,58 @@ avifResult crabby_avifDecoderReadMemory(avifDecoder *decoder,
                                         size_t size);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
-/// - if image is not null, it has to point to a valid avifImage object.
-/// - if filename is not null, it has to point to a valid C-style string.
+/// - If `decoder` and `image` are non-null, they must be properly aligned, non-aliasing pointers to
+///   valid, initialized `avifDecoder` and `avifImage` objects valid for exclusive access during
+///   this call.
+/// - If `filename` is non-null, it must point to a valid, nul-terminated C string valid for reads
+///   during this call.
+/// - Passing null for `decoder`, `image`, or `filename` safely returns
+///   `avifResult::InvalidArgument`.
 ///
 /// This function does not support decoding gainmaps.
 avifResult crabby_avifDecoderReadFile(avifDecoder *decoder, avifImage *image, const char *filename);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
+/// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+/// `avifDecoder` valid for shared reads during this call. Passing null safely returns `AVIF_FALSE`.
 avifBool crabby_avifDecoderIsKeyframe(const avifDecoder *decoder, uint32_t frameIndex);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
+/// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+/// `avifDecoder` valid for shared reads during this call. Passing null safely returns `0`.
 uint32_t crabby_avifDecoderNearestKeyframe(const avifDecoder *decoder, uint32_t frameIndex);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
+/// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+/// `avifDecoder` valid for shared reads during this call. Passing null safely returns `0`.
 uint32_t crabby_avifDecoderDecodedRowCount(const avifDecoder *decoder);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
-/// - if outExtent is not null, it has to point to a valid avifExtent object.
+/// - If both `decoder` and `outExtent` are non-null:
+///   - `decoder` must be properly aligned and point to a valid, initialized `avifDecoder` valid for
+///     shared reads during this call.
+///   - `outExtent` must be properly aligned and point to a valid, initialized `avifExtent` valid
+///     for exclusive writes during this call, without aliasing `decoder`.
+/// - Passing null for either `decoder` or `outExtent` safely returns
+///   `avifResult::InvalidArgument`.
 avifResult crabby_avifDecoderNthImageMaxExtent(const avifDecoder *decoder,
                                                uint32_t frameIndex,
                                                avifExtent *outExtent);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if input is not null, it has to point to a valid avifROData object.
+/// - If `input` is non-null, it must be properly aligned and point to a valid, initialized
+///   `avifROData` valid for shared reads during this call.
+/// - When `input.size > 0` and `input.data` is non-null (`input.size <= isize::MAX as usize`),
+///   `input.data` must point to at least `input.size` initialized bytes valid for shared reads
+///   during this call.
+/// - Passing null for `input` (or an `avifROData` with `size == 0`, null `data`, or
+///   `size > isize::MAX as usize`) safely returns `AVIF_FALSE`.
 avifBool crabby_avifPeekCompatibleFileType(const avifROData *input);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if decoder is not null, it has to point to a valid avifDecoder object.
+/// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+/// `avifDecoder` valid for exclusive access during this call. Passing null safely returns
+/// `avifResult::InvalidArgument`.
 avifResult crabby_avifDecoderReset(avifDecoder *decoder);
 
 avifEncoder *crabby_avifEncoderCreate();
