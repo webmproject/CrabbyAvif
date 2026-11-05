@@ -842,6 +842,24 @@ impl Decoder {
             return Ok(());
         }
 
+        if let Some(sequence_header) =
+            self.find_sequence_header_in_sample(decoding_item, tile_index)?
+        {
+            self.image.color_primaries = sequence_header.color_primaries;
+            self.image.transfer_characteristics = sequence_header.transfer_characteristics;
+            self.image.matrix_coefficients = sequence_header.matrix_coefficients;
+            self.image.yuv_range = sequence_header.yuv_range;
+        }
+        Ok(())
+    }
+
+    // Looks for an AV1 sequence header at the beginning of the first sample of the given tile,
+    // reading increasingly more bytes. Returns None if no sequence header was found.
+    fn find_sequence_header_in_sample(
+        &mut self,
+        decoding_item: DecodingItem,
+        tile_index: usize,
+    ) -> AvifResult<Option<Av1SequenceHeader>> {
         for search_size in (64..4096).step_by(64) {
             self.prepare_sample(
                 /*image_index=*/ 0,
@@ -861,14 +879,13 @@ impl Decoder {
                 item_data_buffer,
                 min(search_size, sample.size),
             )?) {
-                self.image.color_primaries = sequence_header.color_primaries;
-                self.image.transfer_characteristics = sequence_header.transfer_characteristics;
-                self.image.matrix_coefficients = sequence_header.matrix_coefficients;
-                self.image.yuv_range = sequence_header.yuv_range;
-                break;
+                return Ok(Some(sequence_header));
+            }
+            if search_size >= sample.size {
+                break; // The whole sample was searched.
             }
         }
-        Ok(())
+        Ok(None)
     }
 
     // Populates the source item ids for a derived image item.
