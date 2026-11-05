@@ -105,27 +105,6 @@ fn aom_scaling_mode(scaling_mode: &ScalingMode) -> AvifResult<aom_scaling_mode_t
     })
 }
 
-macro_rules! codec_control {
-    ($self: expr, $key: expr, $value: expr) => {
-        // # Safety: Calling a C function with valid parameters.
-        if unsafe { aom_codec_control($self.encoder.unwrap_mut() as *mut _, $key as _, $value) }
-            != aom_codec_err_t_AOM_CODEC_OK
-        {
-            return AvifError::unknown_error(format!(
-                "aom_codec_control failed: {}",
-                Self::codec_error_string($self.encoder.unwrap_ref())
-            ));
-        }
-    };
-}
-
-macro_rules! c_str {
-    ($var: ident, $var_tmp:ident, $str:expr) => {
-        let $var_tmp = CString::new($str).unwrap();
-        let $var = $var_tmp.as_ptr();
-    };
-}
-
 // Quality (q) to quantizer (qp) formula for tune=iq (Image Quality), expressed as a look-up table for more clarity.
 // The formula below is a piecewise linear function. Each segment was empirically selected to correct for the
 // non-linear bitrate increase from encoding content with tune=iq relative to tune=ssim with the same qp.
@@ -421,44 +400,40 @@ impl Encoder for Aom {
             if aom_config.rc_end_usage == aom_rc_mode_AOM_CQ
                 || aom_config.rc_end_usage == aom_rc_mode_AOM_Q
             {
-                codec_control!(self, aome_enc_control_id_AOME_SET_CQ_LEVEL, quantizer);
+                self.codec_control(aome_enc_control_id_AOME_SET_CQ_LEVEL, quantizer as u32)?;
             }
             if quantizer == 0 {
-                codec_control!(self, aome_enc_control_id_AV1E_SET_LOSSLESS, 1);
+                self.codec_control(aome_enc_control_id_AV1E_SET_LOSSLESS, 1u32)?;
             }
             if config.tile_rows_log2 != 0 {
-                codec_control!(
-                    self,
+                self.codec_control(
                     aome_enc_control_id_AV1E_SET_TILE_ROWS,
-                    config.tile_rows_log2
-                );
+                    config.tile_rows_log2 as u32,
+                )?;
             }
             if config.tile_columns_log2 != 0 {
-                codec_control!(
-                    self,
+                self.codec_control(
                     aome_enc_control_id_AV1E_SET_TILE_COLUMNS,
-                    config.tile_columns_log2
-                );
+                    config.tile_columns_log2 as u32,
+                )?;
             }
             if config.extra_layer_count > 0 {
-                codec_control!(
-                    self,
+                self.codec_control(
                     aome_enc_control_id_AOME_SET_NUMBER_SPATIAL_LAYERS,
-                    config.extra_layer_count + 1
-                );
+                    (config.extra_layer_count + 1) as i32,
+                )?;
             }
             if let Some(speed) = config.speed {
-                codec_control!(self, aome_enc_control_id_AOME_SET_CPUUSED, speed.min(9));
+                self.codec_control(aome_enc_control_id_AOME_SET_CPUUSED, speed.min(9) as i32)?;
             }
             match category {
                 Category::Alpha => {
                     // AVIF specification, Section 4 "Auxiliary Image Items and Sequences":
                     //   The color_range field in the Sequence Header OBU shall be set to 1.
-                    codec_control!(
-                        self,
+                    self.codec_control(
                         aome_enc_control_id_AV1E_SET_COLOR_RANGE,
-                        aom_color_range_AOM_CR_FULL_RANGE
-                    )
+                        aom_color_range_AOM_CR_FULL_RANGE as i32,
+                    )?;
                     // Keep the default AOM_CSP_UNKNOWN value.
 
                     // CICP (CP/TC/MC) does not apply to the alpha auxiliary image.
@@ -469,21 +444,19 @@ impl Encoder for Aom {
                     // libaom's defaults are AOM_CSP_UNKNOWN and 0 (studio/limited range).
                     // Call aom_codec_control() only if the values are not the defaults.
                     if image.chroma_sample_position != ChromaSamplePosition::Unknown {
-                        codec_control!(
-                            self,
+                        self.codec_control(
                             aome_enc_control_id_AV1E_SET_CHROMA_SAMPLE_POSITION,
-                            image.chroma_sample_position as i32
-                        );
+                            image.chroma_sample_position as i32,
+                        )?;
                     }
                     // AV1-ISOBMFF specification, Section 2.3.4:
                     //   The value of full_range_flag in the 'colr' box SHALL match the color_range
                     //   flag in the Sequence Header OBU.
                     if image.yuv_range != YuvRange::Limited {
-                        codec_control!(
-                            self,
+                        self.codec_control(
                             aome_enc_control_id_AV1E_SET_COLOR_RANGE,
-                            aom_color_range_AOM_CR_FULL_RANGE
-                        );
+                            aom_color_range_AOM_CR_FULL_RANGE as i32,
+                        )?;
                     }
                     // Section 2.3.4 of AV1-ISOBMFF says 'colr' with 'nclx' should be present and
                     // shall match CICP values in the Sequence Header OBU, unless the latter has
@@ -494,18 +467,13 @@ impl Encoder for Aom {
                 }
             }
             if aom_config.g_usage == AOM_USAGE_ALL_INTRA {
-                codec_control!(
-                    self,
-                    aome_enc_control_id_AV1E_SET_SKIP_POSTPROC_FILTERING,
-                    1
-                );
+                self.codec_control(aome_enc_control_id_AV1E_SET_SKIP_POSTPROC_FILTERING, 1u32)?;
             }
             if use_crabbyavif_default_tune_metric {
-                codec_control!(
-                    self,
+                self.codec_control(
                     aome_enc_control_id_AOME_SET_TUNING,
-                    crabbyavif_default_tune_metric
-                );
+                    crabbyavif_default_tune_metric as i32,
+                )?;
             }
             let codec_specific_options = config.codec_specific_options(category)?;
             for (key, value) in &codec_specific_options {
@@ -513,16 +481,22 @@ impl Encoder for Aom {
                     // This key is already processed before initialization of the encoder.
                     continue;
                 }
-                c_str!(key_str, key_str_tmp, key.clone());
-                c_str!(value_str, value_str_tmp, value.clone());
-                // # Safety: Calling a C function with valid parameters.
-                if unsafe {
-                    aom_codec_set_option(self.encoder.unwrap_mut() as *mut _, key_str, value_str)
-                } != aom_codec_err_t_AOM_CODEC_OK
-                {
+                let key_str = CString::new(key.as_str())
+                    .map_err(|_| AvifError::InvalidCodecSpecificOption)?;
+                let value_str = CString::new(value.as_str())
+                    .map_err(|_| AvifError::InvalidCodecSpecificOption)?;
+                let encoder = self.encoder.as_mut().ok_or(AvifError::InvalidArgument)?;
+                let encoder_ptr: *mut aom_codec_ctx_t = encoder;
+                let key_ptr = key_str.as_ptr();
+                let value_ptr = value_str.as_ptr();
+                // SAFETY: `encoder_ptr` points to an initialized `aom_codec_ctx_t`, and `key_ptr`
+                // and `value_ptr` are valid NUL-terminated C strings borrowed from `key_str` and
+                // `value_str` which outlive the call.
+                let err = unsafe { aom_codec_set_option(encoder_ptr, key_ptr, value_ptr) };
+                if err != aom_codec_err_t_AOM_CODEC_OK {
                     return AvifError::unknown_error(format!(
                         "Unable to set codec specific option: {key} to {value}: {}",
-                        Self::codec_error_string(self.encoder.unwrap_ref())
+                        Self::codec_error_string(encoder)
                     ));
                 }
             }
@@ -531,61 +505,58 @@ impl Encoder for Aom {
                 // libaom may produce integer overflows with 12-bit input when loop restoration is
                 // enabled. See crbug.com/aomedia/42302587. This issue was fixed adequately in
                 // libaom v3.15.2 by the fix for bug oss-fuzz:566951534.
-                codec_control!(self, aome_enc_control_id_AV1E_SET_ENABLE_RESTORATION, 0);
+                self.codec_control(aome_enc_control_id_AV1E_SET_ENABLE_RESTORATION, 0u32)?;
             }
 
             self.aom_config = Some(aom_config);
             self.config = Some(config.clone());
-        } else if self.config.unwrap_ref() != config {
-            let aom_config = self.aom_config.unwrap_mut();
+        } else if self.config.as_ref().ok_or(AvifError::InvalidArgument)? != config {
+            let aom_config = self.aom_config.as_ref().ok_or(AvifError::InvalidArgument)?;
             if aom_config.g_w != image.width || aom_config.g_h != image.height {
                 // Dimension changes aren't allowed.
                 return AvifError::not_implemented();
             }
-            let last_config = self.config.unwrap_ref();
-            if last_config.quality != config.quality {
-                if aom_config.rc_end_usage == aom_rc_mode_AOM_VBR
-                    || aom_config.rc_end_usage == aom_rc_mode_AOM_CBR
-                {
+            let rc_end_usage = aom_config.rc_end_usage;
+            let last_config = self.config.as_ref().ok_or(AvifError::InvalidArgument)?;
+            let quality_changed = last_config.quality != config.quality;
+            let tile_rows_changed = last_config.tile_rows_log2 != config.tile_rows_log2;
+            let tile_cols_changed = last_config.tile_columns_log2 != config.tile_columns_log2;
+            if quality_changed {
+                if rc_end_usage == aom_rc_mode_AOM_VBR || rc_end_usage == aom_rc_mode_AOM_CBR {
+                    let encoder = self.encoder.as_mut().ok_or(AvifError::InvalidArgument)?;
+                    let aom_config = self.aom_config.as_mut().ok_or(AvifError::InvalidArgument)?;
                     (aom_config.rc_min_quantizer, aom_config.rc_max_quantizer) =
                         aom_min_max_quantizers(quantizer);
-                    // # Safety: Calling a C function with valid parameters.
-                    let err = unsafe {
-                        aom_codec_enc_config_set(
-                            self.encoder.unwrap_mut() as *mut _,
-                            self.aom_config.unwrap_ref() as *const _,
-                        )
-                    };
+                    let encoder_ptr: *mut aom_codec_ctx_t = encoder;
+                    let cfg_ptr: *const aom_codec_enc_cfg = aom_config;
+                    // SAFETY: `encoder_ptr` points to an initialized `aom_codec_ctx_t` and
+                    // `cfg_ptr` points to the initialized `aom_codec_enc_cfg` stored in `self`.
+                    let err = unsafe { aom_codec_enc_config_set(encoder_ptr, cfg_ptr) };
                     if err != aom_codec_err_t_AOM_CODEC_OK {
                         return AvifError::unknown_error(format!(
                             "aom_codec_enc_config_set failed: {}",
-                            Self::codec_error_string(self.encoder.unwrap_ref())
+                            Self::codec_error_string(encoder)
                         ));
                     }
-                } else if aom_config.rc_end_usage == aom_rc_mode_AOM_CQ
-                    || aom_config.rc_end_usage == aom_rc_mode_AOM_Q
-                {
-                    codec_control!(self, aome_enc_control_id_AOME_SET_CQ_LEVEL, quantizer);
+                } else if rc_end_usage == aom_rc_mode_AOM_CQ || rc_end_usage == aom_rc_mode_AOM_Q {
+                    self.codec_control(aome_enc_control_id_AOME_SET_CQ_LEVEL, quantizer as u32)?;
                 }
-                codec_control!(
-                    self,
+                self.codec_control(
                     aome_enc_control_id_AV1E_SET_LOSSLESS,
-                    if quantizer == 0 { 1 } else { 0 }
-                );
+                    if quantizer == 0 { 1u32 } else { 0u32 },
+                )?;
             }
-            if last_config.tile_rows_log2 != config.tile_rows_log2 {
-                codec_control!(
-                    self,
+            if tile_rows_changed {
+                self.codec_control(
                     aome_enc_control_id_AV1E_SET_TILE_ROWS,
-                    config.tile_rows_log2
-                );
+                    config.tile_rows_log2 as u32,
+                )?;
             }
-            if last_config.tile_columns_log2 != config.tile_columns_log2 {
-                codec_control!(
-                    self,
+            if tile_cols_changed {
+                self.codec_control(
                     aome_enc_control_id_AV1E_SET_TILE_COLUMNS,
-                    config.tile_columns_log2
-                );
+                    config.tile_columns_log2 as u32,
+                )?;
             }
             self.config = Some(config.clone());
         }
@@ -593,21 +564,18 @@ impl Encoder for Aom {
             return AvifError::invalid_argument();
         }
         if config.extra_layer_count > 0 {
-            codec_control!(
-                self,
+            self.codec_control(
                 aome_enc_control_id_AOME_SET_SPATIAL_LAYER_ID,
-                self.current_layer
-            );
+                self.current_layer as i32,
+            )?;
         }
-        let scaling_mode = aom_scaling_mode(&self.config.unwrap_ref().scaling_mode)?;
+        let current_config = self.config.as_ref().ok_or(AvifError::InvalidArgument)?;
+        let scaling_mode = aom_scaling_mode(&current_config.scaling_mode)?;
         if scaling_mode.h_scaling_mode != aom_scaling_mode_1d_AOME_NORMAL
             || scaling_mode.v_scaling_mode != aom_scaling_mode_1d_AOME_NORMAL
         {
-            codec_control!(
-                self,
-                aome_enc_control_id_AOME_SET_SCALEMODE,
-                &scaling_mode as *const _
-            );
+            let scaling_mode_ptr: *const aom_scaling_mode_t = &scaling_mode;
+            self.codec_control(aome_enc_control_id_AOME_SET_SCALEMODE, scaling_mode_ptr)?;
         }
         // # Safety: Zero initializing a C-struct. This is safe because this is the same usage
         // pattern as the equivalent C-code. The relevant fields are populated in the lines below.
@@ -750,6 +718,24 @@ impl Drop for Aom {
 }
 
 impl Aom {
+    #[allow(clippy::unnecessary_cast)]
+    fn codec_control<T>(&mut self, key: aome_enc_control_id, value: T) -> AvifResult<()> {
+        let encoder = self.encoder.as_mut().ok_or(AvifError::InvalidArgument)?;
+        let encoder_ptr: *mut aom_codec_ctx_t = encoder;
+        let key_id = key as std::os::raw::c_int;
+        // SAFETY: `encoder_ptr` points to an initialized `aom_codec_ctx_t`, and every caller in
+        // this module supplies the C-ABI control argument type matching `key` (`i32`, `u32`, or
+        // `*const aom_scaling_mode_t`).
+        let err = unsafe { aom_codec_control(encoder_ptr, key_id, value) };
+        if err != aom_codec_err_t_AOM_CODEC_OK {
+            return AvifError::unknown_error(format!(
+                "aom_codec_control failed: {}",
+                Self::codec_error_string(encoder)
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn version() -> String {
         // SAFETY: `aom_codec_version_str` has no preconditions and returns a static C string.
         let version_ptr = unsafe { aom_codec_version_str() };
