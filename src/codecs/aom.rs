@@ -113,7 +113,7 @@ macro_rules! codec_control {
         {
             return AvifError::unknown_error(format!(
                 "aom_codec_control failed: {}",
-                $self.error_string()
+                Self::codec_error_string($self.encoder.unwrap_ref())
             ));
         }
     };
@@ -306,7 +306,7 @@ impl Encoder for Aom {
 
         if self.encoder.is_none() {
             // Require libaom v3.14.0 or later.
-            // # Safety: aom_codec_version() has no safety prerequisites.
+            // SAFETY: `aom_codec_version` has no preconditions and simply returns an integer constant.
             let aom_version = unsafe { aom_codec_version() };
             // aom_codec.h says: aom_codec_version() == (major<<16 | minor<<8 | patch)
             if aom_version < (3 << 16) | (14 << 8) {
@@ -412,7 +412,7 @@ impl Encoder for Aom {
             if err != aom_codec_err_t_AOM_CODEC_OK {
                 return AvifError::unknown_error(format!(
                     "aom_codec_enc_init failed: {}",
-                    self.error_string()
+                    Self::codec_error_string(self.encoder.unwrap_ref())
                 ));
             }
             // # Safety: encoder_uninit was initialized in the C function call above.
@@ -522,7 +522,7 @@ impl Encoder for Aom {
                 {
                     return AvifError::unknown_error(format!(
                         "Unable to set codec specific option: {key} to {value}: {}",
-                        self.error_string()
+                        Self::codec_error_string(self.encoder.unwrap_ref())
                     ));
                 }
             }
@@ -559,7 +559,7 @@ impl Encoder for Aom {
                     if err != aom_codec_err_t_AOM_CODEC_OK {
                         return AvifError::unknown_error(format!(
                             "aom_codec_enc_config_set failed: {}",
-                            self.error_string()
+                            Self::codec_error_string(self.encoder.unwrap_ref())
                         ));
                     }
                 } else if aom_config.rc_end_usage == aom_rc_mode_AOM_CQ
@@ -674,7 +674,7 @@ impl Encoder for Aom {
         if err != aom_codec_err_t_AOM_CODEC_OK {
             return AvifError::unknown_error(format!(
                 "aom_codec_encode failed: {}",
-                self.error_string()
+                Self::codec_error_string(self.encoder.unwrap_ref())
             ));
         }
         add_aom_pkts_to_output_samples(self.encoder.unwrap_mut(), output_samples)?;
@@ -713,7 +713,7 @@ impl Encoder for Aom {
             if err != aom_codec_err_t_AOM_CODEC_OK {
                 return AvifError::unknown_error(format!(
                     "aom_codec_encode with null img failed: {}",
-                    self.error_string()
+                    Self::codec_error_string(self.encoder.unwrap_ref())
                 ));
             }
             if !add_aom_pkts_to_output_samples(self.encoder.unwrap_mut(), output_samples)? {
@@ -751,24 +751,41 @@ impl Drop for Aom {
 
 impl Aom {
     pub(crate) fn version() -> String {
-        let version = match unsafe { CStr::from_ptr(aom_codec_version_str()) }.to_str() {
-            Ok(s) => s.to_owned(),
-            Err(_) => String::new(),
+        // SAFETY: `aom_codec_version_str` has no preconditions and returns a static C string.
+        let version_ptr = unsafe { aom_codec_version_str() };
+        let version = if version_ptr.is_null() {
+            String::new()
+        } else {
+            // SAFETY: `version_ptr` was checked to be non-null above and points to a static
+            // NUL-terminated string literal owned by libaom.
+            let version_cstr = unsafe { CStr::from_ptr(version_ptr) };
+            version_cstr.to_str().unwrap_or_default().to_owned()
         };
         format!("aom: {version}")
     }
 
-    fn error_string(&self) -> String {
-        let ctx = self.encoder.unwrap_ref();
-        // # Safety: Calling aom_codec_error() with valid parameters is guaranteed to return a valid char* pointer.
-        let err = unsafe { CStr::from_ptr(aom_codec_error(ctx)).to_string_lossy() };
-        // # Safety: Calling aom_codec_error_detail() with valid parameters is guaranteed to return a null pointer or a valid char* pointer.
-        let detail_ptr = unsafe { aom_codec_error_detail(ctx) };
+    fn codec_error_string(ctx: &aom_codec_ctx_t) -> String {
+        let ctx_ptr: *const aom_codec_ctx_t = ctx;
+        // SAFETY: `ctx_ptr` points to a zero-initialized or libaom-initialized `aom_codec_ctx_t`;
+        // `aom_codec_error` only reads `ctx->err` and maps it to a static string literal.
+        let err_ptr = unsafe { aom_codec_error(ctx_ptr) };
+        let err = if err_ptr.is_null() {
+            std::borrow::Cow::Borrowed("unknown error")
+        } else {
+            // SAFETY: `err_ptr` is non-null and points to a static NUL-terminated string literal.
+            let err_cstr = unsafe { CStr::from_ptr(err_ptr) };
+            err_cstr.to_string_lossy()
+        };
+        // SAFETY: `ctx_ptr` points to an `aom_codec_ctx_t` whose `err`, `priv_`, and `err_detail`
+        // fields are initialized (either zeroed before init or set by libaom).
+        let detail_ptr = unsafe { aom_codec_error_detail(ctx_ptr) };
         if detail_ptr.is_null() {
             format!("{err}: no error detail")
         } else {
-            // # Safety: detail_ptr is a valid char* pointer.
-            let detail = unsafe { CStr::from_ptr(detail_ptr).to_string_lossy() };
+            // SAFETY: `detail_ptr` is non-null and points to a valid NUL-terminated C string owned
+            // by `ctx` (or static storage if `aom_codec_enc_init_ver` failed) and alive during `&ctx`.
+            let detail_cstr = unsafe { CStr::from_ptr(detail_ptr) };
+            let detail = detail_cstr.to_string_lossy();
             format!("{err}: {detail}")
         }
     }
