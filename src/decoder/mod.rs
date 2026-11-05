@@ -421,6 +421,7 @@ pub struct Decoder {
     // may change between decode calls) so that a change can be detected and the decoder reset.
     previous_android_mediacodec_output_color_format: Option<AndroidMediaCodecOutputColorFormat>,
     parsed_image: Image,
+    native_decodable: bool,
 }
 
 #[repr(C)]
@@ -534,6 +535,17 @@ impl Decoder {
     }
     pub fn compression_format(&self) -> CompressionFormat {
         self.compression_format
+    }
+    /// Returns true if the source selected by the last successful call to [`Decoder::parse()`]
+    /// can be decoded with the native AV1 decoder (`CodecChoice::Native`). Always false if the
+    /// `native_av1` feature is disabled.
+    ///
+    /// This is determined cheaply from the container and the AV1 sequence headers (from the
+    /// `av1C` property or from the first bytes of the payload when available), without parsing
+    /// the rest of the AV1 bitstream. Successfully decoding the image with the native AV1 decoder
+    /// is not guaranteed even if this is true (for example if the AV1 bitstream is invalid).
+    pub fn native_decodable(&self) -> bool {
+        self.parsing_complete() && self.native_decodable
     }
 
     fn parsing_complete(&self) -> bool {
@@ -886,6 +898,65 @@ impl Decoder {
             }
         }
         Ok(None)
+    }
+
+    // Returns true if the AV1 sequence header of the given tile signals multiple layers. The
+    // sequence header is taken from the configOBUs of the av1C property if any, or from the
+    // beginning of the first sample of the tile otherwise. Returns false if no sequence header
+    // could be found or read.
+    fn tile_has_multiple_layers(&mut self, decoding_item: DecodingItem, tile_index: usize) -> bool {
+        let tile = &self.tiles[decoding_item.usize()][tile_index];
+        let CodecConfiguration::Av1(av1_config) = &tile.codec_config else {
+            return false;
+        };
+        // See https://aomediacodec.github.io/av1-isobmff/v1.2.0.html#av1codecconfigurationbox-syntax.
+        // configOBUs start after the first 4 bytes of the av1C box payload.
+        if let Some(config_obus) = av1_config.raw_data.get(4..).filter(|x| !x.is_empty()) {
+            if let Ok(sequence_header) = Av1SequenceHeader::parse_from_obus(config_obus) {
+                return sequence_header.has_multiple_layers();
+            }
+        }
+        matches!(
+            self.find_sequence_header_in_sample(decoding_item, tile_index),
+            Ok(Some(sequence_header)) if sequence_header.has_multiple_layers()
+        )
+    }
+
+    // Returns true if the still image prepared by prepare_still_image_item() can be decoded with
+    // the native AV1 decoder. See native_decodable().
+    fn is_still_image_native_decodable(&mut self) -> bool {
+        if !cfg!(feature = "native_av1") {
+            return false;
+        }
+        for decoding_item in DecodingItem::ALL {
+            let tiles = &self.tiles[decoding_item.usize()];
+            if tiles.is_empty() {
+                continue;
+            }
+            for tile in tiles {
+                // Each tile must be a single AV1 payload, without any layer or operating point
+                // selection.
+                if !matches!(tile.codec_config, CodecConfiguration::Av1(_))
+                    || tile.operating_point != 0
+                    || tile.input.all_layers
+                    || tile.input.samples.len() != 1
+                {
+                    return false;
+                }
+                // Layered (including progressive) image items are signaled with the a1lx property.
+                // Layer selection with the lsel property is detected through all_layers above.
+                match self.items.get(&tile.input.samples[0].item_id) {
+                    Some(item) if item.a1lx().is_none() => {}
+                    _ => return false,
+                }
+            }
+            // The tiles of a grid share the same codec configuration so only check the sequence
+            // header of the first one, to keep this cheap.
+            if self.tile_has_multiple_layers(decoding_item, 0) {
+                return false;
+            }
+        }
+        true
     }
 
     // Populates the source item ids for a derived image item.
@@ -1604,6 +1675,7 @@ impl Decoder {
         self.previous_android_mediacodec_output_color_format =
             decoder.previous_android_mediacodec_output_color_format;
         self.parsed_image = decoder.parsed_image;
+        self.native_decodable = decoder.native_decodable;
     }
 
     pub fn parse(&mut self) -> AvifResult<()> {
@@ -1790,11 +1862,13 @@ impl Decoder {
                         &avif_boxes.ftyp,
                         &avif_boxes.meta,
                     )?;
-                    self.prepare_still_image_item(
+                    let cicp_set = self.prepare_still_image_item(
                         primary_item_id,
                         /* allow_gainmap= */ true,
                         /* update_io_stats= */ true,
-                    )?
+                    )?;
+                    self.native_decodable = self.is_still_image_native_decodable();
+                    cicp_set
                 }
                 Source::Thumbnail => {
                     if avif_boxes.meta.primary_item_id == 0 {
@@ -1845,6 +1919,8 @@ impl Decoder {
                             Vec::new()
                         };
                     let mut first_cicp_set = false;
+                    // All the thumbnails must be decodable with the native decoder.
+                    let mut native_decodable = true;
                     for idx in (0..self.thumbnail_item_ids.len()).rev() {
                         let item_id = self.thumbnail_item_ids[idx];
                         let item_cicp_set = self.prepare_still_image_item(
@@ -1852,6 +1928,8 @@ impl Decoder {
                             /* allow_gainmap= */ false,
                             /* update_io_stats= */ idx == 0,
                         )?;
+                        native_decodable =
+                            native_decodable && self.is_still_image_native_decodable();
                         if self.thumbnail_item_ids.len() > 1 {
                             self.image_count = thumbnail_count;
                             self.image.progressive_state = ProgressiveState::Unavailable;
@@ -1885,6 +1963,7 @@ impl Decoder {
                         self.thumbnail_samples = thumbnail_samples_rev;
                     }
                     self.active_thumbnail_index = Some(0);
+                    self.native_decodable = native_decodable;
                     first_cicp_set
                 }
                 Source::Auto => unreachable!(),

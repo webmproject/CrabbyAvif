@@ -41,9 +41,18 @@ pub struct Av1SequenceHeader {
     pub matrix_coefficients: MatrixCoefficients,
     pub yuv_range: YuvRange,
     pub config: Av1CodecConfiguration,
+    operating_points_count: u32,
+    first_operating_point_idc: u16,
 }
 
 impl Av1SequenceHeader {
+    // Returns true if the bitstream contains more than one spatial or temporal layer. See the
+    // semantics of operating_points_cnt_minus_1 and operating_point_idc in section 6.4.1 of the
+    // AV1 specification.
+    pub(crate) fn has_multiple_layers(&self) -> bool {
+        self.operating_points_count > 1 || self.first_operating_point_idc != 0
+    }
+
     fn parse_profile(&mut self, stream: &mut IStream) -> AvifResult<()> {
         self.config.seq_profile = stream.read_bits(3)? as u8;
         if self.config.seq_profile > 2 {
@@ -55,6 +64,7 @@ impl Av1SequenceHeader {
             return AvifError::bmff_parse_failed("invalid reduced_still_picture_header");
         }
         if self.reduced_still_picture_header {
+            self.operating_points_count = 1;
             self.config.seq_level_idx0 = stream.read_bits(5)? as u8;
         } else {
             let mut buffer_delay_length = 0;
@@ -85,9 +95,12 @@ impl Av1SequenceHeader {
             let initial_display_delay_present_flag = stream.read_bool()?;
             let operating_points_cnt_minus_1 = stream.read_bits(5)?;
             let operating_points_cnt = operating_points_cnt_minus_1 + 1;
+            self.operating_points_count = operating_points_cnt;
             for i in 0..operating_points_cnt {
-                // operating_point_idc
-                stream.skip_bits(12)?;
+                let operating_point_idc = stream.read_bits(12)? as u16;
+                if i == 0 {
+                    self.first_operating_point_idc = operating_point_idc;
+                }
                 let seq_level_idx = stream.read_bits(5)?;
                 if i == 0 {
                     self.config.seq_level_idx0 = seq_level_idx as u8;

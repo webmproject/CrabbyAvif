@@ -1645,6 +1645,8 @@ fn heic(filename: &str, expected_width: u32, expected_height: u32) {
         assert_eq!(image.width, expected_width);
         assert_eq!(image.height, expected_height);
         assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
+        // Native decoding is not supported for HEIC.
+        assert!(!decoder.native_decodable());
         if cfg!(feature = "android_mediacodec") && image.yuv_format == PixelFormat::Yuv420 {
             // Ensure that decoding succeeds if Android MediaCodec can decode it.
             assert!(decoder.next_image().is_ok());
@@ -1678,6 +1680,8 @@ fn heic_sequence(
         assert_eq!(image.height, expected_height);
         assert_eq!(decoder.image_count(), expected_frame_count);
         assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
+        // Native decoding is not supported for HEIC.
+        assert!(!decoder.native_decodable());
         if cfg!(feature = "android_mediacodec") {
             // Decode all frames in order.
             for _ in 0..expected_frame_count {
@@ -1704,6 +1708,8 @@ fn heic_monochrome_gainmap() {
     if cfg!(feature = "heic") {
         assert!(res.is_ok());
         assert_eq!(decoder.compression_format(), CompressionFormat::Heic);
+        // Native decoding is not supported for HEIC.
+        assert!(!decoder.native_decodable());
         if cfg!(feature = "android_mediacodec") {
             // Android Emulator's MediaCodec does not support monochrome HEIC images.
             assert!(decoder.next_image().is_err());
@@ -2286,4 +2292,55 @@ fn region_decode_not_implemented(codec: CodecChoice) -> AvifResult<()> {
         Err(AvifError::NotImplemented)
     );
     Ok(())
+}
+
+#[test_case("white_1x1.avif", decoder::Source::Auto, false, true ; "single item")]
+#[test_case("alpha.avif", decoder::Source::Auto, false, true ; "alpha")]
+#[test_case("sofa_grid1x5_420.avif", decoder::Source::Auto, false, true ; "grid")]
+#[test_case("overlay_yellow_bg.avif", decoder::Source::Auto, false, true ; "overlay")]
+#[test_case("seine_sdr_gainmap_srgb.avif", decoder::Source::Auto, false, true ; "gainmap")]
+#[test_case("weld_sato_8plus8bit.avif", decoder::Source::Auto, false, true ; "sample transform")]
+#[test_case("colors-animated-8bpc.avif", decoder::Source::Auto, false, false ; "image sequence")]
+#[test_case("colors-animated-8bpc.avif", decoder::Source::PrimaryItem, false, true ; "image sequence with primary item source")]
+#[test_case("progressive/progressive_quality_change.avif", decoder::Source::Auto, false, false ; "progressive")]
+#[test_case("progressive/progressive_quality_change.avif", decoder::Source::Auto, true, false ; "progressive allowed")]
+#[test_case("progressive/progressive_layered_grid.avif", decoder::Source::Auto, true, false ; "progressive grid")]
+#[test_case("progressive/tiger_3layer_1res.avif", decoder::Source::Auto, false, false ; "three layers")]
+fn native_decodable(
+    filename: &str,
+    source: decoder::Source,
+    allow_progressive: bool,
+    expected_native_decodable: bool,
+) {
+    let expected_native_decodable = expected_native_decodable && cfg!(feature = "native_av1");
+    let mut decoder = get_decoder(filename);
+    decoder.settings.strictness = decoder::Strictness::None;
+    decoder.settings.source = source;
+    decoder.settings.allow_progressive = allow_progressive;
+    decoder.settings.allow_sample_transform = true;
+    decoder.settings.image_content_to_decode = ImageContentType::All;
+    assert!(!decoder.native_decodable());
+    assert!(decoder.parse().is_ok());
+    assert_eq!(decoder.native_decodable(), expected_native_decodable);
+    if expected_native_decodable {
+        decoder.settings.codec_choice = NATIVE;
+        assert!(decoder.next_image().is_ok());
+    }
+    // The value is the same after parsing again.
+    assert!(decoder.parse().is_ok());
+    assert_eq!(decoder.native_decodable(), expected_native_decodable);
+}
+
+#[test_case("thumbnails_grid_per_tile_alpha.avif", true ; "grid and single item")]
+#[test_case("thumbnails_progressive_lsel.avif", false ; "layered")]
+fn native_decodable_thumbnails(filename: &str, expected_native_decodable: bool) {
+    let mut decoder = get_decoder(filename);
+    decoder.settings.source = decoder::Source::Thumbnail;
+    assert!(decoder.parse().is_ok());
+    assert_eq!(decoder.image_count(), 2);
+    // All the thumbnails are taken into account.
+    assert_eq!(
+        decoder.native_decodable(),
+        expected_native_decodable && cfg!(feature = "native_av1")
+    );
 }
