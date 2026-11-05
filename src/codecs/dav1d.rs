@@ -89,9 +89,9 @@ struct Dav1dDataWrapper {
 impl Default for Dav1dDataWrapper {
     fn default() -> Self {
         Self {
-            // # Safety: Zero initializing a C-struct. This is safe because this is the same usage
-            // pattern as the equivalent C-code. This is memset to zero and will be populated by
-            // dav1d in the call to dav1d_data_wrap.
+            // SAFETY: Zero-initializing the C `Dav1dData` struct matches the C API usage
+            // before passing it to `dav1d_data_create` and remains compatible across dav1d
+            // versions.
             data: unsafe { std::mem::zeroed() },
         }
     }
@@ -99,24 +99,46 @@ impl Default for Dav1dDataWrapper {
 
 impl Dav1dDataWrapper {
     fn mut_ptr(&mut self) -> *mut Dav1dData {
-        (&mut self.data) as *mut _
+        &mut self.data
     }
 
     fn has_data(&self) -> bool {
         self.data.sz > 0 && !self.data.data.is_null()
     }
 
+    fn unref(&mut self) {
+        if self.has_data() || !self.data.ref_.is_null() {
+            let ptr = self.mut_ptr();
+            // SAFETY: `ptr` points to `self.data`, which is either zero-initialized by `Default`
+            // or managed by `dav1d_data_create` / `dav1d_send_data`. `dav1d_data_unref` safely
+            // releases any owned `Dav1dRef` and resets `self.data` to empty.
+            unsafe {
+                dav1d_data_unref(ptr);
+            }
+        }
+    }
+
     fn wrap(&mut self, payload: &[u8]) -> AvifResult<()> {
-        let data = unsafe { dav1d_data_create((&mut self.data) as *mut _, payload.len() as _) };
+        self.unref();
+        let data_ptr = self.mut_ptr();
+        let len = payload.len();
+        // SAFETY: `data_ptr` is a valid mutable pointer to `self.data` (which has no active
+        // reference after `self.unref()`), and `dav1d_data_create` validates `len` internally.
+        let data = unsafe { dav1d_data_create(data_ptr, len as _) };
         if data.is_null() {
             return Err(AvifError::UnknownError(
                 "dav1d_data_create returned nullptr".into(),
             ));
         }
-        // # Safety: data was allocated in the successful call to dav1d_data_create and is
-        // guaranteed to be large enough to hold payload.len() bytes.
-        unsafe {
-            std::ptr::copy_nonoverlapping(payload.as_ptr(), data, payload.len());
+        if !payload.is_empty() {
+            let src = payload.as_ptr();
+            // SAFETY: `dav1d_data_create` succeeded and returned a non-null pointer `data` to a
+            // newly heap-allocated buffer of at least `len` bytes disjoint from `payload`. Note
+            // that `dav1d_data_create` returns uninitialized memory, so `copy_nonoverlapping` is
+            // required here instead of constructing `&mut [u8]` via `slice::from_raw_parts_mut`.
+            unsafe {
+                std::ptr::copy_nonoverlapping(src, data, len);
+            }
         }
         Ok(())
     }
@@ -124,12 +146,7 @@ impl Dav1dDataWrapper {
 
 impl Drop for Dav1dDataWrapper {
     fn drop(&mut self) {
-        if self.has_data() {
-            // # Safety: Calling a C function with valid parameters.
-            unsafe {
-                dav1d_data_unref(self.mut_ptr());
-            }
-        }
+        self.unref();
     }
 }
 
