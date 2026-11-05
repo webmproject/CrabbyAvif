@@ -350,8 +350,12 @@ pub fn decode_with_codec(filename: &str, codec: CodecChoice) -> AvifResult<Image
     decoder.image().expect("image was none").try_deep_clone()
 }
 
+/// Decodes `filename` with dav1d and with the native AV1 decoder and checks that the decoded
+/// images match. The comparison is skipped for the files that are not supported by the native
+/// decoder, in which case `Decoder::native_decodable()` must be false. `is_multilayer` must be true
+/// for the files that contain multiple layers.
 #[cfg(all(feature = "dav1d", feature = "native_av1"))]
-pub fn test_dav1d_vs_native(filename: &str) {
+pub fn test_dav1d_vs_native(filename: &str, is_multilayer: bool) {
     let mut decoder = decoder::Decoder::default();
     decoder.settings.strictness = decoder::Strictness::None;
     let filename_string = filename.to_string();
@@ -360,16 +364,25 @@ pub fn test_dav1d_vs_native(filename: &str) {
         .expect("Failed to set IO");
     decoder.parse().expect("Failed to parse");
     let image = decoder.image().expect("image was none");
-    // Image sequences and progressive images are not supported by the native decoder, so skip
-    // them.
-    if image.image_sequence_track_present
+    // Multi-layer images, image sequences and progressive images are not supported by the native
+    // decoder, so skip them.
+    if is_multilayer
+        || image.image_sequence_track_present
         || !matches!(
             image.progressive_state,
             decoder::ProgressiveState::Unavailable
         )
     {
+        assert!(
+            !decoder.native_decodable(),
+            "native_decodable() should be false for {filename}"
+        );
         return;
     }
+    assert!(
+        decoder.native_decodable(),
+        "native_decodable() should be true for {filename}"
+    );
 
     let dav1d_image = decode_with_codec(filename, CodecChoice::Dav1d).unwrap();
     let native_image = decode_with_codec(filename, CodecChoice::Native).unwrap();

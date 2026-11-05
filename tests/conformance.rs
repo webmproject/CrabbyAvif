@@ -150,11 +150,17 @@ fn test_conformance(index: usize) {
 fn test_conformance_native_matches_dav1d(index: usize) {
     let expected_info = &EXPECTED_INFOS[index];
     let filename = get_test_file(expected_info.filename);
-    // Multi-layer files are not supported by the native decoder, so skip them.
-    if filename.contains("multilayer") || filename.contains("3layer") {
-        return;
-    }
-    utils::test_dav1d_vs_native(&filename);
+    // Multi-layer files are not supported by the native decoder. The comparison is skipped for
+    // them and native_decodable() must be false. Note that the "multilayer_examples" directory
+    // also contains a single layer file. The AV1 sequence header of truncated_elementary_stream
+    // signals two operating points with two spatial layers (but only the first layer can be
+    // decoded because the stream is truncated).
+    let is_multilayer = expected_info.filename.contains("_multilayer")
+        || expected_info.filename.contains("3layer")
+        || expected_info
+            .filename
+            .ends_with("truncated_elementary_stream.avif");
+    utils::test_dav1d_vs_native(&filename, is_multilayer);
 }
 
 // If more files are added to this array, update the call to generate_tests macro below.
