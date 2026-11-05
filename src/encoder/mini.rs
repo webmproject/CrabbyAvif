@@ -431,14 +431,19 @@ impl Encoder {
             if has_gainmap {
                 let tmap = &self.alt_image_metadata;
                 let gainmap = &self.gainmap_image_metadata;
-                stream.write_bits(
-                    gainmap.width - 1,
-                    if large_dimensions_flag { 15 } else { 7 },
-                )?; // unsigned int(large_dimensions_flag ? 15 : 7) gainmap_width_minus1;
-                stream.write_bits(
-                    gainmap.height - 1,
-                    if large_dimensions_flag { 15 } else { 7 },
-                )?; // unsigned int(large_dimensions_flag ? 15 : 7) gainmap_height_minus1;
+                let gainmap_dimension_same_as_main_item_flag =
+                    gainmap.width == image.width && gainmap.height == image.height;
+                stream.write_bool(gainmap_dimension_same_as_main_item_flag)?; // bit(1) gainmap_dimension_same_as_main_item_flag;
+                if !gainmap_dimension_same_as_main_item_flag {
+                    stream.write_bits(
+                        gainmap.width - 1,
+                        if large_dimensions_flag { 15 } else { 7 },
+                    )?; // unsigned int(large_dimensions_flag ? 15 : 7) gainmap_width_minus1;
+                    stream.write_bits(
+                        gainmap.height - 1,
+                        if large_dimensions_flag { 15 } else { 7 },
+                    )?; // unsigned int(large_dimensions_flag ? 15 : 7) gainmap_height_minus1;
+                }
                 stream.write_bits(gainmap.matrix_coefficients as u32, 8)?; // bit(8) gainmap_matrix_coefficients;
                 stream.write_bool(gainmap.yuv_range == YuvRange::Full)?; // bit(1) gainmap_full_range_flag;
                 let gainmap_chroma_subsampling =

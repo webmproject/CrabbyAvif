@@ -31,14 +31,16 @@ use test_case::test_matrix;
     [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444, PixelFormat::Yuv400],
     [YuvRange::Limited, YuvRange::Full],
     [false, true],
-    [false, true]
+    // No gain map, a gain map smaller than the main image, or a gain map with the same dimensions
+    // as the main image (gainmap_dimension_same_as_main_item_flag).
+    [None, Some((6, 17)), Some((100, 200))]
 )]
 fn encode_decode_av1(
     depth: u8,
     yuv_format: PixelFormat,
     yuv_range: YuvRange,
     alpha: bool,
-    gainmap: bool,
+    gainmap_dimensions: Option<(u32, u32)>,
 ) -> AvifResult<()> {
     encode_decode(
         CodecChoice::Aom,
@@ -46,7 +48,7 @@ fn encode_decode_av1(
         yuv_format,
         yuv_range,
         alpha,
-        gainmap,
+        gainmap_dimensions,
         "avif",
         CompressionFormat::Avif,
     )
@@ -58,14 +60,14 @@ fn encode_decode_av1(
     [PixelFormat::Yuv420],
     [YuvRange::Full],
     [false],
-    [false]
+    [None]
 )]
 fn encode_decode_av2(
     depth: u8,
     yuv_format: PixelFormat,
     yuv_range: YuvRange,
     alpha: bool,
-    gainmap: bool,
+    gainmap_dimensions: Option<(u32, u32)>,
 ) -> AvifResult<()> {
     encode_decode(
         CodecChoice::Avm,
@@ -73,7 +75,7 @@ fn encode_decode_av2(
         yuv_format,
         yuv_range,
         alpha,
-        gainmap,
+        gainmap_dimensions,
         "av2f",
         CompressionFormat::Avif2,
     )
@@ -86,7 +88,7 @@ fn encode_decode(
     yuv_format: PixelFormat,
     yuv_range: YuvRange,
     alpha: bool,
-    gainmap: bool,
+    gainmap_dimensions: Option<(u32, u32)>,
     expected_minor_version: &str,
     expected_format: CompressionFormat,
 ) -> AvifResult<()> {
@@ -94,14 +96,21 @@ fn encode_decode(
         return Ok(());
     }
     let mut input_image = generate_gradient_image(100, 200, depth, yuv_format, yuv_range, alpha)?;
-    let input_gainmap = if gainmap {
+    let input_gainmap = if let Some((gainmap_width, gainmap_height)) = gainmap_dimensions {
         input_image.transfer_characteristics = TransferCharacteristics::Srgb;
         input_image.clli = Some(ContentLightLevelInformation {
             max_cll: 2,
             max_pall: 1,
         });
         Some(GainMap {
-            image: generate_gradient_image(6, 17, 8, PixelFormat::Yuv420, YuvRange::Full, false)?,
+            image: generate_gradient_image(
+                gainmap_width,
+                gainmap_height,
+                8,
+                PixelFormat::Yuv420,
+                YuvRange::Full,
+                false,
+            )?,
             alt_plane_count: 3,
             alt_matrix_coefficients: MatrixCoefficients::Smpte2085,
             alt_clli: ContentLightLevelInformation {

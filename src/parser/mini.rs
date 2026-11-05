@@ -205,8 +205,16 @@ pub(crate) fn parse_mini(
     if has_hdr {
         has_gainmap = stream.read_bool()?; // bit(1) gainmap_flag;
         if has_gainmap {
-            gainmap_width = stream.read_bits(if large_dimensions_flag { 15 } else { 7 })? + 1; // unsigned int(large_dimensions_flag ? 15 : 7) gainmap_width_minus1;
-            gainmap_height = stream.read_bits(if large_dimensions_flag { 15 } else { 7 })? + 1; // unsigned int(large_dimensions_flag ? 15 : 7) gainmap_height_minus1;
+            let gainmap_dimension_same_as_main_item_flag = stream.read_bool()?; // bit(1) gainmap_dimension_same_as_main_item_flag;
+            if gainmap_dimension_same_as_main_item_flag {
+                gainmap_width = width;
+                gainmap_height = height;
+            } else {
+                // unsigned int(large_dimensions_flag ? 15 : 7) gainmap_width_minus1;
+                gainmap_width = stream.read_bits(if large_dimensions_flag { 15 } else { 7 })? + 1;
+                // unsigned int(large_dimensions_flag ? 15 : 7) gainmap_height_minus1;
+                gainmap_height = stream.read_bits(if large_dimensions_flag { 15 } else { 7 })? + 1;
+            }
             gainmap_matrix_coefficients = MatrixCoefficients::from(stream.read_bits(8)? as u16); // bit(8) gainmap_matrix_coefficients;
             gainmap_full_range = stream.read_bool()?; // bit(1) gainmap_full_range_flag;
 
