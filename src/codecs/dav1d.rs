@@ -50,9 +50,9 @@ struct Dav1dPictureWrapper {
 impl Default for Dav1dPictureWrapper {
     fn default() -> Self {
         Self {
-            // # Safety: Zero initializing a C-struct. This is safe because this is the same usage
-            // pattern as the equivalent C-code. This is memset to zero and will be populated by
-            // dav1d in the call to dav1d_get_picture.
+            // SAFETY: Zero-initializing the C `Dav1dPicture` struct matches the C API usage
+            // before passing it to `dav1d_get_picture` and remains compatible across dav1d
+            // versions.
             picture: unsafe { std::mem::zeroed() },
         }
     }
@@ -60,7 +60,7 @@ impl Default for Dav1dPictureWrapper {
 
 impl Dav1dPictureWrapper {
     fn mut_ptr(&mut self) -> *mut Dav1dPicture {
-        (&mut self.picture) as *mut _
+        &mut self.picture
     }
 
     fn get(&self) -> &Dav1dPicture {
@@ -68,16 +68,29 @@ impl Dav1dPictureWrapper {
     }
 
     fn use_layer(&self, spatial_id: u8) -> bool {
-        // # Safety: frame_hdr is popualated by dav1d and is guaranteed to be valid.
-        spatial_id == 0xFF || spatial_id == unsafe { (*self.get().frame_hdr).spatial_id as u8 }
+        if spatial_id == 0xFF {
+            return true;
+        }
+        let frame_hdr = self.get().frame_hdr;
+        if frame_hdr.is_null() {
+            return false;
+        }
+        // SAFETY: `self.picture` was populated by a successful `dav1d_get_picture` call (`res == 0`),
+        // and `frame_hdr` was verified to be non-null above. `dav1d` guarantees `frame_hdr` points
+        // to an initialized `Dav1dFrameHeader` valid for the lifetime of this `Dav1dPicture` ref.
+        let pic_spatial_id = unsafe { (*frame_hdr).spatial_id };
+        spatial_id == pic_spatial_id as u8
     }
 }
 
 impl Drop for Dav1dPictureWrapper {
     fn drop(&mut self) {
-        // # Safety: Calling a C function with valid parameters.
+        let ptr = self.mut_ptr();
+        // SAFETY: `ptr` points to `self.picture`, which is either zero-initialized by `Default` or
+        // populated by `dav1d_get_picture`. `dav1d_picture_unref` safely handles both states,
+        // decrements any non-null internal `Dav1dRef`s, and zeroes the struct.
         unsafe {
-            dav1d_picture_unref(self.mut_ptr());
+            dav1d_picture_unref(ptr);
         }
     }
 }
@@ -210,6 +223,14 @@ impl Dav1d {
         category: Category,
         overwrite_alpha_plane_yuv_range: bool,
     ) -> AvifResult<()> {
+        let seq_hdr_ptr = dav1d_picture.seq_hdr;
+        if seq_hdr_ptr.is_null() {
+            return AvifError::unknown_error("dav1d_picture.seq_hdr is null");
+        }
+        // SAFETY: `dav1d_picture` was populated by a successful `dav1d_get_picture` call,
+        // `seq_hdr_ptr` was checked to be non-null above, and `dav1d` keeps `seq_hdr` valid and
+        // immutable for the lifetime of `dav1d_picture` via `seq_hdr_ref`.
+        let seq_hdr = unsafe { &*seq_hdr_ptr };
         match category {
             Category::Alpha => {
                 if image.width > 0
@@ -232,8 +253,6 @@ impl Dav1d {
                     image.row_bytes[3],
                 )?);
                 if overwrite_alpha_plane_yuv_range {
-                    // # Safety: seq_hdr is populated by dav1d and is guaranteed to be valid.
-                    let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
                     image.yuv_range =
                         if seq_hdr.color_range == 0 { YuvRange::Limited } else { YuvRange::Full };
                 }
@@ -250,8 +269,6 @@ impl Dav1d {
                     3 => PixelFormat::Yuv444,
                     _ => return AvifError::unknown_error(""), // not reached.
                 };
-                // # Safety: seq_hdr is popualated by dav1d and is guaranteed to be valid.
-                let seq_hdr = unsafe { &(*dav1d_picture.seq_hdr) };
                 image.yuv_range =
                     if seq_hdr.color_range == 0 { YuvRange::Limited } else { YuvRange::Full };
                 image.chroma_sample_position = (seq_hdr.chr as u32).into();
