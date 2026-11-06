@@ -851,15 +851,23 @@ pub(crate) fn parse_mini(
             index: meta.iref.len() as u32,
         })?;
 
+        // The following must be prepended to form the Exif item data:
+        //   unsigned int(32) exif_tiff_header_offset = 0;
+        // Copy the Exif bytes to a virtual 'idat' box to that end.
+        let exif_data = remaining_bytes
+            .get(remaining_bytes_offset..(remaining_bytes_offset + exif_data_size as usize))
+            .ok_or(AvifError::BmffParseFailed("Unexpected mini size".into()))?;
+        let idat_offset = meta.idat.len();
+        meta.idat.try_extend_from_slice(&[0, 0, 0, 0])?; // exif_tiff_header_offset
+        meta.idat.try_extend_from_slice(exif_data)?;
         meta.iloc.items.try_push(ItemLocationEntry {
             item_id: exif_item_id,
-            construction_method: 0,
+            construction_method: 1, // idat
             base_offset: 0,
             extent_count: 0,
             extents: try_vec_exact![decoder::Extent {
-                // Does not include unsigned int(32) exif_tiff_header_offset;
-                offset: (offset_till_remaining_bytes + remaining_bytes_offset) as u64,
-                size: exif_data_size as usize,
+                offset: idat_offset as u64,
+                size: 4 + exif_data_size as usize,
             }]?,
         })?;
         remaining_bytes_offset += exif_data_size as usize;
