@@ -2315,7 +2315,17 @@ pub(crate) fn parse(io: &mut GenericIO, strictness: &Strictness) -> AvifResult<A
                     }
                 }
             }
-            _ => {}
+            _ => {
+                if header.size == BoxSize::UntilEndOfStream {
+                    // There is no other box after this one because it goes till the end of the
+                    // stream, and not enough information was parsed yet, otherwise the loop would
+                    // have been exited earlier. Same as libavif.
+                    return AvifError::bmff_parse_failed(format!(
+                        "unknown top-level box {:?} with size 0",
+                        header.box_type
+                    ));
+                }
+            }
         }
         if header.size == BoxSize::UntilEndOfStream {
             // There is no other box after this one because it goes till the end of the stream.
