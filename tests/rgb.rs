@@ -381,6 +381,68 @@ fn identity(rgb_depth_and_step: (u8, u32), yuv_depth: u8) -> AvifResult<()> {
     })
 }
 
+// Like in libavif, the Identity matrix coefficients cannot be used with chroma subsampling.
+#[test_matrix(
+    [PixelFormat::Yuv444, PixelFormat::Yuv422, PixelFormat::Yuv420, PixelFormat::Yuv400],
+    [rgb::Format::Rgba, rgb::Format::Gray]
+)]
+fn identity_rgb_to_yuv(yuv_format: PixelFormat, rgb_format: rgb::Format) -> AvifResult<()> {
+    let mut rgb = rgb::Image {
+        width: 4,
+        height: 4,
+        depth: 8,
+        format: rgb_format,
+        ..Default::default()
+    };
+    rgb.allocate()?;
+    let mut image = image::Image {
+        width: 4,
+        height: 4,
+        depth: 8,
+        yuv_format,
+        matrix_coefficients: MatrixCoefficients::Identity,
+        ..Default::default()
+    };
+    let result = rgb.convert_to_yuv(&mut image);
+    if matches!(yuv_format, PixelFormat::Yuv444 | PixelFormat::Yuv400) {
+        assert_eq!(result, Ok(()));
+    } else {
+        assert_eq!(result, Err(AvifError::ReformatFailed));
+    }
+    Ok(())
+}
+
+// Like in libavif, invalid RGB images are rejected with ReformatFailed and valid float RGB images
+// are not supported.
+#[test]
+fn rgb_to_yuv_errors() -> AvifResult<()> {
+    for (format, depth, is_float, expected_error) in [
+        (rgb::Format::Rgb565, 8, false, AvifError::ReformatFailed),
+        (rgb::Format::Rgba, 8, true, AvifError::ReformatFailed),
+        (rgb::Format::Rgba, 12, true, AvifError::ReformatFailed),
+        (rgb::Format::Rgba, 16, true, AvifError::NotImplemented),
+    ] {
+        let mut rgb = rgb::Image {
+            width: 4,
+            height: 4,
+            depth,
+            format,
+            is_float,
+            ..Default::default()
+        };
+        rgb.allocate()?;
+        let mut image = image::Image {
+            width: 4,
+            height: 4,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv444,
+            ..Default::default()
+        };
+        assert_eq!(rgb.convert_to_yuv(&mut image), Err(expected_error));
+    }
+    Ok(())
+}
+
 #[test_matrix([8, 10, 12, 16])]
 fn monochrome_lossless(depth: u8) -> AvifResult<()> {
     rgb_to_yuv_whole_range(&RgbToYuvParam {
