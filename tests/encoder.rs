@@ -987,7 +987,7 @@ fn gainmap_image_alpha_invalid() -> AvifResult<()> {
     Ok(())
 }
 
-#[test_matrix([0, 1, 2])]
+#[test_matrix([0, 1, 2, 3])]
 fn gainmap_oriented_invalid(transformation_index: u8) -> AvifResult<()> {
     let (image, mut gainmap) = generate_gainmap_image(false)?;
     // Gainmap image should not have a transformative property. Expect a failure.
@@ -995,6 +995,14 @@ fn gainmap_oriented_invalid(transformation_index: u8) -> AvifResult<()> {
         0 => gainmap.image.irot_angle = Some(1),
         1 => gainmap.image.imir_axis = Some(0),
         2 => gainmap.image.pasp = Some(PixelAspectRatio::default()),
+        3 => {
+            gainmap.image.clap = Some(clap::CleanAperture {
+                width: UFraction(gainmap.image.width, 1),
+                height: UFraction(gainmap.image.height, 1),
+                horiz_off: UFraction(0, 1),
+                vert_off: UFraction(0, 1),
+            })
+        }
         _ => {} // not reached.
     }
     let settings = encoder::Settings {
@@ -1003,7 +1011,11 @@ fn gainmap_oriented_invalid(transformation_index: u8) -> AvifResult<()> {
     };
     let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
     encoder.add_image_gainmap(&image, &gainmap)?;
-    assert!(encoder.finish().is_err());
+    // Same error as libavif.
+    assert!(matches!(
+        encoder.finish(),
+        Err(AvifError::EncodeGainMapFailed)
+    ));
     Ok(())
 }
 
