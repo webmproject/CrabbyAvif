@@ -583,11 +583,15 @@ impl Image {
         }
 
         let mut alpha_multiply_mode = if image.has_alpha() {
-            if !self.has_alpha() && !image.alpha_premultiplied {
+            if !self.has_alpha() {
                 // If we are converting an image with alpha into a format without alpha, we should
                 // premultiply the alpha value before discarding the alpha plane. This has the same
                 // effect of rendering this image on a black background.
-                AlphaMultiplyMode::Multiply
+                if !image.alpha_premultiplied {
+                    AlphaMultiplyMode::Multiply
+                } else {
+                    AlphaMultiplyMode::NoOp
+                }
             } else if !image.alpha_premultiplied && self.premultiply_alpha {
                 AlphaMultiplyMode::Multiply
             } else if image.alpha_premultiplied && !self.premultiply_alpha {
