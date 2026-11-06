@@ -361,12 +361,13 @@ impl SampleTransform {
             assert_eq!(stack.len(), 1);
             let result: StackItem = stack.pop().unwrap();
 
-            let mut output_min: u16 = 0;
-            let mut output_max: u16 = output.max_channel();
-            if output.yuv_range == YuvRange::Limited && output.depth >= 8 {
-                output_min = 16u16 << (output.depth - 8);
-                output_max = 235u16 << (output.depth - 8);
-            }
+            // AVIF specification, Sample Transform Derived Image Item:
+            //   The output reconstructed image is made up of the output samples, whose values
+            //   shall each be clamped to fit in the number of bits per sample as defined by the
+            //   PixelInformationProperty of the reconstructed image item.
+            // The YUV range is ignored, like in libavif.
+            let output_min: u16 = 0;
+            let output_max: u16 = output.max_channel();
             match result {
                 StackItem::Values(values) => {
                     if output.depth == 8 {
@@ -540,9 +541,15 @@ mod tests {
     // Constant
     #[test_case(8, 8, 16, YuvRange::Full, vec![],
         vec![SampleTransformToken::Constant(42)], 42)]
-    // Limited range
+    // Limited range (ignored, only the bit depth matters)
     #[test_case(8, 8, 8, YuvRange::Limited, vec![],
-        vec![SampleTransformToken::Constant(5)], 16)]
+        vec![SampleTransformToken::Constant(5)], 5)]
+    #[test_case(8, 16, 8, YuvRange::Limited, vec![],
+        vec![SampleTransformToken::Constant(250)], 250)]
+    #[test_case(8, 32, 16, YuvRange::Limited, vec![255],
+        vec![SampleTransformToken::ImageItem(0),
+        SampleTransformToken::Constant(256),
+        SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Product)], 65280)]
     // Image
     #[test_case(8, 8, 8, YuvRange::Limited, vec![1, 42, 3],
             vec![SampleTransformToken::ImageItem(1)], 42)]
