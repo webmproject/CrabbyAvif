@@ -522,6 +522,20 @@ impl GridImageHelper<'_> {
     }
 }
 
+// Codecs return AvifError::UnknownError when they fail to decode a payload. Like libavif, return an
+// error specific to the category of the decoded item instead. The Android MediaCodec errors are
+// returned as is.
+fn codec_error_for_category(err: AvifError, category: Category) -> AvifError {
+    match err {
+        AvifError::UnknownError(_) if !cfg!(feature = "android_mediacodec") => match category {
+            Category::Color => AvifError::DecodeColorFailed,
+            Category::Alpha => AvifError::DecodeAlphaFailed,
+            Category::Gainmap => AvifError::DecodeGainMapFailed,
+        },
+        _ => err,
+    }
+}
+
 impl Decoder {
     pub fn image_count(&self) -> u32 {
         self.image_count
@@ -2411,7 +2425,7 @@ impl Decoder {
                 checked_incr!(self.tile_info[decoding_item.usize()].decoded_tile_count, 1);
                 return Ok(());
             } else {
-                return next_image_result;
+                return next_image_result.map_err(|err| codec_error_for_category(err, category));
             }
         }
 
@@ -2661,7 +2675,7 @@ impl Decoder {
                 // When decoding HEIC on Android, if the alpha channel decoding fails, simply
                 // ignore it and return the rest of the image.
             } else {
-                return next_image_result;
+                return next_image_result.map_err(|err| codec_error_for_category(err, category));
             }
         } else if !grid_image_helper.is_grid_complete()? {
             return AvifError::unknown_error("codec did not decode all cells");
@@ -3063,12 +3077,14 @@ impl Decoder {
             self.image.free_planes(decoding_item.category.planes());
             let first_tile = &self.tiles[decoding_item.usize()][0];
             let codec = &mut self.codecs[first_tile.codec_index];
-            codec.get_last_image(
-                &payloads,
-                spatial_id.unwrap(),
-                &mut self.image,
-                decoding_item.category,
-            )?;
+            codec
+                .get_last_image(
+                    &payloads,
+                    spatial_id.unwrap(),
+                    &mut self.image,
+                    decoding_item.category,
+                )
+                .map_err(|err| codec_error_for_category(err, decoding_item.category))?;
             checked_incr!(self.tile_info[decoding_item.usize()].decoded_tile_count, 1);
         }
         self.image_index = requested_index;
