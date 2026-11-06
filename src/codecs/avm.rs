@@ -225,7 +225,8 @@ fn add_avm_pkts_to_output_samples(
         //                    https://aomediacodec.github.io/av2-isobmff/main#sync-sample
         let sync = (frame.flags & AVM_FRAME_IS_KEY) != 0;
         let sample_data_range = Av2CodecConfiguration::get_sample_obus_range(encoded_data)?;
-        output_samples.try_push(Sample::create_from(encoded_data, sample_data_range, sync)?)?;
+        let encoded_data = encoded_data.try_to_vec()?;
+        output_samples.try_push(Sample::create(encoded_data, sample_data_range, sync))?;
         got_frame = true;
     }
     Ok(got_frame)

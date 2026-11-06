@@ -270,14 +270,16 @@ pub(crate) struct Sample {
 impl Sample {
     // This function is not used in all configurations.
     #[allow(dead_code)]
-    pub(crate) fn create_from(data: &[u8], range: Range<usize>, sync: bool) -> AvifResult<Self> {
-        let mut copied_data: Vec<u8> = create_vec_exact(data.len())?;
-        copied_data.try_extend_from_slice(data)?;
-        Ok(Sample {
-            data_output_by_codec: copied_data,
-            sample_data_range: range,
+    pub(crate) fn create(
+        data_output_by_codec: Vec<u8>,
+        sample_data_range: Range<usize>,
+        sync: bool,
+    ) -> Self {
+        Self {
+            data_output_by_codec,
+            sample_data_range,
             sync,
-        })
+        }
     }
 
     // This function is not used in all configurations.

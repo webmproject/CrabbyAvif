@@ -357,11 +357,11 @@ impl Encoder for Libjxl {
         }
         let encoded_bytes_without_header = expected_header.len()..encoded_bytes_with_header.len();
 
-        output_samples.try_push(Sample::create_from(
-            &encoded_bytes_with_header,
+        output_samples.try_push(Sample::create(
+            encoded_bytes_with_header,
             encoded_bytes_without_header,
             true,
-        )?)?;
+        ))?;
 
         Ok(())
     }
