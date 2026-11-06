@@ -338,11 +338,14 @@ impl avifImage {
     // This function is not used in all configurations.
     #[allow(dead_code)]
     pub(crate) fn gainmap(&self) -> AvifResult<Option<GainMap>> {
-        Ok(if self.gainMap.is_null() {
-            None
-        } else {
-            Some(deref_const!(self.gainMap).try_into()?)
-        })
+        if self.gainMap.is_null() {
+            return Ok(None);
+        }
+        let gainmap = deref_const!(self.gainMap);
+        if gainmap.image.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(gainmap.try_into()?))
     }
 }
 

@@ -856,8 +856,10 @@ avifResult crabby_avifEncoderSetCodecSpecificOption(avifEncoder *encoder,
 avifGainMap *crabby_avifGainMapCreate();
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if gainmap is not null, it has to point to a buffer allocated by crabby_avifGainMapCreate.
+/// If `gainmap` is non-null, it must be a valid pointer obtained from
+/// [`crabby_avifGainMapCreate`] that has not yet been destroyed, and if `(*gainmap).image` is
+/// non-null, it must be a valid pointer obtained from [`crabby_avifImageCreate`] or
+/// [`crabby_avifImageCreateEmpty`] that has not yet been destroyed.
 void crabby_avifGainMapDestroy(avifGainMap *gainmap);
 
 avifImage *crabby_avifImageCreateEmpty();
