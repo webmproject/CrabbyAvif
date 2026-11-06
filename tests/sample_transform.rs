@@ -111,3 +111,42 @@ fn recipe_auto(
     assert!(psnr(decoder.image().unwrap(), &input_image)? >= 30.0);
     Ok(())
 }
+
+#[test_matrix(
+    [Recipe::BitDepthExtension8b8b, Recipe::BitDepthExtension12b4b, Recipe::BitDepthExtension12b8bOverlap4b],
+    [YuvRange::Limited, YuvRange::Full],
+    [false, true]
+)]
+fn lossless_sample_transform_yuv_range(
+    recipe: Recipe,
+    yuv_range: YuvRange,
+    alpha: bool,
+) -> AvifResult<()> {
+    if !HAS_ENCODER || !HAS_DECODER {
+        return Ok(());
+    }
+    let image = generate_gradient_image(64, 64, 16, PixelFormat::Yuv444, yuv_range, alpha)?;
+    let settings = encoder::Settings {
+        speed: Some(10),
+        mutable: encoder::MutableSettings {
+            quality: 100.0,
+            quality_alpha: 100.0,
+            ..Default::default()
+        },
+        recipe,
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image(&image)?;
+    let edata = encoder.finish()?;
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.settings.allow_sample_transform = true;
+    assert_eq!(decoder.parse(), Ok(()));
+    assert_eq!(decoder.next_image(), Ok(()));
+    // The samples computed by sample transforms are only clamped to the range allowed by the bit
+    // depth, regardless of the YUV range. The encoding is lossless so the images must be equal.
+    assert!(are_images_equal(&image, decoder.image().unwrap())?);
+    Ok(())
+}
