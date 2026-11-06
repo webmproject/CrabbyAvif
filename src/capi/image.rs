@@ -472,13 +472,16 @@ fn avif_alloc_buffer(size: usize) -> AvifResult<*mut u8> {
 }
 
 /// # Safety
-/// - If `dstImage` is non-null, it must point to a valid, mutable [`avifImage`] whose owned plane
-///   buffers (if `imageOwnsYUVPlanes` / `imageOwnsAlphaPlane` are set) were allocated by
-///   `crabby_avifAlloc` and whose `icc`, `exif`, and `xmp` fields are either empty/default or
-///   managed by `crabby_avifRWData*`.
-/// - If `srcImage` is non-null, it must point to a valid [`avifImage`] distinct from `dstImage`
-///   whose non-null plane and metadata buffers are valid for reads matching its dimensions, row
-///   strides, and metadata sizes.
+/// - If `dstImage` is non-null, it must point to a valid, mutable
+///   [`avifImage`] whose owned plane buffers (if `imageOwnsYUVPlanes` /
+///   `imageOwnsAlphaPlane` are set) were allocated by `crabby_avifAlloc`,
+///   whose `icc`, `exif`, and `xmp` fields are either empty/default or managed
+///   by `crabby_avifRWData*`, and whose `gainMap` (if non-null) is owned by
+///   `dstImage` and was allocated by [`crabby_avifGainMapCreate`].
+/// - If `srcImage` is non-null, it must point to a valid [`avifImage`]
+///   distinct from `dstImage` whose non-null plane, metadata, and `gainMap`
+///   buffers are valid for reads matching its dimensions, row strides, and
+///   metadata sizes.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageCopy(
     dstImage: *mut avifImage,
@@ -600,7 +603,63 @@ pub unsafe extern "C" fn crabby_avifImageCopy(
             dst.imageOwnsAlphaPlane = AVIF_TRUE;
         }
     }
-    avifResult::Ok
+    if src.gainMap.is_null() {
+        if !dst.gainMap.is_null() {
+            // SAFETY: Pre-conditions are met to call this function.
+            unsafe { crabby_avifGainMapDestroy(dst.gainMap) };
+            dst.gainMap = std::ptr::null_mut();
+        }
+        return avifResult::Ok;
+    }
+    if std::ptr::eq(dst.gainMap, src.gainMap) {
+        // The gain map cannot be owned by both images.
+        return avifResult::InvalidArgument;
+    }
+    if dst.gainMap.is_null() {
+        dst.gainMap = crabby_avifGainMapCreate();
+    }
+    let dst_gainmap = deref_mut!(dst.gainMap);
+    let src_gainmap = deref_const!(src.gainMap);
+    dst_gainmap.gainMapMin = src_gainmap.gainMapMin;
+    dst_gainmap.gainMapMax = src_gainmap.gainMapMax;
+    dst_gainmap.gainMapGamma = src_gainmap.gainMapGamma;
+    dst_gainmap.baseOffset = src_gainmap.baseOffset;
+    dst_gainmap.alternateOffset = src_gainmap.alternateOffset;
+    dst_gainmap.baseHdrHeadroom = src_gainmap.baseHdrHeadroom;
+    dst_gainmap.alternateHdrHeadroom = src_gainmap.alternateHdrHeadroom;
+    dst_gainmap.useBaseColorSpace = src_gainmap.useBaseColorSpace;
+    // SAFETY: Pre-conditions are met to call this function.
+    let res = unsafe {
+        crabby_avifRWDataSet(
+            &mut dst_gainmap.altICC,
+            src_gainmap.altICC.data,
+            src_gainmap.altICC.size,
+        )
+    };
+    if res != avifResult::Ok {
+        return res;
+    }
+    dst_gainmap.altColorPrimaries = src_gainmap.altColorPrimaries;
+    dst_gainmap.altTransferCharacteristics = src_gainmap.altTransferCharacteristics;
+    dst_gainmap.altMatrixCoefficients = src_gainmap.altMatrixCoefficients;
+    dst_gainmap.altYUVRange = src_gainmap.altYUVRange;
+    dst_gainmap.altDepth = src_gainmap.altDepth;
+    dst_gainmap.altPlaneCount = src_gainmap.altPlaneCount;
+    dst_gainmap.altCLLI = src_gainmap.altCLLI;
+    if src_gainmap.image.is_null() {
+        if !dst_gainmap.image.is_null() {
+            // SAFETY: Pre-conditions are met to call this function.
+            unsafe { crabby_avifImageDestroy(dst_gainmap.image) };
+            dst_gainmap.image = std::ptr::null_mut();
+        }
+        return avifResult::Ok;
+    }
+    if dst_gainmap.image.is_null() {
+        dst_gainmap.image = crabby_avifImageCreateEmpty();
+    }
+    // SAFETY: Pre-conditions are met to call this function. The images are owned by different
+    // gain maps.
+    unsafe { crabby_avifImageCopy(dst_gainmap.image, src_gainmap.image, planes) }
 }
 
 pub(crate) fn avif_image_allocate_planes_helper(
