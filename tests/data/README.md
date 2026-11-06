@@ -117,6 +117,23 @@ Same as above, but with one 'auxl' box listing track 3 and then the color track 
 00 00 00 28 'f' 'r' 'e' 'e'  followed by 32 zero bytes
 ```
 
+## colors-animated-8bpc-alpha-1x1-frame.avif
+
+Derived from colors-animated-8bpc-alpha-exif-xmp.avif. The second sample of the 150x150 alpha track
+2 (25 bytes at file offset 7194, according to the 'stco' and 'stsz' boxes of that track) was
+overwritten in place with the 23 byte 1x1 AV1 payload of white_1x1.avif (at file offset 282,
+according to its 'iloc' box), followed by an empty padding OBU (`7a 00`). The file size and every
+offset stay the same. Decoding the second frame fails because its alpha plane does not match the
+size of the first alpha frame. This is used to check that the decoded image is not left pointing to
+a released alpha frame buffer.
+
+```python
+data = bytearray(open("colors-animated-8bpc-alpha-exif-xmp.avif", "rb").read())
+white_1x1 = open("white_1x1.avif", "rb").read()
+data[7194:7194 + 25] = white_1x1[282:282 + 23] + b"\x7a\x00"
+open("colors-animated-8bpc-alpha-1x1-frame.avif", "wb").write(data)
+```
+
 ## colors-animated-8bpc-alpha-prem-two-targets.avif
 
 Derived from colors-animated-8bpc-alpha-exif-xmp.avif. The 44 byte 'edts' box of the color track 1,

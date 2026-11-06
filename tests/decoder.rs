@@ -1413,6 +1413,41 @@ fn white_2x2_unknown_top_level_box_size0() -> AvifResult<()> {
     Ok(())
 }
 
+// The second alpha frame of this image sequence has a different size than the first one (see
+// tests/data/README.md). Decoding that frame must fail, and must not leave the alpha plane of the
+// decoder image pointing into a codec buffer that was released.
+#[test]
+fn alpha_frame_size_change_in_sequence() {
+    if !HAS_DECODER || !cfg!(feature = "dav1d") {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec("colors-animated-8bpc-alpha-1x1-frame.avif", DAV1D);
+    assert_eq!(decoder.parse(), Ok(()));
+    assert!(decoder.image().unwrap().alpha_present);
+    assert_eq!(decoder.next_image(), Ok(()));
+    assert!(decoder.image().unwrap().has_plane(Plane::A));
+    // The 1x1 alpha frame does not match the 150x150 color frame.
+    assert!(decoder.next_image().is_err());
+    // Decode the same frame again so that the decoder reuses the released alpha buffers.
+    assert!(decoder.next_image().is_err());
+    let image = decoder.image().unwrap();
+    if image.has_plane(Plane::A) {
+        // Reading a dangling alpha plane is caught by AddressSanitizer.
+        let mut sum = 0u64;
+        for y in 0..image.height {
+            sum += image
+                .row(Plane::A, y)
+                .unwrap()
+                .iter()
+                .map(|&x| x as u64)
+                .sum::<u64>();
+        }
+        std::hint::black_box(sum);
+    }
+    // The alpha plane of the failed frame is not available.
+    assert!(!image.has_plane(Plane::A));
+}
+
 #[test]
 fn grpl_group_with_grouping_type_specific_data() {
     // The 'pymd' EntityToGroupBox of this file carries the grouping type specific fields defined

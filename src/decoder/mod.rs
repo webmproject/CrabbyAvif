@@ -2254,6 +2254,26 @@ impl Decoder {
             }
             (_, Err(err)) => return Err(err),
         };
+        let dst_image = match dst_image_override {
+            Some(img) => img,
+            None => match category {
+                Category::Color | Category::Alpha if (decoding_item.item_idx == 0) => {
+                    &mut self.image
+                }
+                Category::Color | Category::Alpha => {
+                    &mut self.extra_inputs[decoding_item.item_idx - 1]
+                }
+                Category::Gainmap => &mut self.gainmap.image,
+            },
+        };
+
+        let tile_info = &self.tile_info[decoding_item.usize()];
+        if !tile_info.is_grid() && !tile_info.is_overlay() {
+            // In the non-grid, non-overlay path below, dst_image points to memory owned by the
+            // codec, which may be released by get_next_image(). Clear these planes so that they
+            // are not left dangling if decoding this tile fails.
+            dst_image.free_planes(category.planes());
+        }
         let next_image_result = codec.get_next_image(
             data,
             sample.spatial_id,
@@ -2283,19 +2303,6 @@ impl Decoder {
             tile.image.alpha_to_full_range()?;
         }
         tile.image.scale(tile.width, tile.height, category)?;
-
-        let dst_image = match dst_image_override {
-            Some(img) => img,
-            None => match category {
-                Category::Color | Category::Alpha if (decoding_item.item_idx == 0) => {
-                    &mut self.image
-                }
-                Category::Color | Category::Alpha => {
-                    &mut self.extra_inputs[decoding_item.item_idx - 1]
-                }
-                Category::Gainmap => &mut self.gainmap.image,
-            },
-        };
 
         if self.tile_info[decoding_item.usize()].is_grid() {
             if self.tile_info[decoding_item.usize()].is_overlay() {
@@ -2815,6 +2822,9 @@ impl Decoder {
             if payloads.is_empty() {
                 continue;
             }
+            // The codec may release the memory that self.image points to. Clear these planes so
+            // that they are not left dangling if decoding fails.
+            self.image.free_planes(decoding_item.category.planes());
             let first_tile = &self.tiles[decoding_item.usize()][0];
             let codec = &mut self.codecs[first_tile.codec_index];
             codec.get_last_image(

@@ -422,7 +422,6 @@ impl Image {
         Ok(row_bytes)
     }
 
-    #[cfg(any(feature = "dav1d", feature = "avm", feature = "native_av1"))]
     pub(crate) fn free_planes(&mut self, planes: &[Plane]) {
         for plane in planes {
             let plane = plane.as_usize();

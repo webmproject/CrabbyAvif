@@ -321,6 +321,30 @@ impl Dav1d {
         Ok(())
     }
 
+    // Points the `category` planes of `image` to `next_picture`. `self.picture` is replaced only
+    // if this succeeds, so that `image` never points to a released picture. On failure, the
+    // `category` planes of `image` are cleared.
+    fn set_picture_and_image(
+        &mut self,
+        next_picture: Dav1dPictureWrapper,
+        image: &mut Image,
+        category: Category,
+        overwrite_alpha_plane_yuv_range: bool,
+    ) -> AvifResult<()> {
+        let res = self.picture_to_image(
+            next_picture.get(),
+            image,
+            category,
+            overwrite_alpha_plane_yuv_range,
+        );
+        if res.is_ok() {
+            self.picture = Some(next_picture);
+        } else {
+            image.free_planes(category.planes());
+        }
+        res
+    }
+
     fn get_next_image_grid_impl(
         &mut self,
         payloads: &[Vec<u8>],
@@ -424,12 +448,15 @@ impl Decoder for Dav1d {
         _item: Option<&Item>,
         _signal_eos: bool,
     ) -> AvifResult<()> {
+        // Do not leave stale planes in `image` if decoding fails before reaching
+        // set_picture_and_image(), because the other fields of `image` may have changed since.
+        image.free_planes(category.planes());
         if self.context.is_none() {
             self.initialize_impl(true)?;
         }
         let mut data = Dav1dDataWrapper::default();
         data.wrap(av1_payload)?;
-        let next_picture: Option<Dav1dPictureWrapper>;
+        let next_picture: Dav1dPictureWrapper;
         loop {
             if data.has_data() {
                 let res = self.send_data(&mut data)?;
@@ -449,24 +476,12 @@ impl Decoder for Dav1d {
                 return AvifError::unknown_error(format!("dav1d_send_picture returned {res}"));
             } else if picture.use_layer(spatial_id) {
                 // Got a picture.
-                next_picture = Some(picture);
+                next_picture = picture;
                 break;
             }
         }
         self.flush()?;
-        if next_picture.is_some() {
-            self.picture = next_picture;
-        } else if category == Category::Alpha && self.picture.is_some() {
-            // Special case for alpha, re-use last frame.
-        } else {
-            return AvifError::unknown_error("");
-        }
-        let picture = self
-            .picture
-            .as_ref()
-            .ok_or_else(|| AvifError::UnknownError("".into()))?;
-        self.picture_to_image(picture.get(), image, category, true)?;
-        Ok(())
+        self.set_picture_and_image(next_picture, image, category, true)
     }
 
     fn get_next_image_grid(
@@ -489,6 +504,9 @@ impl Decoder for Dav1d {
         image: &mut Image,
         category: Category,
     ) -> AvifResult<()> {
+        // Do not leave stale planes in `image` if decoding fails before reaching
+        // set_picture_and_image(), because the other fields of `image` may have changed since.
+        image.free_planes(category.planes());
         if self.context.is_none() {
             self.initialize_impl(false)?;
         }
@@ -497,7 +515,7 @@ impl Decoder for Dav1d {
         let max_retries = 500;
         let mut retries = 0;
         let mut got_picture_count = 0;
-        let next_picture: Option<Dav1dPictureWrapper>;
+        let next_picture: Dav1dPictureWrapper;
         loop {
             if !data.has_data() {
                 if let Some(payload) = payloads_iter.next() {
@@ -518,7 +536,7 @@ impl Decoder for Dav1d {
                 got_picture_count += 1;
                 retries = 0;
                 if got_picture_count == payloads.len() {
-                    next_picture = Some(picture);
+                    next_picture = picture;
                     break;
                 }
             } else {
@@ -531,21 +549,9 @@ impl Decoder for Dav1d {
             }
         }
         self.flush()?;
-        if next_picture.is_some() {
-            self.picture = next_picture;
-        } else if category == Category::Alpha && self.picture.is_some() {
-            // Special case for alpha, re-use last frame.
-        } else {
-            return AvifError::unknown_error("");
-        }
         // In this case, the source image from the caller is used for both color and alpha planes,
         // so do not overwrite the yuv_range field when processing the alpha plane.
-        let picture = self
-            .picture
-            .as_ref()
-            .ok_or_else(|| AvifError::UnknownError("".into()))?;
-        self.picture_to_image(picture.get(), image, category, false)?;
-        Ok(())
+        self.set_picture_and_image(next_picture, image, category, false)
     }
 }
 
