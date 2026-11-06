@@ -122,10 +122,8 @@ impl TryFrom<&avifGainMap> for GainMap {
     }
 }
 
-/// # Safety
-/// C API function that does not perform any unsafe operation.
 #[no_mangle]
-pub unsafe extern "C" fn crabby_avifGainMapCreate() -> *mut avifGainMap {
+pub extern "C" fn crabby_avifGainMapCreate() -> *mut avifGainMap {
     Box::into_raw(Box::<avifGainMap>::default())
 }
 

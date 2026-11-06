@@ -853,8 +853,6 @@ avifResult crabby_avifEncoderSetCodecSpecificOption(avifEncoder *encoder,
                                                     const char *key,
                                                     const char *value);
 
-/// # Safety
-/// C API function that does not perform any unsafe operation.
 avifGainMap *crabby_avifGainMapCreate();
 
 /// # Safety
@@ -862,12 +860,8 @@ avifGainMap *crabby_avifGainMapCreate();
 /// - if gainmap is not null, it has to point to a buffer allocated by crabby_avifGainMapCreate.
 void crabby_avifGainMapDestroy(avifGainMap *gainmap);
 
-/// # Safety
-/// Used by the C API to create an avifImage object with default values.
 avifImage *crabby_avifImageCreateEmpty();
 
-/// # Safety
-/// Used by the C API to create an avifImage object with the given parameters.
 avifImage *crabby_avifImageCreate(uint32_t width,
                                   uint32_t height,
                                   uint32_t depth,
@@ -1048,8 +1042,6 @@ avifResult crabby_avifImageScale(avifImage *image,
                                  uint32_t dstHeight,
                                  avifDiagnostics *_diag);
 
-/// # Safety
-/// C API function that does not do any unsafe operations.
 uint32_t crabby_avifRGBFormatChannelCount(avifRGBFormat format);
 
 /// # Safety
@@ -1057,8 +1049,6 @@ uint32_t crabby_avifRGBFormatChannelCount(avifRGBFormat format);
 /// - if rgb is not null, it has to point to a valid avifRGBImage object.
 uint32_t crabby_avifRGBImagePixelSize(avifRGBImage *rgb);
 
-/// # Safety
-/// C API function that does not do any unsafe operations.
 avifBool crabby_avifRGBFormatHasAlpha(avifRGBFormat format);
 
 /// # Safety

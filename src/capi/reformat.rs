@@ -349,10 +349,8 @@ pub unsafe extern "C" fn crabby_avifImageScale(
     CopyPlanes(dst_image, &rust_image).into()
 }
 
-/// # Safety
-/// C API function that does not do any unsafe operations.
 #[no_mangle]
-pub unsafe extern "C" fn crabby_avifRGBFormatChannelCount(format: rgb::Format) -> u32 {
+pub extern "C" fn crabby_avifRGBFormatChannelCount(format: rgb::Format) -> u32 {
     format.channel_count()
 }
 
@@ -368,10 +366,8 @@ pub unsafe extern "C" fn crabby_avifRGBImagePixelSize(rgb: *mut avifRGBImage) ->
     rgb.format.pixel_size(rgb.depth)
 }
 
-/// # Safety
-/// C API function that does not do any unsafe operations.
 #[no_mangle]
-pub unsafe extern "C" fn crabby_avifRGBFormatHasAlpha(format: rgb::Format) -> avifBool {
+pub extern "C" fn crabby_avifRGBFormatHasAlpha(format: rgb::Format) -> avifBool {
     format.has_alpha().into()
 }
 

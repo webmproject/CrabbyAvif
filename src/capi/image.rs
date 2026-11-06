@@ -346,17 +346,13 @@ impl avifImage {
     }
 }
 
-/// # Safety
-/// Used by the C API to create an avifImage object with default values.
 #[no_mangle]
-pub unsafe extern "C" fn crabby_avifImageCreateEmpty() -> *mut avifImage {
+pub extern "C" fn crabby_avifImageCreateEmpty() -> *mut avifImage {
     Box::into_raw(Box::<avifImage>::default())
 }
 
-/// # Safety
-/// Used by the C API to create an avifImage object with the given parameters.
 #[no_mangle]
-pub unsafe extern "C" fn crabby_avifImageCreate(
+pub extern "C" fn crabby_avifImageCreate(
     width: u32,
     height: u32,
     depth: u32,
