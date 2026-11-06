@@ -331,6 +331,40 @@ TEST(ImageTest, CopyViewRectAtRightEdge) {
   }
 }
 
+TEST(ImageTest, SetViewRectEmptyRect) {
+  ImagePtr src(avifImageCreate(2, 2, /*depth=*/8, AVIF_PIXEL_FORMAT_YUV444));
+  ASSERT_NE(src, nullptr);
+  ASSERT_EQ(avifImageAllocatePlanes(src.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+  ImagePtr view(avifImageCreateEmpty());
+  ASSERT_NE(view, nullptr);
+
+  // Empty rects must be rejected. An empty rect on the bottom-right edge used
+  // to produce plane pointers past the end of the source planes.
+  const avifCropRect kEmptyRects[] = {
+      {.x = 2, .y = 2, .width = 0, .height = 0},
+      {.x = 0, .y = 0, .width = 0, .height = 0},
+      {.x = 0, .y = 2, .width = 2, .height = 0},
+      {.x = 2, .y = 0, .width = 0, .height = 2},
+  };
+  for (const avifCropRect& rect : kEmptyRects) {
+    EXPECT_EQ(avifImageSetViewRect(view.get(), src.get(), &rect),
+              AVIF_RESULT_INVALID_ARGUMENT)
+        << rect.x << "," << rect.y << " " << rect.width << "x" << rect.height;
+  }
+
+  // The smallest valid rect on the bottom-right edge points to the last sample.
+  const avifCropRect rect{.x = 1, .y = 1, .width = 1, .height = 1};
+  ASSERT_EQ(avifImageSetViewRect(view.get(), src.get(), &rect), AVIF_RESULT_OK);
+  EXPECT_EQ(view->width, 1u);
+  EXPECT_EQ(view->height, 1u);
+  for (int c = 0; c < 4; ++c) {
+    EXPECT_EQ(avifImagePlane(view.get(), c),
+              avifImagePlane(src.get(), c) +
+                  avifImagePlaneRowBytes(src.get(), c) + 1);
+  }
+}
+
 TEST(ImageTest, NullCases) {
   ImagePtr src(avifImageCreateEmpty());
   ImagePtr dst(avifImageCreateEmpty());

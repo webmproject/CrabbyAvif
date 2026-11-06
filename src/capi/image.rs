@@ -781,6 +781,14 @@ pub unsafe extern "C" fn crabby_avifImagePlaneHeight(
     }
 }
 
+// Returns the byte offset of the sample at (x, y) in a plane, or None on overflow.
+fn view_rect_offset(x: u32, y: u32, row_bytes: u32, pixel_size: u32) -> Option<isize> {
+    let offset = y
+        .checked_mul(row_bytes)?
+        .checked_add(x.checked_mul(pixel_size)?)?;
+    isize_from_u32(offset).ok()
+}
+
 /// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if dstImage is not null, it has to point to a valid avifImage object.
@@ -798,7 +806,11 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
     let dst = deref_mut!(dstImage);
     let src = deref_const!(srcImage);
     let rect = deref_const!(rect);
-    if rect.width > src.width
+    // Reject empty rects. Otherwise a rect starting on the right or bottom edge (e.g. x == width)
+    // would lead to plane pointers past the end of the source planes.
+    if rect.width == 0
+        || rect.height == 0
+        || rect.width > src.width
         || rect.height > src.height
         || rect.x > (src.width - rect.width)
         || rect.y > (src.height - rect.height)
@@ -855,22 +867,22 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
         let chroma_shift = src.yuvFormat.chroma_shift_x();
         let x = if plane == 0 { x } else { (x >> chroma_shift.0) << chroma_shift.1 };
         let y = if plane == 0 { y } else { y >> src.yuvFormat.chroma_shift_y() };
-        let offset = match isize_from_u32(y * src.yuvRowBytes[plane] + x * pixel_size) {
-            Ok(x) => x,
-            _ => return avifResult::InvalidArgument,
+        let Some(offset) = view_rect_offset(x, y, src.yuvRowBytes[plane], pixel_size) else {
+            return avifResult::InvalidArgument;
         };
-        // SAFETY: Based on the offset computation above, it is guaranteed to be a valid pointer
-        // that is within the plane buffer.
+        // SAFETY: rect is non-empty and within the image bounds (checked above), so x and y are
+        // strictly less than the plane width and height (after chroma subsampling). Hence the
+        // offset points to a sample within the plane buffer.
         dst.yuvPlanes[plane] = unsafe { src.yuvPlanes[plane].offset(offset) };
         dst.yuvRowBytes[plane] = src.yuvRowBytes[plane];
     }
     if !src.alphaPlane.is_null() {
-        let offset = match isize_from_u32(y * src.alphaRowBytes + x * pixel_size) {
-            Ok(x) => x,
-            _ => return avifResult::InvalidArgument,
+        let Some(offset) = view_rect_offset(x, y, src.alphaRowBytes, pixel_size) else {
+            return avifResult::InvalidArgument;
         };
-        // SAFETY: Based on the offset computation above, it is guaranteed to be a valid pointer
-        // that is within the plane buffer.
+        // SAFETY: rect is non-empty and within the image bounds (checked above), so x and y are
+        // strictly less than the plane width and height. Hence the offset points to a sample
+        // within the plane buffer.
         dst.alphaPlane = unsafe { src.alphaPlane.offset(offset) };
         dst.alphaRowBytes = src.alphaRowBytes;
     }
