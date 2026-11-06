@@ -239,6 +239,8 @@ impl Encoder {
             id: u16_from_usize(self.items.len() + 1)?,
             item_type: "sato".into(),
             category: Category::Color,
+            // The 'ispe' property of the 'sato' item must match the dimensions of its input items.
+            grid: if grid.rows > 1 || grid.columns > 1 { Some(*grid) } else { None },
             metadata_payload: write_sato(self.final_recipe.ok_or(AvifError::InvalidArgument)?)?,
             hidden_image: false,
             ..Default::default()
@@ -268,7 +270,7 @@ impl Encoder {
         self.items[primary_index].dimg_from_id = Some(sato_item_id);
         let bit_depth_extension_item_index = bit_depth_extension_item_id as usize - 1;
         self.items[bit_depth_extension_item_index].dimg_from_id = Some(sato_item_id);
-        self.items[bit_depth_extension_item_index].is_sato_least_significant_input = true;
+        self.mark_as_sato_least_significant_input(bit_depth_extension_item_id);
 
         if self.alpha_present {
             let bit_depth_extension_alpha_item_id =
@@ -278,7 +280,7 @@ impl Encoder {
             self.items[bit_depth_extension_alpha_item_index].iref_type = Some("auxl".into());
             self.items[bit_depth_extension_alpha_item_index].iref_to_id =
                 Some(bit_depth_extension_item_id);
-            self.items[bit_depth_extension_alpha_item_index].is_sato_least_significant_input = true;
+            self.mark_as_sato_least_significant_input(bit_depth_extension_alpha_item_id);
             if self.image_metadata.alpha_premultiplied {
                 self.items[bit_depth_extension_item_index].iref_type = Some("prem".into());
                 self.items[bit_depth_extension_item_index].iref_to_id =
@@ -286,6 +288,16 @@ impl Encoder {
             }
         }
         Ok(())
+    }
+
+    // Marks the item with the given id as an input of the 'sato' derived image item containing
+    // the least significant bits. If it is a 'grid' derived image item, its cells are marked too.
+    fn mark_as_sato_least_significant_input(&mut self, item_id: u16) {
+        for item in &mut self.items {
+            if item.id == item_id || item.dimg_from_id == Some(item_id) {
+                item.is_sato_least_significant_input = true;
+            }
+        }
     }
 
     pub(crate) fn create_bit_depth_extension_8b8b_image(
