@@ -316,6 +316,15 @@ impl Item {
                             );
                         }
                     }
+                    if !Image::is_supported_depth(plane.depth) {
+                        // Same as avifDecoderSampleTransformItemValidateProperties() in libavif
+                        // for sample transform items.
+                        return if self.is_sample_transform_item() {
+                            AvifError::not_implemented()
+                        } else {
+                            AvifError::unsupported_depth()
+                        };
+                    }
                     if let Some(codec_config_pixel_format) = codec_config.pixel_format() {
                         // Extended pixi. Check that the subsampling of the chroma planes matches
                         // the codec config.

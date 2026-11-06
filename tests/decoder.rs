@@ -2026,6 +2026,73 @@ fn sato_16bit_decoder_reset(codec: CodecChoice) {
     assert_eq!(16, decoder.image().unwrap().depth);
 }
 
+fn parse_sato_with_pixi_depths(
+    file_bytes: &[u8],
+    depths: [u8; 3],
+    allow_sample_transform: bool,
+) -> AvifResult<()> {
+    let mut file_bytes = file_bytes.to_vec();
+    // Replace the bits_per_channel fields of the PixelInformationProperty associated with the
+    // 'sato' derived image item (3 channels of 16 bits).
+    let sato_pixi = b"pixi\0\0\0\0\x03\x10\x10\x10";
+    let sato_pixi_pos = file_bytes
+        .windows(sato_pixi.len())
+        .position(|w| w == sato_pixi)
+        .unwrap();
+    file_bytes[sato_pixi_pos + 9..sato_pixi_pos + 12].copy_from_slice(&depths);
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.settings.allow_sample_transform = allow_sample_transform;
+    decoder.set_io_vec(file_bytes);
+    decoder.parse()
+}
+
+// Similar to Avif16bitTest.SampleTransformWithOtherBitDepths in libavif.
+#[test]
+fn sato_pixi_depths() {
+    let file_bytes = std::fs::read(get_test_file("weld_sato_8plus8bit.avif")).unwrap();
+    for allow_sample_transform in [false, true] {
+        let result = parse_sato_with_pixi_depths(&file_bytes, [0, 0, 0], allow_sample_transform);
+        assert!(
+            matches!(result, Err(AvifError::BmffParseFailed(_))),
+            "{result:?}"
+        );
+        // Different depths per channel are not supported.
+        assert_eq!(
+            parse_sato_with_pixi_depths(&file_bytes, [16, 16, 8], allow_sample_transform),
+            Err(AvifError::NotImplemented)
+        );
+    }
+    for depth in 1..=32 {
+        let result_without_sato = parse_sato_with_pixi_depths(&file_bytes, [depth; 3], false);
+        let result_with_sato = parse_sato_with_pixi_depths(&file_bytes, [depth; 3], true);
+        if matches!(depth, 8 | 10 | 12 | 16) || (cfg!(feature = "satofloat") && depth == 32) {
+            assert_eq!(result_without_sato, Ok(()), "depth {depth}");
+            assert_eq!(result_with_sato, Ok(()), "depth {depth}");
+        } else if depth > 16 {
+            // Rejected even if the sato item is not used.
+            assert_eq!(
+                result_without_sato,
+                Err(AvifError::NotImplemented),
+                "depth {depth}"
+            );
+            assert_eq!(
+                result_with_sato,
+                Err(AvifError::NotImplemented),
+                "depth {depth}"
+            );
+        } else {
+            // Rejected only if the sato item is used.
+            assert_eq!(result_without_sato, Ok(()), "depth {depth}");
+            assert_eq!(
+                result_with_sato,
+                Err(AvifError::NotImplemented),
+                "depth {depth}"
+            );
+        }
+    }
+}
+
 #[test_matrix([DAV1D, NATIVE])]
 fn b_497926602(codec: CodecChoice) -> AvifResult<()> {
     if !cfg!(feature = "native_av1") && codec == NATIVE {
