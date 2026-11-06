@@ -3033,6 +3033,7 @@ impl Decoder {
         for decoding_item in DecodingItem::ALL_USIZE {
             self.tile_info[decoding_item].decoded_tile_count = 0;
         }
+        let mut decoded_something = false;
         for decoding_item in self.settings.image_content_to_decode.decoding_items() {
             if self.tiles[decoding_item.usize()].is_empty() {
                 continue;
@@ -3058,18 +3059,61 @@ impl Decoder {
             if payloads.is_empty() {
                 continue;
             }
+            let category = decoding_item.category;
             // The codec may release the memory that self.image points to. Clear these planes so
             // that they are not left dangling if decoding fails.
-            self.image.free_planes(decoding_item.category.planes());
-            let first_tile = &self.tiles[decoding_item.usize()][0];
+            self.image.free_planes(category.planes());
+            let first_tile = &mut self.tiles[decoding_item.usize()][0];
             let codec = &mut self.codecs[first_tile.codec_index];
             codec.get_last_image(
                 &payloads,
                 spatial_id.unwrap(),
-                &mut self.image,
-                decoding_item.category,
+                &mut first_tile.image,
+                category,
             )?;
+            if category == Category::Alpha && first_tile.image.yuv_range == YuvRange::Limited {
+                first_tile.image.alpha_to_full_range()?;
+            }
+            first_tile
+                .image
+                .scale(first_tile.width, first_tile.height, category)?;
+            match category {
+                Category::Color | Category::Gainmap => {
+                    self.image.width = first_tile.image.width;
+                    self.image.height = first_tile.image.height;
+                    self.image
+                        .copy_properties_from(&first_tile.image, &first_tile.codec_config);
+                }
+                Category::Alpha => {
+                    if !self.image.has_same_properties(&first_tile.image) {
+                        return AvifError::decode_alpha_failed();
+                    }
+                }
+            }
+            let planes = if category == Category::Color && first_tile.image.has_plane(Plane::A) {
+                &ALL_PLANES
+            } else {
+                category.planes()
+            };
+            for plane in planes {
+                let plane = plane.as_usize();
+                if let Some(src_plane) = first_tile.image.planes[plane].take() {
+                    self.image.planes[plane] = match src_plane {
+                        Pixels::Buffer(b) if b.is_empty() => None,
+                        Pixels::Buffer16(b) if b.is_empty() => None,
+                        other => Some(other),
+                    };
+                    self.image.row_bytes[plane] = first_tile.image.row_bytes[plane];
+                } else {
+                    self.image.planes[plane] = None;
+                    self.image.row_bytes[plane] = 0;
+                }
+            }
             checked_incr!(self.tile_info[decoding_item.usize()].decoded_tile_count, 1);
+            decoded_something = true;
+        }
+        if !decoded_something {
+            return AvifError::no_content();
         }
         self.image_index = requested_index;
         self.image_timing = self.nth_image_timing(self.image_index as u32)?;
