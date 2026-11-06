@@ -914,7 +914,7 @@ impl Decoder for Avm {
                     first_time = false;
                     let config_obus = match &self.decoder_config.unwrap_ref().codec_config {
                         CodecConfiguration::Av2(av2c) => &av2c.config_obus,
-                        _ => unreachable!(),
+                        _ => return AvifError::unknown_error("not an AV2 item"),
                     };
                     let config_obus_then_av2_payload_len = config_obus
                         .len()
@@ -1408,5 +1408,29 @@ fn avm_enc_dec_opaque_alpha_test() -> Result<(), AvifError> {
     for plane in YUV_PLANES {
         assert!(are_planes_equal(&image, &decoded, plane)?);
     }
+    Ok(())
+}
+
+#[test]
+fn avm_dec_non_av2_config_test() -> Result<(), AvifError> {
+    let mut decoder = Avm::default();
+    decoder.initialize(&DecoderConfig {
+        operating_point: 0,
+        all_layers: false,
+        width: 1,
+        height: 1,
+        depth: 8,
+        max_threads: 0,
+        image_size_limit: None,
+        max_input_size: 0,
+        codec_config: CodecConfiguration::Av1(
+            crate::parser::mp4box::Av1CodecConfiguration::default(),
+        ),
+        category: Category::Color,
+        android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat::default(),
+    })?;
+    let mut decoded = Image::default();
+    let res = decoder.get_next_image(&[0], 0xff, &mut decoded, Category::Color, None, false);
+    assert!(matches!(res, Err(AvifError::UnknownError(_))));
     Ok(())
 }
