@@ -2026,6 +2026,82 @@ fn sato_16bit_decoder_reset(codec: CodecChoice) {
     assert_eq!(16, decoder.image().unwrap().depth);
 }
 
+// Inspired by avif16bittest.cc SampleTransformWithOtherBitDepths.
+#[test_matrix([DAV1D, NATIVE])]
+fn sato_other_bit_depths(codec: CodecChoice) -> AvifResult<()> {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return Ok(());
+    }
+    // Some of the input AV1 streams in this test are too large for Android MediaCodec.
+    if !HAS_NON_ANDROID_DECODER {
+        return Ok(());
+    }
+    let data =
+        std::fs::read(get_test_file("weld_sato_12plus4bit.avif")).expect("Unable to read file");
+    let mut reference_decoder = decoder_with_codec(codec);
+    reference_decoder.settings.allow_sample_transform = true;
+    reference_decoder.set_io_vec(data.clone());
+    assert_eq!(reference_decoder.parse(), Ok(()));
+    assert_eq!(reference_decoder.next_image(), Ok(()));
+    let reference = reference_decoder.image().unwrap();
+    assert_eq!(reference.depth, 16);
+
+    // Replace the 'pixi' property of the 'sato' item (3 channels of 16 bits) by another bit depth.
+    let pixi_16bit = b"pixi\0\0\0\0\x03\x10\x10\x10";
+    let pixi_offset = data
+        .windows(pixi_16bit.len())
+        .position(|window| window == pixi_16bit)
+        .unwrap();
+    let create_decoder_with_depth = |depth: u8| {
+        let mut patched_data = data.clone();
+        patched_data[pixi_offset + 9..pixi_offset + 12].fill(depth);
+        let mut decoder = decoder_with_codec(codec);
+        decoder.settings.allow_sample_transform = true;
+        decoder.set_io_vec(patched_data);
+        decoder
+    };
+
+    for depth in [8, 10, 12, 16] {
+        let mut decoder = create_decoder_with_depth(depth);
+        assert_eq!(decoder.parse(), Ok(()));
+        assert_eq!(decoder.next_image(), Ok(()));
+        let image = decoder.image().unwrap();
+        assert_eq!(image.depth, depth);
+        // The samples are clamped to the range allowed by the bit depth.
+        let max_value = (1u32 << depth) - 1;
+        for plane in YUV_PLANES {
+            let width = reference.width(plane);
+            for y in 0..reference.height(plane) as u32 {
+                let expected_row: Vec<u32> = reference.row16(plane, y)?[..width]
+                    .iter()
+                    .map(|&sample| std::cmp::min(sample as u32, max_value))
+                    .collect();
+                let row: Vec<u32> = if depth == 8 {
+                    image.row(plane, y)?[..width]
+                        .iter()
+                        .map(|&sample| sample as u32)
+                        .collect()
+                } else {
+                    image.row16(plane, y)?[..width]
+                        .iter()
+                        .map(|&sample| sample as u32)
+                        .collect()
+                };
+                assert_eq!(row, expected_row);
+            }
+        }
+    }
+
+    #[cfg(feature = "satofloat")]
+    {
+        // 32-bit samples are only supported for floating point sample transforms.
+        let mut decoder = create_decoder_with_depth(32);
+        assert_eq!(decoder.parse(), Ok(()));
+        assert_eq!(decoder.next_image(), Err(AvifError::NotImplemented));
+    }
+    Ok(())
+}
+
 #[test_matrix([DAV1D, NATIVE])]
 fn b_497926602(codec: CodecChoice) -> AvifResult<()> {
     if !cfg!(feature = "native_av1") && codec == NATIVE {
