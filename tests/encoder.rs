@@ -603,14 +603,18 @@ fn test_progressive_decode(
     Ok(())
 }
 
-#[test_matrix([true, false])]
-fn progressive_quality_change(use_grid: bool) -> AvifResult<()> {
+#[test_matrix([true, false], [90.0, 100.0], [6, 10])]
+fn progressive_quality_change(
+    use_grid: bool,
+    second_layer_quality: f32,
+    speed: u32,
+) -> AvifResult<()> {
     if !HAS_ENCODER {
         return Ok(());
     }
     let image = generate_gradient_image(256, 256, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
     let mut settings = encoder::Settings {
-        speed: Some(10),
+        speed: Some(speed),
         extra_layer_count: 1,
         mutable: encoder::MutableSettings {
             quality: 2.0,
@@ -625,7 +629,7 @@ fn progressive_quality_change(use_grid: bool) -> AvifResult<()> {
     } else {
         encoder.add_image(&image)?;
     }
-    settings.mutable.quality = 90.0;
+    settings.mutable.quality = second_layer_quality;
     encoder.update_settings(&settings.mutable)?;
     if use_grid {
         encoder.add_image_grid(2, 1, &images)?;

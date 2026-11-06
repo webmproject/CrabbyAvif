@@ -532,7 +532,13 @@ impl Encoder for Aom {
                     let encoder = self.encoder.as_mut().ok_or(AvifError::InvalidArgument)?;
                     let aom_config = self.aom_config.as_mut().ok_or(AvifError::InvalidArgument)?;
                     (aom_config.rc_min_quantizer, aom_config.rc_max_quantizer) =
-                        aom_min_max_quantizers(quantizer);
+                        if use_tune_iq && quantizer == 0 {
+                            // Lossless (min=0, max=0) is incompatible with tune=iq's chroma deltaq
+                            // and triggers an assertion failure in libaom.
+                            (0, 1)
+                        } else {
+                            aom_min_max_quantizers(quantizer)
+                        };
                     let encoder_ptr: *mut aom_codec_ctx_t = encoder;
                     let cfg_ptr: *const aom_codec_enc_cfg = aom_config;
                     // SAFETY: `encoder_ptr` points to an initialized `aom_codec_ctx_t` and
@@ -547,10 +553,12 @@ impl Encoder for Aom {
                 } else if rc_end_usage == aom_rc_mode_AOM_CQ || rc_end_usage == aom_rc_mode_AOM_Q {
                     self.codec_control(aome_enc_control_id_AOME_SET_CQ_LEVEL, quantizer as u32)?;
                 }
-                self.codec_control(
-                    aome_enc_control_id_AV1E_SET_LOSSLESS,
-                    if quantizer == 0 { 1u32 } else { 0u32 },
-                )?;
+                if !use_tune_iq || quantizer != 0 {
+                    self.codec_control(
+                        aome_enc_control_id_AV1E_SET_LOSSLESS,
+                        if quantizer == 0 { 1u32 } else { 0u32 },
+                    )?;
+                }
             }
             if tile_rows_changed {
                 self.codec_control(
