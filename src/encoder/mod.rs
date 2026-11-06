@@ -879,7 +879,14 @@ impl Encoder {
         grid_rows: u32,
         images: &[&Image],
     ) -> AvifResult<()> {
-        if grid_columns == 0 || grid_columns > 256 || grid_rows == 0 || grid_rows > 256 {
+        // Each cell is referenced by a 'dimg' item reference whose reference_count field is 16-bit
+        // (ISO/IEC 14496-12 Section 8.11.12), so a grid cannot contain more than 65535 cells.
+        if grid_columns == 0
+            || grid_columns > 256
+            || grid_rows == 0
+            || grid_rows > 256
+            || grid_columns * grid_rows > u16::MAX as u32
+        {
             return AvifError::invalid_image_grid("");
         }
         self.add_image_impl(
@@ -906,7 +913,13 @@ impl Encoder {
         images: &[&Image],
         gainmaps: &[&GainMap],
     ) -> AvifResult<()> {
-        if grid_columns == 0 || grid_columns > 256 || grid_rows == 0 || grid_rows > 256 {
+        // See add_image_grid() for the maximum number of cells.
+        if grid_columns == 0
+            || grid_columns > 256
+            || grid_rows == 0
+            || grid_rows > 256
+            || grid_columns * grid_rows > u16::MAX as u32
+        {
             return AvifError::invalid_image_grid("");
         }
         if self.settings.extra_layer_count != 0 {
