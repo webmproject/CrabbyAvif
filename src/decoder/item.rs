@@ -52,6 +52,14 @@ pub struct Item {
 }
 
 impl Item {
+    pub(crate) fn has_native_alpha(&self) -> bool {
+        self.pixi().is_some_and(|pixi| {
+            pixi.planes
+                .iter()
+                .any(|plane| plane.channel_idc == Some(ChannelIdc::Alpha))
+        })
+    }
+
     pub(crate) fn stream<'a>(&'a mut self, io: &'a mut GenericIO) -> AvifResult<IStream<'a>> {
         if !self.idat.is_empty() {
             match self.extents.len() {

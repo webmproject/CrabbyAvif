@@ -257,6 +257,9 @@ impl Tile {
             }
         } else {
             // Typical case: Use the entire item's payload for a single frame output
+            if item.has_native_alpha() {
+                tile.input.all_layers = true;
+            }
             let sample = DecodeSample {
                 item_id: item.id,
                 offset: base_item_offset,
@@ -380,7 +383,12 @@ impl Image {
         }
         let row_index = tile_index / grid.columns;
         let column_index = tile_index % grid.columns;
-        for plane in category.planes() {
+        let planes: &[Plane] = if category == Category::Color && tile.has_plane(Plane::A) {
+            &ALL_PLANES
+        } else {
+            category.planes()
+        };
+        for plane in planes {
             let plane = *plane;
             let src_plane = tile.plane_data(plane);
             if src_plane.is_none() {
@@ -449,7 +457,12 @@ impl Image {
             return AvifError::invalid_image_grid("mismatch in overlay tile yuv formats.");
         }
         // This function is used only when |tile| contains pointers and self contains buffers.
-        for plane in category.planes() {
+        let planes: &[Plane] = if category == Category::Color && tile.has_plane(Plane::A) {
+            &ALL_PLANES
+        } else {
+            category.planes()
+        };
+        for plane in planes {
             let plane = *plane;
             let (Some(_), Some(dst_plane)) = (tile.plane_data(plane), self.plane_data(plane))
             else {

@@ -2346,6 +2346,7 @@ impl Decoder {
                 // category.
                 tile_index == self.tiles[decoding_item.usize()].len() - 1
             };
+        let has_alpha_item = !self.tiles[DecodingItem::ALPHA.usize()].is_empty();
         // Split the tiles array into two mutable arrays so that we can validate the
         // properties of tiles with index > 0 with that of the first tile.
         let (tiles_slice1, tiles_slice2) =
@@ -2368,6 +2369,9 @@ impl Decoder {
             }
             (_, Err(err)) => return Err(err),
         };
+        if category == Category::Color && decoding_item.item_idx == 0 && !has_alpha_item {
+            tile.image.alpha_present = self.image.alpha_present;
+        }
         let dst_image = match dst_image_override {
             Some(img) => img,
             None => match category {
@@ -2432,6 +2436,13 @@ impl Decoder {
                         dst_image.height = grid.height;
                         dst_image.copy_properties_from(&tile.image, &tile.codec_config);
                         dst_image.allocate_planes(category)?;
+                        if category == Category::Color
+                            && ((dst_image.alpha_present && !has_alpha_item)
+                                || tile.image.has_plane(Plane::A))
+                        {
+                            dst_image.allocate_planes(Category::Alpha)?;
+                            dst_image.alpha_present = true;
+                        }
                     }
                     Category::Alpha => {
                         // Alpha is always just one plane and the depth has been validated
@@ -2466,6 +2477,16 @@ impl Decoder {
                         dst_image.copy_properties_from(&tile.image, &tile.codec_config);
                         dst_image
                             .allocate_planes_with_default_values(category, canvas_fill_values)?;
+                        if category == Category::Color
+                            && ((dst_image.alpha_present && !has_alpha_item)
+                                || tile.image.has_plane(Plane::A))
+                        {
+                            dst_image.allocate_planes_with_default_values(
+                                Category::Alpha,
+                                canvas_fill_values,
+                            )?;
+                            dst_image.alpha_present = true;
+                        }
                     }
                     Category::Alpha => {
                         // Alpha is always just one plane and the depth has been validated
