@@ -860,6 +860,9 @@ avifGainMap *crabby_avifGainMapCreate();
 /// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if gainmap is not null, it has to point to a buffer allocated by crabby_avifGainMapCreate.
+/// - if gainmap is not null, its altICC data has to be null or allocated by
+///   crabby_avifRWDataSet or crabby_avifRWDataRealloc. It is freed by this
+///   function, like in libavif.
 void crabby_avifGainMapDestroy(avifGainMap *gainmap);
 
 /// # Safety
@@ -877,6 +880,9 @@ avifImage *crabby_avifImageCreate(uint32_t width,
 /// Used by the C API with the following pre-conditions:
 /// - if dstImage is not null, it has to point to a valid avifImage object.
 /// - if srcImage is not null, it has to point to a valid avifImage object.
+/// - if the gainMap of dstImage is not null, it has to be owned by dstImage
+///   (allocated by crabby_avifGainMapCreate). It is overwritten or destroyed,
+///   like in libavif.
 avifResult crabby_avifImageCopy(avifImage *dstImage,
                                 const avifImage *srcImage,
                                 avifPlanesFlags planes);

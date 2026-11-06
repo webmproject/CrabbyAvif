@@ -132,17 +132,24 @@ pub unsafe extern "C" fn crabby_avifGainMapCreate() -> *mut avifGainMap {
 /// # Safety
 /// Used by the C API with the following pre-conditions:
 /// - if gainmap is not null, it has to point to a buffer allocated by crabby_avifGainMapCreate.
+/// - if gainmap is not null, its altICC data has to be null or allocated by
+///   crabby_avifRWDataSet or crabby_avifRWDataRealloc. It is freed by this
+///   function, like in libavif.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifGainMapDestroy(gainmap: *mut avifGainMap) {
     if gainmap.is_null() {
         return;
     }
     // SAFETY: Safe because of the pre-condition and the null check.
-    let gainmap = unsafe { Box::from_raw(gainmap) };
+    let mut gainmap = unsafe { Box::from_raw(gainmap) };
     if !gainmap.image.is_null() {
         // SAFETY: Pre-conditions are met to call this function.
         unsafe {
             crabby_avifImageDestroy(gainmap.image);
         }
+    }
+    // SAFETY: Pre-conditions are met to call this function.
+    unsafe {
+        crabby_avifRWDataFree(&mut gainmap.altICC);
     }
 }
