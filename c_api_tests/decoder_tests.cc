@@ -191,6 +191,39 @@ TEST_P(DecoderTest, AnimatedImageWithSourceSetToPrimaryItem) {
   EXPECT_NE(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
 }
 
+TEST_P(DecoderTest, AnimatedImageWithSourceSetAfterParse) {
+  if (codec_choice() == AVIF_CODEC_CHOICE_NATIVE) {
+    GTEST_SKIP() << "The native AV1 decoder does not support inter frames.";
+  }
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  auto decoder = CreateDecoder("colors-animated-8bpc.avif");
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->imageCount, 5);
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+
+  // avifDecoderSetSource() resets an already parsed decoder, so that the new
+  // source is used without calling avifDecoderParse() again.
+  ASSERT_EQ(
+      avifDecoderSetSource(decoder.get(), AVIF_DECODER_SOURCE_PRIMARY_ITEM),
+      AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->imageCount, 1);
+  EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(avifDecoderNextImage(decoder.get()),
+            AVIF_RESULT_NO_IMAGES_REMAINING);
+
+  ASSERT_EQ(avifDecoderSetSource(decoder.get(), AVIF_DECODER_SOURCE_TRACKS),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->imageCount, 5);
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  }
+  EXPECT_EQ(avifDecoderNextImage(decoder.get()),
+            AVIF_RESULT_NO_IMAGES_REMAINING);
+}
+
 TEST(DecoderTest, AnimatedImageWithAlphaAndMetadata) {
   auto decoder = CreateDecoder("colors-animated-8bpc-alpha-exif-xmp.avif");
   ASSERT_NE(decoder, nullptr);
