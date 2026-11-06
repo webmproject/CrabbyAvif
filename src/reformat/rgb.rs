@@ -655,15 +655,23 @@ impl Image {
     }
 
     pub fn convert_to_yuv(&self, image: &mut crate::image::Image) -> AvifResult<()> {
-        if self.format == Format::Rgb565 || self.is_float {
-            return AvifError::not_implemented();
-        }
-        if self.width != image.width
+        if self.format == Format::Rgb565
+            || self.width != image.width
             || self.height != image.height
             || !image.depth_valid()
             || !self.has_valid_pixels()
         {
             return AvifError::reformat_failed();
+        }
+        // The AV1 specification does not allow chroma subsampling with the Identity matrix
+        // coefficients. See avifPrepareReformatState() in libavif.
+        if image.matrix_coefficients == MatrixCoefficients::Identity
+            && !matches!(image.yuv_format, PixelFormat::Yuv444 | PixelFormat::Yuv400)
+        {
+            return AvifError::reformat_failed();
+        }
+        if self.is_float {
+            return AvifError::not_implemented();
         }
         image.allocate_planes(Category::Color)?;
         // TODO: b/410088660 - add a setting to ignore alpha channel.
