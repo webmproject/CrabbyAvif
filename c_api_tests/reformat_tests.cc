@@ -997,6 +997,40 @@ TEST(RGBToYUVTest, 8BitGrayRoundTripWithLift) {
   }
 }
 
+// Converting an RGB image without alpha into a YUV image that already has an
+// alpha plane must not read the freed alpha plane, and must make it opaque.
+TEST(RGBToYUVTest, NoAlphaRgbIntoImageWithAlphaPlane) {
+  for (bool use_ignore_alpha : {false, true}) {
+    for (uint32_t depth : {8u, 10u}) {
+      ImagePtr image(
+          avifImageCreate(kWidth, kHeight, depth, AVIF_PIXEL_FORMAT_YUV444));
+      ASSERT_NE(image, nullptr);
+      ASSERT_EQ(avifImageAllocatePlanes(image.get(), AVIF_PLANES_ALL),
+                AVIF_RESULT_OK);
+      ASSERT_NE(image->alphaPlane, nullptr);
+      memset(image->alphaPlane, 0, image->alphaRowBytes * image->height);
+
+      AvifRgbImage rgb(
+          image.get(), depth,
+          use_ignore_alpha ? AVIF_RGB_FORMAT_RGBA : AVIF_RGB_FORMAT_RGB);
+      rgb.ignoreAlpha = use_ignore_alpha ? AVIF_TRUE : AVIF_FALSE;
+      memset(rgb.pixels, 0, rgb.rowBytes * rgb.height);
+      ASSERT_EQ(avifImageRGBToYUV(image.get(), &rgb), AVIF_RESULT_OK);
+
+      ASSERT_NE(image->alphaPlane, nullptr);
+      const uint32_t max_value = (1u << depth) - 1;
+      for (uint32_t y = 0; y < image->height; ++y) {
+        const uint8_t* row = image->alphaPlane + y * image->alphaRowBytes;
+        for (uint32_t x = 0; x < image->width; ++x) {
+          const uint32_t value =
+              depth == 8 ? row[x] : reinterpret_cast<const uint16_t*>(row)[x];
+          ASSERT_EQ(value, max_value);
+        }
+      }
+    }
+  }
+}
+
 bool AreRgbImagesEqual(avifRGBImage& rgb1, avifRGBImage& rgb2) {
   if (rgb1.width != rgb2.width || rgb1.height != rgb2.height ||
       rgb1.depth != rgb2.depth || rgb1.format != rgb2.format) {

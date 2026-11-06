@@ -165,6 +165,16 @@ pub unsafe extern "C" fn crabby_avifImageRGBToYUV(
         return avifResult::ReformatFailed;
     }
     let mut tmp_image: image::Image = deref_const!(image).as_rust_image_no_metadata();
+    // tmp_image borrows the planes of |image|, which are freed below before being
+    // copied back from tmp_image. convert_to_yuv() always reallocates the color planes,
+    // but only reallocates the alpha plane if |rgb| has alpha. Replace any borrowed
+    // alpha plane with an owned one so that it does not dangle after FreePlanes.
+    if tmp_image.has_plane(Plane::A) && !rgb.has_alpha() {
+        let res = tmp_image.allocate_planes(Category::Alpha);
+        if res.is_err() {
+            return res.into();
+        }
+    }
     let res = rgb.convert_to_yuv(&mut tmp_image);
     if res.is_err() {
         return res.into();
