@@ -2901,13 +2901,13 @@ impl Decoder {
                         != expected_recipe
                     {
                         // 32 bits are not supported for other recipes.
-                        return AvifError::unsupported_depth();
+                        return AvifError::not_implemented();
                     }
                     // Decoder::image() cannot return 32-bit float samples.
                     // Wait for Decoder::image_float() to be called before applying the
                     // sample transform.
                 }
-                16 => {
+                8 | 10 | 12 | 16 => {
                     self.tile_info[DecodingItem::COLOR.usize()]
                         .sample_transform
                         .allocate_planes_and_apply(
