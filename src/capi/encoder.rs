@@ -431,18 +431,26 @@ pub unsafe extern "C" fn crabby_avifEncoderSetCodecSpecificOption(
 ) -> avifResult {
     check_pointer!(encoder);
     check_pointer!(key);
-    check_pointer!(value);
 
     // SAFETY: `key` was verified to be non-null and, by caller precondition, points to a valid
     // NUL-terminated C string for the duration of this call.
     let key_cstr = unsafe { CStr::from_ptr(key) };
-    // SAFETY: `value` was verified to be non-null and, by caller precondition, points to a valid
-    // NUL-terminated C string for the duration of this call.
-    let value_cstr = unsafe { CStr::from_ptr(value) };
-    let (Ok(key), Ok(value)) = (key_cstr.to_str(), value_cstr.to_str()) else {
+    let Ok(key) = key_cstr.to_str() else {
         return avifResult::InvalidArgument;
     };
-    let (key, value) = (key.to_owned(), value.to_owned());
+    let key = key.to_owned();
+    // Like in libavif, a null value deletes the pending key, if it exists.
+    let value = if value.is_null() {
+        None
+    } else {
+        // SAFETY: `value` was verified to be non-null and, by caller precondition, points to a
+        // valid NUL-terminated C string for the duration of this call.
+        let value_cstr = unsafe { CStr::from_ptr(value) };
+        let Ok(value) = value_cstr.to_str() else {
+            return avifResult::InvalidArgument;
+        };
+        Some(value.to_owned())
+    };
     let (key, category) = if let Some(suffix) = key.strip_prefix("c:") {
         (suffix.to_string(), Some(Category::Color))
     } else if let Some(suffix) = key.strip_prefix("color:") {
@@ -460,13 +468,21 @@ pub unsafe extern "C" fn crabby_avifEncoderSetCodecSpecificOption(
     };
     let encoder_ref = deref_mut!(encoder);
     if encoder_ref.rust_encoder_initialized {
-        encoder_ref
-            .rust_encoder
-            .set_codec_specific_option(category, key, value);
+        let rust_encoder = &mut encoder_ref.rust_encoder;
+        match value {
+            Some(value) => rust_encoder.set_codec_specific_option(category, key, value),
+            None => rust_encoder.remove_codec_specific_option(category, &key),
+        }
     } else {
-        encoder_ref
-            .codec_specific_options
-            .insert((category, key), value);
+        let codec_specific_options = &mut encoder_ref.codec_specific_options;
+        match value {
+            Some(value) => {
+                codec_specific_options.insert((category, key), value);
+            }
+            None => {
+                codec_specific_options.remove(&(category, key));
+            }
+        }
     }
     avifResult::Ok
 }

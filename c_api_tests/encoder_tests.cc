@@ -792,7 +792,8 @@ TEST(EncoderApiTest, SetCodecSpecificOption) {
   ASSERT_NE(encoder, nullptr);
   EXPECT_NE(avifEncoderSetCodecSpecificOption(encoder.get(), nullptr, "abcd"),
             AVIF_RESULT_OK);
-  EXPECT_NE(avifEncoderSetCodecSpecificOption(encoder.get(), "abcd", nullptr),
+  // A null value deletes the pending key, if it exists.
+  EXPECT_EQ(avifEncoderSetCodecSpecificOption(encoder.get(), "abcd", nullptr),
             AVIF_RESULT_OK);
   EXPECT_EQ(avifEncoderSetCodecSpecificOption(encoder.get(), "abcd", "efgh"),
             AVIF_RESULT_OK);
@@ -811,6 +812,47 @@ TEST(EncoderApiTest, SetCodecSpecificOption) {
       AVIF_RESULT_OK);
   EXPECT_EQ(avifEncoderSetCodecSpecificOption(encoder.get(), "a:abcd", "efgh"),
             AVIF_RESULT_OK);
+}
+
+TEST(EncoderApiTest, DeleteCodecSpecificOption) {
+  ImagePtr image = testutil::CreateImage(/*width=*/12, /*height=*/34,
+                                         /*depth=*/8, AVIF_PIXEL_FORMAT_YUV420,
+                                         AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+  ASSERT_NE(image, nullptr);
+  testutil::FillImageGradient(image.get(), /*offset=*/0);
+
+  // This option is unknown to the codec so it makes the encoding fail.
+  EncoderPtr encoder(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  encoder->speed = 10;
+  ASSERT_EQ(avifEncoderSetCodecSpecificOption(encoder.get(), "abcd", "efgh"),
+            AVIF_RESULT_OK);
+  EXPECT_NE(avifEncoderAddImage(encoder.get(), image.get(), /*duration=*/1,
+                                AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+
+  // Unless it is deleted before encoding.
+  encoder.reset(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  encoder->speed = 10;
+  ASSERT_EQ(avifEncoderSetCodecSpecificOption(encoder.get(), "abcd", "efgh"),
+            AVIF_RESULT_OK);
+  ASSERT_EQ(avifEncoderSetCodecSpecificOption(encoder.get(), "abcd", nullptr),
+            AVIF_RESULT_OK);
+  ASSERT_EQ(avifEncoderAddImage(encoder.get(), image.get(), /*duration=*/1,
+                                AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+
+  // Options can also be deleted between frames.
+  ASSERT_EQ(avifEncoderSetCodecSpecificOption(encoder.get(), "abcd", "efgh"),
+            AVIF_RESULT_OK);
+  ASSERT_EQ(avifEncoderSetCodecSpecificOption(encoder.get(), "abcd", nullptr),
+            AVIF_RESULT_OK);
+  ASSERT_EQ(avifEncoderAddImage(encoder.get(), image.get(), /*duration=*/1,
+                                AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+  AvifRwData encoded;
+  ASSERT_EQ(avifEncoderFinish(encoder.get(), &encoded), AVIF_RESULT_OK);
 }
 
 TEST(PixelFormatToStringTest, Test) {
