@@ -350,6 +350,14 @@ impl Encoder {
         self.codec_specific_options.insert((category, key), value);
     }
 
+    /// Removes the codec specific option previously set with the same category and key, if any.
+    pub fn remove_codec_specific_option(&mut self, category: Option<Category>, key: &str) {
+        self.codec_specific_options
+            .retain(|(option_category, option_key), _| {
+                *option_category != category || option_key != key
+            });
+    }
+
     pub(crate) fn is_sequence(&self) -> bool {
         self.settings.extra_layer_count == 0 && self.duration_in_timescales.len() > 1
     }
@@ -1026,5 +1034,22 @@ mod tests {
             tiling_mode.log2(height, width),
             (expected_tile_columns_log2, expected_tile_rows_log2)
         );
+    }
+
+    #[test]
+    fn remove_codec_specific_option() {
+        let mut encoder = Encoder::default();
+        encoder.set_codec_specific_option(None, "key".into(), "value".into());
+        encoder.set_codec_specific_option(Some(Category::Color), "key".into(), "value".into());
+        // Removing an option that was not set does nothing.
+        encoder.remove_codec_specific_option(Some(Category::Alpha), "key");
+        encoder.remove_codec_specific_option(None, "other_key");
+        assert_eq!(encoder.codec_specific_options.len(), 2);
+        // Only the option with the same category and key is removed.
+        encoder.remove_codec_specific_option(Some(Category::Color), "key");
+        assert_eq!(encoder.codec_specific_options.len(), 1);
+        assert!(encoder
+            .codec_specific_options
+            .contains_key(&(None, "key".into())));
     }
 }
