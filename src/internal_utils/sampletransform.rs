@@ -350,10 +350,31 @@ impl SampleTransform {
             _ => unreachable!(),
         };
 
+        if extra_inputs.len() < self.num_inputs {
+            return AvifError::invalid_argument();
+        }
         let width = output.width(plane);
+        let height = output.height(plane);
+        for input in &extra_inputs[..self.num_inputs] {
+            if input.width(plane) != width || input.height(plane) != height {
+                return AvifError::bmff_parse_failed(
+                    "dimensions of input images for sato derived item do not match",
+                );
+            }
+        }
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+        for input in &extra_inputs[..self.num_inputs] {
+            if !input.has_plane(plane) {
+                return AvifError::bmff_parse_failed(
+                    "planes of input images for sato derived item do not match",
+                );
+            }
+        }
 
         // Process the image row by row.
-        for y in 0..u32_from_usize(output.height(plane))? {
+        for y in 0..u32_from_usize(height)? {
             for token in &self.tokens {
                 token.apply(stack, extra_inputs, plane, y, width, bounds)?;
             }
@@ -850,5 +871,47 @@ mod tests {
 
         assert_eq!(pow.apply(-(1 << 16), 3, clamp), 0); // i32::MIN as i64 clamped
         assert_eq!(pow.apply(1 << 16, 3, clamp), 255); // i32::MAX as i64 clamped
+    }
+
+    #[test]
+    fn test_apply_mismatched_dimensions() -> AvifResult<()> {
+        let sample_transform = SampleTransform::create_from(
+            32,
+            2,
+            vec![
+                SampleTransformToken::ImageItem(0),
+                SampleTransformToken::ImageItem(1),
+                SampleTransformToken::BinaryOp(SampleTransformBinaryOp::Sum),
+            ],
+        )?;
+        let mut output = Image {
+            width: 128,
+            height: 64,
+            depth: 16,
+            yuv_format: PixelFormat::Yuv444,
+            ..Default::default()
+        };
+        let mut input0 = Image {
+            width: 128,
+            height: 64,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv444,
+            ..Default::default()
+        };
+        input0.allocate_planes(Category::Color)?;
+        let mut input1 = Image {
+            width: 100,
+            height: 64,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv444,
+            ..Default::default()
+        };
+        input1.allocate_planes(Category::Color)?;
+
+        assert!(matches!(
+            sample_transform.allocate_planes_and_apply(&[&input0, &input1], &mut output),
+            Err(AvifError::BmffParseFailed(_))
+        ));
+        Ok(())
     }
 }
