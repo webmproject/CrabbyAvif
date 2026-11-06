@@ -493,6 +493,71 @@ TEST(GainMapTest, NoGainMap) {
   EXPECT_EQ(decoded->gainMap, nullptr);
 }
 
+TEST(GainMapTest, ImageCopy) {
+  ImagePtr image = CreateTestImageWithGainMap(/*base_rendition_is_hdr=*/false);
+  ASSERT_NE(image, nullptr);
+  const uint8_t kAltIcc[] = {1, 2, 3, 4, 5};
+  ASSERT_EQ(avifRWDataSet(&image->gainMap->altICC, kAltIcc, sizeof(kAltIcc)),
+            AVIF_RESULT_OK);
+  image->gainMap->altYUVRange = AVIF_RANGE_LIMITED;
+
+  ImagePtr copy(avifImageCreateEmpty());
+  ASSERT_NE(copy, nullptr);
+  ASSERT_EQ(avifImageCopy(copy.get(), image.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+  // Same as libavif, the gain map is deep copied.
+  ASSERT_NE(copy->gainMap, nullptr);
+  ASSERT_NE(copy->gainMap, image->gainMap);
+  CheckGainMapMetadataMatches(*copy->gainMap, *image->gainMap);
+  EXPECT_EQ(copy->gainMap->useBaseColorSpace,
+            image->gainMap->useBaseColorSpace);
+  EXPECT_NE(copy->gainMap->altICC.data, image->gainMap->altICC.data);
+  EXPECT_TRUE(testutil::AreByteSequencesEqual(copy->gainMap->altICC,
+                                              image->gainMap->altICC));
+  EXPECT_EQ(copy->gainMap->altColorPrimaries,
+            image->gainMap->altColorPrimaries);
+  EXPECT_EQ(copy->gainMap->altTransferCharacteristics,
+            image->gainMap->altTransferCharacteristics);
+  EXPECT_EQ(copy->gainMap->altMatrixCoefficients,
+            image->gainMap->altMatrixCoefficients);
+  EXPECT_EQ(copy->gainMap->altYUVRange, image->gainMap->altYUVRange);
+  EXPECT_EQ(copy->gainMap->altDepth, image->gainMap->altDepth);
+  EXPECT_EQ(copy->gainMap->altPlaneCount, image->gainMap->altPlaneCount);
+  EXPECT_EQ(copy->gainMap->altCLLI.maxCLL, image->gainMap->altCLLI.maxCLL);
+  EXPECT_EQ(copy->gainMap->altCLLI.maxPALL, image->gainMap->altCLLI.maxPALL);
+  ASSERT_NE(copy->gainMap->image, nullptr);
+  EXPECT_NE(copy->gainMap->image, image->gainMap->image);
+  EXPECT_TRUE(testutil::AreImagesEqual(*copy, *image, /*ignore_alpha=*/false));
+
+  // The gain map image of the destination is destroyed if there is none in the
+  // source.
+  avifImageDestroy(image->gainMap->image);
+  image->gainMap->image = nullptr;
+  ASSERT_EQ(avifImageCopy(copy.get(), image.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+  ASSERT_NE(copy->gainMap, nullptr);
+  EXPECT_EQ(copy->gainMap->image, nullptr);
+
+  // The gain map of the destination is destroyed if there is none in the
+  // source.
+  avifGainMapDestroy(image->gainMap);
+  image->gainMap = nullptr;
+  ASSERT_EQ(avifImageCopy(copy.get(), image.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(copy->gainMap, nullptr);
+}
+
+TEST(GainMapTest, DestroyFreesAltIcc) {
+  avifGainMap* gain_map = avifGainMapCreate();
+  ASSERT_NE(gain_map, nullptr);
+  const uint8_t kAltIcc[] = {1, 2, 3, 4, 5};
+  ASSERT_EQ(avifRWDataSet(&gain_map->altICC, kAltIcc, sizeof(kAltIcc)),
+            AVIF_RESULT_OK);
+  // Same as libavif, altICC is owned by the gain map. A leak is reported by
+  // sanitizers otherwise.
+  avifGainMapDestroy(gain_map);
+}
+
 }  // namespace
 }  // namespace avif
 
