@@ -897,6 +897,40 @@ fn gainmap_base_image_hdr() -> AvifResult<()> {
     Ok(())
 }
 
+// The 'pixi' property of the 'tmap' item is optional. Like libavif, it must not
+// be written if both the alternate bit depth and plane count are unknown (0).
+// Otherwise the unknown value is guessed.
+#[test_case(0, 0, 0, 0 ; "unknown")]
+#[test_case(12, 0, 12, 3 ; "known depth")]
+#[test_case(0, 1, 10, 1 ; "known plane count")]
+#[test_case(8, 1, 8, 1 ; "known")]
+fn gainmap_alt_plane_depth_and_count(
+    alt_plane_depth: u8,
+    alt_plane_count: u8,
+    expected_alt_plane_depth: u8,
+    expected_alt_plane_count: u8,
+) -> AvifResult<()> {
+    let (image, mut gainmap) = generate_gainmap_image(false)?;
+    gainmap.alt_plane_depth = alt_plane_depth;
+    gainmap.alt_plane_count = alt_plane_count;
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_gainmap(&image, &gainmap)?;
+    let edata = encoder.finish()?;
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    assert_eq!(decoder.parse(), Ok(()));
+    assert!(decoder.gainmap_present());
+    let decoded_gainmap = decoder.gainmap();
+    assert_eq!(decoded_gainmap.alt_plane_depth, expected_alt_plane_depth);
+    assert_eq!(decoded_gainmap.alt_plane_count, expected_alt_plane_count);
+    Ok(())
+}
+
 // From aviftransformtest.cc
 #[test]
 #[cfg(feature = "png")]
