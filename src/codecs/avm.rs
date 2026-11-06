@@ -286,8 +286,8 @@ impl Encoder for Avm {
                 (category == Category::Alpha || image.yuv_format == PixelFormat::Yuv400).into();
             // end-usage is the only codec specific option that has to be set before initializing
             // the libavm encoder
-            if let Some(value) = config.codec_specific_option(category, "end-usage".into()) {
-                avm_config.rc_end_usage = match (value.parse(), &*value) {
+            if let Some(value) = config.codec_specific_option(category, "end-usage") {
+                avm_config.rc_end_usage = match (value.parse(), value) {
                     (Ok(avm_rc_mode_AVM_VBR), _) | (Err(_), "vbr") => avm_rc_mode_AVM_VBR,
                     (Ok(avm_rc_mode_AVM_CBR), _) | (Err(_), "cbr") => avm_rc_mode_AVM_CBR,
                     (Ok(avm_rc_mode_AVM_CQ), _) | (Err(_), "cq") => avm_rc_mode_AVM_CQ,
@@ -387,13 +387,13 @@ impl Encoder for Avm {
             }
 
             let codec_specific_options = config.codec_specific_options(category)?;
-            for (key, value) in &codec_specific_options {
+            for &(key, value) in &codec_specific_options {
                 if key == "end-usage" {
                     // This key is already processed before initialization of the encoder.
                     continue;
                 }
-                let key_str = CString::new(key.clone()).unwrap();
-                let value_str = CString::new(value.clone()).unwrap();
+                let key_str = CString::new(key).unwrap();
+                let value_str = CString::new(value).unwrap();
                 // # Safety: Calling a C function with valid parameters.
                 let err = unsafe {
                     avm_codec_set_option(
@@ -409,7 +409,7 @@ impl Encoder for Avm {
                 }
             }
             // Set tune=SSIM unless explicitly defined by the user.
-            if !codec_specific_options.iter().any(|(key, _)| key == "tune") {
+            if !codec_specific_options.iter().any(|&(key, _)| key == "tune") {
                 self.codec_control(
                     avme_enc_control_id_AVME_SET_TUNING,
                     avm_tune_metric_AVM_TUNE_SSIM,
@@ -417,7 +417,7 @@ impl Encoder for Avm {
             }
 
             self.encoder_avm_config = Some(avm_config);
-            self.encoder_config = Some(config.clone());
+            self.encoder_config = Some(config.try_clone()?);
         } else if self.encoder_config.unwrap_ref() != config {
             let avm_config = self.encoder_avm_config.unwrap_mut();
             if avm_config.g_w != image.width || avm_config.g_h != image.height {
@@ -465,7 +465,7 @@ impl Encoder for Avm {
                     config.tile_columns_log2,
                 )?;
             }
-            self.encoder_config = Some(config.clone());
+            self.encoder_config = Some(config.try_clone()?);
         }
         if self.current_layer > config.extra_layer_count {
             return AvifError::invalid_argument();

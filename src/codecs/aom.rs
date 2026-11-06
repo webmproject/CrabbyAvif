@@ -237,11 +237,11 @@ impl Encoder for Aom {
         // setting. If there are multiple "tune" options specified, honor the
         // last one.
         let options = config.codec_specific_options(category)?;
-        if let Some((_, value)) = options.iter().rfind(|&(k, _)| k == "tune") {
+        if let Some((_, value)) = options.iter().rfind(|&&(k, _)| k == "tune") {
             // Check if the tune metric setting is AOM_TUNE_IQ. For consistent
             // behavior, handle both cases where tune was either specified as a
             // string (e.g. tune=iq) or as an enum value (e.g. tune=10).
-            use_tune_iq = matches!(value.as_str(), "iq" | "10");
+            use_tune_iq = matches!(*value, "iq" | "10");
         } else if self.encoder.is_none() {
             // CrabbyAvif only needs to set the default tune metric for the
             // first frame, because libaom will persist that setting until
@@ -353,7 +353,7 @@ impl Encoder for Aom {
                 (category == Category::Alpha || image.yuv_format == PixelFormat::Yuv400).into();
             // end-usage is the only codec specific option that has to be set before initializing
             // the libaom encoder
-            if let Some(value) = config.codec_specific_option(category, String::from("end-usage")) {
+            if let Some(value) = config.codec_specific_option(category, "end-usage") {
                 aom_config.rc_end_usage = if let Ok(value) = value.parse() {
                     if value == aom_rc_mode_AOM_VBR
                         || value == aom_rc_mode_AOM_CBR
@@ -365,7 +365,7 @@ impl Encoder for Aom {
                         return AvifError::invalid_argument();
                     }
                 } else {
-                    match value.as_str() {
+                    match value {
                         "vbr" => aom_rc_mode_AOM_VBR,
                         "cbr" => aom_rc_mode_AOM_CBR,
                         "cq" => aom_rc_mode_AOM_CQ,
@@ -481,15 +481,15 @@ impl Encoder for Aom {
                 )?;
             }
             let codec_specific_options = config.codec_specific_options(category)?;
-            for (key, value) in &codec_specific_options {
+            for &(key, value) in &codec_specific_options {
                 if key == "end-usage" {
                     // This key is already processed before initialization of the encoder.
                     continue;
                 }
-                let key_str = CString::new(key.as_str())
-                    .map_err(|_| AvifError::InvalidCodecSpecificOption)?;
-                let value_str = CString::new(value.as_str())
-                    .map_err(|_| AvifError::InvalidCodecSpecificOption)?;
+                let key_str =
+                    CString::new(key).map_err(|_| AvifError::InvalidCodecSpecificOption)?;
+                let value_str =
+                    CString::new(value).map_err(|_| AvifError::InvalidCodecSpecificOption)?;
                 let encoder = self.encoder.as_mut().ok_or(AvifError::InvalidArgument)?;
                 let encoder_ptr: *mut aom_codec_ctx_t = encoder;
                 let key_ptr = key_str.as_ptr();
@@ -514,7 +514,7 @@ impl Encoder for Aom {
             }
 
             self.aom_config = Some(aom_config);
-            self.config = Some(config.clone());
+            self.config = Some(config.try_clone()?);
         } else if self.config.as_ref().ok_or(AvifError::InvalidArgument)? != config {
             let aom_config = self.aom_config.as_ref().ok_or(AvifError::InvalidArgument)?;
             if aom_config.g_w != image.width || aom_config.g_h != image.height {
@@ -563,7 +563,7 @@ impl Encoder for Aom {
                     config.tile_columns_log2 as u32,
                 )?;
             }
-            self.config = Some(config.clone());
+            self.config = Some(config.try_clone()?);
         }
         if self.current_layer > config.extra_layer_count {
             return AvifError::invalid_argument();

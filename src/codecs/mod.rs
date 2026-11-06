@@ -32,6 +32,8 @@ pub mod native;
 
 #[cfg(feature = "encoder")]
 use crate::internal_utils::*;
+#[cfg(feature = "encoder")]
+use crate::AvifError;
 
 use crate::decoder::item::Item;
 use crate::decoder::GridImageHelper;
@@ -94,10 +96,24 @@ pub(crate) trait Decoder {
     // Destruction must be implemented using Drop.
 }
 
+#[cfg(feature = "encoder")]
+impl TryClone for CodecSpecificOptions {
+    fn try_clone(&self) -> AvifResult<Self> {
+        let mut cloned = CodecSpecificOptions::default();
+        cloned
+            .try_reserve(self.len())
+            .map_err(AvifError::map_out_of_memory)?;
+        for (key, value) in self {
+            cloned.insert((key.0, key.1.try_clone()?), value.try_clone()?);
+        }
+        Ok(cloned)
+    }
+}
+
 // Not all fields of this struct are used in all the configurations.
 #[allow(dead_code)]
 #[cfg(feature = "encoder")]
-#[derive(Clone, Default, PartialEq)]
+#[derive(Default, PartialEq)]
 pub(crate) struct EncoderConfig {
     pub tile_rows_log2: i32,
     pub tile_columns_log2: i32,
@@ -113,25 +129,36 @@ pub(crate) struct EncoderConfig {
 }
 
 #[cfg(feature = "encoder")]
+impl TryClone for EncoderConfig {
+    fn try_clone(&self) -> AvifResult<Self> {
+        Ok(Self {
+            codec_specific_options: self.codec_specific_options.try_clone()?,
+            ..*self
+        })
+    }
+}
+
+#[cfg(feature = "encoder")]
 #[allow(dead_code)] // These functions are used only in tests and when aom is enabled.
 impl EncoderConfig {
-    pub(crate) fn codec_specific_option(&self, category: Category, key: String) -> Option<String> {
-        match self
-            .codec_specific_options
-            .get(&(Some(category), key.clone()))
-        {
-            Some(value) => Some(value.clone()),
-            None => self
-                .codec_specific_options
-                .get(&(None, key.clone()))
-                .cloned(),
+    pub(crate) fn codec_specific_option(&self, category: Category, key: &str) -> Option<&str> {
+        for (k, v) in &self.codec_specific_options {
+            if k.0 == Some(category) && k.1 == key {
+                return Some(v.as_str());
+            }
         }
+        for (k, v) in &self.codec_specific_options {
+            if k.0.is_none() && k.1 == key {
+                return Some(v.as_str());
+            }
+        }
+        None
     }
 
     pub(crate) fn codec_specific_options(
         &self,
         category: Category,
-    ) -> AvifResult<Vec<(String, String)>> {
+    ) -> AvifResult<Vec<(&str, &str)>> {
         self.codec_specific_options
             .iter()
             .filter(|(key, _value)| {
@@ -142,9 +169,10 @@ impl EncoderConfig {
                     || (key.0.is_none()
                         && !self
                             .codec_specific_options
-                            .contains_key(&(Some(category), key.1.clone())))
+                            .iter()
+                            .any(|(k, _)| k.0 == Some(category) && k.1 == key.1))
             })
-            .map(|(key, value)| (key.1.clone(), value.clone()))
+            .map(|(key, value)| (key.1.as_str(), value.as_str()))
             .try_collect()
     }
 }
@@ -195,37 +223,34 @@ mod tests {
         };
 
         assert_eq!(
-            config.codec_specific_option(Category::Color, String::from("abcd")),
-            Some(String::from("color_value1")),
+            config.codec_specific_option(Category::Color, "abcd"),
+            Some("color_value1"),
         );
         assert_eq!(
-            config.codec_specific_option(Category::Alpha, String::from("abcd")),
-            Some(String::from("generic_value1")),
+            config.codec_specific_option(Category::Alpha, "abcd"),
+            Some("generic_value1"),
         );
         assert_eq!(
-            config.codec_specific_option(Category::Gainmap, String::from("abcd")),
-            Some(String::from("generic_value1")),
+            config.codec_specific_option(Category::Gainmap, "abcd"),
+            Some("generic_value1"),
         );
         assert_eq!(
-            config.codec_specific_option(Category::Color, String::from("hjkl")),
-            Some(String::from("generic_value2")),
+            config.codec_specific_option(Category::Color, "hjkl"),
+            Some("generic_value2"),
         );
 
         let mut actual = config.codec_specific_options(Category::Color).unwrap();
         actual.sort();
-        let mut expected = vec![
-            (String::from("hjkl"), String::from("generic_value2")),
-            (String::from("abcd"), String::from("color_value1")),
-        ];
+        let mut expected = vec![("hjkl", "generic_value2"), ("abcd", "color_value1")];
         expected.sort();
         assert_eq!(expected, actual);
 
         actual = config.codec_specific_options(Category::Alpha).unwrap();
         actual.sort();
         expected = vec![
-            (String::from("hjkl"), String::from("generic_value2")),
-            (String::from("efgh"), String::from("alpha_value1")),
-            (String::from("abcd"), String::from("generic_value1")),
+            ("hjkl", "generic_value2"),
+            ("efgh", "alpha_value1"),
+            ("abcd", "generic_value1"),
         ];
         expected.sort();
         assert_eq!(expected, actual);

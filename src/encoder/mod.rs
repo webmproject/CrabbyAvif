@@ -434,7 +434,7 @@ impl Encoder {
             infe_content_type: "application/rdf+xml".into(),
             iref_to_id: Some(self.primary_item_id),
             iref_type: Some("cdsc".into()),
-            metadata_payload: self.image_metadata.xmp.clone(),
+            metadata_payload: self.image_metadata.xmp.try_clone()?,
             ..Default::default()
         })?;
         Ok(())
@@ -830,7 +830,7 @@ impl Encoder {
                 threads: self.settings.threads,
                 keyframe_interval: self.settings.keyframe_interval,
                 scaling_mode: self.settings.mutable.scaling_mode,
-                codec_specific_options: self.codec_specific_options.clone(),
+                codec_specific_options: self.codec_specific_options.try_clone()?,
             };
             let item = &mut self.items[i];
             item.codec
