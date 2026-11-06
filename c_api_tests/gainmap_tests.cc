@@ -242,6 +242,36 @@ TEST(GainMapTest, EncodeDecodeOriented) {
             AVIF_TRANSFORM_NONE);
 }
 
+TEST(GainMapTest, EncodeDecodeGainMapWithAlpha) {
+  ImagePtr image = CreateTestImageWithGainMap(/*base_rendition_is_hdr=*/false);
+  ASSERT_NE(image, nullptr);
+  ASSERT_EQ(avifImageAllocatePlanes(image->gainMap->image, AVIF_PLANES_A),
+            AVIF_RESULT_OK);
+  testutil::FillImageGradient(image->gainMap->image, /*offset=*/0);
+
+  // Same as libavif, the alpha plane of the gain map image is ignored.
+  EncoderPtr encoder(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  AvifRwData encoded;
+  ASSERT_EQ(avifEncoderWrite(encoder.get(), image.get(), &encoded),
+            AVIF_RESULT_OK);
+
+  auto decoder = CreateDecoder(encoded);
+  ASSERT_NE(decoder, nullptr);
+  decoder->imageContentToDecode |= AVIF_IMAGE_CONTENT_GAIN_MAP;
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  const avifImage* decoded = decoder->image;
+  ASSERT_NE(decoded, nullptr);
+  EXPECT_GT(testutil::GetPsnr(*image, *decoded, false), 40.0);
+  ASSERT_NE(decoded->gainMap, nullptr);
+  ASSERT_NE(decoded->gainMap->image, nullptr);
+  EXPECT_EQ(decoded->gainMap->image->alphaPlane, nullptr);
+  EXPECT_GT(testutil::GetPsnr(*image->gainMap->image, *decoded->gainMap->image,
+                              /*ignore_alpha=*/true),
+            40.0);
+}
+
 TEST(GainMapTest, EncodeDecodeMetadataSameDenominator) {
   ImagePtr image = CreateTestImageWithGainMap(/*base_rendition_is_hdr=*/true);
   ASSERT_NE(image, nullptr);
