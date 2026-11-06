@@ -567,6 +567,20 @@ impl GridImageHelper<'_> {
     }
 }
 
+// Codecs return AvifError::UnknownError when they fail to decode a payload. Return an error
+// specific to the category of the decoded item instead. The Android MediaCodec errors are returned
+// as is.
+fn codec_error_for_category(err: AvifError, category: Category) -> AvifError {
+    match err {
+        AvifError::UnknownError(_) if !cfg!(feature = "android_mediacodec") => match category {
+            Category::Color => AvifError::DecodeColorFailed,
+            Category::Alpha => AvifError::DecodeAlphaFailed,
+            Category::Gainmap => AvifError::DecodeGainMapFailed,
+        },
+        _ => err,
+    }
+}
+
 impl Decoder {
     pub fn image_count(&self) -> u32 {
         self.image_count
@@ -2637,7 +2651,9 @@ impl Decoder {
             // are not left dangling if decoding this tile fails.
             dst_image.free_planes(category.planes());
         }
-        let next_image_result = codec.get_next_image(
+        tile.image.width = 0;
+        tile.image.height = 0;
+        let mut next_image_result = codec.get_next_image(
             data,
             sample.spatial_id,
             &mut tile.image,
@@ -2645,6 +2661,13 @@ impl Decoder {
             item,
             signal_eos,
         );
+        if next_image_result.is_ok() && (tile.image.width == 0 || tile.image.height == 0) {
+            next_image_result = match category {
+                Category::Color => AvifError::decode_color_failed(),
+                Category::Alpha => AvifError::decode_alpha_failed(),
+                Category::Gainmap => AvifError::decode_gain_map_failed(),
+            };
+        }
         if next_image_result.is_err() {
             if cfg!(feature = "android_mediacodec")
                 && cfg!(feature = "heic")
@@ -2656,7 +2679,7 @@ impl Decoder {
                 checked_incr!(self.tile_info[decoding_item.usize()].decoded_tile_count, 1);
                 return Ok(());
             } else {
-                return next_image_result;
+                return next_image_result.map_err(|err| codec_error_for_category(err, category));
             }
         }
 
@@ -3117,7 +3140,7 @@ impl Decoder {
                 // When decoding HEIC on Android, if the alpha channel decoding fails, simply
                 // ignore it and return the rest of the image.
             } else {
-                return next_image_result;
+                return next_image_result.map_err(|err| codec_error_for_category(err, category));
             }
         } else if !grid_image_helper.is_grid_complete()? {
             return AvifError::unknown_error("codec did not decode all cells");
@@ -3647,12 +3670,14 @@ impl Decoder {
             self.image.free_planes(decoding_item.category.planes());
             let first_tile = &self.tiles[decoding_item.usize()][0];
             let codec = &mut self.codecs[first_tile.codec_index];
-            codec.get_last_image(
-                &payloads,
-                spatial_id.unwrap(),
-                &mut self.image,
-                decoding_item.category,
-            )?;
+            codec
+                .get_last_image(
+                    &payloads,
+                    spatial_id.unwrap(),
+                    &mut self.image,
+                    decoding_item.category,
+                )
+                .map_err(|err| codec_error_for_category(err, decoding_item.category))?;
             checked_incr!(self.tile_info[decoding_item.usize()].decoded_tile_count, 1);
         }
         if let Some(composed) = composed_crop {
@@ -3999,5 +4024,89 @@ mod tests {
         let item_1_props = &decoder.items.get(&1).unwrap().properties;
         assert_eq!(item_1_props.len(), 1);
         assert_eq!(find_property!(item_1_props, ImageRotation), Some(&1));
+    }
+
+    #[derive(Default)]
+    struct EmptyImageCodec;
+
+    impl crate::codecs::Decoder for EmptyImageCodec {
+        fn codec(&self) -> CodecChoice {
+            CodecChoice::Auto
+        }
+
+        fn initialize(&mut self, _config: &DecoderConfig) -> AvifResult<()> {
+            Ok(())
+        }
+
+        fn get_next_image(
+            &mut self,
+            _av1_payload: &[u8],
+            _spatial_id: u8,
+            _image: &mut Image,
+            _category: Category,
+            _item: Option<&Item>,
+            _signal_eos: bool,
+        ) -> AvifResult<()> {
+            Ok(())
+        }
+
+        fn get_next_image_grid(
+            &mut self,
+            _payloads: &[Vec<u8>],
+            _spatial_id: u8,
+            _grid_image_helper: &mut GridImageHelper,
+        ) -> AvifResult<()> {
+            Ok(())
+        }
+
+        fn get_last_image(
+            &mut self,
+            _payloads: &[Vec<u8>],
+            _spatial_id: u8,
+            _image: &mut Image,
+            _category: Category,
+        ) -> AvifResult<()> {
+            Ok(())
+        }
+    }
+
+    #[test_case(DecodingItem::COLOR, AvifError::DecodeColorFailed ; "color")]
+    #[test_case(DecodingItem::ALPHA, AvifError::DecodeAlphaFailed ; "alpha")]
+    #[test_case(DecodingItem::GAINMAP, AvifError::DecodeGainMapFailed ; "gainmap")]
+    fn decode_tile_zero_dimensions_returns_error(
+        decoding_item: DecodingItem,
+        expected_error: AvifError,
+    ) {
+        let mut decoder = Decoder::default();
+        decoder.set_io_vec(vec![0]);
+        decoder.codecs.push(Box::new(EmptyImageCodec));
+        let tile = Tile {
+            width: 1,
+            height: 1,
+            operating_point: 0,
+            image: Image {
+                width: 1,
+                height: 1,
+                ..Image::default()
+            },
+            input: DecodeInput {
+                samples: vec![DecodeSample {
+                    item_id: 0,
+                    offset: 0,
+                    size: 1,
+                    spatial_id: 0,
+                    sync: true,
+                }],
+                all_layers: false,
+                decoding_item,
+            },
+            codec_index: 0,
+            codec_config: CodecConfiguration::Av1(Av1CodecConfiguration::default()),
+        };
+        decoder.tiles[decoding_item.usize()].push(tile);
+        assert_eq!(
+            decoder.decode_tile(0, decoding_item, 0, 0, true, None, None),
+            Err(expected_error)
+        );
     }
 }

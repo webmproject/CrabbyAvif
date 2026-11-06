@@ -1479,9 +1479,9 @@ fn alpha_frame_size_change_in_sequence() {
     assert_eq!(decoder.next_image(), Ok(()));
     assert!(decoder.image().unwrap().has_plane(Plane::A));
     // The 1x1 alpha frame does not match the 150x150 color frame.
-    assert!(decoder.next_image().is_err());
+    assert_eq!(decoder.next_image(), Err(AvifError::DecodeAlphaFailed));
     // Decode the same frame again so that the decoder reuses the released alpha buffers.
-    assert!(decoder.next_image().is_err());
+    assert_eq!(decoder.next_image(), Err(AvifError::DecodeAlphaFailed));
     let image = decoder.image().unwrap();
     if image.has_plane(Plane::A) {
         // Reading a dangling alpha plane is caught by AddressSanitizer.
@@ -1498,6 +1498,54 @@ fn alpha_frame_size_change_in_sequence() {
     }
     // The alpha plane of the failed frame is not available.
     assert!(!image.has_plane(Plane::A));
+}
+
+// Overwrites the obu_size of the last OBU of the AV1 payload of the given size at the given offset
+// with the largest value that fits in the same number of bytes, so that the OBU exceeds the payload.
+fn corrupt_last_obu(data: &mut [u8], offset: usize, size: usize) {
+    let payload = &mut data[offset..offset + size];
+    let mut obu_offset = 0;
+    let mut obu_size_range = 0..0;
+    while obu_offset < payload.len() {
+        // obu_header() is one byte, or two if obu_extension_flag is set.
+        let obu_size_start = obu_offset + if payload[obu_offset] & 0x04 != 0 { 2 } else { 1 };
+        // leb128() obu_size
+        let mut obu_size_end = obu_size_start;
+        let mut obu_size = 0;
+        loop {
+            let byte = payload[obu_size_end];
+            obu_size |= usize::from(byte & 0x7f) << (7 * (obu_size_end - obu_size_start));
+            obu_size_end += 1;
+            if byte & 0x80 == 0 {
+                break;
+            }
+        }
+        obu_size_range = obu_size_start..obu_size_end;
+        obu_offset = obu_size_end + obu_size;
+    }
+    let last_obu_size_byte = obu_size_range.end - 1;
+    payload[obu_size_range].fill(0xff);
+    payload[last_obu_size_byte] = 0x7f;
+}
+
+// Return an error specific to the category of the item that the codec failed to decode.
+#[test_case("white_1x1.avif", 282, 23, AvifError::DecodeColorFailed ; "color")]
+#[test_case("sofa_grid1x5_420.avif", 22151, 3258, AvifError::DecodeColorFailed ; "color grid")]
+#[test_case("alpha.avif", 437, 790, AvifError::DecodeAlphaFailed ; "alpha")]
+#[test_case("seine_sdr_gainmap_srgb.avif", 58591, 31077, AvifError::DecodeGainMapFailed ; "gain map")]
+fn corrupt_payload(filename: &str, offset: usize, size: usize, expected_error: AvifError) {
+    if !cfg!(feature = "dav1d") {
+        return;
+    }
+    // offset and size are the location of the AV1 payload of a coded image item in the file,
+    // according to its 'iloc' box.
+    let mut data = std::fs::read(get_test_file(filename)).expect("Unable to read file");
+    corrupt_last_obu(&mut data, offset, size);
+    let mut decoder = decoder_with_codec(DAV1D);
+    decoder.settings.image_content_to_decode = ImageContentType::All;
+    decoder.set_io_vec(data);
+    assert_eq!(decoder.parse(), Ok(()));
+    assert_eq!(decoder.next_image(), Err(expected_error));
 }
 
 #[test]
