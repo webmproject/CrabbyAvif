@@ -59,7 +59,7 @@ fn encode_decode_av1(
     [8, 10],
     [PixelFormat::Yuv420],
     [YuvRange::Full],
-    [false],
+    [false, true],
     [None]
 )]
 fn encode_decode_av2(

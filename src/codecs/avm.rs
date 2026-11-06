@@ -63,6 +63,7 @@ pub struct Avm {
     encoder_avm_config: Option<avm_codec_enc_cfg>,
     encoder_config: Option<EncoderConfig>,
     current_layer: u32,
+    has_alpha_layer: bool,
 
     // Decoder.
     decoder_config: Option<DecoderConfig>,
@@ -196,10 +197,11 @@ fn avm_min_max_quantizers(quantizer: i32) -> (i32, i32) {
     }
 }
 
-// Adds frame packets to output_samples. Returns true if at least one sample was added.
-fn add_avm_pkts_to_output_samples(
+// Calls `handle_frame` for each frame packet available from `ctx`. Returns true if at least one
+// frame packet was processed.
+fn for_each_avm_frame_pkt(
     ctx: &mut avm_codec_ctx_t,
-    output_samples: &mut Vec<Sample>,
+    mut handle_frame: impl FnMut(&[u8], bool) -> AvifResult<()>,
 ) -> AvifResult<bool> {
     let mut got_frame = false;
     let mut iter: avm_codec_iter_t = std::ptr::null_mut();
@@ -224,12 +226,33 @@ fn add_avm_pkts_to_output_samples(
         // TODO(b/437292541): Make sure the sync definition below matches
         //                    https://aomediacodec.github.io/av2-isobmff/main#sync-sample
         let sync = (frame.flags & AVM_FRAME_IS_KEY) != 0;
-        let sample_data_range = Av2CodecConfiguration::get_sample_obus_range(encoded_data)?;
-        let encoded_data = encoded_data.try_to_vec()?;
-        output_samples.try_push(Sample::create(encoded_data, sample_data_range, sync))?;
+        handle_frame(encoded_data, sync)?;
         got_frame = true;
     }
     Ok(got_frame)
+}
+
+// Adds frame packets to output_samples. Returns true if at least one sample was added.
+fn add_avm_pkts_to_output_samples(
+    ctx: &mut avm_codec_ctx_t,
+    output_samples: &mut Vec<Sample>,
+) -> AvifResult<bool> {
+    for_each_avm_frame_pkt(ctx, |encoded_data, sync| {
+        add_output_sample(encoded_data.try_to_vec()?, sync, output_samples)
+    })
+}
+
+fn add_output_sample(
+    data_output_by_codec: Vec<u8>,
+    sync: bool,
+    output_samples: &mut Vec<Sample>,
+) -> AvifResult<()> {
+    let sample_data_range = Av2CodecConfiguration::get_sample_obus_range(&data_output_by_codec)?;
+    output_samples.try_push(Sample::create(
+        data_output_by_codec,
+        sample_data_range,
+        sync,
+    ))
 }
 
 impl Encoder for Avm {
@@ -266,13 +289,16 @@ impl Encoder for Avm {
             avm_config.g_w = image.width;
             avm_config.g_h = image.height;
 
+            self.has_alpha_layer = category == Category::Color
+                && image.alpha_present
+                && (!config.is_single_image || !image.is_opaque()?);
             if config.is_single_image {
-                avm_config.g_limit = 1;
+                avm_config.g_limit = if self.has_alpha_layer { 2 } else { 1 };
                 avm_config.g_lag_in_frames = 0;
                 avm_config.kf_mode = avm_kf_mode_AVM_KF_DISABLED;
                 avm_config.kf_max_dist = 0;
             }
-            if config.disable_lagged_output {
+            if config.disable_lagged_output || self.has_alpha_layer {
                 avm_config.g_lag_in_frames = 0;
             }
             if config.extra_layer_count > 0 {
@@ -343,10 +369,25 @@ impl Encoder for Avm {
                     config.tile_columns_log2,
                 )?;
             }
-            if config.extra_layer_count > 0 {
+            // TODO(b/437292541): Revisit using embedded layers (mlayer_id) vs. extended layers
+            //                    (xlayer_id) and signaling the alpha layer in OBUs (e.g., via an
+            //                    LCR, OPS, or ATLAS OBU) once supported by libavm and specified by
+            //                    AV2-in-HEIF.
+            let num_mlayers = if self.has_alpha_layer {
+                if config.extra_layer_count > 0 {
+                    // TODO(b/437292541): Support alpha layers with extra layers or explain why
+                    //                    this is not possible.
+                    return AvifError::not_implemented();
+                }
+                2
+            } else {
+                config.extra_layer_count + 1
+            };
+            if num_mlayers > 1 {
+                self.codec_control(avme_enc_control_id_AVME_SET_NUMBER_MLAYERS, num_mlayers)?;
                 self.codec_control(
-                    avme_enc_control_id_AVME_SET_NUMBER_MLAYERS,
-                    config.extra_layer_count + 1,
+                    avme_enc_control_id_AV2E_SET_ENABLE_FLAG_MULTI_LAYER_LAG_TEST,
+                    1,
                 )?;
             }
             if let Some(speed) = config.speed {
@@ -474,6 +515,14 @@ impl Encoder for Avm {
         if config.extra_layer_count > 0 {
             return AvifError::not_implemented();
         }
+        if self.has_alpha_layer {
+            self.codec_control(avme_enc_control_id_AVME_SET_MLAYER_ID, 0)?;
+            self.codec_control(avme_enc_control_id_AVME_SET_QP, quantizer)?;
+            self.codec_control(
+                avme_enc_control_id_AV2E_SET_LOSSLESS,
+                if quantizer == 0 { 1 } else { 0 },
+            )?;
+        }
         let scaling_mode = avm_scaling_mode(&self.encoder_config.unwrap_ref().scaling_mode)?;
         if scaling_mode.h_scaling_mode != avm_scaling_mode_1d_AVME_NORMAL
             || scaling_mode.v_scaling_mode != avm_scaling_mode_1d_AVME_NORMAL
@@ -563,7 +612,77 @@ impl Encoder for Avm {
         if err != avm_codec_err_t_AVM_CODEC_OK {
             return AvifError::unknown_error(format!("avm_codec_encode() failed: {err}"));
         }
-        add_avm_pkts_to_output_samples(self.context.unwrap_mut(), output_samples)?;
+        if self.has_alpha_layer {
+            let mut combined_data = Vec::new();
+            let mut sync = false;
+            for_each_avm_frame_pkt(self.context.unwrap_mut(), |encoded_data, pkt_sync| {
+                sync |= pkt_sync;
+                combined_data.try_extend_from_slice(encoded_data)
+            })?;
+
+            self.codec_control(avme_enc_control_id_AVME_SET_MLAYER_ID, 1)?;
+            let quality_alpha = config.quality_alpha.clamp(0.0, 100.0) as i32;
+            let quantizer_alpha = avm_quality_to_quantizer(quality_alpha);
+            self.codec_control(avme_enc_control_id_AVME_SET_QP, quantizer_alpha)?;
+            self.codec_control(
+                avme_enc_control_id_AV2E_SET_LOSSLESS,
+                if quantizer_alpha == 0 { 1 } else { 0 },
+            )?;
+
+            // # Safety: Zero initializing a C-struct. This is safe because this is the same usage
+            // pattern as the equivalent C-code. The relevant fields are populated in the lines
+            // below.
+            let mut avm_alpha_image: avm_image_t = unsafe { std::mem::zeroed() };
+            // All embedded layers share a single SequenceHeader in libavm, so fmt, bps,
+            // x_chroma_shift, and y_chroma_shift must match avm_image to pass libavm's
+            // validate_img() checks even though the alpha plane is monochrome. Because
+            // avm_alpha_image.monochrome is 1, libavm only copies planes[0] into its lookahead
+            // buffer (leaving the U and V planes of the lookahead buffer untouched, i.e. zeroed
+            // on initial allocation); if the color image is not monochrome, libavm still encodes
+            // those U and V planes for mlayer_id == 1, and they are ignored on decode.
+            avm_alpha_image.fmt = avm_image.fmt;
+            avm_alpha_image.bit_depth = avm_image.bit_depth;
+            avm_alpha_image.w = avm_image.w;
+            avm_alpha_image.h = avm_image.h;
+            avm_alpha_image.d_w = avm_image.d_w;
+            avm_alpha_image.d_h = avm_image.d_h;
+            avm_alpha_image.bps = avm_image.bps;
+            avm_alpha_image.x_chroma_shift = avm_image.x_chroma_shift;
+            avm_alpha_image.y_chroma_shift = avm_image.y_chroma_shift;
+            avm_alpha_image.range = avm_color_range_AVM_CR_FULL_RANGE;
+            avm_alpha_image.monochrome = 1;
+            avm_alpha_image.planes[0] = image.planes[3]
+                .as_ref()
+                .ok_or(AvifError::NoContent)?
+                .ptr_generic() as *mut _;
+            avm_alpha_image.stride[0] = image.row_bytes[3] as i32;
+            // Leave CICP values as unspecified.
+
+            // # Safety: Calling a C function with valid parameters.
+            let err = unsafe {
+                avm_codec_encode(
+                    self.context.unwrap_mut() as *mut _,
+                    &avm_alpha_image as *const _,
+                    avm_codec_pts_t::default(),
+                    duration,
+                    encode_flags as _,
+                )
+            };
+            if err != avm_codec_err_t_AVM_CODEC_OK {
+                return AvifError::unknown_error(format!(
+                    "avm_codec_encode() failed for alpha: {err}"
+                ));
+            }
+
+            for_each_avm_frame_pkt(self.context.unwrap_mut(), |encoded_data, pkt_sync| {
+                sync |= pkt_sync;
+                let sample_range = Av2CodecConfiguration::get_sample_obus_range(encoded_data)?;
+                combined_data.try_extend_from_slice(&encoded_data[sample_range])
+            })?;
+            add_output_sample(combined_data, sync, output_samples)?;
+        } else {
+            add_avm_pkts_to_output_samples(self.context.unwrap_mut(), output_samples)?;
+        }
         if config.is_single_image
             || (config.extra_layer_count > 0 && config.extra_layer_count == self.current_layer)
         {
@@ -600,7 +719,23 @@ impl Encoder for Avm {
             if err != avm_codec_err_t_AVM_CODEC_OK {
                 return AvifError::unknown_error(format!("Flush avm_codec_encode() failed: {err}"));
             }
-            if !add_avm_pkts_to_output_samples(self.context.unwrap_mut(), output_samples)? {
+            let got_packet = if let Some(last_sample) =
+                output_samples.last_mut().filter(|_| self.has_alpha_layer)
+            {
+                for_each_avm_frame_pkt(self.context.unwrap_mut(), |encoded_data, sync| {
+                    let mut combined = last_sample.data_output_by_codec().try_to_vec()?;
+                    let sample_range = Av2CodecConfiguration::get_sample_obus_range(encoded_data)?;
+                    combined.try_extend_from_slice(&encoded_data[sample_range])?;
+                    let sample_data_range =
+                        Av2CodecConfiguration::get_sample_obus_range(&combined)?;
+                    *last_sample =
+                        Sample::create(combined, sample_data_range, last_sample.sync || sync);
+                    Ok(())
+                })?
+            } else {
+                add_avm_pkts_to_output_samples(self.context.unwrap_mut(), output_samples)?
+            };
+            if !got_packet {
                 break;
             }
         }
@@ -625,6 +760,62 @@ impl Encoder for Avm {
     }
 }
 
+fn assign_avm_alpha_plane(image: &mut Image, avm_alpha_image: &avm_image_t) -> AvifResult<()> {
+    image.free_planes(&A_PLANE);
+    if image.depth <= 8 && (avm_alpha_image.fmt & AVM_IMG_FMT_HIGHBITDEPTH) != 0 {
+        image.allocate_planes(Category::Alpha)?;
+        let plane_width = image.width(Plane::A);
+        let plane_height = image.height(Plane::A);
+        let src_plane = avm_alpha_image.planes[0] as *mut u16;
+        if src_plane.is_null() {
+            return AvifError::unknown_error("AVM returned a NULL buffer");
+        }
+        let src_stride_in_bytes = avm_alpha_image.stride[0];
+        if src_stride_in_bytes % 2 != 0 {
+            return AvifError::unknown_error("AVM returned an odd stride for 16-bit samples");
+        }
+        let src_stride_in_samples: usize = (src_stride_in_bytes / 2)
+            .try_into()
+            .map_err(AvifError::map_unknown_error)?;
+        let src_plane_len = checked_add!(
+            checked_mul!(src_stride_in_samples, checked_sub!(plane_height, 1)?)?,
+            plane_width
+        )?;
+        // # Safety: planes[0] and stride[0] are guaranteed to be valid as per
+        // libavm API contract. So it is safe to construct a slice.
+        let src_plane = unsafe { slice::from_raw_parts(src_plane, src_plane_len) };
+        for y in 0..plane_height {
+            let src_row =
+                &src_plane[y * src_stride_in_samples..y * src_stride_in_samples + plane_width];
+            let dst_row = image.row_mut(Plane::A, y as u32)?;
+            for (x, dst_pixel) in dst_row.iter_mut().enumerate().take(plane_width) {
+                *dst_pixel = src_row[x] as u8;
+            }
+        }
+    } else {
+        // Steal the pointers from the decoder's image directly.
+
+        // Check that the alpha plane start pointer is distinct from the color plane start pointers.
+        // This is a weak assertion that the AVM codec instance for color was not reused for alpha.
+        // This check alone does not guarantee that the borrowed 'avm_alpha_image' outlast 'image'.
+        for plane in image.planes[..3].iter().flatten() {
+            assert_ne!(plane.ptr_generic(), avm_alpha_image.planes[0].cast_const());
+        }
+
+        image.row_bytes[Plane::A.as_usize()] = avm_alpha_image.stride[0]
+            .try_into()
+            .map_err(AvifError::map_unknown_error)?;
+        image.planes[Plane::A.as_usize()] = Some(Pixels::from_raw_pointer(
+            avm_alpha_image.planes[0],
+            image.depth.into(),
+            image.height,
+            image.row_bytes[Plane::A.as_usize()],
+        )?);
+    }
+    image.alpha_present = true;
+    Ok(())
+}
+
 impl Decoder for Avm {
     fn codec(&self) -> CodecChoice {
         CodecChoice::Avm
@@ -644,7 +835,7 @@ impl Decoder for Avm {
         spatial_id: u8,
         image: &mut Image,
         category: Category,
-        _item: Option<&Item>,
+        item: Option<&Item>,
         _signal_eos: bool,
     ) -> AvifResult<()> {
         let mut first_time = self.context.is_none();
@@ -677,7 +868,14 @@ impl Decoder for Avm {
 
             self.codec_control(
                 avm_dec_control_id_AV2D_SET_OUTPUT_ALL_LAYERS,
-                if self.decoder_config.unwrap_ref().all_layers { 1 } else { 0 },
+                if self.decoder_config.unwrap_ref().all_layers
+                    || item.is_some_and(|item| item.has_native_alpha())
+                    || (category == Category::Color && image.alpha_present)
+                {
+                    1
+                } else {
+                    0
+                },
             )?;
 
             self.decoder_iter = std::ptr::null();
@@ -744,7 +942,20 @@ impl Decoder for Avm {
                     )
                 };
                 if err != avm_codec_err_t_AVM_CODEC_OK {
-                    return AvifError::unknown_error(format!("avm_codec_decode() failed: {err}"));
+                    // # Safety: Calling a C function with valid parameters.
+                    let ptr =
+                        unsafe { avm_codec_error_detail(self.context.unwrap_mut() as *mut _) };
+                    let detail = if ptr.is_null() {
+                        String::new()
+                    } else {
+                        // # Safety: ptr is guaranteed to be a valid null-terminated C string.
+                        unsafe { CStr::from_ptr(ptr) }
+                            .to_string_lossy()
+                            .into_owned()
+                    };
+                    return AvifError::unknown_error(format!(
+                        "avm_codec_decode() failed: {err}: {detail}"
+                    ));
                 }
                 target_spatial_id = spatial_id.into();
                 av2_payload_can_be_used = false;
@@ -843,20 +1054,13 @@ impl Decoder for Avm {
                     let src_stride_in_samples: usize = (src_stride_in_bytes / 2)
                         .try_into()
                         .map_err(AvifError::map_unknown_error)?;
+                    let src_plane_len = checked_add!(
+                        checked_mul!(src_stride_in_samples, checked_sub!(plane_height, 1)?)?,
+                        plane_width
+                    )?;
                     // # Safety: planes and stride are guaranteed to be valid as per
                     // libavm API contract. So it is safe to construct slices.
-                    let src_plane = unsafe {
-                        slice::from_raw_parts(
-                            src_plane,
-                            checked_add!(
-                                checked_mul!(
-                                    src_stride_in_samples,
-                                    checked_sub!(plane_height, 1)?
-                                )?,
-                                plane_width
-                            )?,
-                        )
-                    };
+                    let src_plane = unsafe { slice::from_raw_parts(src_plane, src_plane_len) };
                     for y in 0..plane_height {
                         let src_row = &src_plane
                             [y * src_stride_in_samples..y * src_stride_in_samples + plane_width];
@@ -878,6 +1082,24 @@ impl Decoder for Avm {
                         u32_from_usize(image.height(plane.into()))?,
                         image.row_bytes[plane],
                     )?);
+                }
+            }
+            if item.is_some_and(|item| item.has_native_alpha()) || image.alpha_present {
+                // # Safety: Calling a C function with valid parameters.
+                let alpha_frame = unsafe {
+                    avm_codec_get_frame(
+                        self.context.unwrap_mut() as *mut _,
+                        (&mut self.decoder_iter) as *mut _,
+                    )
+                };
+                if !alpha_frame.is_null() {
+                    // # Safety: Dereferencing a non-NULL pointer.
+                    let avm_alpha_image = unsafe { &*alpha_frame };
+                    // TODO(b/437292541): Revisit hardcoded mlayer_id == 1 once AV2-in-HEIF
+                    //                    specifies how to find if and where there is alpha.
+                    if avm_alpha_image.mlayer_id == 1 {
+                        assign_avm_alpha_plane(image, avm_alpha_image)?;
+                    }
                 }
             }
         } else {
@@ -903,57 +1125,18 @@ impl Decoder for Avm {
                 .try_into()
                 .map_err(AvifError::map_unknown_error)?;
 
-            image.free_planes(&A_PLANE);
-
-            if image.depth <= 8 && (avm_image.fmt & AVM_IMG_FMT_HIGHBITDEPTH) != 0 {
-                image.allocate_planes(category)?;
-                let plane_width = image.width(Plane::A);
-                let plane_height = image.height(Plane::A);
-                let src_plane = avm_image.planes[0] as *mut u16;
-                if src_plane.is_null() {
-                    return AvifError::unknown_error("AVM returned a NULL buffer");
-                }
-                let src_stride_in_bytes = avm_image.stride[0];
-                if src_stride_in_bytes % 2 != 0 {
-                    return AvifError::unknown_error(
-                        "AVM returned an odd stride for 16-bit samples",
-                    );
-                }
-                let src_stride_in_samples: usize = (src_stride_in_bytes / 2)
-                    .try_into()
-                    .map_err(AvifError::map_unknown_error)?;
-                // # Safety: planes[0] and stride[0] are guaranteed to be valid as per
-                // libavm API contract. So it is safe to construct a slice.
-                let src_plane = unsafe {
-                    slice::from_raw_parts(
-                        src_plane,
-                        checked_add!(
-                            checked_mul!(src_stride_in_samples, checked_sub!(plane_height, 1)?)?,
-                            plane_width
-                        )?,
-                    )
-                };
-                for y in 0..plane_height {
-                    let src_row = &src_plane
-                        [y * src_stride_in_samples..y * src_stride_in_samples + plane_width];
-                    let dst_row = image.row_mut(Plane::A, y as u32)?;
-                    for (x, dst_pixel) in dst_row.iter_mut().enumerate().take(plane_width) {
-                        *dst_pixel = src_row[x] as u8;
-                    }
-                }
-            } else {
-                // Steal the pointers from the decoder's image directly
-                image.row_bytes[Plane::A.as_usize()] = avm_image.stride[0]
-                    .try_into()
-                    .map_err(AvifError::map_unknown_error)?;
-                image.planes[Plane::A.as_usize()] = Some(Pixels::from_raw_pointer(
-                    avm_image.planes[0],
-                    image.depth.into(),
-                    image.height,
-                    image.row_bytes[Plane::A.as_usize()],
-                )?);
-            }
+            assign_avm_alpha_plane(image, avm_image)?;
         }
+
+        // # Safety: Calling a C function with valid parameters.
+        while !unsafe {
+            avm_codec_get_frame(
+                self.context.unwrap_mut() as *mut _,
+                (&mut self.decoder_iter) as *mut _,
+            )
+        }
+        .is_null()
+        {}
 
         Ok(())
     }
@@ -991,6 +1174,7 @@ impl Drop for Avm {
 
 impl Avm {
     pub(crate) fn version() -> String {
+        // # Safety: Calling a C function that returns a valid null-terminated C string.
         let version = match unsafe { CStr::from_ptr(avm_codec_version_str()) }.to_str() {
             Ok(s) => s.to_owned(),
             Err(_) => String::new(),
@@ -1074,5 +1258,155 @@ fn avm_enc_dec_test() -> Result<(), AvifError> {
     )?;
 
     assert!(are_images_equal(&image, &decoded)?);
+    Ok(())
+}
+
+#[test]
+fn avm_enc_dec_alpha_layer_test() -> Result<(), AvifError> {
+    let mut encoder = Avm::default();
+    let config = EncoderConfig {
+        is_single_image: true,
+        quality: 100.0,
+        quality_alpha: 100.0,
+        ..Default::default()
+    };
+
+    let image = {
+        let mut image = Image {
+            width: 1,
+            height: 1,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv444,
+            ..Default::default()
+        };
+        image.allocate_planes(Category::Color)?;
+        image.allocate_planes(Category::Alpha)?;
+        let mut rgb = reformat::rgb::Image::create_from_yuv(&image);
+        rgb.format = Format::Rgb;
+        rgb.allocate()?;
+        rgb.row_mut(0)?[0] = 42;
+        rgb.row_mut(0)?[1] = 80;
+        rgb.row_mut(0)?[2] = 0;
+        rgb.convert_to_yuv(&mut image)?;
+        image.row_mut(Plane::A, 0)?[0] = 128;
+        image.alpha_present = true;
+        image
+    };
+
+    let mut output_samples = vec![];
+    encoder.encode_image(&image, Category::Color, &config, &mut output_samples)?;
+    encoder.finish(&mut output_samples)?;
+    assert_eq!(output_samples.len(), 1);
+    let all_obus = output_samples[0].data_output_by_codec();
+    let config_obus = Av2CodecConfiguration::get_config_obus_range_and_count(all_obus)?;
+    let codec_config = Av2CodecConfiguration::from_av2_config_obus(
+        config_obus.count,
+        &all_obus[config_obus.range],
+    )?;
+
+    let mut decoder = Avm::default();
+    let mut decoded = Image {
+        alpha_present: true,
+        ..Default::default()
+    };
+    decoder.initialize(&DecoderConfig {
+        operating_point: 0,
+        all_layers: false,
+        width: image.width,
+        height: image.height,
+        depth: image.depth,
+        max_threads: 0,
+        image_size_limit: None,
+        max_input_size: 0,
+        codec_config: CodecConfiguration::Av2(codec_config),
+        category: Category::Color,
+        android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat::default(),
+    })?;
+    decoder.get_next_image(
+        output_samples[0].sample_data(),
+        0xff,
+        &mut decoded,
+        Category::Color,
+        None,
+        false,
+    )?;
+
+    assert!(decoded.alpha_present);
+    assert!(are_images_equal(&image, &decoded)?);
+    Ok(())
+}
+
+#[test]
+fn avm_enc_dec_opaque_alpha_test() -> Result<(), AvifError> {
+    let mut encoder = Avm::default();
+    let config = EncoderConfig {
+        is_single_image: true,
+        quality: 100.0,
+        quality_alpha: 100.0,
+        ..Default::default()
+    };
+
+    let image = {
+        let mut image = Image {
+            width: 1,
+            height: 1,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv444,
+            ..Default::default()
+        };
+        image.allocate_planes(Category::Color)?;
+        image.allocate_planes(Category::Alpha)?;
+        let mut rgb = reformat::rgb::Image::create_from_yuv(&image);
+        rgb.format = Format::Rgb;
+        rgb.allocate()?;
+        rgb.row_mut(0)?[0] = 42;
+        rgb.row_mut(0)?[1] = 80;
+        rgb.row_mut(0)?[2] = 0;
+        rgb.convert_to_yuv(&mut image)?;
+        image.row_mut(Plane::A, 0)?[0] = 255;
+        image.alpha_present = true;
+        image
+    };
+
+    let mut output_samples = vec![];
+    encoder.encode_image(&image, Category::Color, &config, &mut output_samples)?;
+    encoder.finish(&mut output_samples)?;
+    assert_eq!(output_samples.len(), 1);
+    let all_obus = output_samples[0].data_output_by_codec();
+    let config_obus = Av2CodecConfiguration::get_config_obus_range_and_count(all_obus)?;
+    let codec_config = Av2CodecConfiguration::from_av2_config_obus(
+        config_obus.count,
+        &all_obus[config_obus.range],
+    )?;
+
+    let mut decoder = Avm::default();
+    let mut decoded = Image::default();
+    decoder.initialize(&DecoderConfig {
+        operating_point: 0,
+        all_layers: false,
+        width: image.width,
+        height: image.height,
+        depth: image.depth,
+        max_threads: 0,
+        image_size_limit: None,
+        max_input_size: 0,
+        codec_config: CodecConfiguration::Av2(codec_config),
+        category: Category::Color,
+        android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat::default(),
+    })?;
+    decoder.get_next_image(
+        output_samples[0].sample_data(),
+        0xff,
+        &mut decoded,
+        Category::Color,
+        None,
+        false,
+    )?;
+
+    assert!(!decoded.alpha_present);
+    assert!(!decoded.has_plane(Plane::A));
+    for plane in YUV_PLANES {
+        assert!(are_planes_equal(&image, &decoded, plane)?);
+    }
     Ok(())
 }

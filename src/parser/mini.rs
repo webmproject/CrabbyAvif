@@ -423,6 +423,7 @@ pub(crate) fn parse_mini(
                 chroma_subsampling,
                 chroma_is_horizontally_centered,
                 chroma_is_vertically_centered,
+                has_alpha && alpha_item_data_size == 0,
             )?),
             // entry 4
             ItemProperty::ColorInformation(ColorInformation::Nclx(Nclx {
@@ -529,6 +530,7 @@ pub(crate) fn parse_mini(
                     gainmap_chroma_subsampling,
                     gainmap_chroma_is_horizontally_centered,
                     gainmap_chroma_is_vertically_centered,
+                    false,
                 )?)
             } else {
                 ItemProperty::Unused
@@ -1042,6 +1044,7 @@ fn create_extended_pixi(
     chroma_subsampling: u32,
     chroma_is_horizontally_centered: bool,
     chroma_is_vertically_centered: bool,
+    has_alpha: bool,
 ) -> Result<PixelInformation, AvifError> {
     let mut pixi = PixelInformation {
         planes: try_vec_exact![PlanePixelInformation {
@@ -1074,6 +1077,14 @@ fn create_extended_pixi(
             })?;
         }
         _ => unreachable!(),
+    }
+    if has_alpha {
+        pixi.planes.try_push(PlanePixelInformation {
+            depth: bit_depth as u8,
+            channel_idc: Some(ChannelIdc::Alpha),
+            subsampling_type: Some(PixelFormat::Yuv444),
+            subsampling_location: Some(ChromaSamplePosition::Colocated),
+        })?;
     }
     Ok(pixi)
 }

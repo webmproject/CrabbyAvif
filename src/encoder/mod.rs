@@ -244,11 +244,19 @@ impl Settings {
         if self.codec_choice == CodecChoice::Libjxl {
             return true;
         }
+        #[cfg(feature = "avm")]
+        if self.codec_choice == CodecChoice::Avm {
+            return true;
+        }
         self.force_write_extended_pixi
     }
     pub(crate) fn codec_supports_native_alpha_channel(&self) -> bool {
         #[cfg(feature = "jpegxl")]
         if self.codec_choice == CodecChoice::Libjxl {
+            return true;
+        }
+        #[cfg(feature = "avm")]
+        if self.codec_choice == CodecChoice::Avm {
             return true;
         }
         false
@@ -613,7 +621,7 @@ impl Encoder {
             self.alpha_present = first_image.has_alpha()
                 && if is_single_image {
                     // When encoding a single image in which the alpha plane exists but is entirely
-                    // opaque, skip writing an alpha AV1 payload. This does not apply to image
+                    // opaque, skip writing an alpha payload. This does not apply to image
                     // sequences since subsequent frames may have a non-opaque alpha channel.
                     let mut all_opaque = true;
                     for image in cell_images {
@@ -626,6 +634,7 @@ impl Encoder {
                 } else {
                     true
                 };
+            self.image_metadata.alpha_present = self.alpha_present;
 
             if self.alpha_present && !self.settings.codec_supports_native_alpha_channel() {
                 let alpha_item_id =
@@ -825,6 +834,7 @@ impl Encoder {
                 tile_rows_log2,
                 tile_columns_log2,
                 quality,
+                quality_alpha: self.settings.mutable.quality_alpha,
                 disable_lagged_output: self.alpha_present,
                 is_single_image,
                 speed: self.settings.speed,

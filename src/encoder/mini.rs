@@ -141,11 +141,8 @@ pub fn is_mini_compatible(enc: &Encoder) -> bool {
             if item.samples.len() != 1 || item.samples[0].sample_data().len() >= (1 << 28) {
                 return false;
             }
-            match item.codec_configuration {
-                Some(CodecConfiguration::Av1(_)) => {}
-                #[cfg(feature = "avm")]
-                Some(CodecConfiguration::Av2(_)) => {}
-                _ => return false,
+            if !matches!(item.codec_configuration, Some(CodecConfiguration::Av1(_))) {
+                return false;
             }
             continue; // The alpha auxiliary item can be stored in the MinimizedImageBox.
         }
@@ -254,7 +251,7 @@ impl Encoder {
         let image = &self.image_metadata;
         let gainmap_image = &self.gainmap_image_metadata;
 
-        let has_alpha = alpha_item.is_some();
+        let has_alpha = self.alpha_present;
         let alpha_is_premultiplied = image.alpha_premultiplied;
         let has_gainmap = gainmap_item.is_some();
         let has_hdr = has_gainmap; // CrabbyAvif only supports gainmap-based HDR encoding for now.
@@ -371,7 +368,7 @@ impl Encoder {
         stream.write_bool(has_explicit_codec_types)?; // bit(1) explicit_codec_types_flag;
         stream.write_bool(float_flag)?; // bit(1) float_flag;
         stream.write_bool(full_range)?; // bit(1) full_range_flag;
-        stream.write_bool(alpha_item.is_some())?; // bit(1) alpha_flag;
+        stream.write_bool(has_alpha)?; // bit(1) alpha_flag;
         stream.write_bool(has_explicit_cicp)?; // bit(1) explicit_cicp_flag;
         stream.write_bool(has_hdr)?; // bit(1) hdr_flag;
         stream.write_bool(has_icc)?; // bit(1) icc_flag;
@@ -404,7 +401,7 @@ impl Encoder {
             }
         }
 
-        if alpha_item.is_some() {
+        if has_alpha {
             stream.write_bool(alpha_is_premultiplied)?; // bit(1) alpha_is_premultiplied;
         }
 
@@ -577,11 +574,7 @@ impl Encoder {
 
         if has_alpha {
             stream.write_bits(
-                u32_from_usize(
-                    alpha_data
-                        .ok_or(AvifError::UnknownError("alpha data missing".into()))?
-                        .len(),
-                )?,
+                u32_from_usize(alpha_data.unwrap_or(&[]).len())?,
                 if large_item_data_flag { 28 } else { 15 },
             )?; // unsigned int(large_item_data_flag ? 28 : 15) alpha_item_data_size;
         }

@@ -118,6 +118,7 @@ pub(crate) struct EncoderConfig {
     pub tile_rows_log2: i32,
     pub tile_columns_log2: i32,
     pub quality: f32, // From 0 (maximum distortion) to 100 (lossless) inclusive.
+    pub quality_alpha: f32,
     pub disable_lagged_output: bool,
     pub is_single_image: bool,
     pub speed: Option<u32>,
