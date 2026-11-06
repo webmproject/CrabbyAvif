@@ -2433,7 +2433,10 @@ pub(crate) fn parse_tmap(stream: &mut IStream) -> AvifResult<GainMapMetadata> {
     if writer_version <= supported_version && stream.has_bytes_left()? {
         return AvifError::invalid_tone_mapped_image("invalid trailing bytes in tmap box");
     }
-    metadata.is_valid()?;
+    if metadata.is_valid().is_err() {
+        // Same as libavif.
+        return AvifError::invalid_tone_mapped_image("invalid gain map metadata in tmap box");
+    }
     Ok(metadata)
 }
 
@@ -2500,7 +2503,9 @@ pub(crate) fn parse_sato(stream: &mut IStream, num_inputs: usize) -> AvifResult<
 
 #[cfg(test)]
 mod tests {
+    use crate::internal_utils::stream::IStream;
     use crate::parser::mp4box;
+    use crate::AvifError;
     use crate::AvifResult;
 
     #[test]
@@ -2524,6 +2529,56 @@ mod tests {
             } else {
                 assert!(res?);
             }
+        }
+        Ok(())
+    }
+
+    // Returns the payload of a tone mapping derived image item with valid single-channel gain map
+    // metadata.
+    fn valid_tmap_payload() -> Vec<u8> {
+        let mut payload = vec![
+            0, // unsigned int(8) version = 0;
+            0, 0, // unsigned int(16) minimum_version;
+            0, 0, // unsigned int(16) writer_version;
+            0, // is_multichannel, use_base_colour_space, reserved
+        ];
+        for (numerator, denominator) in [
+            (0u32, 1u32), // base_hdr_headroom
+            (1, 1),       // alternate_hdr_headroom
+            (0, 1),       // gain_map_min
+            (1, 1),       // gain_map_max
+            (1, 1),       // gamma
+            (1, 64),      // base_offset
+            (1, 64),      // alternate_offset
+        ] {
+            payload.extend_from_slice(&numerator.to_be_bytes());
+            payload.extend_from_slice(&denominator.to_be_bytes());
+        }
+        payload
+    }
+
+    #[test]
+    fn parse_tmap_invalid_metadata() -> AvifResult<()> {
+        let payload = valid_tmap_payload();
+        mp4box::parse_tmap(&mut IStream::create(&payload))?;
+
+        // Byte offsets of some fields in valid_tmap_payload().
+        const GAIN_MAP_MAX_NUMERATOR: usize = 6 + 3 * 8;
+        const GAMMA_NUMERATOR: usize = 6 + 4 * 8;
+        const GAMMA_DENOMINATOR: usize = GAMMA_NUMERATOR + 4;
+        for (offset, value) in [
+            (GAIN_MAP_MAX_NUMERATOR, -1i32 as u32), // max is less than min
+            (GAMMA_NUMERATOR, 0),                   // gamma is 0
+            (GAMMA_DENOMINATOR, 0),                 // denominator is 0
+        ] {
+            let mut payload = payload.clone();
+            payload[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+            // Same as libavif.
+            let result = mp4box::parse_tmap(&mut IStream::create(&payload));
+            assert!(
+                matches!(result, Err(AvifError::InvalidToneMappedImage(_))),
+                "{result:?}"
+            );
         }
         Ok(())
     }
