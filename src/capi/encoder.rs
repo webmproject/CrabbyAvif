@@ -328,9 +328,9 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
     let encoder_ref = deref_mut!(encoder);
     if gridCols == 0
         || gridRows == 0
-        // If we are not encoding a grid image with multiple layers, AVIF_ADD_IMAGE_FLAG_SINGLE has
-        // to be set.
-        || ((addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) == 0 && encoder_ref.extraLayerCount == 0)
+        // AVIF_ADD_IMAGE_FLAG_SINGLE is implied for a grid image without layers because image grids
+        // cannot be image sequences. It cannot be set for a grid image with multiple layers.
+        || ((addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) != 0 && encoder_ref.extraLayerCount != 0)
     {
         return avifResult::InvalidArgument;
     }

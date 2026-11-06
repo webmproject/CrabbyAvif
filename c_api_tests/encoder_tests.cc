@@ -524,6 +524,56 @@ TEST(GridApiTest, MatrixCoefficients) {
   }
 }
 
+TEST(GridApiTest, AddImageFlagSingleIsImpliedWithoutLayers) {
+  ImagePtr cell =
+      testutil::CreateImage(64, 64, /*depth=*/8, AVIF_PIXEL_FORMAT_YUV444,
+                            AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+  ASSERT_NE(cell, nullptr);
+  testutil::FillImageGradient(cell.get(), 0);
+  const avifImage* cell_image_ptrs[2] = {cell.get(), cell.get()};
+
+  // Like in libavif, AVIF_ADD_IMAGE_FLAG_SINGLE is implied for grids without
+  // layers because grids cannot be image sequences.
+  for (const avifAddImageFlags flags :
+       {AVIF_ADD_IMAGE_FLAG_NONE, AVIF_ADD_IMAGE_FLAG_SINGLE}) {
+    EncoderPtr encoder(avifEncoderCreate());
+    ASSERT_NE(encoder, nullptr);
+    encoder->speed = 10;
+    ASSERT_EQ(avifEncoderAddImageGrid(encoder.get(), /*gridCols=*/2,
+                                      /*gridRows=*/1, cell_image_ptrs, flags),
+              AVIF_RESULT_OK);
+    AvifRwData encoded;
+    ASSERT_EQ(avifEncoderFinish(encoder.get(), &encoded), AVIF_RESULT_OK);
+    auto decoder = CreateDecoder(encoded);
+    ASSERT_NE(decoder, nullptr);
+    ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+    EXPECT_EQ(decoder->imageCount, 1);
+    ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+    EXPECT_EQ(decoder->image->width, 2 * cell->width);
+    EXPECT_EQ(decoder->image->height, cell->height);
+  }
+}
+
+TEST(GridApiTest, AddImageFlagSingleWithLayers) {
+  ImagePtr cell =
+      testutil::CreateImage(64, 64, /*depth=*/8, AVIF_PIXEL_FORMAT_YUV444,
+                            AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+  ASSERT_NE(cell, nullptr);
+  testutil::FillImageGradient(cell.get(), 0);
+  const avifImage* cell_image_ptrs[2] = {cell.get(), cell.get()};
+
+  // Like in libavif, AVIF_ADD_IMAGE_FLAG_SINGLE cannot be set for a layered
+  // grid.
+  EncoderPtr encoder(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  encoder->speed = 10;
+  encoder->extraLayerCount = 1;
+  EXPECT_EQ(avifEncoderAddImageGrid(encoder.get(), /*gridCols=*/2,
+                                    /*gridRows=*/1, cell_image_ptrs,
+                                    AVIF_ADD_IMAGE_FLAG_SINGLE),
+            AVIF_RESULT_INVALID_ARGUMENT);
+}
+
 class ProgressiveTest : public testing::Test {
  protected:
   static constexpr uint32_t kImageSize = 256;
