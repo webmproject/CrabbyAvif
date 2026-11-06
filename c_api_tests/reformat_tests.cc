@@ -807,6 +807,28 @@ TEST(ReformatTest, NullCases) {
   avifRGBImageFreePixels(nullptr);
 }
 
+TEST(ReformatTest, ScaleWithoutYPlane) {
+  for (uint32_t depth : {8, 10}) {
+    ImagePtr image(
+        avifImageCreate(kWidth, kHeight, depth, AVIF_PIXEL_FORMAT_YUV444));
+    ASSERT_NE(image, nullptr);
+    ASSERT_EQ(avifImageAllocatePlanes(image.get(), AVIF_PLANES_YUV),
+              AVIF_RESULT_OK);
+    // Hide the Y plane while keeping the U and V planes.
+    uint8_t* y_plane = image->yuvPlanes[0];
+    const uint32_t y_row_bytes = image->yuvRowBytes[0];
+    image->yuvPlanes[0] = nullptr;
+    image->yuvRowBytes[0] = 0;
+    EXPECT_NE(avifImageScale(image.get(), kWidth / 2, kHeight / 2, nullptr),
+              AVIF_RESULT_OK);
+    EXPECT_EQ(image->width, kWidth);
+    EXPECT_EQ(image->height, kHeight);
+    // Restore the Y plane so that it gets freed.
+    image->yuvPlanes[0] = y_plane;
+    image->yuvRowBytes[0] = y_row_bytes;
+  }
+}
+
 TEST(ReformatTest, MismatchedDimensions) {
   ImagePtr image(avifImageCreate(kWidth, kHeight, 8, AVIF_PIXEL_FORMAT_YUV444));
   ASSERT_NE(image, nullptr);

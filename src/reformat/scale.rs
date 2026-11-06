@@ -183,6 +183,15 @@ impl Image {
         if width == 0 || height == 0 {
             return AvifError::invalid_argument();
         }
+        // The destination planes are only reallocated when the Y plane is present. Scaling chroma
+        // planes without a Y plane would scale them in place, with the source and destination
+        // aliasing each other. Reject such images.
+        if category != Category::Alpha
+            && !self.has_plane(Plane::Y)
+            && (self.has_plane(Plane::U) || self.has_plane(Plane::V))
+        {
+            return AvifError::invalid_argument();
+        }
         let validate_plane = |img: &Image, plane: Plane| -> AvifResult<PlaneData> {
             let pd = img.plane_data(plane).ok_or(AvifError::NoContent)?;
             if pd.width == 0 || pd.height == 0 {
@@ -564,6 +573,25 @@ mod tests {
         assert!(image.scale(49, 24, Category::Color).is_ok());
         assert_eq!(image.width, 49);
         assert_eq!(image.height, 24);
+        Ok(())
+    }
+
+    #[test_case(8 ; "8bit")]
+    #[test_case(10 ; "10bit")]
+    fn scale_without_y_plane(depth: u8) -> AvifResult<()> {
+        let mut image = image::Image {
+            width: 4,
+            height: 4,
+            depth,
+            yuv_format: PixelFormat::Yuv444,
+            ..Default::default()
+        };
+        image.allocate_planes(Category::Color)?;
+        image.planes[Plane::Y.as_usize()] = None;
+        image.row_bytes[Plane::Y.as_usize()] = 0;
+        assert!(image.scale(2, 2, Category::Color).is_err());
+        assert_eq!(image.width, 4);
+        assert_eq!(image.height, 4);
         Ok(())
     }
 }
