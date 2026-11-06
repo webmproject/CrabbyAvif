@@ -44,7 +44,7 @@ impl JpegReader {
 
 impl Reader for JpegReader {
     fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64, Option<GainMap>)> {
-        let file = File::open(self.filename.clone()).map_err(AvifError::map_unknown_error)?;
+        let file = File::open(&self.filename).map_err(AvifError::map_unknown_error)?;
         let mut decoder = JpegDecoder::new(BufReader::new(file));
         decoder
             .decode_headers()
@@ -61,8 +61,14 @@ impl Reader for JpegReader {
         let width = info.width as u32;
         let height = info.height as u32;
         let icc = decoder.icc_profile().unwrap_or_default();
-        let exif = info.exif_data.clone().unwrap_or_default();
-        let xmp = info.xmp_data.clone().unwrap_or_default();
+        let exif = match &info.exif_data {
+            Some(data) => data.try_clone()?,
+            None => Vec::new(),
+        };
+        let xmp = match &info.xmp_data {
+            Some(data) => data.try_clone()?,
+            None => Vec::new(),
+        };
         let (irot_angle, imir_axis) = exif::get_orientation(&exif)?;
         let rgb_bytes = decoder
             .decode()
@@ -98,8 +104,7 @@ impl Reader for JpegReader {
             info.multi_picture_information_offset,
         ) {
             if let Ok(aux_images) = extract_aux_images(mpf_data, u32_from_u64(mpf_offset)?) {
-                let mut file =
-                    File::open(self.filename.clone()).map_err(AvifError::map_unknown_error)?;
+                let mut file = File::open(&self.filename).map_err(AvifError::map_unknown_error)?;
                 gainmap = get_gainmap(&mut file, &aux_images, &yuv)?;
             }
         }
@@ -115,7 +120,7 @@ impl Reader for JpegReader {
             } else {
                 3
             };
-            gainmap.alt_icc = yuv.icc.clone();
+            gainmap.alt_icc = yuv.icc.try_clone()?;
         }
         rgb.convert_to_yuv(&mut yuv)?;
         Ok((yuv, 0, gainmap))
