@@ -111,3 +111,43 @@ fn recipe_auto(
     assert!(psnr(decoder.image().unwrap(), &input_image)? >= 30.0);
     Ok(())
 }
+
+#[test_matrix(
+    [
+        Recipe::BitDepthExtension8b8b,
+        Recipe::BitDepthExtension12b4b,
+        Recipe::BitDepthExtension12b8bOverlap4b,
+    ],
+    [false, true]
+)]
+fn sample_transform_exif_xmp(recipe: Recipe, allow_sample_transform: bool) -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    if recipe == Recipe::BitDepthExtension12b8bOverlap4b && !HAS_DECODER {
+        return Ok(());
+    }
+    let mut input_image =
+        generate_gradient_image(16, 16, 16, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    // Minimal valid little-endian TIFF header with an empty 0th IFD at offset 8.
+    input_image.exif = b"II*\0\x08\0\0\0\0\0\0\0\0\0".to_vec();
+    input_image.xmp = b"<x:xmpmeta>test</x:xmpmeta>".to_vec();
+
+    let settings = encoder::Settings {
+        speed: Some(10),
+        recipe,
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image(&input_image)?;
+    let encoded = encoder.finish()?;
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(encoded);
+    decoder.settings.allow_sample_transform = allow_sample_transform;
+    assert_eq!(decoder.parse(), Ok(()));
+    let decoded = decoder.image().unwrap();
+    assert_eq!(decoded.exif, input_image.exif);
+    assert_eq!(decoded.xmp, input_image.xmp);
+    Ok(())
+}
