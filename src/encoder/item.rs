@@ -705,9 +705,11 @@ impl Item {
     }
 
     pub(crate) fn write_stsd(
-        &self,
+        &mut self,
         stream: &mut OStream,
         image_metadata: &Image,
+        force_write_extended_pixi: bool,
+        codec_supports_native_alpha_channel: bool,
     ) -> AvifResult<()> {
         stream.start_full_box("stsd", (0, 0))?;
         // unsigned int(32) entry_count;
@@ -771,6 +773,22 @@ impl Item {
                 self.write_nclx(stream, image_metadata)?;
                 // TODO: Determine if HDR and transformative properties have to be written here or
                 // not.
+            }
+            if force_write_extended_pixi {
+                self.write_pixi(
+                    stream,
+                    image_metadata,
+                    force_write_extended_pixi,
+                    codec_supports_native_alpha_channel,
+                )?;
+            }
+            let force_write_alpi = force_write_extended_pixi; // Assumed.
+            if self.category == Category::Color
+                && codec_supports_native_alpha_channel
+                && image_metadata.alpha_present
+                && (image_metadata.alpha_premultiplied || force_write_alpi)
+            {
+                self.write_alpi(stream, image_metadata)?;
             }
             self.write_ccst(stream)?;
             if self.category == Category::Alpha {
@@ -881,9 +899,16 @@ impl Item {
         stream: &mut OStream,
         image_metadata: &Image,
         duration_in_timescales: &Vec<u64>,
+        force_write_extended_pixi: bool,
+        codec_supports_native_alpha_channel: bool,
     ) -> AvifResult<()> {
         stream.start_box("stbl")?;
-        self.write_stsd(stream, image_metadata)?;
+        self.write_stsd(
+            stream,
+            image_metadata,
+            force_write_extended_pixi,
+            codec_supports_native_alpha_channel,
+        )?;
         self.write_stts(stream, duration_in_timescales)?;
         self.write_stsc(stream)?;
         self.write_stsz(stream)?;

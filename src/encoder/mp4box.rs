@@ -644,11 +644,16 @@ impl Encoder {
                     stream.start_box("minf")?;
                     item.write_vmhd(stream)?;
                     item.write_dinf(stream)?;
+                    let force_write_extended_pixi = self.settings.must_write_extended_pixi();
+                    let codec_supports_native_alpha_channel =
+                        self.settings.codec_supports_native_alpha_channel();
                     let item_mut = &mut self.items[index];
                     item_mut.write_stbl(
                         stream,
                         &self.image_metadata,
                         &self.duration_in_timescales,
+                        force_write_extended_pixi,
+                        codec_supports_native_alpha_channel,
                     )?;
                     stream.finish_box()?;
                 }
