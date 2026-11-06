@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <thread>
 #include <tuple>
@@ -160,6 +161,57 @@ TEST(BasicTest, EncodeContainerByteExactAnimatedImages) {
       EXPECT_NE(memcmp(encoded[0].data, encoded[1].data, encoded[0].size), 0);
     }
   }
+}
+
+TEST(EncoderApiTest, CannotChangeSetting) {
+  ImagePtr image = testutil::CreateImage(/*width=*/12, /*height=*/34,
+                                         /*depth=*/8, AVIF_PIXEL_FORMAT_YUV420,
+                                         AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+  ASSERT_NE(image, nullptr);
+  testutil::FillImageGradient(image.get(), /*offset=*/0);
+
+  // Like in libavif, these settings cannot be changed after the first call to
+  // avifEncoderAddImage().
+  const std::vector<std::function<void(avifEncoder*)>> setting_changes = {
+      [](avifEncoder* encoder) {
+        encoder->codecChoice = encoder->codecChoice == AVIF_CODEC_CHOICE_AUTO
+                                   ? AVIF_CODEC_CHOICE_AOM
+                                   : AVIF_CODEC_CHOICE_AUTO;
+      },
+      [](avifEncoder* encoder) { encoder->maxThreads += 1; },
+      [](avifEncoder* encoder) { encoder->speed -= 1; },
+      [](avifEncoder* encoder) { encoder->keyframeInterval += 1; },
+      [](avifEncoder* encoder) { encoder->timescale += 1; },
+      [](avifEncoder* encoder) { encoder->repetitionCount = 1; },
+      [](avifEncoder* encoder) { encoder->extraLayerCount += 1; },
+  };
+  for (const auto& change_setting : setting_changes) {
+    EncoderPtr encoder(avifEncoderCreate());
+    ASSERT_NE(encoder, nullptr);
+    encoder->speed = 10;
+    ASSERT_EQ(avifEncoderAddImage(encoder.get(), image.get(), /*duration=*/1,
+                                  AVIF_ADD_IMAGE_FLAG_NONE),
+              AVIF_RESULT_OK);
+    change_setting(encoder.get());
+    EXPECT_EQ(avifEncoderAddImage(encoder.get(), image.get(), /*duration=*/1,
+                                  AVIF_ADD_IMAGE_FLAG_NONE),
+              AVIF_RESULT_CANNOT_CHANGE_SETTING);
+  }
+
+  // Other settings can be changed.
+  EncoderPtr encoder(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  encoder->speed = 10;
+  ASSERT_EQ(avifEncoderAddImage(encoder.get(), image.get(), /*duration=*/1,
+                                AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+  encoder->quality = 50;
+  encoder->qualityAlpha = 50;
+  ASSERT_EQ(avifEncoderAddImage(encoder.get(), image.get(), /*duration=*/1,
+                                AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+  AvifRwData encoded;
+  ASSERT_EQ(avifEncoderFinish(encoder.get(), &encoded), AVIF_RESULT_OK);
 }
 
 TEST(TransformTest, ClapIrotImir) {
