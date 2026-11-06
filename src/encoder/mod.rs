@@ -708,6 +708,13 @@ impl Encoder {
             }
             // Another frame in an image sequence, or layer in a layered image.
             let first_image = *cell_images.first().ok_or(AvifError::InvalidArgument)?;
+            // All images must have the same dimensions. Smaller layers can be obtained through
+            // scaling_mode.
+            if first_image.width != self.image_metadata.width
+                || first_image.height != self.image_metadata.height
+            {
+                return AvifError::invalid_argument();
+            }
             if !first_image.has_same_cicp(&self.image_metadata)
                 || first_image.alpha_premultiplied != self.image_metadata.alpha_premultiplied
                 // If the previously added image had an alpha channel, then this image should have
@@ -715,7 +722,7 @@ impl Encoder {
                 // of the current image in that case.
                 || (self.image_metadata.alpha_present && !first_image.alpha_present)
             {
-                return AvifError::invalid_argument();
+                return AvifError::incompatible_image();
             }
             if self.final_recipe != Some(final_recipe) {
                 return AvifError::invalid_argument();

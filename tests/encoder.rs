@@ -512,7 +512,7 @@ fn sequence_alpha_combinations(first_image_has_alpha: bool) -> AvifResult<()> {
     let second_image_res = encoder.add_image_for_sequence(&image2, 0);
     if first_image_has_alpha {
         // In this case, adding a second image without an alpha plane should fail.
-        assert!(second_image_res.is_err());
+        assert_eq!(second_image_res, Err(AvifError::IncompatibleImage));
         return Ok(());
     } else {
         // In this case, adding a second image with an alpha plane should succeed, but the
@@ -545,6 +545,57 @@ fn sequence_alpha_combinations(first_image_has_alpha: bool) -> AvifResult<()> {
         assert!(decoder.next_image().is_ok());
         let image = decoder.image().expect("image was none");
         assert!(!image.alpha_present);
+    }
+    Ok(())
+}
+
+#[test_matrix([0, 1, 2, 3, 4, 5, 6, 7], [false, true])]
+fn incompatible_frame(test_case_index: u8, layered: bool) -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let image = generate_gradient_image(64, 64, 8, PixelFormat::Yuv420, YuvRange::Full, true)?;
+    let mut width = 64;
+    let mut depth = 8;
+    let mut yuv_format = PixelFormat::Yuv420;
+    let mut yuv_range = YuvRange::Full;
+    let mut alpha = true;
+    match test_case_index {
+        0 => width = 32,
+        1 => depth = 10,
+        2 => yuv_format = PixelFormat::Yuv444,
+        3 => yuv_range = YuvRange::Limited,
+        4 => alpha = false,
+        _ => {}
+    }
+    let mut other_image = generate_gradient_image(width, 64, depth, yuv_format, yuv_range, alpha)?;
+    match test_case_index {
+        5 => other_image.chroma_sample_position = ChromaSamplePosition::Vertical,
+        6 => other_image.color_primaries = ColorPrimaries::Bt709,
+        7 => other_image.alpha_premultiplied = true,
+        _ => {}
+    }
+    let expected_error = if test_case_index == 0 {
+        AvifError::InvalidArgument
+    } else {
+        AvifError::IncompatibleImage
+    };
+
+    let settings = encoder::Settings {
+        speed: Some(10),
+        extra_layer_count: if layered { 1 } else { 0 },
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    if layered {
+        encoder.add_image(&image)?;
+        assert_eq!(encoder.add_image(&other_image), Err(expected_error));
+    } else {
+        encoder.add_image_for_sequence(&image, 1)?;
+        assert_eq!(
+            encoder.add_image_for_sequence(&other_image, 1),
+            Err(expected_error)
+        );
     }
     Ok(())
 }
