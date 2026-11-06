@@ -68,10 +68,14 @@ impl rgb::Image {
             }
         }
 
-        let (alpha_offset, rgb_offsets) = match self.format {
-            Format::Rgba | Format::Bgra => (3, [0, 1, 2]),
-            _ => (0, [1, 2, 3]),
+        let (alpha_offset, rgb_offsets): (usize, &[usize]) = match self.format {
+            Format::Rgba | Format::Bgra => (3, &[0, 1, 2]),
+            Format::Argb | Format::Abgr => (0, &[1, 2, 3]),
+            Format::GrayA => (1, &[0]),
+            Format::AGray => (0, &[1]),
+            _ => return AvifError::not_implemented(),
         };
+        let channel_count = self.format.channel_count() as usize;
 
         if self.depth > 8 {
             let max_channel = self.max_channel();
@@ -80,18 +84,18 @@ impl rgb::Image {
                 let width = self.width;
                 let row = self.row16_mut(j)?;
                 for i in 0..width as usize {
-                    let offset = i * 4;
+                    let offset = i * channel_count;
                     let alpha = row[offset + alpha_offset];
                     if alpha >= max_channel {
                         continue;
                     }
                     if alpha == 0 {
-                        for rgb_offset in rgb_offsets {
+                        for &rgb_offset in rgb_offsets {
                             row[offset + rgb_offset] = 0;
                         }
                         continue;
                     }
-                    for rgb_offset in rgb_offsets {
+                    for &rgb_offset in rgb_offsets {
                         row[offset + rgb_offset] =
                             premultiply_u16(row[offset + rgb_offset], alpha, max_channel_f);
                     }
@@ -102,17 +106,17 @@ impl rgb::Image {
                 let width = self.width;
                 let row = self.row_mut(j)?;
                 for i in 0..width as usize {
-                    let offset = i * 4;
+                    let offset = i * channel_count;
                     let alpha = row[offset + alpha_offset];
                     match alpha {
                         0 => {
-                            for rgb_offset in rgb_offsets {
+                            for &rgb_offset in rgb_offsets {
                                 row[offset + rgb_offset] = 0;
                             }
                         }
                         255 => {}
                         _ => {
-                            for rgb_offset in rgb_offsets {
+                            for &rgb_offset in rgb_offsets {
                                 row[offset + rgb_offset] =
                                     premultiply_u8(row[offset + rgb_offset], alpha);
                             }
@@ -142,10 +146,14 @@ impl rgb::Image {
             }
         }
 
-        let (alpha_offset, rgb_offsets) = match self.format {
-            Format::Rgba | Format::Bgra => (3, [0, 1, 2]),
-            _ => (0, [1, 2, 3]),
+        let (alpha_offset, rgb_offsets): (usize, &[usize]) = match self.format {
+            Format::Rgba | Format::Bgra => (3, &[0, 1, 2]),
+            Format::Argb | Format::Abgr => (0, &[1, 2, 3]),
+            Format::GrayA => (1, &[0]),
+            Format::AGray => (0, &[1]),
+            _ => return AvifError::not_implemented(),
         };
+        let channel_count = self.format.channel_count() as usize;
 
         if self.depth > 8 {
             let max_channel = self.max_channel();
@@ -154,18 +162,18 @@ impl rgb::Image {
                 let width = self.width;
                 let row = self.row16_mut(j)?;
                 for i in 0..width as usize {
-                    let offset = i * 4;
+                    let offset = i * channel_count;
                     let alpha = row[offset + alpha_offset];
                     if alpha >= max_channel {
                         continue;
                     }
                     if alpha == 0 {
-                        for rgb_offset in rgb_offsets {
+                        for &rgb_offset in rgb_offsets {
                             row[offset + rgb_offset] = 0;
                         }
                         continue;
                     }
-                    for rgb_offset in rgb_offsets {
+                    for &rgb_offset in rgb_offsets {
                         row[offset + rgb_offset] =
                             unpremultiply_u16(row[offset + rgb_offset], alpha, max_channel_f);
                     }
@@ -176,17 +184,17 @@ impl rgb::Image {
                 let width = self.width;
                 let row = self.row_mut(j)?;
                 for i in 0..width as usize {
-                    let offset = i * 4;
+                    let offset = i * channel_count;
                     let alpha = row[offset + alpha_offset];
                     match alpha {
                         0 => {
-                            for rgb_offset in rgb_offsets {
+                            for &rgb_offset in rgb_offsets {
                                 row[offset + rgb_offset] = 0;
                             }
                         }
                         255 => {}
                         _ => {
-                            for rgb_offset in rgb_offsets {
+                            for &rgb_offset in rgb_offsets {
                                 row[offset + rgb_offset] =
                                     unpremultiply_u8(row[offset + rgb_offset], alpha);
                             }
@@ -202,27 +210,28 @@ impl rgb::Image {
         if !self.has_alpha() {
             return Ok(());
         }
-        if self.format == rgb::Format::Rgb565 {
+        if matches!(self.format, rgb::Format::Rgb565 | rgb::Format::Rgba1010102) {
             return AvifError::not_implemented();
         }
         if !self.has_valid_pixels() {
             return AvifError::reformat_failed();
         }
         let alpha_offset = self.format.alpha_offset();
+        let channel_count = self.format.channel_count() as usize;
         let width = usize_from_u32(self.width)?;
         if self.depth > 8 {
             let max_channel = self.max_channel();
             for y in 0..self.height {
                 let row = self.row16_mut(y)?;
                 for x in 0..width {
-                    row[(x * 4) + alpha_offset] = max_channel;
+                    row[(x * channel_count) + alpha_offset] = max_channel;
                 }
             }
         } else {
             for y in 0..self.height {
                 let row = self.row_mut(y)?;
                 for x in 0..width {
-                    row[(x * 4) + alpha_offset] = 255;
+                    row[(x * channel_count) + alpha_offset] = 255;
                 }
             }
         }
@@ -487,11 +496,13 @@ mod tests {
     use rand::RngExt;
     use test_case::test_matrix;
 
-    const ALPHA_RGB_FORMATS: [rgb::Format; 4] = [
+    const ALPHA_RGB_FORMATS: [rgb::Format; 6] = [
         rgb::Format::Rgba,
         rgb::Format::Argb,
         rgb::Format::Bgra,
         rgb::Format::Abgr,
+        rgb::Format::GrayA,
+        rgb::Format::AGray,
     ];
 
     fn rgb_image(
@@ -511,10 +522,11 @@ mod tests {
         };
         if use_pointer {
             let pixel_size = if depth == 8 { 1 } else { 2 };
-            let buffer_size = (width * height * 4 * pixel_size) as usize;
+            let channel_count = format.channel_count();
+            let buffer_size = (width * height * channel_count * pixel_size) as usize;
             buffer.reserve_exact(buffer_size);
             buffer.resize(buffer_size, 0);
-            rgb.row_bytes = width * 4 * pixel_size;
+            rgb.row_bytes = width * channel_count * pixel_size;
             // Use a pointer to mimic C API calls.
             rgb.pixels = Some(Pixels::from_raw_pointer(
                 buffer.as_mut_ptr(),
@@ -529,7 +541,7 @@ mod tests {
     }
 
     #[allow(clippy::zero_prefixed_literal)]
-    #[test_matrix(20, 10, [8, 10, 12, 16], 0..4, [true, false])]
+    #[test_matrix(20, 10, [8, 10, 12, 16], 0..6, [true, false])]
     fn fill_alpha(
         width: u32,
         height: u32,
@@ -544,14 +556,15 @@ mod tests {
         rgb.set_opaque()?;
 
         let alpha_offset = rgb.format.alpha_offset();
+        let channel_count = rgb.format.channel_count() as usize;
         if depth == 8 {
             for y in 0..height {
                 let row = rgb.row(y)?;
-                assert_eq!(row.len(), (width * 4) as usize);
+                assert_eq!(row.len(), width as usize * channel_count);
                 for x in 0..width as usize {
-                    for idx in 0..4usize {
+                    for idx in 0..channel_count {
                         let expected_value = if idx == alpha_offset { 255 } else { 0 };
-                        assert_eq!(row[x * 4 + idx], expected_value);
+                        assert_eq!(row[x * channel_count + idx], expected_value);
                     }
                 }
             }
@@ -559,15 +572,103 @@ mod tests {
             let max_channel = ((1 << depth) - 1) as u16;
             for y in 0..height {
                 let row = rgb.row16(y)?;
-                assert_eq!(row.len(), (width * 4) as usize);
+                assert_eq!(row.len(), width as usize * channel_count);
                 for x in 0..width as usize {
-                    for idx in 0..4usize {
+                    for idx in 0..channel_count {
                         let expected_value = if idx == alpha_offset { max_channel } else { 0 };
-                        assert_eq!(row[x * 4 + idx], expected_value);
+                        assert_eq!(row[x * channel_count + idx], expected_value);
                     }
                 }
             }
         }
+        Ok(())
+    }
+
+    // Returns the (gray, alpha) sample pairs of all the pixels of a GrayA or AGray image.
+    fn gray_alpha_samples(rgb: &rgb::Image) -> AvifResult<Vec<(u16, u16)>> {
+        let gray_offset = rgb.format.r_offset();
+        let alpha_offset = rgb.format.alpha_offset();
+        let mut samples = Vec::new();
+        for y in 0..rgb.height {
+            if rgb.depth == 8 {
+                for pixel in rgb.row(y)?.as_chunks::<2>().0 {
+                    samples.push((pixel[gray_offset] as u16, pixel[alpha_offset] as u16));
+                }
+            } else {
+                for pixel in rgb.row16(y)?.as_chunks::<2>().0 {
+                    samples.push((pixel[gray_offset], pixel[alpha_offset]));
+                }
+            }
+        }
+        Ok(samples)
+    }
+
+    #[test_matrix(
+        [rgb::Format::GrayA, rgb::Format::AGray],
+        [8, 10, 12, 16],
+        [true, false]
+    )]
+    fn premultiply_alpha_gray(format: rgb::Format, depth: u8, use_pointer: bool) -> AvifResult<()> {
+        let width = 20;
+        let height = 10;
+        let mut buffer: Vec<u8> = vec![];
+        let mut rgb = rgb_image(width, height, depth, format, use_pointer, &mut buffer)?;
+        let gray_offset = format.r_offset();
+        let alpha_offset = format.alpha_offset();
+        let max_channel = rgb.max_channel();
+        let max_channel_f = rgb.max_channel_f();
+        let gray = max_channel / 4 * 3;
+        let alphas = [0, max_channel / 3, max_channel / 2, max_channel];
+        for y in 0..height {
+            if depth == 8 {
+                for (x, pixel) in rgb
+                    .row_mut(y)?
+                    .as_chunks_mut::<2>()
+                    .0
+                    .iter_mut()
+                    .enumerate()
+                {
+                    pixel[gray_offset] = gray as u8;
+                    pixel[alpha_offset] = alphas[x % alphas.len()] as u8;
+                }
+            } else {
+                for (x, pixel) in rgb
+                    .row16_mut(y)?
+                    .as_chunks_mut::<2>()
+                    .0
+                    .iter_mut()
+                    .enumerate()
+                {
+                    pixel[gray_offset] = gray;
+                    pixel[alpha_offset] = alphas[x % alphas.len()];
+                }
+            }
+        }
+        let mut premultiplied_samples = Vec::new();
+        let mut unpremultiplied_samples = Vec::new();
+        for _ in 0..height {
+            for x in 0..width as usize {
+                let alpha = alphas[x % alphas.len()];
+                let (premultiplied_gray, unpremultiplied_gray) = if alpha == 0 {
+                    (0, 0)
+                } else if alpha == max_channel {
+                    (gray, gray)
+                } else {
+                    let premultiplied_gray = premultiply_u16(gray, alpha, max_channel_f);
+                    (
+                        premultiplied_gray,
+                        unpremultiply_u16(premultiplied_gray, alpha, max_channel_f),
+                    )
+                };
+                premultiplied_samples.push((premultiplied_gray, alpha));
+                unpremultiplied_samples.push((unpremultiplied_gray, alpha));
+            }
+        }
+
+        rgb.premultiply_alpha()?;
+        assert_eq!(gray_alpha_samples(&rgb)?, premultiplied_samples);
+        rgb.unpremultiply_alpha()?;
+        assert_eq!(gray_alpha_samples(&rgb)?, unpremultiplied_samples);
         Ok(())
     }
 
