@@ -1104,6 +1104,50 @@ TEST(DecoderTest, IOFileReader) {
   avifIODestroy(io);
 }
 
+TEST(DecoderTest, IODestroyCustomIOWithoutDestroyCallback) {
+  // avifIODestroy() only calls io->destroy if it is set, so it must be a no-op
+  // for a caller-owned avifIO without a destroy callback (it must not free the
+  // avifIO or its data).
+  avifROData ro_data = {.data = nullptr, .size = 0};
+  avifIO io = {.destroy = nullptr,
+               .read = io_read,
+               .sizeHint = 0,
+               .persistent = false,
+               .data = &ro_data};
+  avifIODestroy(&io);
+  EXPECT_EQ(io.data, &ro_data);
+}
+
+void CountingIODestroy(avifIO* io) {
+  ++*reinterpret_cast<int*>(io->data);
+  delete io;
+}
+
+TEST(DecoderTest, IODestroyCallsCustomDestroyCallback) {
+  // avifIODestroy() must call the avifIO's destroy callback when it is set.
+  int destroy_count = 0;
+  avifIO* io = new avifIO{.destroy = CountingIODestroy,
+                          .read = io_read,
+                          .sizeHint = 0,
+                          .persistent = false,
+                          .data = &destroy_count};
+  avifIODestroy(io);
+  EXPECT_EQ(destroy_count, 1);
+}
+
+TEST(DecoderTest, DecoderOwnsMemoryReader) {
+  // avifDecoderSetIO() transfers ownership of the avifIO to the decoder, which
+  // must release it (checked by the leak sanitizer).
+  auto data =
+      testutil::read_file(GetFilename("colors-animated-8bpc.avif").c_str());
+  avifIO* io = avifIOCreateMemoryReader(data.data(), data.size());
+  ASSERT_NE(io, nullptr);
+  DecoderPtr decoder(avifDecoderCreate());
+  ASSERT_NE(decoder, nullptr);
+  avifDecoderSetIO(decoder.get(), io);
+  EXPECT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+}
+
 class ScaleTest : public testing::TestWithParam<const char*> {};
 
 TEST_P(ScaleTest, Scaling) {

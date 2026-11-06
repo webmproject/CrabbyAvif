@@ -233,15 +233,11 @@ impl avifIOWrapper {
 
 impl Drop for avifIOWrapper {
     fn drop(&mut self) {
-        if !self.io.is_null() {
-            if let Some(destroy) = deref_const!(self.io).destroy {
-                // SAFETY: `self.io` is non-null and, by `crabby_avifDecoderSetIO`'s preconditions,
-                // points to a valid `avifIO` whose `destroy` callback may be invoked once when the
-                // decoder releases or replaces its IO.
-                unsafe {
-                    destroy(self.io);
-                }
-            }
+        // SAFETY: By the struct invariant and `crabby_avifDecoderSetIO`'s preconditions,
+        // `self.io` is either null or points to a valid `avifIO` that has not yet been destroyed,
+        // and it is destroyed only once, when the decoder releases or replaces its IO.
+        unsafe {
+            crabby_avifIODestroy(self.io);
         }
     }
 }
@@ -293,8 +289,24 @@ pub(crate) struct avifCIOWrapper {
     buf: Vec<u8>,
 }
 
+/// # Safety
+/// If `io` is non-null, it must be a pointer previously returned by
+/// `crabby_avifIOCreateMemoryReader` or `crabby_avifIOCreateFileReader` that has not yet been
+/// destroyed, and must not be accessed after this call. Passing null is safe and is a no-op.
 #[no_mangle]
-extern "C" fn cioDestroy(_io: *mut avifIO) {}
+unsafe extern "C" fn cioDestroy(io: *mut avifIO) {
+    check_pointer_or_return!(io);
+    // SAFETY: `io` is non-null and, by caller precondition, was allocated via `Box::into_raw` in
+    // `crabby_avifIOCreateMemoryReader` or `crabby_avifIOCreateFileReader` and has not yet been
+    // freed.
+    let io_box = unsafe { Box::from_raw(io) };
+    let data = io_box.data as *mut avifCIOWrapper;
+    if !data.is_null() {
+        // SAFETY: When non-null, `io_box.data` was allocated via `Box::into_raw` on a
+        // `Box<avifCIOWrapper>` when `io` was created and has not yet been freed.
+        let _ = unsafe { Box::from_raw(data) };
+    }
+}
 
 /// # Safety
 /// - If `io` is non-null, it must point to a valid, initialized `avifIO` whose non-null `data`
@@ -348,7 +360,7 @@ extern "C" fn cioWrite(
 /// # Safety
 /// - If `data` is non-null and `size <= isize::MAX as usize`, `data` must point to at least `size`
 ///   initialized bytes that remain valid and unmodified for shared reads until the returned
-///   `avifIO` is destroyed with `crabby_avifIODestroy`.
+///   `avifIO` is destroyed (with `crabby_avifIODestroy` or by the decoder that owns it).
 /// - Passing null for `data` or `size > isize::MAX as usize` safely returns null.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifIOCreateMemoryReader(
@@ -410,20 +422,18 @@ pub unsafe extern "C" fn crabby_avifIOCreateFileReader(filename: *const c_char) 
 }
 
 /// # Safety
-/// If `io` is non-null, it must be a pointer previously returned by
-/// `crabby_avifIOCreateMemoryReader` or `crabby_avifIOCreateFileReader` that has not yet been
-/// destroyed, and must not be accessed after this call. Passing null is safe and is a no-op.
+/// If `io` is non-null, it must point to a valid, initialized `avifIO` that has not yet been
+/// destroyed and whose `destroy` callback (if any) upholds the C `avifIO` contract. `io` must not
+/// be accessed after this call if it has a `destroy` callback. Passing null (or an `avifIO` with a
+/// null `destroy` callback) is safe and is a no-op.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifIODestroy(io: *mut avifIO) {
     check_pointer_or_return!(io);
-    // SAFETY: `io` is non-null and, by caller precondition, was allocated via `Box::into_raw` in
-    // `crabby_avifIOCreateMemoryReader` or `crabby_avifIOCreateFileReader` and has not yet been
-    // freed.
-    let io_box = unsafe { Box::from_raw(io) };
-    let data = io_box.data as *mut avifCIOWrapper;
-    if !data.is_null() {
-        // SAFETY: When non-null, `io_box.data` was allocated via `Box::into_raw` on a
-        // `Box<avifCIOWrapper>` when `io` was created and has not yet been freed.
-        let _ = unsafe { Box::from_raw(data) };
+    if let Some(destroy) = deref_const!(io).destroy {
+        // SAFETY: `io` is non-null and, by caller precondition, points to a valid `avifIO` that
+        // has not yet been destroyed, so its `destroy` callback may be invoked once.
+        unsafe {
+            destroy(io);
+        }
     }
 }

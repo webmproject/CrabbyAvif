@@ -980,7 +980,11 @@ avifResult crabby_avifRWDataSet(avifRWData *raw, const uint8_t *data, size_t siz
 /// - Passing null for `raw` (or an `avifRWData` with null `data`) is safe and is a no-op.
 void crabby_avifRWDataFree(avifRWData *raw);
 
-void cioDestroy(avifIO *_io);
+/// # Safety
+/// If `io` is non-null, it must be a pointer previously returned by
+/// `crabby_avifIOCreateMemoryReader` or `crabby_avifIOCreateFileReader` that has not yet been
+/// destroyed, and must not be accessed after this call. Passing null is safe and is a no-op.
+void cioDestroy(avifIO *io);
 
 /// # Safety
 /// - If `io` is non-null, it must point to a valid, initialized `avifIO` whose non-null `data`
@@ -1000,7 +1004,7 @@ avifResult cioWrite(avifIO *_io,
 /// # Safety
 /// - If `data` is non-null and `size <= isize::MAX as usize`, `data` must point to at least `size`
 ///   initialized bytes that remain valid and unmodified for shared reads until the returned
-///   `avifIO` is destroyed with `crabby_avifIODestroy`.
+///   `avifIO` is destroyed (with `crabby_avifIODestroy` or by the decoder that owns it).
 /// - Passing null for `data` or `size > isize::MAX as usize` safely returns null.
 avifIO *crabby_avifIOCreateMemoryReader(const uint8_t *data, size_t size);
 
@@ -1011,9 +1015,10 @@ avifIO *crabby_avifIOCreateMemoryReader(const uint8_t *data, size_t size);
 avifIO *crabby_avifIOCreateFileReader(const char *filename);
 
 /// # Safety
-/// If `io` is non-null, it must be a pointer previously returned by
-/// `crabby_avifIOCreateMemoryReader` or `crabby_avifIOCreateFileReader` that has not yet been
-/// destroyed, and must not be accessed after this call. Passing null is safe and is a no-op.
+/// If `io` is non-null, it must point to a valid, initialized `avifIO` that has not yet been
+/// destroyed and whose `destroy` callback (if any) upholds the C `avifIO` contract. `io` must not
+/// be accessed after this call if it has a `destroy` callback. Passing null (or an `avifIO` with a
+/// null `destroy` callback) is safe and is a no-op.
 void crabby_avifIODestroy(avifIO *io);
 
 /// # Safety
