@@ -424,6 +424,11 @@ pub unsafe extern "C" fn crabby_avifImageCopy(
 ) -> avifResult {
     check_pointer!(dstImage);
     check_pointer!(srcImage);
+    // Same as libavif, an image cannot be copied to itself. The planes of srcImage would be freed
+    // below, and dst and src would alias.
+    if std::ptr::eq(dstImage as *const avifImage, srcImage) {
+        return avifResult::InvalidArgument;
+    }
     // SAFETY: Pre-conditions are met to call this function.
     unsafe {
         crabby_avifImageFreePlanes(dstImage, avifPlanesFlag::AvifPlanesAll as u32);
@@ -803,6 +808,10 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
     check_pointer!(dstImage);
     check_pointer!(srcImage);
     check_pointer!(rect);
+    // Same as libavif, an image cannot be a view of itself. dst and src would alias.
+    if std::ptr::eq(dstImage as *const avifImage, srcImage) {
+        return avifResult::InvalidArgument;
+    }
     let dst = deref_mut!(dstImage);
     let src = deref_const!(srcImage);
     let rect = deref_const!(rect);
