@@ -14,7 +14,6 @@
 
 use crate::image::*;
 use crate::internal_utils::*;
-use crate::utils::pixels::Pixels;
 use crate::*;
 
 use libyuv_sys::bindings::*;
@@ -183,9 +182,8 @@ impl Image {
         if width == 0 || height == 0 {
             return AvifError::invalid_argument();
         }
-        // The destination planes are only reallocated when the Y plane is present. Scaling chroma
-        // planes without a Y plane would scale them in place, with the source and destination
-        // aliasing each other. Reject such images.
+        // The destination planes are only reallocated when the Y plane is present. Reject images
+        // that have chroma planes without a Y plane instead of silently dropping the chroma planes.
         if category != Category::Alpha
             && !self.has_plane(Plane::Y)
             && (self.has_plane(Plane::U) || self.has_plane(Plane::V))
@@ -289,21 +287,14 @@ impl Image {
             }
             i010
         } else {
+            // Move the planes for this category into `src`; they will be reallocated in `self`
+            // below.
             let mut src = self.shallow_clone();
-            for plane in ALL_PLANES {
-                if let Some(self_plane) = &self.planes[plane.as_usize()] {
-                    src.planes[plane.as_usize()] = Some(match self_plane {
-                        // Pixel values are already stored elsewhere. Reuse the pointer.
-                        Pixels::Pointer(p) => Pixels::Pointer(p.shallow_clone()),
-                        Pixels::Pointer16(p) => Pixels::Pointer16(p.shallow_clone()),
-                        // Pixel values must be duplicated.
-                        // Note that a temporary destination instead of a
-                        // temporary source would avoid this allocation.
-                        // This simpler logic is kept for convenience.
-                        Pixels::Buffer(b) => Pixels::Buffer(b.try_clone()?),
-                        Pixels::Buffer16(b) => Pixels::Buffer16(b.try_clone()?),
-                    });
-                    src.row_bytes[plane.as_usize()] = self.row_bytes[plane.as_usize()];
+            for plane in planes {
+                let plane_index = plane.as_usize();
+                if let Some(self_plane) = self.planes[plane_index].take() {
+                    src.planes[plane_index] = Some(self_plane);
+                    src.row_bytes[plane_index] = std::mem::take(&mut self.row_bytes[plane_index]);
                 }
             }
             src
@@ -490,6 +481,7 @@ impl Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::pixels::Pixels;
     use test_case::test_case;
     use test_case::test_matrix;
 
