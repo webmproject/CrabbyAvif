@@ -149,16 +149,17 @@ pub const DEFAULT_IMAGE_COUNT_LIMIT: u32 = 12 * 3600 * 60;
 /// Options for [`Decoder::next_image_with_options()`] and [`Decoder::nth_image_with_options()`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DecodeOptions {
-    /// If set, only this region of the image is decoded. The region is relative to the whole
-    /// image and must fit in it. It is expressed before rotation and mirroring ('irot' and 'imir'
+    /// If set, only this region of the image is decoded. The region is relative to the clean
+    /// aperture ('clap' property) if the image has a valid one, or to the whole image otherwise,
+    /// and must fit in it. It is expressed before rotation and mirroring ('irot' and 'imir'
     /// properties, which are kept on the decoded image). Its x and y are rounded down to even
     /// values along the chroma-subsampled axes of the decoded image. The decoded image has the
-    /// dimensions of the region.
+    /// dimensions of the region and no clean aperture.
     ///
     /// Decoding fails if:
-    /// - the region does not fit in the image
+    /// - the region does not fit in the clean aperture or image
+    /// - the clean aperture is invalid and StrictnessFlag::ClapValid is set
     /// - allow_incremental is set
-    /// - the image has a clean aperture
     /// - the gain map is decoded
     /// - the image has a sample transform
     /// - the image is part of an image sequence
@@ -291,6 +292,10 @@ impl Strictness {
 
     pub(crate) fn pixi_required(&self) -> bool {
         self.contains(StrictnessFlag::PixiRequired)
+    }
+
+    pub(crate) fn clap_valid(&self) -> bool {
+        self.contains(StrictnessFlag::ClapValid)
     }
 
     pub(crate) fn alpha_ispe_required(&self) -> bool {
@@ -2283,25 +2288,44 @@ impl Decoder {
             // TODO: b/578636390 - Support gain maps.
             return AvifError::not_implemented();
         }
-        let (full_width, full_height, clap) =
+        let (full_width, full_height, clap, yuv_format) =
             if self.source == Source::Thumbnail && target_index < self.thumbnail_images.len() {
                 let thumb = &self.thumbnail_images[target_index];
-                (thumb.width, thumb.height, thumb.clap)
+                (thumb.width, thumb.height, thumb.clap, thumb.yuv_format)
             } else {
                 (
                     self.parsed_image.width,
                     self.parsed_image.height,
                     self.parsed_image.clap,
+                    self.parsed_image.yuv_format,
                 )
             };
-        if clap.is_some() {
-            // TODO: b/578636390 - Support clean apertures.
-            return AvifError::not_implemented();
+
+        let mut base_rect = CropRect {
+            x: 0,
+            y: 0,
+            width: full_width,
+            height: full_height,
+        };
+        if let Some(clap) = clap {
+            match CropRect::create_from(&clap, full_width, full_height, yuv_format) {
+                Ok(rect) => base_rect = rect,
+                Err(_) if self.settings.strictness.clap_valid() => {
+                    return AvifError::bmff_parse_failed("invalid clap property");
+                }
+                Err(_) => {}
+            }
         }
-        if !user_crop.is_within(full_width, full_height) {
+
+        if !user_crop.is_within(base_rect.width, base_rect.height) {
             return AvifError::invalid_argument();
         }
-        Ok(Some(user_crop))
+        Ok(Some(CropRect {
+            x: checked_add!(base_rect.x, user_crop.x)?,
+            y: checked_add!(base_rect.y, user_crop.y)?,
+            width: user_crop.width,
+            height: user_crop.height,
+        }))
     }
 
     fn align_crop_rect_for_codecs(&self, composed: CropRect) -> CropRect {
