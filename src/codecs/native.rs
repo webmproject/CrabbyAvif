@@ -122,6 +122,7 @@ fn decode_payloads_in_parallel(
         let (sender, receiver) = std::sync::mpsc::channel();
         let mut handles = create_vec_exact(thread_count)?;
         for _ in 0..thread_count {
+            #[allow(clippy::disallowed_methods)]
             let sender = sender.clone();
             let next_index = &next_index;
             let handle = std::thread::Builder::new()
