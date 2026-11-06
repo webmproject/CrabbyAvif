@@ -98,8 +98,13 @@ impl From<&GainMap> for avifGainMap {
 impl TryFrom<&avifGainMap> for GainMap {
     type Error = AvifError;
     fn try_from(gainmap: &avifGainMap) -> AvifResult<Self> {
+        let mut image: crate::image::Image = deref_const!(gainmap.image).try_into()?;
+        // Same as libavif, ignore the alpha plane of the gain map image, if any.
+        image.alpha_present = false;
+        image.planes[3] = None;
+        image.row_bytes[3] = 0;
         Ok(Self {
-            image: deref_const!(gainmap.image).try_into()?,
+            image,
             metadata: GainMapMetadata {
                 min: gainmap.gainMapMin,
                 max: gainmap.gainMapMax,
