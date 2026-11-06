@@ -165,6 +165,16 @@ fn parse_metadata(data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Checks that the data following the first frame splits into well-formed
+/// OBUs (spec 5.3), so that a payload with malformed OBU headers or sizes
+/// is rejected even if they come after the first frame.
+fn validate_trailing_obus(mut data: &[u8]) -> Result<()> {
+    while !data.is_empty() {
+        data = next_obu(data)?.1;
+    }
+    Ok(())
+}
+
 /// Parses OBUs until the first frame is complete.
 pub fn parse_first_frame(mut data: &[u8]) -> Result<FrameData<'_>> {
     let mut seq: Option<SequenceHeader> = None;
@@ -219,6 +229,7 @@ pub fn parse_first_frame(mut data: &[u8]) -> Result<FrameData<'_>> {
                     let offset = header_bits.div_ceil(8);
                     let tg = obu.payload.get(offset..).ok_or(Error::Truncated)?;
                     if parse_tile_group(tg, &fh, &mut single_tile, &mut tiles)? {
+                        validate_trailing_obus(data)?;
                         return Ok(FrameData {
                             seq: seq.take().ok_or(Error::Invalid("no sequence header"))?,
                             frame: fh,
@@ -251,6 +262,7 @@ pub fn parse_first_frame(mut data: &[u8]) -> Result<FrameData<'_>> {
     if !complete {
         return Err(Error::Truncated);
     }
+    validate_trailing_obus(data)?;
     Ok(FrameData {
         seq,
         frame,
