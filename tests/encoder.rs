@@ -549,6 +549,57 @@ fn sequence_alpha_combinations(first_image_has_alpha: bool) -> AvifResult<()> {
     Ok(())
 }
 
+#[test_matrix([false, true])]
+fn add_image_after_validation_failure(invalid_gainmap: bool) -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let valid_image =
+        generate_gradient_image(64, 64, 8, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    if invalid_gainmap {
+        let mut bad_gainmap = GainMap {
+            image: generate_gradient_image(32, 32, 8, PixelFormat::Yuv420, YuvRange::Full, false)?,
+            metadata: gainmap_metadata(false),
+            ..Default::default()
+        };
+        // Gain map CICP must be Unspecified.
+        bad_gainmap.image.color_primaries = ColorPrimaries::Bt709;
+        assert_eq!(
+            encoder.add_image_gainmap(&valid_image, &bad_gainmap),
+            Err(AvifError::InvalidArgument)
+        );
+    } else {
+        let mut bad_image =
+            generate_gradient_image(64, 64, 8, PixelFormat::Yuv420, YuvRange::Full, false)?;
+        // Identity matrix coefficients require Yuv444.
+        bad_image.matrix_coefficients = MatrixCoefficients::Identity;
+        assert_eq!(
+            encoder.add_image(&bad_image),
+            Err(AvifError::InvalidArgument)
+        );
+    }
+    // Retrying with a valid image on the same encoder must succeed without panicking or observing
+    // stale state from the rejected first call.
+    let retry_image =
+        generate_gradient_image(64, 64, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    encoder.add_image(&retry_image)?;
+    let edata = encoder.finish()?;
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.parse()?;
+    assert_eq!(decoder.image_count(), 1);
+    assert_eq!(
+        decoder.image().expect("image was none").yuv_format,
+        PixelFormat::Yuv444
+    );
+    Ok(())
+}
+
 #[test_matrix([0, 1, 65535], [0, 1, 65535])]
 fn clli(max_cll: u16, max_pall: u16) -> AvifResult<()> {
     if !HAS_ENCODER || !HAS_DECODER {
