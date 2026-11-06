@@ -1519,6 +1519,15 @@ impl Decoder {
             self.io.unwrap_mut(),
             &mut self.image,
         )?;
+        if is_sample_transform && self.image.exif.is_empty() && self.image.xmp.is_empty() {
+            Self::search_exif_or_xmp_metadata(
+                &mut self.items,
+                Some(item_ids[DecodingItem::color(1).usize()]),
+                &self.settings,
+                self.io.unwrap_mut(),
+                &mut self.image,
+            )?;
+        }
 
         // Optional alpha auxiliary item
         if let Some(alpha_item_id) = self.find_alpha_item(item_ids[DecodingItem::COLOR.usize()])? {
