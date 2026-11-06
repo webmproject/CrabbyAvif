@@ -126,6 +126,10 @@ impl AvifError {
         AvifError::on_error();
         Err(AvifError::IncompatibleImage)
     }
+    pub(crate) fn internal_error<T>() -> Result<T, AvifError> {
+        AvifError::on_error();
+        Err(AvifError::InternalError)
+    }
     pub(crate) fn encode_gain_map_failed<T>() -> Result<T, AvifError> {
         AvifError::on_error();
         Err(AvifError::EncodeGainMapFailed)
@@ -218,6 +222,7 @@ impl std::fmt::Display for AvifError {
             | AvifError::OutOfMemory
             | AvifError::CannotChangeSetting
             | AvifError::IncompatibleImage
+            | AvifError::InternalError
             | AvifError::EncodeGainMapFailed
             | AvifError::DecodeGainMapFailed => std::fmt::Debug::fmt(self, f),
         }
