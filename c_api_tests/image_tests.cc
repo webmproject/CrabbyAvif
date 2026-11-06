@@ -286,6 +286,51 @@ TEST(RWDataTest, Realloc) {
   EXPECT_EQ(rw_data.size, 0u);
 }
 
+TEST(ImageTest, CopyViewRectAtRightEdge) {
+  for (uint32_t depth : {8, 10}) {
+    SCOPED_TRACE(depth);
+    ImagePtr src(avifImageCreate(4, 4, depth, AVIF_PIXEL_FORMAT_YUV444));
+    ASSERT_NE(src, nullptr);
+    ASSERT_EQ(avifImageAllocatePlanes(src.get(), AVIF_PLANES_ALL),
+              AVIF_RESULT_OK);
+    const size_t pixel_size = avifImageUsesU16(src.get()) ? 2 : 1;
+    for (int plane = AVIF_CHAN_Y; plane <= AVIF_CHAN_A; ++plane) {
+      uint8_t* row = avifImagePlane(src.get(), plane);
+      ASSERT_NE(row, nullptr);
+      const uint32_t row_bytes = avifImagePlaneRowBytes(src.get(), plane);
+      for (uint32_t y = 0; y < 4; ++y, row += row_bytes) {
+        for (uint32_t i = 0; i < 4 * pixel_size; ++i) {
+          row[i] = static_cast<uint8_t>(plane * 64 + y * 16 + i);
+        }
+      }
+    }
+    // A view whose rows end at the last column of the source planes. Copying
+    // it must only touch pointers within the source planes.
+    ImagePtr view(avifImageCreateEmpty());
+    ASSERT_NE(view, nullptr);
+    const avifCropRect rect = {/*x=*/2, /*y=*/0, /*width=*/2, /*height=*/4};
+    ASSERT_EQ(avifImageSetViewRect(view.get(), src.get(), &rect),
+              AVIF_RESULT_OK);
+    ImagePtr dst(avifImageCreateEmpty());
+    ASSERT_NE(dst, nullptr);
+    ASSERT_EQ(avifImageCopy(dst.get(), view.get(), AVIF_PLANES_ALL),
+              AVIF_RESULT_OK);
+    EXPECT_EQ(dst->width, 2u);
+    EXPECT_EQ(dst->height, 4u);
+    for (int plane = AVIF_CHAN_Y; plane <= AVIF_CHAN_A; ++plane) {
+      const uint8_t* row = avifImagePlane(dst.get(), plane);
+      ASSERT_NE(row, nullptr);
+      const uint32_t row_bytes = avifImagePlaneRowBytes(dst.get(), plane);
+      for (uint32_t y = 0; y < 4; ++y, row += row_bytes) {
+        for (uint32_t i = 0; i < 2 * pixel_size; ++i) {
+          EXPECT_EQ(row[i], static_cast<uint8_t>(plane * 64 + y * 16 +
+                                                 2 * pixel_size + i));
+        }
+      }
+    }
+  }
+}
+
 TEST(ImageTest, NullCases) {
   ImagePtr src(avifImageCreateEmpty());
   ImagePtr dst(avifImageCreateEmpty());

@@ -380,21 +380,34 @@ macro_rules! usize_from_u32_or_fail {
     };
 }
 
-fn copy_plane_helper(
-    mut src_plane_ptr: *const u8,
+/// # Safety
+/// For each row `y` in `0..height`:
+/// - `src_plane_ptr + y * src_row_bytes` must be valid for reads of `width * pixel_size` bytes.
+/// - `dst_plane_ptr + y * dst_row_bytes` must be valid for writes of `width * pixel_size` bytes.
+/// - The source and destination rows must not overlap.
+unsafe fn copy_plane_helper(
+    src_plane_ptr: *const u8,
     src_row_bytes: u32,
-    mut dst_plane_ptr: *mut u8,
+    dst_plane_ptr: *mut u8,
     dst_row_bytes: u32,
-    mut width: usize,
+    width: usize,
     height: usize,
     pixel_size: usize,
 ) {
-    width *= pixel_size;
-    for _ in 0..height {
+    let row_width = width * pixel_size;
+    let src_row_bytes = src_row_bytes as usize;
+    let dst_row_bytes = dst_row_bytes as usize;
+    for y in 0..height {
+        // Compute each row pointer from the plane base so that the pointer is never advanced past
+        // the last row of the plane.
+        // SAFETY: Pre-conditions of this function guarantee that the row pointers are within the
+        // planes and that the rows are valid for row_width bytes and do not overlap.
         unsafe {
-            std::ptr::copy_nonoverlapping(src_plane_ptr, dst_plane_ptr, width);
-            src_plane_ptr = src_plane_ptr.offset(src_row_bytes as isize);
-            dst_plane_ptr = dst_plane_ptr.offset(dst_row_bytes as isize);
+            std::ptr::copy_nonoverlapping(
+                src_plane_ptr.add(y * src_row_bytes),
+                dst_plane_ptr.add(y * dst_row_bytes),
+                row_width,
+            );
         }
     }
 }
@@ -471,15 +484,20 @@ pub unsafe extern "C" fn crabby_avifImageCopy(
                 return avifResult::OutOfMemory;
             }
             dst.yuvRowBytes[plane] = (pixel_size * alloc_plane_width) as u32;
-            copy_plane_helper(
-                src.yuvPlanes[plane],
-                src.yuvRowBytes[plane],
-                dst.yuvPlanes[plane],
-                dst.yuvRowBytes[plane],
-                plane_width,
-                plane_height,
-                pixel_size,
-            );
+            // SAFETY: srcImage is a valid avifImage, so its plane has plane_height rows of
+            // plane_width pixels, yuvRowBytes apart. The dst plane was just allocated with at least
+            // as many rows of at least as many pixels, so it is valid and does not overlap src.
+            unsafe {
+                copy_plane_helper(
+                    src.yuvPlanes[plane],
+                    src.yuvRowBytes[plane],
+                    dst.yuvPlanes[plane],
+                    dst.yuvRowBytes[plane],
+                    plane_width,
+                    plane_height,
+                    pixel_size,
+                );
+            }
             dst.imageOwnsYUVPlanes = AVIF_TRUE;
         }
     }
@@ -495,15 +513,20 @@ pub unsafe extern "C" fn crabby_avifImageCopy(
             return avifResult::OutOfMemory;
         }
         dst.alphaRowBytes = (pixel_size * alloc_plane_width) as u32;
-        copy_plane_helper(
-            src.alphaPlane,
-            src.alphaRowBytes,
-            dst.alphaPlane,
-            dst.alphaRowBytes,
-            plane_width,
-            plane_height,
-            pixel_size,
-        );
+        // SAFETY: srcImage is a valid avifImage, so its alpha plane has plane_height rows of
+        // plane_width pixels, alphaRowBytes apart. The dst plane was just allocated with at least
+        // as many rows of at least as many pixels, so it is valid and does not overlap src.
+        unsafe {
+            copy_plane_helper(
+                src.alphaPlane,
+                src.alphaRowBytes,
+                dst.alphaPlane,
+                dst.alphaRowBytes,
+                plane_width,
+                plane_height,
+                pixel_size,
+            );
+        }
         dst.imageOwnsAlphaPlane = AVIF_TRUE;
     }
     avifResult::Ok
