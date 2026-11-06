@@ -56,9 +56,9 @@ pub enum avifResult {
     OutOfMemory = 26,
     CannotChangeSetting = 27,
     IncompatibleImage = 28,
-    EncodeGainMapFailed = 29,
-    DecodeGainMapFailed = 30,
-    InvalidToneMappedImage = 31,
+    EncodeGainMapFailed = 30,
+    DecodeGainMapFailed = 31,
+    InvalidToneMappedImage = 32,
 }
 
 impl From<&AvifError> for avifResult {
