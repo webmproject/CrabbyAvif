@@ -653,7 +653,11 @@ impl Decoder {
         self.parse_state = ParseState::None;
     }
 
-    fn find_alpha_item(&mut self, color_item_index: u32) -> AvifResult<Option<u32>> {
+    fn find_alpha_item(
+        &mut self,
+        color_item_index: u32,
+        item_idx: usize,
+    ) -> AvifResult<Option<u32>> {
         let color_item = self.items.get(&color_item_index).unwrap();
         if let Some(item) = self.items.iter().find(|x| {
             !x.1.should_skip()
@@ -709,8 +713,8 @@ impl Decoder {
             is_made_up: true,
             ..Item::default()
         };
-        self.tile_info[DecodingItem::ALPHA.usize()].grid =
-            self.tile_info[DecodingItem::COLOR.usize()].grid;
+        self.tile_info[DecodingItem::alpha(item_idx).usize()].grid =
+            self.tile_info[DecodingItem::color(item_idx).usize()].grid;
         self.items.insert(alpha_item_id, alpha_item);
         Ok(Some(alpha_item_id))
     }
@@ -1033,17 +1037,33 @@ impl Decoder {
 
         // The input items are recorded on the derived item in 'dimg' order while the
         // 'iref' box is parsed.
-        let source_item_ids = match self.items.get(&item_id) {
-            Some(item) => &item.source_item_ids,
+        let (is_sample_transform, source_item_ids) = match self.items.get(&item_id) {
+            Some(item) => (
+                item.is_sample_transform_item(),
+                item.source_item_ids.try_clone()?,
+            ),
             None => return AvifError::unknown_error(""),
         };
         if source_item_ids.is_empty() {
             return Ok(());
         }
+        if is_sample_transform {
+            // The input image items of a 'sato' derived image item can be 'grid' derived image
+            // items. Populate them first so that their codec configuration can be adopted below.
+            for dimg_item_id in &source_item_ids {
+                if self
+                    .items
+                    .get(dimg_item_id)
+                    .is_some_and(|item| item.is_grid_item())
+                {
+                    self.populate_source_item_ids(*dimg_item_id)?;
+                }
+            }
+        }
         let mut first_codec_config: Option<CodecConfiguration> = None;
         let mut first_icc: Option<Vec<u8>> = None;
         let mut first_nclx: Option<Nclx> = None;
-        for dimg_item_id in source_item_ids {
+        for dimg_item_id in &source_item_ids {
             let dimg_item = self
                 .items
                 .get(dimg_item_id)
@@ -1051,7 +1071,8 @@ impl Decoder {
             if dimg_item.should_skip() {
                 return AvifError::not_implemented();
             }
-            if dimg_item.is_image_codec_item() {
+            if dimg_item.is_image_codec_item() || (is_sample_transform && dimg_item.is_grid_item())
+            {
                 if first_codec_config.is_none() {
                     first_codec_config = Some(
                         dimg_item
@@ -1549,7 +1570,7 @@ impl Decoder {
                 item_ids[decoding_item.usize()] = *item_id;
                 self.read_and_parse_item(*item_id, decoding_item)?;
                 // Optional alpha auxiliary item
-                if let Some(alpha_item_id) = self.find_alpha_item(*item_id)? {
+                if let Some(alpha_item_id) = self.find_alpha_item(*item_id, idx + 1)? {
                     let alpha_decoding_item = DecodingItem::alpha(idx + 1);
                     if !self.items.get(&alpha_item_id).unwrap().is_made_up {
                         self.read_and_parse_item(alpha_item_id, alpha_decoding_item)?;
@@ -1600,7 +1621,9 @@ impl Decoder {
         )?;
 
         // Optional alpha auxiliary item
-        if let Some(alpha_item_id) = self.find_alpha_item(item_ids[DecodingItem::COLOR.usize()])? {
+        if let Some(alpha_item_id) =
+            self.find_alpha_item(item_ids[DecodingItem::COLOR.usize()], 0)?
+        {
             if !self.items.get(&alpha_item_id).unwrap().is_made_up {
                 self.read_and_parse_item(alpha_item_id, DecodingItem::ALPHA)?;
             }
@@ -3070,13 +3093,15 @@ impl Decoder {
         let category = decoding_item.category;
         let dst_image = match dst_image_override {
             Some(img) => img,
-            None => {
-                if category == Category::Gainmap {
-                    &mut self.gainmap.image
-                } else {
+            None => match category {
+                Category::Color | Category::Alpha if (decoding_item.item_idx == 0) => {
                     &mut self.image
                 }
-            }
+                Category::Color | Category::Alpha => {
+                    &mut self.extra_inputs[decoding_item.item_idx - 1]
+                }
+                Category::Gainmap => &mut self.gainmap.image,
+            },
         };
         let (cell_index, expected_cell_count, cell_indices, crop_rect) =
             if let Some((indices, rect)) = grid_subset {
@@ -3466,6 +3491,13 @@ impl Decoder {
                         // 32 bits are not supported for other recipes.
                         return AvifError::unsupported_depth();
                     }
+                    for input in &self.extra_inputs[..3] {
+                        if input.width != self.image.width || input.height != self.image.height {
+                            return AvifError::bmff_parse_failed(
+                                "dimensions of input images for sato derived item do not match",
+                            );
+                        }
+                    }
                     // Decoder::image() cannot return 32-bit float samples.
                     // Wait for Decoder::image_float() to be called before applying the
                     // sample transform.
@@ -3689,11 +3721,21 @@ impl Decoder {
             if !self.extra_inputs[0].has_plane(plane) {
                 continue;
             }
-            let width = self.extra_inputs[0].width(plane);
-            let height = self.extra_inputs[0].height(plane);
+            let width = self.image.width(plane);
+            let height = self.image.height(plane);
+            for input in &self.extra_inputs[..3] {
+                if !input.has_plane(plane)
+                    || input.width(plane) != width
+                    || input.height(plane) != height
+                {
+                    return AvifError::bmff_parse_failed(
+                        "dimensions of input images for sato derived item do not match",
+                    );
+                }
+            }
             let mut float_plane = create_vec_exact(checked_mul!(width, height)?)?;
 
-            for y in 0..height as u32 {
+            for y in 0..u32_from_usize(height)? {
                 let sign_exponent_msb_row = self.extra_inputs[0].row(plane, y)?;
                 let exponent_lsb_mantissa_msb_row = self.extra_inputs[1].row16(plane, y)?;
                 let mantissa_lsb_row = self.extra_inputs[2].row16(plane, y)?;
@@ -3999,5 +4041,38 @@ mod tests {
         let item_1_props = &decoder.items.get(&1).unwrap().properties;
         assert_eq!(item_1_props.len(), 1);
         assert_eq!(find_property!(item_1_props, ImageRotation), Some(&1));
+    }
+
+    #[cfg(feature = "satofloat")]
+    #[test]
+    fn image_float_rejects_mismatched_input_dimensions() {
+        let mut decoder = Decoder::default();
+        decoder.parse_state = ParseState::Complete;
+        decoder.settings.allow_sample_transform = true;
+        decoder.tile_info[DecodingItem::COLOR.usize()].sample_transform =
+            SampleTransform::from_float32b_recipe().unwrap();
+        decoder.image = Image {
+            width: 128,
+            height: 64,
+            depth: 32,
+            yuv_format: PixelFormat::Yuv444,
+            ..Image::default()
+        };
+        for (idx, (width, depth)) in [(128, 8), (100, 12), (128, 12)].into_iter().enumerate() {
+            decoder.extra_inputs[idx] = Image {
+                width,
+                height: 64,
+                depth,
+                yuv_format: PixelFormat::Yuv444,
+                ..Image::default()
+            };
+            decoder.extra_inputs[idx]
+                .allocate_planes(Category::Color)
+                .unwrap();
+        }
+        assert!(matches!(
+            decoder.image_float(),
+            Err(AvifError::BmffParseFailed(_))
+        ));
     }
 }
