@@ -97,6 +97,12 @@ impl CropRect {
         right <= image_width && bottom <= image_height
     }
 
+    pub(crate) fn align_to_pixel_format(&self, pixel_format: PixelFormat) -> Self {
+        let x = if pixel_format.chroma_shift_x().0 == 1 { self.x & !1 } else { self.x };
+        let y = if pixel_format.chroma_shift_y() == 1 { self.y & !1 } else { self.y };
+        Self { x, y, ..*self }
+    }
+
     pub fn create_from(
         clap: &CleanAperture,
         image_width: u32,
@@ -280,5 +286,62 @@ mod tests {
             height: 2
         })
         .is_within(u32::MAX, 10));
+    }
+
+    #[test]
+    fn crop_rect_align_to_pixel_format() {
+        let r = CropRect {
+            x: 3,
+            y: 5,
+            width: 7,
+            height: 9,
+        };
+        assert_eq!(
+            r.align_to_pixel_format(PixelFormat::Yuv420),
+            CropRect {
+                x: 2,
+                y: 4,
+                width: 7,
+                height: 9
+            }
+        );
+        assert_eq!(
+            r.align_to_pixel_format(PixelFormat::Yuv422),
+            CropRect {
+                x: 2,
+                y: 5,
+                width: 7,
+                height: 9
+            }
+        );
+        assert_eq!(r.align_to_pixel_format(PixelFormat::Yuv444), r);
+        assert_eq!(r.align_to_pixel_format(PixelFormat::Yuv400), r);
+        assert_eq!(
+            r.align_to_pixel_format(PixelFormat::AndroidNv12),
+            CropRect {
+                x: 2,
+                y: 4,
+                width: 7,
+                height: 9
+            }
+        );
+        assert_eq!(
+            r.align_to_pixel_format(PixelFormat::AndroidNv21),
+            CropRect {
+                x: 2,
+                y: 4,
+                width: 7,
+                height: 9
+            }
+        );
+        assert_eq!(
+            r.align_to_pixel_format(PixelFormat::AndroidP010),
+            CropRect {
+                x: 2,
+                y: 4,
+                width: 7,
+                height: 9
+            }
+        );
     }
 }

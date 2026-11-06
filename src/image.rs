@@ -314,6 +314,75 @@ impl Image {
             .slice16_mut(start, plane_data.width)
     }
 
+    // Replaces the given planes by owned copies of their region described by `rect` (with x and y
+    // rounded down to the chroma subsampling of the image). The image dimensions are not modified.
+    // self is left untouched if any of the planes cannot be cropped.
+    pub(crate) fn crop_planes_in_place(
+        &mut self,
+        planes: &[Plane],
+        rect: &CropRect,
+    ) -> AvifResult<()> {
+        let aligned = rect.align_to_pixel_format(self.yuv_format);
+        if !aligned.is_within(self.width, self.height) {
+            return AvifError::invalid_argument();
+        }
+        // Holds the cropped planes until all of them are successfully cropped.
+        let mut dst = self.shallow_clone();
+        dst.width = aligned.width;
+        dst.height = aligned.height;
+        for &plane in planes {
+            if !self.has_plane(plane) {
+                continue;
+            }
+            let (plane_x, plane_y) = if matches!(plane, Plane::Y | Plane::A) {
+                (usize_from_u32(aligned.x)?, aligned.y)
+            } else {
+                (
+                    usize_from_u32(self.yuv_format.apply_chroma_shift_x(aligned.x))?,
+                    self.yuv_format.apply_chroma_shift_y(aligned.y),
+                )
+            };
+            dst.allocate_plane(plane)?;
+            if !dst.has_plane(plane) {
+                continue;
+            }
+            let plane_x_end = checked_add!(plane_x, dst.width(plane))?;
+            for y in 0..u32_from_usize(dst.height(plane))? {
+                let src_y = checked_add!(plane_y, y)?;
+                if self.depth == 8 {
+                    let src_row = self
+                        .row(plane, src_y)?
+                        .get(plane_x..plane_x_end)
+                        .ok_or(AvifError::InvalidArgument)?;
+                    dst.row_mut(plane, y)?.copy_from_slice(src_row);
+                } else {
+                    let src_row = self
+                        .row16(plane, src_y)?
+                        .get(plane_x..plane_x_end)
+                        .ok_or(AvifError::InvalidArgument)?;
+                    dst.row16_mut(plane, y)?.copy_from_slice(src_row);
+                }
+            }
+        }
+        for &plane in planes {
+            if self.has_plane(plane) {
+                let plane_index = plane.as_usize();
+                self.planes[plane_index] = dst.planes[plane_index].take();
+                self.row_bytes[plane_index] = dst.row_bytes[plane_index];
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn crop_in_place(&mut self, rect: &CropRect) -> AvifResult<()> {
+        let aligned = rect.align_to_pixel_format(self.yuv_format);
+        self.crop_planes_in_place(&ALL_PLANES, &aligned)?;
+        self.width = aligned.width;
+        self.height = aligned.height;
+        self.clap = None;
+        Ok(())
+    }
+
     // Returns a view of the region of self described by `rect`. The returned image has the same
     // properties as self and points to the pixel values of self (no pixel data is copied). Exif,
     // XMP and ICC data are not copied. `rect` must be a valid rectangle within the bounds of self,

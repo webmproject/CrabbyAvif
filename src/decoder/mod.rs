@@ -149,8 +149,21 @@ pub const DEFAULT_IMAGE_COUNT_LIMIT: u32 = 12 * 3600 * 60;
 /// Options for [`Decoder::next_image_with_options()`] and [`Decoder::nth_image_with_options()`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DecodeOptions {
-    /// If set, only this region of the image is decoded. Region decoding is not implemented yet:
-    /// decoding fails with AvifError::NotImplemented if this is set.
+    /// If set, only this region of the image is decoded. The region is relative to the whole
+    /// image and must fit in it. It is expressed before rotation and mirroring ('irot' and 'imir'
+    /// properties, which are kept on the decoded image). Its x and y are rounded down to even
+    /// values along the chroma-subsampled axes of the decoded image. The decoded image has the
+    /// dimensions of the region.
+    ///
+    /// Decoding fails if:
+    /// - the region does not fit in the image
+    /// - allow_incremental is set
+    /// - the image has a clean aperture
+    /// - the gain map is decoded
+    /// - the image has a sample transform
+    /// - the image is part of an image sequence
+    ///
+    /// When decoding fails, [`Decoder::image()`] may be partially decoded or have no pixels.
     pub crop_rect: Option<CropRect>,
 }
 
@@ -422,6 +435,13 @@ pub struct Decoder {
     previous_android_mediacodec_output_color_format: Option<AndroidMediaCodecOutputColorFormat>,
     parsed_image: Image,
     native_decodable: bool,
+    // Options used to decode the frame at image_index, or None if the decoded images do not hold
+    // that frame (for example because the last decode attempt failed after modifying them).
+    decoded_frame_options: Option<DecodeOptions>,
+    // True if the decoder state (image dimensions, clap and planes, and decoded tile counts) may
+    // have been modified by a region decode, successful or not. Region decodes cannot be resumed,
+    // so this state is reset before the next decode.
+    region_decode_dirty: bool,
 }
 
 #[repr(C)]
@@ -1676,6 +1696,8 @@ impl Decoder {
             decoder.previous_android_mediacodec_output_color_format;
         self.parsed_image = decoder.parsed_image;
         self.native_decodable = decoder.native_decodable;
+        self.decoded_frame_options = decoder.decoded_frame_options;
+        self.region_decode_dirty = decoder.region_decode_dirty;
     }
 
     pub fn parse(&mut self) -> AvifResult<()> {
@@ -2200,6 +2222,98 @@ impl Decoder {
         Ok(())
     }
 
+    // Region decodes only decode a subset of the tiles and modify the image dimensions, clap and
+    // planes. They cannot be resumed, so if the previous decode was a region decode (successful or
+    // not), this restores the parsed image properties and resets the decoding progress so that the
+    // next decode starts from scratch. The planes are dropped along with the region dimensions so
+    // that the image stays self-consistent even if the next decode fails.
+    fn reset_region_decode_state(&mut self) {
+        if !self.region_decode_dirty {
+            return;
+        }
+        self.image.width = self.parsed_image.width;
+        self.image.height = self.parsed_image.height;
+        self.image.clap = self.parsed_image.clap;
+        self.image.free_planes(&ALL_PLANES);
+        for extra_input in &mut self.extra_inputs {
+            extra_input.free_planes(&ALL_PLANES);
+        }
+        for decoding_item in DecodingItem::ALL_USIZE {
+            self.tile_info[decoding_item].decoded_tile_count = 0;
+        }
+        self.region_decode_dirty = false;
+    }
+
+    // Must be called right before a region decode starts modifying the decoder state. Region
+    // decodes always start from scratch: they never resume a partially decoded frame and they never
+    // carry over planes from a previous decode (which may be stale, for example an alpha plane that
+    // is not decoded again, or point to memory owned by codecs that were destroyed since).
+    fn begin_region_decode(&mut self) {
+        for decoding_item in DecodingItem::ALL_USIZE {
+            self.tile_info[decoding_item].decoded_tile_count = 0;
+        }
+        self.image.free_planes(&ALL_PLANES);
+        self.region_decode_dirty = true;
+    }
+
+    fn validate_and_compose_crop_rect(
+        &self,
+        target_index: usize,
+        options: &DecodeOptions,
+    ) -> AvifResult<Option<CropRect>> {
+        let Some(user_crop) = options.crop_rect else {
+            return Ok(None);
+        };
+        if self.settings.allow_incremental {
+            return AvifError::not_implemented();
+        }
+        if self.source == Source::Tracks {
+            // TODO: b/578636390 - Support image sequences.
+            return AvifError::not_implemented();
+        }
+        if !self.tile_info[DecodingItem::COLOR.usize()]
+            .sample_transform
+            .tokens
+            .is_empty()
+        {
+            // TODO: b/578636390 - Support sample transforms.
+            return AvifError::not_implemented();
+        }
+        if self.settings.image_content_to_decode.gainmap() {
+            // TODO: b/578636390 - Support gain maps.
+            return AvifError::not_implemented();
+        }
+        let (full_width, full_height, clap) =
+            if self.source == Source::Thumbnail && target_index < self.thumbnail_images.len() {
+                let thumb = &self.thumbnail_images[target_index];
+                (thumb.width, thumb.height, thumb.clap)
+            } else {
+                (
+                    self.parsed_image.width,
+                    self.parsed_image.height,
+                    self.parsed_image.clap,
+                )
+            };
+        if clap.is_some() {
+            // TODO: b/578636390 - Support clean apertures.
+            return AvifError::not_implemented();
+        }
+        if !user_crop.is_within(full_width, full_height) {
+            return AvifError::invalid_argument();
+        }
+        Ok(Some(user_crop))
+    }
+
+    fn align_crop_rect_for_codecs(&self, composed: CropRect) -> CropRect {
+        let uses_mediacodec = self.tiles[DecodingItem::COLOR.usize()]
+            .first()
+            .and_then(|tile| self.codecs.get(tile.codec_index))
+            .is_some_and(|codec| codec.codec() == CodecChoice::MediaCodec);
+        let output_format =
+            if uses_mediacodec { PixelFormat::Yuv420 } else { self.image.yuv_format };
+        composed.align_to_pixel_format(output_format)
+    }
+
     fn prepare_samples(&mut self, image_index: usize) -> AvifResult<()> {
         for decoding_item in self.settings.image_content_to_decode.decoding_items() {
             for tile_index in 0..self.tiles[decoding_item.usize()].len() {
@@ -2566,14 +2680,67 @@ impl Decoder {
             && cfg!(feature = "dav1d")
     }
 
-    fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
+    fn decode_tiles(
+        &mut self,
+        image_index: usize,
+        effective_crop: Option<CropRect>,
+    ) -> AvifResult<()> {
         let mut decoded_something = false;
+        // Dimensions of the color image before cropping. The alpha image is decoded to these
+        // dimensions before being cropped, if it cannot be cropped while being decoded.
+        // parsed_image describes the active thumbnail, if any.
+        let mut uncropped_color_dims = (self.parsed_image.width, self.parsed_image.height);
+        let mut actual_crop = effective_crop;
         for decoding_item in self.settings.image_content_to_decode.decoding_items() {
             let tile_count = self.tiles[decoding_item.usize()].len();
             if tile_count == 0 {
                 continue;
             }
-            if self.can_use_decode_grid(decoding_item) {
+            if let Some(rect) = actual_crop.filter(|_| decoding_item.item_idx == 0) {
+                if decoding_item == DecodingItem::ALPHA {
+                    let mut temp_alpha_image = self.image.shallow_clone();
+                    temp_alpha_image.width = uncropped_color_dims.0;
+                    temp_alpha_image.height = uncropped_color_dims.1;
+                    if self.can_use_decode_grid(decoding_item) {
+                        self.decode_grid(image_index, decoding_item, Some(&mut temp_alpha_image))?;
+                    } else {
+                        let previous_decoded_tile_count =
+                            self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
+                        for tile_index in previous_decoded_tile_count..tile_count {
+                            self.decode_tile(
+                                image_index,
+                                decoding_item,
+                                tile_index,
+                                Some(&mut temp_alpha_image),
+                            )?;
+                        }
+                    }
+                    if temp_alpha_image.has_plane(Plane::A) {
+                        temp_alpha_image.crop_planes_in_place(&A_PLANE, &rect)?;
+                        self.image.planes[Plane::A.as_usize()] =
+                            temp_alpha_image.planes[Plane::A.as_usize()].take();
+                        self.image.row_bytes[Plane::A.as_usize()] =
+                            temp_alpha_image.row_bytes[Plane::A.as_usize()];
+                    }
+                    decoded_something = true;
+                } else {
+                    if self.can_use_decode_grid(decoding_item) {
+                        self.decode_grid(image_index, decoding_item, None)?;
+                    } else {
+                        let previous_decoded_tile_count =
+                            self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
+                        for tile_index in previous_decoded_tile_count..tile_count {
+                            self.decode_tile(image_index, decoding_item, tile_index, None)?;
+                        }
+                    }
+                    if decoding_item == DecodingItem::COLOR {
+                        uncropped_color_dims = (self.image.width, self.image.height);
+                        self.image.crop_in_place(&rect)?;
+                        actual_crop = Some(rect.align_to_pixel_format(self.image.yuv_format));
+                    }
+                    decoded_something = true;
+                }
+            } else if self.can_use_decode_grid(decoding_item) {
                 self.decode_grid(image_index, decoding_item, None)?;
                 decoded_something = true;
             } else {
@@ -2604,33 +2771,35 @@ impl Decoder {
         if !self.parsing_complete() {
             return AvifError::no_content();
         }
-        if options.crop_rect.is_some() {
-            // TODO: b/578636390 - Support region decoding.
-            return AvifError::not_implemented();
-        }
 
         let next_image_index = checked_add!(self.image_index, 1)?;
         if self
             .previous_android_mediacodec_output_color_format
             .is_some_and(|x| x != self.settings.android_mediacodec_output_color_format)
         {
-            return self.nth_image(u32_from_i32(next_image_index)?);
+            return self.nth_image_with_options(u32_from_i32(next_image_index)?, options);
         }
+        let composed_crop = if options.crop_rect.is_some() {
+            if next_image_index as u32 >= self.image_count {
+                return AvifError::no_images_remaining();
+            }
+            self.validate_and_compose_crop_rect(next_image_index as usize, options)?
+        } else {
+            None
+        };
+
         if self.can_use_decode_until() {
             // If decode_until can be used, always prefer that since we cannot conflate calls
             // between get_last_image and get_next_image.
             match self.decode_until(next_image_index) {
-                Ok(_) => return Ok(()),
+                Ok(_) => {
+                    self.decoded_frame_options = Some(*options);
+                    return Ok(());
+                }
                 Err(AvifError::NotImplemented) => {
                     // If decode_until is not implemented, fallback to next_image.
                 }
                 Err(err) => return Err(err),
-            }
-        }
-
-        if self.is_current_frame_fully_decoded() {
-            for decoding_item in DecodingItem::ALL_USIZE {
-                self.tile_info[decoding_item].decoded_tile_count = 0;
             }
         }
 
@@ -2656,6 +2825,9 @@ impl Decoder {
                 self.codecs.clear();
                 self.active_thumbnail_index = Some(thumbnail_idx);
                 self.parsed_image = self.image.shallow_clone();
+                // prepare_still_image_item() reset the whole decoder state.
+                self.region_decode_dirty = false;
+                self.decoded_frame_options = None;
             }
             0
         } else {
@@ -2663,6 +2835,9 @@ impl Decoder {
         };
 
         self.create_codecs()?;
+        let effective_crop =
+            composed_crop.map(|composed| self.align_crop_rect_for_codecs(composed));
+
         match (
             self.settings.allow_progressive,
             self.prepare_samples(sample_index),
@@ -2670,7 +2845,21 @@ impl Decoder {
             (_, Ok(_)) | (true, Err(AvifError::WaitingOnIo)) => {}
             (_, Err(err)) => return Err(err),
         }
-        self.decode_tiles(sample_index)?;
+        // Apart from a thumbnail switch, the previously decoded image has been left untouched so
+        // far, for example if there are no images remaining. Prepare the decoder state for decoding
+        // the new image. This drops the planes if this or the previous decode is a region decode,
+        // so a failure from now on may leave the image without pixels.
+        if self.is_current_frame_fully_decoded() {
+            for decoding_item in DecodingItem::ALL_USIZE {
+                self.tile_info[decoding_item].decoded_tile_count = 0;
+            }
+        }
+        self.reset_region_decode_state();
+        if composed_crop.is_some() {
+            self.begin_region_decode();
+        }
+        self.decoded_frame_options = None;
+        self.decode_tiles(sample_index, effective_crop)?;
 
         if !self.tile_info[DecodingItem::COLOR.usize()]
             .sample_transform
@@ -2709,6 +2898,7 @@ impl Decoder {
             }
         }
 
+        self.decoded_frame_options = Some(*options);
         self.image_index = next_image_index;
         self.image_timing = self.nth_image_timing(self.image_index as u32)?;
         Ok(())
@@ -2739,10 +2929,6 @@ impl Decoder {
         if !self.parsing_complete() {
             return AvifError::no_content();
         }
-        if options.crop_rect.is_some() {
-            // TODO: b/578636390 - Support region decoding.
-            return AvifError::not_implemented();
-        }
         if index >= self.image_count {
             return AvifError::no_images_remaining();
         }
@@ -2755,30 +2941,59 @@ impl Decoder {
         }
         let requested_index = i32_from_u32(index)?;
         if requested_index == checked_add!(self.image_index, 1)? {
-            return self.next_image();
+            return self.next_image_with_options(options);
         }
-        if requested_index == self.image_index && self.is_current_frame_fully_decoded() {
-            // Current frame which is already fully decoded has been requested. Do nothing.
+        if requested_index == self.image_index
+            && self.is_current_frame_fully_decoded()
+            && self.decoded_frame_options == Some(*options)
+        {
+            // Current frame which is already fully decoded with the same options has been
+            // requested. Do nothing.
             return Ok(());
         }
+        self.validate_and_compose_crop_rect(index as usize, options)?;
         let nearest_keyframe = i32_from_u32(self.nearest_keyframe(index))?;
         if nearest_keyframe > checked_add!(self.image_index, 1)?
             || requested_index <= self.image_index
         {
+            if requested_index <= self.image_index
+                && cfg!(feature = "android_mediacodec")
+                && !self.image.image_sequence_track_present
+            {
+                // The Android MediaCodec instances were signaled the end of the stream after the
+                // last decoded frame of this still image, so they cannot decode it again (for
+                // example with different options). Re-create them. The decoded planes may point
+                // to memory owned by these instances, so drop them as well.
+                self.image.free_planes(&ALL_PLANES);
+                self.gainmap.image.free_planes(&ALL_PLANES);
+                for extra_input in &mut self.extra_inputs {
+                    extra_input.free_planes(&ALL_PLANES);
+                }
+                self.codecs.clear();
+            }
             // Start decoding from the nearest keyframe.
             self.image_index = nearest_keyframe - 1;
         }
         if self.can_use_decode_until() {
             match self.decode_until(requested_index) {
-                Ok(_) => return Ok(()),
+                Ok(_) => {
+                    self.decoded_frame_options = Some(*options);
+                    return Ok(());
+                }
                 Err(AvifError::NotImplemented) => {
                     // If decode_until is not implemented, fallback to the next_image loop.
                 }
                 Err(err) => return Err(err),
             }
         }
+        let default_options = DecodeOptions::default();
         loop {
-            self.next_image()?;
+            let step_options = if checked_add!(self.image_index, 1)? == requested_index {
+                options
+            } else {
+                &default_options
+            };
+            self.next_image_with_options(step_options)?;
             if requested_index == self.image_index {
                 break;
             }
