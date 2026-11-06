@@ -807,6 +807,42 @@ TEST(ReformatTest, NullCases) {
   avifRGBImageFreePixels(nullptr);
 }
 
+TEST(ReformatTest, ZeroDimensions) {
+  ImagePtr image(avifImageCreate(kWidth, kHeight, 8, AVIF_PIXEL_FORMAT_YUV444));
+  ASSERT_NE(image, nullptr);
+  ASSERT_EQ(avifImageAllocatePlanes(image.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+
+  // Like in libavif, scaling to a zero dimension is an invalid argument, even
+  // when the other dimension is larger.
+  const std::vector<std::pair<uint32_t, uint32_t>> scaled_dimensions = {
+      {0, kHeight / 2},
+      {kWidth / 2, 0},
+      {0, 0},
+      {0, kHeight * 2},
+      {kWidth * 2, 0}};
+  for (const auto& [width, height] : scaled_dimensions) {
+    EXPECT_EQ(avifImageScale(image.get(), width, height, nullptr),
+              AVIF_RESULT_INVALID_ARGUMENT);
+    EXPECT_EQ(image->width, kWidth);
+    EXPECT_EQ(image->height, kHeight);
+  }
+
+  // Like in libavif, allocating the pixels of an empty RGB image is an invalid
+  // argument.
+  const std::vector<std::pair<uint32_t, uint32_t>> rgb_dimensions = {
+      {0, kHeight}, {kWidth, 0}, {0, 0}};
+  for (const auto& [width, height] : rgb_dimensions) {
+    avifRGBImage rgb;
+    avifRGBImageSetDefaults(&rgb, image.get());
+    rgb.width = width;
+    rgb.height = height;
+    EXPECT_EQ(avifRGBImageAllocatePixels(&rgb), AVIF_RESULT_INVALID_ARGUMENT);
+    EXPECT_EQ(rgb.pixels, nullptr);
+    avifRGBImageFreePixels(&rgb);
+  }
+}
+
 TEST(ReformatTest, ScaleWithoutYPlane) {
   for (uint32_t depth : {8, 10}) {
     ImagePtr image(
