@@ -656,7 +656,7 @@ avifResult crabby_avifDecoderSetIOMemory(avifDecoder *decoder, const uint8_t *da
 
 /// # Safety
 /// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
-/// `avifDecoder` valid for exclusive writes during this call. Passing null safely returns
+/// `avifDecoder` valid for exclusive access during this call. Passing null safely returns
 /// `avifResult::InvalidArgument`.
 avifResult crabby_avifDecoderSetSource(avifDecoder *decoder, avifDecoderSource source);
 

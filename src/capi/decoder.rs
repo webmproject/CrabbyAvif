@@ -186,7 +186,7 @@ pub unsafe extern "C" fn crabby_avifDecoderSetIOMemory(
 
 /// # Safety
 /// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
-/// `avifDecoder` valid for exclusive writes during this call. Passing null safely returns
+/// `avifDecoder` valid for exclusive access during this call. Passing null safely returns
 /// `avifResult::InvalidArgument`.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifDecoderSetSource(
@@ -194,8 +194,15 @@ pub unsafe extern "C" fn crabby_avifDecoderSetSource(
     source: Source,
 ) -> avifResult {
     check_pointer!(decoder);
-    deref_mut!(decoder).requestedSource = source;
-    avifResult::Ok
+    let decoder_ref = deref_mut!(decoder);
+    decoder_ref.requestedSource = source;
+    if !decoder_ref.rust_decoder.parsing_complete() {
+        return avifResult::Ok;
+    }
+    // Like in libavif, reset an already parsed decoder so that the new source is used.
+    // SAFETY: `decoder` is non-null and, by caller precondition, points to a valid `avifDecoder`
+    // valid for exclusive access during this call.
+    unsafe { crabby_avifDecoderReset(decoder) }
 }
 
 impl TryFrom<&avifDecoder> for Settings {
