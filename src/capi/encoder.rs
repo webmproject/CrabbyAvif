@@ -163,7 +163,19 @@ impl avifEncoder {
     #[allow(clippy::replace_box)]
     fn initialize_or_update_rust_encoder(&mut self) -> avifResult {
         if self.rust_encoder_initialized {
-            // TODO - b/416560730: Validate the immutable settings.
+            // Like in libavif, these settings cannot be changed after the first image was added.
+            let settings: Settings = (&*self).into();
+            let initial_settings = self.rust_encoder.settings();
+            if settings.codec_choice != initial_settings.codec_choice
+                || settings.threads != initial_settings.threads
+                || settings.speed != initial_settings.speed
+                || settings.keyframe_interval != initial_settings.keyframe_interval
+                || settings.timescale != initial_settings.timescale
+                || settings.repetition_count != initial_settings.repetition_count
+                || settings.extra_layer_count != initial_settings.extra_layer_count
+            {
+                return avifResult::CannotChangeSetting;
+            }
             let mutable_settings: MutableSettings = (&*self).into();
             let res = self.rust_encoder.update_settings(&mutable_settings);
             self.diag.set_from_result(&res);
