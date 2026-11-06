@@ -595,7 +595,6 @@ impl Encoder {
         }
         if self.items.is_empty() {
             assert!(self.final_recipe.is_none());
-            self.final_recipe = Some(final_recipe);
             let last_image = cell_images.last().ok_or(AvifError::InvalidArgument)?;
             let grid = Grid {
                 rows: grid_rows,
@@ -604,19 +603,36 @@ impl Encoder {
                 height: (grid_rows - 1) * first_image.height + last_image.height,
             };
             Self::validate_image_grid(&grid, cell_images, final_recipe)?;
-            self.image_metadata = first_image.shallow_clone();
-            self.image_metadata.exif = first_image.exif.try_clone()?;
-            self.image_metadata.xmp = first_image.xmp.try_clone()?;
-            self.image_metadata.icc = first_image.icc.try_clone()?;
-            if let Some(gainmaps) = gainmaps {
+            let gainmap_info = if let Some(gainmaps) = gainmaps {
                 if gainmaps.len() != cell_images.len() {
                     return AvifError::invalid_image_grid("invalid number of gainmap images");
                 }
                 let first_gainmap = *gainmaps.first().ok_or(AvifError::InvalidArgument)?;
+                let first_gainmap_image = &first_gainmap.image;
+                let last_gainmap_image = &gainmaps.last().ok_or(AvifError::InvalidArgument)?.image;
+                let gainmap_grid = Grid {
+                    rows: grid_rows,
+                    columns: grid_columns,
+                    width: (grid_columns - 1) * first_gainmap_image.width
+                        + last_gainmap_image.width,
+                    height: (grid_rows - 1) * first_gainmap_image.height
+                        + last_gainmap_image.height,
+                };
+                Self::validate_gainmap_grid(&gainmap_grid, gainmaps)?;
+                Some((first_gainmap, gainmap_grid))
+            } else {
+                None
+            };
+            self.image_metadata = first_image.shallow_clone();
+            self.image_metadata.exif = first_image.exif.try_clone()?;
+            self.image_metadata.xmp = first_image.xmp.try_clone()?;
+            self.image_metadata.icc = first_image.icc.try_clone()?;
+            if let Some((first_gainmap, _)) = gainmap_info {
                 self.gainmap_image_metadata = first_gainmap.image.shallow_clone();
                 self.copy_alt_image_metadata(first_gainmap, &grid)?;
             }
             let color_item_id = self.add_items(&grid, Category::Color, /*hidden=*/ false)?;
+            self.final_recipe = Some(final_recipe);
             self.primary_item_id = color_item_id;
             self.alpha_present = first_image.has_alpha()
                 && if is_single_image {
@@ -648,19 +664,7 @@ impl Encoder {
                     color_item.iref_to_id = Some(alpha_item_id);
                 }
             }
-            if let Some(gainmaps) = gainmaps {
-                let first_gainmap = *gainmaps.first().ok_or(AvifError::InvalidArgument)?;
-                let first_gainmap_image = &first_gainmap.image;
-                let last_gainmap_image = &gainmaps.last().ok_or(AvifError::InvalidArgument)?.image;
-                let gainmap_grid = Grid {
-                    rows: grid_rows,
-                    columns: grid_columns,
-                    width: (grid_columns - 1) * first_gainmap_image.width
-                        + last_gainmap_image.width,
-                    height: (grid_rows - 1) * first_gainmap_image.height
-                        + last_gainmap_image.height,
-                };
-                Self::validate_gainmap_grid(&gainmap_grid, gainmaps)?;
+            if let Some((first_gainmap, gainmap_grid)) = gainmap_info {
                 let tonemap_item_id = self.add_tmap_item(first_gainmap)?;
                 if !self.alternative_item_ids.is_empty() {
                     return AvifError::unknown_error("");
