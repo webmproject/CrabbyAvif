@@ -549,6 +549,57 @@ fn sequence_alpha_combinations(first_image_has_alpha: bool) -> AvifResult<()> {
     Ok(())
 }
 
+#[test]
+fn sequence_codec_specific_option_change() -> AvifResult<()> {
+    if !HAS_ENCODER || !HAS_DECODER {
+        return Ok(());
+    }
+    let image = generate_gradient_image(64, 64, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    let mut image2 = image.try_deep_clone()?;
+    for y in 0..64 {
+        for p in image2.row_mut(Plane::Y, y)? {
+            *p = 255 - *p;
+        }
+    }
+    let settings = encoder::Settings {
+        speed: Some(10),
+        mutable: encoder::MutableSettings {
+            quality: 50.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_for_sequence(&image, 1)?;
+    // Codec-specific option changes apply to the next frames.
+    encoder.set_codec_specific_option(None, "lossless".into(), "1".into());
+    encoder.add_image_for_sequence(&image, 1)?;
+    encoder.set_codec_specific_option(None, "lossless".into(), "0".into());
+    encoder.add_image_for_sequence(&image2, 1)?;
+    let edata = encoder.finish()?;
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.parse()?;
+    assert_eq!(decoder.image_count(), 3);
+    decoder.next_image()?;
+    assert!(!are_images_equal(
+        decoder.image().expect("image was none"),
+        &image
+    )?);
+    decoder.next_image()?;
+    assert!(are_images_equal(
+        decoder.image().expect("image was none"),
+        &image
+    )?);
+    decoder.next_image()?;
+    assert!(!are_images_equal(
+        decoder.image().expect("image was none"),
+        &image2
+    )?);
+    Ok(())
+}
+
 #[test_matrix([0, 1, 65535], [0, 1, 65535])]
 fn clli(max_cll: u16, max_pall: u16) -> AvifResult<()> {
     if !HAS_ENCODER || !HAS_DECODER {

@@ -487,24 +487,7 @@ impl Encoder for Aom {
                     // This key is already processed before initialization of the encoder.
                     continue;
                 }
-                let key_str =
-                    CString::new(key).map_err(|_| AvifError::InvalidCodecSpecificOption)?;
-                let value_str =
-                    CString::new(value).map_err(|_| AvifError::InvalidCodecSpecificOption)?;
-                let encoder = self.encoder.as_mut().ok_or(AvifError::InvalidArgument)?;
-                let encoder_ptr: *mut aom_codec_ctx_t = encoder;
-                let key_ptr = key_str.as_ptr();
-                let value_ptr = value_str.as_ptr();
-                // SAFETY: `encoder_ptr` points to an initialized `aom_codec_ctx_t`, and `key_ptr`
-                // and `value_ptr` are valid NUL-terminated C strings borrowed from `key_str` and
-                // `value_str` which outlive the call.
-                let err = unsafe { aom_codec_set_option(encoder_ptr, key_ptr, value_ptr) };
-                if err != aom_codec_err_t_AOM_CODEC_OK {
-                    return AvifError::unknown_error(format!(
-                        "Unable to set codec specific option: {key} to {value}: {}",
-                        Self::codec_error_string(encoder)
-                    ));
-                }
+                self.set_option(key, value)?;
             }
             let aom_version_3_15_2 = (3 << 16) | (15 << 8) | 2;
             if aom_version < aom_version_3_15_2 && image.depth == 12 {
@@ -527,6 +510,19 @@ impl Encoder for Aom {
             let quality_changed = last_config.quality != config.quality;
             let tile_rows_changed = last_config.tile_rows_log2 != config.tile_rows_log2;
             let tile_cols_changed = last_config.tile_columns_log2 != config.tile_columns_log2;
+            let changed_codec_specific_options: Vec<(&str, &str)> =
+                if last_config.codec_specific_options != config.codec_specific_options {
+                    config
+                        .codec_specific_options(category)?
+                        .into_iter()
+                        .filter(|&(key, value)| {
+                            key != "end-usage"
+                                && last_config.codec_specific_option(category, key) != Some(value)
+                        })
+                        .try_collect()?
+                } else {
+                    Vec::new()
+                };
             if quality_changed {
                 if rc_end_usage == aom_rc_mode_AOM_VBR || rc_end_usage == aom_rc_mode_AOM_CBR {
                     let encoder = self.encoder.as_mut().ok_or(AvifError::InvalidArgument)?;
@@ -563,6 +559,9 @@ impl Encoder for Aom {
                     aome_enc_control_id_AV1E_SET_TILE_COLUMNS,
                     config.tile_columns_log2 as u32,
                 )?;
+            }
+            for (key, value) in changed_codec_specific_options {
+                self.set_option(key, value)?;
             }
             self.config = Some(config.try_clone()?);
         }
@@ -731,6 +730,26 @@ impl Aom {
         if err != aom_codec_err_t_AOM_CODEC_OK {
             return AvifError::unknown_error(format!(
                 "aom_codec_control failed: {}",
+                Self::codec_error_string(encoder)
+            ));
+        }
+        Ok(())
+    }
+
+    fn set_option(&mut self, key: &str, value: &str) -> AvifResult<()> {
+        let key_str = CString::new(key).map_err(|_| AvifError::InvalidCodecSpecificOption)?;
+        let value_str = CString::new(value).map_err(|_| AvifError::InvalidCodecSpecificOption)?;
+        let encoder = self.encoder.as_mut().ok_or(AvifError::InvalidArgument)?;
+        let encoder_ptr: *mut aom_codec_ctx_t = encoder;
+        let key_ptr = key_str.as_ptr();
+        let value_ptr = value_str.as_ptr();
+        // SAFETY: `encoder_ptr` points to an initialized `aom_codec_ctx_t`, and `key_ptr` and
+        // `value_ptr` are valid NUL-terminated C strings borrowed from `key_str` and `value_str`
+        // which outlive the call.
+        let err = unsafe { aom_codec_set_option(encoder_ptr, key_ptr, value_ptr) };
+        if err != aom_codec_err_t_AOM_CODEC_OK {
+            return AvifError::unknown_error(format!(
+                "Unable to set codec specific option: {key} to {value}: {}",
                 Self::codec_error_string(encoder)
             ));
         }
