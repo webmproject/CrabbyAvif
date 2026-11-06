@@ -326,12 +326,15 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
     check_pointer!(cellImages);
 
     let encoder_ref = deref_mut!(encoder);
-    if gridCols == 0
-        || gridRows == 0
-        // If we are not encoding a grid image with multiple layers, AVIF_ADD_IMAGE_FLAG_SINGLE has
-        // to be set.
-        || ((addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) == 0 && encoder_ref.extraLayerCount == 0)
-    {
+    if gridCols == 0 || gridRows == 0 {
+        return avifResult::InvalidArgument;
+    }
+
+    // If we are encoding multiple layers, AVIF_ADD_IMAGE_FLAG_SINGLE cannot be set.
+    // Otherwise, AVIF_ADD_IMAGE_FLAG_SINGLE has to be set, because a grid cannot be a sequence.
+    let single_layer = (addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) != 0;
+    let multi_layer = encoder_ref.extraLayerCount > 0;
+    if single_layer == multi_layer {
         return avifResult::InvalidArgument;
     }
     let Some(cell_count_u32) = gridCols.checked_mul(gridRows) else {
