@@ -345,9 +345,8 @@ TEST(RGBToYUVTest, ExhaustiveSettings) {
                     AVIF_CHROMA_DOWNSAMPLING_AVERAGE,
                     AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV}) {
                 if (chroma_downsampling == AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV &&
-                    (yuv_depth > 12 ||
-                     yuv_format != AVIF_PIXEL_FORMAT_YUV420)) {
-                  // sharpyuv does not support these combinations.
+                    yuv_depth > 12) {
+                  // SharpYuvConvert() only supports YUV bit depths up to 12.
                   continue;
                 }
                 ConvertWholeRange(

@@ -559,6 +559,59 @@ fn sharpyuv_16bit(yuv_depth: u8) -> AvifResult<()> {
     })
 }
 
+// Like in libavif, libsharpyuv is only used for YUV 4:2:0. Requesting it for other YUV formats
+// should fall back to the default conversion.
+#[test_matrix(
+    [8, 10, 12, 16],
+    [8, 10, 12, 16],
+    [rgb::Format::Rgb, rgb::Format::Rgba, rgb::Format::Bgra],
+    [PixelFormat::Yuv422, PixelFormat::Yuv444, PixelFormat::Yuv400]
+)]
+fn sharpyuv_non_yuv420(
+    rgb_depth: u8,
+    yuv_depth: u8,
+    rgb_format: rgb::Format,
+    yuv_format: PixelFormat,
+) -> AvifResult<()> {
+    let width = 5;
+    let height = 3;
+    let mut rgb = rgb::Image {
+        width,
+        height,
+        depth: rgb_depth,
+        format: rgb_format,
+        ..Default::default()
+    };
+    rgb.allocate()?;
+    let max_channel = rgb.max_channel();
+    fill_rgb_image_channel(&mut rgb, rgb_format.r_offset(), max_channel / 2)?;
+    fill_rgb_image_channel(&mut rgb, rgb_format.g_offset(), max_channel / 3)?;
+    fill_rgb_image_channel(&mut rgb, rgb_format.b_offset(), max_channel / 4)?;
+    add_noise(&mut rgb, rgb_format.r_offset(), &RED_NOISE)?;
+    add_noise(&mut rgb, rgb_format.g_offset(), &GREEN_NOISE)?;
+    add_noise(&mut rgb, rgb_format.b_offset(), &BLUE_NOISE)?;
+    if rgb_format.has_alpha() {
+        fill_rgb_image_channel(&mut rgb, rgb_format.alpha_offset(), max_channel)?;
+    }
+    let create_image = || image::Image {
+        width,
+        height,
+        depth: yuv_depth,
+        yuv_format,
+        matrix_coefficients: MatrixCoefficients::Bt601,
+        ..Default::default()
+    };
+
+    let mut expected_image = create_image();
+    rgb.convert_to_yuv(&mut expected_image)?;
+
+    rgb.chroma_downsampling = ChromaDownsampling::SharpYuv;
+    let mut image = create_image();
+    rgb.convert_to_yuv(&mut image)?;
+    assert!(are_images_equal(&image, &expected_image)?);
+    Ok(())
+}
+
 #[test_matrix(
     [(8, 128), (10, 512), (12, 2048), (16, 32768)],
     [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444, PixelFormat::Yuv400],

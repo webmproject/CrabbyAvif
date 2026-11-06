@@ -681,7 +681,11 @@ impl Image {
             rgb_impl::rgb_gray_to_yuv(self, image)?;
         } else {
             let mut conversion_complete = false;
-            if self.chroma_downsampling == ChromaDownsampling::SharpYuv {
+            // Like in libavif, libsharpyuv is only used for 4:2:0. The other YUV formats fall back
+            // to the regular conversion.
+            if self.chroma_downsampling == ChromaDownsampling::SharpYuv
+                && image.yuv_format == PixelFormat::Yuv420
+            {
                 sharpyuv::rgb_to_yuv(self, image)?;
                 conversion_complete = true;
             } else if alpha_multiply_mode == AlphaMultiplyMode::NoOp {
