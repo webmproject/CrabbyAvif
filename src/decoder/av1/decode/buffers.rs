@@ -54,6 +54,22 @@ impl<T: Pixel> PlaneWin<T> {
         }
     }
 
+    pub fn from_vec_uninit(mut buf: Vec<T>, stride: usize, rows: usize) -> Self {
+        buf.clear();
+        Self {
+            buf,
+            stride,
+            x0: 0,
+            y0: 0,
+            rows,
+        }
+    }
+
+    #[inline(always)]
+    pub fn buf_mut(&mut self) -> &mut Vec<T> {
+        &mut self.buf
+    }
+
     /// Resizes `buf` to `n` samples. A buffer that has to grow is
     /// replaced by a zeroed allocation (`calloc`: fresh pages are zero
     /// already) instead of being filled, which for frame sized planes

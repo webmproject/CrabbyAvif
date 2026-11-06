@@ -155,6 +155,25 @@ fn filter_level(
     lvl
 }
 
+/// [`deblock_rows_passes`] flag: filter the vertical edges.
+pub const PASS_V: u8 = 1;
+/// [`deblock_rows_passes`] flag: filter the horizontal edges on the top
+/// boundary of the superblock row.
+pub const PASS_H_TOP: u8 = 2;
+/// [`deblock_rows_passes`] flag: filter the other horizontal edges.
+pub const PASS_H_BODY: u8 = 4;
+/// [`deblock_rows_passes`] flags: filter all horizontal edges.
+pub const PASS_H: u8 = PASS_H_TOP | PASS_H_BODY;
+
+/// The range of 4x4 rows (of `0..n_r`) whose horizontal edges `passes`
+/// selects.
+#[inline(always)]
+fn h_rows(passes: u8, n_r: usize) -> std::ops::Range<usize> {
+    let r0 = if (passes & PASS_H_TOP) != 0 { 0 } else { 1 };
+    let r1 = if (passes & PASS_H_BODY) != 0 { n_r } else { n_r.min(1) };
+    r0..r1.max(r0)
+}
+
 /// Deblocks the mode-info rows `mi_row0..mi_row1` (one superblock row) of
 /// all planes, vertical edges first, then horizontal edges. `grid` is
 /// scratch space. Requires `mi_row1 - mi_row0 <= 32` (at most one 128x128
@@ -169,6 +188,44 @@ pub fn deblock_rows<T: Pixel>(
     cols: (usize, usize),
     dsp: &crate::decoder::av1::dsp::Dsp<T>,
     grid: &mut Vec<u8>,
+) {
+    deblock_rows_passes(
+        f,
+        mi,
+        planes,
+        mi_row0,
+        mi_row1,
+        cols,
+        dsp,
+        grid,
+        PASS_V | PASS_H,
+    );
+}
+
+/// [`deblock_rows`] restricted to the edges selected by `passes`.
+///
+/// Only the horizontal edges on the top boundary of the superblock row
+/// (`PASS_H_TOP`) read the mode info row above and modify (the last rows
+/// of) the row above, so they must run in row order, after the other
+/// edges of the row. The vertical edges (`PASS_V`) and the other
+/// horizontal edges (`PASS_H_BODY`, after `PASS_V`) read and write only
+/// the samples and mode info of the row itself: a filter never reaches
+/// past the middle of the transform blocks on both sides of its edge
+/// (its size is at most the smaller of their dimensions across the
+/// edge), so the body edges also neither touch the samples the top edges
+/// read or write nor depend on them. They can be filtered as soon as the
+/// row is decoded, in any order with respect to the other rows.
+#[allow(clippy::too_many_arguments)]
+pub fn deblock_rows_passes<T: Pixel>(
+    f: &FrameCtx,
+    mi: &MiWin,
+    planes: &mut [PlaneWin<T>],
+    mi_row0: usize,
+    mi_row1: usize,
+    cols: (usize, usize),
+    dsp: &crate::decoder::av1::dsp::Dsp<T>,
+    grid: &mut Vec<u8>,
+    passes: u8,
 ) {
     let fh = f.fh;
     if fh.lf.level[0] == 0 && fh.lf.level[1] == 0 {
@@ -188,12 +245,12 @@ pub fn deblock_rows<T: Pixel>(
         });
     if !seg_lf && !fh.delta_lf_present {
         deblock_rows_const(
-            f, mi, planes, mi_row0, col_lim, row_lim, cols.0, dsp, limits_lut, grid,
+            f, mi, planes, mi_row0, col_lim, row_lim, cols.0, dsp, limits_lut, grid, passes,
         );
         return;
     }
     deblock_rows_var(
-        f, mi, planes, mi_row0, col_lim, row_lim, cols.0, dsp, limits_lut, grid,
+        f, mi, planes, mi_row0, col_lim, row_lim, cols.0, dsp, limits_lut, grid, passes,
     );
 }
 
@@ -211,6 +268,7 @@ fn deblock_rows_var<T: Pixel>(
     dsp: &crate::decoder::av1::dsp::Dsp<T>,
     limits_lut: &[FilterLimits; 64],
     grid: &mut Vec<u8>,
+    passes: u8,
 ) {
     let fh = f.fh;
     for plane in 0..f.num_planes {
@@ -256,7 +314,7 @@ fn deblock_rows_var<T: Pixel>(
         let c4_0 = col0 >> sx;
         let yp0 = r4_0 * MI_SIZE - y0;
         let xp0 = c4_0 * MI_SIZE;
-        for ri in 0..n_r {
+        for ri in 0..if (passes & PASS_V) != 0 { n_r } else { 0 } {
             let row = mi_row0 + ri * row_step;
             let trow = mi.lf_tx_row(pt, r4_0 + ri);
             let mut prev_tw4 = if c4_0 > 0 { tx_w4(trow[c4_0 - 1]) } else { 0 };
@@ -302,7 +360,7 @@ fn deblock_rows_var<T: Pixel>(
             }
         }
         // Horizontal edges.
-        for ri in 0..n_r {
+        for ri in h_rows(passes, n_r) {
             let row = mi_row0 + ri * row_step;
             if row == 0 {
                 continue;
@@ -516,8 +574,11 @@ fn deblock_rows_const<T: Pixel>(
     dsp: &crate::decoder::av1::dsp::Dsp<T>,
     limits_lut: &[FilterLimits; 64],
     grid: &mut Vec<u8>,
+    passes: u8,
 ) {
     let fh = f.fh;
+    let (do_v, do_h) = ((passes & PASS_V) != 0, (passes & PASS_H) != 0);
+    let h_range = |n_r: usize| h_rows(passes, n_r);
     let const_lvl = |plane: usize, pass: usize| -> u8 {
         let i = if plane == 0 { pass } else { plane + 1 };
         if plane > 0 && fh.lf.level[i] == 0 {
@@ -536,8 +597,8 @@ fn deblock_rows_const<T: Pixel>(
     if n_c > 0 && n_r > 0 {
         debug_assert!(n_r <= 32);
         let n_r = n_r.min(32);
-        let lvl_v = const_lvl(0, 0);
-        let lvl_h = const_lvl(0, 1);
+        let lvl_v = if do_v { const_lvl(0, 0) } else { 0 };
+        let lvl_h = if do_h { const_lvl(0, 1) } else { 0 };
         let ncp = n_c.next_multiple_of(16);
         let needed = (n_r + 3) * ncp;
         if grid.len() < needed {
@@ -567,7 +628,7 @@ fn deblock_rows_const<T: Pixel>(
             fill_u8(&mut hl[..ncp], lvl_h);
             let pl = &mut planes[0];
             let (stride, y0) = (pl.stride, pl.y0);
-            for ri in 0..n_r {
+            for ri in h_range(n_r) {
                 let r4 = mi_row0 + ri;
                 if r4 == 0 {
                     continue;
@@ -617,23 +678,28 @@ fn deblock_rows_const<T: Pixel>(
     let r4_0 = mi_row0 >> sy;
     let c4_0 = col0 >> sx;
     let xp0 = c4_0 * MI_SIZE;
-    v_edge_sizes::<true>(mi, 1, r4_0, n_r, c4_0, n_c, ncp, vs, any);
-    v_edges_filter(
-        planes,
-        &[(1, lvl_u), (2, lvl_v)],
-        dsp,
-        xp0,
-        r4_0,
-        n_r,
-        ncp,
-        vs,
-        any,
-        limits_lut,
-        f.bd,
-    );
+    if do_v {
+        v_edge_sizes::<true>(mi, 1, r4_0, n_r, c4_0, n_c, ncp, vs, any);
+        v_edges_filter(
+            planes,
+            &[(1, lvl_u), (2, lvl_v)],
+            dsp,
+            xp0,
+            r4_0,
+            n_r,
+            ncp,
+            vs,
+            any,
+            limits_lut,
+            f.bd,
+        );
+    }
+    if !do_h {
+        return;
+    }
     fill_u8(&mut hl_u[..ncp], lvl_u);
     fill_u8(&mut hl_v[..ncp], lvl_v);
-    for ri in 0..n_r {
+    for ri in h_range(n_r) {
         let r4 = r4_0 + ri;
         if r4 == 0 || !h_edge_sizes::<true>(mi, 1, r4, c4_0, n_c, ncp, hs) {
             continue;

@@ -64,6 +64,8 @@ struct BandWorkerScratch<T: Pixel> {
     cdef_srcs: [CdefSrc; 3],
     scratch: Vec<T>,
     lr_band_out: [Vec<T>; 3],
+    /// Deblocking edge parameter scratch of the vertical edge pass.
+    lf_grid: Vec<u8>,
 }
 
 impl<T: Pixel> Default for BandWorkerScratch<T> {
@@ -72,6 +74,7 @@ impl<T: Pixel> Default for BandWorkerScratch<T> {
             cdef_srcs: Default::default(),
             scratch: Vec::new(),
             lr_band_out: Default::default(),
+            lf_grid: Vec::new(),
         }
     }
 }
@@ -414,8 +417,7 @@ pub fn decode_frame<T: Pixel>(
         full_out && params.threads > 1 && !intrabc && f.sb_rows > 1 && (cdef || lr || deblock);
     let tiles_bands = bands && !single_tile;
     let direct = full_out && !bands;
-    let has_post =
-        deblock || cdef || fh.lr.uses_lr || fh.use_superres || intrabc || sink.wants_rows_final();
+    let has_post = deblock || cdef || fh.lr.uses_lr || fh.use_superres || sink.wants_rows_final();
     let tiles_direct = direct && !single_tile && !has_post;
     let tiles_mt = tiles_bands || tiles_direct;
     // In `run_bands` the rows above a superblock row are filled into its
@@ -1246,11 +1248,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
     /// (CDEF with all strengths zero does not).
     fn has_post_filters(&self) -> bool {
         let fh = self.f.fh;
-        self.deblock
-            || (self.cdef && cdef_active(fh))
-            || fh.lr.uses_lr
-            || self.superres
-            || self.intrabc
+        self.deblock || (self.cdef && cdef_active(fh)) || fh.lr.uses_lr || self.superres
     }
 
     /// Single tile frames with CDEF and / or loop restoration (whole frame,
@@ -1295,6 +1293,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 std::mem::take(self.lr_free),
                 workers,
             );
+            pipe.set_parallel_bands(bp.cdef || bp.lr);
             let mut worker_scratches: Vec<BandWorkerScratch<T>> = (0..workers)
                 .map(|_| self.band_scratches.pop().unwrap_or_default())
                 .collect();
@@ -1440,6 +1439,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
             std::mem::take(self.lr_free),
             workers,
         ));
+        pipe.set_parallel_bands(bp.cdef || bp.lr);
         let shared = std::sync::Arc::new((self.f.seq.clone(), self.f.fh.clone(), bp));
         type ReconOut<T> = Result<([PlaneWin<T>; 3], [Vec<T>; 3], Scratch, Box<CdfContext>)>;
         let r_slot: std::sync::Arc<Mutex<Option<ReconOut<T>>>> =
@@ -2158,7 +2158,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
     /// handed to the sink): the band pipeline of [`Pipeline::run_bands`]
     /// with the rows produced by all threads. The decoding units are the
     /// superblock rows of the tiles in raster order ([`TileJobs`]): each is
-    /// decoded with the persistent state of its tile column and copied
+    /// decoded with the persistent state of its tile and copied
     /// (pixels, mode info, `cdef_idx`, restoration units) into the row
     /// buffer of its superblock row; a row is queued for the finishing
     /// stage once all its tiles are in.
@@ -2178,7 +2178,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                     .unwrap_or(ti.rows - 1)
             })
             .collect();
-        let ctxs = (0..ti.cols)
+        let ctxs = (0..ti.rows * ti.cols)
             .map(|_| {
                 Mutex::new(TileCtx::from_worker(
                     self.tile_workers.pop().unwrap_or_else(TileWorker::new),
@@ -2200,6 +2200,9 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 next: 0,
                 ready: (0..f.sb_rows).map(|_| None).collect(),
                 carry: std::mem::take(self.order_carry),
+                above_ready: (0..f.sb_rows).map(|r| r == 0).collect(),
+                carries: (0..f.sb_rows).map(|_| None).collect(),
+                free_carries: Vec::with_capacity(4),
             }),
             meta: Mutex::new(TileMeta {
                 cdef_idx: std::mem::take(&mut self.s.cdef_idx),
@@ -2218,8 +2221,19 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 std::mem::take(self.lr_free),
                 threads,
             );
-            // A tile's rows are decoded in order.
-            pipe.set_units(f.sb_rows * ti.cols, ti.cols, threads);
+            pipe.set_parallel_bands(bp.deblock || bp.cdef || bp.lr);
+            // A tile's rows are decoded in order; tiles (also of different
+            // tile rows) are independent.
+            let lanes = (0..ti.rows)
+                .flat_map(|tr| {
+                    let (r0, r1) = (
+                        ti.mi_row_starts[tr] / f.sb4,
+                        ti.mi_row_starts[tr + 1].div_ceil(f.sb4),
+                    );
+                    (0..ti.cols).map(move |tc| (r0 * ti.cols + tc, r1 * ti.cols + tc))
+                })
+                .collect();
+            pipe.set_units(lanes, ti.cols, threads);
             let mut worker_scratches: Vec<BandWorkerScratch<T>> = (1..threads)
                 .map(|_| self.band_scratches.pop().unwrap_or_default())
                 .collect();
@@ -2284,6 +2298,20 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         for bb in order.ready.into_iter().flatten() {
             self.band_free.push(bb);
         }
+        for c in order
+            .free_carries
+            .into_iter()
+            .chain(order.carries.into_iter().flatten())
+        {
+            if let Some(bb) = self
+                .band_free
+                .iter_mut()
+                .find(|bb| bb.carry_planes[0].stride == 0)
+            {
+                bb.carry_planes = c.planes;
+                bb.carry_mi = c.mi;
+            }
+        }
         *self.order_carry = order.carry;
         let meta = meta
             .into_inner()
@@ -2328,12 +2356,11 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         let mut bufs = pop_direct_planes::<T>(f.num_planes);
         for p in 0..f.num_planes {
             bp.lr_on[p] = self.lr && fh.lr.frame_restoration_type[p] != RestorationType::None;
-            let stride = self.s.planes[p].stride;
-            bp.out_stride[p] = stride;
-            out_planes[p] = PlaneWin::from_vec(
+            bp.out_stride[p] = self.s.planes[p].stride;
+            out_planes[p] = PlaneWin::from_vec_uninit(
                 std::mem::take(&mut bufs[p]),
-                stride,
-                (f.sb_rows * f.sb_px) >> f.sub(p).1,
+                self.out_w[p],
+                self.out_h[p],
             );
         }
         (bp, out_planes)
@@ -2349,7 +2376,11 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
             .map(|p| {
                 let w = std::mem::take(&mut out_planes[p]);
                 let stride = w.stride;
-                let (data, offset) = w.into_raw();
+                let (mut data, offset) = w.into_raw();
+                let need = stride * self.out_h[p];
+                if data.len() < need {
+                    data.resize(need, T::default());
+                }
                 crate::decoder::av1::sink::Plane {
                     width: self.out_w[p],
                     height: self.out_h[p],
@@ -2414,7 +2445,11 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 };
                 debug_assert!(w.y0 == 0 && w.rows >= self.out_h[p] && w.stride >= self.out_w[p]);
                 let stride = w.stride;
-                let (data, offset) = w.into_raw();
+                let (mut data, offset) = w.into_raw();
+                let need = stride * self.out_h[p];
+                if data.len() < need {
+                    data.resize(need, T::default());
+                }
                 crate::decoder::av1::sink::Plane {
                     width: self.out_w[p],
                     height: self.out_h[p],
@@ -2430,9 +2465,8 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
     /// Multi-tile frames without post filters (whole frame, direct
     /// output): the tiles are decoded in parallel, each worker into a
     /// window of one superblock row of its tile, and every decoded
-    /// superblock row is copied into the frame planes right away (while
-    /// still in the cache), under the lock of that frame superblock row.
-    /// Nothing frame sized is allocated besides the output planes.
+    /// superblock row is copied into `self.s.planes` right away (while
+    /// still in the cache) under the lock of that frame superblock row.
     fn run_tiles_direct(
         &mut self,
         fd: &FrameData,
@@ -2442,34 +2476,29 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let f = &self.f;
         let ti = &f.fh.tile_info;
-        let np = f.num_planes;
         let sb_px = f.sb_px;
         let num_jobs = ti.rows * ti.cols;
         let num_workers = threads.min(num_jobs);
-        let mi_h = self.mi_h;
-        let mut strides = [0usize; 3];
-        // The frame planes split into superblock rows.
-        let chunks: Vec<Mutex<[&mut [T]; 3]>> = {
-            let mut iters: Vec<_> = self.s.planes[..np]
-                .iter_mut()
-                .enumerate()
-                .map(|(p, pl)| {
-                    strides[p] = pl.stride;
-                    let rows = sb_px >> f.sub(p).1;
-                    pl.data_mut().chunks_mut(strides[p] * rows)
-                })
-                .collect();
-            (0..f.sb_rows)
-                .map(|_| {
-                    let mut c: [&mut [T]; 3] = Default::default();
-                    for (dst, it) in c.iter_mut().zip(iters.iter_mut()) {
-                        *dst = it.next().unwrap_or_default();
-                    }
-                    Mutex::new(c)
-                })
-                .collect()
-        };
+        let strides = std::array::from_fn(|p| self.s.planes[p].stride);
+        let [p0, p1, p2] = &mut self.s.planes;
+        let mut c0 = p0.data_mut().chunks_mut((sb_px >> f.sub(0).1) * strides[0]);
+        let mut c1 = p1
+            .data_mut()
+            .chunks_mut(((sb_px >> f.sub(1).1) * strides[1]).max(1));
+        let mut c2 = p2
+            .data_mut()
+            .chunks_mut(((sb_px >> f.sub(2).1) * strides[2]).max(1));
+        let chunks: Vec<Mutex<[&mut [T]; 3]>> = (0..f.sb_rows)
+            .map(|_| {
+                Mutex::new([
+                    c0.next().unwrap_or(&mut []),
+                    c1.next().unwrap_or(&mut []),
+                    c2.next().unwrap_or(&mut []),
+                ])
+            })
+            .collect();
         let dsp = &self.dsp;
+        let mi_h = &self.mi_h;
         // Largest tiles (by coded size, a proxy for decoding time) first so a
         // heavy tile is not started near the end while the other threads idle.
         let mut order: Vec<usize> = (0..num_jobs).collect();
@@ -2502,7 +2531,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                     tc,
                     &chunks,
                     &strides,
-                    &mi_h,
+                    mi_h,
                     &min_failed_key,
                 ) {
                     min_failed_key.fetch_min(key, Ordering::Relaxed);
@@ -2549,7 +2578,6 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
             slot.unwrap_or_else(|| Some((0, Error::Invalid("decoding thread panicked"))))
         }));
         self.tile_workers.extend(workers);
-        drop(chunks);
         if let Some((_, e)) = errs.into_iter().flatten().min_by_key(|(k, _)| *k) {
             return Err(e);
         }
@@ -2587,7 +2615,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                     false,
                     false,
                     false,
-                    false,
+                    fh.allow_intrabc,
                 );
                 self.s
                     .above
@@ -3661,8 +3689,18 @@ struct FinishState<T: Pixel> {
 enum BandTask<T: Pixel> {
     Finish(RowJob<T>),
     Band(BandJob<T>),
-    /// Decoding unit (see [`UnitRunner`]).
-    Unit(usize),
+    /// Decoding unit (see [`UnitRunner`]) of lane (index, unit).
+    Unit(usize, usize),
+}
+
+/// Decoding units `next, next + step, ..` (below `end`) that run one at a
+/// time in this order (the superblock rows of one tile).
+struct UnitLane {
+    next: usize,
+    end: usize,
+    step: usize,
+    /// A unit of the lane is running.
+    busy: bool,
 }
 
 enum SpinPoll<T: Pixel> {
@@ -3673,18 +3711,19 @@ enum SpinPoll<T: Pixel> {
 }
 
 /// Producer of the rows of a [`BandPipeline`] that runs on the workers:
-/// decoding units `0..n` (handed out in order) that queue the decoded rows
-/// in order with [`BandPipeline::push_row`].
+/// decoding units (handed out in the order of their lanes, see
+/// [`BandPipeline::set_units`]) that queue the decoded rows in order with
+/// [`BandPipeline::push_row`].
 trait UnitRunner<T: Pixel>: Sync {
-    /// Runs unit `u`; returns false (after recording the error) if it
-    /// failed, which stops handing out units.
+    /// Runs unit `u` on `lane`; returns `(ok, lane_released)`.
     fn run_unit(
         &self,
         w: &mut BandWorker<'_, T>,
         bp: &BandParams,
+        lane: usize,
         u: usize,
         pipe: &BandPipeline<T>,
-    ) -> bool;
+    ) -> (bool, bool);
 }
 
 struct BandQueue<T: Pixel> {
@@ -3700,18 +3739,19 @@ struct BandQueue<T: Pixel> {
     free_bounds: Vec<LrBoundary<T>>,
     /// No more rows will be queued.
     closed: bool,
-    /// Decoding units: earliest unclaimed, total, running.
-    units_next: usize,
-    units: usize,
+    /// Decoding units: lanes of units that run in order (see
+    /// [`BandPipeline::set_units`]), units running.
+    lanes: Vec<UnitLane>,
     units_running: usize,
-    /// Unit `u` is only handed out once unit `u - units_after` is done.
-    units_after: usize,
-    units_claimed: Vec<bool>,
-    units_done: Vec<bool>,
-    /// A unit failed: no more units are handed out.
-    stop: bool,
+    /// The earliest unit that failed (`usize::MAX`: none): later units are
+    /// not handed out any more, earlier ones still run (so that the error
+    /// of the first failing unit in decoding order is found).
+    stop_at: usize,
     /// Bands queued beyond this many are processed before new units.
     band_backlog: usize,
+    /// Whether bands have filter work (`cdef` or `lr`) that can run in
+    /// parallel across workers before acquiring `out_planes`.
+    parallel_bands: bool,
     /// A task panicked: the workers stop (see [`AbortOnPanic`]).
     aborted: bool,
 }
@@ -3735,6 +3775,12 @@ impl<T: Pixel> Drop for AbortOnPanic<'_, T> {
     }
 }
 
+struct OutState<T: Pixel> {
+    next_lum0: usize,
+    writing: bool,
+    pending: Vec<BandJob<T>>,
+}
+
 /// Work queue of [`Pipeline::run_bands`]: decoded rows go through the
 /// finishing stage one at a time in order, the resulting bands are
 /// processed by any worker.
@@ -3743,6 +3789,7 @@ struct BandPipeline<T: Pixel> {
     cv: std::sync::Condvar,
     fin: Mutex<FinishState<T>>,
     out_planes: Mutex<[PlaneWin<T>; 3]>,
+    out_state: Mutex<OutState<T>>,
     returned_scratches: Mutex<Vec<BandWorkerScratch<T>>>,
 }
 
@@ -3764,14 +3811,11 @@ impl<T: Pixel> BandPipeline<T> {
                 free,
                 free_bounds: Vec::new(),
                 closed: false,
-                units_next: 0,
-                units: 0,
+                lanes: Vec::new(),
                 units_running: 0,
-                units_after: 0,
-                units_claimed: Vec::new(),
-                units_done: Vec::new(),
-                stop: false,
+                stop_at: usize::MAX,
                 band_backlog,
+                parallel_bands: true,
                 aborted: false,
             }),
             cv: std::sync::Condvar::new(),
@@ -3783,8 +3827,20 @@ impl<T: Pixel> BandPipeline<T> {
                 lf_grid,
             }),
             out_planes: Mutex::new(out_planes),
+            out_state: Mutex::new(OutState {
+                next_lum0: 0,
+                writing: false,
+                pending: Vec::new(),
+            }),
             returned_scratches: Mutex::new(Vec::with_capacity(8)),
         }
+    }
+
+    fn set_parallel_bands(&self, parallel_bands: bool) {
+        self.q
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .parallel_bands = parallel_bands;
     }
 
     fn return_scratch(&self, sc: BandWorkerScratch<T>) {
@@ -3814,7 +3870,14 @@ impl<T: Pixel> BandPipeline<T> {
             q.free.push(r.bufs);
         }
         let drained_bands: Vec<_> = q.bands.drain(..).collect();
-        for b in drained_bands {
+        let drained_out: Vec<_> = self
+            .out_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pending
+            .drain(..)
+            .collect();
+        for b in drained_bands.into_iter().chain(drained_out) {
             for arc in b.bounds {
                 if let Ok(bnd) = std::sync::Arc::try_unwrap(arc) {
                     q.free_bounds.push(bnd);
@@ -3864,21 +3927,28 @@ impl<T: Pixel> BandPipeline<T> {
         std::mem::take(&mut *out_planes)
     }
 
-    /// Hands out decoding units `0..units` in order to the workers (instead
-    /// of rows being pushed from outside), unit `u` only once unit
-    /// `u - after` is done; the pipeline closes once all of them ran.
-    /// Bands queued beyond `band_backlog` go first.
-    fn set_units(&self, units: usize, after: usize, band_backlog: usize) {
+    /// Hands out decoding units to the workers (instead of rows being
+    /// pushed from outside): every lane `(start, end)` runs units `start,
+    /// start + step, ..` below `end` one at a time in this order, lanes run
+    /// in parallel (earliest unit first); the pipeline closes once all of
+    /// them ran. Bands queued beyond `band_backlog` go first.
+    fn set_units(&self, lanes: Vec<(usize, usize)>, step: usize, band_backlog: usize) {
         let mut q = self
             .q
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        q.units = units;
-        q.units_after = after;
-        q.units_claimed = vec![false; units];
-        q.units_done = vec![false; units];
+        q.lanes = lanes
+            .into_iter()
+            .filter(|&(start, end)| start < end)
+            .map(|(next, end)| UnitLane {
+                next,
+                end,
+                step,
+                busy: false,
+            })
+            .collect();
         q.band_backlog = band_backlog;
-        q.closed = units == 0;
+        q.closed = q.lanes.is_empty();
     }
 
     /// Buffers for the next row (recycled if possible), without blocking on
@@ -3886,9 +3956,15 @@ impl<T: Pixel> BandPipeline<T> {
     fn take_bufs(&self) -> Box<BandBufs<T>> {
         loop {
             match self.q.try_lock() {
-                Ok(mut q) => return q.free.pop().unwrap_or_default(),
+                Ok(mut q) => {
+                    let mut b: Box<BandBufs<T>> = q.free.pop().unwrap_or_default();
+                    b.lf_v_done = false;
+                    return b;
+                }
                 Err(std::sync::TryLockError::Poisoned(p)) => {
-                    return p.into_inner().free.pop().unwrap_or_default();
+                    let mut b: Box<BandBufs<T>> = p.into_inner().free.pop().unwrap_or_default();
+                    b.lf_v_done = false;
+                    return b;
                 }
                 Err(std::sync::TryLockError::WouldBlock) => std::hint::spin_loop(),
             }
@@ -3921,6 +3997,119 @@ impl<T: Pixel> BandPipeline<T> {
         drop(q);
         self.cv.notify_one();
         n
+    }
+
+    /// Queues a band directly for CDEF / output processing.
+    fn push_band(&self, job: BandJob<T>) {
+        let mut q = self
+            .q
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pos = q
+            .bands
+            .iter()
+            .position(|b| b.lum0 > job.lum0)
+            .unwrap_or(q.bands.len());
+        q.bands.insert(pos, job);
+        drop(q);
+        self.cv.notify_one();
+    }
+
+    fn recycle_band(&self, job: BandJob<T>) {
+        let BandJob { bufs, bounds, .. } = job;
+        let mut q = self
+            .q
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for arc in bounds {
+            if let Ok(bnd) = std::sync::Arc::try_unwrap(arc) {
+                q.free_bounds.push(bnd);
+            }
+        }
+        match bufs {
+            BandBuf::Owned(bufs) => q.free.push(bufs),
+            BandBuf::Shared(arc) => {
+                if let Ok(bufs) = std::sync::Arc::try_unwrap(arc) {
+                    q.free.push(bufs);
+                }
+            }
+        }
+    }
+
+    fn append_band_planes(&self, f: &FrameCtx, bp: &BandParams, job: &BandJob<T>) {
+        let np = f.num_planes;
+        let (lum0, lum1) = (job.lum0, job.lum1);
+        let b: &BandBufs<T> = match &job.bufs {
+            BandBuf::Owned(b) => b,
+            BandBuf::Shared(b) => b,
+        };
+        let mut out_guard = self
+            .out_planes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for p in 0..np {
+            let sy = f.sub(p).1;
+            let stride = out_guard[p].stride;
+            let w = bp.out_w[p];
+            let oy0 = lum0 >> sy;
+            let y1 = (lum1 >> sy).min(bp.mi_h[p]).min(bp.out_h[p]);
+            let out_buf = out_guard[p].buf_mut();
+            let total = bp.out_h[p] * stride;
+            if out_buf.capacity() < total {
+                out_buf.reserve_exact(total - out_buf.len());
+            }
+            if y1 > oy0 {
+                let start = oy0 * stride;
+                if stride == w && out_buf.len() == start {
+                    for y in oy0..y1 {
+                        out_buf.extend_from_slice(&b.planes[p].row(y)[..w]);
+                    }
+                } else {
+                    let end = (y1 - 1) * stride + w;
+                    if out_buf.len() < end {
+                        out_buf.resize(end, T::default());
+                    }
+                    for y in oy0..y1 {
+                        let d = y * stride;
+                        out_buf[d..d + w].copy_from_slice(&b.planes[p].row(y)[..w]);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Writes a non-LR band into `out_planes` strictly in `lum0` order so
+    /// `out_buf.extend_from_slice` never triggers an out-of-order `resize`
+    /// zero-fill under the lock.
+    fn write_band(&self, f: &FrameCtx, bp: &BandParams, job: BandJob<T>) {
+        let mut st = self
+            .out_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if job.lum0 != st.next_lum0 || st.writing {
+            st.pending.push(job);
+            return;
+        }
+        st.writing = true;
+        drop(st);
+        let mut cur = job;
+        loop {
+            let next_lum = cur.lum1;
+            self.append_band_planes(f, bp, &cur);
+            self.recycle_band(cur);
+            let mut st = self
+                .out_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            st.next_lum0 = next_lum;
+            if let Some(pos) = st.pending.iter().position(|b| b.lum0 == next_lum) {
+                cur = st.pending.swap_remove(pos);
+                drop(st);
+            } else {
+                st.writing = false;
+                break;
+            }
+        }
     }
 
     fn queued_tasks(&self) -> usize {
@@ -3989,7 +4178,7 @@ impl<T: Pixel> BandPipeline<T> {
             if let Some(t) = Self::pick(&mut q) {
                 return Some(t);
             }
-            if !wait || (q.closed && q.rows.is_empty() && !q.finishing) {
+            if !wait || (q.closed && q.rows.is_empty() && !q.finishing && q.bands.is_empty()) {
                 return None;
             }
             q = self
@@ -4035,36 +4224,45 @@ impl<T: Pixel> BandPipeline<T> {
                     return Some(BandTask::Finish(row));
                 }
             }
-            while q.units_next < q.units && q.units_claimed[q.units_next] {
-                q.units_next += 1;
-            }
-            let u = q.units_next;
-            let after = q.units_after;
-            let unit = u < q.units && !q.stop && (u < after || q.units_done[u - after]);
-            if !unit || q.bands.len() > q.band_backlog {
+            // The ready lane with the earliest unit.
+            let stop_at = q.stop_at;
+            let lane = q
+                .lanes
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| !l.busy && l.next < l.end.min(stop_at))
+                .min_by_key(|(_, l)| l.next)
+                .map(|(i, _)| i);
+            let can_band = q.parallel_bands || q.bands_running == 0;
+            if can_band && (lane.is_none() || q.bands.len() > q.band_backlog) {
                 if let Some(b) = q.bands.pop_front() {
                     q.bands_running += 1;
                     return Some(BandTask::Band(b));
                 }
             }
-            if unit {
-                q.units_claimed[u] = true;
-                q.units_next += 1;
+            if let Some(i) = lane {
+                let l = &mut q.lanes[i];
+                let u = l.next;
+                l.next += l.step;
+                l.busy = true;
                 q.units_running += 1;
-                return Some(BandTask::Unit(u));
-            }
-            if !q.stop && u < q.units && after > 1 {
-                let row_end = ((u / after) + 1) * after;
-                let scan_end = row_end.min(q.units);
-                if let Some(u2) = (u + 1..scan_end)
-                    .find(|&i| !q.units_claimed[i] && (i < after || q.units_done[i - after]))
-                {
-                    q.units_claimed[u2] = true;
-                    q.units_running += 1;
-                    return Some(BandTask::Unit(u2));
-                }
+                return Some(BandTask::Unit(i, u));
             }
             None
+        }
+    }
+
+    fn release_lane(&self, lane: usize) {
+        let mut q = self
+            .q
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        q.lanes[lane].busy = false;
+        let stop_at = q.stop_at;
+        let has_next = q.lanes[lane].next < q.lanes[lane].end.min(stop_at);
+        drop(q);
+        if has_next {
+            self.cv.notify_one();
         }
     }
 
@@ -4077,19 +4275,22 @@ impl<T: Pixel> BandPipeline<T> {
     ) {
         let _abort = AbortOnPanic(self);
         match task {
-            BandTask::Unit(u) => {
-                let ok = units.is_some_and(|units| units.run_unit(w, bp, u, self));
+            BandTask::Unit(lane, u) => {
+                let (ok, released) =
+                    units.map_or((false, false), |units| units.run_unit(w, bp, lane, u, self));
                 let mut q = self
                     .q
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 q.units_running -= 1;
-                q.units_done[u] = true;
-                q.stop |= !ok;
-                while q.units_next < q.units && q.units_claimed[q.units_next] {
-                    q.units_next += 1;
+                if !released {
+                    q.lanes[lane].busy = false;
                 }
-                if (q.stop || q.units_next == q.units) && q.units_running == 0 {
+                if !ok {
+                    q.stop_at = q.stop_at.min(u);
+                }
+                let stop_at = q.stop_at;
+                if q.units_running == 0 && q.lanes.iter().all(|l| l.next >= l.end.min(stop_at)) {
                     q.closed = true;
                 }
                 drop(q);
@@ -4115,26 +4316,40 @@ impl<T: Pixel> BandPipeline<T> {
                 drop(q);
                 self.cv.notify_all();
             }
-            BandTask::Band(mut b) => {
-                w.process(bp, &mut b, &self.out_planes);
-                let BandJob { bufs, bounds, .. } = b;
+            BandTask::Band(b) => {
+                let recycled = w.process(bp, b, self);
                 let mut q = self
                     .q
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 q.bands_running -= 1;
-                for arc in bounds {
-                    if let Ok(bnd) = std::sync::Arc::try_unwrap(arc) {
-                        q.free_bounds.push(bnd);
-                    }
-                }
-                match bufs {
-                    BandBuf::Owned(bufs) => q.free.push(bufs),
-                    BandBuf::Shared(arc) => {
-                        if let Ok(bufs) = std::sync::Arc::try_unwrap(arc) {
-                            q.free.push(bufs);
+                if let Some(BandJob { bufs, bounds, .. }) = recycled {
+                    for arc in bounds {
+                        if let Ok(bnd) = std::sync::Arc::try_unwrap(arc) {
+                            q.free_bounds.push(bnd);
                         }
                     }
+                    match bufs {
+                        BandBuf::Owned(bufs) => q.free.push(bufs),
+                        BandBuf::Shared(arc) => {
+                            if let Ok(bufs) = std::sync::Arc::try_unwrap(arc) {
+                                q.free.push(bufs);
+                            }
+                        }
+                    }
+                }
+                let notify = !q.parallel_bands && q.bands_running == 0 && !q.bands.is_empty();
+                let done = q.closed
+                    && q.rows.is_empty()
+                    && !q.finishing
+                    && q.bands.is_empty()
+                    && q.bands_running == 0
+                    && q.units_running == 0;
+                drop(q);
+                if done {
+                    self.cv.notify_all();
+                } else if notify {
+                    self.cv.notify_one();
                 }
             }
         }
@@ -4164,7 +4379,9 @@ impl<T: Pixel> BandPipeline<T> {
                     } else if !q.finishing && !q.rows.is_empty() {
                         q.finishing = true;
                         q.rows.pop_front().map(BandTask::Finish)
-                    } else if q.bands.len() > q.band_backlog {
+                    } else if (q.parallel_bands || q.bands_running == 0)
+                        && q.bands.len() > q.band_backlog
+                    {
                         q.bands_running += 1;
                         q.bands.pop_front().map(BandTask::Band)
                     } else {
@@ -4201,6 +4418,13 @@ pub(crate) struct BandBufs<T: Pixel> {
     /// Loop restoration units (only the unit rows of the band's stripes
     /// are filled in).
     lr: [LrPlane; 3],
+    /// Whether all edges of the row but the horizontal ones on its top
+    /// boundary are already deblocked (see `TileJobs::run_unit`), leaving
+    /// only those to `BandWorker::finish_row`.
+    lf_v_done: bool,
+    /// Pooled neighbor-row carry buffers for `RowOrder`.
+    carry_planes: [PlaneWin<T>; 3],
+    carry_mi: MiWin,
 }
 
 enum BandBuf<T: Pixel> {
@@ -4289,7 +4513,13 @@ impl<'a, T: Pixel> BandWorker<'a, T> {
             }
         }
         if bp.deblock {
-            deblock::deblock_rows(
+            let passes = if b.lf_v_done {
+                deblock::PASS_H_TOP
+            } else {
+                deblock::PASS_V | deblock::PASS_H
+            };
+            b.lf_v_done = false;
+            deblock::deblock_rows_passes(
                 f,
                 &b.mi,
                 &mut b.planes[..np],
@@ -4298,6 +4528,7 @@ impl<'a, T: Pixel> BandWorker<'a, T> {
                 bp.col_range,
                 &self.dsp,
                 &mut fs.lf_grid,
+                passes,
             );
         }
         for p in 0..np {
@@ -4390,9 +4621,9 @@ impl<'a, T: Pixel> BandWorker<'a, T> {
     fn process(
         &mut self,
         bp: &BandParams,
-        job: &mut BandJob<T>,
-        out_planes: &Mutex<[PlaneWin<T>; 3]>,
-    ) {
+        mut job: BandJob<T>,
+        pipe: &BandPipeline<T>,
+    ) -> Option<BandJob<T>> {
         let f = &self.f;
         let np = f.num_planes;
         let (lum0, lum1) = (job.lum0, job.lum1);
@@ -4403,6 +4634,39 @@ impl<'a, T: Pixel> BandWorker<'a, T> {
         }
         // Shared buffers are only built without CDEF.
         debug_assert!(!bp.cdef || matches!(job.bufs, BandBuf::Owned(_)));
+        if let BandBuf::Owned(b) = &mut job.bufs {
+            let b = &mut **b;
+            if b.lf_v_done {
+                b.lf_v_done = false;
+                if bp.deblock {
+                    let r = (lum0 + POST_LAG) / f.sb_px;
+                    deblock::deblock_rows_passes(
+                        f,
+                        &b.mi,
+                        &mut b.planes[..np],
+                        r * f.sb4,
+                        (r + 1) * f.sb4,
+                        bp.col_range,
+                        &self.dsp,
+                        &mut self.sc.lf_grid,
+                        deblock::PASS_H_TOP,
+                    );
+                }
+                if bp.cdef {
+                    for p in 0..np {
+                        let sy = f.sub(p).1;
+                        let w = bp.mi_w[p];
+                        let y0 = lum0 >> sy;
+                        if y0 >= 2 {
+                            for (i, a) in b.above[p].iter_mut().enumerate() {
+                                a.clear();
+                                a.extend_from_slice(&b.planes[p].row(y0 - 2 + i)[..w]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if let (true, BandBuf::Owned(b)) = (bp.cdef, &mut job.bufs) {
             let b = &mut **b;
             let mut dims = [(0usize, 0usize); 3];
@@ -4424,6 +4688,10 @@ impl<'a, T: Pixel> BandWorker<'a, T> {
                 (0, f.sb_cols * f.sb4),
                 &self.dsp,
             );
+        }
+        if !bp.lr {
+            pipe.write_band(&self.f, bp, job);
+            return None;
         }
         let b: &BandBufs<T> = match &job.bufs {
             BandBuf::Owned(b) => b,
@@ -4488,36 +4756,66 @@ impl<'a, T: Pixel> BandWorker<'a, T> {
             }
             lr_rows[p] = max_y - oy0;
         }
-        let mut out_guard = out_planes
+        let mut out_guard = pipe
+            .out_planes
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         for p in 0..np {
             let sy = f.sub(p).1;
-            let stride = bp.out_stride[p];
+            let stride = out_guard[p].stride;
             let w = bp.out_w[p];
             let oy0 = lum0 >> sy;
-            let out_data = out_guard[p].data_mut();
+            let out_buf = out_guard[p].buf_mut();
+            let total = bp.out_h[p] * stride;
+            if out_buf.capacity() < total {
+                out_buf.reserve_exact(total - out_buf.len());
+            }
             if !bp.lr_on[p] {
                 let y1 = ranges[p].1.min(bp.out_h[p]);
-                for y in oy0..y1 {
-                    let d = y * stride;
-                    out_data[d..d + w].copy_from_slice(&b.planes[p].row(y)[..w]);
+                if y1 > oy0 {
+                    let start = oy0 * stride;
+                    if stride == w && out_buf.len() == start {
+                        for y in oy0..y1 {
+                            out_buf.extend_from_slice(&b.planes[p].row(y)[..w]);
+                        }
+                    } else {
+                        let end = (y1 - 1) * stride + w;
+                        if out_buf.len() < end {
+                            out_buf.resize(end, T::default());
+                        }
+                        for y in oy0..y1 {
+                            let d = y * stride;
+                            out_buf[d..d + w].copy_from_slice(&b.planes[p].row(y)[..w]);
+                        }
+                    }
                 }
             } else {
                 let n_rows = lr_rows[p];
-                let src = &self.sc.lr_band_out[p];
-                for r in 0..n_rows {
-                    let d = (oy0 + r) * stride;
-                    let s = r * w;
-                    out_data[d..d + w].copy_from_slice(&src[s..s + w]);
+                if n_rows > 0 {
+                    let src = &self.sc.lr_band_out[p];
+                    let start = oy0 * stride;
+                    if stride == w && out_buf.len() == start {
+                        out_buf.extend_from_slice(&src[..n_rows * w]);
+                    } else {
+                        let end = (oy0 + n_rows - 1) * stride + w;
+                        if out_buf.len() < end {
+                            out_buf.resize(end, T::default());
+                        }
+                        for r in 0..n_rows {
+                            let d = (oy0 + r) * stride;
+                            let s = r * w;
+                            out_buf[d..d + w].copy_from_slice(&src[s..s + w]);
+                        }
+                    }
                 }
             }
         }
+        Some(job)
     }
 }
 
-/// Persistent decoding state of one tile column in
-/// [`Pipeline::run_tiles_bands`] (set up anew at every tile row).
+/// Persistent decoding state of one tile in [`Pipeline::run_tiles_bands`]
+/// (set up when its first superblock row is decoded).
 struct TileCtx<'d, T: Pixel> {
     /// Tile row the state is set up for (`usize::MAX`: none yet).
     tr: usize,
@@ -4685,14 +4983,127 @@ struct RowSlot<T: Pixel> {
     remaining: usize,
 }
 
+#[derive(Default)]
+struct RowCarry<T: Pixel> {
+    planes: [PlaneWin<T>; 3],
+    mi: MiWin,
+}
+
+fn save_row_carry<T: Pixel>(
+    f: &FrameCtx,
+    bp: &BandParams,
+    r: usize,
+    bb: &BandBufs<T>,
+    c: &mut RowCarry<T>,
+) {
+    let np = f.num_planes;
+    let sb_px = f.sb_px;
+    for p in 0..np {
+        let sy = f.sub(p).1;
+        let w = bp.mi_w[p];
+        let pl = &bb.planes[p];
+        let y0 = ((r + 1) * sb_px - BAND_TOP) >> sy;
+        let n = BAND_TOP >> sy;
+        c.planes[p].reset(w, n, 0, y0);
+        for y in y0..y0 + n {
+            c.planes[p].row_mut(y)[..w].copy_from_slice(&pl.row(y)[..w]);
+        }
+    }
+    if bp.deblock || bp.cdef {
+        let c0 = (r + 1) * f.sb4 - 2;
+        let mi = &bb.mi;
+        c.mi.reset(
+            mi.stride,
+            2,
+            0,
+            c0,
+            f.ss_x,
+            f.ss_y,
+            !mi.lf_tx[0].is_empty(),
+            !mi.lf_tx[1].is_empty(),
+            !mi.delta_lf.is_empty(),
+            false,
+        );
+        copy_mi_rows(&mut c.mi, mi, c0, c0 + 2, 0, f.mi_cols, f.ss_x, f.ss_y);
+    }
+}
+
+fn apply_row_carry<T: Pixel>(
+    f: &FrameCtx,
+    bp: &BandParams,
+    r: usize,
+    c: &RowCarry<T>,
+    bb: &mut BandBufs<T>,
+) {
+    let np = f.num_planes;
+    for p in 0..np {
+        let (cp, w) = (&c.planes[p], bp.mi_w[p]);
+        for y in cp.y0..cp.y0 + cp.rows {
+            bb.planes[p].row_mut(y)[..w].copy_from_slice(&cp.row(y)[..w]);
+        }
+    }
+    if bp.deblock || bp.cdef {
+        let (m0, _) = band_mi_rows(f, r);
+        copy_mi_rows(
+            &mut bb.mi,
+            &c.mi,
+            m0,
+            r * f.sb4,
+            0,
+            f.mi_cols,
+            f.ss_x,
+            f.ss_y,
+        );
+    }
+}
+
+fn copy_row_carry_direct<T: Pixel>(
+    f: &FrameCtx,
+    bp: &BandParams,
+    r_next: usize,
+    src_bb: &BandBufs<T>,
+    dst_bb: &mut BandBufs<T>,
+) {
+    let np = f.num_planes;
+    let sb_px = f.sb_px;
+    for p in 0..np {
+        let sy = f.sub(p).1;
+        let w = bp.mi_w[p];
+        let y0 = (r_next * sb_px - BAND_TOP) >> sy;
+        let n = BAND_TOP >> sy;
+        for y in y0..y0 + n {
+            dst_bb.planes[p].row_mut(y)[..w].copy_from_slice(&src_bb.planes[p].row(y)[..w]);
+        }
+    }
+    if bp.deblock || bp.cdef {
+        let (m0, _) = band_mi_rows(f, r_next);
+        copy_mi_rows(
+            &mut dst_bb.mi,
+            &src_bb.mi,
+            m0,
+            r_next * f.sb4,
+            0,
+            f.mi_cols,
+            f.ss_x,
+            f.ss_y,
+        );
+    }
+}
+
 /// Completed rows of [`Pipeline::run_tiles_bands`] waiting to be queued in
-/// order.
+/// order (with LR) or waiting only on row `r - 1` (without LR).
 struct RowOrder<T: Pixel> {
     next: usize,
     ready: Vec<Option<Box<BandBufs<T>>>>,
     /// The last 2 mode info rows of the last queued row (the rows above
     /// the next one).
     carry: MiWin,
+    /// Whether row `r - 1` has saved its bottom carry into `carries[r - 1]`
+    /// (`above_ready[0]` is always `true`).
+    above_ready: Vec<bool>,
+    /// Per-row carry from row `r` to row `r + 1` (used when `!bp.lr`).
+    carries: Vec<Option<RowCarry<T>>>,
+    free_carries: Vec<RowCarry<T>>,
 }
 
 /// Frame level `cdef_idx` and restoration units assembled from the tiles.
@@ -4718,17 +5129,96 @@ struct TileJobs<'d, T: Pixel> {
 }
 
 impl<'d, T: Pixel> TileJobs<'d, T> {
-    /// Row `r` has all its tiles: queues it, and the completed rows after
-    /// it, in order (filling in the mode info rows above each from the row
-    /// before it, and the band's `cdef_idx` rows and restoration units).
+    fn finish_non_lr_row(
+        &self,
+        f: &FrameCtx,
+        bp: &BandParams,
+        rr: usize,
+        rows: usize,
+        mut bb: Box<BandBufs<T>>,
+        pipe: &BandPipeline<T>,
+    ) {
+        let last = rr + 1 == rows;
+        let (lum0, lum1) = band_rows(rr, last, f.sb_px);
+        if bp.cdef {
+            let m = self
+                .meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            fill_band_meta(f, bp, &mut bb, rr, last, &m.cdef_idx, &m.lr);
+        }
+        bb.lf_v_done = true;
+        pipe.push_band(BandJob {
+            lum0,
+            lum1,
+            bufs: BandBuf::Owned(bb),
+            bounds: Vec::new(),
+        });
+    }
+
+    /// Row `r` has all its tiles: without LR, immediately hands off its
+    /// bottom carry to `r + 1` and queues `r` (and `r + 1` if waiting)
+    /// as soon as `r - 1` is ready; with LR, queues completed rows in
+    /// order for `Finish`.
     fn complete(
         &self,
         f: &FrameCtx,
         bp: &BandParams,
         r: usize,
-        bufs: Box<BandBufs<T>>,
+        mut bufs: Box<BandBufs<T>>,
         pipe: &BandPipeline<T>,
     ) {
+        if !bp.lr {
+            let (rows, ready_self, ready_next) = {
+                let mut o = self
+                    .order
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let rows = o.ready.len();
+                let ready_self = if o.above_ready[r] {
+                    if r > 0 {
+                        if let Some(c) = o.carries[r - 1].take() {
+                            apply_row_carry(f, bp, r, &c, &mut bufs);
+                            o.free_carries.push(c);
+                        }
+                    }
+                    true
+                } else {
+                    false
+                };
+                let ready_next = if r + 1 < rows {
+                    o.above_ready[r + 1] = true;
+                    if let Some(mut next_bb) = o.ready[r + 1].take() {
+                        copy_row_carry_direct(f, bp, r + 1, &bufs, &mut next_bb);
+                        Some((r + 1, next_bb))
+                    } else {
+                        let mut c = o.free_carries.pop().unwrap_or_else(|| RowCarry {
+                            planes: std::mem::take(&mut bufs.carry_planes),
+                            mi: std::mem::take(&mut bufs.carry_mi),
+                        });
+                        save_row_carry(f, bp, r, &bufs, &mut c);
+                        o.carries[r] = Some(c);
+                        None
+                    }
+                } else {
+                    None
+                };
+                let ready_self = if ready_self {
+                    Some((r, bufs))
+                } else {
+                    o.ready[r] = Some(bufs);
+                    None
+                };
+                (rows, ready_self, ready_next)
+            };
+            if let Some((rr, bb)) = ready_self {
+                self.finish_non_lr_row(f, bp, rr, rows, bb, pipe);
+            }
+            if let Some((rr, bb)) = ready_next {
+                self.finish_non_lr_row(f, bp, rr, rows, bb, pipe);
+            }
+            return;
+        }
         let mut o = self
             .order
             .lock()
@@ -4795,9 +5285,10 @@ impl<'d, T: Pixel> UnitRunner<T> for TileJobs<'d, T> {
         &self,
         w: &mut BandWorker<'_, T>,
         bp: &BandParams,
+        lane: usize,
         u: usize,
         pipe: &BandPipeline<T>,
-    ) -> bool {
+    ) -> (bool, bool) {
         let f = &w.f;
         let ti = &f.fh.tile_info;
         let np = f.num_planes;
@@ -4807,7 +5298,7 @@ impl<'d, T: Pixel> UnitRunner<T> for TileJobs<'d, T> {
         let (mi_c0, mi_c1) = (ti.mi_col_starts[tc], ti.mi_col_starts[tc + 1]);
         // The tile's previous row is done (see `BandPipeline::set_units`),
         // so the lock is free.
-        let mut ctx = self.ctxs[tc]
+        let mut ctx = self.ctxs[tr * ti.cols + tc]
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let data = self.fd.tiles()[tr * ti.cols + tc];
@@ -4820,7 +5311,7 @@ impl<'d, T: Pixel> UnitRunner<T> for TileJobs<'d, T> {
             if err.as_ref().is_none_or(|(k, _)| key < *k) {
                 *err = Some((key, e));
             }
-            return false;
+            return (false, false);
         }
         let s = &ctx.s;
         // The frame's cdef_idx entries and restoration units coded in this
@@ -4905,10 +5396,34 @@ impl<'d, T: Pixel> UnitRunner<T> for TileJobs<'d, T> {
             }
         };
         drop(ctx);
-        if let Some(bb) = done {
+        if let Some(mut bb) = done {
+            // The tile's own state (`ctx`) is already updated for row
+            // `r + 1`; release the lane before full-row deblocking so a
+            // free worker can immediately advance this tile column.
+            pipe.release_lane(lane);
+            if bp.deblock {
+                // All edges of the row but the horizontal ones on its top
+                // boundary only touch the row itself (see
+                // `deblock::deblock_rows_passes`): filter them here, in
+                // parallel with the other rows, leaving only the top edges
+                // to the ordered `finish_row` chain.
+                deblock::deblock_rows_passes(
+                    f,
+                    &bb.mi,
+                    &mut bb.planes[..np],
+                    r * sb4,
+                    (r + 1) * sb4,
+                    bp.col_range,
+                    &w.dsp,
+                    &mut w.sc.lf_grid,
+                    deblock::PASS_V | deblock::PASS_H_BODY,
+                );
+                bb.lf_v_done = true;
+            }
             self.complete(f, bp, r, bb, pipe);
+            return (true, true);
         }
-        true
+        (true, false)
     }
 }
 
@@ -4961,10 +5476,24 @@ impl<T: Pixel> TileWorker<T> {
         let mut x_range = [(0usize, 0usize); 3];
         for p in 0..np {
             let (sx, sy) = f.sub(p);
-            let stride = ((tile_mi_al * 4) >> sx).next_multiple_of(64);
+            // With intra block copy the window holds the whole tile.
+            // `intrabc_mode_info` keeps the source inside the tile, so the
+            // 2-tap chroma filter of `predict_intrabc` should not read past
+            // it; the padding keeps a stray read from panicking anyway.
+            let pad = if fh.allow_intrabc { 4 } else { 0 };
+            let stride = (((tile_mi_al * 4) >> sx) + pad).next_multiple_of(64);
             x_range[p] = ((mi_c0 * 4) >> sx, (mi_c1 * 4) >> sx);
-            s.planes[p].reset(stride, sb_px >> sy, x_range[p].0, (sb_r0 * sb_px) >> sy);
-            s.above_line[p].resize(stride + 64, T::default());
+            let rows = if fh.allow_intrabc {
+                (((sb_r1 - sb_r0) * sb_px) >> sy) + pad
+            } else {
+                sb_px >> sy
+            };
+            s.planes[p].reset(stride, rows, x_range[p].0, (sb_r0 * sb_px) >> sy);
+            if fh.allow_intrabc {
+                s.above_line[p].clear();
+            } else {
+                s.above_line[p].resize(stride + 64, T::default());
+            }
         }
         s.mi.reset(
             tile_mi_al + 32,
@@ -4976,7 +5505,7 @@ impl<T: Pixel> TileWorker<T> {
             false,
             false,
             false,
-            false,
+            fh.allow_intrabc,
         );
         s.above
             .reset(mi_c0, tile_mi_al + 32, np, fh.allow_screen_content_tools);
@@ -5005,8 +5534,10 @@ impl<T: Pixel> TileWorker<T> {
             let mi_row = r * sb4;
             let sb_y = r * sb_px;
             s.mi.slide_to(mi_row.saturating_sub(sb4));
-            for p in 0..np {
-                s.planes[p].y0 = sb_y >> f.sub(p).1;
+            if !fh.allow_intrabc {
+                for p in 0..np {
+                    s.planes[p].y0 = sb_y >> f.sub(p).1;
+                }
             }
             s.left.clear();
             s.set_sb_y(f, sb_y);
@@ -5039,7 +5570,7 @@ impl<T: Pixel> TileWorker<T> {
             if res.is_err() {
                 break;
             }
-            if r + 1 < sb_r1 {
+            if !fh.allow_intrabc && r + 1 < sb_r1 {
                 for p in 0..np {
                     let h = sb_px >> f.sub(p).1;
                     let w = x_range[p].1 - x_range[p].0;
@@ -5061,11 +5592,12 @@ impl<T: Pixel> TileWorker<T> {
                     let pl = &s.planes[p];
                     let src_stride = pl.stride;
                     let src_data = pl.data();
+                    let sr0 = y0 - pl.y0;
                     let dst_stride = strides[p];
                     let dst_data = &mut dst[p][x0..];
                     for ry in 0..h {
                         let d = ry * dst_stride;
-                        let sr = ry * src_stride;
+                        let sr = (sr0 + ry) * src_stride;
                         dst_data[d..d + w].copy_from_slice(&src_data[sr..sr + w]);
                     }
                 }

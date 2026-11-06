@@ -37,7 +37,7 @@ fn refill_slow(buf: &[u8], mut pos: usize, mut dif: u64, mut c: i32) -> u64 {
         let b = if pos < buf.len() { buf[pos] ^ 0xff } else { 0xff };
         dif |= (b as u64) << c;
         pos += 1;
-        c -= 8;
+        c = c.wrapping_sub(8);
         if c < 0 {
             return dif;
         }
@@ -54,14 +54,14 @@ fn refill_slow(buf: &[u8], mut pos: usize, mut dif: u64, mut c: i32) -> u64 {
 #[inline(never)]
 fn refill_cold<const DUMMY: usize>(buf: &[u8], pos: usize, mut dif: u64, cnt: i32) -> (u64, u64) {
     debug_assert!((-16..=40).contains(&cnt));
-    let nb = ((48 - cnt) >> 3) as usize;
+    let nb = (48i32.wrapping_sub(cnt) >> 3) as usize;
     if let Some(bytes) = buf.get(pos..).and_then(|s| s.first_chunk::<8>()) {
         let w = !u64::from_be_bytes(*bytes);
-        dif |= w >> ((16 + cnt) as u32 & 63);
+        dif |= w >> (16i32.wrapping_add(cnt) as u32 & 63);
     } else {
-        dif = refill_slow(buf, pos, dif, 40 - cnt);
+        dif = refill_slow(buf, pos, dif, 40i32.wrapping_sub(cnt));
     }
-    let new_cnt = (cnt + ((nb as i32) << 3)) as u32;
+    let new_cnt = cnt.wrapping_add((nb as i32) << 3) as u32;
     (dif, (nb as u64) | ((new_cnt as u64) << 32))
 }
 
@@ -69,15 +69,15 @@ fn refill_cold<const DUMMY: usize>(buf: &[u8], pos: usize, mut dif: u64, cnt: i3
 fn refill_buf(buf: &[u8], cur_pos: &mut usize, dif: &mut u64, cnt: &mut i32) {
     let c = *cnt;
     debug_assert!((-16..=40).contains(&c));
-    let nb = ((48 - c) >> 3) as usize;
+    let nb = (48i32.wrapping_sub(c) >> 3) as usize;
     if let Some(bytes) = buf.get(*cur_pos..).and_then(|s| s.first_chunk::<8>()) {
         let w = !u64::from_be_bytes(*bytes);
-        *dif |= w >> ((16 + c) as u32 & 63);
+        *dif |= w >> (16i32.wrapping_add(c) as u32 & 63);
     } else {
-        *dif = refill_slow(buf, *cur_pos, *dif, 40 - c);
+        *dif = refill_slow(buf, *cur_pos, *dif, 40i32.wrapping_sub(c));
     }
     *cur_pos = (*cur_pos).wrapping_add(nb);
-    *cnt = c + ((nb as i32) << 3);
+    *cnt = c.wrapping_add((nb as i32) << 3);
 }
 
 /// Reads one equiprobable bit (`read_bool`) without a refill check.
@@ -97,7 +97,7 @@ fn equi_nobuf(dif: &mut u64, rng: &mut u32, cnt: &mut i32) -> bool {
     let sh = sel(ret, s1, 1);
     *dif = sel(ret, d.wrapping_sub(vw), d) << sh;
     *rng = sel(ret, r.wrapping_sub(v), v) << sh;
-    *cnt -= sh as i32;
+    *cnt = cnt.wrapping_sub(sh as i32);
     !ret
 }
 
@@ -122,13 +122,13 @@ fn golomb_coef_very_slow(
         if dif < vw {
             dif <<= 1;
             rng = v << 1;
-            cnt -= 1;
+            cnt = cnt.wrapping_sub(1);
             break;
         }
         let s1 = ((rng < 0xff84) as u32) + ((rng < 0x8004) as u32);
         dif = dif.wrapping_sub(vw) << s1;
         rng = rng.wrapping_sub(v) << s1;
-        cnt -= s1 as i32;
+        cnt = cnt.wrapping_sub(s1 as i32);
         if length > 32 {
             break;
         }
@@ -175,11 +175,11 @@ fn golomb_coef_slow<const DUMMY: usize>(
     if cnt < 16 {
         cold_refill();
         if let Some(bytes) = buf.get(pos..).and_then(|s| s.first_chunk::<8>()) {
-            let nb = ((48 - cnt) >> 3) as usize;
+            let nb = (48i32.wrapping_sub(cnt) >> 3) as usize;
             let w = !u64::from_be_bytes(*bytes);
-            dif |= w >> ((16 + cnt) as u32 & 63);
+            dif |= w >> (16i32.wrapping_add(cnt) as u32 & 63);
             cur_pos = pos.wrapping_add(nb);
-            cnt += (nb as i32) << 3;
+            cnt = cnt.wrapping_add((nb as i32) << 3);
         } else {
             return golomb_coef_eof(buf, pos, dif, rng, cnt);
         }
@@ -192,7 +192,7 @@ fn golomb_coef_slow<const DUMMY: usize>(
         if dif < vw {
             dif <<= 1;
             rng = v << 1;
-            cnt -= 1;
+            cnt = cnt.wrapping_sub(1);
             let mut x = 1u32;
             let mut rem = length - 1;
             while rem != 0 {
@@ -209,7 +209,7 @@ fn golomb_coef_slow<const DUMMY: usize>(
         let s1 = ((rng < 0xff84) as u32) + ((rng < 0x8004) as u32);
         dif = dif.wrapping_sub(vw) << s1;
         rng = rng.wrapping_sub(v) << s1;
-        cnt -= s1 as i32;
+        cnt = cnt.wrapping_sub(s1 as i32);
         if length == 8 {
             return golomb_coef_very_slow(buf, pos, cur_pos, dif, rng, cnt);
         }
@@ -238,13 +238,13 @@ fn sign_golomb_very_slow(
         if dif < vw {
             dif <<= 1;
             rng = v << 1;
-            cnt -= 1;
+            cnt = cnt.wrapping_sub(1);
             break;
         }
         let s1 = ((rng < 0xff84) as u32) + ((rng < 0x8004) as u32);
         dif = dif.wrapping_sub(vw) << s1;
         rng = rng.wrapping_sub(v) << s1;
-        cnt -= s1 as i32;
+        cnt = cnt.wrapping_sub(s1 as i32);
         if length > 32 {
             break;
         }
@@ -295,11 +295,11 @@ fn sign_golomb_slow<const DUMMY: usize>(
     if cnt < 18 {
         cold_refill();
         if let Some(bytes) = buf.get(pos..).and_then(|s| s.first_chunk::<8>()) {
-            let nb = ((48 - cnt) >> 3) as usize;
+            let nb = (48i32.wrapping_sub(cnt) >> 3) as usize;
             let w = !u64::from_be_bytes(*bytes);
-            dif |= w >> ((16 + cnt) as u32 & 63);
+            dif |= w >> (16i32.wrapping_add(cnt) as u32 & 63);
             cur_pos = pos.wrapping_add(nb);
-            cnt += (nb as i32) << 3;
+            cnt = cnt.wrapping_add((nb as i32) << 3);
         } else {
             return sign_golomb_eof(buf, pos, dif, rng, cnt);
         }
@@ -314,7 +314,7 @@ fn sign_golomb_slow<const DUMMY: usize>(
         if dif < vw {
             dif <<= 1;
             rng = v << 1;
-            cnt -= 1;
+            cnt = cnt.wrapping_sub(1);
             let mut x = 1u32;
             let mut rem = length - 1;
             while rem != 0 {
@@ -333,7 +333,7 @@ fn sign_golomb_slow<const DUMMY: usize>(
         let s1 = ((rng < 0xff84) as u32) + ((rng < 0x8004) as u32);
         dif = dif.wrapping_sub(vw) << s1;
         rng = rng.wrapping_sub(v) << s1;
-        cnt -= s1 as i32;
+        cnt = cnt.wrapping_sub(s1 as i32);
         if length == 8 {
             return sign_golomb_very_slow(buf, pos, cur_pos, dif, rng, cnt, sign_hi);
         }
@@ -438,33 +438,33 @@ macro_rules! simd_symbol_body {
         let cnt0 = $self.cnt;
         let (dif0, cnt) = if $self.raw.buf.len() >= 8 && $self.raw.pos <= $self.raw.buf.len() - 8 {
             let bytes = $self.raw.buf[$self.raw.pos..].first_chunk::<8>().unwrap();
-            let nb = ((48 - cnt0) >> 3) as usize;
+            let nb = (48i32.wrapping_sub(cnt0) >> 3) as usize;
             let w = !u64::from_be_bytes(*bytes);
             $self.raw.pos = $self.raw.pos.wrapping_add(nb);
             (
-                c0 | ((w >> 1) >> ((15 + cnt0) as u32 & 63)),
-                cnt0 + ((nb as i32) << 3),
+                c0 | ((w >> 1) >> (15i32.wrapping_add(cnt0) as u32 & 63)),
+                cnt0.wrapping_add((nb as i32) << 3),
             )
         } else if cnt0 >= 16 {
             cold_refill();
             (c0, cnt0)
         } else {
             cold_refill();
-            let nb = ((48 - cnt0) >> 3) as usize;
+            let nb = (48i32.wrapping_sub(cnt0) >> 3) as usize;
             let mut d = c0;
             let mut pos = $self.raw.pos;
-            let mut shift = 40 - cnt0;
+            let mut shift = 40i32.wrapping_sub(cnt0);
             loop {
                 let b = if pos < $self.raw.buf.len() { $self.raw.buf[pos] ^ 0xff } else { 0xff };
                 d |= (b as u64) << shift;
                 pos += 1;
-                shift -= 8;
+                shift = shift.wrapping_sub(8);
                 if shift < 0 {
                     break;
                 }
             }
             $self.raw.pos = $self.raw.pos.wrapping_add(nb);
-            (d, cnt0 + ((nb as i32) << 3))
+            (d, cnt0.wrapping_add((nb as i32) << 3))
         };
         let x = if N >= $l {
             $v::from_array(*$cdf.first_chunk::<$l>().unwrap())
@@ -706,7 +706,7 @@ impl<'a> SymbolDecoder<'a> {
     fn refill(&mut self) {
         let cnt = self.cnt;
         debug_assert!((-16..=40).contains(&cnt));
-        let nb = ((48 - cnt) >> 3) as usize;
+        let nb = (48i32.wrapping_sub(cnt) >> 3) as usize;
         if let Some(bytes) = self
             .raw
             .buf
@@ -718,12 +718,17 @@ impl<'a> SymbolDecoder<'a> {
             // `cnt >= 0`) belong to `buf[pos + nb]` and are idempotently OR'd
             // at the exact same bit positions on the next refill.
             let w = !u64::from_be_bytes(*bytes);
-            self.dif |= w >> ((16 + cnt) as u32 & 63);
+            self.dif |= w >> (16i32.wrapping_add(cnt) as u32 & 63);
         } else {
-            self.dif = refill_slow(self.raw.buf, self.raw.pos, self.dif, 40 - cnt);
+            self.dif = refill_slow(
+                self.raw.buf,
+                self.raw.pos,
+                self.dif,
+                40i32.wrapping_sub(cnt),
+            );
         }
         self.raw.pos = self.raw.pos.wrapping_add(nb);
-        self.cnt = cnt + ((nb as i32) << 3);
+        self.cnt = cnt.wrapping_add((nb as i32) << 3);
     }
 
     /// Copies the mutable decoding state (`pos`, `dif`, `rng`, `cnt`) from
@@ -743,7 +748,7 @@ impl<'a> SymbolDecoder<'a> {
     fn refill_hot(&mut self) {
         let cnt = self.cnt;
         debug_assert!((-16..=40).contains(&cnt));
-        let nb = ((48 - cnt) >> 3) as usize;
+        let nb = (48i32.wrapping_sub(cnt) >> 3) as usize;
         if let Some(bytes) = self
             .raw
             .buf
@@ -751,23 +756,23 @@ impl<'a> SymbolDecoder<'a> {
             .and_then(|s| s.first_chunk::<8>())
         {
             let w = !u64::from_be_bytes(*bytes);
-            self.dif |= w >> ((16 + cnt) as u32 & 63);
+            self.dif |= w >> (16i32.wrapping_add(cnt) as u32 & 63);
         } else {
             cold_refill();
             let mut pos = self.raw.pos;
-            let mut shift = 40 - cnt;
+            let mut shift = 40i32.wrapping_sub(cnt);
             loop {
                 let b = if pos < self.raw.buf.len() { self.raw.buf[pos] ^ 0xff } else { 0xff };
                 self.dif |= (b as u64) << shift;
                 pos += 1;
-                shift -= 8;
+                shift = shift.wrapping_sub(8);
                 if shift < 0 {
                     break;
                 }
             }
         }
         self.raw.pos = self.raw.pos.wrapping_add(nb);
-        self.cnt = cnt + ((nb as i32) << 3);
+        self.cnt = cnt.wrapping_add((nb as i32) << 3);
     }
 
     /// Spec `SymbolMaxBits`: bits of the tile data still unread (negative
@@ -1055,7 +1060,7 @@ impl<'a> SymbolDecoder<'a> {
         let new_rng = u.wrapping_sub(v);
         let y = if upd {
             let cb = cdf.cb;
-            let rate = (cb >> 4) as u32;
+            let rate = ((cb >> 4) & 7) as u32;
             let mr = (MR5_SHIFT_SRC >> rate) & MR5_BASE;
             let f_dec = f.wrapping_sub((f >> rate) & mr);
             let f_inc = f.wrapping_add((TOP3_64.wrapping_sub(f) >> rate) & mr);
@@ -1111,7 +1116,7 @@ impl<'a> SymbolDecoder<'a> {
         let new_rng = u.wrapping_sub(v);
         if UPD {
             let cb = loaded.cb;
-            let rate = (cb >> 4) as u32;
+            let rate = ((cb >> 4) & 7) as u32;
             let mr = (MR5_SHIFT_SRC >> rate) & MR5_BASE;
             let f_dec = f.wrapping_sub((f >> rate) & mr);
             let f_inc = f.wrapping_add((TOP3_64.wrapping_sub(f) >> rate) & mr);
@@ -1189,7 +1194,7 @@ impl<'a> SymbolDecoder<'a> {
             let new_dif = sel(ret, dif.wrapping_sub(vw), dif);
             let new_rng = sel(ret, r.wrapping_sub(v), v);
             if UPD {
-                let rate = 4 + (count >> 4) as u32;
+                let rate = 4 + ((count >> 4) & 3) as u32;
                 c3[0] = sel(ret, p0.wrapping_add(f >> rate), p0.wrapping_sub(p0 >> rate)) as u16;
                 c3[2] = inc_count(count);
             }
@@ -1240,33 +1245,33 @@ impl<'a> SymbolDecoder<'a> {
         let cnt0 = self.cnt;
         let (dif0, cnt) = if self.raw.buf.len() >= 8 && self.raw.pos <= self.raw.buf.len() - 8 {
             let bytes = self.raw.buf[self.raw.pos..].first_chunk::<8>().unwrap();
-            let nb = ((48 - cnt0) >> 3) as usize;
+            let nb = (48i32.wrapping_sub(cnt0) >> 3) as usize;
             let w = !u64::from_be_bytes(*bytes);
             self.raw.pos = self.raw.pos.wrapping_add(nb);
             (
-                c0 | ((w >> 1) >> ((15 + cnt0) as u32 & 63)),
-                cnt0 + ((nb as i32) << 3),
+                c0 | ((w >> 1) >> (15i32.wrapping_add(cnt0) as u32 & 63)),
+                cnt0.wrapping_add((nb as i32) << 3),
             )
         } else if cnt0 >= 16 {
             cold_refill();
             (c0, cnt0)
         } else {
             cold_refill();
-            let nb = ((48 - cnt0) >> 3) as usize;
+            let nb = (48i32.wrapping_sub(cnt0) >> 3) as usize;
             let mut d = c0;
             let mut pos = self.raw.pos;
-            let mut shift = 40 - cnt0;
+            let mut shift = 40i32.wrapping_sub(cnt0);
             loop {
                 let b = if pos < self.raw.buf.len() { self.raw.buf[pos] ^ 0xff } else { 0xff };
                 d |= (b as u64) << shift;
                 pos += 1;
-                shift -= 8;
+                shift = shift.wrapping_sub(8);
                 if shift < 0 {
                     break;
                 }
             }
             self.raw.pos = self.raw.pos.wrapping_add(nb);
-            (d, cnt0 + ((nb as i32) << 3))
+            (d, cnt0.wrapping_add((nb as i32) << 3))
         };
         let x0 = u16x8::from_array(*cdf.first_chunk::<8>().unwrap());
         let x1 = if N >= 16 {
@@ -1411,7 +1416,7 @@ impl<'a> SymbolDecoder<'a> {
             if self.dif < vw {
                 self.dif <<= 1;
                 self.rng = v2;
-                self.cnt -= 1;
+                self.cnt = self.cnt.wrapping_sub(1);
                 return Some(1);
             }
         }
@@ -1503,7 +1508,7 @@ impl<'a> SymbolDecoder<'a> {
         let new_rng = sel(ret, r.wrapping_sub(v), v);
         if self.allow_update {
             let count = cdf[2];
-            let rate = 4 + (count >> 4) as u32;
+            let rate = 4 + ((count >> 4) & 3) as u32;
             cdf[0] = sel(ret, p0.wrapping_add(f >> rate), p0.wrapping_sub(p0 >> rate)) as u16;
             cdf[2] = inc_count(count);
         }
