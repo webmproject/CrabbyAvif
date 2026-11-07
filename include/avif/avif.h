@@ -870,9 +870,13 @@ avifImage *crabby_avifImageCreate(uint32_t width,
                                   avifPixelFormat yuvFormat);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if dstImage is not null, it has to point to a valid avifImage object.
-/// - if srcImage is not null, it has to point to a valid avifImage object.
+/// - If `dstImage` is non-null, it must point to a valid, mutable [`avifImage`] whose owned plane
+///   buffers (if `imageOwnsYUVPlanes` / `imageOwnsAlphaPlane` are set) were allocated by
+///   `crabby_avifAlloc` and whose `icc`, `exif`, and `xmp` fields are either empty/default or
+///   managed by `crabby_avifRWData*`.
+/// - If `srcImage` is non-null, it must point to a valid [`avifImage`] distinct from `dstImage`
+///   whose non-null plane and metadata buffers are valid for reads matching its dimensions, row
+///   strides, and metadata sizes.
 avifResult crabby_avifImageCopy(avifImage *dstImage,
                                 const avifImage *srcImage,
                                 avifPlanesFlags planes);
