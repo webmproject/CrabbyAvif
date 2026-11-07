@@ -173,9 +173,11 @@ pub unsafe extern "C" fn crabby_avifImageYUVToRGB(
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
-/// - if rgb is not null, it has to point to a valid avifRGBImage object.
+/// - If `image` is non-null, it must point to a valid, mutable [`avifImage`] whose owned plane
+///   buffers (when `imageOwnsYUVPlanes` / `imageOwnsAlphaPlane` are set) were allocated by
+///   `crabby_avifAlloc`.
+/// - If `rgb` is non-null, it must point to a valid [`avifRGBImage`] whose `pixels` buffer is
+///   valid for reads of `height * rowBytes` bytes (and disjoint from `image`).
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageRGBToYUV(
     image: *mut avifImage,
@@ -190,7 +192,8 @@ pub unsafe extern "C" fn crabby_avifImageRGBToYUV(
     if rgb.pixels.is_none() {
         return avifResult::ReformatFailed;
     }
-    let mut tmp_image: image::Image = deref_const!(image).as_rust_image_no_metadata();
+    let dst = deref_mut!(image);
+    let mut tmp_image: image::Image = dst.as_rust_image_no_metadata();
     // tmp_image borrows the planes of |image|, which are freed below before being
     // copied back from tmp_image. convert_to_yuv() always reallocates the color planes,
     // but only reallocates the alpha plane if |rgb| has alpha. Replace any borrowed
@@ -205,113 +208,63 @@ pub unsafe extern "C" fn crabby_avifImageRGBToYUV(
     if res.is_err() {
         return res.into();
     }
-    // SAFETY: Pre-conditions are met to call these two functions.
-    let res = unsafe {
-        crabby_avifImageFreePlanes(image, avifPlanesFlag::AvifPlanesAll as _);
-        crabby_avifImageAllocatePlanes(
-            image,
-            if tmp_image.has_alpha() {
-                avifPlanesFlag::AvifPlanesAll
-            } else {
-                avifPlanesFlag::AvifPlanesYuv
-            } as _,
-        )
-    };
-    if res != avifResult::Ok {
-        return res;
+    dst.free_planes(avifPlanesFlag::AvifPlanesAll as u32);
+    let planes_to_alloc = if tmp_image.has_alpha() {
+        avifPlanesFlag::AvifPlanesAll
+    } else {
+        avifPlanesFlag::AvifPlanesYuv
+    } as u32;
+    if let Err(err) = avif_image_allocate_planes_helper(dst, planes_to_alloc) {
+        return (&err).into();
     }
-    CopyPlanes(deref_mut!(image), &tmp_image).into()
+    CopyPlanes(dst, &tmp_image).into()
 }
 
 fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
-    for plane in ALL_PLANES {
-        if !src.has_plane(plane) {
-            continue;
-        }
-        let plane_data = src.plane_data(plane).unwrap();
-        if src.depth == 8 {
-            let dst_planes = [
-                dst.yuvPlanes[0],
-                dst.yuvPlanes[1],
-                dst.yuvPlanes[2],
-                dst.alphaPlane,
-            ];
-            let dst_row_bytes = [
-                dst.yuvRowBytes[0],
-                dst.yuvRowBytes[1],
-                dst.yuvRowBytes[2],
-                dst.alphaRowBytes,
-            ];
-            let dst_ptr = dst_planes[plane.as_usize()];
-            if dst_ptr.is_null() {
-                return AvifError::invalid_argument();
-            }
-            for y in 0..plane_data.height {
-                let src_slice = src.row(plane, y)?;
-                let row_offset = checked_mul!(y, dst_row_bytes[plane.as_usize()])?;
-                // SAFETY: dst_ptr was verified to be non-null, row_offset arithmetic is checked,
-                // and the slice length does not exceed the allocated plane row bounds.
-                let dst_slice = unsafe {
-                    std::slice::from_raw_parts_mut(
-                        dst_ptr.offset(isize_from_u32(row_offset)?),
-                        usize_from_u32(plane_data.width)?,
-                    )
-                };
-                dst_slice.copy_from_slice(src_slice);
-            }
-        } else {
-            // When scaling a P010 image, the scaling code converts the image into Yuv420 with
-            // an explicit V plane. So if the V plane is missing in |dst|, we will have to allocate
-            // it here. It is safe to do so since it will be free'd with the other plane buffers
-            // when the image object is destroyed.
-            if plane == Plane::V && dst.yuvPlanes[2].is_null() {
-                let plane_size = usize_from_u32(checked_mul!(
-                    checked_mul!(plane_data.width, plane_data.height)?,
-                    2
-                )?)?;
-                // SAFETY: Pre-conditions are met to call these two functions.
-                dst.yuvPlanes[2] = unsafe { crabby_avifAlloc(plane_size) } as *mut _;
+    // When scaling a P010 image, the scaling code converts the image into Yuv420 with an explicit
+    // V plane. If the V plane is missing in `dst`, allocate it here so it will be freed alongside
+    // the other owned plane buffers when `dst` is destroyed.
+    if src.depth > 8 && dst.yuvPlanes[2].is_null() {
+        if let Some(plane_data) = src.plane_data(Plane::V) {
+            let row_bytes = checked_mul!(plane_data.width, 2)?;
+            let plane_size = usize_from_u32(checked_mul!(row_bytes, plane_data.height)?)?;
+            if plane_size > 0 {
+                let _ = isize_from_usize(plane_size)?;
+                // SAFETY: `plane_size` is in `1..=isize::MAX`; `crabby_avifAlloc` allocates a
+                // zero-initialized buffer via `calloc` (or returns null on OOM).
+                dst.yuvPlanes[2] = unsafe { crabby_avifAlloc(plane_size) } as *mut u8;
                 if dst.yuvPlanes[2].is_null() {
                     return AvifError::out_of_memory();
                 }
-                dst.yuvRowBytes[2] = checked_mul!(plane_data.width, 2)?;
+                dst.yuvRowBytes[2] = row_bytes;
             }
-            let dst_planes = [
-                dst.yuvPlanes[0] as *mut u16,
-                dst.yuvPlanes[1] as *mut u16,
-                dst.yuvPlanes[2] as *mut u16,
-                dst.alphaPlane as *mut u16,
-            ];
-            let raw_row_bytes = [
-                dst.yuvRowBytes[0],
-                dst.yuvRowBytes[1],
-                dst.yuvRowBytes[2],
-                dst.alphaRowBytes,
-            ];
-            let dst_row_bytes = [
-                dst.yuvRowBytes[0] / 2,
-                dst.yuvRowBytes[1] / 2,
-                dst.yuvRowBytes[2] / 2,
-                dst.alphaRowBytes / 2,
-            ];
-            let dst_ptr = dst_planes[plane.as_usize()];
-            if dst_ptr.is_null()
-                || !dst_ptr.is_aligned()
-                || !raw_row_bytes[plane.as_usize()].is_multiple_of(2)
-            {
-                return AvifError::invalid_argument();
+        }
+    }
+
+    let mut dst_image = dst.as_rust_image_no_metadata();
+    for plane in ALL_PLANES {
+        let Some(plane_data) = src.plane_data(plane) else {
+            continue;
+        };
+        if !dst_image.has_plane(plane) {
+            return AvifError::invalid_argument();
+        }
+        if src.depth == 8 {
+            for y in 0..plane_data.height {
+                let src_slice = src.row(plane, y)?;
+                let dst_slice = dst_image.row_mut(plane, y)?;
+                if dst_slice.len() != src_slice.len() {
+                    return AvifError::invalid_argument();
+                }
+                dst_slice.copy_from_slice(src_slice);
             }
+        } else {
             for y in 0..plane_data.height {
                 let src_slice = src.row16(plane, y)?;
-                let row_offset = checked_mul!(y, dst_row_bytes[plane.as_usize()])?;
-                // SAFETY: dst_ptr was verified to be non-null, row_offset arithmetic is checked,
-                // and the slice length does not exceed the allocated plane row bounds.
-                let dst_slice = unsafe {
-                    std::slice::from_raw_parts_mut(
-                        dst_ptr.offset(isize_from_u32(row_offset)?),
-                        usize_from_u32(plane_data.width)?,
-                    )
-                };
+                let dst_slice = dst_image.row16_mut(plane, y)?;
+                if dst_slice.len() != src_slice.len() {
+                    return AvifError::invalid_argument();
+                }
                 dst_slice.copy_from_slice(src_slice);
             }
         }
@@ -320,9 +273,10 @@ fn CopyPlanes(dst: &mut avifImage, src: &Image) -> AvifResult<()> {
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
-/// - if diag is not null, it has to point to a valid avifDiagnostics object.
+/// - If `image` is non-null, it must point to a valid, mutable [`avifImage`] whose active plane
+///   buffers are valid for reads and writes of `plane_height * rowBytes` bytes for the duration of
+///   this call.
+/// - `_diag` is unused and may be null.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageScale(
     image: *mut avifImage,
@@ -332,15 +286,17 @@ pub unsafe extern "C" fn crabby_avifImageScale(
 ) -> avifResult {
     check_pointer!(image);
     let dst_image = deref_mut!(image);
-    if dstWidth > dst_image.width || dstHeight > dst_image.height {
+    let orig_width = dst_image.width;
+    let orig_height = dst_image.height;
+    if dstWidth > orig_width || dstHeight > orig_height {
         // To avoid buffer reallocations, we only support scaling to a smaller size.
         return avifResult::NotImplemented;
     }
-    if dstWidth == dst_image.width && dstHeight == dst_image.height {
+    if dstWidth == orig_width && dstHeight == orig_height {
         return avifResult::Ok;
     }
 
-    let mut rust_image: image::Image = deref_const!(image).as_rust_image_no_metadata();
+    let mut rust_image: image::Image = dst_image.as_rust_image_no_metadata();
     for (plane_ptr, rust_plane) in [
         dst_image.yuvPlanes[0],
         dst_image.yuvPlanes[1],
@@ -361,8 +317,8 @@ pub unsafe extern "C" fn crabby_avifImageScale(
     // The scale function is designed to work only for one category at a time.
     // Restore the width and height to the original values before scaling the
     // alpha plane.
-    rust_image.width = deref_const!(image).width;
-    rust_image.height = deref_const!(image).height;
+    rust_image.width = orig_width;
+    rust_image.height = orig_height;
     let res = rust_image.scale(dstWidth, dstHeight, Category::Alpha);
     if res.is_err() {
         return res.into();

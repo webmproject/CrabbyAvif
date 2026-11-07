@@ -1038,15 +1038,18 @@ void crabby_avifRGBImageSetDefaults(avifRGBImage *rgb, const avifImage *image);
 avifResult crabby_avifImageYUVToRGB(const avifImage *image, avifRGBImage *rgb);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
-/// - if rgb is not null, it has to point to a valid avifRGBImage object.
+/// - If `image` is non-null, it must point to a valid, mutable [`avifImage`] whose owned plane
+///   buffers (when `imageOwnsYUVPlanes` / `imageOwnsAlphaPlane` are set) were allocated by
+///   `crabby_avifAlloc`.
+/// - If `rgb` is non-null, it must point to a valid [`avifRGBImage`] whose `pixels` buffer is
+///   valid for reads of `height * rowBytes` bytes (and disjoint from `image`).
 avifResult crabby_avifImageRGBToYUV(avifImage *image, const avifRGBImage *rgb);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
-/// - if diag is not null, it has to point to a valid avifDiagnostics object.
+/// - If `image` is non-null, it must point to a valid, mutable [`avifImage`] whose active plane
+///   buffers are valid for reads and writes of `plane_height * rowBytes` bytes for the duration of
+///   this call.
+/// - `_diag` is unused and may be null.
 avifResult crabby_avifImageScale(avifImage *image,
                                  uint32_t dstWidth,
                                  uint32_t dstHeight,
