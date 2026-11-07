@@ -449,9 +449,85 @@ fn get_codec_initializers(config: &DecoderConfig) -> AvifResult<Vec<CodecInitial
     }
 }
 
+struct Codec {
+    codec: ptr::NonNull<AMediaCodec>,
+    started: bool,
+}
+
+impl Codec {
+    fn create_by_name(name: &CStr) -> AvifResult<Self> {
+        // SAFETY: `name.as_ptr()` is a valid NUL-terminated C string. `AMediaCodec_createCodecByName`
+        // returns either a newly allocated `AMediaCodec` owned by the caller or null on failure.
+        let codec = unsafe { AMediaCodec_createCodecByName(name.as_ptr()) };
+        let codec = ptr::NonNull::new(codec).ok_or(AvifError::NoCodecAvailable)?;
+        Ok(Self {
+            codec,
+            started: false,
+        })
+    }
+
+    fn create_decoder_by_type(mime_type: &CStr) -> AvifResult<Self> {
+        // SAFETY: `mime_type.as_ptr()` is a valid NUL-terminated C string.
+        // `AMediaCodec_createDecoderByType` returns either a newly allocated `AMediaCodec` owned by
+        // the caller or null on failure.
+        let codec = unsafe { AMediaCodec_createDecoderByType(mime_type.as_ptr()) };
+        let codec = ptr::NonNull::new(codec).ok_or(AvifError::NoCodecAvailable)?;
+        Ok(Self {
+            codec,
+            started: false,
+        })
+    }
+
+    fn configure(&mut self, format: &MediaFormat) -> AvifResult<()> {
+        // SAFETY: `self.codec` is a valid newly created `AMediaCodec`, `format.as_ptr()` is a valid
+        // `AMediaFormat` borrowed for the call, and null `surface`/`crypto` with `flags = 0`
+        // configures a byte-buffer decoder per Android NDK documentation.
+        let status = unsafe {
+            AMediaCodec_configure(
+                self.codec.as_ptr(),
+                format.as_ptr(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                0,
+            )
+        };
+        if status != media_status_t_AMEDIA_OK {
+            return AvifError::no_codec_available();
+        }
+        Ok(())
+    }
+
+    fn start(&mut self) -> AvifResult<()> {
+        // SAFETY: `self.codec` is a valid configured `AMediaCodec` owned exclusively by `self`.
+        let status = unsafe { AMediaCodec_start(self.codec.as_ptr()) };
+        if status != media_status_t_AMEDIA_OK {
+            return AvifError::no_codec_available();
+        }
+        self.started = true;
+        Ok(())
+    }
+
+    fn as_ptr(&self) -> *mut AMediaCodec {
+        self.codec.as_ptr()
+    }
+}
+
+impl Drop for Codec {
+    fn drop(&mut self) {
+        if self.started {
+            // SAFETY: `self.codec` is a valid `AMediaCodec` owned exclusively by `self` that
+            // succeeded in `AMediaCodec_start`.
+            unsafe { AMediaCodec_stop(self.codec.as_ptr()) };
+        }
+        // SAFETY: `self.codec` is a valid non-null `AMediaCodec` uniquely owned by `self` and
+        // deleted only once here when `Codec` is dropped.
+        unsafe { AMediaCodec_delete(self.codec.as_ptr()) };
+    }
+}
+
 #[derive(Default)]
 pub struct MediaCodec {
-    codec: Option<*mut AMediaCodec>,
+    codec: Option<Codec>,
     codec_index: usize,
     format: Option<MediaFormat>,
     output_buffer_index: Option<usize>,
@@ -469,10 +545,14 @@ impl MediaCodec {
     const TIMEOUT: u32 = 10000;
 
     fn initialize_impl(&mut self, low_latency: bool) -> AvifResult<()> {
-        let config = self.config.unwrap_ref();
-        if self.codec_index >= self.codec_initializers.len() {
-            return AvifError::no_codec_available();
-        }
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| AvifError::UnknownError("missing decoder config".into()))?;
+        let initializer = self
+            .codec_initializers
+            .get(self.codec_index)
+            .ok_or(AvifError::NoCodecAvailable)?;
         let mut format = MediaFormat::new()?;
         let mime_type = match config.codec_config.compression_format() {
             CompressionFormat::Avif => MediaFormat::cstr_from_nul_bytes(Self::AV1_MIME)?,
@@ -510,29 +590,12 @@ impl MediaCodec {
         // importance). To make codec for images less important, give it a value more than 0.
         format.set_i32(MediaFormat::KEY_IMPORTANCE, 1)?;
 
-        let codec = match &self.codec_initializers[self.codec_index] {
-            CodecInitializer::ByName(name) => unsafe {
-                AMediaCodec_createCodecByName(name.as_ptr())
-            },
-            CodecInitializer::ByMimeType(mime_type) => unsafe {
-                AMediaCodec_createDecoderByType(mime_type.as_ptr())
-            },
+        let mut codec = match initializer {
+            CodecInitializer::ByName(name) => Codec::create_by_name(name.as_c_str())?,
+            CodecInitializer::ByMimeType(mime_type) => Codec::create_decoder_by_type(mime_type)?,
         };
-        if codec.is_null() {
-            return AvifError::no_codec_available();
-        }
-        let status = unsafe {
-            AMediaCodec_configure(codec, format.as_ptr(), ptr::null_mut(), ptr::null_mut(), 0)
-        };
-        if status != media_status_t_AMEDIA_OK {
-            unsafe { AMediaCodec_delete(codec) };
-            return AvifError::no_codec_available();
-        }
-        let status = unsafe { AMediaCodec_start(codec) };
-        if status != media_status_t_AMEDIA_OK {
-            unsafe { AMediaCodec_delete(codec) };
-            return AvifError::no_codec_available();
-        }
+        codec.configure(&format)?;
+        codec.start()?;
         self.codec = Some(codec);
         Ok(())
     }
@@ -639,12 +702,17 @@ impl MediaCodec {
     }
 
     fn enqueue_payload(&self, input_index: isize, payload: &[u8], flags: u32) -> AvifResult<()> {
+        let codec = self.codec.as_ref().ok_or(AvifError::NoCodecAvailable)?;
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| AvifError::UnknownError("missing decoder config".into()))?;
         Self::enqueue_payload_impl(
-            self.codec.unwrap(),
+            codec.as_ptr(),
             input_index,
             payload,
             flags,
-            &self.config.unwrap_ref().codec_config,
+            &config.codec_config,
         )
     }
 
@@ -708,7 +776,11 @@ impl MediaCodec {
         if self.codec.is_none() {
             self.initialize_impl(/*low_latency=*/ true)?;
         }
-        let codec = self.codec.unwrap();
+        let codec = self
+            .codec
+            .as_ref()
+            .ok_or(AvifError::NoCodecAvailable)?
+            .as_ptr();
         if self.output_buffer_index.is_some() {
             // Release any existing output buffer.
             unsafe {
@@ -832,7 +904,11 @@ impl MediaCodec {
         rx: Receiver<()>,
     ) -> AvifResult<()> {
         let mut retry_count = 0;
-        let codec = self.codec.unwrap();
+        let codec = self
+            .codec
+            .as_ref()
+            .ok_or(AvifError::NoCodecAvailable)?
+            .as_ptr();
         while !grid_image_helper.is_grid_complete()? {
             if rx.try_recv().is_ok() {
                 return AvifError::unknown_error("input thread error");
@@ -908,8 +984,18 @@ impl MediaCodec {
         let (dequeue_to_enqueue_tx, dequeue_to_enqueue_rx) = channel::<()>();
 
         // Create a thread to enqueue the input frames.
-        let codec_config = self.config.unwrap_ref().codec_config.try_clone()?;
-        let codec = MediaCodecThreadWrapper(self.codec.unwrap());
+        let codec_config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| AvifError::UnknownError("missing decoder config".into()))?
+            .codec_config
+            .try_clone()?;
+        let codec = MediaCodecThreadWrapper(
+            self.codec
+                .as_ref()
+                .ok_or(AvifError::NoCodecAvailable)?
+                .as_ptr(),
+        );
         let mut payloads_vec = create_vec_exact(payloads.len())?;
         for payload in payloads {
             payloads_vec.try_push(payload.try_clone()?)?;
@@ -940,23 +1026,16 @@ impl MediaCodec {
     }
 
     fn drop_impl(&mut self) {
-        if self.codec.is_some() {
-            if self.output_buffer_index.is_some() {
+        if let Some(codec) = self.codec.take() {
+            if let Some(index) = self.output_buffer_index.take() {
+                // SAFETY: `codec` is a started `AMediaCodec`, and `index` is a previously dequeued
+                // output buffer index returned to the codec only once before stopping/deleting it.
                 unsafe {
-                    AMediaCodec_releaseOutputBuffer(
-                        self.codec.unwrap(),
-                        self.output_buffer_index.unwrap(),
-                        false,
-                    );
+                    AMediaCodec_releaseOutputBuffer(codec.as_ptr(), index, false);
                 }
-                self.output_buffer_index = None;
             }
-            unsafe {
-                AMediaCodec_stop(self.codec.unwrap());
-                AMediaCodec_delete(self.codec.unwrap());
-            }
-            self.codec = None;
         }
+        self.output_buffer_index = None;
         self.format = None;
     }
 }
