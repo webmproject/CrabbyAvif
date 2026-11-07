@@ -526,8 +526,13 @@ impl GridImageHelper<'_> {
         {
             return AvifError::invalid_image_grid("grid image contains mismatched tiles");
         }
-        self.image
-            .copy_from_tile(cell_image, self.grid, self.cell_index as u32, self.category)?;
+        self.image.copy_from_tile(
+            cell_image,
+            self.grid,
+            self.cell_index as u32,
+            self.category,
+            None,
+        )?;
         if self.cell_index == 0 {
             self.first_cell_image = Some(cell_image.shallow_clone());
         }
@@ -2512,6 +2517,7 @@ impl Decoder {
                 &self.tile_info[decoding_item.usize()].grid,
                 tile_index as u32,
                 category,
+                None,
             )?;
         } else if self.tile_info[decoding_item.usize()].is_overlay() {
             if tile_index == 0 {
