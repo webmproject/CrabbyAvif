@@ -924,10 +924,13 @@ uint32_t crabby_avifImagePlaneWidth(const avifImage *image, int channel);
 uint32_t crabby_avifImagePlaneHeight(const avifImage *image, int channel);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if dstImage is not null, it has to point to a valid avifImage object.
-/// - if srcImage is not null, it has to point to a valid avifImage object.
-/// - if rect is not null, it has to point to a valid avifCropRect object.
+/// - If `dstImage` is non-null, it must point to a valid, mutable [`avifImage`] distinct from
+///   `srcImage`, whose owned plane buffers (if `imageOwnsYUVPlanes` / `imageOwnsAlphaPlane` are
+///   set) were allocated via `crabby_avifAlloc`.
+/// - If `srcImage` is non-null, it must point to a valid [`avifImage`] whose non-null plane
+///   buffers are valid allocations covering `srcImage`'s dimensions and row strides.
+/// - If `rect` is non-null, it must point to a valid [`avifCropRect`] for the duration of this
+///   call.
 avifResult crabby_avifImageSetViewRect(avifImage *dstImage,
                                        const avifImage *srcImage,
                                        const avifCropRect *rect);

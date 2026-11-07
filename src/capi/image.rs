@@ -811,10 +811,13 @@ fn view_rect_offset(x: u32, y: u32, row_bytes: u32, pixel_size: u32) -> Option<i
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if dstImage is not null, it has to point to a valid avifImage object.
-/// - if srcImage is not null, it has to point to a valid avifImage object.
-/// - if rect is not null, it has to point to a valid avifCropRect object.
+/// - If `dstImage` is non-null, it must point to a valid, mutable [`avifImage`] distinct from
+///   `srcImage`, whose owned plane buffers (if `imageOwnsYUVPlanes` / `imageOwnsAlphaPlane` are
+///   set) were allocated via `crabby_avifAlloc`.
+/// - If `srcImage` is non-null, it must point to a valid [`avifImage`] whose non-null plane
+///   buffers are valid allocations covering `srcImage`'s dimensions and row strides.
+/// - If `rect` is non-null, it must point to a valid [`avifCropRect`] for the duration of this
+///   call.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageSetViewRect(
     dstImage: *mut avifImage,
@@ -824,6 +827,9 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
     check_pointer!(dstImage);
     check_pointer!(srcImage);
     check_pointer!(rect);
+    if std::ptr::eq(dstImage, srcImage) {
+        return avifResult::InvalidArgument;
+    }
     let dst = deref_mut!(dstImage);
     let src = deref_const!(srcImage);
     let rect = deref_const!(rect);
@@ -859,9 +865,10 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
     } else {
         (rect.x, rect.y)
     };
+    dst.free_planes(avifPlanesFlag::AvifPlanesAll as u32);
     *dst = avifImage {
-        width: src.width,
-        height: src.height,
+        width: rect.width,
+        height: rect.height,
         depth: src.depth,
         yuvFormat: src.yuvFormat,
         yuvRange: src.yuvRange,
@@ -878,34 +885,47 @@ pub unsafe extern "C" fn crabby_avifImageSetViewRect(
         imir: src.imir,
         ..avifImage::default()
     };
-    dst.width = rect.width;
-    dst.height = rect.height;
     let pixel_size: u32 = if src.depth == 8 { 1 } else { 2 };
-    for plane in 0usize..3 {
-        if src.yuvPlanes[plane].is_null() {
+    for channel in 0usize..4 {
+        let (src_plane, src_row_bytes) = if channel < AVIF_PLANE_COUNT_YUV {
+            (src.yuvPlanes[channel], src.yuvRowBytes[channel])
+        } else {
+            (src.alphaPlane, src.alphaRowBytes)
+        };
+        if src_plane.is_null() {
             continue;
         }
         let chroma_shift = src.yuvFormat.chroma_shift_x();
-        let x = if plane == 0 { x } else { (x >> chroma_shift.0) << chroma_shift.1 };
-        let y = if plane == 0 { y } else { y >> src.yuvFormat.chroma_shift_y() };
-        let Some(offset) = view_rect_offset(x, y, src.yuvRowBytes[plane], pixel_size) else {
+        let plane_x = if channel == 0 || channel == AVIF_PLANE_COUNT_YUV {
+            x
+        } else {
+            (x >> chroma_shift.0) << chroma_shift.1
+        };
+        let plane_y = if channel == 0 || channel == AVIF_PLANE_COUNT_YUV {
+            y
+        } else {
+            y >> src.yuvFormat.chroma_shift_y()
+        };
+        let Some(offset) = view_rect_offset(plane_x, plane_y, src_row_bytes, pixel_size) else {
             return avifResult::InvalidArgument;
         };
-        // SAFETY: rect is non-empty and within the image bounds (checked above), so x and y are
-        // strictly less than the plane width and height (after chroma subsampling). Hence the
-        // offset points to a sample within the plane buffer.
-        dst.yuvPlanes[plane] = unsafe { src.yuvPlanes[plane].offset(offset) };
-        dst.yuvRowBytes[plane] = src.yuvRowBytes[plane];
-    }
-    if !src.alphaPlane.is_null() {
-        let Some(offset) = view_rect_offset(x, y, src.alphaRowBytes, pixel_size) else {
-            return avifResult::InvalidArgument;
+        let dst_plane = if offset == 0 {
+            src_plane
+        } else {
+            // SAFETY: `src_plane` is non-null, `(x, y)` was validated to lie within `src.width`
+            // and `src.height`, `offset` is non-negative and fits in `isize`, and by caller
+            // precondition `src_plane` points to a valid plane allocation covering `src`'s
+            // dimensions and row stride, so advancing by `offset` bytes stays within (or
+            // one-past-end of) the allocated object.
+            unsafe { src_plane.offset(offset) }
         };
-        // SAFETY: rect is non-empty and within the image bounds (checked above), so x and y are
-        // strictly less than the plane width and height. Hence the offset points to a sample
-        // within the plane buffer.
-        dst.alphaPlane = unsafe { src.alphaPlane.offset(offset) };
-        dst.alphaRowBytes = src.alphaRowBytes;
+        if channel < AVIF_PLANE_COUNT_YUV {
+            dst.yuvPlanes[channel] = dst_plane;
+            dst.yuvRowBytes[channel] = src_row_bytes;
+        } else {
+            dst.alphaPlane = dst_plane;
+            dst.alphaRowBytes = src_row_bytes;
+        }
     }
     avifResult::Ok
 }
