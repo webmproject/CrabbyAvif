@@ -998,20 +998,22 @@ impl MediaCodec {
         }
         // For HEVC, MediaCodec expects whole NAL units with each unit prefixed with a start code
         // of "\x00\x00\x00\x01".
-        let nal_length_size = codec_config.nal_length_size() as usize;
+        let nal_length_size = codec_config.nal_length_size();
+        let nal_length_size_usize = usize::from(nal_length_size);
         let mut offset = 0;
         let mut hevc_payload = Vec::new();
         while offset < payload.len() {
-            let payload_slice = &payload[offset..];
+            let payload_slice = payload.get(offset..).ok_or(AvifError::NoContent)?;
             let mut stream = IStream::create(payload_slice);
-            let nal_length = usize_from_u64(stream.read_uxx(nal_length_size as u8)?)?;
-            let nal_unit_end = checked_add!(nal_length, nal_length_size)?;
-            let nal_unit_range = nal_length_size..nal_unit_end;
-            check_slice_range(payload_slice.len(), &nal_unit_range)?;
+            let nal_length = usize_from_u64(stream.read_uxx(nal_length_size)?)?;
+            let nal_unit_end = checked_add!(nal_length, nal_length_size_usize)?;
+            let nal_unit = payload_slice
+                .get(nal_length_size_usize..nal_unit_end)
+                .ok_or(AvifError::NoContent)?;
             // Start code.
             hevc_payload.try_extend_from_slice(&[0, 0, 0, 1])?;
             // NAL Unit.
-            hevc_payload.try_extend_from_slice(&payload_slice[nal_unit_range])?;
+            hevc_payload.try_extend_from_slice(nal_unit)?;
             offset = checked_add!(offset, nal_unit_end)?;
         }
         Ok(Some(hevc_payload))
