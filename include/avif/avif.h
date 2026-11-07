@@ -1025,15 +1025,16 @@ avifIO *crabby_avifIOCreateFileReader(const char *filename);
 void crabby_avifIODestroy(avifIO *io);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if rgb is not null, it has to point to a valid avifRGBImage object.
-/// - if image is not null, it has to point to a valid avifImage object.
+/// - If `rgb` is non-null, it must point to a valid, mutable [`avifRGBImage`] for the duration of
+///   this call, not aliased by `image`.
+/// - If `image` is non-null, it must point to a valid [`avifImage`] for the duration of this call.
 void crabby_avifRGBImageSetDefaults(avifRGBImage *rgb, const avifImage *image);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
-/// - if rgb is not null, it has to point to a valid avifRGBImage object.
+/// - If `image` is non-null, it must point to a valid [`avifImage`] whose non-null plane pointers
+///   are valid for reads of `height * rowBytes` bytes for each active plane.
+/// - If `rgb` is non-null, it must point to a valid [`avifRGBImage`] whose `pixels` buffer is
+///   valid for writes of `height * rowBytes` bytes (and disjoint from `image`'s planes).
 avifResult crabby_avifImageYUVToRGB(const avifImage *image, avifRGBImage *rgb);
 
 /// # Safety

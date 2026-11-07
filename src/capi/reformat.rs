@@ -57,8 +57,10 @@ impl From<rgb::Image> for avifRGBImage {
     }
 }
 
-impl From<&avifRGBImage> for rgb::Image {
-    fn from(rgb: &avifRGBImage) -> rgb::Image {
+impl TryFrom<&avifRGBImage> for rgb::Image {
+    type Error = AvifError;
+
+    fn try_from(rgb: &avifRGBImage) -> AvifResult<rgb::Image> {
         let dst = rgb::Image {
             width: rgb.width,
             height: rgb.height,
@@ -92,16 +94,16 @@ impl From<&avifRGBImage> for rgb::Image {
             (rgb::Format::AGray, false) => rgb::Format::AGray,
         };
         if !dst.has_valid_pixels() {
-            return dst;
+            return Ok(dst);
         }
-        dst.shuffle_channels_to(format).unwrap()
+        dst.shuffle_channels_to(format)
     }
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if rgb is not null, it has to point to a valid avifRGBImage object.
-/// - if image is not null, it has to point to a valid avifImage object.
+/// - If `rgb` is non-null, it must point to a valid, mutable [`avifRGBImage`] for the duration of
+///   this call, not aliased by `image`.
+/// - If `image` is non-null, it must point to a valid [`avifImage`] for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRGBImageSetDefaults(
     rgb: *mut avifRGBImage,
@@ -114,9 +116,10 @@ pub unsafe extern "C" fn crabby_avifRGBImageSetDefaults(
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
-/// - if rgb is not null, it has to point to a valid avifRGBImage object.
+/// - If `image` is non-null, it must point to a valid [`avifImage`] whose non-null plane pointers
+///   are valid for reads of `height * rowBytes` bytes for each active plane.
+/// - If `rgb` is non-null, it must point to a valid [`avifRGBImage`] whose `pixels` buffer is
+///   valid for writes of `height * rowBytes` bytes (and disjoint from `image`'s planes).
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageYUVToRGB(
     image: *const avifImage,
@@ -124,29 +127,32 @@ pub unsafe extern "C" fn crabby_avifImageYUVToRGB(
 ) -> avifResult {
     check_pointer!(image);
     check_pointer!(rgb);
-    let c_image = deref_const!(image);
-    if c_image.yuvPlanes[0].is_null() {
+    let image_ref = deref_const!(image);
+    if image_ref.yuvPlanes[0].is_null() {
         return avifResult::Ok;
     }
-    let mut rgb: rgb::Image = deref_const!(rgb).into();
+    let mut rgb: rgb::Image = match deref_const!(rgb).try_into() {
+        Ok(rgb) => rgb,
+        Err(err) => return (&err).into(),
+    };
     if rgb.pixels.is_none() {
         return avifResult::ReformatFailed;
     }
-    let image: image::Image = c_image.as_rust_image_no_metadata();
+    let rust_image: image::Image = image_ref.as_rust_image_no_metadata();
     for (plane_ptr, rust_plane) in [
-        c_image.yuvPlanes[0],
-        c_image.yuvPlanes[1],
-        c_image.yuvPlanes[2],
-        c_image.alphaPlane,
+        image_ref.yuvPlanes[0],
+        image_ref.yuvPlanes[1],
+        image_ref.yuvPlanes[2],
+        image_ref.alphaPlane,
     ]
     .into_iter()
-    .zip(&image.planes)
+    .zip(&rust_image.planes)
     {
         if !plane_ptr.is_null() && rust_plane.is_none() {
             return avifResult::ReformatFailed;
         }
     }
-    rgb.convert_from_yuv(&image).into()
+    rgb.convert_from_yuv(&rust_image).into()
 }
 
 /// # Safety
@@ -160,7 +166,10 @@ pub unsafe extern "C" fn crabby_avifImageRGBToYUV(
 ) -> avifResult {
     check_pointer!(image);
     check_pointer!(rgb);
-    let rgb: rgb::Image = deref_const!(rgb).into();
+    let rgb: rgb::Image = match deref_const!(rgb).try_into() {
+        Ok(rgb) => rgb,
+        Err(err) => return (&err).into(),
+    };
     if rgb.pixels.is_none() {
         return avifResult::ReformatFailed;
     }
