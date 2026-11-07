@@ -878,18 +878,21 @@ avifResult crabby_avifImageCopy(avifImage *dstImage,
                                 avifPlanesFlags planes);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must point to a valid, mutable [`avifImage`] for the duration of
+/// this call.
 avifResult crabby_avifImageAllocatePlanes(avifImage *image, avifPlanesFlags planes);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must point to a valid, mutable [`avifImage`] whose owned plane
+/// pointers (when `imageOwnsYUVPlanes` / `imageOwnsAlphaPlane` are set) are either null or were
+/// allocated via `crabby_avifAlloc` and have not yet been freed.
 void crabby_avifImageFreePlanes(avifImage *image, avifPlanesFlags planes);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must be a valid pointer obtained from [`crabby_avifImageCreate`] or
+/// [`crabby_avifImageCreateEmpty`] that has not yet been destroyed, with valid owned planes (from
+/// `crabby_avifAlloc`), metadata (`crabby_avifRWData*`), and optional `gainMap` (from
+/// [`crabby_avifGainMapCreate`]).
 void crabby_avifImageDestroy(avifImage *image);
 
 /// # Safety
@@ -926,21 +929,24 @@ avifResult crabby_avifImageSetViewRect(avifImage *dstImage,
                                        const avifCropRect *rect);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
-/// - if exif is not null, it has to point to a valid buffer of size exifSize bytes.
+/// - If `image` is non-null, it must point to a valid, mutable [`avifImage`] whose `exif` field is
+///   either empty/default or managed by `crabby_avifRWData*`.
+/// - If `exif` is non-null and `exifSize > 0`, `exif` must point to at least `exifSize` initialized
+///   bytes valid for reads for the duration of this call (disjoint from `image.exif`).
 avifResult crabby_avifImageSetMetadataExif(avifImage *image, const uint8_t *exif, size_t exifSize);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
-/// - if xmp is not null, it has to point to a valid buffer of size xmpSize bytes.
+/// - If `image` is non-null, it must point to a valid, mutable [`avifImage`] whose `xmp` field is
+///   either empty/default or managed by `crabby_avifRWData*`.
+/// - If `xmp` is non-null and `xmpSize > 0`, `xmp` must point to at least `xmpSize` initialized
+///   bytes valid for reads for the duration of this call (disjoint from `image.xmp`).
 avifResult crabby_avifImageSetMetadataXMP(avifImage *image, const uint8_t *xmp, size_t xmpSize);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
-/// - if icc is not null, it has to point to a valid buffer of size iccSize bytes.
+/// - If `image` is non-null, it must point to a valid, mutable [`avifImage`] whose `icc` field is
+///   either empty/default or managed by `crabby_avifRWData*`.
+/// - If `icc` is non-null and `iccSize > 0`, `icc` must point to at least `iccSize` initialized
+///   bytes valid for reads for the duration of this call (disjoint from `image.icc`).
 avifResult crabby_avifImageSetProfileICC(avifImage *image, const uint8_t *icc, size_t iccSize);
 
 /// # Safety
