@@ -27,6 +27,7 @@ use crate::*;
 
 use ndk_sys::bindings::*;
 
+use std::ffi::CStr;
 use std::ffi::CString;
 use std::os::raw::c_char;
 use std::ptr;
@@ -132,6 +133,10 @@ impl MediaFormat {
     const COLOR_TRANSFER_LINEAR: i32 = 1;
     const COLOR_TRANSFER_SDR_VIDEO: i32 = 3;
     const COLOR_TRANSFER_HLG: i32 = 7;
+
+    fn cstr_from_nul_bytes(bytes: &[u8]) -> AvifResult<&CStr> {
+        CStr::from_bytes_with_nul(bytes).map_err(AvifError::map_unknown_error)
+    }
 
     fn get_i32(&self, key: *const c_char) -> Option<i32> {
         let mut value: i32 = 0;
@@ -290,8 +295,8 @@ impl MediaFormat {
 }
 
 enum CodecInitializer {
-    ByName(String),
-    ByMimeType(String),
+    ByName(CString),
+    ByMimeType(&'static CStr),
 }
 
 #[cfg(android_soong)]
@@ -325,8 +330,10 @@ fn prefer_hardware_decoder(config: &DecoderConfig) -> bool {
             //    only supports 8-bit images.
             prefer_hw || config.depth > 8
         }
+        #[cfg(feature = "avm")]
+        CodecConfiguration::Av2(_) => false,
         #[cfg(feature = "jpegxl")]
-        CodecConfiguration::JpegXl(_) => unreachable!(),
+        CodecConfiguration::JpegXl(_) => false,
     }
 }
 
@@ -338,40 +345,46 @@ fn get_codec_initializers(config: &DecoderConfig) -> AvifResult<Vec<CodecInitial
             rustutils::android::system_properties::read("media.crabbyavif.debug.decoder")
         {
             if !decoder.is_empty() {
-                return try_vec_exact![CodecInitializer::ByName(decoder)];
+                let name = CString::new(decoder).map_err(AvifError::map_unknown_error)?;
+                return try_vec_exact![CodecInitializer::ByName(name)];
             }
         }
     }
-    let dav1d = String::from("c2.android.av1-dav1d.decoder");
-    let hevc = String::from("c2.android.hevc.decoder");
+    let dav1d = MediaFormat::cstr_from_nul_bytes(b"c2.android.av1-dav1d.decoder\0")?.to_owned();
+    let hevc = MediaFormat::cstr_from_nul_bytes(b"c2.android.hevc.decoder\0")?.to_owned();
     let mime_type = match config.codec_config.compression_format() {
-        CompressionFormat::Avif => MediaCodec::AV1_MIME,
-        CompressionFormat::Heic => MediaCodec::HEVC_MIME,
+        CompressionFormat::Avif => MediaFormat::cstr_from_nul_bytes(MediaCodec::AV1_MIME)?,
+        CompressionFormat::Heic => MediaFormat::cstr_from_nul_bytes(MediaCodec::HEVC_MIME)?,
+        #[cfg(feature = "avm")]
+        CompressionFormat::Avif2 => return AvifError::no_codec_available(),
         #[cfg(feature = "jpegxl")]
-        CompressionFormat::JpegXl => unreachable!(),
+        CompressionFormat::JpegXl => return AvifError::no_codec_available(),
     };
-    let prefer_hw = false;
     #[cfg(android_soong)]
     let prefer_hw = prefer_hardware_decoder(config);
+    #[cfg(not(android_soong))]
+    let prefer_hw = false;
     match (prefer_hw, config.codec_config.compression_format()) {
         (true, CompressionFormat::Heic) => try_vec_exact![
-            CodecInitializer::ByMimeType(mime_type.to_string()),
+            CodecInitializer::ByMimeType(mime_type),
             CodecInitializer::ByName(hevc),
         ],
         (false, CompressionFormat::Heic) => try_vec_exact![
             CodecInitializer::ByName(hevc),
-            CodecInitializer::ByMimeType(mime_type.to_string()),
+            CodecInitializer::ByMimeType(mime_type),
         ],
         (true, CompressionFormat::Avif) => try_vec_exact![
-            CodecInitializer::ByMimeType(mime_type.to_string()),
+            CodecInitializer::ByMimeType(mime_type),
             CodecInitializer::ByName(dav1d),
         ],
         (false, CompressionFormat::Avif) => try_vec_exact![
             CodecInitializer::ByName(dav1d),
-            CodecInitializer::ByMimeType(mime_type.to_string()),
+            CodecInitializer::ByMimeType(mime_type),
         ],
+        #[cfg(feature = "avm")]
+        (_, CompressionFormat::Avif2) => AvifError::no_codec_available(),
         #[cfg(feature = "jpegxl")]
-        (_, CompressionFormat::JpegXl) => unreachable!(),
+        (_, CompressionFormat::JpegXl) => AvifError::no_codec_available(),
     }
 }
 
@@ -389,8 +402,8 @@ struct MediaCodecThreadWrapper(*mut AMediaCodec);
 unsafe impl Send for MediaCodecThreadWrapper {}
 
 impl MediaCodec {
-    const AV1_MIME: &str = "video/av01";
-    const HEVC_MIME: &str = "video/hevc";
+    const AV1_MIME: &'static [u8] = b"video/av01\0";
+    const HEVC_MIME: &'static [u8] = b"video/hevc\0";
     const MAX_RETRIES: u32 = 100;
     const TIMEOUT: u32 = 10000;
 
@@ -403,18 +416,16 @@ impl MediaCodec {
         if format.is_null() {
             return AvifError::unknown_error("");
         }
-        c_str!(
-            mime_type,
-            mime_type_tmp,
-            match config.codec_config.compression_format() {
-                CompressionFormat::Avif => Self::AV1_MIME,
-                CompressionFormat::Heic => Self::HEVC_MIME,
-                #[cfg(feature = "jpegxl")]
-                CompressionFormat::JpegXl => unreachable!(),
-            }
-        );
+        let mime_type = match config.codec_config.compression_format() {
+            CompressionFormat::Avif => MediaFormat::cstr_from_nul_bytes(Self::AV1_MIME)?,
+            CompressionFormat::Heic => MediaFormat::cstr_from_nul_bytes(Self::HEVC_MIME)?,
+            #[cfg(feature = "avm")]
+            CompressionFormat::Avif2 => return AvifError::no_codec_available(),
+            #[cfg(feature = "jpegxl")]
+            CompressionFormat::JpegXl => return AvifError::no_codec_available(),
+        };
         unsafe {
-            AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, mime_type);
+            AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, mime_type.as_ptr());
             AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_WIDTH, i32_from_u32(config.width)?);
             AMediaFormat_setInt32(
                 format,
@@ -459,14 +470,12 @@ impl MediaCodec {
         }
 
         let codec = match &self.codec_initializers[self.codec_index] {
-            CodecInitializer::ByName(name) => {
-                c_str!(codec_name, codec_name_tmp, name.as_str());
-                unsafe { AMediaCodec_createCodecByName(codec_name) }
-            }
-            CodecInitializer::ByMimeType(mime_type) => {
-                c_str!(codec_mime, codec_mime_tmp, mime_type.as_str());
-                unsafe { AMediaCodec_createDecoderByType(codec_mime) }
-            }
+            CodecInitializer::ByName(name) => unsafe {
+                AMediaCodec_createCodecByName(name.as_ptr())
+            },
+            CodecInitializer::ByMimeType(mime_type) => unsafe {
+                AMediaCodec_createDecoderByType(mime_type.as_ptr())
+            },
         };
         if codec.is_null() {
             unsafe { AMediaFormat_delete(format) };
