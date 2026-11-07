@@ -162,24 +162,22 @@ impl From<&Image> for avifImage {
         dst_image.icc = (&image.icc).into();
         dst_image.exif = (&image.exif).into();
         dst_image.xmp = (&image.xmp).into();
-        for i in 0usize..3 {
+        for i in 0usize..AVIF_PLANE_COUNT_YUV {
             if !image.has_plane(i.into()) {
                 continue;
             }
-            dst_image.yuvPlanes[i] = if image.depth > 8 {
-                image.planes[i].unwrap_ref().ptr16() as *mut u8
-            } else {
-                image.planes[i].unwrap_ref().ptr() as *mut u8
-            };
-            dst_image.yuvRowBytes[i] = image.row_bytes[i];
+            if let Some(plane) = &image.planes[i] {
+                dst_image.yuvPlanes[i] =
+                    if image.depth > 8 { plane.ptr16() as *mut u8 } else { plane.ptr() as *mut u8 };
+                dst_image.yuvRowBytes[i] = image.row_bytes[i];
+            }
         }
         if image.has_plane(Plane::A) {
-            dst_image.alphaPlane = if image.depth > 8 {
-                image.planes[3].unwrap_ref().ptr16() as *mut u8
-            } else {
-                image.planes[3].unwrap_ref().ptr() as *mut u8
-            };
-            dst_image.alphaRowBytes = image.row_bytes[3];
+            if let Some(plane) = &image.planes[3] {
+                dst_image.alphaPlane =
+                    if image.depth > 8 { plane.ptr16() as *mut u8 } else { plane.ptr() as *mut u8 };
+                dst_image.alphaRowBytes = image.row_bytes[3];
+            }
         }
         dst_image
     }
@@ -244,14 +242,14 @@ impl avifImage {
                 Pixels::from_raw_pointer(
                     self.yuvPlanes[1],
                     self.depth,
-                    self.height,
+                    self.plane_height(1),
                     self.yuvRowBytes[1],
                 )
                 .ok(),
                 Pixels::from_raw_pointer(
                     self.yuvPlanes[2],
                     self.depth,
-                    self.height,
+                    self.plane_height(2),
                     self.yuvRowBytes[2],
                 )
                 .ok(),
@@ -346,6 +344,56 @@ impl avifImage {
             return Ok(None);
         }
         Ok(Some(gainmap.try_into()?))
+    }
+
+    pub(crate) fn plane_width(&self, channel: c_int) -> u32 {
+        match channel {
+            0 => self.width,
+            1 => match self.yuvFormat {
+                PixelFormat::Yuv444 => self.width,
+                PixelFormat::AndroidP010 | PixelFormat::AndroidNv12 | PixelFormat::AndroidNv21 => {
+                    self.width.div_ceil(2).saturating_mul(2)
+                }
+                PixelFormat::Yuv420 | PixelFormat::Yuv422 => self.width.div_ceil(2),
+                PixelFormat::None | PixelFormat::Yuv400 => 0,
+            },
+            2 => match self.yuvFormat {
+                PixelFormat::Yuv444 => self.width,
+                PixelFormat::Yuv420 | PixelFormat::Yuv422 => self.width.div_ceil(2),
+                PixelFormat::None
+                | PixelFormat::Yuv400
+                | PixelFormat::AndroidP010
+                | PixelFormat::AndroidNv12
+                | PixelFormat::AndroidNv21 => 0,
+            },
+            3 if !self.alphaPlane.is_null() => self.width,
+            _ => 0,
+        }
+    }
+
+    pub(crate) fn plane_height(&self, channel: c_int) -> u32 {
+        match channel {
+            0 => self.height,
+            1 => match self.yuvFormat {
+                PixelFormat::Yuv444 | PixelFormat::Yuv422 => self.height,
+                PixelFormat::Yuv420
+                | PixelFormat::AndroidP010
+                | PixelFormat::AndroidNv12
+                | PixelFormat::AndroidNv21 => self.height.div_ceil(2),
+                PixelFormat::None | PixelFormat::Yuv400 => 0,
+            },
+            2 => match self.yuvFormat {
+                PixelFormat::Yuv444 | PixelFormat::Yuv422 => self.height,
+                PixelFormat::Yuv420 => self.height.div_ceil(2),
+                PixelFormat::None
+                | PixelFormat::Yuv400
+                | PixelFormat::AndroidP010
+                | PixelFormat::AndroidNv12
+                | PixelFormat::AndroidNv21 => 0,
+            },
+            3 if !self.alphaPlane.is_null() => self.height,
+            _ => 0,
+        }
     }
 }
 
@@ -668,40 +716,43 @@ pub unsafe extern "C" fn crabby_avifImageDestroy(image: *mut avifImage) {
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must point to a valid [`avifImage`] for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageUsesU16(image: *const avifImage) -> avifBool {
-    to_avifBool(!image.is_null() && deref_const!(image).depth > 8)
+    if image.is_null() {
+        return AVIF_FALSE;
+    }
+    to_avifBool(deref_const!(image).depth > 8)
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must point to a valid [`avifImage`] for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImageIsOpaque(image: *const avifImage) -> avifBool {
+    if image.is_null() {
+        return AVIF_FALSE;
+    }
     // TODO: Check for pixel level opacity as well.
-    to_avifBool(!image.is_null() && deref_const!(image).alphaPlane.is_null())
+    to_avifBool(deref_const!(image).alphaPlane.is_null())
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must point to a valid [`avifImage`] for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImagePlane(image: *const avifImage, channel: c_int) -> *mut u8 {
     if image.is_null() {
         return std::ptr::null_mut();
     }
+    let image = deref_const!(image);
     match channel {
-        0..=2 => deref_const!(image).yuvPlanes[channel as usize],
-        3 => deref_const!(image).alphaPlane,
+        0..=2 => image.yuvPlanes[channel as usize],
+        3 => image.alphaPlane,
         _ => std::ptr::null_mut(),
     }
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must point to a valid [`avifImage`] for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImagePlaneRowBytes(
     image: *const avifImage,
@@ -710,16 +761,16 @@ pub unsafe extern "C" fn crabby_avifImagePlaneRowBytes(
     if image.is_null() {
         return 0;
     }
+    let image = deref_const!(image);
     match channel {
-        0..=2 => deref_const!(image).yuvRowBytes[channel as usize],
-        3 => deref_const!(image).alphaRowBytes,
+        0..=2 => image.yuvRowBytes[channel as usize],
+        3 => image.alphaRowBytes,
         _ => 0,
     }
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must point to a valid [`avifImage`] for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImagePlaneWidth(
     image: *const avifImage,
@@ -728,34 +779,11 @@ pub unsafe extern "C" fn crabby_avifImagePlaneWidth(
     if image.is_null() {
         return 0;
     }
-    let image = deref_const!(image);
-    match channel {
-        0 => image.width,
-        1 => match image.yuvFormat {
-            PixelFormat::Yuv444 => image.width,
-            PixelFormat::AndroidP010 | PixelFormat::AndroidNv12 | PixelFormat::AndroidNv21 => {
-                image.width.div_ceil(2) * 2
-            }
-            PixelFormat::Yuv420 | PixelFormat::Yuv422 => image.width.div_ceil(2),
-            PixelFormat::None | PixelFormat::Yuv400 => 0,
-        },
-        2 => match image.yuvFormat {
-            PixelFormat::Yuv444 => image.width,
-            PixelFormat::Yuv420 | PixelFormat::Yuv422 => image.width.div_ceil(2),
-            PixelFormat::None
-            | PixelFormat::Yuv400
-            | PixelFormat::AndroidP010
-            | PixelFormat::AndroidNv12
-            | PixelFormat::AndroidNv21 => 0,
-        },
-        3 if !image.alphaPlane.is_null() => image.width,
-        _ => 0,
-    }
+    deref_const!(image).plane_width(channel)
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must point to a valid [`avifImage`] for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifImagePlaneHeight(
     image: *const avifImage,
@@ -764,20 +792,7 @@ pub unsafe extern "C" fn crabby_avifImagePlaneHeight(
     if image.is_null() {
         return 0;
     }
-    let image = deref_const!(image);
-    match channel {
-        0 => image.height,
-        1 | 2 => {
-            if image.yuvFormat.is_monochrome() {
-                0
-            } else {
-                let shift_y = image.yuvFormat.chroma_shift_y();
-                (image.height + shift_y) >> shift_y
-            }
-        }
-        3 if !image.alphaPlane.is_null() => image.height,
-        _ => 0,
-    }
+    deref_const!(image).plane_height(channel)
 }
 
 // Returns the byte offset of the sample at (x, y) in a plane, or None on overflow.

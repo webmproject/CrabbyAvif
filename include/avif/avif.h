@@ -893,33 +893,27 @@ void crabby_avifImageFreePlanes(avifImage *image, avifPlanesFlags planes);
 void crabby_avifImageDestroy(avifImage *image);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must point to a valid [`avifImage`] for the duration of this call.
 avifBool crabby_avifImageUsesU16(const avifImage *image);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must point to a valid [`avifImage`] for the duration of this call.
 avifBool crabby_avifImageIsOpaque(const avifImage *image);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must point to a valid [`avifImage`] for the duration of this call.
 uint8_t *crabby_avifImagePlane(const avifImage *image, int channel);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must point to a valid [`avifImage`] for the duration of this call.
 uint32_t crabby_avifImagePlaneRowBytes(const avifImage *image, int channel);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must point to a valid [`avifImage`] for the duration of this call.
 uint32_t crabby_avifImagePlaneWidth(const avifImage *image, int channel);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if image is not null, it has to point to a valid avifImage object.
+/// If `image` is non-null, it must point to a valid [`avifImage`] for the duration of this call.
 uint32_t crabby_avifImagePlaneHeight(const avifImage *image, int channel);
 
 /// # Safety
