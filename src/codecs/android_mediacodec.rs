@@ -45,7 +45,7 @@ include!(concat!(env!("OUT_DIR"), "/mediaimage2_bindgen.rs"));
 #[allow(non_camel_case_types, non_snake_case, unused)]
 #[cfg(not(android_soong))]
 mod android_soong_placeholder {
-    #[repr(C)]
+    #[repr(C, packed)]
     #[derive(Clone, Copy)]
     pub(crate) struct android_MediaImage2_PlaneInfo {
         pub mOffset: u32,
@@ -56,7 +56,7 @@ mod android_soong_placeholder {
     }
 
     #[derive(Clone, Copy)]
-    #[repr(C)]
+    #[repr(C, packed)]
     pub(crate) struct android_MediaImage2 {
         pub mType: u32,
         pub mNumPlanes: u32,
@@ -92,8 +92,8 @@ impl PlaneInfo {
         match self.color_format {
             AndroidMediaCodecOutputColorFormat::P010 => PixelFormat::AndroidP010,
             AndroidMediaCodecOutputColorFormat::Yuv420Flexible => {
-                let u_before_v = self.offset[2] == self.offset[1] + 1;
-                let v_before_u = self.offset[1] == self.offset[2] + 1;
+                let u_before_v = self.offset[1].checked_add(1) == Some(self.offset[2]);
+                let v_before_u = self.offset[2].checked_add(1) == Some(self.offset[1]);
                 let is_nv_format = self.column_stride == [1, 2, 2] && (u_before_v || v_before_u);
                 match (is_nv_format, u_before_v) {
                     (true, true) => PixelFormat::AndroidNv12,
@@ -273,9 +273,15 @@ impl MediaFormat {
     }
 
     fn guess_plane_info(&self) -> AvifResult<PlaneInfo> {
-        let height = self.height()?;
-        let slice_height = self.slice_height().unwrap_or(height);
-        let stride = self.stride()?;
+        let height = u32_from_i32(self.height()?)?;
+        let slice_height = self
+            .slice_height()
+            .and_then(u32_from_i32)
+            .ok()
+            .filter(|&v| v >= height)
+            .unwrap_or(height);
+        let stride = u32_from_i32(self.stride()?)?;
+        let y_plane_size = checked_mul!(stride, slice_height)?;
         let color_format: AndroidMediaCodecOutputColorFormat = self.color_format()?.into();
         let mut plane_info = PlaneInfo {
             color_format,
@@ -284,31 +290,27 @@ impl MediaFormat {
         match color_format {
             AndroidMediaCodecOutputColorFormat::P010 => {
                 plane_info.row_stride = [
-                    u32_from_i32(stride)?,
-                    u32_from_i32(stride)?,
-                    0, // V plane is not used for P010.
+                    stride, stride, 0, // V plane is not used for P010.
                 ];
                 plane_info.column_stride = [
                     2, 2, 0, // V plane is not used for P010.
                 ];
                 plane_info.offset = [
                     0,
-                    isize_from_i32(stride * slice_height)?,
+                    isize_from_u32(y_plane_size)?,
                     0, // V plane is not used for P010.
                 ];
             }
             AndroidMediaCodecOutputColorFormat::Yuv420Flexible => {
-                plane_info.row_stride = [
-                    u32_from_i32(stride)?,
-                    u32_from_i32((stride + 1) / 2)?,
-                    u32_from_i32((stride + 1) / 2)?,
-                ];
+                let half_stride = checked_add!(stride, 1)? / 2;
+                let half_height = checked_add!(height, 1)? / 2;
+                plane_info.row_stride = [stride, half_stride, half_stride];
                 plane_info.column_stride = [1, 1, 1];
                 plane_info.offset[0] = 0;
-                plane_info.offset[1] = isize_from_i32(stride * slice_height)?;
-                let u_plane_size = isize_from_i32(((stride + 1) / 2) * ((height + 1) / 2))?;
+                plane_info.offset[1] = isize_from_u32(y_plane_size)?;
+                let u_plane_size = checked_mul!(half_stride, half_height)?;
                 // When color format is YUV_420_FLEXIBLE, the V plane comes before the U plane.
-                plane_info.offset[2] = plane_info.offset[1] - u_plane_size;
+                plane_info.offset[2] = isize_from_u32(checked_sub!(y_plane_size, u_plane_size)?)?;
             }
         }
         Ok(plane_info)
@@ -325,28 +327,29 @@ impl MediaFormat {
         let has_buffer = unsafe {
             AMediaFormat_getBuffer(self.format.as_ptr(), key.as_ptr(), &mut data, &mut size)
         };
-        if !has_buffer {
+        if !has_buffer || data.is_null() || size != std::mem::size_of::<android_MediaImage2>() {
             return self.guess_plane_info();
         }
-        if size != std::mem::size_of::<android_MediaImage2>() {
-            return self.guess_plane_info();
-        }
-        let image_data = unsafe { *(data as *const android_MediaImage2) };
+        // SAFETY: `AMediaFormat_getBuffer` succeeded and returned a non-null `data` buffer owned by
+        // `self.format` with `size == size_of::<android_MediaImage2>()` initialized bytes.
+        // `ptr::read_unaligned` safely copies the packed `android_MediaImage2` POD struct by value
+        // regardless of the buffer's alignment without creating unaligned references.
+        let image_data = unsafe { ptr::read_unaligned(data.cast::<android_MediaImage2>()) };
         if image_data.mType != android_MediaImage2_Type_MEDIA_IMAGE_TYPE_YUV {
             return self.guess_plane_info();
         }
-        let planes = unsafe { ptr::read_unaligned(ptr::addr_of!(image_data.mPlane)) };
+        let planes = image_data.mPlane;
         let mut plane_info = PlaneInfo {
             color_format: self.color_format()?.into(),
             ..Default::default()
         };
-        // Clippy suggests using an iterator with an enumerator which does not seem more readable
-        // than using explicit indices.
-        #[allow(clippy::needless_range_loop)]
-        for plane_index in 0usize..3 {
-            plane_info.offset[plane_index] = isize_from_u32(planes[plane_index].mOffset)?;
-            plane_info.row_stride[plane_index] = u32_from_i32(planes[plane_index].mRowInc)?;
-            plane_info.column_stride[plane_index] = u32_from_i32(planes[plane_index].mColInc)?;
+        for (plane_index, plane) in planes[..3].iter().copied().enumerate() {
+            let offset = plane.mOffset;
+            let row_inc = plane.mRowInc;
+            let col_inc = plane.mColInc;
+            plane_info.offset[plane_index] = isize_from_u32(offset)?;
+            plane_info.row_stride[plane_index] = u32_from_i32(row_inc)?;
+            plane_info.column_stride[plane_index] = u32_from_i32(col_inc)?;
         }
         Ok(plane_info)
     }
