@@ -163,7 +163,6 @@ pub struct DecodeOptions {
     /// - allow_incremental is set
     /// - only the gain map is decoded and the image has no gain map
     /// - both the color image and the gain map of an image with a gain map are decoded
-    /// - the image is part of an image sequence
     ///
     /// When decoding fails, [`Decoder::image()`] may be partially decoded or have no pixels.
     pub crop_rect: Option<CropRect>,
@@ -2289,10 +2288,6 @@ impl Decoder {
         if self.settings.allow_incremental {
             return AvifError::not_implemented();
         }
-        if self.source == Source::Tracks {
-            // TODO: b/578636390 - Support image sequences.
-            return AvifError::not_implemented();
-        }
         if self.gainmap_present
             && self.settings.image_content_to_decode.color()
             && self.settings.image_content_to_decode.gainmap()
@@ -2865,7 +2860,7 @@ impl Decoder {
         if self.can_use_decode_until() {
             // If decode_until can be used, always prefer that since we cannot conflate calls
             // between get_last_image and get_next_image.
-            match self.decode_until(next_image_index) {
+            match self.decode_until(next_image_index, composed_crop) {
                 Ok(_) => {
                     self.decoded_frame_options = Some(*options);
                     return Ok(());
@@ -3040,7 +3035,7 @@ impl Decoder {
             // requested. Do nothing.
             return Ok(());
         }
-        self.validate_and_compose_crop_rect(index as usize, options)?;
+        let composed_crop = self.validate_and_compose_crop_rect(index as usize, options)?;
         let nearest_keyframe = i32_from_u32(self.nearest_keyframe(index))?;
         if nearest_keyframe > checked_add!(self.image_index, 1)?
             || requested_index <= self.image_index
@@ -3064,7 +3059,7 @@ impl Decoder {
             self.image_index = nearest_keyframe - 1;
         }
         if self.can_use_decode_until() {
-            match self.decode_until(requested_index) {
+            match self.decode_until(requested_index, composed_crop) {
                 Ok(_) => {
                     self.decoded_frame_options = Some(*options);
                     return Ok(());
@@ -3090,17 +3085,26 @@ impl Decoder {
         Ok(())
     }
 
-    fn decode_until(&mut self, requested_index: i32) -> AvifResult<()> {
+    fn decode_until(
+        &mut self,
+        requested_index: i32,
+        composed_crop: Option<CropRect>,
+    ) -> AvifResult<()> {
         if self.io.is_none() {
             return AvifError::io_not_set();
         }
         if requested_index < 0 || requested_index >= i32_from_u32(self.image_count)? {
             return AvifError::no_images_remaining();
         }
+        self.reset_region_decode_state();
         self.create_codecs()?;
         for decoding_item in DecodingItem::ALL_USIZE {
             self.tile_info[decoding_item].decoded_tile_count = 0;
         }
+        if composed_crop.is_some() {
+            self.begin_region_decode();
+        }
+        self.decoded_frame_options = None;
         for decoding_item in self.settings.image_content_to_decode.decoding_items() {
             if self.tiles[decoding_item.usize()].is_empty() {
                 continue;
@@ -3138,6 +3142,9 @@ impl Decoder {
                 decoding_item.category,
             )?;
             checked_incr!(self.tile_info[decoding_item.usize()].decoded_tile_count, 1);
+        }
+        if let Some(composed) = composed_crop {
+            self.image.crop_in_place(&composed)?;
         }
         self.image_index = requested_index;
         self.image_timing = self.nth_image_timing(self.image_index as u32)?;

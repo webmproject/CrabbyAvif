@@ -2989,6 +2989,51 @@ fn region_decode_thumbnails() -> AvifResult<()> {
     Ok(())
 }
 
+#[test]
+fn region_decode_sequence() -> AvifResult<()> {
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    // Animated sequence ('avis') via both next_image_with_options and nth_image_with_options.
+    let mut ref_anim = get_decoder("colors-animated-8bpc.avif");
+    ref_anim.parse()?;
+    let mut ref_frames = Vec::new();
+    for _ in 0..5 {
+        ref_anim.next_image()?;
+        ref_frames.push(ref_anim.image().unwrap().try_deep_clone()?);
+    }
+    let anim_crop = CropRect {
+        x: 5,
+        y: 7,
+        width: ref_frames[0].width / 2,
+        height: ref_frames[0].height / 2,
+    };
+    let anim_opts = decoder::DecodeOptions {
+        crop_rect: Some(anim_crop),
+    };
+
+    let mut anim_next = get_decoder("colors-animated-8bpc.avif");
+    anim_next.parse()?;
+    for ref_frame in &ref_frames {
+        anim_next.next_image_with_options(&anim_opts)?;
+        assert!(utils::are_images_equal(
+            anim_next.image().unwrap(),
+            &crop_reference_image(ref_frame, &anim_crop)?
+        )?);
+    }
+
+    let mut anim_nth = get_decoder("colors-animated-8bpc.avif");
+    anim_nth.parse()?;
+    for &idx in &[3usize, 1, 4, 0] {
+        anim_nth.nth_image_with_options(idx as u32, &anim_opts)?;
+        assert!(utils::are_images_equal(
+            anim_nth.image().unwrap(),
+            &crop_reference_image(&ref_frames[idx], &anim_crop)?
+        )?);
+    }
+    Ok(())
+}
+
 #[cfg(all(feature = "encoder", feature = "satofloat"))]
 #[test]
 fn region_decode_sato_float32() -> AvifResult<()> {
