@@ -375,11 +375,15 @@ impl Image {
         tile_index: u32,
         category: Category,
     ) -> AvifResult<()> {
-        // When copying non-alpha planes, the source and destination depth and yuv_format has
-        // to be the same. This restriction does not apply to alpha planes since only Y plane is
-        // copied.
+        // When copying non-alpha planes, the source and destination yuv_format has to be the
+        // same. This restriction does not apply to alpha planes since only Y plane is copied.
         if category != Category::Alpha && self.yuv_format != tile.yuv_format {
             return AvifError::invalid_image_grid("mismatch in grid tile yuv formats.");
+        }
+        // The samples are copied as is, so the source and destination depth has to be the same
+        // for all planes.
+        if self.depth != tile.depth {
+            return AvifError::invalid_image_grid("mismatch in grid tile depths.");
         }
         let row_index = tile_index / grid.columns;
         let column_index = tile_index % grid.columns;
@@ -450,11 +454,15 @@ impl Image {
         tile_index: u32,
         category: Category,
     ) -> AvifResult<()> {
-        // When copying non-alpha planes, the source and destination depth and yuv_format has
-        // to be the same. This restriction does not apply to alpha planes since only Y plane is
-        // copied.
+        // When copying non-alpha planes, the source and destination yuv_format has to be the
+        // same. This restriction does not apply to alpha planes since only Y plane is copied.
         if category != Category::Alpha && self.yuv_format != tile.yuv_format {
             return AvifError::invalid_image_grid("mismatch in overlay tile yuv formats.");
+        }
+        // The samples are copied as is, so the source and destination depth has to be the same
+        // for all planes.
+        if self.depth != tile.depth {
+            return AvifError::invalid_image_grid("mismatch in overlay tile depths.");
         }
         // This function is used only when |tile| contains pointers and self contains buffers.
         let planes: &[Plane] = if category == Category::Color && tile.has_plane(Plane::A) {
@@ -574,5 +582,84 @@ impl Image {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_image(width: u32, height: u32, depth: u8, category: Category) -> Image {
+        let mut image = Image {
+            width,
+            height,
+            depth,
+            yuv_format: PixelFormat::Yuv444,
+            ..Default::default()
+        };
+        assert!(image.allocate_planes(category).is_ok());
+        image
+    }
+
+    #[test]
+    fn copy_from_tile_depth_mismatch() {
+        let grid = Grid {
+            rows: 1,
+            columns: 2,
+            width: 4,
+            height: 2,
+        };
+        for category in [Category::Color, Category::Alpha] {
+            for (grid_depth, tile_depth) in [(8, 10), (10, 8), (10, 12)] {
+                let mut grid_image = create_image(4, 2, grid_depth, category);
+                let tile = create_image(2, 2, tile_depth, category);
+                assert!(matches!(
+                    grid_image.copy_from_tile(&tile, &grid, 0, category),
+                    Err(AvifError::InvalidImageGrid(_))
+                ));
+            }
+            for depth in [8, 10] {
+                let mut grid_image = create_image(4, 2, depth, category);
+                let tile = create_image(2, 2, depth, category);
+                for tile_index in 0..2 {
+                    assert!(grid_image
+                        .copy_from_tile(&tile, &grid, tile_index, category)
+                        .is_ok());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn copy_and_overlay_from_tile_depth_mismatch() {
+        let tile_info = TileInfo {
+            overlay: Overlay {
+                width: 4,
+                height: 2,
+                horizontal_offsets: vec![0, 2],
+                vertical_offsets: vec![0, 0],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for category in [Category::Color, Category::Alpha] {
+            for (overlay_depth, tile_depth) in [(8, 10), (10, 8), (10, 12)] {
+                let mut overlay_image = create_image(4, 2, overlay_depth, category);
+                let tile = create_image(2, 2, tile_depth, category);
+                assert!(matches!(
+                    overlay_image.copy_and_overlay_from_tile(&tile, &tile_info, 0, category),
+                    Err(AvifError::InvalidImageGrid(_))
+                ));
+            }
+            for depth in [8, 10] {
+                let mut overlay_image = create_image(4, 2, depth, category);
+                let tile = create_image(2, 2, depth, category);
+                for tile_index in 0..2 {
+                    assert!(overlay_image
+                        .copy_and_overlay_from_tile(&tile, &tile_info, tile_index, category)
+                        .is_ok());
+                }
+            }
+        }
     }
 }
