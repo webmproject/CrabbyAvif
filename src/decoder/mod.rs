@@ -154,13 +154,15 @@ pub struct DecodeOptions {
     /// and must fit in it. It is expressed before rotation and mirroring ('irot' and 'imir'
     /// properties, which are kept on the decoded image). Its x and y are rounded down to even
     /// values along the chroma-subsampled axes of the decoded image. The decoded image has the
-    /// dimensions of the region and no clean aperture.
+    /// dimensions of the region and no clean aperture. With ImageContentType::GainMap, the region
+    /// applies to the gain map image.
     ///
     /// Decoding fails if:
     /// - the region does not fit in the clean aperture or image
     /// - the clean aperture is invalid and StrictnessFlag::ClapValid is set
     /// - allow_incremental is set
-    /// - the gain map is decoded
+    /// - only the gain map is decoded and the image has no gain map
+    /// - both the color image and the gain map of an image with a gain map are decoded
     /// - the image has a sample transform
     /// - the image is part of an image sequence
     ///
@@ -189,6 +191,13 @@ impl ImageContentType {
             Self::All => &Category::ALL,
         };
         DecodingItem::all_for_categories(categories)
+    }
+
+    pub(crate) fn color(&self) -> bool {
+        matches!(
+            self,
+            Self::Color | Self::ColorAndAlpha | Self::ColorAndGainMap | Self::All
+        )
     }
 
     pub(crate) fn gainmap(&self) -> bool {
@@ -440,6 +449,7 @@ pub struct Decoder {
     previous_android_mediacodec_output_color_format: Option<AndroidMediaCodecOutputColorFormat>,
     parsed_image: Image,
     native_decodable: bool,
+    parsed_gainmap_image: Image,
     // Options used to decode the frame at image_index, or None if the decoded images do not hold
     // that frame (for example because the last decode attempt failed after modifying them).
     decoded_frame_options: Option<DecodeOptions>,
@@ -1701,6 +1711,7 @@ impl Decoder {
             decoder.previous_android_mediacodec_output_color_format;
         self.parsed_image = decoder.parsed_image;
         self.native_decodable = decoder.native_decodable;
+        self.parsed_gainmap_image = decoder.parsed_gainmap_image;
         self.decoded_frame_options = decoder.decoded_frame_options;
         self.region_decode_dirty = decoder.region_decode_dirty;
     }
@@ -1998,6 +2009,7 @@ impl Decoder {
 
             if cicp_set {
                 self.parsed_image = self.image.shallow_clone();
+                self.parsed_gainmap_image = self.gainmap.image.shallow_clone();
                 self.parse_state = ParseState::Complete;
                 return Ok(());
             }
@@ -2010,6 +2022,7 @@ impl Decoder {
             self.thumbnail_images[0] = self.image.shallow_clone();
         }
         self.parsed_image = self.image.shallow_clone();
+        self.parsed_gainmap_image = self.gainmap.image.shallow_clone();
         self.parse_state = ParseState::Complete;
 
         Ok(())
@@ -2239,7 +2252,11 @@ impl Decoder {
         self.image.width = self.parsed_image.width;
         self.image.height = self.parsed_image.height;
         self.image.clap = self.parsed_image.clap;
+        self.gainmap.image.width = self.parsed_gainmap_image.width;
+        self.gainmap.image.height = self.parsed_gainmap_image.height;
+        self.gainmap.image.clap = self.parsed_gainmap_image.clap;
         self.image.free_planes(&ALL_PLANES);
+        self.gainmap.image.free_planes(&ALL_PLANES);
         for extra_input in &mut self.extra_inputs {
             extra_input.free_planes(&ALL_PLANES);
         }
@@ -2258,6 +2275,7 @@ impl Decoder {
             self.tile_info[decoding_item].decoded_tile_count = 0;
         }
         self.image.free_planes(&ALL_PLANES);
+        self.gainmap.image.free_planes(&ALL_PLANES);
         self.region_decode_dirty = true;
     }
 
@@ -2284,22 +2302,35 @@ impl Decoder {
             // TODO: b/578636390 - Support sample transforms.
             return AvifError::not_implemented();
         }
-        if self.settings.image_content_to_decode.gainmap() {
-            // TODO: b/578636390 - Support gain maps.
+        if self.gainmap_present
+            && self.settings.image_content_to_decode.color()
+            && self.settings.image_content_to_decode.gainmap()
+        {
             return AvifError::not_implemented();
         }
-        let (full_width, full_height, clap, yuv_format) =
-            if self.source == Source::Thumbnail && target_index < self.thumbnail_images.len() {
-                let thumb = &self.thumbnail_images[target_index];
-                (thumb.width, thumb.height, thumb.clap, thumb.yuv_format)
-            } else {
-                (
-                    self.parsed_image.width,
-                    self.parsed_image.height,
-                    self.parsed_image.clap,
-                    self.parsed_image.yuv_format,
-                )
-            };
+        let (full_width, full_height, clap, yuv_format) = if self.settings.image_content_to_decode
+            == ImageContentType::GainMap
+        {
+            if !self.gainmap_present {
+                return AvifError::no_content();
+            }
+            (
+                self.parsed_gainmap_image.width,
+                self.parsed_gainmap_image.height,
+                self.parsed_gainmap_image.clap,
+                self.parsed_gainmap_image.yuv_format,
+            )
+        } else if self.source == Source::Thumbnail && target_index < self.thumbnail_images.len() {
+            let thumb = &self.thumbnail_images[target_index];
+            (thumb.width, thumb.height, thumb.clap, thumb.yuv_format)
+        } else {
+            (
+                self.parsed_image.width,
+                self.parsed_image.height,
+                self.parsed_image.clap,
+                self.parsed_image.yuv_format,
+            )
+        };
 
         let mut base_rect = CropRect {
             x: 0,
@@ -2329,12 +2360,17 @@ impl Decoder {
     }
 
     fn align_crop_rect_for_codecs(&self, composed: CropRect) -> CropRect {
-        let uses_mediacodec = self.tiles[DecodingItem::COLOR.usize()]
+        let (target_item, parsed_fmt) =
+            if self.settings.image_content_to_decode == ImageContentType::GainMap {
+                (DecodingItem::GAINMAP, self.gainmap.image.yuv_format)
+            } else {
+                (DecodingItem::COLOR, self.image.yuv_format)
+            };
+        let uses_mediacodec = self.tiles[target_item.usize()]
             .first()
             .and_then(|tile| self.codecs.get(tile.codec_index))
             .is_some_and(|codec| codec.codec() == CodecChoice::MediaCodec);
-        let output_format =
-            if uses_mediacodec { PixelFormat::Yuv420 } else { self.image.yuv_format };
+        let output_format = if uses_mediacodec { PixelFormat::Yuv420 } else { parsed_fmt };
         composed.align_to_pixel_format(output_format)
     }
 
@@ -2782,6 +2818,8 @@ impl Decoder {
                         uncropped_color_dims = (self.image.width, self.image.height);
                         self.image.crop_in_place(&rect)?;
                         actual_crop = Some(rect.align_to_pixel_format(self.image.yuv_format));
+                    } else if decoding_item == DecodingItem::GAINMAP {
+                        self.gainmap.image.crop_in_place(&rect)?;
                     }
                     decoded_something = true;
                 }
@@ -2870,6 +2908,7 @@ impl Decoder {
                 self.codecs.clear();
                 self.active_thumbnail_index = Some(thumbnail_idx);
                 self.parsed_image = self.image.shallow_clone();
+                self.parsed_gainmap_image = self.gainmap.image.shallow_clone();
                 // prepare_still_image_item() reset the whole decoder state.
                 self.region_decode_dirty = false;
                 self.decoded_frame_options = None;

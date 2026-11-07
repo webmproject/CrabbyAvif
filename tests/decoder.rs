@@ -2954,6 +2954,72 @@ fn region_decode_thumbnails() -> AvifResult<()> {
 }
 
 #[test]
+fn region_decode_gainmap() -> AvifResult<()> {
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    // 1. Gainmap-only region decode succeeds.
+    let mut ref_gm_decoder = get_decoder("seine_sdr_gainmap_srgb.avif");
+    ref_gm_decoder.settings.image_content_to_decode = ImageContentType::GainMap;
+    ref_gm_decoder.parse()?;
+    ref_gm_decoder.nth_image(0)?;
+    let ref_gm = ref_gm_decoder.gainmap().image.try_deep_clone()?;
+
+    let gm_crop = CropRect {
+        x: 15,
+        y: 25,
+        width: 100,
+        height: 80,
+    };
+    let gm_opts = decoder::DecodeOptions {
+        crop_rect: Some(gm_crop),
+    };
+    let mut gm_decoder = get_decoder("seine_sdr_gainmap_srgb.avif");
+    gm_decoder.settings.image_content_to_decode = ImageContentType::GainMap;
+    gm_decoder.parse()?;
+    gm_decoder.nth_image_with_options(0, &gm_opts)?;
+    assert_eq!(gm_decoder.image().unwrap().row_bytes[0], 0);
+    assert!(utils::are_images_equal(
+        &gm_decoder.gainmap().image,
+        &crop_reference_image(&ref_gm, &gm_crop)?
+    )?);
+
+    // 2. Decoding both Color and GainMap with crop_rect when gainmap is present fails.
+    for content in [ImageContentType::ColorAndGainMap, ImageContentType::All] {
+        let mut both_decoder = get_decoder("seine_sdr_gainmap_srgb.avif");
+        both_decoder.settings.image_content_to_decode = content;
+        both_decoder.parse()?;
+        assert!(both_decoder.nth_image_with_options(0, &gm_opts).is_err());
+    }
+
+    // 3. ImageContentType::All on an image WITHOUT a gainmap succeeds with crop_rect.
+    let mut ref_no_gm_decoder = get_decoder("paris_10bpc.avif");
+    ref_no_gm_decoder.parse()?;
+    ref_no_gm_decoder.nth_image(0)?;
+    let ref_no_gm = ref_no_gm_decoder.image().unwrap().try_deep_clone()?;
+    let no_gm_crop = CropRect {
+        x: 4,
+        y: 4,
+        width: 32,
+        height: 32,
+    };
+    let mut no_gm_decoder = get_decoder("paris_10bpc.avif");
+    no_gm_decoder.settings.image_content_to_decode = ImageContentType::All;
+    no_gm_decoder.parse()?;
+    no_gm_decoder.nth_image_with_options(
+        0,
+        &decoder::DecodeOptions {
+            crop_rect: Some(no_gm_crop),
+        },
+    )?;
+    assert!(utils::are_images_equal(
+        no_gm_decoder.image().unwrap(),
+        &crop_reference_image(&ref_no_gm, &no_gm_crop)?
+    )?);
+    Ok(())
+}
+
+#[test]
 fn region_decode_error_cases() -> AvifResult<()> {
     if !HAS_DECODER {
         return Ok(());
