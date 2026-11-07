@@ -542,6 +542,56 @@ TEST(SkCrabbyAvifCodecTest, OddStride16BitPlanes) {
   avifRGBImageFreePixels(&rgb);
 }
 
+TEST(SkCrabbyAvifCodecTest, ScaleAndroidP010WithAlphaToRgba1010102) {
+  constexpr uint32_t kWidth = 4;
+  constexpr uint32_t kHeight = 4;
+  ImagePtr image(
+      avifImageCreate(kWidth, kHeight, 16, AVIF_PIXEL_FORMAT_ANDROID_P010));
+  ASSERT_NE(image, nullptr);
+  ASSERT_EQ(avifImageAllocatePlanes(image.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+
+  // Fill P010 planes (10-bit values in the upper 10 bits of 16-bit words).
+  for (uint32_t y = 0; y < kHeight; ++y) {
+    uint16_t* y_row = reinterpret_cast<uint16_t*>(image->yuvPlanes[0] +
+                                                  y * image->yuvRowBytes[0]);
+    uint16_t* a_row = reinterpret_cast<uint16_t*>(image->alphaPlane +
+                                                  y * image->alphaRowBytes);
+    for (uint32_t x = 0; x < kWidth; ++x) {
+      y_row[x] = 512 << 6;
+      a_row[x] = 512 << 6;
+    }
+  }
+  for (uint32_t y = 0; y < kHeight / 2; ++y) {
+    uint16_t* uv_row = reinterpret_cast<uint16_t*>(image->yuvPlanes[1] +
+                                                   y * image->yuvRowBytes[1]);
+    for (uint32_t x = 0; x < kWidth; ++x) {
+      uv_row[x] = 512 << 6;
+    }
+  }
+
+  ASSERT_EQ(avifImageScale(image.get(), 2, 2, nullptr), AVIF_RESULT_OK);
+  EXPECT_EQ(image->depth, 10u);
+  EXPECT_EQ(image->yuvFormat, AVIF_PIXEL_FORMAT_YUV420);
+
+  // Alpha plane must be downshifted to 10-bit (512) to match image->depth = 10.
+  const uint16_t* scaled_a =
+      reinterpret_cast<const uint16_t*>(image->alphaPlane);
+  EXPECT_EQ(scaled_a[0], 512);
+
+  avifRGBImage rgb;
+  avifRGBImageSetDefaults(&rgb, image.get());
+  rgb.format = AVIF_RGB_FORMAT_RGBA1010102;
+  rgb.depth = 10;
+  ASSERT_EQ(avifRGBImageAllocatePixels(&rgb), AVIF_RESULT_OK);
+  ASSERT_EQ(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+
+  // 512 >> (10 - 2) == 2 in the top 2 bits of RGBA1010102.
+  const uint32_t* rgba_pixels = reinterpret_cast<const uint32_t*>(rgb.pixels);
+  EXPECT_EQ(rgba_pixels[0] >> 30, 2u);
+  avifRGBImageFreePixels(&rgb);
+}
+
 }  // namespace
 }  // namespace avif
 

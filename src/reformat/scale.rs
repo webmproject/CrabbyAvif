@@ -175,6 +175,16 @@ impl Image {
         }
         Ok(())
     }
+    // Converts 16-bit P010 alpha samples (stored in the upper 10 bits) into 10-bit samples.
+    fn downshift_p010_alpha(&mut self) -> AvifResult<()> {
+        for y in 0..self.height {
+            for pixel in self.row16_mut(Plane::A, y)? {
+                *pixel >>= 6;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn scale(&mut self, width: u32, height: u32, category: Category) -> AvifResult<()> {
         if self.width == width && self.height == height {
             return Ok(());
@@ -285,8 +295,20 @@ impl Image {
             if ret != 0 {
                 return AvifError::reformat_failed();
             }
+            if self.has_plane(Plane::A) {
+                let _ = validate_plane(self, Plane::A)?;
+                self.downshift_p010_alpha()?;
+            }
             i010
         } else {
+            // Alpha decoded separately from an AndroidP010 image (e.g. MediaCodec alpha tiles) is
+            // also 16-bit. Downshift it so that it matches the 10-bit depth of the color planes.
+            if self.yuv_format == PixelFormat::AndroidP010 && self.has_plane(Plane::A) {
+                let _ = validate_plane(self, Plane::A)?;
+                self.downshift_p010_alpha()?;
+                self.depth = 10;
+                self.yuv_format = PixelFormat::Yuv420;
+            }
             // Move the planes for this category into `src`; they will be reallocated in `self`
             // below.
             let mut src = self.shallow_clone();
@@ -565,6 +587,32 @@ mod tests {
         assert!(image.scale(49, 24, Category::Color).is_ok());
         assert_eq!(image.width, 49);
         assert_eq!(image.height, 24);
+        Ok(())
+    }
+
+    #[test]
+    fn scale_android_p010_alpha_only() -> AvifResult<()> {
+        let mut image = image::Image {
+            width: 4,
+            height: 4,
+            depth: 16,
+            yuv_format: PixelFormat::AndroidP010,
+            ..Default::default()
+        };
+        image.allocate_planes(Category::Alpha)?;
+        for y in 0..image.height {
+            for pixel in image.row16_mut(Plane::A, y)? {
+                *pixel = 512 << 6;
+            }
+        }
+        image.scale(2, 2, Category::Alpha)?;
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 2);
+        assert_eq!(image.depth, 10);
+        assert_eq!(image.yuv_format, PixelFormat::Yuv420);
+        for y in 0..image.height {
+            assert!(image.row16(Plane::A, y)?.iter().all(|&pixel| pixel == 512));
+        }
         Ok(())
     }
 
