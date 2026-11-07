@@ -160,7 +160,8 @@ pub struct DecodeOptions {
     /// Decoding fails if:
     /// - the region does not fit in the clean aperture or image
     /// - the clean aperture is invalid and StrictnessFlag::ClapValid is set
-    /// - allow_incremental is set
+    /// - allow_progressive or allow_incremental is set (region decoding requires the whole file
+    ///   to be available)
     /// - only the gain map is decoded and the image has no gain map
     /// - both the color image and the gain map of an image with a gain map are decoded
     ///
@@ -2285,7 +2286,8 @@ impl Decoder {
         let Some(user_crop) = options.crop_rect else {
             return Ok(None);
         };
-        if self.settings.allow_incremental {
+        // Region decodes cannot be resumed, so they require the whole file to be available.
+        if self.settings.allow_progressive || self.settings.allow_incremental {
             return AvifError::not_implemented();
         }
         if self.gainmap_present
