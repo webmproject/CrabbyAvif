@@ -21,6 +21,8 @@ use crate::reformat::rgb;
 use crate::utils::pixels::*;
 use crate::*;
 
+use std::os::raw::c_void;
+
 /// cbindgen:rename-all=CamelCase
 #[repr(C)]
 pub struct avifRGBImage {
@@ -54,6 +56,21 @@ impl From<rgb::Image> for avifRGBImage {
             pixels: rgb.pixels_mut(),
             row_bytes: rgb.row_bytes,
         }
+    }
+}
+
+impl avifRGBImage {
+    fn free_pixels(&mut self) {
+        if !self.pixels.is_null() {
+            // SAFETY: By caller precondition on `avifRGBImage` pixel management functions, a
+            // non-null `self.pixels` owned by this `avifRGBImage` was allocated via
+            // `crabby_avifAlloc`, and we immediately null `self.pixels` to prevent double-free.
+            unsafe {
+                crabby_avifFree(self.pixels as *mut c_void);
+            }
+        }
+        self.pixels = std::ptr::null_mut();
+        self.row_bytes = 0;
     }
 }
 
@@ -364,8 +381,7 @@ pub extern "C" fn crabby_avifRGBFormatChannelCount(format: rgb::Format) -> u32 {
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if rgb is not null, it has to point to a valid avifRGBImage object.
+/// If `rgb` is non-null, it must point to a valid [`avifRGBImage`] for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRGBImagePixelSize(rgb: *mut avifRGBImage) -> u32 {
     if rgb.is_null() {
@@ -381,53 +397,49 @@ pub extern "C" fn crabby_avifRGBFormatHasAlpha(format: rgb::Format) -> avifBool 
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if rgb is not null, it has to point to a valid avifRGBImage object.
+/// If `rgb` is non-null, it must point to a valid, mutable [`avifRGBImage`] whose `pixels` field
+/// is either null or a pointer previously allocated by `crabby_avifAlloc` /
+/// [`crabby_avifRGBImageAllocatePixels`].
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRGBImageAllocatePixels(rgb: *mut avifRGBImage) -> avifResult {
-    if rgb.is_null() {
+    check_pointer!(rgb);
+    let rgb = deref_mut!(rgb);
+    rgb.free_pixels();
+    let pixel_size = rgb.format.pixel_size(rgb.depth);
+    let Ok(row_bytes_u32) = checked_mul!(rgb.width, pixel_size) else {
+        return avifResult::InvalidArgument;
+    };
+    let Ok(row_bytes) = usize_from_u32(row_bytes_u32) else {
+        return avifResult::InvalidArgument;
+    };
+    let Ok(height) = usize_from_u32(rgb.height) else {
+        return avifResult::InvalidArgument;
+    };
+    let Ok(raw_size) = checked_mul!(row_bytes, height) else {
+        return avifResult::InvalidArgument;
+    };
+    let Some(alloc_size) = raw_size.checked_add(raw_size % 2) else {
+        return avifResult::InvalidArgument;
+    };
+    if isize_from_usize(alloc_size).is_err() {
         return avifResult::InvalidArgument;
     }
-    // SAFETY: Pre-conditions are met to call this function.
-    unsafe {
-        crabby_avifRGBImageFreePixels(rgb);
-    }
-    let rgb = deref_mut!(rgb);
-    let pixel_size = rgb.format.pixel_size(rgb.depth);
-    let row_bytes = match checked_mul!(rgb.width, pixel_size) {
-        Ok(value) => value,
-        Err(_) => return avifResult::InvalidArgument,
-    };
-    let row_bytes = match usize_from_u32(row_bytes) {
-        Ok(value) => value,
-        Err(_) => return avifResult::InvalidArgument,
-    };
-    let alloc_size = match checked_mul!(row_bytes, rgb.height as usize) {
-        Ok(value) => round2_usize(value),
-        Err(_) => return avifResult::InvalidArgument,
-    };
-    // SAFETY: Pre-conditions are met to call this function.
-    rgb.pixels = unsafe { crabby_avifAlloc(alloc_size) } as *mut _;
+    // SAFETY: `alloc_size <= isize::MAX`; `crabby_avifAlloc` allocates `alloc_size` zeroed bytes
+    // via `calloc` (or returns null on OOM), matching `crabby_avifFree` in `free_pixels`.
+    rgb.pixels = unsafe { crabby_avifAlloc(alloc_size) } as *mut u8;
     if rgb.pixels.is_null() {
         return avifResult::OutOfMemory;
     }
-    rgb.row_bytes = row_bytes as u32;
+    rgb.row_bytes = row_bytes_u32;
     avifResult::Ok
 }
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if rgb is not null, it has to point to a valid avifRGBImage object.
+/// If `rgb` is non-null, it must point to a valid, mutable [`avifRGBImage`] whose `pixels` field
+/// is either null or a pointer previously allocated by `crabby_avifAlloc` /
+/// [`crabby_avifRGBImageAllocatePixels`] that has not yet been freed.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifRGBImageFreePixels(rgb: *mut avifRGBImage) {
-    if rgb.is_null() {
-        return;
-    }
-    let rgb = deref_mut!(rgb);
-    // SAFETY: Pre-conditions are met to call this function.
-    unsafe {
-        crabby_avifFree(rgb.pixels as _);
-    }
-    rgb.pixels = std::ptr::null_mut();
-    rgb.row_bytes = 0;
+    check_pointer_or_return!(rgb);
+    deref_mut!(rgb).free_pixels();
 }

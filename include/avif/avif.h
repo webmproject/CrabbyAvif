@@ -1055,20 +1055,21 @@ avifResult crabby_avifImageScale(avifImage *image,
 uint32_t crabby_avifRGBFormatChannelCount(avifRGBFormat format);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if rgb is not null, it has to point to a valid avifRGBImage object.
+/// If `rgb` is non-null, it must point to a valid [`avifRGBImage`] for the duration of this call.
 uint32_t crabby_avifRGBImagePixelSize(avifRGBImage *rgb);
 
 avifBool crabby_avifRGBFormatHasAlpha(avifRGBFormat format);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if rgb is not null, it has to point to a valid avifRGBImage object.
+/// If `rgb` is non-null, it must point to a valid, mutable [`avifRGBImage`] whose `pixels` field
+/// is either null or a pointer previously allocated by `crabby_avifAlloc` /
+/// [`crabby_avifRGBImageAllocatePixels`].
 avifResult crabby_avifRGBImageAllocatePixels(avifRGBImage *rgb);
 
 /// # Safety
-/// Used by the C API with the following pre-conditions:
-/// - if rgb is not null, it has to point to a valid avifRGBImage object.
+/// If `rgb` is non-null, it must point to a valid, mutable [`avifRGBImage`] whose `pixels` field
+/// is either null or a pointer previously allocated by `crabby_avifAlloc` /
+/// [`crabby_avifRGBImageAllocatePixels`] that has not yet been freed.
 void crabby_avifRGBImageFreePixels(avifRGBImage *rgb);
 
 /// # Safety
