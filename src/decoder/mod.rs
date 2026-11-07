@@ -163,7 +163,6 @@ pub struct DecodeOptions {
     /// - allow_incremental is set
     /// - only the gain map is decoded and the image has no gain map
     /// - both the color image and the gain map of an image with a gain map are decoded
-    /// - the image has a sample transform
     /// - the image is part of an image sequence
     ///
     /// When decoding fails, [`Decoder::image()`] may be partially decoded or have no pixels.
@@ -2294,14 +2293,6 @@ impl Decoder {
             // TODO: b/578636390 - Support image sequences.
             return AvifError::not_implemented();
         }
-        if !self.tile_info[DecodingItem::COLOR.usize()]
-            .sample_transform
-            .tokens
-            .is_empty()
-        {
-            // TODO: b/578636390 - Support sample transforms.
-            return AvifError::not_implemented();
-        }
         if self.gainmap_present
             && self.settings.image_content_to_decode.color()
             && self.settings.image_content_to_decode.gainmap()
@@ -2919,8 +2910,14 @@ impl Decoder {
         };
 
         self.create_codecs()?;
-        let effective_crop =
-            composed_crop.map(|composed| self.align_crop_rect_for_codecs(composed));
+
+        let is_sample_transform = self.tile_info[DecodingItem::COLOR.usize()].is_sample_transform();
+        let effective_crop = match composed_crop {
+            Some(composed) if !is_sample_transform => {
+                Some(self.align_crop_rect_for_codecs(composed))
+            }
+            _ => None,
+        };
 
         match (
             self.settings.allow_progressive,
@@ -2945,11 +2942,7 @@ impl Decoder {
         self.decoded_frame_options = None;
         self.decode_tiles(sample_index, effective_crop)?;
 
-        if !self.tile_info[DecodingItem::COLOR.usize()]
-            .sample_transform
-            .tokens
-            .is_empty()
-        {
+        if is_sample_transform {
             // The tokens were created in parse_sato() which was only called
             // if a sato item was processed in find_and_parse_item(), meaning
             // allow_sample_transform is true.
@@ -2969,6 +2962,14 @@ impl Decoder {
                     // Decoder::image() cannot return 32-bit float samples.
                     // Wait for Decoder::image_float() to be called before applying the
                     // sample transform.
+                    if let Some(composed) = composed_crop {
+                        for extra_input in &mut self.extra_inputs {
+                            // Unused extra inputs have no planes and no dimensions.
+                            if extra_input.has_plane(Plane::Y) {
+                                extra_input.crop_in_place(&composed)?;
+                            }
+                        }
+                    }
                 }
                 16 => {
                     self.tile_info[DecodingItem::COLOR.usize()]
@@ -2979,6 +2980,10 @@ impl Decoder {
                         )?;
                 }
                 _ => return AvifError::unsupported_depth(),
+            }
+            if let Some(composed) = composed_crop {
+                // For 32-bit float samples, this only crops the alpha plane (if any).
+                self.image.crop_in_place(&composed)?;
             }
         }
 

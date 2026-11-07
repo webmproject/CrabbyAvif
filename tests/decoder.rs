@@ -2900,6 +2900,42 @@ fn region_decode_single_tile_and_overlay() -> AvifResult<()> {
 }
 
 #[test]
+fn region_decode_sato_16bit() -> AvifResult<()> {
+    // 16-bit Sample Transform ('sato').
+    if !HAS_NON_ANDROID_DECODER {
+        return Ok(());
+    }
+    for filename in ["weld_sato_8plus8bit.avif", "weld_sato_8plus8bit_alpha.avif"] {
+        let mut ref_decoder = get_decoder(filename);
+        ref_decoder.settings.allow_sample_transform = true;
+        ref_decoder.parse()?;
+        ref_decoder.nth_image(0)?;
+        let ref_full = ref_decoder.image().unwrap().try_deep_clone()?;
+        let crop = CropRect {
+            x: 7,
+            y: 9,
+            width: ref_full.width / 2,
+            height: ref_full.height / 2,
+        };
+        let mut decoder = get_decoder(filename);
+        decoder.settings.allow_sample_transform = true;
+        decoder.parse()?;
+        decoder.nth_image_with_options(
+            0,
+            &decoder::DecodeOptions {
+                crop_rect: Some(crop),
+            },
+        )?;
+        assert_eq!(decoder.image().unwrap().depth, 16);
+        assert!(utils::are_images_equal(
+            decoder.image().unwrap(),
+            &crop_reference_image(&ref_full, &crop)?
+        )?);
+    }
+    Ok(())
+}
+
+#[test]
 fn region_decode_thumbnails() -> AvifResult<()> {
     if !HAS_DECODER {
         return Ok(());
@@ -2950,6 +2986,76 @@ fn region_decode_thumbnails() -> AvifResult<()> {
         thumb_decoder.image().unwrap(),
         &crop_reference_image(&ref_thumb1, &crop_t1)?
     )?);
+    Ok(())
+}
+
+#[cfg(all(feature = "encoder", feature = "satofloat"))]
+#[test]
+fn region_decode_sato_float32() -> AvifResult<()> {
+    // MediaCodec decodes the 12-bit inputs of the Float32b recipe to 8 bits.
+    if !HAS_ENCODER || !HAS_NON_ANDROID_DECODER {
+        return Ok(());
+    }
+    let image_metadata = Image {
+        width: 8,
+        height: 8,
+        depth: 8,
+        yuv_format: PixelFormat::Yuv444,
+        yuv_range: YuvRange::Full,
+        ..Default::default()
+    };
+    let mut float_data = Vec::new();
+    for i in 0..64 {
+        float_data.push((i as f32) * 0.25 + 1.0);
+    }
+    let settings = encoder::Settings {
+        speed: Some(10),
+        mutable: encoder::MutableSettings {
+            quality: 100.0,
+            ..Default::default()
+        },
+        recipe: encoder::Recipe::Float32b,
+        ..Default::default()
+    };
+    let mut enc = encoder::Encoder::create_with_settings(&settings)?;
+    enc.add_image_float(
+        &image_metadata,
+        [
+            Some(float_data.as_slice()),
+            Some(float_data.as_slice()),
+            Some(float_data.as_slice()),
+            None,
+        ],
+    )?;
+    let encoded = enc.finish()?;
+
+    let crop = CropRect {
+        x: 2,
+        y: 3,
+        width: 4,
+        height: 3,
+    };
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(encoded);
+    decoder.settings.allow_sample_transform = true;
+    decoder.parse()?;
+    decoder.nth_image_with_options(
+        0,
+        &decoder::DecodeOptions {
+            crop_rect: Some(crop),
+        },
+    )?;
+    assert_eq!(decoder.image().unwrap().width, 4);
+    assert_eq!(decoder.image().unwrap().height, 3);
+    let planes = decoder.image_float()?;
+    let y_plane = planes[Plane::Y as usize].as_ref().unwrap();
+    assert_eq!(y_plane.len(), 12);
+    for row in 0..3usize {
+        for col in 0..4usize {
+            let expected = float_data[(row + 3) * 8 + (col + 2)];
+            assert_eq!(y_plane[row * 4 + col], expected);
+        }
+    }
     Ok(())
 }
 
