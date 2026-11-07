@@ -27,8 +27,8 @@ use crate::*;
 
 use ndk_sys::bindings::*;
 
+use std::ffi::CStr;
 use std::ffi::CString;
-use std::os::raw::c_char;
 use std::ptr;
 use std::sync::mpsc::channel;
 use std::sync::mpsc::Receiver;
@@ -45,7 +45,7 @@ include!(concat!(env!("OUT_DIR"), "/mediaimage2_bindgen.rs"));
 #[allow(non_camel_case_types, non_snake_case, unused)]
 #[cfg(not(android_soong))]
 mod android_soong_placeholder {
-    #[repr(C)]
+    #[repr(C, packed)]
     #[derive(Clone, Copy)]
     pub(crate) struct android_MediaImage2_PlaneInfo {
         pub mOffset: u32,
@@ -56,7 +56,7 @@ mod android_soong_placeholder {
     }
 
     #[derive(Clone, Copy)]
-    #[repr(C)]
+    #[repr(C, packed)]
     pub(crate) struct android_MediaImage2 {
         pub mType: u32,
         pub mNumPlanes: u32,
@@ -76,14 +76,7 @@ use android_soong_placeholder::*;
 
 #[derive(Debug)]
 struct MediaFormat {
-    format: *mut AMediaFormat,
-}
-
-macro_rules! c_str {
-    ($var: ident, $var_tmp:ident, $str:expr) => {
-        let $var_tmp = CString::new($str).unwrap();
-        let $var = $var_tmp.as_ptr();
-    };
+    format: ptr::NonNull<AMediaFormat>,
 }
 
 #[derive(Debug, Default)]
@@ -99,8 +92,8 @@ impl PlaneInfo {
         match self.color_format {
             AndroidMediaCodecOutputColorFormat::P010 => PixelFormat::AndroidP010,
             AndroidMediaCodecOutputColorFormat::Yuv420Flexible => {
-                let u_before_v = self.offset[2] == self.offset[1] + 1;
-                let v_before_u = self.offset[1] == self.offset[2] + 1;
+                let u_before_v = self.offset[1].checked_add(1) == Some(self.offset[2]);
+                let v_before_u = self.offset[2].checked_add(1) == Some(self.offset[1]);
                 let is_nv_format = self.column_stride == [1, 2, 2] && (u_before_v || v_before_u);
                 match (is_nv_format, u_before_v) {
                     (true, true) => PixelFormat::AndroidNv12,
@@ -120,6 +113,25 @@ impl PlaneInfo {
 }
 
 impl MediaFormat {
+    // Keys documented in https://developer.android.com/reference/android/media/MediaFormat.
+    // Using static NUL-terminated byte slices validated via `CStr::from_bytes_with_nul` avoids
+    // reading bindgen's `extern static mut` `AMEDIAFORMAT_KEY_*` globals (`unsafe`), avoids
+    // heap-allocating `CString` keys, and remains compatible with `cbindgen`'s `syn 1.0` parser.
+    const KEY_WIDTH: &'static [u8] = b"width\0";
+    const KEY_HEIGHT: &'static [u8] = b"height\0";
+    const KEY_SLICE_HEIGHT: &'static [u8] = b"slice-height\0";
+    const KEY_STRIDE: &'static [u8] = b"stride\0";
+    const KEY_COLOR_FORMAT: &'static [u8] = b"color-format\0";
+    const KEY_MIME: &'static [u8] = b"mime\0";
+    const KEY_MAX_INPUT_SIZE: &'static [u8] = b"max-input-size\0";
+    const KEY_CSD_0: &'static [u8] = b"csd-0\0";
+    const KEY_COLOR_RANGE: &'static [u8] = b"color-range\0";
+    const KEY_COLOR_STANDARD: &'static [u8] = b"color-standard\0";
+    const KEY_COLOR_TRANSFER: &'static [u8] = b"color-transfer\0";
+    const KEY_LOW_LATENCY: &'static [u8] = b"low-latency\0";
+    const KEY_IMPORTANCE: &'static [u8] = b"importance\0";
+    const KEY_IMAGE_DATA: &'static [u8] = b"image-data\0";
+
     // These constants are documented in
     // https://developer.android.com/reference/android/media/MediaFormat
     const COLOR_RANGE_LIMITED: i32 = 2;
@@ -133,49 +145,100 @@ impl MediaFormat {
     const COLOR_TRANSFER_SDR_VIDEO: i32 = 3;
     const COLOR_TRANSFER_HLG: i32 = 7;
 
-    fn get_i32(&self, key: *const c_char) -> Option<i32> {
+    fn new() -> AvifResult<Self> {
+        // SAFETY: `AMediaFormat_new` takes no arguments and returns either a newly allocated
+        // `AMediaFormat` owned by the caller or null on allocation failure.
+        let format = unsafe { AMediaFormat_new() };
+        Self::from_raw(format)
+    }
+
+    fn from_raw(format: *mut AMediaFormat) -> AvifResult<Self> {
+        let format = ptr::NonNull::new(format).ok_or_else(|| AvifError::UnknownError("".into()))?;
+        Ok(Self { format })
+    }
+
+    fn as_ptr(&self) -> *const AMediaFormat {
+        self.format.as_ptr()
+    }
+
+    fn cstr_from_nul_bytes(bytes: &[u8]) -> AvifResult<&CStr> {
+        CStr::from_bytes_with_nul(bytes).map_err(AvifError::map_unknown_error)
+    }
+
+    fn get_i32(&self, key: &[u8]) -> Option<i32> {
+        let key = CStr::from_bytes_with_nul(key).ok()?;
         let mut value: i32 = 0;
-        match unsafe { AMediaFormat_getInt32(self.format, key, &mut value as *mut _) } {
+        // SAFETY: `self.format` is a valid non-null `AMediaFormat` owned by `self`, `key.as_ptr()`
+        // is a valid NUL-terminated C string, and `&mut value` is a valid writable `i32` pointer.
+        match unsafe { AMediaFormat_getInt32(self.format.as_ptr(), key.as_ptr(), &mut value) } {
             true => Some(value),
             false => None,
         }
     }
 
-    fn get_i32_from_str(&self, key: &str) -> Option<i32> {
-        c_str!(key_str, key_str_tmp, key);
-        self.get_i32(key_str)
+    fn set_i32(&mut self, key: &[u8], value: i32) -> AvifResult<()> {
+        let key = Self::cstr_from_nul_bytes(key)?;
+        // SAFETY: `self.format` is a valid non-null `AMediaFormat` uniquely owned by `self`, and
+        // `key.as_ptr()` is a valid NUL-terminated C string.
+        unsafe { AMediaFormat_setInt32(self.format.as_ptr(), key.as_ptr(), value) };
+        Ok(())
+    }
+
+    fn set_str(&mut self, key: &[u8], value: &CStr) -> AvifResult<()> {
+        let key = Self::cstr_from_nul_bytes(key)?;
+        // SAFETY: `self.format` is a valid non-null `AMediaFormat` uniquely owned by `self`, and
+        // both `key` and `value` are valid NUL-terminated C strings. `AMediaFormat_setString`
+        // copies `value` into the format before returning.
+        unsafe { AMediaFormat_setString(self.format.as_ptr(), key.as_ptr(), value.as_ptr()) };
+        Ok(())
+    }
+
+    fn set_buffer(&mut self, key: &[u8], data: &[u8]) -> AvifResult<()> {
+        let key = Self::cstr_from_nul_bytes(key)?;
+        // SAFETY: `self.format` is a valid non-null `AMediaFormat` uniquely owned by `self`,
+        // `key.as_ptr()` is a valid NUL-terminated C string, and `data.as_ptr()` is non-null and
+        // valid for reads of `data.len()` bytes. `AMediaFormat_setBuffer` copies the buffer.
+        unsafe {
+            AMediaFormat_setBuffer(
+                self.format.as_ptr(),
+                key.as_ptr(),
+                data.as_ptr().cast(),
+                data.len(),
+            );
+        }
+        Ok(())
     }
 
     fn width(&self) -> AvifResult<i32> {
-        self.get_i32(unsafe { AMEDIAFORMAT_KEY_WIDTH })
-            .ok_or(AvifError::UnknownError("".into()))
+        self.get_i32(Self::KEY_WIDTH)
+            .ok_or_else(|| AvifError::UnknownError("".into()))
     }
 
     fn height(&self) -> AvifResult<i32> {
-        self.get_i32(unsafe { AMEDIAFORMAT_KEY_HEIGHT })
-            .ok_or(AvifError::UnknownError("".into()))
+        self.get_i32(Self::KEY_HEIGHT)
+            .ok_or_else(|| AvifError::UnknownError("".into()))
     }
 
     fn slice_height(&self) -> AvifResult<i32> {
-        self.get_i32(unsafe { AMEDIAFORMAT_KEY_SLICE_HEIGHT })
-            .ok_or(AvifError::UnknownError("".into()))
+        self.get_i32(Self::KEY_SLICE_HEIGHT)
+            .ok_or_else(|| AvifError::UnknownError("".into()))
     }
 
     fn stride(&self) -> AvifResult<i32> {
-        self.get_i32(unsafe { AMEDIAFORMAT_KEY_STRIDE })
-            .ok_or(AvifError::UnknownError("".into()))
+        self.get_i32(Self::KEY_STRIDE)
+            .ok_or_else(|| AvifError::UnknownError("".into()))
     }
 
     fn color_format(&self) -> AvifResult<i32> {
-        self.get_i32(unsafe { AMEDIAFORMAT_KEY_COLOR_FORMAT })
-            .ok_or(AvifError::UnknownError("".into()))
+        self.get_i32(Self::KEY_COLOR_FORMAT)
+            .ok_or_else(|| AvifError::UnknownError("".into()))
     }
 
     fn color_range(&self) -> YuvRange {
         // color-range is documented but isn't exposed as a constant in the NDK:
         // https://developer.android.com/reference/android/media/MediaFormat#KEY_COLOR_RANGE
         let color_range = self
-            .get_i32_from_str("color-range")
+            .get_i32(Self::KEY_COLOR_RANGE)
             .unwrap_or(Self::COLOR_RANGE_LIMITED);
         if color_range == Self::COLOR_RANGE_LIMITED {
             YuvRange::Limited
@@ -187,7 +250,7 @@ impl MediaFormat {
     fn color_primaries(&self) -> ColorPrimaries {
         // color-standard is documented but isn't exposed as a constant in the NDK:
         // https://developer.android.com/reference/android/media/MediaFormat#KEY_COLOR_STANDARD
-        let color_standard = self.get_i32_from_str("color-standard").unwrap_or(-1);
+        let color_standard = self.get_i32(Self::KEY_COLOR_STANDARD).unwrap_or(-1);
         match color_standard {
             Self::COLOR_STANDARD_BT709 => ColorPrimaries::Bt709,
             Self::COLOR_STANDARD_BT2020 => ColorPrimaries::Bt2020,
@@ -201,7 +264,7 @@ impl MediaFormat {
     fn transfer_characteristics(&self) -> TransferCharacteristics {
         // color-transfer is documented but isn't exposed as a constant in the NDK:
         // https://developer.android.com/reference/android/media/MediaFormat#KEY_COLOR_TRANSFER
-        match self.get_i32_from_str("color-transfer").unwrap_or(-1) {
+        match self.get_i32(Self::KEY_COLOR_TRANSFER).unwrap_or(-1) {
             Self::COLOR_TRANSFER_LINEAR => TransferCharacteristics::Linear,
             Self::COLOR_TRANSFER_HLG => TransferCharacteristics::Hlg,
             Self::COLOR_TRANSFER_SDR_VIDEO => TransferCharacteristics::Bt601,
@@ -210,9 +273,19 @@ impl MediaFormat {
     }
 
     fn guess_plane_info(&self) -> AvifResult<PlaneInfo> {
-        let height = self.height()?;
-        let slice_height = self.slice_height().unwrap_or(height);
-        let stride = self.stride()?;
+        let height_i32 = self.height()?;
+        let slice_height_i32 = self
+            .slice_height()
+            .ok()
+            .filter(|&v| v >= 0)
+            .unwrap_or(height_i32);
+        let stride_i32 = self.stride()?;
+        let height = u32_from_i32(height_i32)?;
+        let stride = u32_from_i32(stride_i32)?;
+        let y_plane_size = checked_mul!(
+            isize_from_i32(stride_i32)?,
+            isize_from_i32(slice_height_i32)?
+        )?;
         let color_format: AndroidMediaCodecOutputColorFormat = self.color_format()?.into();
         let mut plane_info = PlaneInfo {
             color_format,
@@ -221,77 +294,74 @@ impl MediaFormat {
         match color_format {
             AndroidMediaCodecOutputColorFormat::P010 => {
                 plane_info.row_stride = [
-                    u32_from_i32(stride)?,
-                    u32_from_i32(stride)?,
-                    0, // V plane is not used for P010.
+                    stride, stride, 0, // V plane is not used for P010.
                 ];
                 plane_info.column_stride = [
                     2, 2, 0, // V plane is not used for P010.
                 ];
                 plane_info.offset = [
                     0,
-                    isize_from_i32(stride * slice_height)?,
+                    y_plane_size,
                     0, // V plane is not used for P010.
                 ];
             }
             AndroidMediaCodecOutputColorFormat::Yuv420Flexible => {
-                plane_info.row_stride = [
-                    u32_from_i32(stride)?,
-                    u32_from_i32((stride + 1) / 2)?,
-                    u32_from_i32((stride + 1) / 2)?,
-                ];
+                let half_stride = checked_add!(stride, 1)? / 2;
+                let half_height = checked_add!(height, 1)? / 2;
+                plane_info.row_stride = [stride, half_stride, half_stride];
                 plane_info.column_stride = [1, 1, 1];
                 plane_info.offset[0] = 0;
-                plane_info.offset[1] = isize_from_i32(stride * slice_height)?;
-                let u_plane_size = isize_from_i32(((stride + 1) / 2) * ((height + 1) / 2))?;
+                plane_info.offset[1] = y_plane_size;
+                let u_plane_size = isize_from_u32(checked_mul!(half_stride, half_height)?)?;
                 // When color format is YUV_420_FLEXIBLE, the V plane comes before the U plane.
-                plane_info.offset[2] = plane_info.offset[1] - u_plane_size;
+                plane_info.offset[2] = checked_sub!(plane_info.offset[1], u_plane_size)?;
             }
         }
         Ok(plane_info)
     }
 
     fn get_plane_info(&self) -> AvifResult<PlaneInfo> {
-        c_str!(key_str, key_str_tmp, "image-data");
-        let mut data: *mut std::ffi::c_void = ptr::null_mut();
+        let key = Self::cstr_from_nul_bytes(Self::KEY_IMAGE_DATA)?;
+        let mut data: *mut std::os::raw::c_void = ptr::null_mut();
         let mut size: usize = 0;
-        if !unsafe {
-            AMediaFormat_getBuffer(
-                self.format,
-                key_str,
-                &mut data as *mut _,
-                &mut size as *mut _,
-            )
-        } {
+        // SAFETY: `self.format` is a valid non-null `AMediaFormat` owned by `self`, `key.as_ptr()`
+        // is a valid NUL-terminated C string, and `&mut data` / `&mut size` are valid writable
+        // out-pointers. Any returned buffer stays alive as long as `self.format` is not mutated
+        // or deleted.
+        let has_buffer = unsafe {
+            AMediaFormat_getBuffer(self.format.as_ptr(), key.as_ptr(), &mut data, &mut size)
+        };
+        if !has_buffer || data.is_null() || size != std::mem::size_of::<android_MediaImage2>() {
             return self.guess_plane_info();
         }
-        if size != std::mem::size_of::<android_MediaImage2>() {
-            return self.guess_plane_info();
-        }
-        let image_data = unsafe { *(data as *const android_MediaImage2) };
+        // SAFETY: `AMediaFormat_getBuffer` succeeded and returned a non-null `data` buffer owned by
+        // `self.format` with `size == size_of::<android_MediaImage2>()` initialized bytes.
+        // `ptr::read_unaligned` safely copies the packed `android_MediaImage2` POD struct by value
+        // regardless of the buffer's alignment without creating unaligned references.
+        let image_data = unsafe { ptr::read_unaligned(data.cast::<android_MediaImage2>()) };
         if image_data.mType != android_MediaImage2_Type_MEDIA_IMAGE_TYPE_YUV {
             return self.guess_plane_info();
         }
-        let planes = unsafe { ptr::read_unaligned(ptr::addr_of!(image_data.mPlane)) };
+        let planes = image_data.mPlane;
         let mut plane_info = PlaneInfo {
             color_format: self.color_format()?.into(),
             ..Default::default()
         };
-        // Clippy suggests using an iterator with an enumerator which does not seem more readable
-        // than using explicit indices.
-        #[allow(clippy::needless_range_loop)]
-        for plane_index in 0usize..3 {
-            plane_info.offset[plane_index] = isize_from_u32(planes[plane_index].mOffset)?;
-            plane_info.row_stride[plane_index] = u32_from_i32(planes[plane_index].mRowInc)?;
-            plane_info.column_stride[plane_index] = u32_from_i32(planes[plane_index].mColInc)?;
+        for (plane_index, plane) in planes[..3].iter().copied().enumerate() {
+            let offset = plane.mOffset;
+            let row_inc = plane.mRowInc;
+            let col_inc = plane.mColInc;
+            plane_info.offset[plane_index] = isize_from_u32(offset)?;
+            plane_info.row_stride[plane_index] = u32_from_i32(row_inc)?;
+            plane_info.column_stride[plane_index] = u32_from_i32(col_inc)?;
         }
         Ok(plane_info)
     }
 }
 
 enum CodecInitializer {
-    ByName(String),
-    ByMimeType(String),
+    ByName(CString),
+    ByMimeType(&'static CStr),
 }
 
 #[cfg(android_soong)]
@@ -325,8 +395,10 @@ fn prefer_hardware_decoder(config: &DecoderConfig) -> bool {
             //    only supports 8-bit images.
             prefer_hw || config.depth > 8
         }
+        #[cfg(feature = "avm")]
+        CodecConfiguration::Av2(_) => false,
         #[cfg(feature = "jpegxl")]
-        CodecConfiguration::JpegXl(_) => unreachable!(),
+        CodecConfiguration::JpegXl(_) => false,
     }
 }
 
@@ -338,46 +410,128 @@ fn get_codec_initializers(config: &DecoderConfig) -> AvifResult<Vec<CodecInitial
             rustutils::android::system_properties::read("media.crabbyavif.debug.decoder")
         {
             if !decoder.is_empty() {
-                return try_vec_exact![CodecInitializer::ByName(decoder)];
+                let name = CString::new(decoder).map_err(AvifError::map_unknown_error)?;
+                return try_vec_exact![CodecInitializer::ByName(name)];
             }
         }
     }
-    let dav1d = String::from("c2.android.av1-dav1d.decoder");
-    let hevc = String::from("c2.android.hevc.decoder");
+    let dav1d = MediaFormat::cstr_from_nul_bytes(b"c2.android.av1-dav1d.decoder\0")?.to_owned();
+    let hevc = MediaFormat::cstr_from_nul_bytes(b"c2.android.hevc.decoder\0")?.to_owned();
     let mime_type = match config.codec_config.compression_format() {
-        CompressionFormat::Avif => MediaCodec::AV1_MIME,
-        CompressionFormat::Heic => MediaCodec::HEVC_MIME,
+        CompressionFormat::Avif => MediaFormat::cstr_from_nul_bytes(MediaCodec::AV1_MIME)?,
+        CompressionFormat::Heic => MediaFormat::cstr_from_nul_bytes(MediaCodec::HEVC_MIME)?,
+        #[cfg(feature = "avm")]
+        CompressionFormat::Avif2 => return AvifError::no_codec_available(),
         #[cfg(feature = "jpegxl")]
-        CompressionFormat::JpegXl => unreachable!(),
+        CompressionFormat::JpegXl => return AvifError::no_codec_available(),
     };
-    let prefer_hw = false;
     #[cfg(android_soong)]
     let prefer_hw = prefer_hardware_decoder(config);
+    #[cfg(not(android_soong))]
+    let prefer_hw = false;
     match (prefer_hw, config.codec_config.compression_format()) {
         (true, CompressionFormat::Heic) => try_vec_exact![
-            CodecInitializer::ByMimeType(mime_type.to_string()),
+            CodecInitializer::ByMimeType(mime_type),
             CodecInitializer::ByName(hevc),
         ],
         (false, CompressionFormat::Heic) => try_vec_exact![
             CodecInitializer::ByName(hevc),
-            CodecInitializer::ByMimeType(mime_type.to_string()),
+            CodecInitializer::ByMimeType(mime_type),
         ],
         (true, CompressionFormat::Avif) => try_vec_exact![
-            CodecInitializer::ByMimeType(mime_type.to_string()),
+            CodecInitializer::ByMimeType(mime_type),
             CodecInitializer::ByName(dav1d),
         ],
         (false, CompressionFormat::Avif) => try_vec_exact![
             CodecInitializer::ByName(dav1d),
-            CodecInitializer::ByMimeType(mime_type.to_string()),
+            CodecInitializer::ByMimeType(mime_type),
         ],
+        #[cfg(feature = "avm")]
+        (_, CompressionFormat::Avif2) => AvifError::no_codec_available(),
         #[cfg(feature = "jpegxl")]
-        (_, CompressionFormat::JpegXl) => unreachable!(),
+        (_, CompressionFormat::JpegXl) => AvifError::no_codec_available(),
+    }
+}
+
+struct Codec {
+    codec: ptr::NonNull<AMediaCodec>,
+    started: bool,
+}
+
+impl Codec {
+    fn create_by_name(name: &CStr) -> AvifResult<Self> {
+        // SAFETY: `name.as_ptr()` is a valid NUL-terminated C string. `AMediaCodec_createCodecByName`
+        // returns either a newly allocated `AMediaCodec` owned by the caller or null on failure.
+        let codec = unsafe { AMediaCodec_createCodecByName(name.as_ptr()) };
+        let codec = ptr::NonNull::new(codec).ok_or(AvifError::NoCodecAvailable)?;
+        Ok(Self {
+            codec,
+            started: false,
+        })
+    }
+
+    fn create_decoder_by_type(mime_type: &CStr) -> AvifResult<Self> {
+        // SAFETY: `mime_type.as_ptr()` is a valid NUL-terminated C string.
+        // `AMediaCodec_createDecoderByType` returns either a newly allocated `AMediaCodec` owned by
+        // the caller or null on failure.
+        let codec = unsafe { AMediaCodec_createDecoderByType(mime_type.as_ptr()) };
+        let codec = ptr::NonNull::new(codec).ok_or(AvifError::NoCodecAvailable)?;
+        Ok(Self {
+            codec,
+            started: false,
+        })
+    }
+
+    fn configure(&mut self, format: &MediaFormat) -> AvifResult<()> {
+        // SAFETY: `self.codec` is a valid newly created `AMediaCodec`, `format.as_ptr()` is a valid
+        // `AMediaFormat` borrowed for the call, and null `surface`/`crypto` with `flags = 0`
+        // configures a byte-buffer decoder per Android NDK documentation.
+        let status = unsafe {
+            AMediaCodec_configure(
+                self.codec.as_ptr(),
+                format.as_ptr(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                0,
+            )
+        };
+        if status != media_status_t_AMEDIA_OK {
+            return AvifError::no_codec_available();
+        }
+        Ok(())
+    }
+
+    fn start(&mut self) -> AvifResult<()> {
+        // SAFETY: `self.codec` is a valid configured `AMediaCodec` owned exclusively by `self`.
+        let status = unsafe { AMediaCodec_start(self.codec.as_ptr()) };
+        if status != media_status_t_AMEDIA_OK {
+            return AvifError::no_codec_available();
+        }
+        self.started = true;
+        Ok(())
+    }
+
+    fn as_ptr(&self) -> *mut AMediaCodec {
+        self.codec.as_ptr()
+    }
+}
+
+impl Drop for Codec {
+    fn drop(&mut self) {
+        if self.started {
+            // SAFETY: `self.codec` is a valid `AMediaCodec` owned exclusively by `self` that
+            // succeeded in `AMediaCodec_start`.
+            unsafe { AMediaCodec_stop(self.codec.as_ptr()) };
+        }
+        // SAFETY: `self.codec` is a valid non-null `AMediaCodec` uniquely owned by `self` and
+        // deleted only once here when `Codec` is dropped.
+        unsafe { AMediaCodec_delete(self.codec.as_ptr()) };
     }
 }
 
 #[derive(Default)]
 pub struct MediaCodec {
-    codec: Option<*mut AMediaCodec>,
+    codec: Option<Codec>,
     codec_index: usize,
     format: Option<MediaFormat>,
     output_buffer_index: Option<usize>,
@@ -389,106 +543,63 @@ struct MediaCodecThreadWrapper(*mut AMediaCodec);
 unsafe impl Send for MediaCodecThreadWrapper {}
 
 impl MediaCodec {
-    const AV1_MIME: &str = "video/av01";
-    const HEVC_MIME: &str = "video/hevc";
+    const AV1_MIME: &'static [u8] = b"video/av01\0";
+    const HEVC_MIME: &'static [u8] = b"video/hevc\0";
     const MAX_RETRIES: u32 = 100;
     const TIMEOUT: u32 = 10000;
 
     fn initialize_impl(&mut self, low_latency: bool) -> AvifResult<()> {
-        let config = self.config.unwrap_ref();
-        if self.codec_index >= self.codec_initializers.len() {
-            return AvifError::no_codec_available();
-        }
-        let format = unsafe { AMediaFormat_new() };
-        if format.is_null() {
-            return AvifError::unknown_error("");
-        }
-        c_str!(
-            mime_type,
-            mime_type_tmp,
-            match config.codec_config.compression_format() {
-                CompressionFormat::Avif => Self::AV1_MIME,
-                CompressionFormat::Heic => Self::HEVC_MIME,
-                #[cfg(feature = "jpegxl")]
-                CompressionFormat::JpegXl => unreachable!(),
-            }
-        );
-        unsafe {
-            AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, mime_type);
-            AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_WIDTH, i32_from_u32(config.width)?);
-            AMediaFormat_setInt32(
-                format,
-                AMEDIAFORMAT_KEY_HEIGHT,
-                i32_from_u32(config.height)?,
-            );
-            AMediaFormat_setInt32(
-                format,
-                AMEDIAFORMAT_KEY_COLOR_FORMAT,
-                if config.depth == 8 {
-                    // For 8-bit images, always use Yuv420Flexible.
-                    AndroidMediaCodecOutputColorFormat::Yuv420Flexible
-                } else {
-                    // For all other images, use whatever format is requested.
-                    config.android_mediacodec_output_color_format
-                } as i32,
-            );
-            if low_latency {
-                // low-latency is documented but isn't exposed as a constant in the NDK:
-                // https://developer.android.com/reference/android/media/MediaFormat#KEY_LOW_LATENCY
-                c_str!(low_latency_str, low_latency_tmp, "low-latency");
-                AMediaFormat_setInt32(format, low_latency_str, 1);
-            }
-            AMediaFormat_setInt32(
-                format,
-                AMEDIAFORMAT_KEY_MAX_INPUT_SIZE,
-                i32_from_usize(config.max_input_size)?,
-            );
-            let codec_specific_data = config.codec_config.raw_data()?;
-            if !codec_specific_data.is_empty() {
-                AMediaFormat_setBuffer(
-                    format,
-                    AMEDIAFORMAT_KEY_CSD_0,
-                    codec_specific_data.as_ptr() as *const _,
-                    codec_specific_data.len(),
-                );
-            }
-            // For video codecs, 0 is the highest importance (higher the number lesser the
-            // importance). To make codec for images less important, give it a value more than 0.
-            c_str!(importance, importance_tmp, "importance");
-            AMediaFormat_setInt32(format, importance, 1);
-        }
-
-        let codec = match &self.codec_initializers[self.codec_index] {
-            CodecInitializer::ByName(name) => {
-                c_str!(codec_name, codec_name_tmp, name.as_str());
-                unsafe { AMediaCodec_createCodecByName(codec_name) }
-            }
-            CodecInitializer::ByMimeType(mime_type) => {
-                c_str!(codec_mime, codec_mime_tmp, mime_type.as_str());
-                unsafe { AMediaCodec_createDecoderByType(codec_mime) }
-            }
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| AvifError::UnknownError("missing decoder config".into()))?;
+        let initializer = self
+            .codec_initializers
+            .get(self.codec_index)
+            .ok_or(AvifError::NoCodecAvailable)?;
+        let mut format = MediaFormat::new()?;
+        let mime_type = match config.codec_config.compression_format() {
+            CompressionFormat::Avif => MediaFormat::cstr_from_nul_bytes(Self::AV1_MIME)?,
+            CompressionFormat::Heic => MediaFormat::cstr_from_nul_bytes(Self::HEVC_MIME)?,
+            #[cfg(feature = "avm")]
+            CompressionFormat::Avif2 => return AvifError::no_codec_available(),
+            #[cfg(feature = "jpegxl")]
+            CompressionFormat::JpegXl => return AvifError::no_codec_available(),
         };
-        if codec.is_null() {
-            unsafe { AMediaFormat_delete(format) };
-            return AvifError::no_codec_available();
+        format.set_str(MediaFormat::KEY_MIME, mime_type)?;
+        format.set_i32(MediaFormat::KEY_WIDTH, i32_from_u32(config.width)?)?;
+        format.set_i32(MediaFormat::KEY_HEIGHT, i32_from_u32(config.height)?)?;
+        let color_format = if config.depth == 8 {
+            // For 8-bit images, always use Yuv420Flexible.
+            AndroidMediaCodecOutputColorFormat::Yuv420Flexible
+        } else {
+            // For all other images, use whatever format is requested.
+            config.android_mediacodec_output_color_format
+        };
+        format.set_i32(MediaFormat::KEY_COLOR_FORMAT, color_format as i32)?;
+        if low_latency {
+            // low-latency is documented but isn't exposed as a constant in the NDK:
+            // https://developer.android.com/reference/android/media/MediaFormat#KEY_LOW_LATENCY
+            format.set_i32(MediaFormat::KEY_LOW_LATENCY, 1)?;
         }
-        let status =
-            unsafe { AMediaCodec_configure(codec, format, ptr::null_mut(), ptr::null_mut(), 0) };
-        if status != media_status_t_AMEDIA_OK {
-            unsafe {
-                AMediaCodec_delete(codec);
-                AMediaFormat_delete(format);
-            }
-            return AvifError::no_codec_available();
+        format.set_i32(
+            MediaFormat::KEY_MAX_INPUT_SIZE,
+            i32_from_usize(config.max_input_size)?,
+        )?;
+        let codec_specific_data = config.codec_config.raw_data()?;
+        if !codec_specific_data.is_empty() {
+            format.set_buffer(MediaFormat::KEY_CSD_0, &codec_specific_data)?;
         }
-        let status = unsafe { AMediaCodec_start(codec) };
-        if status != media_status_t_AMEDIA_OK {
-            unsafe {
-                AMediaCodec_delete(codec);
-                AMediaFormat_delete(format);
-            }
-            return AvifError::no_codec_available();
-        }
+        // For video codecs, 0 is the highest importance (higher the number lesser the
+        // importance). To make codec for images less important, give it a value more than 0.
+        format.set_i32(MediaFormat::KEY_IMPORTANCE, 1)?;
+
+        let mut codec = match initializer {
+            CodecInitializer::ByName(name) => Codec::create_by_name(name.as_c_str())?,
+            CodecInitializer::ByMimeType(mime_type) => Codec::create_decoder_by_type(mime_type)?,
+        };
+        codec.configure(&format)?;
+        codec.start()?;
         self.codec = Some(codec);
         Ok(())
     }
@@ -595,12 +706,17 @@ impl MediaCodec {
     }
 
     fn enqueue_payload(&self, input_index: isize, payload: &[u8], flags: u32) -> AvifResult<()> {
+        let codec = self.codec.as_ref().ok_or(AvifError::NoCodecAvailable)?;
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| AvifError::UnknownError("missing decoder config".into()))?;
         Self::enqueue_payload_impl(
-            self.codec.unwrap(),
+            codec.as_ptr(),
             input_index,
             payload,
             flags,
-            &self.config.unwrap_ref().codec_config,
+            &config.codec_config,
         )
     }
 
@@ -664,7 +780,11 @@ impl MediaCodec {
         if self.codec.is_none() {
             self.initialize_impl(/*low_latency=*/ true)?;
         }
-        let codec = self.codec.unwrap();
+        let codec = self
+            .codec
+            .as_ref()
+            .ok_or(AvifError::NoCodecAvailable)?
+            .as_ptr();
         if self.output_buffer_index.is_some() {
             // Release any existing output buffer.
             unsafe {
@@ -718,10 +838,10 @@ impl MediaCodec {
                     continue;
                 } else if output_index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED as isize {
                     let format = AMediaCodec_getOutputFormat(codec);
-                    if format.is_null() {
-                        return AvifError::unknown_error("output format was null");
-                    }
-                    self.format = Some(MediaFormat { format });
+                    self.format =
+                        Some(MediaFormat::from_raw(format).map_err(|_| {
+                            AvifError::UnknownError("output format was null".into())
+                        })?);
                     continue;
                 } else if output_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
                     continue;
@@ -788,7 +908,11 @@ impl MediaCodec {
         rx: Receiver<()>,
     ) -> AvifResult<()> {
         let mut retry_count = 0;
-        let codec = self.codec.unwrap();
+        let codec = self
+            .codec
+            .as_ref()
+            .ok_or(AvifError::NoCodecAvailable)?
+            .as_ptr();
         while !grid_image_helper.is_grid_complete()? {
             if rx.try_recv().is_ok() {
                 return AvifError::unknown_error("input thread error");
@@ -807,10 +931,10 @@ impl MediaCodec {
             } else if output_index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED as isize {
                 // # Safety: Calling a C function with valid parameters.
                 let format = unsafe { AMediaCodec_getOutputFormat(codec) };
-                if format.is_null() {
-                    return AvifError::unknown_error("output format was null");
-                }
-                self.format = Some(MediaFormat { format });
+                self.format = Some(
+                    MediaFormat::from_raw(format)
+                        .map_err(|_| AvifError::UnknownError("output format was null".into()))?,
+                );
             } else if output_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
                 retry_count += 1;
                 if retry_count >= Self::MAX_RETRIES {
@@ -864,8 +988,18 @@ impl MediaCodec {
         let (dequeue_to_enqueue_tx, dequeue_to_enqueue_rx) = channel::<()>();
 
         // Create a thread to enqueue the input frames.
-        let codec_config = self.config.unwrap_ref().codec_config.try_clone()?;
-        let codec = MediaCodecThreadWrapper(self.codec.unwrap());
+        let codec_config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| AvifError::UnknownError("missing decoder config".into()))?
+            .codec_config
+            .try_clone()?;
+        let codec = MediaCodecThreadWrapper(
+            self.codec
+                .as_ref()
+                .ok_or(AvifError::NoCodecAvailable)?
+                .as_ptr(),
+        );
         let mut payloads_vec = create_vec_exact(payloads.len())?;
         for payload in payloads {
             payloads_vec.try_push(payload.try_clone()?)?;
@@ -896,23 +1030,16 @@ impl MediaCodec {
     }
 
     fn drop_impl(&mut self) {
-        if self.codec.is_some() {
-            if self.output_buffer_index.is_some() {
+        if let Some(codec) = self.codec.take() {
+            if let Some(index) = self.output_buffer_index.take() {
+                // SAFETY: `codec` is a started `AMediaCodec`, and `index` is a previously dequeued
+                // output buffer index returned to the codec only once before stopping/deleting it.
                 unsafe {
-                    AMediaCodec_releaseOutputBuffer(
-                        self.codec.unwrap(),
-                        self.output_buffer_index.unwrap(),
-                        false,
-                    );
+                    AMediaCodec_releaseOutputBuffer(codec.as_ptr(), index, false);
                 }
-                self.output_buffer_index = None;
             }
-            unsafe {
-                AMediaCodec_stop(self.codec.unwrap());
-                AMediaCodec_delete(self.codec.unwrap());
-            }
-            self.codec = None;
         }
+        self.output_buffer_index = None;
         self.format = None;
     }
 }
@@ -998,20 +1125,22 @@ impl MediaCodec {
         }
         // For HEVC, MediaCodec expects whole NAL units with each unit prefixed with a start code
         // of "\x00\x00\x00\x01".
-        let nal_length_size = codec_config.nal_length_size() as usize;
+        let nal_length_size = codec_config.nal_length_size();
+        let nal_length_size_usize = usize::from(nal_length_size);
         let mut offset = 0;
         let mut hevc_payload = Vec::new();
         while offset < payload.len() {
-            let payload_slice = &payload[offset..];
+            let payload_slice = payload.get(offset..).ok_or(AvifError::NoContent)?;
             let mut stream = IStream::create(payload_slice);
-            let nal_length = usize_from_u64(stream.read_uxx(nal_length_size as u8)?)?;
-            let nal_unit_end = checked_add!(nal_length, nal_length_size)?;
-            let nal_unit_range = nal_length_size..nal_unit_end;
-            check_slice_range(payload_slice.len(), &nal_unit_range)?;
+            let nal_length = usize_from_u64(stream.read_uxx(nal_length_size)?)?;
+            let nal_unit_end = checked_add!(nal_length, nal_length_size_usize)?;
+            let nal_unit = payload_slice
+                .get(nal_length_size_usize..nal_unit_end)
+                .ok_or(AvifError::NoContent)?;
             // Start code.
             hevc_payload.try_extend_from_slice(&[0, 0, 0, 1])?;
             // NAL Unit.
-            hevc_payload.try_extend_from_slice(&payload_slice[nal_unit_range])?;
+            hevc_payload.try_extend_from_slice(nal_unit)?;
             offset = checked_add!(offset, nal_unit_end)?;
         }
         Ok(Some(hevc_payload))
@@ -1020,7 +1149,10 @@ impl MediaCodec {
 
 impl Drop for MediaFormat {
     fn drop(&mut self) {
-        unsafe { AMediaFormat_delete(self.format) };
+        // SAFETY: `self.format` is a valid non-null `AMediaFormat` uniquely owned by `self`
+        // (created via `AMediaFormat_new` or `AMediaCodec_getOutputFormat`) and is deleted only
+        // once here when `MediaFormat` is dropped.
+        unsafe { AMediaFormat_delete(self.format.as_ptr()) };
     }
 }
 
