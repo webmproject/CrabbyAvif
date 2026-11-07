@@ -3393,8 +3393,9 @@ fn region_decode_then_no_images_remaining(filename: &str) -> AvifResult<()> {
     Ok(())
 }
 
-// Progressive images are decoded layer by layer, and the layers of progressive grids have several
-// samples per cell, so they are fully decoded before being cropped.
+// Region decoding requires the whole file to be available, so it is not supported with
+// allow_progressive. Progressive images can still be region decoded without allow_progressive, in
+// which case they are decoded as a single image.
 #[test_case("progressive_layered_grid.avif")]
 #[test_case("tiger_3layer_3res.avif")]
 fn region_decode_progressive(filename: &str) -> AvifResult<()> {
@@ -3404,16 +3405,10 @@ fn region_decode_progressive(filename: &str) -> AvifResult<()> {
     }
     let path = format!("progressive/{filename}");
     let mut ref_decoder = get_decoder(&path);
-    ref_decoder.settings.allow_progressive = true;
     ref_decoder.parse()?;
-    let layer_count = ref_decoder.image_count();
-    assert!(layer_count > 1);
-    let mut ref_layers = Vec::new();
-    for _ in 0..layer_count {
-        ref_decoder.next_image()?;
-        ref_layers.push(ref_decoder.image().unwrap().try_deep_clone()?);
-    }
-    let (w, h) = (ref_layers[0].width, ref_layers[0].height);
+    ref_decoder.nth_image(0)?;
+    let ref_image = ref_decoder.image().unwrap().try_deep_clone()?;
+    let (w, h) = (ref_image.width, ref_image.height);
     let crop = CropRect {
         x: (w / 3) | 1,
         y: (h / 3) | 1,
@@ -3425,33 +3420,20 @@ fn region_decode_progressive(filename: &str) -> AvifResult<()> {
     };
 
     let mut decoder = get_decoder(&path);
-    decoder.settings.allow_progressive = true;
     decoder.parse()?;
-    for ref_layer in &ref_layers {
-        decoder.next_image_with_options(&options)?;
-        assert!(utils::are_images_equal(
-            decoder.image().unwrap(),
-            &crop_reference_image(ref_layer, &crop)?
-        )?);
-    }
+    decoder.nth_image_with_options(0, &options)?;
+    assert!(utils::are_images_equal(
+        decoder.image().unwrap(),
+        &crop_reference_image(&ref_image, &crop)?
+    )?);
 
-    // Seeking forward decodes the intermediate layers without crop. Seeking backward decodes the
-    // layers again from the first one.
     let mut decoder = get_decoder(&path);
     decoder.settings.allow_progressive = true;
     decoder.parse()?;
-    let last = layer_count - 1;
-    for index in [last, 0, last] {
-        decoder.nth_image_with_options(index, &options)?;
-        assert!(utils::are_images_equal(
-            decoder.image().unwrap(),
-            &crop_reference_image(&ref_layers[index as usize], &crop)?
-        )?);
-        decoder.nth_image(index)?;
-        assert!(utils::are_images_equal(
-            decoder.image().unwrap(),
-            &ref_layers[index as usize]
-        )?);
-    }
+    assert!(decoder.image_count() > 1);
+    assert!(decoder.next_image_with_options(&options).is_err());
+    assert!(decoder.nth_image_with_options(0, &options).is_err());
+    // Full decodes are not affected.
+    decoder.nth_image(0)?;
     Ok(())
 }
