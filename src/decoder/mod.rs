@@ -2211,7 +2211,9 @@ impl Decoder {
         tile_index: usize,
         max_num_bytes: Option<usize>, // Bytes read past that size will be ignored.
     ) -> AvifResult<()> {
-        let tile = &mut self.tiles[decoding_item.usize()][tile_index];
+        let tile = self.tiles[decoding_item.usize()]
+            .get(tile_index)
+            .ok_or(AvifError::InvalidArgument)?;
         if tile.input.samples.len() <= image_index {
             return AvifError::no_images_remaining();
         }
@@ -2392,9 +2394,26 @@ impl Decoder {
         composed.align_to_pixel_format(output_format)
     }
 
-    fn prepare_samples(&mut self, image_index: usize) -> AvifResult<()> {
+    fn prepare_samples(
+        &mut self,
+        image_index: usize,
+        grid_subsets: &[Option<Vec<usize>>; DecodingItem::COUNT],
+    ) -> AvifResult<()> {
         for decoding_item in self.settings.image_content_to_decode.decoding_items() {
-            for tile_index in 0..self.tiles[decoding_item.usize()].len() {
+            // Either the given subset of the tiles or all the tiles.
+            let (subset, all_tiles) = match &grid_subsets[decoding_item.usize()] {
+                Some(indices) => {
+                    if self.settings.allow_progressive
+                        || self.settings.allow_incremental
+                        || !self.tile_info[decoding_item.usize()].is_grid()
+                    {
+                        return AvifError::invalid_argument();
+                    }
+                    (indices.as_slice(), 0..0)
+                }
+                None => (&[][..], 0..self.tiles[decoding_item.usize()].len()),
+            };
+            for tile_index in subset.iter().copied().chain(all_tiles) {
                 match (
                     self.settings.allow_progressive,
                     self.prepare_sample(image_index, decoding_item, tile_index, None),
@@ -3059,7 +3078,7 @@ impl Decoder {
 
         match (
             self.settings.allow_progressive,
-            self.prepare_samples(sample_index),
+            self.prepare_samples(sample_index, /* grid_subsets= */ &Default::default()),
         ) {
             (_, Ok(_)) | (true, Err(AvifError::WaitingOnIo)) => {}
             (_, Err(err)) => return Err(err),
