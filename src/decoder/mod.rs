@@ -474,12 +474,19 @@ pub(crate) struct GridImageHelper<'a> {
     grid: &'a Grid,
     image: &'a mut Image,
     pub category: Category,
+    // Index of the next cell to copy. This is the index of the cell in the grid if cell_indices
+    // is None, or the position of the cell in cell_indices otherwise.
     pub cell_index: usize,
     expected_cell_count: usize,
     codec_config: &'a CodecConfiguration,
     first_cell_image: Option<Image>,
     tile_width: u32,
     tile_height: u32,
+    // If set, only these cells of the grid are copied, in this order, into an image with the
+    // dimensions of crop_rect (only the intersection of each cell with crop_rect is copied).
+    // For Category::Alpha, image must already have the pixel format of the color image.
+    cell_indices: Option<&'a [usize]>,
+    crop_rect: Option<CropRect>,
 }
 
 impl Image {
@@ -515,10 +522,22 @@ impl GridImageHelper<'_> {
         if self.cell_index == 0 {
             validate_grid_image_dimensions(cell_image, self.grid)?;
             if self.category != Category::Alpha {
-                self.image.width = self.grid.width;
-                self.image.height = self.grid.height;
                 self.image
                     .copy_properties_from(cell_image, self.codec_config);
+            }
+            if let Some(rect) = self.crop_rect {
+                let aligned = rect.align_to_pixel_format(self.image.yuv_format);
+                if !aligned.is_within(self.grid.width, self.grid.height) {
+                    return AvifError::invalid_argument();
+                }
+                self.image.width = aligned.width;
+                self.image.height = aligned.height;
+                if self.category != Category::Alpha {
+                    self.image.clap = None;
+                }
+            } else if self.category != Category::Alpha {
+                self.image.width = self.grid.width;
+                self.image.height = self.grid.height;
             }
             self.image.allocate_planes(self.category)?;
         } else if self.first_cell_image.is_some()
@@ -526,12 +545,18 @@ impl GridImageHelper<'_> {
         {
             return AvifError::invalid_image_grid("grid image contains mismatched tiles");
         }
+        let actual_tile_index = match self.cell_indices {
+            Some(indices) => *indices
+                .get(self.cell_index)
+                .ok_or(AvifError::InvalidArgument)?,
+            None => self.cell_index,
+        };
         self.image.copy_from_tile(
             cell_image,
             self.grid,
-            self.cell_index as u32,
+            u32_from_usize(actual_tile_index)?,
             self.category,
-            None,
+            self.crop_rect.as_ref(),
         )?;
         if self.cell_index == 0 {
             self.first_cell_image = Some(cell_image.shallow_clone());
@@ -2656,57 +2681,93 @@ impl Decoder {
         Ok(())
     }
 
+    // If grid_subset is set, only the given cells are read and decoded, into an image with the
+    // dimensions of the given region. This is not compatible with incremental decoding, and the
+    // item is considered fully decoded afterwards.
     fn decode_grid(
         &mut self,
         image_index: usize,
         decoding_item: DecodingItem,
+        grid_subset: Option<(&[usize], CropRect)>,
         dst_image_override: Option<&mut Image>,
     ) -> AvifResult<()> {
         let tile_count = self.tiles[decoding_item.usize()].len();
         if tile_count == 0 {
             return Ok(());
         }
-        let previous_decoded_tile_count =
-            self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
         let mut payloads = Vec::new();
         let mut pending_read = false;
-        for tile_index in previous_decoded_tile_count..tile_count {
-            let tile = &self.tiles[decoding_item.usize()][tile_index];
-            let sample = &tile.input.samples[image_index];
-            let item_data_buffer = if sample.item_id == 0 {
-                &None
-            } else {
-                &self.items.get(&sample.item_id).unwrap().data_buffer
-            };
-            let io = &mut self.io.unwrap_mut();
-            let data = match sample.data(io, item_data_buffer) {
-                Ok(data) => data,
-                Err(AvifError::WaitingOnIo) => {
-                    if self.settings.allow_incremental {
-                        if payloads.is_empty() {
-                            // No cells have been read. Nothing to decode.
-                            return AvifError::waiting_on_io();
+        let first_tile_index = if let Some((indices, _)) = grid_subset {
+            if self.settings.allow_incremental || !self.tile_info[decoding_item.usize()].is_grid() {
+                return AvifError::invalid_argument();
+            }
+            let first_tile_index = *indices.first().ok_or(AvifError::InvalidArgument)?;
+            for &tile_index in indices {
+                let tile = self.tiles[decoding_item.usize()]
+                    .get(tile_index)
+                    .ok_or(AvifError::InvalidArgument)?;
+                let sample = tile
+                    .input
+                    .samples
+                    .get(image_index)
+                    .ok_or(AvifError::NoImagesRemaining)?;
+                let item_data_buffer = if sample.item_id == 0 {
+                    &None
+                } else {
+                    &self
+                        .items
+                        .get(&sample.item_id)
+                        .ok_or_else(|| AvifError::BmffParseFailed("missing item".into()))?
+                        .data_buffer
+                };
+                let io = self.io.as_mut().ok_or(AvifError::IoNotSet)?;
+                let data = sample.data(io, item_data_buffer)?;
+                payloads.try_push(data.try_to_vec()?)?;
+            }
+            first_tile_index
+        } else {
+            let previous_decoded_tile_count =
+                self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
+            for tile_index in previous_decoded_tile_count..tile_count {
+                let tile = &self.tiles[decoding_item.usize()][tile_index];
+                let sample = &tile.input.samples[image_index];
+                let item_data_buffer = if sample.item_id == 0 {
+                    &None
+                } else {
+                    &self.items.get(&sample.item_id).unwrap().data_buffer
+                };
+                let io = &mut self.io.unwrap_mut();
+                let data = match sample.data(io, item_data_buffer) {
+                    Ok(data) => data,
+                    Err(AvifError::WaitingOnIo) => {
+                        if self.settings.allow_incremental {
+                            if payloads.is_empty() {
+                                // No cells have been read. Nothing to decode.
+                                return AvifError::waiting_on_io();
+                            } else {
+                                // One or more cells have been read. Decode them.
+                                pending_read = true;
+                                break;
+                            }
                         } else {
-                            // One or more cells have been read. Decode them.
-                            pending_read = true;
-                            break;
+                            return AvifError::waiting_on_io();
                         }
-                    } else {
-                        return AvifError::waiting_on_io();
                     }
-                }
-                Err(err) => return Err(err),
-            };
-            payloads.try_push(data.try_to_vec()?)?;
-        }
+                    Err(err) => return Err(err),
+                };
+                payloads.try_push(data.try_to_vec()?)?;
+            }
+            previous_decoded_tile_count
+        };
         let grid = &self.tile_info[decoding_item.usize()].grid;
         // If we are not doing incremental decode, all the cells must have been read.
-        if !self.settings.allow_incremental
+        if grid_subset.is_none()
+            && !self.settings.allow_incremental
             && checked_mul!(grid.rows, grid.columns)? != payloads.len() as u32
         {
             return AvifError::invalid_argument();
         }
-        let first_tile = &self.tiles[decoding_item.usize()][previous_decoded_tile_count];
+        let first_tile = &self.tiles[decoding_item.usize()][first_tile_index];
         let category = decoding_item.category;
         let dst_image = match dst_image_override {
             Some(img) => img,
@@ -2718,16 +2779,29 @@ impl Decoder {
                 }
             }
         };
+        let (cell_index, expected_cell_count, cell_indices, crop_rect) =
+            if let Some((indices, rect)) = grid_subset {
+                (0, payloads.len(), Some(indices), Some(rect))
+            } else {
+                (
+                    first_tile_index,
+                    first_tile_index + payloads.len(),
+                    None,
+                    None,
+                )
+            };
         let mut grid_image_helper = GridImageHelper {
             grid,
             image: dst_image,
             category,
-            cell_index: previous_decoded_tile_count,
-            expected_cell_count: previous_decoded_tile_count + payloads.len(),
+            cell_index,
+            expected_cell_count,
             codec_config: &first_tile.codec_config,
             first_cell_image: None,
             tile_width: first_tile.width,
             tile_height: first_tile.height,
+            cell_indices,
+            crop_rect,
         };
         let codec = &mut self.codecs[first_tile.codec_index];
         let next_image_result = codec.get_next_image_grid(
@@ -2749,10 +2823,15 @@ impl Decoder {
         } else if !grid_image_helper.is_grid_complete()? {
             return AvifError::unknown_error("codec did not decode all cells");
         }
-        checked_incr!(
-            self.tile_info[decoding_item.usize()].decoded_tile_count,
-            u32_from_usize(payloads.len())?
-        );
+        if grid_subset.is_some() {
+            self.tile_info[decoding_item.usize()].decoded_tile_count =
+                self.tile_info[decoding_item.usize()].tile_count;
+        } else {
+            checked_incr!(
+                self.tile_info[decoding_item.usize()].decoded_tile_count,
+                u32_from_usize(payloads.len())?
+            );
+        }
         if pending_read {
             AvifError::waiting_on_io()
         } else {
@@ -2806,7 +2885,12 @@ impl Decoder {
                     temp_alpha_image.width = uncropped_color_dims.0;
                     temp_alpha_image.height = uncropped_color_dims.1;
                     if self.can_use_decode_grid(decoding_item) {
-                        self.decode_grid(image_index, decoding_item, Some(&mut temp_alpha_image))?;
+                        self.decode_grid(
+                            image_index,
+                            decoding_item,
+                            None,
+                            Some(&mut temp_alpha_image),
+                        )?;
                     } else {
                         let previous_decoded_tile_count =
                             self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
@@ -2833,7 +2917,7 @@ impl Decoder {
                     decoded_something = true;
                 } else {
                     if self.can_use_decode_grid(decoding_item) {
-                        self.decode_grid(image_index, decoding_item, None)?;
+                        self.decode_grid(image_index, decoding_item, None, None)?;
                     } else {
                         let previous_decoded_tile_count =
                             self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
@@ -2860,7 +2944,7 @@ impl Decoder {
                     decoded_something = true;
                 }
             } else if self.can_use_decode_grid(decoding_item) {
-                self.decode_grid(image_index, decoding_item, None)?;
+                self.decode_grid(image_index, decoding_item, None, None)?;
                 decoded_something = true;
             } else {
                 let previous_decoded_tile_count =
