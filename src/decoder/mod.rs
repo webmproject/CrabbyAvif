@@ -2382,26 +2382,37 @@ impl Decoder {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn decode_tile(
         &mut self,
         image_index: usize,
         decoding_item: DecodingItem,
         tile_index: usize,
+        first_tile_index: usize,
+        is_last_tile: bool,
+        crop_rect: Option<CropRect>,
         dst_image_override: Option<&mut Image>,
     ) -> AvifResult<()> {
+        // Only grid cells can be decoded as a subset of the tiles or into a region.
+        if tile_index < first_tile_index
+            || ((first_tile_index != 0 || crop_rect.is_some())
+                && !self.tile_info[decoding_item.usize()].is_grid())
+        {
+            return AvifError::invalid_argument();
+        }
         let signal_eos =
             if !cfg!(feature = "android_mediacodec") || self.image.image_sequence_track_present {
                 // signal_eos is used only by Android MediaCodec. Never signal EOS for sequences as
                 // nth_image can be used to get any frame.
                 false
             } else {
-                // For non sequence images, signal EOS only if this is the last tile in the
-                // category.
-                tile_index == self.tiles[decoding_item.usize()].len() - 1
+                // For non sequence images, signal EOS only if this is the last tile to
+                // decode in the category.
+                is_last_tile
             };
         let has_alpha_item = !self.tiles[DecodingItem::ALPHA.usize()].is_empty();
         // Split the tiles array into two mutable arrays so that we can validate the
-        // properties of tiles with index > 0 with that of the first tile.
+        // properties of tiles with index > first_tile_index with that of the first decoded tile.
         let (tiles_slice1, tiles_slice2) =
             self.tiles[decoding_item.usize()].split_at_mut(tile_index);
         let tile = &mut tiles_slice2[0];
@@ -2480,13 +2491,23 @@ impl Decoder {
                 return AvifError::not_implemented();
             }
 
-            if tile_index == 0 {
+            if tile_index == first_tile_index {
                 let grid = &self.tile_info[decoding_item.usize()].grid;
                 validate_grid_image_dimensions(&tile.image, grid)?;
                 match category {
                     Category::Color | Category::Gainmap => {
-                        dst_image.width = grid.width;
-                        dst_image.height = grid.height;
+                        if let Some(rect) = crop_rect {
+                            let aligned = rect.align_to_pixel_format(tile.image.yuv_format);
+                            if !aligned.is_within(grid.width, grid.height) {
+                                return AvifError::invalid_argument();
+                            }
+                            dst_image.width = aligned.width;
+                            dst_image.height = aligned.height;
+                            dst_image.clap = None;
+                        } else {
+                            dst_image.width = grid.width;
+                            dst_image.height = grid.height;
+                        }
                         dst_image.copy_properties_from(&tile.image, &tile.codec_config);
                         dst_image.allocate_planes(category)?;
                         if category == Category::Color
@@ -2498,16 +2519,24 @@ impl Decoder {
                         }
                     }
                     Category::Alpha => {
+                        if let Some(rect) = crop_rect {
+                            let aligned = rect.align_to_pixel_format(dst_image.yuv_format);
+                            if !aligned.is_within(grid.width, grid.height) {
+                                return AvifError::invalid_argument();
+                            }
+                            dst_image.width = aligned.width;
+                            dst_image.height = aligned.height;
+                        }
                         // Alpha is always just one plane and the depth has been validated
                         // to be the same as the color planes' depth.
                         dst_image.allocate_planes(category)?;
                     }
                 }
             }
-            if !tiles_slice1.is_empty()
+            if tile_index > first_tile_index
                 && !tile
                     .image
-                    .has_same_properties_and_cicp(&tiles_slice1[0].image)
+                    .has_same_properties_and_cicp(&tiles_slice1[first_tile_index].image)
             {
                 return AvifError::invalid_image_grid("grid image contains mismatched tiles");
             }
@@ -2517,7 +2546,7 @@ impl Decoder {
                 &self.tile_info[decoding_item.usize()].grid,
                 tile_index as u32,
                 category,
-                None,
+                crop_rect.as_ref(),
             )?;
         } else if self.tile_info[decoding_item.usize()].is_overlay() {
             if tile_index == 0 {
@@ -2782,10 +2811,14 @@ impl Decoder {
                         let previous_decoded_tile_count =
                             self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
                         for tile_index in previous_decoded_tile_count..tile_count {
+                            let is_last = tile_index + 1 == tile_count;
                             self.decode_tile(
                                 image_index,
                                 decoding_item,
                                 tile_index,
+                                /* first_tile_index= */ 0,
+                                is_last,
+                                /* crop_rect= */ None,
                                 Some(&mut temp_alpha_image),
                             )?;
                         }
@@ -2805,7 +2838,16 @@ impl Decoder {
                         let previous_decoded_tile_count =
                             self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
                         for tile_index in previous_decoded_tile_count..tile_count {
-                            self.decode_tile(image_index, decoding_item, tile_index, None)?;
+                            let is_last = tile_index + 1 == tile_count;
+                            self.decode_tile(
+                                image_index,
+                                decoding_item,
+                                tile_index,
+                                /* first_tile_index= */ 0,
+                                is_last,
+                                /* crop_rect= */ None,
+                                None,
+                            )?;
                         }
                     }
                     if decoding_item == DecodingItem::COLOR {
@@ -2824,7 +2866,16 @@ impl Decoder {
                 let previous_decoded_tile_count =
                     self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
                 for tile_index in previous_decoded_tile_count..tile_count {
-                    self.decode_tile(image_index, decoding_item, tile_index, None)?;
+                    let is_last = tile_index + 1 == tile_count;
+                    self.decode_tile(
+                        image_index,
+                        decoding_item,
+                        tile_index,
+                        /* first_tile_index= */ 0,
+                        is_last,
+                        /* crop_rect= */ None,
+                        None,
+                    )?;
                     decoded_something = true;
                 }
             }
