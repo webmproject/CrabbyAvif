@@ -186,6 +186,97 @@ TEST(EncodingTest, VariousCases) {
 #endif
 }
 
+// Region decoding of an image with a clean aperture. This test is not in
+// decoder_tests.cc because it needs the encoder, which decoder_tests.cc must
+// not depend on.
+TEST(RegionDecodingTest, CleanAperture) {
+  ImagePtr src = testutil::CreateImage(
+      /*width=*/120, /*height=*/160, /*depth=*/8, AVIF_PIXEL_FORMAT_YUV420,
+      AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+  ASSERT_NE(src, nullptr);
+  testutil::FillImageGradient(src.get(), /*offset=*/0);
+  src->transformFlags =
+      AVIF_TRANSFORM_CLAP | AVIF_TRANSFORM_IROT | AVIF_TRANSFORM_IMIR;
+  const avifCropRect clap_rect{.x = 12, .y = 14, .width = 96, .height = 132};
+  avifDiagnostics diag{};
+  ASSERT_TRUE(avifCleanApertureBoxConvertCropRect(
+      &src->clap, &clap_rect, src->width, src->height, src->yuvFormat, &diag));
+  src->irot.angle = 1;
+  src->imir.axis = 0;
+
+  EncoderPtr encoder(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  encoder->speed = 10;
+  encoder->quality = 100;
+  encoder->qualityAlpha = 100;
+  AvifRwData encoded;
+  ASSERT_EQ(avifEncoderWrite(encoder.get(), src.get(), &encoded),
+            AVIF_RESULT_OK);
+
+  DecoderPtr ref_decoder(avifDecoderCreate());
+  ASSERT_NE(ref_decoder, nullptr);
+  ASSERT_EQ(
+      avifDecoderSetIOMemory(ref_decoder.get(), encoded.data, encoded.size),
+      AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderParse(ref_decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNthImage(ref_decoder.get(), 0), AVIF_RESULT_OK);
+
+  DecoderPtr decoder(avifDecoderCreate());
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderSetIOMemory(decoder.get(), encoded.data, encoded.size),
+            AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+
+  // Odd user crop (5, 7, 41, 39) inside clap (12, 14, 96, 132) -> (17, 21),
+  // aligned down to (16, 20).
+  const avifDecodeOptions opts{
+      .enableCropRect = AVIF_TRUE,
+      .cropRect = {.x = 5, .y = 7, .width = 41, .height = 39},
+  };
+  ASSERT_EQ(avifDecoderNextImageWithOptions(decoder.get(), &opts),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->width, 41u);
+  EXPECT_EQ(decoder->image->height, 39u);
+  // CLAP flag must be cleared on cropped output while IROT/IMIR remain intact.
+  EXPECT_EQ(decoder->image->transformFlags,
+            AVIF_TRANSFORM_IROT | AVIF_TRANSFORM_IMIR);
+
+  const avifCropRect expected_rect{.x = 16, .y = 20, .width = 41, .height = 39};
+  ImagePtr expected_view(avifImageCreateEmpty());
+  ASSERT_EQ(avifImageSetViewRect(expected_view.get(), ref_decoder->image,
+                                 &expected_rect),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(testutil::GetPsnr(*decoder->image, *expected_view,
+                              /*ignore_alpha=*/false),
+            99.0);
+
+  // avifDecoderNthImageProperties still reports uncropped dimensions and CLAP.
+  ImagePtr props(avifImageCreateEmpty());
+  ASSERT_EQ(avifDecoderNthImageProperties(decoder.get(), 0, props.get()),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(props->width, 120u);
+  EXPECT_EQ(props->height, 160u);
+  EXPECT_NE(props->transformFlags & AVIF_TRANSFORM_CLAP, 0u);
+
+  // Crop exceeding clap bounds (90 + 10 > 96, even though 12 + 100 <= 120) must
+  // fail with AVIF_RESULT_INVALID_ARGUMENT.
+  const avifDecodeOptions out_of_clap{
+      .enableCropRect = AVIF_TRUE,
+      .cropRect = {.x = 90, .y = 0, .width = 10, .height = 10},
+  };
+  EXPECT_EQ(avifDecoderNthImageWithOptions(decoder.get(), 0, &out_of_clap),
+            AVIF_RESULT_INVALID_ARGUMENT);
+
+  // Subsequent uncropped decode restores original dimensions and CLAP flag.
+  ASSERT_EQ(avifDecoderNthImage(decoder.get(), 0), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->width, 120u);
+  EXPECT_EQ(decoder->image->height, 160u);
+  EXPECT_NE(decoder->image->transformFlags & AVIF_TRANSFORM_CLAP, 0u);
+  EXPECT_EQ(testutil::GetPsnr(*decoder->image, *ref_decoder->image,
+                              /*ignore_alpha=*/false),
+            99.0);
+}
+
 TEST(ImageTest, MetadataFunctions) {
   // Fill data with some values.
   constexpr int kSize = 10;

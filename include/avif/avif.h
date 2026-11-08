@@ -529,6 +529,40 @@ struct avifIO {
     void *data;
 };
 
+struct CropRect {
+    uint32_t x;
+    uint32_t y;
+    uint32_t width;
+    uint32_t height;
+};
+
+using avifCropRect = CropRect;
+
+/// Options for crabby_avifDecoderNextImageWithOptions() and
+/// crabby_avifDecoderNthImageWithOptions(). Zero-initialized options are the default options.
+struct avifDecodeOptions {
+    /// If AVIF_TRUE, only the cropRect region of the image is decoded (for regular grid images,
+    /// only the intersecting cells are read and decoded). cropRect is relative to the clean
+    /// aperture of the image if it has a valid one, or to the whole image otherwise, and must fit
+    /// in it. It is expressed before rotation and mirroring (AVIF_TRANSFORM_IROT and
+    /// AVIF_TRANSFORM_IMIR are kept on the decoded image). Its x and y are rounded down to even
+    /// values along the chroma-subsampled axes of the decoded image. The decoded image has the
+    /// dimensions of cropRect and AVIF_TRANSFORM_CLAP is not set. With
+    /// AVIF_IMAGE_CONTENT_GAIN_MAP, cropRect applies to the gain map image.
+    ///
+    /// Decoding fails if:
+    /// - cropRect does not fit in the clean aperture or image
+    /// - the clean aperture is invalid and strictFlags contains AVIF_STRICT_CLAP_VALID
+    /// - allowProgressive or allowIncremental is set (region decoding requires the whole file to
+    ///   be available)
+    /// - imageContentToDecode is AVIF_IMAGE_CONTENT_GAIN_MAP and the image has no gain map
+    /// - both the color image and the gain map of an image with a gain map are decoded
+    ///
+    /// When decoding fails, decoder->image may be partially decoded or have no pixels.
+    avifBool enableCropRect;
+    avifCropRect cropRect;
+};
+
 struct Extent {
     uint64_t offset;
     size_t size;
@@ -581,15 +615,6 @@ struct avifEncoder {
 using avifAddImageFlags = uint32_t;
 
 using avifPlanesFlags = uint32_t;
-
-struct CropRect {
-    uint32_t x;
-    uint32_t y;
-    uint32_t width;
-    uint32_t height;
-};
-
-using avifCropRect = CropRect;
 
 struct avifRGBImage {
     uint32_t width;
@@ -667,11 +692,34 @@ avifResult crabby_avifDecoderSetSource(avifDecoder *decoder, avifDecoderSource s
 /// `avifResult::InvalidArgument`.
 avifResult crabby_avifDecoderParse(avifDecoder *decoder);
 
+/// Same as crabby_avifDecoderNextImage() with the given options. NULL options are the default
+/// options.
+///
+/// # Safety
+/// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+/// `avifDecoder` valid for exclusive access during this call. Passing null safely returns
+/// `avifResult::InvalidArgument`. If `options` is non-null, it must be properly aligned and point
+/// to a valid, initialized `avifDecodeOptions` valid for shared reads during this call.
+avifResult crabby_avifDecoderNextImageWithOptions(avifDecoder *decoder,
+                                                  const avifDecodeOptions *options);
+
 /// # Safety
 /// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
 /// `avifDecoder` valid for exclusive access during this call. Passing null safely returns
 /// `avifResult::InvalidArgument`.
 avifResult crabby_avifDecoderNextImage(avifDecoder *decoder);
+
+/// Same as crabby_avifDecoderNthImage() with the given options. NULL options are the default
+/// options.
+///
+/// # Safety
+/// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+/// `avifDecoder` valid for exclusive access during this call. Passing null safely returns
+/// `avifResult::InvalidArgument`. If `options` is non-null, it must be properly aligned and point
+/// to a valid, initialized `avifDecodeOptions` valid for shared reads during this call.
+avifResult crabby_avifDecoderNthImageWithOptions(avifDecoder *decoder,
+                                                 uint32_t frameIndex,
+                                                 const avifDecodeOptions *options);
 
 /// # Safety
 /// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized

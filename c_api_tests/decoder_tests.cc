@@ -1461,6 +1461,15 @@ TEST(DecoderTest, NullCases) {
   EXPECT_NE(avifDecoderParse(nullptr), AVIF_RESULT_OK);
   EXPECT_NE(avifDecoderNextImage(nullptr), AVIF_RESULT_OK);
   EXPECT_NE(avifDecoderNthImage(nullptr, 0), AVIF_RESULT_OK);
+  avifDecodeOptions decode_options{.enableCropRect = AVIF_TRUE,
+                                   .cropRect = {0, 0, 1, 1}};
+  EXPECT_NE(avifDecoderNextImageWithOptions(nullptr, nullptr), AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderNextImageWithOptions(nullptr, &decode_options),
+            AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderNthImageWithOptions(nullptr, 0, nullptr),
+            AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderNthImageWithOptions(nullptr, 0, &decode_options),
+            AVIF_RESULT_OK);
 
   avifImageTiming timing;
   EXPECT_NE(avifDecoderNthImageTiming(nullptr, 0, &timing), AVIF_RESULT_OK);
@@ -1770,6 +1779,315 @@ INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<avifCodecChoice>& info) {
       return GetCodecName(info.param);
     });
+
+TEST_P(DecoderTest, DecodeWithOptionsNullAndDisabled) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  auto ref_decoder = CreateDecoder("sofa_grid1x5_420.avif");
+  ASSERT_NE(ref_decoder, nullptr);
+  ASSERT_EQ(avifDecoderParse(ref_decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNthImage(ref_decoder.get(), 0), AVIF_RESULT_OK);
+
+  auto decoder = CreateDecoder("sofa_grid1x5_420.avif");
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNextImageWithOptions(decoder.get(), nullptr),
+            AVIF_RESULT_OK);
+  EXPECT_TRUE(CompareImages(*decoder->image, *ref_decoder->image));
+  ASSERT_EQ(avifDecoderNthImageWithOptions(decoder.get(), 0, nullptr),
+            AVIF_RESULT_OK);
+  EXPECT_TRUE(CompareImages(*decoder->image, *ref_decoder->image));
+
+  // Zero-initialized options are the default options.
+  const avifDecodeOptions default_opts{};
+  ASSERT_EQ(avifDecoderReset(decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNextImageWithOptions(decoder.get(), &default_opts),
+            AVIF_RESULT_OK);
+  EXPECT_TRUE(CompareImages(*decoder->image, *ref_decoder->image));
+  ASSERT_EQ(avifDecoderNthImageWithOptions(decoder.get(), 0, &default_opts),
+            AVIF_RESULT_OK);
+  EXPECT_TRUE(CompareImages(*decoder->image, *ref_decoder->image));
+
+  // When enableCropRect is AVIF_FALSE, cropRect values must be ignored.
+  avifDecodeOptions disabled_opts{
+      .enableCropRect = AVIF_FALSE,
+      .cropRect = {.x = 99999, .y = 99999, .width = 0, .height = 0},
+  };
+  ASSERT_EQ(avifDecoderReset(decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNthImageWithOptions(decoder.get(), 0, &disabled_opts),
+            AVIF_RESULT_OK);
+  EXPECT_TRUE(CompareImages(*decoder->image, *ref_decoder->image));
+}
+
+TEST_P(DecoderTest, DecodeRegionGridAndRgbParity) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  for (const char* filename :
+       {"sofa_grid1x5_420.avif", "color_grid_alpha_nogrid.avif",
+        "paris_10bpc.avif"}) {
+    SCOPED_TRACE(filename);
+    auto ref_decoder = CreateDecoder(filename);
+    ASSERT_NE(ref_decoder, nullptr);
+    ASSERT_EQ(avifDecoderParse(ref_decoder.get()), AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderNthImage(ref_decoder.get(), 0), AVIF_RESULT_OK);
+
+    const uint32_t w = ref_decoder->image->width;
+    const uint32_t h = ref_decoder->image->height;
+    // Odd x, y, width, height; x and y round down to even only along
+    // chroma-subsampled axes.
+    const avifDecodeOptions opts{
+        .enableCropRect = AVIF_TRUE,
+        .cropRect = {.x = (w / 4) | 1u,
+                     .y = (h / 4) | 1u,
+                     .width = (w / 2) | 1u,
+                     .height = (h / 2) | 1u},
+    };
+    avifPixelFormatInfo format_info{};
+    avifGetPixelFormatInfo(ref_decoder->image->yuvFormat, &format_info);
+    const avifCropRect aligned_rect{
+        .x = (!format_info.monochrome && format_info.chromaShiftX == 1)
+                 ? (opts.cropRect.x & ~1u)
+                 : opts.cropRect.x,
+        .y = (!format_info.monochrome && format_info.chromaShiftY == 1)
+                 ? (opts.cropRect.y & ~1u)
+                 : opts.cropRect.y,
+        .width = opts.cropRect.width,
+        .height = opts.cropRect.height,
+    };
+
+    ImagePtr view(avifImageCreateEmpty());
+    ASSERT_NE(view, nullptr);
+    ASSERT_EQ(
+        avifImageSetViewRect(view.get(), ref_decoder->image, &aligned_rect),
+        AVIF_RESULT_OK);
+
+    auto decoder = CreateDecoder(filename);
+    ASSERT_NE(decoder, nullptr);
+    ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderNthImageWithOptions(decoder.get(), 0, &opts),
+              AVIF_RESULT_OK);
+    EXPECT_TRUE(CompareImages(*decoder->image, *view));
+
+    // Also verify YUV-to-RGB conversion on the region-decoded image matches the
+    // view byte-for-byte.
+    AvifRgbImage rgb_region(decoder->image, decoder->image->depth,
+                            AVIF_RGB_FORMAT_RGBA);
+    AvifRgbImage rgb_view(view.get(), view->depth, AVIF_RGB_FORMAT_RGBA);
+    ASSERT_EQ(avifImageYUVToRGB(decoder->image, &rgb_region), AVIF_RESULT_OK);
+    ASSERT_EQ(avifImageYUVToRGB(view.get(), &rgb_view), AVIF_RESULT_OK);
+    const size_t row_bytes =
+        rgb_region.width * avifRGBImagePixelSize(&rgb_region);
+    for (uint32_t y = 0; y < rgb_region.height; ++y) {
+      EXPECT_TRUE(testutil::AreByteSequencesEqual(
+          rgb_region.pixels + y * rgb_region.rowBytes, row_bytes,
+          rgb_view.pixels + y * rgb_view.rowBytes, row_bytes))
+          << "row " << y;
+    }
+  }
+}
+
+TEST_P(DecoderTest, DecodeRegionGainMapAnimatedAndErrors) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  // 1. Gainmap-only region decode succeeds; Color + GainMap returns
+  // AVIF_RESULT_NOT_IMPLEMENTED.
+  auto gm_ref = CreateDecoder("seine_sdr_gainmap_srgb.avif");
+  ASSERT_NE(gm_ref, nullptr);
+  gm_ref->imageContentToDecode = AVIF_IMAGE_CONTENT_GAIN_MAP;
+  ASSERT_EQ(avifDecoderParse(gm_ref.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNthImage(gm_ref.get(), 0), AVIF_RESULT_OK);
+
+  const avifDecodeOptions gm_opts{
+      .enableCropRect = AVIF_TRUE,
+      .cropRect = {.x = 10, .y = 20, .width = 80, .height = 60},
+  };
+  auto gm_dec = CreateDecoder("seine_sdr_gainmap_srgb.avif");
+  ASSERT_NE(gm_dec, nullptr);
+  gm_dec->imageContentToDecode = AVIF_IMAGE_CONTENT_GAIN_MAP;
+  ASSERT_EQ(avifDecoderParse(gm_dec.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNthImageWithOptions(gm_dec.get(), 0, &gm_opts),
+            AVIF_RESULT_OK);
+  // Only the gain map is decoded and cropped. The color image keeps its
+  // uncropped dimensions and has no pixels.
+  EXPECT_EQ(gm_dec->image->width, gm_ref->image->width);
+  EXPECT_EQ(gm_dec->image->height, gm_ref->image->height);
+  EXPECT_EQ(gm_dec->image->yuvPlanes[AVIF_CHAN_Y], nullptr);
+  ASSERT_NE(gm_dec->image->gainMap, nullptr);
+  ASSERT_NE(gm_dec->image->gainMap->image, nullptr);
+  ImagePtr gm_view(avifImageCreateEmpty());
+  ASSERT_EQ(avifImageSetViewRect(gm_view.get(), gm_ref->image->gainMap->image,
+                                 &gm_opts.cropRect),
+            AVIF_RESULT_OK);
+  EXPECT_TRUE(CompareImages(*gm_dec->image->gainMap->image, *gm_view));
+
+  auto gm_both = CreateDecoder("seine_sdr_gainmap_srgb.avif");
+  ASSERT_NE(gm_both, nullptr);
+  gm_both->imageContentToDecode = AVIF_IMAGE_CONTENT_ALL;
+  ASSERT_EQ(avifDecoderParse(gm_both.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(avifDecoderNthImageWithOptions(gm_both.get(), 0, &gm_opts),
+            AVIF_RESULT_NOT_IMPLEMENTED);
+
+  // Gainmap-only region decode of an image without a gain map fails.
+  auto no_gm = CreateDecoder("sofa_grid1x5_420.avif");
+  ASSERT_NE(no_gm, nullptr);
+  no_gm->imageContentToDecode = AVIF_IMAGE_CONTENT_GAIN_MAP;
+  ASSERT_EQ(avifDecoderParse(no_gm.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(avifDecoderNthImageWithOptions(no_gm.get(), 0, &gm_opts),
+            AVIF_RESULT_NO_CONTENT);
+
+  // 2. Animated sequence with NextImageWithOptions and NthImageWithOptions.
+  // The native AV1 decoder does not support inter frames.
+  if (codec_choice() != AVIF_CODEC_CHOICE_NATIVE) {
+    const avifDecodeOptions anim_opts{
+        .enableCropRect = AVIF_TRUE,
+        .cropRect = {.x = 4, .y = 6, .width = 20, .height = 20},
+    };
+    auto anim_ref = CreateDecoder("colors-animated-8bpc.avif");
+    ASSERT_NE(anim_ref, nullptr);
+    ASSERT_EQ(avifDecoderParse(anim_ref.get()), AVIF_RESULT_OK);
+    auto anim_dec = CreateDecoder("colors-animated-8bpc.avif");
+    ASSERT_NE(anim_dec, nullptr);
+    ASSERT_EQ(avifDecoderParse(anim_dec.get()), AVIF_RESULT_OK);
+    for (int i = 0; i < anim_ref->imageCount; ++i) {
+      SCOPED_TRACE(i);
+      ASSERT_EQ(avifDecoderNextImage(anim_ref.get()), AVIF_RESULT_OK);
+      ASSERT_EQ(avifDecoderNextImageWithOptions(anim_dec.get(), &anim_opts),
+                AVIF_RESULT_OK);
+      ImagePtr anim_view(avifImageCreateEmpty());
+      ASSERT_EQ(avifImageSetViewRect(anim_view.get(), anim_ref->image,
+                                     &anim_opts.cropRect),
+                AVIF_RESULT_OK);
+      EXPECT_TRUE(CompareImages(*anim_dec->image, *anim_view));
+    }
+    ASSERT_EQ(avifDecoderNthImage(anim_ref.get(), 3), AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderNthImageWithOptions(anim_dec.get(), 3, &anim_opts),
+              AVIF_RESULT_OK);
+    ImagePtr anim_view(avifImageCreateEmpty());
+    ASSERT_EQ(avifImageSetViewRect(anim_view.get(), anim_ref->image,
+                                   &anim_opts.cropRect),
+              AVIF_RESULT_OK);
+    EXPECT_TRUE(CompareImages(*anim_dec->image, *anim_view));
+  }
+
+  // 3. Progressive or incremental + cropRect returns
+  // AVIF_RESULT_NOT_IMPLEMENTED (region decoding requires the whole file).
+  auto inc_dec = CreateDecoder("sofa_grid1x5_420.avif");
+  ASSERT_NE(inc_dec, nullptr);
+  inc_dec->allowIncremental = AVIF_TRUE;
+  ASSERT_EQ(avifDecoderParse(inc_dec.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(avifDecoderNextImageWithOptions(inc_dec.get(), &gm_opts),
+            AVIF_RESULT_NOT_IMPLEMENTED);
+  auto prog_dec = CreateDecoder("sofa_grid1x5_420.avif");
+  ASSERT_NE(prog_dec, nullptr);
+  prog_dec->allowProgressive = AVIF_TRUE;
+  ASSERT_EQ(avifDecoderParse(prog_dec.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(avifDecoderNextImageWithOptions(prog_dec.get(), &gm_opts),
+            AVIF_RESULT_NOT_IMPLEMENTED);
+
+  // 4. Zero-width and out-of-bounds crops return AVIF_RESULT_INVALID_ARGUMENT.
+  auto err_dec = CreateDecoder("sofa_grid1x5_420.avif");
+  ASSERT_NE(err_dec, nullptr);
+  ASSERT_EQ(avifDecoderParse(err_dec.get()), AVIF_RESULT_OK);
+  const avifDecodeOptions zero_opts{
+      .enableCropRect = AVIF_TRUE,
+      .cropRect = {.x = 0, .y = 0, .width = 0, .height = 10},
+  };
+  EXPECT_EQ(avifDecoderNthImageWithOptions(err_dec.get(), 0, &zero_opts),
+            AVIF_RESULT_INVALID_ARGUMENT);
+  const avifDecodeOptions out_of_bounds_opts{
+      .enableCropRect = AVIF_TRUE,
+      .cropRect = {.x = err_dec->image->width - 5,
+                   .y = 0,
+                   .width = 6,
+                   .height = 10},
+  };
+  EXPECT_EQ(
+      avifDecoderNthImageWithOptions(err_dec.get(), 0, &out_of_bounds_opts),
+      AVIF_RESULT_INVALID_ARGUMENT);
+  EXPECT_EQ(avifDecoderNextImageWithOptions(err_dec.get(), &out_of_bounds_opts),
+            AVIF_RESULT_INVALID_ARGUMENT);
+}
+
+// A NextImage call past the last image after a region decode fails without
+// modifying the decoded image, which must stay consistent with its planes.
+TEST_P(DecoderTest, DecodeRegionThenNoImagesRemaining) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  auto ref_decoder = CreateDecoder("sofa_grid1x5_420.avif");
+  ASSERT_NE(ref_decoder, nullptr);
+  ASSERT_EQ(avifDecoderParse(ref_decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNthImage(ref_decoder.get(), 0), AVIF_RESULT_OK);
+  const avifDecodeOptions opts{
+      .enableCropRect = AVIF_TRUE,
+      .cropRect = {.x = 100, .y = 200, .width = 300, .height = 250},
+  };
+  ImagePtr view(avifImageCreateEmpty());
+  ASSERT_NE(view, nullptr);
+  ASSERT_EQ(
+      avifImageSetViewRect(view.get(), ref_decoder->image, &opts.cropRect),
+      AVIF_RESULT_OK);
+
+  auto decoder = CreateDecoder("sofa_grid1x5_420.avif");
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNextImageWithOptions(decoder.get(), &opts),
+            AVIF_RESULT_OK);
+  EXPECT_TRUE(CompareImages(*decoder->image, *view));
+  EXPECT_EQ(avifDecoderNextImage(decoder.get()),
+            AVIF_RESULT_NO_IMAGES_REMAINING);
+  EXPECT_EQ(decoder->image->width, opts.cropRect.width);
+  EXPECT_EQ(decoder->image->height, opts.cropRect.height);
+  EXPECT_TRUE(CompareImages(*decoder->image, *view));
+  EXPECT_EQ(avifDecoderNextImageWithOptions(decoder.get(), &opts),
+            AVIF_RESULT_NO_IMAGES_REMAINING);
+  EXPECT_TRUE(CompareImages(*decoder->image, *view));
+}
+
+// Region decodes interleaved with full decodes on the same decoder. The full
+// decodes leave planes pointing into codec-owned memory, which a region decode
+// must neither read nor expose.
+TEST_P(DecoderTest, DecodeRegionInterleavedWithFullDecodes) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  for (const char* filename : {"alpha.avif", "color_grid_alpha_nogrid.avif",
+                               "sofa_grid1x5_420.avif"}) {
+    SCOPED_TRACE(filename);
+    auto ref_decoder = CreateDecoder(filename);
+    ASSERT_NE(ref_decoder, nullptr);
+    ASSERT_EQ(avifDecoderParse(ref_decoder.get()), AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderNthImage(ref_decoder.get(), 0), AVIF_RESULT_OK);
+    const uint32_t w = ref_decoder->image->width;
+    const uint32_t h = ref_decoder->image->height;
+    const avifDecodeOptions opts{
+        .enableCropRect = AVIF_TRUE,
+        .cropRect = {.x = (w / 4) & ~1u,
+                     .y = (h / 4) & ~1u,
+                     .width = w / 2,
+                     .height = h / 2},
+    };
+    ImagePtr view(avifImageCreateEmpty());
+    ASSERT_NE(view, nullptr);
+    ASSERT_EQ(
+        avifImageSetViewRect(view.get(), ref_decoder->image, &opts.cropRect),
+        AVIF_RESULT_OK);
+
+    auto decoder = CreateDecoder(filename);
+    ASSERT_NE(decoder, nullptr);
+    ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+    for (int i = 0; i < 2; ++i) {
+      ASSERT_EQ(avifDecoderNthImage(decoder.get(), 0), AVIF_RESULT_OK);
+      EXPECT_TRUE(CompareImages(*decoder->image, *ref_decoder->image));
+      ASSERT_EQ(avifDecoderNthImageWithOptions(decoder.get(), 0, &opts),
+                AVIF_RESULT_OK);
+      EXPECT_TRUE(CompareImages(*decoder->image, *view));
+    }
+  }
+}
 
 }  // namespace
 }  // namespace avif

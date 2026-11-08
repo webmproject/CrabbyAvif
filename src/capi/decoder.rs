@@ -338,14 +338,47 @@ pub unsafe extern "C" fn crabby_avifDecoderParse(decoder: *mut avifDecoder) -> a
     avif_decoder_parse(deref_mut!(decoder))
 }
 
-/// # Safety
-/// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
-/// `avifDecoder` valid for exclusive access during this call. Passing null safely returns
-/// `avifResult::InvalidArgument`.
-#[no_mangle]
-pub unsafe extern "C" fn crabby_avifDecoderNextImage(decoder: *mut avifDecoder) -> avifResult {
-    check_pointer!(decoder);
-    let decoder = deref_mut!(decoder);
+/// Options for crabby_avifDecoderNextImageWithOptions() and
+/// crabby_avifDecoderNthImageWithOptions(). Zero-initialized options are the default options.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct avifDecodeOptions {
+    /// If AVIF_TRUE, only the cropRect region of the image is decoded (for regular grid images,
+    /// only the intersecting cells are read and decoded). cropRect is relative to the clean
+    /// aperture of the image if it has a valid one, or to the whole image otherwise, and must fit
+    /// in it. It is expressed before rotation and mirroring (AVIF_TRANSFORM_IROT and
+    /// AVIF_TRANSFORM_IMIR are kept on the decoded image). Its x and y are rounded down to even
+    /// values along the chroma-subsampled axes of the decoded image. The decoded image has the
+    /// dimensions of cropRect and AVIF_TRANSFORM_CLAP is not set. With
+    /// AVIF_IMAGE_CONTENT_GAIN_MAP, cropRect applies to the gain map image.
+    ///
+    /// Decoding fails if:
+    /// - cropRect does not fit in the clean aperture or image
+    /// - the clean aperture is invalid and strictFlags contains AVIF_STRICT_CLAP_VALID
+    /// - allowProgressive or allowIncremental is set (region decoding requires the whole file to
+    ///   be available)
+    /// - imageContentToDecode is AVIF_IMAGE_CONTENT_GAIN_MAP and the image has no gain map
+    /// - both the color image and the gain map of an image with a gain map are decoded
+    ///
+    /// When decoding fails, decoder->image may be partially decoded or have no pixels.
+    pub enableCropRect: avifBool,
+    pub cropRect: avifCropRect,
+}
+
+impl From<&avifDecodeOptions> for DecodeOptions {
+    fn from(options: &avifDecodeOptions) -> Self {
+        Self {
+            crop_rect: (options.enableCropRect != AVIF_FALSE).then_some(options.cropRect),
+        }
+    }
+}
+
+/// Applies the settings of `decoder` to its Rust decoder, calls `decode` on the latter and syncs the
+/// result back to `decoder`.
+fn avif_decoder_decode(
+    decoder: &mut avifDecoder,
+    decode: impl FnOnce(&mut Decoder) -> AvifResult<()>,
+) -> avifResult {
     let res: AvifResult<Settings> = (&*decoder).try_into();
     decoder.diag.set_from_result(&res);
     let Ok(settings) = res else {
@@ -353,10 +386,70 @@ pub unsafe extern "C" fn crabby_avifDecoderNextImage(decoder: *mut avifDecoder) 
     };
     decoder.rust_decoder.settings = settings;
 
-    let res = decoder.rust_decoder.next_image();
+    let res = decode(&mut decoder.rust_decoder);
     decoder.diag.set_from_result(&res);
     decoder.sync_from_rust_decoder();
     res.into()
+}
+
+/// Same as crabby_avifDecoderNextImage() with the given options. NULL options are the default
+/// options.
+///
+/// # Safety
+/// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+/// `avifDecoder` valid for exclusive access during this call. Passing null safely returns
+/// `avifResult::InvalidArgument`. If `options` is non-null, it must be properly aligned and point
+/// to a valid, initialized `avifDecodeOptions` valid for shared reads during this call.
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifDecoderNextImageWithOptions(
+    decoder: *mut avifDecoder,
+    options: *const avifDecodeOptions,
+) -> avifResult {
+    check_pointer!(decoder);
+    let rust_options = if options.is_null() {
+        DecodeOptions::default()
+    } else {
+        DecodeOptions::from(deref_const!(options))
+    };
+    avif_decoder_decode(deref_mut!(decoder), |rust_decoder| {
+        rust_decoder.next_image_with_options(&rust_options)
+    })
+}
+
+/// # Safety
+/// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+/// `avifDecoder` valid for exclusive access during this call. Passing null safely returns
+/// `avifResult::InvalidArgument`.
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifDecoderNextImage(decoder: *mut avifDecoder) -> avifResult {
+    // SAFETY: The pre-conditions of this function are the same as for
+    // crabby_avifDecoderNextImageWithOptions() with null options.
+    unsafe { crabby_avifDecoderNextImageWithOptions(decoder, std::ptr::null()) }
+}
+
+/// Same as crabby_avifDecoderNthImage() with the given options. NULL options are the default
+/// options.
+///
+/// # Safety
+/// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
+/// `avifDecoder` valid for exclusive access during this call. Passing null safely returns
+/// `avifResult::InvalidArgument`. If `options` is non-null, it must be properly aligned and point
+/// to a valid, initialized `avifDecodeOptions` valid for shared reads during this call.
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifDecoderNthImageWithOptions(
+    decoder: *mut avifDecoder,
+    frameIndex: u32,
+    options: *const avifDecodeOptions,
+) -> avifResult {
+    check_pointer!(decoder);
+    let rust_options = if options.is_null() {
+        DecodeOptions::default()
+    } else {
+        DecodeOptions::from(deref_const!(options))
+    };
+    avif_decoder_decode(deref_mut!(decoder), |rust_decoder| {
+        rust_decoder.nth_image_with_options(frameIndex, &rust_options)
+    })
 }
 
 /// # Safety
@@ -368,19 +461,9 @@ pub unsafe extern "C" fn crabby_avifDecoderNthImage(
     decoder: *mut avifDecoder,
     frameIndex: u32,
 ) -> avifResult {
-    check_pointer!(decoder);
-    let decoder = deref_mut!(decoder);
-    let res: AvifResult<Settings> = (&*decoder).try_into();
-    decoder.diag.set_from_result(&res);
-    let Ok(settings) = res else {
-        return res.into();
-    };
-    decoder.rust_decoder.settings = settings;
-
-    let res = decoder.rust_decoder.nth_image(frameIndex);
-    decoder.diag.set_from_result(&res);
-    decoder.sync_from_rust_decoder();
-    res.into()
+    // SAFETY: The pre-conditions of this function are the same as for
+    // crabby_avifDecoderNthImageWithOptions() with null options.
+    unsafe { crabby_avifDecoderNthImageWithOptions(decoder, frameIndex, std::ptr::null()) }
 }
 
 /// # Safety
