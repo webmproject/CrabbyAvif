@@ -149,9 +149,10 @@ pub const DEFAULT_IMAGE_COUNT_LIMIT: u32 = 12 * 3600 * 60;
 /// Options for [`Decoder::next_image_with_options()`] and [`Decoder::nth_image_with_options()`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DecodeOptions {
-    /// If set, only this region of the image is decoded. The region is relative to the clean
-    /// aperture ('clap' property) if the image has a valid one, or to the whole image otherwise,
-    /// and must fit in it. It is expressed before rotation and mirroring ('irot' and 'imir'
+    /// If set, only this region of the image is decoded (for regular grid images, only the
+    /// intersecting cells are read and decoded). The region is relative to the clean aperture
+    /// ('clap' property) if the image has a valid one, or to the whole image otherwise, and must
+    /// fit in it. It is expressed before rotation and mirroring ('irot' and 'imir'
     /// properties, which are kept on the decoded image). Its x and y are rounded down to even
     /// values along the chroma-subsampled axes of the decoded image. The decoded image has the
     /// dimensions of the region and no clean aperture. With ImageContentType::GainMap, the region
@@ -2291,6 +2292,12 @@ impl Decoder {
         for extra_input in &mut self.extra_inputs {
             extra_input.free_planes(&ALL_PLANES);
         }
+        if cfg!(feature = "android_mediacodec") && !self.image.image_sequence_track_present {
+            // The Android MediaCodec instances may have been signaled the end of the stream by the
+            // previous decode of this still image, even if it failed. Re-create them (the planes
+            // that may point to memory owned by these instances were dropped above).
+            self.codecs.clear();
+        }
         for decoding_item in DecodingItem::ALL_USIZE {
             self.tile_info[decoding_item].decoded_tile_count = 0;
         }
@@ -2379,7 +2386,7 @@ impl Decoder {
         }))
     }
 
-    fn align_crop_rect_for_codecs(&self, composed: CropRect) -> CropRect {
+    fn align_crop_rect_for_codecs(&self, composed: CropRect) -> (CropRect, PixelFormat) {
         let (target_item, parsed_fmt) =
             if self.settings.image_content_to_decode == ImageContentType::GainMap {
                 (DecodingItem::GAINMAP, self.gainmap.image.yuv_format)
@@ -2391,7 +2398,102 @@ impl Decoder {
             .and_then(|tile| self.codecs.get(tile.codec_index))
             .is_some_and(|codec| codec.codec() == CodecChoice::MediaCodec);
         let output_format = if uses_mediacodec { PixelFormat::Yuv420 } else { parsed_fmt };
-        composed.align_to_pixel_format(output_format)
+        (composed.align_to_pixel_format(output_format), output_format)
+    }
+
+    // Returns the indices of the cells of the grid of decoding_item that intersect rect, in raster
+    // order, if only these cells need to be read and decoded to get the region. This requires a
+    // regular grid matching the dimensions of the image, with identical cells of at least 64x64
+    // pixels, even along the chroma-subsampled axes of output_format, and rect within the grid.
+    // Returns None otherwise (the whole item is then decoded and cropped).
+    fn grid_tiles_for_crop(
+        &self,
+        decoding_item: DecodingItem,
+        rect: &CropRect,
+        output_format: PixelFormat,
+    ) -> AvifResult<Option<Vec<usize>>> {
+        if decoding_item.item_idx != 0 {
+            return Ok(None);
+        }
+        let tile_info = &self.tile_info[decoding_item.usize()];
+        if !tile_info.is_grid() || tile_info.is_overlay() || tile_info.is_sample_transform() {
+            return Ok(None);
+        }
+        if output_format == PixelFormat::None {
+            return Ok(None);
+        }
+        let tiles = &self.tiles[decoding_item.usize()];
+        let Some(first_tile) = tiles.first() else {
+            return Ok(None);
+        };
+        let grid = &tile_info.grid;
+        if usize_from_u32(checked_mul!(grid.rows, grid.columns)?)? != tiles.len() {
+            return Ok(None);
+        }
+        // The alpha grid must match the color image.
+        let image = if decoding_item.category == Category::Gainmap {
+            &self.parsed_gainmap_image
+        } else {
+            &self.parsed_image
+        };
+        if grid.width != image.width || grid.height != image.height {
+            return Ok(None);
+        }
+        if decoding_item == DecodingItem::ALPHA {
+            // The color item is decoded to its own dimensions, which may differ from the image.
+            let color = &self.tile_info[DecodingItem::COLOR.usize()];
+            if (color.is_grid()
+                && (grid.width != color.grid.width || grid.height != color.grid.height))
+                || (color.is_overlay()
+                    && (grid.width != color.overlay.width || grid.height != color.overlay.height))
+            {
+                return Ok(None);
+            }
+        }
+        let tile_w = first_tile.width;
+        let tile_h = first_tile.height;
+        let need_even_w = output_format.chroma_shift_x().0 > 0;
+        let need_even_h = output_format.chroma_shift_y() > 0;
+        if tile_w < 64
+            || tile_h < 64
+            || (need_even_w && tile_w % 2 != 0)
+            || (need_even_h && tile_h % 2 != 0)
+        {
+            return Ok(None);
+        }
+        if checked_mul!(tile_w, grid.columns)? < grid.width
+            || checked_mul!(tile_h, grid.rows)? < grid.height
+            || checked_mul!(tile_w, grid.columns - 1)? >= grid.width
+            || checked_mul!(tile_h, grid.rows - 1)? >= grid.height
+        {
+            return Ok(None);
+        }
+        if !tiles
+            .iter()
+            .all(|t| t.width == tile_w && t.height == tile_h && t.input.samples.len() == 1)
+        {
+            return Ok(None);
+        }
+        if !rect.is_within(grid.width, grid.height) {
+            return Ok(None);
+        }
+        let col_start = rect.x / tile_w;
+        let col_end = checked_sub!(checked_add!(rect.x, rect.width)?, 1)? / tile_w;
+        let row_start = rect.y / tile_h;
+        let row_end = checked_sub!(checked_add!(rect.y, rect.height)?, 1)? / tile_h;
+        if col_end >= grid.columns || row_end >= grid.rows {
+            return Ok(None);
+        }
+        let row_count = usize_from_u32(checked_add!(checked_sub!(row_end, row_start)?, 1)?)?;
+        let col_count = usize_from_u32(checked_add!(checked_sub!(col_end, col_start)?, 1)?)?;
+        let mut needed_tiles = create_vec_exact(checked_mul!(row_count, col_count)?)?;
+        for row in row_start..=row_end {
+            for col in col_start..=col_end {
+                let idx = usize_from_u32(checked_add!(checked_mul!(row, grid.columns)?, col)?)?;
+                needed_tiles.try_push(idx)?;
+            }
+        }
+        Ok(Some(needed_tiles))
     }
 
     fn prepare_samples(
@@ -2886,6 +2988,7 @@ impl Decoder {
         &mut self,
         image_index: usize,
         effective_crop: Option<CropRect>,
+        grid_subsets: &[Option<Vec<usize>>; DecodingItem::COUNT],
     ) -> AvifResult<()> {
         let mut decoded_something = false;
         // Dimensions of the color image before cropping. The alpha image is decoded to these
@@ -2898,7 +3001,36 @@ impl Decoder {
             if tile_count == 0 {
                 continue;
             }
-            if let Some(rect) = actual_crop.filter(|_| decoding_item.item_idx == 0) {
+            if let (Some(indices), Some(rect)) =
+                (grid_subsets[decoding_item.usize()].as_deref(), actual_crop)
+            {
+                if self.can_use_decode_grid(decoding_item) {
+                    self.decode_grid(image_index, decoding_item, Some((indices, rect)), None)?;
+                } else {
+                    let first_tile_index = *indices.first().ok_or(AvifError::InvalidArgument)?;
+                    for (pos, &tile_index) in indices.iter().enumerate() {
+                        let is_last = pos + 1 == indices.len();
+                        self.decode_tile(
+                            image_index,
+                            decoding_item,
+                            tile_index,
+                            first_tile_index,
+                            is_last,
+                            Some(rect),
+                            None,
+                        )?;
+                    }
+                    self.tile_info[decoding_item.usize()].decoded_tile_count =
+                        self.tile_info[decoding_item.usize()].tile_count;
+                }
+                if decoding_item == DecodingItem::COLOR {
+                    // Same dimensions as a full decode of the grid.
+                    let grid = &self.tile_info[decoding_item.usize()].grid;
+                    uncropped_color_dims = (grid.width, grid.height);
+                    actual_crop = Some(rect.align_to_pixel_format(self.image.yuv_format));
+                }
+                decoded_something = true;
+            } else if let Some(rect) = actual_crop.filter(|_| decoding_item.item_idx == 0) {
                 if decoding_item == DecodingItem::ALPHA {
                     let mut temp_alpha_image = self.image.shallow_clone();
                     temp_alpha_image.width = uncropped_color_dims.0;
@@ -3069,16 +3201,38 @@ impl Decoder {
         self.create_codecs()?;
 
         let is_sample_transform = self.tile_info[DecodingItem::COLOR.usize()].is_sample_transform();
-        let effective_crop = match composed_crop {
+        let (effective_crop, grid_subsets) = match composed_crop {
             Some(composed) if !is_sample_transform => {
-                Some(self.align_crop_rect_for_codecs(composed))
+                let (aligned, output_format) = self.align_crop_rect_for_codecs(composed);
+                // The color crop rectangle is aligned again to the actual pixel format of the
+                // decoded color image, which may differ from output_format (so x and y may be
+                // rounded down to even values). The alpha cells must cover that final rectangle.
+                // This is not an issue for the color cells because their dimensions are even along
+                // the chroma-subsampled axes.
+                let alpha_cells_rect = CropRect {
+                    x: aligned.x & !1,
+                    y: aligned.y & !1,
+                    width: checked_add!(aligned.width, aligned.x & 1)?,
+                    height: checked_add!(aligned.height, aligned.y & 1)?,
+                };
+                let mut subsets: [Option<Vec<usize>>; DecodingItem::COUNT] = Default::default();
+                for decoding_item in self.settings.image_content_to_decode.decoding_items() {
+                    let (cells_rect, item_format) = if decoding_item == DecodingItem::ALPHA {
+                        (&alpha_cells_rect, PixelFormat::Yuv400)
+                    } else {
+                        (&aligned, output_format)
+                    };
+                    subsets[decoding_item.usize()] =
+                        self.grid_tiles_for_crop(decoding_item, cells_rect, item_format)?;
+                }
+                (Some(aligned), subsets)
             }
-            _ => None,
+            _ => (None, Default::default()),
         };
 
         match (
             self.settings.allow_progressive,
-            self.prepare_samples(sample_index, /* grid_subsets= */ &Default::default()),
+            self.prepare_samples(sample_index, &grid_subsets),
         ) {
             (_, Ok(_)) | (true, Err(AvifError::WaitingOnIo)) => {}
             (_, Err(err)) => return Err(err),
@@ -3093,11 +3247,12 @@ impl Decoder {
             }
         }
         self.reset_region_decode_state();
+        self.create_codecs()?;
         if composed_crop.is_some() {
             self.begin_region_decode();
         }
         self.decoded_frame_options = None;
-        self.decode_tiles(sample_index, effective_crop)?;
+        self.decode_tiles(sample_index, effective_crop, &grid_subsets)?;
 
         if is_sample_transform {
             // The tokens were created in parse_sato() which was only called

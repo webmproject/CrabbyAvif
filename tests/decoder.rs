@@ -2410,6 +2410,209 @@ impl decoder::IO for TrackingIO {
     }
 }
 
+#[test]
+fn region_decode_grid_selective_io_and_corrupted_unused_cells() -> AvifResult<()> {
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    // Cell extents in sofa_grid1x5_420.avif (1x5 grid, each cell 1024x154, total 1024x770):
+    // Cell 0: [578, 3258), rows 0..154
+    // Cell 1: [3258, 10643), rows 154..308
+    // Cell 2: [10643, 17846), rows 308..462
+    // Cell 3: [17846, 22151), rows 462..616
+    // Cell 4: [22151, 25409), rows 616..770
+    let cell_ranges: [(usize, usize); 5] = [
+        (578, 3258),
+        (3258, 10643),
+        (10643, 17846),
+        (17846, 22151),
+        (22151, 25409),
+    ];
+    let original_data =
+        std::fs::read(get_test_file("sofa_grid1x5_420.avif")).expect("Unable to read file");
+
+    let mut ref_decoder = decoder::Decoder::default();
+    ref_decoder.set_io_vec(original_data.clone());
+    ref_decoder.parse()?;
+    ref_decoder.nth_image(0)?;
+    let ref_full = ref_decoder.image().unwrap().try_deep_clone()?;
+
+    // Case 1: Crop strictly inside Cell 2 (rows 320..420).
+    let crop_cell2 = CropRect {
+        x: 10,
+        y: 320,
+        width: 100,
+        height: 100,
+    };
+    let opts_cell2 = decoder::DecodeOptions {
+        crop_rect: Some(crop_cell2),
+    };
+    let reads = Rc::new(RefCell::new(Vec::new()));
+    let mut tracking_decoder = decoder::Decoder::default();
+    tracking_decoder.set_io(Box::new(TrackingIO {
+        data: original_data.clone(),
+        reads: reads.clone(),
+    }));
+    tracking_decoder.parse()?;
+    reads.borrow_mut().clear();
+    tracking_decoder.nth_image_with_options(0, &opts_cell2)?;
+    let recorded_reads = reads.borrow().clone();
+    assert!(!recorded_reads.is_empty());
+    for (start, end) in &recorded_reads {
+        assert!(
+            *start >= cell_ranges[2].0 && *end <= cell_ranges[2].1,
+            "Unexpected read [{start}, {end}) outside cell 2 {:?}",
+            cell_ranges[2]
+        );
+    }
+    let expected_cell2 = crop_reference_image(&ref_full, &crop_cell2)?;
+    assert!(utils::are_images_equal(
+        tracking_decoder.image().unwrap(),
+        &expected_cell2
+    )?);
+
+    // Corrupt cells 0, 1, 3, and 4 with 0xFF and verify full decode fails while region decode
+    // succeeds via both next_image_with_options and nth_image_with_options.
+    let mut corrupted_non_cell2 = original_data.clone();
+    for (idx, &(start, end)) in cell_ranges.iter().enumerate() {
+        if idx != 2 {
+            corrupted_non_cell2[start..end].fill(0xFF);
+        }
+    }
+    let mut full_corrupt_decoder = decoder::Decoder::default();
+    full_corrupt_decoder.set_io_vec(corrupted_non_cell2.clone());
+    full_corrupt_decoder.parse()?;
+    assert!(full_corrupt_decoder.nth_image(0).is_err());
+
+    let mut region_corrupt_decoder = decoder::Decoder::default();
+    region_corrupt_decoder.set_io_vec(corrupted_non_cell2);
+    region_corrupt_decoder.parse()?;
+    region_corrupt_decoder.next_image_with_options(&opts_cell2)?;
+    assert!(utils::are_images_equal(
+        region_corrupt_decoder.image().unwrap(),
+        &expected_cell2
+    )?);
+
+    // Case 2: Cross-cell crop spanning Cells 1, 2, and 3 (rows 301..500, aligned to 300..499)
+    // with odd x, y, width, and height.
+    let crop_multi = CropRect {
+        x: 11,
+        y: 301,
+        width: 99,
+        height: 199,
+    };
+    let opts_multi = decoder::DecodeOptions {
+        crop_rect: Some(crop_multi),
+    };
+    let reads_multi = Rc::new(RefCell::new(Vec::new()));
+    let mut tracking_multi = decoder::Decoder::default();
+    tracking_multi.set_io(Box::new(TrackingIO {
+        data: original_data.clone(),
+        reads: reads_multi.clone(),
+    }));
+    tracking_multi.parse()?;
+    reads_multi.borrow_mut().clear();
+    tracking_multi.nth_image_with_options(0, &opts_multi)?;
+    for (start, end) in reads_multi.borrow().iter() {
+        assert!(
+            *start >= cell_ranges[1].0 && *end <= cell_ranges[3].1,
+            "Unexpected read [{start}, {end}) outside cells 1..=3"
+        );
+    }
+    let expected_multi = crop_reference_image(&ref_full, &crop_multi)?;
+    assert!(utils::are_images_equal(
+        tracking_multi.image().unwrap(),
+        &expected_multi
+    )?);
+
+    let mut corrupted_outer = original_data;
+    corrupted_outer[cell_ranges[0].0..cell_ranges[0].1].fill(0xFF);
+    corrupted_outer[cell_ranges[4].0..cell_ranges[4].1].fill(0xFF);
+    let mut outer_corrupt_decoder = decoder::Decoder::default();
+    outer_corrupt_decoder.set_io_vec(corrupted_outer);
+    outer_corrupt_decoder.parse()?;
+    outer_corrupt_decoder.nth_image_with_options(0, &opts_multi)?;
+    assert!(utils::are_images_equal(
+        outer_corrupt_decoder.image().unwrap(),
+        &expected_multi
+    )?);
+    Ok(())
+}
+
+// The output dimensions of the ImageGrid of sofa_grid1x5_420.avif (at [570, 578)) are patched to
+// differ from the 'ispe' dimensions of the grid item. A region decode behaves like a full decode
+// followed by a crop, and does not leave the decoder in a bad state if it fails.
+#[test_case(1024, 700 ; "grid_shorter_than_ispe")]
+#[test_case(1000, 770 ; "grid_narrower_than_ispe")]
+fn region_decode_grid_dimensions_mismatch(grid_width: u16, grid_height: u16) -> AvifResult<()> {
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    let mut data =
+        std::fs::read(get_test_file("sofa_grid1x5_420.avif")).expect("Unable to read file");
+    assert_eq!(data[570..578], [0, 0, 4, 0, 4, 0, 3, 2]);
+    data[574..576].copy_from_slice(&grid_width.to_be_bytes());
+    data[576..578].copy_from_slice(&grid_height.to_be_bytes());
+
+    let mut ref_decoder = decoder::Decoder::default();
+    ref_decoder.set_io_vec(data.clone());
+    ref_decoder.parse()?;
+    let ref_full = match ref_decoder.nth_image(0) {
+        Ok(()) => Some(ref_decoder.image().unwrap().try_deep_clone()?),
+        Err(_) => None,
+    };
+
+    let crops = [
+        // Within the grid.
+        CropRect {
+            x: 10,
+            y: 320,
+            width: 100,
+            height: 100,
+        },
+        // Within the 'ispe' dimensions but not within the grid.
+        CropRect {
+            x: 990,
+            y: 720,
+            width: 30,
+            height: 40,
+        },
+    ];
+    for crop in crops {
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_vec(data.clone());
+        decoder.parse()?;
+        let result = decoder.nth_image_with_options(
+            0,
+            &decoder::DecodeOptions {
+                crop_rect: Some(crop),
+            },
+        );
+        match &ref_full {
+            Some(ref_full)
+                if crop.x + crop.width <= ref_full.width
+                    && crop.y + crop.height <= ref_full.height =>
+            {
+                assert!(result.is_ok(), "Unexpected failure for crop {crop:?}");
+                assert!(utils::are_images_equal(
+                    decoder.image().unwrap(),
+                    &crop_reference_image(ref_full, &crop)?
+                )?);
+            }
+            _ => assert!(result.is_err(), "Unexpected success for crop {crop:?}"),
+        }
+        // A full decode still behaves as with a fresh decoder.
+        match &ref_full {
+            Some(ref_full) => {
+                decoder.nth_image(0)?;
+                assert!(utils::are_images_equal(decoder.image().unwrap(), ref_full)?);
+            }
+            None => assert!(decoder.nth_image(0).is_err()),
+        }
+    }
+    Ok(())
+}
+
 #[test_case("sofa_grid1x5_420.avif")]
 #[test_case("color_grid_alpha_grid_shared_tiles.avif")]
 #[test_case("color_grid_alpha_nogrid.avif")]
@@ -3340,6 +3543,162 @@ fn native_decodable_thumbnails(filename: &str, expected_native_decodable: bool) 
         decoder.native_decodable(),
         expected_native_decodable && cfg!(feature = "native_av1")
     );
+}
+
+// The gain map is a 2x2 grid of 64x80 cells while the base and alpha images are single items, so
+// each gain map cell is decoded with its own codec instance through decode_tile().
+#[test]
+fn region_decode_gainmap_grid_per_tile() -> AvifResult<()> {
+    if !HAS_NON_ANDROID_DECODER {
+        return Ok(());
+    }
+    let filename = "color_nogrid_alpha_nogrid_gainmap_grid.avif";
+    let mut ref_decoder = get_decoder(filename);
+    ref_decoder.settings.image_content_to_decode = ImageContentType::GainMap;
+    ref_decoder.parse()?;
+    ref_decoder.nth_image(0)?;
+    let ref_gainmap = ref_decoder.gainmap().image.try_deep_clone()?;
+    assert_eq!((ref_gainmap.width, ref_gainmap.height), (128, 160));
+
+    let crops = [
+        // Single cell.
+        CropRect {
+            x: 0,
+            y: 0,
+            width: 64,
+            height: 80,
+        },
+        // All cells, with odd x, y, width and height.
+        CropRect {
+            x: 33,
+            y: 41,
+            width: 61,
+            height: 79,
+        },
+        // Bottom-right cell only (the first decoded cell is not cell 0).
+        CropRect {
+            x: 64,
+            y: 80,
+            width: 64,
+            height: 80,
+        },
+        // Bottom row (two cells, the first decoded cell is not cell 0).
+        CropRect {
+            x: 10,
+            y: 90,
+            width: 100,
+            height: 50,
+        },
+        // Right column (two non-consecutive cells).
+        CropRect {
+            x: 70,
+            y: 10,
+            width: 40,
+            height: 120,
+        },
+    ];
+    let mut decoder = get_decoder(filename);
+    decoder.settings.image_content_to_decode = ImageContentType::GainMap;
+    decoder.parse()?;
+    for crop in crops {
+        decoder.nth_image_with_options(
+            0,
+            &decoder::DecodeOptions {
+                crop_rect: Some(crop),
+            },
+        )?;
+        assert!(
+            utils::are_images_equal(
+                &decoder.gainmap().image,
+                &crop_reference_image(&ref_gainmap, &crop)?
+            )?,
+            "Mismatch for crop {crop:?}"
+        );
+        // Interleave full decodes.
+        decoder.nth_image(0)?;
+        assert!(utils::are_images_equal(
+            &decoder.gainmap().image,
+            &ref_gainmap
+        )?);
+    }
+    Ok(())
+}
+
+fn decoded_image(decoder: &decoder::Decoder, gainmap: bool) -> &Image {
+    if gainmap {
+        &decoder.gainmap().image
+    } else {
+        decoder.image().unwrap()
+    }
+}
+
+// The color image and the gain map are grids with different layouts. Region decodes of either one
+// only decode the intersecting cells, with both AV1 decoders and with several threads.
+#[test_matrix([false, true], [DAV1D, NATIVE], [1, 4])]
+fn region_decode_grid_codecs_and_threads(
+    gainmap: bool,
+    codec: CodecChoice,
+    max_threads: u32,
+) -> AvifResult<()> {
+    if !HAS_DECODER || (!cfg!(feature = "native_av1") && codec == NATIVE) {
+        return Ok(());
+    }
+    let filename = "color_grid_gainmap_different_grid.avif";
+    let new_decoder = || {
+        let mut decoder = get_decoder_with_codec(filename, codec);
+        decoder.settings.image_content_to_decode =
+            if gainmap { ImageContentType::GainMap } else { ImageContentType::Color };
+        decoder.settings.max_threads = max_threads;
+        decoder
+    };
+    let mut ref_decoder = new_decoder();
+    ref_decoder.parse()?;
+    ref_decoder.nth_image(0)?;
+    let ref_full = decoded_image(&ref_decoder, gainmap).try_deep_clone()?;
+    let w = ref_full.width;
+    let h = ref_full.height;
+
+    let crops = [
+        // Top-left quarter.
+        CropRect {
+            x: 0,
+            y: 0,
+            width: w / 2,
+            height: h / 2,
+        },
+        // Centered, with odd x, y, width and height.
+        CropRect {
+            x: (w / 4) | 1,
+            y: (h / 4) | 1,
+            width: (w / 2) | 1,
+            height: (h / 2) | 1,
+        },
+        // Bottom-right corner, only in the last cell (the first decoded cell is not cell 0).
+        CropRect {
+            x: w - 3,
+            y: h - 3,
+            width: 3,
+            height: 3,
+        },
+    ];
+    let mut decoder = new_decoder();
+    decoder.parse()?;
+    for crop in crops {
+        decoder.nth_image_with_options(
+            0,
+            &decoder::DecodeOptions {
+                crop_rect: Some(crop),
+            },
+        )?;
+        assert!(
+            utils::are_images_equal(
+                decoded_image(&decoder, gainmap),
+                &crop_reference_image(&ref_full, &crop)?
+            )?,
+            "Mismatch for crop {crop:?}"
+        );
+    }
+    Ok(())
 }
 
 // A next_image() past the last image after a region decode fails without modifying the decoded
