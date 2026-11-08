@@ -280,8 +280,11 @@ struct CommandLineArgs {
     #[arg(long, value_parser = clap_parser)]
     clap: Option<CleanAperture>,
 
-    /// AVIF Encode only: Add clap property (clean aperture) calculated from a crop rectangle. X,
-    /// Y, Width, Height
+    /// When encoding AVIF: Add clap property (clean aperture) calculated from a crop rectangle.
+    /// When decoding AVIF: Only decode this region of the image (relative to its clean aperture if
+    /// it has a valid one, before rotation and mirroring; with --extract-gainmap, relative to the
+    /// gain map). X and Y are rounded down to even values along chroma-subsampled axes. X, Y,
+    /// Width, Height
     #[arg(long, value_parser = crop_parser)]
     crop: Option<CropRect>,
 
@@ -492,20 +495,30 @@ fn print_image_info(decoder: &Decoder) {
     if decoder.gainmap_present() {
         let gainmap = decoder.gainmap();
         let gainmap_image = &gainmap.image;
+        let base_image = if gainmap.metadata.base_hdr_headroom.0 == 0 { "SDR" } else { "HDR" };
+        // The dimensions and format of the gain map image are only set if the gain map is decoded.
+        let gainmap_decoded = matches!(
+            decoder.settings.image_content_to_decode,
+            ImageContentType::GainMap | ImageContentType::ColorAndGainMap | ImageContentType::All
+        );
         image_data.extend_from_slice(&[
             (
                 0,
                 "Gainmap",
-                format!(
-                "{}x{} pixels, {} bit, {:#?}, {:#?} Range, Matrix Coeffs. {:#?}, Base Image is {}",
-                gainmap_image.width,
-                gainmap_image.height,
-                gainmap_image.depth,
-                gainmap_image.yuv_format,
-                gainmap_image.yuv_range,
-                gainmap_image.matrix_coefficients,
-                if gainmap.metadata.base_hdr_headroom.0 == 0 { "SDR" } else { "HDR" },
-            ),
+                if gainmap_decoded {
+                    format!(
+                        "{}x{} pixels, {} bit, {:#?}, {:#?} Range, Matrix Coeffs. {:#?}, Base Image is {}",
+                        gainmap_image.width,
+                        gainmap_image.height,
+                        gainmap_image.depth,
+                        gainmap_image.yuv_format,
+                        gainmap_image.yuv_range,
+                        gainmap_image.matrix_coefficients,
+                        base_image,
+                    )
+                } else {
+                    format!("Present (not decoded), Base Image is {base_image}")
+                },
             ),
             (0, "Alternate image", "".to_string()),
             (
@@ -576,6 +589,10 @@ fn create_decoder_and_parse(args: &CommandLineArgs, input_file: &String) -> Avif
         strictness: if args.no_strict { Strictness::None } else { Strictness::All },
         image_content_to_decode: if args.extract_gainmap {
             ImageContentType::GainMap
+        } else if args.crop.is_some() {
+            // Region decodes cannot decode both the color image and the gain map. The gain map is
+            // only written with --extract-gainmap anyway.
+            ImageContentType::ColorAndAlpha
         } else {
             ImageContentType::All
         },
@@ -672,18 +689,29 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
         if max_threads == 1 { "" } else { "s" }
     );
     let mut decoder = create_decoder_and_parse(args, input_file)?;
-    decoder.nth_image(args.index.unwrap_or(0))?;
+    if args.extract_gainmap && !decoder.gainmap_present() {
+        return Err(AvifError::UnknownError(
+            "Input image does not contain a gain map".into(),
+        ));
+    }
+    let options = DecodeOptions {
+        crop_rect: args.crop,
+    };
+    match decoder.nth_image_with_options(args.index.unwrap_or(0), &options) {
+        Err(AvifError::InvalidArgument) if args.crop.is_some() => {
+            return Err(AvifError::UnknownError(
+                "Invalid crop rectangle: it must fit in the image (or in its clean aperture)"
+                    .into(),
+            ));
+        }
+        result => result?,
+    }
     println!("Image Decoded: {}", input_file);
     println!("Image details:");
     print_image_info(&decoder);
 
     let output_filename = &args.output_file.as_ref().unwrap().as_str();
     let image = if args.extract_gainmap {
-        if !decoder.gainmap_present() {
-            return Err(AvifError::UnknownError(
-                "Input image does not contain a gain map".into(),
-            ));
-        }
         &decoder.gainmap().image
     } else {
         decoder.image().unwrap()
@@ -922,6 +950,7 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                     || args.index.is_some()
                     || args.extract_gainmap
                     || args.extract_thumbnail
+                    || args.crop.is_some()
                 {
                     return Err(AvifError::UnknownError(
                         "--info contains unsupported extra arguments".into(),
@@ -953,6 +982,11 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                 if args.png_compress.is_some() && extension != "png" {
                     return Err(AvifError::UnknownError(
                         "png-compress-level is only supported for png output".into(),
+                    ));
+                }
+                if args.crop.is_some() && args.progressive {
+                    return Err(AvifError::UnknownError(
+                        "crop is not supported with progressive decoding".into(),
                     ));
                 }
             }
