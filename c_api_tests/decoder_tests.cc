@@ -2089,6 +2089,75 @@ TEST_P(DecoderTest, DecodeRegionInterleavedWithFullDecodes) {
   }
 }
 
+// Region decoding of a 120x160 image with a clean aperture (crop rectangle
+// (12, 14, 96, 132)), rotation and mirroring. The region is relative to the
+// clean aperture, which is not applied to the decoded image.
+TEST_P(DecoderTest, DecodeRegionCleanAperture) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  const char* filename = "region/region_clap_irot_imir.avif";
+  auto ref_decoder = CreateDecoder(filename);
+  ASSERT_NE(ref_decoder, nullptr);
+  ASSERT_EQ(avifDecoderParse(ref_decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNthImage(ref_decoder.get(), 0), AVIF_RESULT_OK);
+  ASSERT_EQ(ref_decoder->image->width, 120u);
+  ASSERT_EQ(ref_decoder->image->height, 160u);
+  ASSERT_EQ(ref_decoder->image->transformFlags,
+            AVIF_TRANSFORM_CLAP | AVIF_TRANSFORM_IROT | AVIF_TRANSFORM_IMIR);
+
+  auto decoder = CreateDecoder(filename);
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+
+  // Odd user crop (5, 7, 41, 39) inside clap (12, 14, 96, 132) -> (17, 21),
+  // aligned down to (16, 20).
+  const avifDecodeOptions opts{
+      .enableCropRect = AVIF_TRUE,
+      .cropRect = {.x = 5, .y = 7, .width = 41, .height = 39},
+  };
+  ASSERT_EQ(avifDecoderNextImageWithOptions(decoder.get(), &opts),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->width, 41u);
+  EXPECT_EQ(decoder->image->height, 39u);
+  // CLAP flag must be cleared on cropped output while IROT/IMIR remain intact.
+  EXPECT_EQ(decoder->image->transformFlags,
+            AVIF_TRANSFORM_IROT | AVIF_TRANSFORM_IMIR);
+
+  const avifCropRect expected_rect{.x = 16, .y = 20, .width = 41, .height = 39};
+  ImagePtr expected_view(avifImageCreateEmpty());
+  ASSERT_NE(expected_view, nullptr);
+  ASSERT_EQ(avifImageSetViewRect(expected_view.get(), ref_decoder->image,
+                                 &expected_rect),
+            AVIF_RESULT_OK);
+  EXPECT_TRUE(CompareImages(*decoder->image, *expected_view));
+
+  // avifDecoderNthImageProperties still reports uncropped dimensions and CLAP.
+  ImagePtr props(avifImageCreateEmpty());
+  ASSERT_NE(props, nullptr);
+  ASSERT_EQ(avifDecoderNthImageProperties(decoder.get(), 0, props.get()),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(props->width, 120u);
+  EXPECT_EQ(props->height, 160u);
+  EXPECT_NE(props->transformFlags & AVIF_TRANSFORM_CLAP, 0u);
+
+  // Crop exceeding clap bounds (90 + 10 > 96, even though 12 + 100 <= 120) must
+  // fail with AVIF_RESULT_INVALID_ARGUMENT.
+  const avifDecodeOptions out_of_clap{
+      .enableCropRect = AVIF_TRUE,
+      .cropRect = {.x = 90, .y = 0, .width = 10, .height = 10},
+  };
+  EXPECT_EQ(avifDecoderNthImageWithOptions(decoder.get(), 0, &out_of_clap),
+            AVIF_RESULT_INVALID_ARGUMENT);
+
+  // Subsequent uncropped decode restores original dimensions and CLAP flag.
+  ASSERT_EQ(avifDecoderNthImage(decoder.get(), 0), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->width, 120u);
+  EXPECT_EQ(decoder->image->height, 160u);
+  EXPECT_NE(decoder->image->transformFlags & AVIF_TRANSFORM_CLAP, 0u);
+  EXPECT_TRUE(CompareImages(*decoder->image, *ref_decoder->image));
+}
+
 }  // namespace
 }  // namespace avif
 

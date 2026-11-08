@@ -198,3 +198,25 @@ $ for y in 400 420 422 444; do for d in 8 10 12; do for a in "" _alpha; do
       region_grid${a}.png region/region_grid_${y}_${d}bpc${a}.avif
   done; done; done
 ```
+
+## region/region_clap_irot_imir.avif
+
+120x160 4:2:0 8-bit image with alpha, a clean aperture (`clap`) derived from
+the crop rectangle (12, 14, 96, 132), a rotation (`irot`) of 1 and a mirroring
+(`imir`) along axis 0, used by the region decoding tests.
+
+The source image was generated with ffmpeg (a test pattern with an alpha
+gradient, so that all the samples depend on their position):
+
+```bash
+$ ffmpeg -f lavfi -i testsrc2=size=120x160:rate=1 -frames:v 1 \
+    -vf "format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='255*(X+Y)/278'" \
+    -pix_fmt rgba region_clap.png
+```
+
+and encoded with avifenc (libavif 1.4.2, aom 3.15.2):
+
+```bash
+$ avifenc -q 60 --qalpha 60 -s 10 -d 8 -y 420 --crop 12,14,96,132 --irot 1 \
+    --imir 0 region_clap.png region/region_clap_irot_imir.avif
+```
