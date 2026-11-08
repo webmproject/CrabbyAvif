@@ -54,6 +54,14 @@ fn get_decoder_with_codec(filename: &str, codec: CodecChoice) -> decoder::Decode
     decoder
 }
 
+// Returns true if the given codec is not available, in which case parameterized tests return early.
+// Without this, DAV1D would fall back to another decoder and duplicate the test case of that
+// decoder.
+fn codec_unavailable(codec: CodecChoice) -> bool {
+    (!cfg!(feature = "dav1d") && codec == DAV1D)
+        || (!cfg!(feature = "native_av1") && codec == NATIVE)
+}
+
 macro_rules! pixel_eq {
     ($a:expr, $b:expr) => {
         assert!((i32::from($a) - i32::from($b)).abs() <= 3);
@@ -2410,9 +2418,11 @@ impl decoder::IO for TrackingIO {
     }
 }
 
-#[test]
-fn region_decode_grid_selective_io_and_corrupted_unused_cells() -> AvifResult<()> {
-    if !HAS_DECODER {
+#[test_matrix([DAV1D, NATIVE])]
+fn region_decode_grid_selective_io_and_corrupted_unused_cells(
+    codec: CodecChoice,
+) -> AvifResult<()> {
+    if !HAS_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
     // Cell extents in sofa_grid1x5_420.avif (1x5 grid, each cell 1024x154, total 1024x770):
@@ -2431,7 +2441,7 @@ fn region_decode_grid_selective_io_and_corrupted_unused_cells() -> AvifResult<()
     let original_data =
         std::fs::read(get_test_file("sofa_grid1x5_420.avif")).expect("Unable to read file");
 
-    let mut ref_decoder = decoder::Decoder::default();
+    let mut ref_decoder = decoder_with_codec(codec);
     ref_decoder.set_io_vec(original_data.clone());
     ref_decoder.parse()?;
     ref_decoder.nth_image(0)?;
@@ -2448,7 +2458,7 @@ fn region_decode_grid_selective_io_and_corrupted_unused_cells() -> AvifResult<()
         crop_rect: Some(crop_cell2),
     };
     let reads = Rc::new(RefCell::new(Vec::new()));
-    let mut tracking_decoder = decoder::Decoder::default();
+    let mut tracking_decoder = decoder_with_codec(codec);
     tracking_decoder.set_io(Box::new(TrackingIO {
         data: original_data.clone(),
         reads: reads.clone(),
@@ -2479,12 +2489,12 @@ fn region_decode_grid_selective_io_and_corrupted_unused_cells() -> AvifResult<()
             corrupted_non_cell2[start..end].fill(0xFF);
         }
     }
-    let mut full_corrupt_decoder = decoder::Decoder::default();
+    let mut full_corrupt_decoder = decoder_with_codec(codec);
     full_corrupt_decoder.set_io_vec(corrupted_non_cell2.clone());
     full_corrupt_decoder.parse()?;
     assert!(full_corrupt_decoder.nth_image(0).is_err());
 
-    let mut region_corrupt_decoder = decoder::Decoder::default();
+    let mut region_corrupt_decoder = decoder_with_codec(codec);
     region_corrupt_decoder.set_io_vec(corrupted_non_cell2);
     region_corrupt_decoder.parse()?;
     region_corrupt_decoder.next_image_with_options(&opts_cell2)?;
@@ -2505,7 +2515,7 @@ fn region_decode_grid_selective_io_and_corrupted_unused_cells() -> AvifResult<()
         crop_rect: Some(crop_multi),
     };
     let reads_multi = Rc::new(RefCell::new(Vec::new()));
-    let mut tracking_multi = decoder::Decoder::default();
+    let mut tracking_multi = decoder_with_codec(codec);
     tracking_multi.set_io(Box::new(TrackingIO {
         data: original_data.clone(),
         reads: reads_multi.clone(),
@@ -2528,7 +2538,7 @@ fn region_decode_grid_selective_io_and_corrupted_unused_cells() -> AvifResult<()
     let mut corrupted_outer = original_data;
     corrupted_outer[cell_ranges[0].0..cell_ranges[0].1].fill(0xFF);
     corrupted_outer[cell_ranges[4].0..cell_ranges[4].1].fill(0xFF);
-    let mut outer_corrupt_decoder = decoder::Decoder::default();
+    let mut outer_corrupt_decoder = decoder_with_codec(codec);
     outer_corrupt_decoder.set_io_vec(corrupted_outer);
     outer_corrupt_decoder.parse()?;
     outer_corrupt_decoder.nth_image_with_options(0, &opts_multi)?;
@@ -2542,10 +2552,16 @@ fn region_decode_grid_selective_io_and_corrupted_unused_cells() -> AvifResult<()
 // The output dimensions of the ImageGrid of sofa_grid1x5_420.avif (at [570, 578)) are patched to
 // differ from the 'ispe' dimensions of the grid item. A region decode behaves like a full decode
 // followed by a crop, and does not leave the decoder in a bad state if it fails.
-#[test_case(1024, 700 ; "grid_shorter_than_ispe")]
-#[test_case(1000, 770 ; "grid_narrower_than_ispe")]
-fn region_decode_grid_dimensions_mismatch(grid_width: u16, grid_height: u16) -> AvifResult<()> {
-    if !HAS_DECODER {
+#[test_case(1024, 700, DAV1D ; "grid_shorter_than_ispe_dav1d")]
+#[test_case(1024, 700, NATIVE ; "grid_shorter_than_ispe_native")]
+#[test_case(1000, 770, DAV1D ; "grid_narrower_than_ispe_dav1d")]
+#[test_case(1000, 770, NATIVE ; "grid_narrower_than_ispe_native")]
+fn region_decode_grid_dimensions_mismatch(
+    grid_width: u16,
+    grid_height: u16,
+    codec: CodecChoice,
+) -> AvifResult<()> {
+    if !HAS_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
     let mut data =
@@ -2554,7 +2570,7 @@ fn region_decode_grid_dimensions_mismatch(grid_width: u16, grid_height: u16) -> 
     data[574..576].copy_from_slice(&grid_width.to_be_bytes());
     data[576..578].copy_from_slice(&grid_height.to_be_bytes());
 
-    let mut ref_decoder = decoder::Decoder::default();
+    let mut ref_decoder = decoder_with_codec(codec);
     ref_decoder.set_io_vec(data.clone());
     ref_decoder.parse()?;
     let ref_full = match ref_decoder.nth_image(0) {
@@ -2579,7 +2595,7 @@ fn region_decode_grid_dimensions_mismatch(grid_width: u16, grid_height: u16) -> 
         },
     ];
     for crop in crops {
-        let mut decoder = decoder::Decoder::default();
+        let mut decoder = decoder_with_codec(codec);
         decoder.set_io_vec(data.clone());
         decoder.parse()?;
         let result = decoder.nth_image_with_options(
@@ -2613,15 +2629,20 @@ fn region_decode_grid_dimensions_mismatch(grid_width: u16, grid_height: u16) -> 
     Ok(())
 }
 
-#[test_case("sofa_grid1x5_420.avif")]
-#[test_case("color_grid_alpha_grid_shared_tiles.avif")]
-#[test_case("color_grid_alpha_nogrid.avif")]
-#[test_case("color_grid_alpha_grid_gainmap_nogrid.avif")]
-fn region_decode_existing_grid_files(filename: &str) -> AvifResult<()> {
-    if !HAS_DECODER {
+#[test_matrix(
+    [
+        "sofa_grid1x5_420.avif",
+        "color_grid_alpha_grid_shared_tiles.avif",
+        "color_grid_alpha_nogrid.avif",
+        "color_grid_alpha_grid_gainmap_nogrid.avif"
+    ],
+    [DAV1D, NATIVE]
+)]
+fn region_decode_existing_grid_files(filename: &str, codec: CodecChoice) -> AvifResult<()> {
+    if !HAS_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
-    let mut ref_decoder = get_decoder(filename);
+    let mut ref_decoder = get_decoder_with_codec(filename, codec);
     ref_decoder.parse()?;
     ref_decoder.nth_image(0)?;
     let ref_full = ref_decoder.image().unwrap().try_deep_clone()?;
@@ -2660,7 +2681,7 @@ fn region_decode_existing_grid_files(filename: &str) -> AvifResult<()> {
     ];
 
     for crop in crops {
-        let mut decoder = get_decoder(filename);
+        let mut decoder = get_decoder_with_codec(filename, codec);
         decoder.parse()?;
         decoder.nth_image_with_options(
             0,
@@ -2676,7 +2697,7 @@ fn region_decode_existing_grid_files(filename: &str) -> AvifResult<()> {
     }
 
     // Default options (crop_rect: None) decode the full image again after a region decode.
-    let mut decoder = get_decoder(filename);
+    let mut decoder = get_decoder_with_codec(filename, codec);
     decoder.parse()?;
     decoder.nth_image_with_options(
         0,
@@ -2694,13 +2715,18 @@ fn region_decode_existing_grid_files(filename: &str) -> AvifResult<()> {
 
 // 3x3 grids where the right-most column and the bottom-most row are trimmed (86 instead of 88
 // pixels), see tests/data/README.md.
-#[test_matrix(["400", "420", "422", "444"], [8, 10, 12], ["", "_alpha"])]
-fn region_decode_grid_matrix(yuv_format: &str, depth: u8, alpha: &str) -> AvifResult<()> {
-    if !HAS_NON_ANDROID_DECODER {
+#[test_matrix(["400", "420", "422", "444"], [8, 10, 12], ["", "_alpha"], [DAV1D, NATIVE])]
+fn region_decode_grid_matrix(
+    yuv_format: &str,
+    depth: u8,
+    alpha: &str,
+    codec: CodecChoice,
+) -> AvifResult<()> {
+    if !HAS_NON_ANDROID_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
     let filename = format!("region/region_grid_{yuv_format}_{depth}bpc{alpha}.avif");
-    let mut ref_decoder = get_decoder(&filename);
+    let mut ref_decoder = get_decoder_with_codec(&filename, codec);
     ref_decoder.parse()?;
     ref_decoder.nth_image(0)?;
     let ref_full = ref_decoder.image().unwrap().try_deep_clone()?;
@@ -2732,7 +2758,7 @@ fn region_decode_grid_matrix(yuv_format: &str, depth: u8, alpha: &str) -> AvifRe
         },
     ];
 
-    let mut decoder = get_decoder(&filename);
+    let mut decoder = get_decoder_with_codec(&filename, codec);
     decoder.parse()?;
     for crop in crops {
         decoder.nth_image_with_options(
@@ -2751,10 +2777,12 @@ fn region_decode_grid_matrix(yuv_format: &str, depth: u8, alpha: &str) -> AvifRe
 }
 
 #[cfg(feature = "encoder")]
-#[test_case(false ; "single_tile")]
-#[test_case(true ; "grid_3x3")]
-fn region_decode_with_clean_aperture(is_grid: bool) -> AvifResult<()> {
-    if !HAS_ENCODER || !HAS_DECODER {
+#[test_case(false, DAV1D ; "single_tile_dav1d")]
+#[test_case(false, NATIVE ; "single_tile_native")]
+#[test_case(true, DAV1D ; "grid_3x3_dav1d")]
+#[test_case(true, NATIVE ; "grid_3x3_native")]
+fn region_decode_with_clean_aperture(is_grid: bool, codec: CodecChoice) -> AvifResult<()> {
+    if !HAS_ENCODER || !HAS_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
     let settings = encoder::Settings {
@@ -2818,7 +2846,7 @@ fn region_decode_with_clean_aperture(is_grid: bool) -> AvifResult<()> {
     };
     let edata = enc.finish()?;
 
-    let mut ref_decoder = decoder::Decoder::default();
+    let mut ref_decoder = decoder_with_codec(codec);
     ref_decoder.set_io_vec(edata.clone());
     ref_decoder.parse()?;
     let orig_clap = ref_decoder.image().unwrap().clap;
@@ -2826,7 +2854,7 @@ fn region_decode_with_clean_aperture(is_grid: bool) -> AvifResult<()> {
     ref_decoder.nth_image(0)?;
     let ref_full = ref_decoder.image().unwrap().try_deep_clone()?;
 
-    let mut decoder = decoder::Decoder::default();
+    let mut decoder = decoder_with_codec(codec);
     decoder.set_io_vec(edata);
     decoder.parse()?;
 
@@ -2893,9 +2921,9 @@ fn region_decode_with_clean_aperture(is_grid: bool) -> AvifResult<()> {
 }
 
 #[cfg(feature = "encoder")]
-#[test]
-fn region_decode_with_invalid_clean_aperture() -> AvifResult<()> {
-    if !HAS_ENCODER || !HAS_DECODER {
+#[test_matrix([DAV1D, NATIVE])]
+fn region_decode_with_invalid_clean_aperture(codec: CodecChoice) -> AvifResult<()> {
+    if !HAS_ENCODER || !HAS_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
     let settings = encoder::Settings {
@@ -2930,7 +2958,7 @@ fn region_decode_with_invalid_clean_aperture() -> AvifResult<()> {
     edata[clap_offset + 4..clap_offset + 8].copy_from_slice(&97u32.to_be_bytes());
     edata[clap_offset + 8..clap_offset + 12].copy_from_slice(&2u32.to_be_bytes());
 
-    let mut ref_decoder = decoder::Decoder::default();
+    let mut ref_decoder = decoder_with_codec(codec);
     ref_decoder.set_io_vec(edata.clone());
     ref_decoder.parse()?;
     assert!(ref_decoder.image().unwrap().clap.is_some());
@@ -2949,7 +2977,7 @@ fn region_decode_with_invalid_clean_aperture() -> AvifResult<()> {
     };
 
     // StrictnessFlag::ClapValid is set by default.
-    let mut decoder = decoder::Decoder::default();
+    let mut decoder = decoder_with_codec(codec);
     decoder.set_io_vec(edata.clone());
     decoder.parse()?;
     assert!(matches!(
@@ -2959,7 +2987,7 @@ fn region_decode_with_invalid_clean_aperture() -> AvifResult<()> {
 
     // Without StrictnessFlag::ClapValid, the invalid clean aperture is ignored and the region
     // is relative to the whole image.
-    let mut decoder = decoder::Decoder::default();
+    let mut decoder = decoder_with_codec(codec);
     decoder.settings.strictness =
         decoder::Strictness::SpecificExclude(vec![decoder::StrictnessFlag::ClapValid]);
     decoder.set_io_vec(edata);
@@ -2976,20 +3004,20 @@ fn region_decode_with_invalid_clean_aperture() -> AvifResult<()> {
     Ok(())
 }
 
-#[test]
-fn region_decode_cache_and_state_transitions() -> AvifResult<()> {
-    if !HAS_DECODER {
+#[test_matrix([DAV1D, NATIVE])]
+fn region_decode_cache_and_state_transitions(codec: CodecChoice) -> AvifResult<()> {
+    if !HAS_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
     let data = std::fs::read(get_test_file("sofa_grid1x5_420.avif")).expect("Unable to read file");
-    let mut ref_decoder = decoder::Decoder::default();
+    let mut ref_decoder = decoder_with_codec(codec);
     ref_decoder.set_io_vec(data.clone());
     ref_decoder.parse()?;
     ref_decoder.nth_image(0)?;
     let ref_full = ref_decoder.image().unwrap().try_deep_clone()?;
 
     let reads = Rc::new(RefCell::new(Vec::new()));
-    let mut decoder = decoder::Decoder::default();
+    let mut decoder = decoder_with_codec(codec);
     decoder.set_io(Box::new(TrackingIO {
         data,
         reads: reads.clone(),
@@ -3055,9 +3083,9 @@ fn region_decode_cache_and_state_transitions() -> AvifResult<()> {
     Ok(())
 }
 
-#[test]
-fn region_decode_single_tile_and_overlay() -> AvifResult<()> {
-    if !HAS_DECODER {
+#[test_matrix([DAV1D, NATIVE])]
+fn region_decode_single_tile_and_overlay(codec: CodecChoice) -> AvifResult<()> {
+    if !HAS_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
     // Single-tile still images and iovl overlays.
@@ -3070,7 +3098,7 @@ fn region_decode_single_tile_and_overlay() -> AvifResult<()> {
         if is_overlay && !HAS_NON_ANDROID_DECODER {
             continue;
         }
-        let mut ref_decoder = get_decoder(filename);
+        let mut ref_decoder = get_decoder_with_codec(filename, codec);
         if is_overlay {
             ref_decoder.settings.strictness = decoder::Strictness::None;
         }
@@ -3083,7 +3111,7 @@ fn region_decode_single_tile_and_overlay() -> AvifResult<()> {
             width: ref_full.width / 2,
             height: ref_full.height / 2,
         };
-        let mut decoder = get_decoder(filename);
+        let mut decoder = get_decoder_with_codec(filename, codec);
         if is_overlay {
             decoder.settings.strictness = decoder::Strictness::None;
         }
@@ -3102,14 +3130,14 @@ fn region_decode_single_tile_and_overlay() -> AvifResult<()> {
     Ok(())
 }
 
-#[test]
-fn region_decode_sato_16bit() -> AvifResult<()> {
+#[test_matrix([DAV1D, NATIVE])]
+fn region_decode_sato_16bit(codec: CodecChoice) -> AvifResult<()> {
     // 16-bit Sample Transform ('sato').
-    if !HAS_NON_ANDROID_DECODER {
+    if !HAS_NON_ANDROID_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
     for filename in ["weld_sato_8plus8bit.avif", "weld_sato_8plus8bit_alpha.avif"] {
-        let mut ref_decoder = get_decoder(filename);
+        let mut ref_decoder = get_decoder_with_codec(filename, codec);
         ref_decoder.settings.allow_sample_transform = true;
         ref_decoder.parse()?;
         ref_decoder.nth_image(0)?;
@@ -3120,7 +3148,7 @@ fn region_decode_sato_16bit() -> AvifResult<()> {
             width: ref_full.width / 2,
             height: ref_full.height / 2,
         };
-        let mut decoder = get_decoder(filename);
+        let mut decoder = get_decoder_with_codec(filename, codec);
         decoder.settings.allow_sample_transform = true;
         decoder.parse()?;
         decoder.nth_image_with_options(
@@ -3138,14 +3166,14 @@ fn region_decode_sato_16bit() -> AvifResult<()> {
     Ok(())
 }
 
-#[test]
-fn region_decode_thumbnails() -> AvifResult<()> {
-    if !HAS_DECODER {
+#[test_matrix([DAV1D, NATIVE])]
+fn region_decode_thumbnails(codec: CodecChoice) -> AvifResult<()> {
+    if !HAS_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
     // Multi-thumbnail source (thumbnail 0 is 2x1 grid + per-tile alpha, thumbnail 1 is single
     // item).
-    let mut ref_thumb = get_decoder("thumbnails_grid_per_tile_alpha.avif");
+    let mut ref_thumb = get_decoder_with_codec("thumbnails_grid_per_tile_alpha.avif", codec);
     ref_thumb.settings.source = decoder::Source::Thumbnail;
     ref_thumb.parse()?;
     ref_thumb.nth_image(0)?;
@@ -3153,7 +3181,7 @@ fn region_decode_thumbnails() -> AvifResult<()> {
     ref_thumb.nth_image(1)?;
     let ref_thumb1 = ref_thumb.image().unwrap().try_deep_clone()?;
 
-    let mut thumb_decoder = get_decoder("thumbnails_grid_per_tile_alpha.avif");
+    let mut thumb_decoder = get_decoder_with_codec("thumbnails_grid_per_tile_alpha.avif", codec);
     thumb_decoder.settings.source = decoder::Source::Thumbnail;
     thumb_decoder.parse()?;
     let crop_t0 = CropRect {
@@ -3192,13 +3220,15 @@ fn region_decode_thumbnails() -> AvifResult<()> {
     Ok(())
 }
 
+// The native AV1 decoder does not support inter frames (image sequences), so this test only runs
+// with dav1d.
 #[test]
 fn region_decode_sequence() -> AvifResult<()> {
-    if !HAS_DECODER {
+    if !HAS_DECODER || !cfg!(feature = "dav1d") {
         return Ok(());
     }
     // Animated sequence ('avis') via both next_image_with_options and nth_image_with_options.
-    let mut ref_anim = get_decoder("colors-animated-8bpc.avif");
+    let mut ref_anim = get_decoder_with_codec("colors-animated-8bpc.avif", DAV1D);
     ref_anim.parse()?;
     let mut ref_frames = Vec::new();
     for _ in 0..5 {
@@ -3215,7 +3245,7 @@ fn region_decode_sequence() -> AvifResult<()> {
         crop_rect: Some(anim_crop),
     };
 
-    let mut anim_next = get_decoder("colors-animated-8bpc.avif");
+    let mut anim_next = get_decoder_with_codec("colors-animated-8bpc.avif", DAV1D);
     anim_next.parse()?;
     for ref_frame in &ref_frames {
         anim_next.next_image_with_options(&anim_opts)?;
@@ -3225,7 +3255,7 @@ fn region_decode_sequence() -> AvifResult<()> {
         )?);
     }
 
-    let mut anim_nth = get_decoder("colors-animated-8bpc.avif");
+    let mut anim_nth = get_decoder_with_codec("colors-animated-8bpc.avif", DAV1D);
     anim_nth.parse()?;
     for &idx in &[3usize, 1, 4, 0] {
         anim_nth.nth_image_with_options(idx as u32, &anim_opts)?;
@@ -3238,10 +3268,10 @@ fn region_decode_sequence() -> AvifResult<()> {
 }
 
 #[cfg(all(feature = "encoder", feature = "satofloat"))]
-#[test]
-fn region_decode_sato_float32() -> AvifResult<()> {
+#[test_matrix([DAV1D, NATIVE])]
+fn region_decode_sato_float32(codec: CodecChoice) -> AvifResult<()> {
     // MediaCodec decodes the 12-bit inputs of the Float32b recipe to 8 bits.
-    if !HAS_ENCODER || !HAS_NON_ANDROID_DECODER {
+    if !HAS_ENCODER || !HAS_NON_ANDROID_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
     let image_metadata = Image {
@@ -3283,7 +3313,7 @@ fn region_decode_sato_float32() -> AvifResult<()> {
         width: 4,
         height: 3,
     };
-    let mut decoder = decoder::Decoder::default();
+    let mut decoder = decoder_with_codec(codec);
     decoder.set_io_vec(encoded);
     decoder.settings.allow_sample_transform = true;
     decoder.parse()?;
@@ -3307,13 +3337,13 @@ fn region_decode_sato_float32() -> AvifResult<()> {
     Ok(())
 }
 
-#[test]
-fn region_decode_gainmap() -> AvifResult<()> {
-    if !HAS_DECODER {
+#[test_matrix([DAV1D, NATIVE])]
+fn region_decode_gainmap(codec: CodecChoice) -> AvifResult<()> {
+    if !HAS_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
     // 1. Gainmap-only region decode succeeds.
-    let mut ref_gm_decoder = get_decoder("seine_sdr_gainmap_srgb.avif");
+    let mut ref_gm_decoder = get_decoder_with_codec("seine_sdr_gainmap_srgb.avif", codec);
     ref_gm_decoder.settings.image_content_to_decode = ImageContentType::GainMap;
     ref_gm_decoder.parse()?;
     ref_gm_decoder.nth_image(0)?;
@@ -3328,7 +3358,7 @@ fn region_decode_gainmap() -> AvifResult<()> {
     let gm_opts = decoder::DecodeOptions {
         crop_rect: Some(gm_crop),
     };
-    let mut gm_decoder = get_decoder("seine_sdr_gainmap_srgb.avif");
+    let mut gm_decoder = get_decoder_with_codec("seine_sdr_gainmap_srgb.avif", codec);
     gm_decoder.settings.image_content_to_decode = ImageContentType::GainMap;
     gm_decoder.parse()?;
     gm_decoder.nth_image_with_options(0, &gm_opts)?;
@@ -3340,14 +3370,14 @@ fn region_decode_gainmap() -> AvifResult<()> {
 
     // 2. Decoding both Color and GainMap with crop_rect when gainmap is present fails.
     for content in [ImageContentType::ColorAndGainMap, ImageContentType::All] {
-        let mut both_decoder = get_decoder("seine_sdr_gainmap_srgb.avif");
+        let mut both_decoder = get_decoder_with_codec("seine_sdr_gainmap_srgb.avif", codec);
         both_decoder.settings.image_content_to_decode = content;
         both_decoder.parse()?;
         assert!(both_decoder.nth_image_with_options(0, &gm_opts).is_err());
     }
 
     // 3. ImageContentType::All on an image WITHOUT a gainmap succeeds with crop_rect.
-    let mut ref_no_gm_decoder = get_decoder("paris_10bpc.avif");
+    let mut ref_no_gm_decoder = get_decoder_with_codec("paris_10bpc.avif", codec);
     ref_no_gm_decoder.parse()?;
     ref_no_gm_decoder.nth_image(0)?;
     let ref_no_gm = ref_no_gm_decoder.image().unwrap().try_deep_clone()?;
@@ -3357,7 +3387,7 @@ fn region_decode_gainmap() -> AvifResult<()> {
         width: 32,
         height: 32,
     };
-    let mut no_gm_decoder = get_decoder("paris_10bpc.avif");
+    let mut no_gm_decoder = get_decoder_with_codec("paris_10bpc.avif", codec);
     no_gm_decoder.settings.image_content_to_decode = ImageContentType::All;
     no_gm_decoder.parse()?;
     no_gm_decoder.nth_image_with_options(
@@ -3373,9 +3403,9 @@ fn region_decode_gainmap() -> AvifResult<()> {
     Ok(())
 }
 
-#[test]
-fn region_decode_error_cases() -> AvifResult<()> {
-    if !HAS_DECODER {
+#[test_matrix([DAV1D, NATIVE])]
+fn region_decode_error_cases(codec: CodecChoice) -> AvifResult<()> {
+    if !HAS_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
     // allow_incremental + crop_rect fails.
@@ -3387,13 +3417,13 @@ fn region_decode_error_cases() -> AvifResult<()> {
             height: 16,
         }),
     };
-    let mut inc_decoder = get_decoder("sofa_grid1x5_420.avif");
+    let mut inc_decoder = get_decoder_with_codec("sofa_grid1x5_420.avif", codec);
     inc_decoder.settings.allow_incremental = true;
     inc_decoder.parse()?;
     assert!(inc_decoder.next_image_with_options(&opts).is_err());
 
     // Invalid crop rectangles fail.
-    let mut bad_crop_decoder = get_decoder("sofa_grid1x5_420.avif");
+    let mut bad_crop_decoder = get_decoder_with_codec("sofa_grid1x5_420.avif", codec);
     bad_crop_decoder.parse()?;
     let w = bad_crop_decoder.image().unwrap().width;
     let h = bad_crop_decoder.image().unwrap().height;
@@ -3455,14 +3485,22 @@ fn region_decode_error_cases() -> AvifResult<()> {
 // pointing into codec-owned memory, which a region decode must neither read (for example by
 // cropping a stale alpha plane) nor expose once the codecs are re-created (Android MediaCodec
 // instances are re-created to decode the same still image again).
-#[test_case("alpha.avif")]
-#[test_case("color_grid_alpha_nogrid.avif")]
-#[test_case("sofa_grid1x5_420.avif")]
-fn region_decode_interleaved_with_full_decodes(filename: &str) -> AvifResult<()> {
-    if !HAS_DECODER {
+#[test_matrix(
+    [
+        "alpha.avif",
+        "color_grid_alpha_nogrid.avif",
+        "sofa_grid1x5_420.avif"
+    ],
+    [DAV1D, NATIVE]
+)]
+fn region_decode_interleaved_with_full_decodes(
+    filename: &str,
+    codec: CodecChoice,
+) -> AvifResult<()> {
+    if !HAS_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
-    let mut ref_decoder = get_decoder(filename);
+    let mut ref_decoder = get_decoder_with_codec(filename, codec);
     ref_decoder.parse()?;
     ref_decoder.nth_image(0)?;
     let ref_full = ref_decoder.image().unwrap().try_deep_clone()?;
@@ -3477,7 +3515,7 @@ fn region_decode_interleaved_with_full_decodes(filename: &str) -> AvifResult<()>
         crop_rect: Some(crop),
     };
 
-    let mut decoder = get_decoder(filename);
+    let mut decoder = get_decoder_with_codec(filename, codec);
     decoder.parse()?;
     for _ in 0..2 {
         decoder.nth_image(0)?;
@@ -3547,13 +3585,13 @@ fn native_decodable_thumbnails(filename: &str, expected_native_decodable: bool) 
 
 // The gain map is a 2x2 grid of 64x80 cells while the base and alpha images are single items, so
 // each gain map cell is decoded with its own codec instance through decode_tile().
-#[test]
-fn region_decode_gainmap_grid_per_tile() -> AvifResult<()> {
-    if !HAS_NON_ANDROID_DECODER {
+#[test_matrix([DAV1D, NATIVE])]
+fn region_decode_gainmap_grid_per_tile(codec: CodecChoice) -> AvifResult<()> {
+    if !HAS_NON_ANDROID_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
     let filename = "color_nogrid_alpha_nogrid_gainmap_grid.avif";
-    let mut ref_decoder = get_decoder(filename);
+    let mut ref_decoder = get_decoder_with_codec(filename, codec);
     ref_decoder.settings.image_content_to_decode = ImageContentType::GainMap;
     ref_decoder.parse()?;
     ref_decoder.nth_image(0)?;
@@ -3597,7 +3635,7 @@ fn region_decode_gainmap_grid_per_tile() -> AvifResult<()> {
             height: 120,
         },
     ];
-    let mut decoder = get_decoder(filename);
+    let mut decoder = get_decoder_with_codec(filename, codec);
     decoder.settings.image_content_to_decode = ImageContentType::GainMap;
     decoder.parse()?;
     for crop in crops {
@@ -3640,7 +3678,7 @@ fn region_decode_grid_codecs_and_threads(
     codec: CodecChoice,
     max_threads: u32,
 ) -> AvifResult<()> {
-    if !HAS_DECODER || (!cfg!(feature = "native_av1") && codec == NATIVE) {
+    if !HAS_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
     let filename = "color_grid_gainmap_different_grid.avif";
@@ -3703,13 +3741,12 @@ fn region_decode_grid_codecs_and_threads(
 
 // A next_image() past the last image after a region decode fails without modifying the decoded
 // image, which must stay self-consistent (it is exposed through the C API even on failure).
-#[test_case("paris_10bpc.avif")]
-#[test_case("sofa_grid1x5_420.avif")]
-fn region_decode_then_no_images_remaining(filename: &str) -> AvifResult<()> {
-    if !HAS_DECODER {
+#[test_matrix(["paris_10bpc.avif", "sofa_grid1x5_420.avif"], [DAV1D, NATIVE])]
+fn region_decode_then_no_images_remaining(filename: &str, codec: CodecChoice) -> AvifResult<()> {
+    if !HAS_DECODER || codec_unavailable(codec) {
         return Ok(());
     }
-    let mut ref_decoder = get_decoder(filename);
+    let mut ref_decoder = get_decoder_with_codec(filename, codec);
     ref_decoder.parse()?;
     ref_decoder.nth_image(0)?;
     let ref_full = ref_decoder.image().unwrap().try_deep_clone()?;
@@ -3724,7 +3761,7 @@ fn region_decode_then_no_images_remaining(filename: &str) -> AvifResult<()> {
         crop_rect: Some(crop),
     };
 
-    let mut decoder = get_decoder(filename);
+    let mut decoder = get_decoder_with_codec(filename, codec);
     decoder.parse()?;
     decoder.nth_image_with_options(0, &options)?;
     assert!(decoder.next_image().is_err());
@@ -3755,15 +3792,16 @@ fn region_decode_then_no_images_remaining(filename: &str) -> AvifResult<()> {
 // Region decoding requires the whole file to be available, so it is not supported with
 // allow_progressive. Progressive images can still be region decoded without allow_progressive, in
 // which case they are decoded as a single image.
+// The native AV1 decoder does not support layered images, so this test only runs with dav1d.
 #[test_case("progressive_layered_grid.avif")]
 #[test_case("tiger_3layer_3res.avif")]
 fn region_decode_progressive(filename: &str) -> AvifResult<()> {
     // Progressive decoding is not supported on Android.
-    if !HAS_NON_ANDROID_DECODER {
+    if !HAS_NON_ANDROID_DECODER || !cfg!(feature = "dav1d") {
         return Ok(());
     }
     let path = format!("progressive/{filename}");
-    let mut ref_decoder = get_decoder(&path);
+    let mut ref_decoder = get_decoder_with_codec(&path, DAV1D);
     ref_decoder.parse()?;
     ref_decoder.nth_image(0)?;
     let ref_image = ref_decoder.image().unwrap().try_deep_clone()?;
@@ -3778,7 +3816,7 @@ fn region_decode_progressive(filename: &str) -> AvifResult<()> {
         crop_rect: Some(crop),
     };
 
-    let mut decoder = get_decoder(&path);
+    let mut decoder = get_decoder_with_codec(&path, DAV1D);
     decoder.parse()?;
     decoder.nth_image_with_options(0, &options)?;
     assert!(utils::are_images_equal(
@@ -3786,7 +3824,7 @@ fn region_decode_progressive(filename: &str) -> AvifResult<()> {
         &crop_reference_image(&ref_image, &crop)?
     )?);
 
-    let mut decoder = get_decoder(&path);
+    let mut decoder = get_decoder_with_codec(&path, DAV1D);
     decoder.settings.allow_progressive = true;
     decoder.parse()?;
     assert!(decoder.image_count() > 1);
