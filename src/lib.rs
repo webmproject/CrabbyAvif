@@ -367,6 +367,7 @@ pub enum AvifError {
     OutOfMemory,
     CannotChangeSetting,
     IncompatibleImage,
+    InternalError,
     EncodeGainMapFailed,
     DecodeGainMapFailed,
     InvalidToneMappedImage(String),

@@ -56,6 +56,7 @@ pub enum avifResult {
     OutOfMemory = 26,
     CannotChangeSetting = 27,
     IncompatibleImage = 28,
+    InternalError = 29,
     EncodeGainMapFailed = 30,
     DecodeGainMapFailed = 31,
     InvalidToneMappedImage = 32,
@@ -93,6 +94,7 @@ impl From<&AvifError> for avifResult {
             AvifError::OutOfMemory => avifResult::OutOfMemory,
             AvifError::CannotChangeSetting => avifResult::CannotChangeSetting,
             AvifError::IncompatibleImage => avifResult::IncompatibleImage,
+            AvifError::InternalError => avifResult::InternalError,
             AvifError::EncodeGainMapFailed => avifResult::EncodeGainMapFailed,
             AvifError::DecodeGainMapFailed => avifResult::DecodeGainMapFailed,
             AvifError::InvalidToneMappedImage(_) => avifResult::InvalidToneMappedImage,
@@ -144,6 +146,7 @@ impl From<avifResult> for AvifError {
             avifResult::OutOfMemory => AvifError::OutOfMemory,
             avifResult::CannotChangeSetting => AvifError::CannotChangeSetting,
             avifResult::IncompatibleImage => AvifError::IncompatibleImage,
+            avifResult::InternalError => AvifError::InternalError,
             avifResult::EncodeGainMapFailed => AvifError::EncodeGainMapFailed,
             avifResult::DecodeGainMapFailed => AvifError::DecodeGainMapFailed,
             avifResult::InvalidToneMappedImage => AvifError::InvalidToneMappedImage("".into()),
@@ -364,6 +367,7 @@ pub extern "C" fn crabby_avifResultToString(res: avifResult) -> *const c_char {
         avifResult::IncompatibleImage => {
             cstr_ptr!(b"The image is incompatible with already encoded images\0")
         }
+        avifResult::InternalError => cstr_ptr!(b"Internal error\0"),
         avifResult::EncodeGainMapFailed => cstr_ptr!(b"Encoding of gain map planes failed\0"),
         avifResult::DecodeGainMapFailed => cstr_ptr!(b"Decoding of gain map planes failed\0"),
         avifResult::InvalidToneMappedImage => cstr_ptr!(b"Invalid tone mapped image item\0"),
