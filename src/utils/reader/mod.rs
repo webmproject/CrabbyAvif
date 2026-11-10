@@ -31,29 +31,38 @@ mod xmp;
 
 use crate::gainmap::GainMap;
 use crate::image::Image;
+use crate::image::YuvRange;
 use crate::AvifError;
 use crate::AvifResult;
+use crate::ColorPrimaries;
 use crate::MatrixCoefficients;
 use crate::PixelFormat;
 
 #[derive(Default)]
 pub struct Config {
     pub yuv_format: Option<PixelFormat>,
+    pub yuv_range: Option<YuvRange>,
     pub depth: Option<u8>,
+    pub color_primaries: Option<ColorPrimaries>,
     pub matrix_coefficients: Option<MatrixCoefficients>,
     pub ignore_icc: bool,
     pub ignore_exif: bool,
     pub ignore_xmp: bool,
     pub image_size_limit: u32,
     pub allow_sample_transform: bool,
+    pub max_threads: u32,
 }
 
 pub trait Reader {
-    // Returns the next frame, its duration in milliseconds, and the gain map if any.
+    // Returns the next frame, its duration in timescale units, and the gain map if any.
     fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64, Option<GainMap>)>;
     // Returns true if the last call to read_frame() returned another frame than the last frame.
     // Meaningless if read_frame() was never called or if read_frame() returned an error.
     fn has_more_frames(&mut self) -> bool;
+    // Timescale (ticks per second) for frame durations returned by read_frame().
+    fn timescale(&self) -> u64 {
+        1000
+    }
 }
 
 impl dyn Reader {

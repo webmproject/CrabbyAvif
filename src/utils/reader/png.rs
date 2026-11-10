@@ -468,6 +468,7 @@ impl Reader for PngReader {
 
         yuv.width = raw_width;
         yuv.height = raw_height;
+        yuv.yuv_range = config.yuv_range.unwrap_or(YuvRange::Full);
         yuv.matrix_coefficients = config
             .matrix_coefficients
             .unwrap_or(MatrixCoefficients::Bt601);
@@ -645,6 +646,9 @@ impl Reader for PngReader {
             }
         }
 
+        if let Some(cp) = config.color_primaries {
+            yuv.color_primaries = cp;
+        }
         // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs updated by
         // `png_read_update_info`.
         let num_channels = unsafe { png_get_channels(png.png, png.info) };
