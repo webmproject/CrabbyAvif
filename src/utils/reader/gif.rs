@@ -82,6 +82,7 @@ impl Reader for GifReader {
             format: rgb::Format::Rgba,
             pixels: Some(Pixels::Buffer(rgba_buffer)),
             row_bytes: (width * 4) as u32,
+            max_threads: i32::try_from(config.max_threads).unwrap_or(i32::MAX),
             ..Default::default()
         };
         let mut yuv = Image {
@@ -89,7 +90,10 @@ impl Reader for GifReader {
             height: self.decoder.height() as u32,
             depth: config.depth.unwrap_or(8),
             yuv_format: config.yuv_format.unwrap_or(PixelFormat::Yuv420),
-            yuv_range: YuvRange::Full,
+            yuv_range: config.yuv_range.unwrap_or(YuvRange::Full),
+            color_primaries: config
+                .color_primaries
+                .unwrap_or(ColorPrimaries::Unspecified),
             matrix_coefficients: config
                 .matrix_coefficients
                 .unwrap_or(MatrixCoefficients::Bt601),

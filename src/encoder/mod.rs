@@ -42,7 +42,6 @@ use crate::codecs::avm::Avm;
 #[cfg(feature = "jpegxl")]
 use crate::codecs::libjxl::Libjxl;
 
-use std::collections::HashMap;
 use std::fmt;
 use std::ops::Range;
 use std::time::SystemTime;
@@ -80,9 +79,12 @@ impl TilingMode {
     fn log2(&self, width: u32, height: u32) -> (i32, i32) {
         match *self {
             Self::Auto => {
-                let image_area = width * height;
-                let tiles_log2 =
-                    floor_log2(std::cmp::min(image_area.div_ceil(512 * 512), 8)) as i32;
+                if width == 0 || height == 0 {
+                    return (0, 0);
+                }
+                let image_area = (width as u64) * (height as u64);
+                let tiles = std::cmp::min(image_area.div_ceil(512 * 512), 8) as u32;
+                let tiles_log2 = floor_log2(tiles) as i32;
                 let (dim1, dim2) = if width >= height { (width, height) } else { (height, width) };
                 let diff_log2 = floor_log2(dim1 / dim2) as i32;
                 let diff = std::cmp::max(0, tiles_log2 - diff_log2);
@@ -307,8 +309,62 @@ impl Sample {
 pub(crate) type Codec = Box<dyn crate::codecs::Encoder>;
 
 // If Category is None, the option applies to all categories. If Category is some, it only
-// applies to that category.
-pub(crate) type CodecSpecificOptions = HashMap<(Option<Category>, String), String>;
+// applies to that category. Stored as a Vec to preserve exact insertion order.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct CodecSpecificOptions(pub(crate) Vec<((Option<Category>, String), String)>);
+
+impl CodecSpecificOptions {
+    #[cfg(feature = "capi")]
+    pub(crate) fn try_set(
+        &mut self,
+        category: Option<Category>,
+        key: &str,
+        value: &str,
+    ) -> AvifResult<()> {
+        let mut val_owned = String::new();
+        val_owned
+            .try_reserve_exact(value.len())
+            .map_err(AvifError::map_out_of_memory)?;
+        val_owned.push_str(value);
+        if let Some(idx) = self
+            .0
+            .iter()
+            .position(|((c, k), _)| *c == category && k == key)
+        {
+            let ((cat, key_owned), _) = self.0.remove(idx);
+            #[allow(clippy::disallowed_methods)]
+            self.0.push(((cat, key_owned), val_owned));
+            Ok(())
+        } else {
+            let mut key_owned = String::new();
+            key_owned
+                .try_reserve_exact(key.len())
+                .map_err(AvifError::map_out_of_memory)?;
+            key_owned.push_str(key);
+            self.0.try_push(((category, key_owned), val_owned))
+        }
+    }
+
+    pub(crate) fn try_set_owned(
+        &mut self,
+        category: Option<Category>,
+        key: String,
+        value: String,
+    ) -> AvifResult<()> {
+        if let Some(idx) = self
+            .0
+            .iter()
+            .position(|((c, k), _)| *c == category && *k == key)
+        {
+            let ((cat, key_owned), _) = self.0.remove(idx);
+            #[allow(clippy::disallowed_methods)]
+            self.0.push(((cat, key_owned), value));
+            Ok(())
+        } else {
+            self.0.try_push(((category, key), value))
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct Encoder {
@@ -321,7 +377,7 @@ pub struct Encoder {
     alternative_item_ids: Vec<u16>,
     alpha_present: bool,
     duration_in_timescales: Vec<u64>,
-    codec_specific_options: CodecSpecificOptions,
+    pub(crate) codec_specific_options: CodecSpecificOptions,
     // Decided when the first image is added. Guaranteed not to be Recipe::Auto.
     final_recipe: Option<Recipe>,
     // True if the first image was added as a single image (not as a frame of an image sequence
@@ -351,13 +407,25 @@ impl Encoder {
         Ok(())
     }
 
+    /// Sets a codec-specific option, ignoring allocation failure if out of memory.
+    /// Prefer [`Self::try_set_codec_specific_option`] when OOM errors must be propagated.
     pub fn set_codec_specific_option(
         &mut self,
         category: Option<Category>,
         key: String,
         value: String,
     ) {
-        self.codec_specific_options.insert((category, key), value);
+        let _ = self.try_set_codec_specific_option(category, key, value);
+    }
+
+    pub fn try_set_codec_specific_option(
+        &mut self,
+        category: Option<Category>,
+        key: String,
+        value: String,
+    ) -> AvifResult<()> {
+        self.codec_specific_options
+            .try_set_owned(category, key, value)
     }
 
     pub(crate) fn is_sequence(&self) -> bool {
@@ -1034,6 +1102,17 @@ impl Encoder {
             }
         }
         let mut stream = OStream::default();
+        let mut estimated = 4096usize.saturating_add(self.items.len().saturating_mul(512));
+        for item in &self.items {
+            estimated = estimated.saturating_add(item.metadata_payload.len());
+            for sample in &item.samples {
+                estimated = estimated.saturating_add(sample.sample_data().len());
+            }
+        }
+        estimated = estimated
+            .saturating_add(self.image_metadata.icc.len())
+            .saturating_add(self.alt_image_metadata.icc.len());
+        stream.data = create_vec_exact(estimated)?;
 
         if self.settings.header_format == HeaderFormat::Mini && mini::is_mini_compatible(self) {
             self.write_ftyp_and_mini(&mut stream)?;
@@ -1057,6 +1136,8 @@ mod tests {
     use super::*;
     use test_case::test_case;
 
+    #[test_case(0, 100, 0, 0 ; "zero_width")]
+    #[test_case(100, 0, 0, 0 ; "zero_height")]
     #[test_case(256, 144, 0, 0 ; "144p")]
     #[test_case(426, 240, 0, 0 ; "240p")]
     #[test_case(640, 360, 0, 0 ; "360p")]
@@ -1068,6 +1149,7 @@ mod tests {
     #[test_case(7680, 4320, 1, 2 ; "8k")]
     #[test_case(768, 512, 0, 1 ; "case 1")]
     #[test_case(16384, 64, 0, 2 ; "case 2")]
+    #[test_case(131072, 65536, 1, 2 ; "overflow_u32")]
     fn auto_tiling(
         width: u32,
         height: u32,
@@ -1082,6 +1164,34 @@ mod tests {
         assert_eq!(
             tiling_mode.log2(height, width),
             (expected_tile_columns_log2, expected_tile_rows_log2)
+        );
+    }
+
+    #[test]
+    fn codec_specific_options_repeated_keys_move_to_tail() {
+        let mut enc = Encoder::create_with_settings(&Settings::default()).unwrap();
+        enc.try_set_codec_specific_option(None, "end-usage".into(), "q".into())
+            .unwrap();
+        enc.try_set_codec_specific_option(None, "cq-level".into(), "40".into())
+            .unwrap();
+        enc.try_set_codec_specific_option(None, "end-usage".into(), "vbr".into())
+            .unwrap();
+        enc.try_set_codec_specific_option(None, "cq-level".into(), "18".into())
+            .unwrap();
+        enc.try_set_codec_specific_option(Some(Category::Color), "cq-level".into(), "12".into())
+            .unwrap();
+
+        let cfg = crate::codecs::EncoderConfig {
+            codec_specific_options: enc.codec_specific_options,
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg.codec_specific_options(Category::Color).unwrap(),
+            vec![("end-usage", "vbr"), ("cq-level", "12")]
+        );
+        assert_eq!(
+            cfg.codec_specific_options(Category::Alpha).unwrap(),
+            vec![("end-usage", "vbr"), ("cq-level", "18")]
         );
     }
 }
