@@ -12,24 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![forbid(unsafe_code)]
+
+use crate::checked_mul;
 use crate::image::*;
 use crate::reformat::rgb;
+use crate::utils::pixels::Pixels;
 use crate::utils::*;
 
-use std::ffi::c_char;
-use std::ffi::c_int;
+use std::borrow::Cow;
 use std::fs::File;
-use std::io::Write;
-use std::ptr;
-use std::slice;
+use std::io::BufWriter;
 
 use super::Writer;
 
-use libpng_sys::bindings::*;
-
-const WRITE_ERROR_MSG: &[u8] = b"Write Error\0";
-const ICC_PROFILE_NAME: &[u8] = b"libavif\0";
-const XMP_KEY: &[u8] = b"XML:com.adobe.xmp\0";
+// Uncompressed PNG iTXt payload prefix for Adobe XMP:
+// keyword ("XML:com.adobe.xmp\0"), compression_flag (0), compression_method (0),
+// language_tag ("\0"), translated_keyword ("\0").
+const XMP_ITXT_PREFIX: &[u8] = b"XML:com.adobe.xmp\0\0\0\0\0";
 
 #[derive(Default)]
 pub struct PngWriter {
@@ -37,108 +37,9 @@ pub struct PngWriter {
     pub compression_level: Option<i32>,
 }
 
-/// Owns a valid non-null `libpng` write struct (`png`) and info struct (`info`) pair, destroying
-/// both on drop.
-struct PngWriterNative {
-    png: png_structp,
-    info: png_infop,
+fn png_error(err: png::EncodingError) -> AvifError {
+    AvifError::UnknownError(format!("PNG encoding error: {err}"))
 }
-
-impl PngWriterNative {
-    fn new() -> AvifResult<Self> {
-        let ver = PNG_LIBPNG_VER_STRING.as_ptr().cast::<c_char>();
-        // SAFETY: `PNG_LIBPNG_VER_STRING` is a static NUL-terminated byte string generated from
-        // `libpng`'s header, and null/`None` error arguments select `libpng`'s default handlers.
-        let png = unsafe { png_create_write_struct(ver, ptr::null_mut(), None, None) };
-        if png.is_null() {
-            return Err(AvifError::UnknownError(
-                "png_create_write_struct failed".into(),
-            ));
-        }
-        let mut writer = Self {
-            png,
-            info: ptr::null_mut(),
-        };
-        // SAFETY: `writer.png` was just allocated by `png_create_write_struct` and verified
-        // non-null; `writer` drops it automatically if `png_create_info_struct` fails.
-        let info = unsafe {
-            png_set_benign_errors(writer.png, 1);
-            png_create_info_struct(writer.png)
-        };
-        if info.is_null() {
-            return Err(AvifError::UnknownError(
-                "png_create_info_struct failed".into(),
-            ));
-        }
-        writer.info = info;
-        Ok(writer)
-    }
-}
-
-impl Drop for PngWriterNative {
-    fn drop(&mut self) {
-        if !self.png.is_null() {
-            let png_ptr = ptr::from_mut(&mut self.png);
-            let info_ptr = if self.info.is_null() {
-                ptr::null_mut()
-            } else {
-                ptr::from_mut(&mut self.info)
-            };
-            // SAFETY: `self.png` is non-null and was allocated by `png_create_write_struct`;
-            // `info_ptr` is either null or points to `self.info` allocated by
-            // `png_create_info_struct`. Both are owned exclusively by `self` and destroyed once.
-            unsafe {
-                png_destroy_write_struct(png_ptr, info_ptr);
-            }
-        }
-    }
-}
-
-/// # Safety
-/// Must only be invoked by `libpng` as the `write_data_fn` callback registered via
-/// `png_set_write_fn`. `png_ptr` must be a valid `libpng` write struct whose `io_ptr` points to a
-/// valid, aligned `File` exclusively accessible for the duration of this call, and when
-/// `length > 0`, `data` must point to a readable buffer of at least `length` initialized bytes
-/// disjoint from the `File`.
-unsafe extern "C" fn crabbyavif_png_write_data(
-    png_ptr: png_structp,
-    data: png_bytep,
-    length: png_size_t,
-) {
-    if length == 0 || png_ptr.is_null() {
-        return;
-    }
-    // SAFETY: `png_ptr` is verified non-null and valid per `libpng`'s callback contract;
-    // `png_get_io_ptr` returns the `io_ptr` registered in `png_set_write_fn`.
-    let io_ptr = unsafe { png_get_io_ptr(png_ptr) };
-    let write_ok = if !data.is_null() && !io_ptr.is_null() {
-        let data_const: *const u8 = data;
-        let file_ptr = io_ptr.cast::<File>();
-        // SAFETY: `data` is verified non-null and `length > 0`; per `libpng`'s `png_rw_ptr`
-        // contract, `data` points to `length` initialized bytes valid for reading during this
-        // callback (`u8` has alignment 1) and disjoint from `file`.
-        let buf = unsafe { slice::from_raw_parts(data_const, length) };
-        // SAFETY: `file_ptr` is verified non-null and was set to `file` (`*mut File`) in
-        // `png_set_write_fn`; `file` outlives `png_ptr` and is not accessed elsewhere while
-        // `libpng` invokes this callback.
-        let file = unsafe { &mut *file_ptr };
-        file.write_all(buf).is_ok()
-    } else {
-        false
-    };
-    if !write_ok {
-        let err_msg = WRITE_ERROR_MSG.as_ptr().cast::<c_char>();
-        // With no `setjmp` handler installed, `libpng`'s default error handler aborts; no `Drop`
-        // values are live on this frame.
-        // SAFETY: `png_ptr` is verified non-null and valid, and `err_msg` points to a static
-        // NUL-terminated C string.
-        unsafe {
-            png_error(png_ptr, err_msg);
-        }
-    }
-}
-
-extern "C" fn crabbyavif_png_output_flush(_png_ptr: png_structp) {}
 
 impl Writer for PngWriter {
     fn write_frame(&mut self, file: &mut File, image: &Image) -> AvifResult<()> {
@@ -167,6 +68,17 @@ impl Writer for PngWriter {
             }
             rgb_depth = 8;
         }
+        let bit_depth = match rgb_depth {
+            8 => png::BitDepth::Eight,
+            16 => png::BitDepth::Sixteen,
+            _ => return AvifError::invalid_argument(),
+        };
+        let deflate_compression = match self.compression_level {
+            None => None,
+            Some(0) => Some(png::DeflateCompression::NoCompression),
+            Some(level @ 1..=9) => Some(png::DeflateCompression::Level(level as u8)),
+            Some(_) => return AvifError::invalid_argument(),
+        };
         let copy_y_plane = image.yuv_format == PixelFormat::Yuv400
             && !image.alpha_present
             && image.depth == 8
@@ -175,216 +87,132 @@ impl Writer for PngWriter {
             && image.irot_angle.is_none()
             && image.imir_axis.is_none();
         let mut rgb = rgb::Image::create_from_yuv(image);
-        let color_type;
-        if copy_y_plane {
-            color_type = PNG_COLOR_TYPE_GRAY;
+        let color_type = if copy_y_plane {
+            png::ColorType::Grayscale
         } else {
             rgb.depth = rgb_depth;
-            match (image.yuv_format, image.alpha_present) {
+            let color_type = match (image.yuv_format, image.alpha_present) {
                 (PixelFormat::Yuv400, true) => {
-                    color_type = PNG_COLOR_TYPE_GRAY_ALPHA;
                     rgb.format = rgb::Format::GrayA;
+                    png::ColorType::GrayscaleAlpha
                 }
                 (PixelFormat::Yuv400, false) => {
-                    color_type = PNG_COLOR_TYPE_GRAY;
                     rgb.format = rgb::Format::Gray;
+                    png::ColorType::Grayscale
                 }
                 (_, true) => {
                     // TODO - b/479429854: Support specifying chroma upsampling.
-                    color_type = if image.is_opaque()? {
+                    if image.is_opaque()? {
                         rgb.format = rgb::Format::Rgb;
-                        PNG_COLOR_TYPE_RGB
+                        png::ColorType::Rgb
                     } else {
-                        PNG_COLOR_TYPE_RGBA
-                    };
+                        png::ColorType::Rgba
+                    }
                 }
                 (_, false) => {
                     // TODO - b/479429854: Support specifying chroma upsampling.
-                    color_type = PNG_COLOR_TYPE_RGB;
                     rgb.format = rgb::Format::Rgb;
+                    png::ColorType::Rgb
                 }
-            }
+            };
             rgb.allocate()?;
             rgb.convert_from_yuv(image)?;
-        }
-        let height = image.height;
-        let png = PngWriterNative::new()?;
+            color_type
+        };
 
-        let io_ptr = ptr::from_mut(file).cast();
-        let rgb_depth_c = c_int::from(rgb_depth);
-        let color_type_c = color_type as c_int;
-        let skip_srgb_check = PNG_SKIP_sRGB_CHECK_PROFILE as c_int;
-        let option_on = PNG_OPTION_ON as c_int;
-        let interlace_none = PNG_INTERLACE_NONE as c_int;
-        let compression_default = PNG_COMPRESSION_TYPE_DEFAULT as c_int;
-        let filter_default = PNG_FILTER_TYPE_DEFAULT as c_int;
-        // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs owned by `png`.
-        // `io_ptr` points to `file`, which outlives `png` and is not accessed directly while
-        // `libpng` writes. `image.width` and `image.height` are verified non-zero above and match
-        // the row pointers written below.
-        unsafe {
-            png_set_write_fn(
-                png.png,
-                io_ptr,
-                Some(crabbyavif_png_write_data),
-                Some(crabbyavif_png_output_flush),
-            );
-            png_set_option(png.png, skip_srgb_check, option_on);
-            png_set_IHDR(
-                png.png,
-                png.info,
-                image.width,
-                image.height,
-                rgb_depth_c,
-                color_type_c,
-                interlace_none,
-                compression_default,
-                filter_default,
-            );
-        }
-        if let Some(compression_level) = self.compression_level {
-            // SAFETY: `png.png` is a valid non-null `libpng` write struct owned by `png`.
-            unsafe {
-                png_set_compression_level(png.png, compression_level);
-            }
-        }
+        let mut info = png::Info::with_size(image.width, image.height);
+        info.color_type = color_type;
+        info.bit_depth = bit_depth;
+        let is_srgb = image.icc.is_empty()
+            && image.color_primaries == ColorPrimaries::Srgb
+            && image.transfer_characteristics == TransferCharacteristics::Srgb;
         if image.icc.is_empty() {
-            if image.color_primaries == ColorPrimaries::Srgb
-                && image.transfer_characteristics == TransferCharacteristics::Srgb
-            {
-                let intent = PNG_sRGB_INTENT_PERCEPTUAL as c_int;
-                // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs owned by
-                // `png`.
-                unsafe {
-                    png_set_sRGB_gAMA_and_cHRM(png.png, png.info, intent);
-                }
-            } else {
+            if !is_srgb {
                 if let Some(primaries) = image.color_primaries.values() {
-                    let [rx, ry, gx, gy, bx, by, wx, wy] = primaries.map(f64::from);
-                    // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs owned
-                    // by `png`.
-                    unsafe {
-                        png_set_cHRM(png.png, png.info, wx, wy, rx, ry, gx, gy, bx, by);
-                    }
+                    let [rx, ry, gx, gy, bx, by, wx, wy] = primaries;
+                    info.source_chromaticities = Some(png::SourceChromaticities::new(
+                        (wx, wy),
+                        (rx, ry),
+                        (gx, gy),
+                        (bx, by),
+                    ));
                 }
                 if let Some(gamma) = image.transfer_characteristics.gamma() {
-                    let file_gamma = f64::from(1.0 / gamma);
-                    // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs owned
-                    // by `png`.
-                    unsafe {
-                        png_set_gAMA(png.png, png.info, file_gamma);
-                    }
+                    info.source_gamma = Some(png::ScaledFloat::new(1.0 / gamma));
                 }
             }
         } else {
             // If there is an ICC profile, the CICP values are irrelevant and only the ICC
             // profile is written. If we could extract the primaries/transfer curve from the
             // ICC profile, then they could be written in cHRM/gAMA chunks.
-            let icc_size = u32_from_usize(image.icc.len())?;
-            let icc_ptr = image.icc.as_ptr();
-            let icc_name = ICC_PROFILE_NAME.as_ptr().cast::<c_char>();
-            // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs, `icc_name`
-            // points to a static NUL-terminated C string, and `icc_ptr` points to `icc_size` (> 0)
-            // initialized bytes in `image.icc`.
-            unsafe {
-                png_set_iCCP(png.png, png.info, icc_name, 0, icc_ptr, icc_size);
-            }
+            info.icc_profile = Some(Cow::Borrowed(&image.icc));
         }
         if !image.exif.is_empty() {
-            let exif_size = u32_from_usize(image.exif.len())?;
-            let exif_ptr = image.exif.as_ptr().cast_mut();
-            // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs, and `exif_ptr`
-            // points to `exif_size` (> 0) initialized bytes in `image.exif`. `png_set_eXIf_1` only
-            // reads from `exif_ptr` (`memcpy` into `info_ptr->exif`) despite lacking `const` in C.
-            unsafe {
-                png_set_eXIf_1(png.png, png.info, exif_size, exif_ptr);
-            }
+            info.exif_metadata = Some(Cow::Borrowed(&image.exif));
         }
-        if !image.xmp.is_empty() {
-            let xmp_with_nul_len = image
-                .xmp
-                .len()
-                .checked_add(1)
-                .ok_or(AvifError::OutOfMemory)?;
-            let mut xmp = create_vec_exact(xmp_with_nul_len)?;
-            xmp.try_extend_from_slice(&image.xmp)?;
-            xmp.try_push(0)?;
-            let text = png_text {
-                compression: PNG_ITXT_COMPRESSION_NONE as c_int,
-                key: XMP_KEY.as_ptr().cast::<c_char>().cast_mut(),
-                text: xmp.as_mut_ptr().cast::<c_char>(),
-                text_length: 0,
-                itxt_length: xmp.len(),
-                lang: ptr::null_mut(),
-                lang_key: ptr::null_mut(),
-            };
-            let text_ptr = ptr::from_ref(&text);
-            // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs, and `text_ptr`
-            // points to an initialized `png_text` whose `key` and `text` are valid NUL-terminated
-            // strings. `png_set_text` copies `key` and `text` into `png.info`-owned allocations
-            // before returning without mutating the input buffers.
-            unsafe {
-                png_set_text(png.png, png.info, text_ptr, 1);
-            }
+
+        let mut encoder = png::Encoder::with_info(BufWriter::new(file), info).map_err(png_error)?;
+        if is_srgb {
+            encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
         }
-        // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs with `IHDR` and
-        // write callbacks configured above.
-        unsafe {
-            png_write_info(png.png, png.info);
+        if let Some(compression) = deflate_compression {
+            encoder.set_deflate_compression(compression);
         }
+
+        let mut writer = encoder.write_header().map_err(png_error)?;
         if image.icc.is_empty() {
-            let cicp_name: &[png_byte; 5] = b"cICP\0";
-            let cicp_data: [png_byte; 4] = [
-                image.color_primaries as png_byte,
-                image.transfer_characteristics as png_byte,
-                MatrixCoefficients::Identity as png_byte,
+            let cicp_data: [u8; 4] = [
+                image.color_primaries as u8,
+                image.transfer_characteristics as u8,
+                MatrixCoefficients::Identity as u8,
                 1, // full_range
             ];
-            let cicp_name_ptr = cicp_name.as_ptr();
-            let cicp_data_ptr = cicp_data.as_ptr();
-            let cicp_len = cicp_data.len();
-            // SAFETY: `png.png` is a valid non-null `libpng` write struct after `png_write_info`,
-            // `cicp_name_ptr` points to 4 chunk-type bytes (plus NUL), and `cicp_data_ptr` points
-            // to `cicp_len` (4) initialized bytes.
-            unsafe {
-                png_write_chunk(png.png, cicp_name_ptr, cicp_data_ptr, cicp_len);
-            }
+            writer
+                .write_chunk(png::chunk::cICP, &cicp_data)
+                .map_err(png_error)?;
         }
-        let height_usize = usize_from_u32(height)?;
-        let mut row_pointers: Vec<png_bytep> = create_vec_exact(height_usize)?;
+        if !image.xmp.is_empty() {
+            let xmp_len = XMP_ITXT_PREFIX
+                .len()
+                .checked_add(image.xmp.len())
+                .ok_or(AvifError::OutOfMemory)?;
+            let mut xmp_chunk = create_vec_exact(xmp_len)?;
+            xmp_chunk.try_extend_from_slice(XMP_ITXT_PREFIX)?;
+            xmp_chunk.try_extend_from_slice(&image.xmp)?;
+            writer
+                .write_chunk(png::chunk::iTXt, &xmp_chunk)
+                .map_err(png_error)?;
+        }
+
         if copy_y_plane {
-            for y in 0..height {
-                if image.depth == 8 {
-                    row_pointers.try_push(image.row(Plane::Y, y)?.as_ptr().cast_mut())?;
-                } else {
-                    row_pointers
-                        .try_push(image.row16(Plane::Y, y)?.as_ptr().cast::<u8>().cast_mut())?;
-                }
+            let width_usize = usize_from_u32(image.width)?;
+            let total_len = usize_from_u32(checked_mul!(image.width, image.height)?)?;
+            let mut y_bytes: Vec<u8> = create_vec_exact(total_len)?;
+            for y in 0..image.height {
+                let row = image
+                    .row(Plane::Y, y)?
+                    .get(..width_usize)
+                    .ok_or(AvifError::NoContent)?;
+                y_bytes.try_extend_from_slice(row)?;
             }
+            writer.write_image_data(&y_bytes).map_err(png_error)?;
+        } else if rgb_depth == 8 {
+            writer
+                .write_image_data(rgb.pixel_slice()?)
+                .map_err(png_error)?;
         } else {
-            for y in 0..height {
-                if rgb.depth == 8 {
-                    row_pointers.try_push(rgb.row(y)?.as_ptr().cast_mut())?;
-                } else {
-                    row_pointers.try_push(rgb.row16(y)?.as_ptr().cast::<u8>().cast_mut())?;
-                }
+            let Some(Pixels::Buffer16(buf16)) = rgb.pixels.as_ref() else {
+                return Err(AvifError::NoContent);
+            };
+            let byte_len = buf16.len().checked_mul(2).ok_or(AvifError::OutOfMemory)?;
+            let mut be_bytes: Vec<u8> = try_vec_exact![0; byte_len]?;
+            for (dst, &sample) in be_bytes.chunks_exact_mut(2).zip(buf16.iter()) {
+                dst.copy_from_slice(&sample.to_be_bytes());
             }
+            writer.write_image_data(&be_bytes).map_err(png_error)?;
         }
-        if rgb_depth > 8 {
-            // SAFETY: `png.png` is a valid non-null `libpng` write struct owned by `png`.
-            unsafe {
-                png_set_swap(png.png);
-            }
-        }
-        let row_pointers_ptr = row_pointers.as_mut_ptr();
-        // SAFETY: `png.png` is a valid non-null `libpng` write struct. `row_pointers_ptr` points
-        // to `height` valid row pointers, each referencing a readable row slice of at least
-        // `width * bytes_per_pixel` bytes in `image` or `rgb`, both of which remain alive and
-        // immutable throughout `png_write_image` (`libpng` only reads the row buffers).
-        unsafe {
-            png_write_image(png.png, row_pointers_ptr);
-            png_write_end(png.png, ptr::null_mut());
-        }
+
+        writer.finish().map_err(png_error)?;
         Ok(())
     }
 }
@@ -392,14 +220,33 @@ impl Writer for PngWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::BufReader;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct TempPngPath(PathBuf);
+
+    impl TempPngPath {
+        fn new(label: &str) -> Self {
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+            Self(std::env::temp_dir().join(format!(
+                "crabbyavif_png_writer_{label}_{}_{id}.png",
+                std::process::id()
+            )))
+        }
+    }
+
+    impl Drop for TempPngPath {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
 
     #[test]
     fn write_frame_rejects_zero_dimensions() {
-        let path = std::env::temp_dir().join(format!(
-            "crabbyavif_png_writer_zero_dim_{}.png",
-            std::process::id()
-        ));
-        let mut file = File::create(&path).unwrap();
+        let tmp = TempPngPath::new("zero_dim");
+        let mut file = File::create(&tmp.0).unwrap();
 
         let mut writer = PngWriter::default();
         assert!(matches!(
@@ -430,19 +277,165 @@ mod tests {
             writer.write_frame(&mut file, &yuv400_zero_h),
             Err(AvifError::InvalidArgument)
         ));
-
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
-    fn write_data_callback_ignores_zero_len_and_null_png_ptr() {
-        // SAFETY: `crabbyavif_png_write_data` returns early before dereferencing any pointer when
-        // `length == 0` or `png_ptr` is null.
-        unsafe {
-            crabbyavif_png_write_data(ptr::null_mut(), ptr::null_mut(), 0);
-            crabbyavif_png_write_data(ptr::null_mut(), ptr::null_mut(), 16);
-            let png = PngWriterNative::new().unwrap();
-            crabbyavif_png_write_data(png.png, ptr::null_mut(), 0);
+    fn write_frame_rejects_invalid_configs() {
+        let tmp = TempPngPath::new("invalid_cfg");
+        let mut file = File::create(&tmp.0).unwrap();
+
+        let mut writer = PngWriter::default();
+        let ycgco_ro = Image {
+            width: 2,
+            height: 2,
+            depth: 8,
+            matrix_coefficients: MatrixCoefficients::YcgcoRo,
+            ..Image::default()
+        };
+        assert!(matches!(
+            writer.write_frame(&mut file, &ycgco_ro),
+            Err(AvifError::UnknownError(_))
+        ));
+
+        let ycgco_re_bad_depth = Image {
+            width: 2,
+            height: 2,
+            depth: 8,
+            matrix_coefficients: MatrixCoefficients::YcgcoRe,
+            ..Image::default()
+        };
+        assert!(matches!(
+            writer.write_frame(&mut file, &ycgco_re_bad_depth),
+            Err(AvifError::UnknownError(_))
+        ));
+
+        let ycgco_re_16bit_out = Image {
+            width: 2,
+            height: 2,
+            depth: 10,
+            matrix_coefficients: MatrixCoefficients::YcgcoRe,
+            ..Image::default()
+        };
+        writer.depth = Some(16);
+        assert!(matches!(
+            writer.write_frame(&mut file, &ycgco_re_16bit_out),
+            Err(AvifError::UnknownError(_))
+        ));
+
+        writer.depth = Some(10);
+        let mut valid_img = Image {
+            width: 2,
+            height: 2,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv444,
+            ..Image::default()
+        };
+        valid_img.allocate_planes(Category::Color).unwrap();
+        assert!(matches!(
+            writer.write_frame(&mut file, &valid_img),
+            Err(AvifError::InvalidArgument)
+        ));
+
+        writer.depth = None;
+        writer.compression_level = Some(10);
+        assert!(matches!(
+            writer.write_frame(&mut file, &valid_img),
+            Err(AvifError::InvalidArgument)
+        ));
+    }
+
+    #[test]
+    fn write_frame_roundtrips_strided_gray_and_metadata() -> AvifResult<()> {
+        let tmp = TempPngPath::new("gray_meta");
+        // Strided Yuv400 image (`row_bytes = 5` > `width = 3`) exercises `copy_y_plane`.
+        let mut y_buf = try_vec_exact![0u8; 5 * 2]?;
+        y_buf[..3].copy_from_slice(&[10, 20, 30]);
+        y_buf[5..8].copy_from_slice(&[40, 50, 60]);
+        let exif_payload = b"Exif\0\0MM\0*";
+        let xmp_payload = b"<x:xmpmeta/>";
+        let mut image = Image {
+            width: 3,
+            height: 2,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv400,
+            yuv_range: YuvRange::Full,
+            color_primaries: ColorPrimaries::Srgb,
+            transfer_characteristics: TransferCharacteristics::Srgb,
+            exif: create_vec_exact(exif_payload.len())?,
+            xmp: create_vec_exact(xmp_payload.len())?,
+            ..Image::default()
+        };
+        image.exif.try_extend_from_slice(exif_payload)?;
+        image.xmp.try_extend_from_slice(xmp_payload)?;
+        image.planes[0] = Some(Pixels::Buffer(y_buf));
+        image.row_bytes[0] = 5;
+
+        {
+            let mut file = File::create(&tmp.0).unwrap();
+            let mut writer = PngWriter {
+                depth: None,
+                compression_level: Some(0),
+            };
+            writer.write_frame(&mut file, &image)?;
         }
+
+        let decoder = png::Decoder::new(BufReader::new(File::open(&tmp.0).unwrap()));
+        let mut reader = decoder.read_info().unwrap();
+        let info = reader.info();
+        assert_eq!(info.width, 3);
+        assert_eq!(info.height, 2);
+        assert_eq!(info.color_type, png::ColorType::Grayscale);
+        assert_eq!(info.bit_depth, png::BitDepth::Eight);
+        assert!(info.srgb.is_some());
+        let cicp = info.coding_independent_code_points.unwrap();
+        assert_eq!(cicp.color_primaries, ColorPrimaries::Srgb as u8);
+        assert_eq!(cicp.transfer_function, TransferCharacteristics::Srgb as u8);
+        assert_eq!(cicp.matrix_coefficients, 0);
+        assert!(cicp.is_video_full_range_image);
+        assert_eq!(info.exif_metadata.as_deref(), Some(exif_payload.as_slice()));
+        assert_eq!(info.utf8_text.len(), 1);
+        assert_eq!(info.utf8_text[0].keyword, "XML:com.adobe.xmp");
+        assert_eq!(info.utf8_text[0].get_text().unwrap(), "<x:xmpmeta/>");
+
+        let mut out = try_vec_exact![0u8; reader.output_buffer_size().unwrap()]?;
+        let frame_info = reader.next_frame(&mut out).unwrap();
+        assert_eq!(&out[..frame_info.buffer_size()], &[10, 20, 30, 40, 50, 60]);
+        Ok(())
+    }
+
+    #[test]
+    fn write_frame_roundtrips_16bit_rgb_with_iccp_and_cicp() {
+        let tmp = TempPngPath::new("rgb16");
+        let mut image = Image {
+            width: 2,
+            height: 2,
+            depth: 10,
+            yuv_format: PixelFormat::Yuv444,
+            yuv_range: YuvRange::Full,
+            color_primaries: ColorPrimaries::Bt2020,
+            transfer_characteristics: TransferCharacteristics::Bt709,
+            ..Image::default()
+        };
+        image.allocate_planes(Category::Color).unwrap();
+        let icc_bytes = b"fake-icc-profile-bytes";
+        image.icc = create_vec_exact(icc_bytes.len()).unwrap();
+        image.icc.try_extend_from_slice(icc_bytes).unwrap();
+
+        {
+            let mut file = File::create(&tmp.0).unwrap();
+            let mut writer = PngWriter {
+                depth: Some(16),
+                compression_level: Some(9),
+            };
+            writer.write_frame(&mut file, &image).unwrap();
+        }
+
+        let decoder = png::Decoder::new(BufReader::new(File::open(&tmp.0).unwrap()));
+        let reader = decoder.read_info().unwrap();
+        let info = reader.info();
+        assert_eq!(info.color_type, png::ColorType::Rgb);
+        assert_eq!(info.bit_depth, png::BitDepth::Sixteen);
+        assert_eq!(info.icc_profile.as_deref(), Some(icc_bytes.as_slice()));
+        assert!(info.coding_independent_code_points.is_none());
     }
 }

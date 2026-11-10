@@ -883,6 +883,17 @@ impl Image {
     }
 
     pub fn convert_to_yuv(&self, image: &mut crate::image::Image) -> AvifResult<()> {
+        if self.max_threads < 0 {
+            return AvifError::reformat_failed();
+        }
+        self.convert_to_yuv_with_threads(image, self.max_threads.max(1) as u32)
+    }
+
+    pub(crate) fn convert_to_yuv_with_threads(
+        &self,
+        image: &mut crate::image::Image,
+        threads: u32,
+    ) -> AvifResult<()> {
         if self.width != image.width
             || self.height != image.height
             || !image.depth_valid()
@@ -897,14 +908,19 @@ impl Image {
         {
             return AvifError::reformat_failed();
         }
-        if self.format == Format::Rgb565 || self.is_float {
+        if matches!(self.format, Format::Rgb565 | Format::Rgba1010102) || self.is_float {
             return AvifError::not_implemented();
         }
-        image.allocate_planes(Category::Color)?;
         // TODO: b/410088660 - add a setting to ignore alpha channel.
         let has_alpha = self.has_alpha();
+        // The output is always written to newly allocated planes. The planes that `image` points
+        // to may be borrowed (for example by crabby_avifImageRGBToYUV()) and must not be written.
+        // The alpha plane is only replaced if `self` has alpha. Otherwise an existing alpha plane
+        // is set to opaque below, so callers must make sure it is owned (crabby_avifImageRGBToYUV()
+        // does).
+        image.free_planes(&[Plane::Y, Plane::U, Plane::V]);
         if has_alpha {
-            image.allocate_planes(Category::Alpha)?;
+            image.free_planes(&[Plane::A]);
         }
         let alpha_multiply_mode =
             match (has_alpha, self.premultiply_alpha, image.alpha_premultiplied) {
@@ -912,27 +928,40 @@ impl Image {
                 (true, true, false) => AlphaMultiplyMode::UnMultiply,
                 _ => AlphaMultiplyMode::NoOp,
             };
-        if self.chroma_downsampling == ChromaDownsampling::SharpYuv {
-            sharpyuv::rgb_to_yuv(self, image)?;
-        } else if self.format.is_gray() {
-            rgb_impl::rgb_gray_to_yuv(self, image)?;
-        } else {
-            let mut conversion_complete = false;
-            if alpha_multiply_mode == AlphaMultiplyMode::NoOp {
-                conversion_complete = libyuv::rgb_to_yuv(self, image)?.is_some();
-            }
-            if !conversion_complete {
-                rgb_impl::rgb_to_yuv(self, image)?;
-            }
-        }
-        if image.has_plane(Plane::A) {
-            if has_alpha {
-                image.import_alpha_from(self)?;
+        let res = (|| -> AvifResult<()> {
+            let mut alpha_imported = false;
+            if self.chroma_downsampling == ChromaDownsampling::SharpYuv {
+                image.allocate_planes(Category::Color)?;
+                sharpyuv::rgb_to_yuv(self, image)?;
+            } else if self.format.is_gray() {
+                rgb_impl::rgb_gray_to_yuv(self, image)?;
             } else {
-                image.set_opaque()?;
+                let mut conversion_complete = false;
+                if alpha_multiply_mode == AlphaMultiplyMode::NoOp {
+                    conversion_complete =
+                        libyuv::rgb_to_yuv_with_threads(self, image, threads)?.is_some();
+                }
+                if !conversion_complete {
+                    alpha_imported =
+                        rgb_impl::rgb_to_yuv_uninit_with_threads(self, image, has_alpha, threads)?;
+                }
+            }
+            if !alpha_imported {
+                if has_alpha {
+                    rgb_impl::import_alpha_uninit_with_threads(self, image, threads)?;
+                } else if image.has_plane(Plane::A) {
+                    image.set_opaque()?;
+                }
+            }
+            Ok(())
+        })();
+        if res.is_err() {
+            image.free_planes(&[Plane::Y, Plane::U, Plane::V]);
+            if has_alpha {
+                image.free_planes(&[Plane::A]);
             }
         }
-        Ok(())
+        res
     }
 
     pub fn shuffle_channels_to(self, format: Format) -> AvifResult<Image> {
@@ -1003,6 +1032,13 @@ impl Image {
         Ok(dst)
     }
 }
+
+pub(crate) const MAX_RGB_TO_YUV_THREADS: usize = 8;
+pub(crate) const MIN_MT_ROWS_PER_WORKER: usize = 16;
+pub(crate) const MIN_MT_PIXELS_RGB_TO_YUV: usize = 512 * 512;
+pub(crate) const MIN_MT_PIXELS_ALPHA_INT8: usize = 2_000_000;
+#[cfg(all(feature = "libyuv", target_arch = "x86_64"))]
+pub(crate) const MIN_MT_PIXELS_LIBYUV_444: usize = 6_000_000;
 
 #[cfg(test)]
 mod tests {
@@ -1178,5 +1214,301 @@ mod tests {
             image.shuffle_channels_to(format).unwrap().row(0).unwrap(),
             expected
         );
+    }
+
+    #[test]
+    fn import_alpha_uninit_4ch_avx2_and_odd_padding() -> AvifResult<()> {
+        for format in [Format::Rgba, Format::Bgra, Format::Argb, Format::Abgr] {
+            let alpha_off = format.alpha_offset();
+            for width in [1u32, 7, 15, 31, 32, 33, 63, 64, 65, 67] {
+                let height = 3u32;
+                let row_bytes = width * 4 + 8;
+                let total = (row_bytes * height) as usize;
+                let mut pixels = create_vec_exact::<u8>(total)?;
+                for i in 0..total {
+                    pixels.try_push(((i * 41 + 19) ^ (i >> 2)) as u8)?;
+                }
+                let rgb = Image {
+                    width,
+                    height,
+                    depth: 8,
+                    format,
+                    pixels: Some(Pixels::Buffer(pixels.clone())),
+                    row_bytes,
+                    ..Default::default()
+                };
+                let mut image = crate::image::Image {
+                    width,
+                    height,
+                    depth: 8,
+                    yuv_format: PixelFormat::Yuv420,
+                    ..Default::default()
+                };
+                rgb_impl::import_alpha_uninit(&rgb, &mut image)?;
+                let stride = usize_from_u32(image.row_bytes[Plane::A.as_usize()])?;
+                let plane = image.planes[Plane::A.as_usize()]
+                    .as_ref()
+                    .ok_or(AvifError::NoContent)?
+                    .slice(0, u32_from_usize(stride * (height as usize))?)?;
+                for y in 0..height as usize {
+                    let row_start = y * stride;
+                    let src_start = y * (row_bytes as usize);
+                    for x in 0..width as usize {
+                        assert_eq!(
+                            plane[row_start + x],
+                            pixels[src_start + x * 4 + alpha_off],
+                            "alpha mismatch fmt={format:?} w={width} y={y} x={x}"
+                        );
+                    }
+                    if stride > width as usize {
+                        // Odd widths pad trailing column with max_channel (255).
+                        assert_eq!(
+                            plane[row_start + width as usize],
+                            255,
+                            "odd padding mismatch fmt={format:?} w={width} y={y}"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn import_alpha_uninit_threaded_0lsb() -> AvifResult<()> {
+        for (w, h, src_depth, dst_depth, format) in [
+            // Exceed `MIN_MT_PIXELS_ALPHA_INT8` (`2_000_000`) on 8-bit -> 8-bit integer paths.
+            (1601u32, 1281u32, 8u8, 8u8, Format::Rgba),
+            (1601, 1281, 8, 8, Format::GrayA),
+            // Exceed `MIN_MT_PIXELS_RGB_TO_YUV` (`512 * 512`) on >8-bit / cross-depth paths.
+            (641, 521, 10, 10, Format::Bgra),
+            (641, 521, 10, 8, Format::Rgba),
+            (641, 521, 8, 12, Format::Argb),
+        ] {
+            let mut rgb = Image {
+                width: w,
+                height: h,
+                depth: src_depth,
+                format,
+                ..Default::default()
+            };
+            rgb.allocate()?;
+            let max_src = rgb.max_channel() as usize;
+            if src_depth == 8 {
+                for y in 0..h {
+                    let row = rgb.row_mut(y)?;
+                    for (idx, b) in row.iter_mut().enumerate() {
+                        *b = ((idx * 37 + y as usize * 13 + 7) % (max_src + 1)) as u8;
+                    }
+                }
+            } else {
+                for y in 0..h {
+                    let row = rgb.row16_mut(y)?;
+                    for (idx, v) in row.iter_mut().enumerate() {
+                        *v = ((idx * 131 + y as usize * 19 + 5) % (max_src + 1)) as u16;
+                    }
+                }
+            }
+            let mut img_st = crate::image::Image {
+                width: w,
+                height: h,
+                depth: dst_depth,
+                yuv_format: PixelFormat::Yuv420,
+                ..Default::default()
+            };
+            let mut img_mt = crate::image::Image {
+                width: w,
+                height: h,
+                depth: dst_depth,
+                yuv_format: PixelFormat::Yuv420,
+                ..Default::default()
+            };
+            rgb_impl::import_alpha_uninit_with_threads(&rgb, &mut img_st, 1)?;
+            rgb_impl::import_alpha_uninit_with_threads(&rgb, &mut img_mt, 4)?;
+            for y in 0..h {
+                if dst_depth == 8 {
+                    assert_eq!(img_mt.row(Plane::A, y)?, img_st.row(Plane::A, y)?);
+                } else {
+                    assert_eq!(img_mt.row16(Plane::A, y)?, img_st.row16(Plane::A, y)?);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn convert_to_yuv_with_threads_0ulp() -> AvifResult<()> {
+        let w = 641u32;
+        let h = 521u32;
+        for (format, depth, yuv_format, yuv_range, mc) in [
+            (
+                Format::Bgr,
+                8u8,
+                PixelFormat::Yuv444,
+                YuvRange::Full,
+                MatrixCoefficients::Bt601,
+            ),
+            (
+                Format::Rgba,
+                8,
+                PixelFormat::Yuv420,
+                YuvRange::Full,
+                MatrixCoefficients::Bt601,
+            ),
+            (
+                Format::Bgra,
+                10,
+                PixelFormat::Yuv422,
+                YuvRange::Limited,
+                MatrixCoefficients::Bt709,
+            ),
+            (
+                Format::Rgb,
+                8,
+                PixelFormat::Yuv444,
+                YuvRange::Limited,
+                MatrixCoefficients::Bt601,
+            ),
+        ] {
+            let mut rgb = Image {
+                width: w,
+                height: h,
+                depth,
+                format,
+                ..Default::default()
+            };
+            rgb.allocate()?;
+            let max_src = rgb.max_channel() as usize;
+            if depth == 8 {
+                for y in 0..h {
+                    for (idx, b) in rgb.row_mut(y)?.iter_mut().enumerate() {
+                        *b = ((idx * 53 + y as usize * 11 + 3) % (max_src + 1)) as u8;
+                    }
+                }
+            } else {
+                for y in 0..h {
+                    for (idx, v) in rgb.row16_mut(y)?.iter_mut().enumerate() {
+                        *v = ((idx * 179 + y as usize * 23 + 9) % (max_src + 1)) as u16;
+                    }
+                }
+            }
+            let mut img_st = crate::image::Image {
+                width: w,
+                height: h,
+                depth,
+                yuv_format,
+                yuv_range,
+                matrix_coefficients: mc,
+                ..Default::default()
+            };
+            let mut img_mt = crate::image::Image {
+                width: w,
+                height: h,
+                depth,
+                yuv_format,
+                yuv_range,
+                matrix_coefficients: mc,
+                ..Default::default()
+            };
+            rgb.convert_to_yuv_with_threads(&mut img_st, 1)?;
+            rgb.convert_to_yuv_with_threads(&mut img_mt, 4)?;
+            for plane in ALL_PLANES {
+                assert_eq!(img_mt.has_plane(plane), img_st.has_plane(plane));
+                if !img_st.has_plane(plane) {
+                    continue;
+                }
+                let ph = img_st.height(plane) as u32;
+                for y in 0..ph {
+                    if depth == 8 {
+                        assert_eq!(img_mt.row(plane, y)?, img_st.row(plane, y)?);
+                    } else {
+                        assert_eq!(img_mt.row16(plane, y)?, img_st.row16(plane, y)?);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn convert_to_yuv_with_threads_gray_alpha_cross_depth() -> AvifResult<()> {
+        let (w, h) = (67u32, 19u32);
+        for (format, src_depth, dst_depth, yuv_format, range) in [
+            (Format::Gray, 8u8, 10u8, PixelFormat::Yuv400, YuvRange::Full),
+            (Format::GrayA, 8, 10, PixelFormat::Yuv444, YuvRange::Limited),
+            (Format::AGray, 10, 8, PixelFormat::Yuv420, YuvRange::Full),
+            (
+                Format::GrayA,
+                12,
+                16,
+                PixelFormat::Yuv422,
+                YuvRange::Limited,
+            ),
+            (Format::AGray, 16, 8, PixelFormat::Yuv400, YuvRange::Full),
+        ] {
+            let mut rgb = Image {
+                width: w,
+                height: h,
+                depth: src_depth,
+                format,
+                ..Default::default()
+            };
+            rgb.allocate()?;
+            let max_src = rgb.max_channel() as usize;
+            if src_depth == 8 {
+                for y in 0..h {
+                    for (idx, b) in rgb.row_mut(y)?.iter_mut().enumerate() {
+                        *b = ((idx * 43 + y as usize * 17 + 5) % (max_src + 1)) as u8;
+                    }
+                }
+            } else {
+                for y in 0..h {
+                    for (idx, v) in rgb.row16_mut(y)?.iter_mut().enumerate() {
+                        *v = ((idx * 199 + y as usize * 31 + 11) % (max_src + 1)) as u16;
+                    }
+                }
+            }
+
+            let mut img_st = crate::image::Image {
+                width: w,
+                height: h,
+                depth: dst_depth,
+                yuv_format,
+                yuv_range: range,
+                matrix_coefficients: MatrixCoefficients::Bt709,
+                ..Default::default()
+            };
+            let mut img_mt = crate::image::Image {
+                width: w,
+                height: h,
+                depth: dst_depth,
+                yuv_format,
+                yuv_range: range,
+                matrix_coefficients: MatrixCoefficients::Bt709,
+                ..Default::default()
+            };
+            rgb.convert_to_yuv_with_threads(&mut img_st, 1)?;
+            rgb.convert_to_yuv_with_threads(&mut img_mt, 4)?;
+            assert_eq!(img_st.has_alpha(), format.has_alpha());
+            for plane in ALL_PLANES {
+                assert_eq!(img_mt.has_plane(plane), img_st.has_plane(plane));
+                if !img_st.has_plane(plane) {
+                    continue;
+                }
+                let ph = img_st.height(plane) as u32;
+                let pw = img_st.width(plane);
+                for y in 0..ph {
+                    if dst_depth == 8 {
+                        assert_eq!(&img_mt.row(plane, y)?[..pw], &img_st.row(plane, y)?[..pw]);
+                    } else {
+                        assert_eq!(
+                            &img_mt.row16(plane, y)?[..pw],
+                            &img_st.row16(plane, y)?[..pw]
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }

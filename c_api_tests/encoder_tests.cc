@@ -863,6 +863,30 @@ TEST(EncoderApiTest, SetCodecSpecificOption) {
       AVIF_RESULT_OK);
   EXPECT_EQ(avifEncoderSetCodecSpecificOption(encoder.get(), "a:abcd", "efgh"),
             AVIF_RESULT_OK);
+
+  // Repeated keys override earlier values both before and after rust_encoder
+  // initialization, while nullptr values remain rejected.
+  EncoderPtr enc2(avifEncoderCreate());
+  ASSERT_NE(enc2, nullptr);
+  enc2->speed = 10;
+  ASSERT_EQ(avifEncoderSetCodecSpecificOption(enc2.get(), "cq-level", "bad"),
+            AVIF_RESULT_OK);
+  ASSERT_EQ(avifEncoderSetCodecSpecificOption(enc2.get(), "cq-level", "28"),
+            AVIF_RESULT_OK);
+  ImagePtr image = testutil::CreateImage(/*width=*/16, /*height=*/16,
+                                         /*depth=*/8, AVIF_PIXEL_FORMAT_YUV420,
+                                         AVIF_PLANES_YUV, AVIF_RANGE_FULL);
+  ASSERT_NE(image, nullptr);
+  testutil::FillImageGradient(image.get(), /*offset=*/0);
+  ASSERT_EQ(avifEncoderAddImage(enc2.get(), image.get(), /*duration=*/1,
+                                AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+  EXPECT_NE(avifEncoderSetCodecSpecificOption(enc2.get(), "cq-level", nullptr),
+            AVIF_RESULT_OK);
+  ASSERT_EQ(avifEncoderSetCodecSpecificOption(enc2.get(), "cq-level", "30"),
+            AVIF_RESULT_OK);
+  AvifRwData encoded;
+  ASSERT_EQ(avifEncoderFinish(enc2.get(), &encoded), AVIF_RESULT_OK);
 }
 
 TEST(PixelFormatToStringTest, Test) {
