@@ -1591,3 +1591,36 @@ fn codec_versions() {
     assert!(crabby_avif::codec_versions().contains("dav1d"));
     assert!(crabby_avif::codec_versions().contains("aom"));
 }
+
+#[test]
+fn encode_finish_combined_icc_exif_xmp_roundtrip() -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let mut input = generate_gradient_image(16, 16, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    input.icc = vec![
+        0x00, 0x00, 0x02, 0x0c, 0x6c, 0x63, 0x6d, 0x73, 0x02, 0x10, 0x00, 0x00, 0x6d, 0x6e, 0x74,
+        0x72, 0x52, 0x47, 0x42, 0x20, 0x58, 0x59, 0x5a, 0x20,
+    ];
+    input.exif = b"MM\x00*\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00".to_vec();
+    input.xmp = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>".to_vec();
+
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut enc = encoder::Encoder::create_with_settings(&settings)?;
+    enc.try_set_codec_specific_option(None, "cq-level".into(), "invalid".into())?;
+    enc.try_set_codec_specific_option(None, "cq-level".into(), "24".into())?;
+    enc.add_image(&input)?;
+    let encoded = enc.finish()?;
+
+    let mut dec = decoder::Decoder::default();
+    dec.set_io_vec(encoded);
+    dec.parse()?;
+    let decoded = dec.image().expect("decoded image");
+    assert_eq!(decoded.icc, input.icc);
+    assert_eq!(decoded.exif, input.exif);
+    assert_eq!(decoded.xmp, input.xmp);
+    Ok(())
+}
