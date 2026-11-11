@@ -1495,11 +1495,45 @@ impl Decoder {
                 item_ids[DecodingItem::COLOR.usize()],
             )?;
             resolved_color_properties = None;
-            self.gainmap.metadata = self.tile_info[DecodingItem::COLOR.usize()].gainmap_metadata;
-            self.gainmap_present = true;
 
-            if self.settings.image_content_to_decode.gainmap() {
-                item_ids[DecodingItem::GAINMAP.usize()] = gainmap_id;
+            // Callers (e.g. Android's SkCrabbyAvifCodec) typically check and bound their memory
+            // allocations based on the base image dimensions only. So ignore gain maps that are
+            // larger than the base image in either dimension, and treat the image as if it did
+            // not have a gain map. Grid items are decoded to the grid output dimensions, which
+            // may differ from the ispe dimensions, so account for both.
+            let base_item = self
+                .items
+                .get(&base_item_id)
+                .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
+            let gainmap_item = self
+                .items
+                .get(&gainmap_id)
+                .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
+            let mut base_dimensions = (base_item.width, base_item.height);
+            let base_tile_info = &self.tile_info[DecodingItem::COLOR.usize()];
+            if base_tile_info.is_grid() {
+                base_dimensions.0 = min(base_dimensions.0, base_tile_info.grid.width);
+                base_dimensions.1 = min(base_dimensions.1, base_tile_info.grid.height);
+            }
+            let mut gainmap_dimensions = (gainmap_item.width, gainmap_item.height);
+            let gainmap_tile_info = &self.tile_info[DecodingItem::GAINMAP.usize()];
+            if gainmap_tile_info.is_grid() {
+                gainmap_dimensions.0 = max(gainmap_dimensions.0, gainmap_tile_info.grid.width);
+                gainmap_dimensions.1 = max(gainmap_dimensions.1, gainmap_tile_info.grid.height);
+            }
+            if gainmap_dimensions.0 > base_dimensions.0 || gainmap_dimensions.1 > base_dimensions.1
+            {
+                self.gainmap = Default::default();
+                self.tile_info[DecodingItem::COLOR.usize()].gainmap_metadata = Default::default();
+                self.tile_info[DecodingItem::GAINMAP.usize()] = Default::default();
+            } else {
+                self.gainmap.metadata =
+                    self.tile_info[DecodingItem::COLOR.usize()].gainmap_metadata;
+                self.gainmap_present = true;
+
+                if self.settings.image_content_to_decode.gainmap() {
+                    item_ids[DecodingItem::GAINMAP.usize()] = gainmap_id;
+                }
             }
         }
 

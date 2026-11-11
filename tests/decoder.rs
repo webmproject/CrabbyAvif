@@ -787,6 +787,50 @@ fn decode_supported_writer_version_with_extra_bytes(codec: CodecChoice) {
     assert!(matches!(res, Err(AvifError::InvalidToneMappedImage(_))));
 }
 
+// Callers bound memory allocations based on the base image dimensions, so gain
+// maps that are larger than the base image in either dimension are ignored.
+#[test_case("gainmap_larger_than_base_wider.avif", 16, 16)]
+#[test_case("gainmap_larger_than_base_taller.avif", 16, 16)]
+#[test_case("gainmap_larger_than_base_wider_and_taller.avif", 16, 16)]
+#[test_case("gainmap_larger_than_base_grid.avif", 128, 64)]
+fn decode_gainmap_larger_than_base(filename: &str, width: u32, height: u32) {
+    for codec in [DAV1D, NATIVE] {
+        if codec_unavailable(codec) {
+            continue;
+        }
+        for image_content_to_decode in [
+            ImageContentType::All,
+            ImageContentType::ColorAndAlpha,
+            ImageContentType::GainMap,
+        ] {
+            let decode_color = image_content_to_decode != ImageContentType::GainMap;
+            let mut decoder = get_decoder_with_codec(filename, codec);
+            decoder.settings.image_content_to_decode = image_content_to_decode;
+            assert!(decoder.parse().is_ok());
+            assert!(!decoder.gainmap_present());
+            assert_eq!(decoder.gainmap().image.width, 0);
+            assert_eq!(decoder.gainmap().image.height, 0);
+            assert_eq!(decoder.gainmap().alt_plane_depth, 0);
+            assert_eq!(decoder.gainmap().metadata.alternate_hdr_headroom.0, 0);
+            let image = decoder.image().expect("image was none");
+            assert_eq!(image.width, width);
+            assert_eq!(image.height, height);
+            if !HAS_DECODER {
+                continue;
+            }
+            if decode_color {
+                assert!(decoder.next_image().is_ok());
+                assert!(!decoder.gainmap_present());
+                assert_eq!(decoder.gainmap().image.width, 0);
+                assert_eq!(decoder.gainmap().image.row_bytes[0], 0);
+            } else {
+                // There is nothing to decode since the gain map is ignored.
+                assert!(matches!(decoder.next_image(), Err(AvifError::NoContent)));
+            }
+        }
+    }
+}
+
 // From avifgainmaptest.cc
 #[test_matrix([DAV1D, NATIVE])]
 fn decode_ignore_gain_map_but_read_metadata(codec: CodecChoice) {

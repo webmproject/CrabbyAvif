@@ -220,3 +220,62 @@ and encoded with avifenc (libavif 1.4.2, aom 3.15.2):
 $ avifenc -q 60 --qalpha 60 -s 10 -d 8 -y 420 --crop 12,14,96,132 --irot 1 \
     --imir 0 region_clap.png region/region_clap_irot_imir.avif
 ```
+
+## gainmap_larger_than_base_*.avif
+
+Images with a `tmap` gain map that is larger than the base image, used to
+verify that such gain maps are ignored (b/583496039):
+
+- `gainmap_larger_than_base_wider.avif`: 16x16 base image, 32x16 gain map.
+- `gainmap_larger_than_base_taller.avif`: 16x16 base image, 16x32 gain map.
+- `gainmap_larger_than_base_wider_and_taller.avif`: 16x16 base image, 64x64
+  gain map.
+- `gainmap_larger_than_base_grid.avif`: 128x64 base image (2x1 grid of 64x64
+  cells) and a 2x1 grid of 128x128 gain map cells. The `ispe` of the gain map
+  grid item was patched from 256x128 to 128x64 (the base image size), while
+  its `ImageGrid` output size remains 256x128.
+
+The first three files were generated with the CrabbyAvif encoder using a
+temporary test in `tests/encoder.rs`:
+
+```rust
+for (name, gw, gh) in [("wider", 32, 16), ("taller", 16, 32),
+                       ("wider_and_taller", 64, 64)] {
+    let image = generate_gradient_image(16, 16, 8, PixelFormat::Yuv420,
+                                        YuvRange::Full, false)?;
+    let gainmap = GainMap {
+        image: generate_gradient_image(gw, gh, 8, PixelFormat::Yuv420,
+                                       YuvRange::Full, false)?,
+        metadata: gainmap_metadata(false),
+        ..Default::default()
+    };
+    let settings =
+        encoder::Settings { speed: Some(10), ..Default::default() };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_gainmap(&image, &gainmap)?;
+    std::fs::write(format!("gainmap_larger_than_base_{name}.avif"),
+                   &encoder.finish()?).unwrap();
+}
+```
+
+The grid file was generated similarly with:
+
+```rust
+let cell = generate_gradient_image(64, 64, 8, PixelFormat::Yuv420,
+                                   YuvRange::Full, false)?;
+let gainmap = GainMap {
+    image: generate_gradient_image(128, 128, 8, PixelFormat::Yuv420,
+                                   YuvRange::Full, false)?,
+    metadata: gainmap_metadata(false),
+    ..Default::default()
+};
+let settings = encoder::Settings { speed: Some(10), ..Default::default() };
+let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+encoder.add_image_gainmap_grid(2, 1, &[&cell, &cell],
+                               &[&gainmap, &gainmap])?;
+std::fs::write("gainmap_larger_than_base_grid.avif",
+               &encoder.finish()?).unwrap();
+```
+
+followed by overwriting the width and height of the 256x128 `ispe` box with
+128 and 64.

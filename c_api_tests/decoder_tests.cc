@@ -619,6 +619,48 @@ TEST_P(DecoderTest, GainMapReadMemoryFails) {
       AVIF_RESULT_OK);
 }
 
+// Callers bound memory allocations based on the base image dimensions, so gain
+// maps that are larger than the base image in either dimension are ignored.
+TEST_P(DecoderTest, GainMapLargerThanBaseImage) {
+  struct TestFile {
+    const char* file_name;
+    uint32_t width;
+    uint32_t height;
+  };
+  for (const TestFile& file :
+       {TestFile{"gainmap_larger_than_base_wider.avif", 16, 16},
+        TestFile{"gainmap_larger_than_base_taller.avif", 16, 16},
+        TestFile{"gainmap_larger_than_base_wider_and_taller.avif", 16, 16},
+        TestFile{"gainmap_larger_than_base_grid.avif", 128, 64}}) {
+    for (avifImageContentTypeFlags image_content_to_decode :
+         {AVIF_IMAGE_CONTENT_ALL, AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA,
+          AVIF_IMAGE_CONTENT_GAIN_MAP}) {
+      SCOPED_TRACE(::testing::Message()
+                   << file.file_name << " " << image_content_to_decode);
+      auto decoder = CreateDecoder(file.file_name);
+      ASSERT_NE(decoder, nullptr);
+      decoder->imageContentToDecode = image_content_to_decode;
+      auto result = avifDecoderParse(decoder.get());
+      ASSERT_EQ(result, AVIF_RESULT_OK)
+          << avifResultToString(result) << " " << decoder->diag.error;
+      ASSERT_NE(decoder->image, nullptr);
+      EXPECT_EQ(decoder->image->width, file.width);
+      EXPECT_EQ(decoder->image->height, file.height);
+      EXPECT_EQ(decoder->image->gainMap, nullptr);
+      if (!testutil::Av1DecoderAvailable()) {
+        continue;
+      }
+      if (image_content_to_decode == AVIF_IMAGE_CONTENT_GAIN_MAP) {
+        // There is nothing to decode since the gain map is ignored.
+        EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_NO_CONTENT);
+      } else {
+        EXPECT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+        EXPECT_EQ(decoder->image->gainMap, nullptr);
+      }
+    }
+  }
+}
+
 TEST(DecoderTest, KeyFrame) {
   if (!testutil::Av1DecoderAvailable()) {
     GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
