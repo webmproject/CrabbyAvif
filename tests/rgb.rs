@@ -896,3 +896,106 @@ fn yuv_to_rgb_threading_padded_rgb(
     }
     Ok(())
 }
+
+fn repack_yuv_planes_padded_tight(image: &mut image::Image, pad_samples: usize) -> AvifResult<()> {
+    for plane in ALL_PLANES {
+        if !image.has_plane(plane) {
+            continue;
+        }
+        let pw = image.width(plane);
+        let ph = image.height(plane);
+        let stride = pw + pad_samples;
+        let tight_len = (ph - 1) * stride + pw;
+        if image.depth == 8 {
+            let mut buf = vec![0xCCu8; tight_len];
+            for y in 0..ph {
+                let src = image.row(plane, y as u32)?;
+                buf[y * stride..y * stride + pw].copy_from_slice(src);
+            }
+            image.planes[plane as usize] = Some(Pixels::Buffer(buf));
+            image.row_bytes[plane as usize] = stride as u32;
+        } else {
+            let mut buf = vec![0xCCCCu16; tight_len];
+            for y in 0..ph {
+                let src = image.row16(plane, y as u32)?;
+                buf[y * stride..y * stride + pw].copy_from_slice(src);
+            }
+            image.planes[plane as usize] = Some(Pixels::Buffer16(buf));
+            image.row_bytes[plane as usize] = (stride * 2) as u32;
+        }
+    }
+    Ok(())
+}
+
+#[test_matrix([8, 10], [15, 16], [16, 17])]
+fn yuv_to_rgb_threading_padded_yuv(yuv_depth: u8, width: u32, height: u32) -> AvifResult<()> {
+    let mut image = generate_gradient_image(
+        width,
+        height,
+        yuv_depth,
+        PixelFormat::Yuv420,
+        YuvRange::Full,
+        true,
+    )?;
+    image.matrix_coefficients = MatrixCoefficients::Bt601;
+    repack_yuv_planes_padded_tight(&mut image, 5)?;
+
+    let mut rgb = rgb::Image::create_from_yuv(&image);
+    rgb.chroma_upsampling = rgb::ChromaUpsampling::Nearest;
+    rgb.allocate()?;
+    rgb.convert_from_yuv(&image)?;
+
+    let mut rgb_threaded = rgb::Image::create_from_yuv(&image);
+    rgb_threaded.chroma_upsampling = rgb::ChromaUpsampling::Nearest;
+    rgb_threaded.max_threads = 4;
+    rgb_threaded.allocate()?;
+    rgb_threaded.convert_from_yuv(&image)?;
+
+    for y in 0..height {
+        if yuv_depth == 8 {
+            assert_eq!(rgb.row(y)?, rgb_threaded.row(y)?);
+        } else {
+            assert_eq!(rgb.row16(y)?, rgb_threaded.row16(y)?);
+        }
+    }
+    Ok(())
+}
+
+#[test_matrix([8, 10])]
+fn yuv_to_rgb_threading_invalid_yuv_planes(yuv_depth: u8) -> AvifResult<()> {
+    let mut base =
+        generate_gradient_image(16, 16, yuv_depth, PixelFormat::Yuv420, YuvRange::Full, true)?;
+    base.matrix_coefficients = MatrixCoefficients::Bt601;
+    repack_yuv_planes_padded_tight(&mut base, 4)?;
+
+    let mut rgb = rgb::Image::create_from_yuv(&base);
+    rgb.chroma_upsampling = rgb::ChromaUpsampling::Nearest;
+    rgb.max_threads = 4;
+    rgb.allocate()?;
+
+    // Truncating any Y, U, V, or A plane by 1 sample (while keeping earlier rows valid) must fail.
+    for plane in ALL_PLANES {
+        let mut truncated = base.try_deep_clone()?;
+        repack_yuv_planes_padded_tight(&mut truncated, 4)?;
+        match truncated.planes[plane as usize].as_mut().unwrap() {
+            Pixels::Buffer(buf) => {
+                buf.pop();
+            }
+            Pixels::Buffer16(buf) => {
+                buf.pop();
+            }
+            _ => unreachable!(),
+        }
+        assert!(rgb.convert_from_yuv(&truncated).is_err());
+    }
+
+    if yuv_depth > 8 {
+        let mut odd_stride = base.try_deep_clone()?;
+        odd_stride.row_bytes[Plane::Y as usize] += 1;
+        assert!(matches!(
+            rgb.convert_from_yuv(&odd_stride),
+            Err(AvifError::ReformatFailed)
+        ));
+    }
+    Ok(())
+}

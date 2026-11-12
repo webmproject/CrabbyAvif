@@ -22,6 +22,7 @@ use crate::checked_mul;
 use crate::checked_sub;
 use crate::image::Plane;
 use crate::image::YuvRange;
+use crate::image::ALL_PLANES;
 use crate::image::MAX_PLANE_COUNT;
 use crate::internal_utils::*;
 use crate::utils::clap::CropRect;
@@ -358,11 +359,87 @@ impl<'a> RgbStripSlice<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum YuvPlaneSlice<'a> {
+    U8(&'a [u8]),
+    U16(&'a [u16]),
+}
+
+impl<'a> YuvPlaneSlice<'a> {
+    fn strip_planes(
+        image: &'a crate::image::Image,
+        start_row: u32,
+        height: u32,
+    ) -> AvifResult<[Option<Self>; MAX_PLANE_COUNT]> {
+        let rect = CropRect {
+            x: 0,
+            y: start_row,
+            width: image.width,
+            height,
+        };
+        if !rect.is_valid(image.width, image.height, image.yuv_format) {
+            return AvifError::invalid_argument();
+        }
+        let mut yuv_planes = [None; MAX_PLANE_COUNT];
+        for plane in ALL_PLANES {
+            if !image.has_plane(plane) {
+                continue;
+            }
+            let plane_y = if matches!(plane, Plane::Y | Plane::A) {
+                start_row
+            } else {
+                image.yuv_format.apply_chroma_shift_y(start_row)
+            };
+            let plane_width = u32_from_usize(crate::image::Image::plane_width(
+                image.yuv_format,
+                plane,
+                image.width,
+            ))?;
+            let plane_height = u32_from_usize(crate::image::Image::plane_height(
+                image.yuv_format,
+                plane,
+                height,
+            ))?;
+            if plane_width == 0 || plane_height == 0 {
+                return AvifError::invalid_argument();
+            }
+            let last_row = checked_sub!(plane_height, 1)?;
+            let row_bytes = image.row_bytes[plane.as_usize()];
+            let pixels = image.planes[plane.as_usize()]
+                .as_ref()
+                .ok_or(AvifError::NoContent)?;
+            yuv_planes[plane.as_usize()] = Some(if image.depth == 8 {
+                let offset = checked_mul!(plane_y, row_bytes)?;
+                let len = checked_add!(checked_mul!(last_row, row_bytes)?, plane_width)?;
+                Self::U8(pixels.slice(offset, len)?)
+            } else {
+                if row_bytes % 2 != 0 {
+                    return AvifError::reformat_failed();
+                }
+                let row_u16 = row_bytes / 2;
+                let offset = checked_mul!(plane_y, row_u16)?;
+                let len = checked_add!(checked_mul!(last_row, row_u16)?, plane_width)?;
+                Self::U16(pixels.slice16(offset, len)?)
+            });
+        }
+        Ok(yuv_planes)
+    }
+
+    fn to_pixels(self, depth: u8) -> AvifResult<Pixels> {
+        match self {
+            Self::U8(s) => Pixels::from_raw_pointer_and_size(s.as_ptr() as *mut u8, 8, s.len()),
+            Self::U16(s) => {
+                Pixels::from_raw_pointer_and_size(s.as_ptr() as *mut u8, u32::from(depth), s.len())
+            }
+        }
+    }
+}
+
 // A horizontal strip of a YUV image and of the RGB image it is converted into. Used to split the
 // YUV to RGB conversion across multiple threads.
 struct Strip<'a> {
     yuv_meta: YuvStripMeta,
-    yuv_planes: [Option<Pixels>; MAX_PLANE_COUNT],
+    yuv_planes: [Option<YuvPlaneSlice<'a>>; MAX_PLANE_COUNT],
     height: u32,
     rgb_meta: RgbStripMeta,
     rgb_pixels: RgbStripSlice<'a>,
@@ -377,9 +454,13 @@ unsafe impl Send for Strip<'_> {}
 
 impl Strip<'_> {
     fn convert(&mut self) -> AvifResult<()> {
-        let yuv_image = self
-            .yuv_meta
-            .into_image(self.height, std::mem::take(&mut self.yuv_planes));
+        let mut planes: [Option<Pixels>; MAX_PLANE_COUNT] = [const { None }; MAX_PLANE_COUNT];
+        for (i, plane_slice) in self.yuv_planes.iter().enumerate() {
+            if let Some(plane_slice) = plane_slice {
+                planes[i] = Some(plane_slice.to_pixels(self.yuv_meta.depth)?);
+            }
+        }
+        let yuv_image = self.yuv_meta.into_image(self.height, planes);
         let rgb_pixels = self.rgb_pixels.as_pixels(self.rgb_meta.depth)?;
         let mut rgb_image = self.rgb_meta.into_image(self.height, rgb_pixels);
         rgb_image.convert_from_yuv_impl(&yuv_image)
@@ -645,12 +726,7 @@ impl Image {
         let mut start_row = 0;
         for i in 0..jobs {
             let height = if i == jobs - 1 { image.height - start_row } else { rows_per_job };
-            let rect = CropRect {
-                x: 0,
-                y: start_row,
-                width: image.width,
-                height,
-            };
+            let yuv_planes = YuvPlaneSlice::strip_planes(image, start_row, height)?;
             let current_rgb = rem_rgb.take().ok_or(AvifError::ReformatFailed)?;
             let rgb_pixels = if i == jobs - 1 {
                 current_rgb
@@ -661,7 +737,7 @@ impl Image {
             };
             strips.try_push(Strip {
                 yuv_meta,
-                yuv_planes: image.view(&rect)?.planes,
+                yuv_planes,
                 height,
                 rgb_meta,
                 rgb_pixels,
