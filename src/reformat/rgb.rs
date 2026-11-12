@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![forbid(unsafe_code)]
+
 use super::coeffs::*;
 use super::libyuv;
 use super::rgb_impl;
@@ -435,8 +437,10 @@ impl<'a> YuvPlaneSlice<'a> {
     }
 }
 
-// A horizontal strip of a YUV image and of the RGB image it is converted into. Used to split the
-// YUV to RGB conversion across multiple threads.
+// A horizontal strip of a YUV image and of the RGB image it is converted into. Holds shared
+// YUV plane slices and a disjoint mutable RGB slice so `Strip` is safely `Send` across scoped
+// worker threads without any `unsafe impl Send`; the temporary `Pixels` views built in
+// `Strip::convert` do not outlive `convert()`.
 struct Strip<'a> {
     yuv_meta: YuvStripMeta,
     yuv_planes: [Option<YuvPlaneSlice<'a>>; MAX_PLANE_COUNT],
@@ -444,13 +448,6 @@ struct Strip<'a> {
     rgb_meta: RgbStripMeta,
     rgb_pixels: RgbStripSlice<'a>,
 }
-
-// SAFETY: The views held by a Strip are only ever created by `Image::convert_from_yuv_threaded`,
-// which guarantees that: the YUV view is only read from (and it is fine for multiple threads to
-// read from the same source image concurrently), the RGB view of each strip points to a set of
-// rows that is disjoint from the rows of every other strip, and the parent images outlive all of
-// the strips (the threads are scoped). So it is safe to send a Strip to another thread.
-unsafe impl Send for Strip<'_> {}
 
 impl Strip<'_> {
     fn convert(&mut self) -> AvifResult<()> {
