@@ -17,6 +17,7 @@
 use crabby_avif::image::*;
 use crabby_avif::reformat::rgb;
 use crabby_avif::reformat::rgb::ChromaDownsampling;
+use crabby_avif::utils::pixels::Pixels;
 use crabby_avif::*;
 
 #[cfg(feature = "sharpyuv")]
@@ -820,5 +821,78 @@ fn yuv_to_rgb_negative_max_threads() -> AvifResult<()> {
     // Values larger than the internal maximum are clamped.
     rgb.max_threads = 1000;
     assert!(rgb.convert_from_yuv(&image).is_ok());
+    Ok(())
+}
+
+#[test_matrix(
+    [8, 16],
+    [15, 16],
+    [16, 17],
+    [rgb::Format::Rgb, rgb::Format::Rgba],
+    [2, 5]
+)]
+fn yuv_to_rgb_threading_padded_rgb(
+    rgb_depth: u8,
+    width: u32,
+    height: u32,
+    rgb_format: rgb::Format,
+    max_threads: i32,
+) -> AvifResult<()> {
+    let mut image =
+        generate_gradient_image(width, height, 8, PixelFormat::Yuv420, YuvRange::Full, true)?;
+    image.matrix_coefficients = MatrixCoefficients::Bt601;
+
+    let mut rgb = rgb::Image::create_from_yuv(&image);
+    rgb.depth = rgb_depth;
+    rgb.format = rgb_format;
+    rgb.chroma_upsampling = rgb::ChromaUpsampling::Nearest;
+    rgb.allocate()?;
+    rgb.convert_from_yuv(&image)?;
+
+    let mut rgb_threaded = rgb::Image::create_from_yuv(&image);
+    rgb_threaded.depth = rgb_depth;
+    rgb_threaded.format = rgb_format;
+    rgb_threaded.chroma_upsampling = rgb::ChromaUpsampling::Nearest;
+    rgb_threaded.max_threads = max_threads;
+    let pixel_size = rgb_format.pixel_size(u32::from(rgb_depth));
+    let row_width_bytes = width * pixel_size;
+    let pad_bytes = 12u32;
+    let row_bytes = row_width_bytes + pad_bytes;
+    rgb_threaded.row_bytes = row_bytes;
+    // Allocate a tight last row (no trailing row_bytes padding after the final row's pixels).
+    let tight_bytes = ((height - 1) * row_bytes + row_width_bytes) as usize;
+    if rgb_depth == 8 {
+        rgb_threaded.pixels = Some(Pixels::Buffer(vec![0xA5u8; tight_bytes]));
+    } else {
+        rgb_threaded.pixels = Some(Pixels::Buffer16(vec![0xA55Au16; tight_bytes / 2]));
+    }
+    rgb_threaded.convert_from_yuv(&image)?;
+
+    for y in 0..height {
+        if rgb_depth == 8 {
+            assert_eq!(rgb.row(y)?, rgb_threaded.row(y)?);
+        } else {
+            assert_eq!(rgb.row16(y)?, rgb_threaded.row16(y)?);
+        }
+    }
+    match rgb_threaded.pixels.as_ref().unwrap() {
+        Pixels::Buffer(buf) => {
+            for y in 0..(height - 1) as usize {
+                let pad_start = y * row_bytes as usize + row_width_bytes as usize;
+                let pad_end = (y + 1) * row_bytes as usize;
+                assert!(buf[pad_start..pad_end].iter().all(|&b| b == 0xA5));
+            }
+        }
+        Pixels::Buffer16(buf) => {
+            let row_u16 = (row_bytes / 2) as usize;
+            let width_u16 = (row_width_bytes / 2) as usize;
+            for y in 0..(height - 1) as usize {
+                let pad_start = y * row_u16 + width_u16;
+                let pad_end = (y + 1) * row_u16;
+                assert!(buf[pad_start..pad_end].iter().all(|&w| w == 0xA55A));
+            }
+        }
+        _ => unreachable!(),
+    }
     Ok(())
 }

@@ -19,6 +19,7 @@ use super::sharpyuv;
 
 use crate::checked_add;
 use crate::checked_mul;
+use crate::checked_sub;
 use crate::image::Plane;
 use crate::image::YuvRange;
 use crate::image::MAX_PLANE_COUNT;
@@ -301,14 +302,70 @@ impl RgbStripMeta {
     }
 }
 
+enum RgbStripSlice<'a> {
+    U8(&'a mut [u8]),
+    U16(&'a mut [u16]),
+}
+
+impl<'a> RgbStripSlice<'a> {
+    fn from_image(rgb: &'a mut Image) -> AvifResult<Self> {
+        let last_row = checked_sub!(rgb.height, 1)?;
+        let pixel_size = rgb.pixel_size();
+        let pixels = rgb.pixels.as_mut().ok_or(AvifError::NoContent)?;
+        if rgb.depth == 8 {
+            let len = checked_add!(
+                checked_mul!(last_row, rgb.row_bytes)?,
+                checked_mul!(rgb.width, pixel_size)?
+            )?;
+            Ok(Self::U8(pixels.slice_mut(0, len)?))
+        } else {
+            let len = checked_add!(
+                checked_mul!(last_row, rgb.row_bytes / 2)?,
+                checked_mul!(rgb.width, pixel_size / 2)?
+            )?;
+            Ok(Self::U16(pixels.slice16_mut(0, len)?))
+        }
+    }
+
+    fn split_rows(self, rows: u32, row_bytes: u32) -> AvifResult<(Self, Self)> {
+        match self {
+            Self::U8(s) => {
+                let mid = usize_from_u32(checked_mul!(rows, row_bytes)?)?;
+                let (head, tail) = s
+                    .split_at_mut_checked(mid)
+                    .ok_or(AvifError::ReformatFailed)?;
+                Ok((Self::U8(head), Self::U8(tail)))
+            }
+            Self::U16(s) => {
+                let mid = usize_from_u32(checked_mul!(rows, row_bytes / 2)?)?;
+                let (head, tail) = s
+                    .split_at_mut_checked(mid)
+                    .ok_or(AvifError::ReformatFailed)?;
+                Ok((Self::U16(head), Self::U16(tail)))
+            }
+        }
+    }
+
+    fn as_pixels(&mut self, depth: u8) -> AvifResult<Pixels> {
+        match self {
+            Self::U8(s) => Pixels::from_raw_pointer_and_size(s.as_mut_ptr(), 8, s.len()),
+            Self::U16(s) => Pixels::from_raw_pointer_and_size(
+                s.as_mut_ptr() as *mut u8,
+                u32::from(depth),
+                s.len(),
+            ),
+        }
+    }
+}
+
 // A horizontal strip of a YUV image and of the RGB image it is converted into. Used to split the
 // YUV to RGB conversion across multiple threads.
-struct Strip {
+struct Strip<'a> {
     yuv_meta: YuvStripMeta,
     yuv_planes: [Option<Pixels>; MAX_PLANE_COUNT],
     height: u32,
     rgb_meta: RgbStripMeta,
-    rgb_pixels: Option<Pixels>,
+    rgb_pixels: RgbStripSlice<'a>,
 }
 
 // SAFETY: The views held by a Strip are only ever created by `Image::convert_from_yuv_threaded`,
@@ -316,14 +373,14 @@ struct Strip {
 // read from the same source image concurrently), the RGB view of each strip points to a set of
 // rows that is disjoint from the rows of every other strip, and the parent images outlive all of
 // the strips (the threads are scoped). So it is safe to send a Strip to another thread.
-unsafe impl Send for Strip {}
+unsafe impl Send for Strip<'_> {}
 
-impl Strip {
+impl Strip<'_> {
     fn convert(&mut self) -> AvifResult<()> {
         let yuv_image = self
             .yuv_meta
             .into_image(self.height, std::mem::take(&mut self.yuv_planes));
-        let rgb_pixels = self.rgb_pixels.take().ok_or(AvifError::NoContent)?;
+        let rgb_pixels = self.rgb_pixels.as_pixels(self.rgb_meta.depth)?;
         let mut rgb_image = self.rgb_meta.into_image(self.height, rgb_pixels);
         rgb_image.convert_from_yuv_impl(&yuv_image)
     }
@@ -529,41 +586,6 @@ impl Image {
         Ok(())
     }
 
-    // Returns a view of the rows [start_row, start_row + height) of self. The returned image has
-    // the same properties as self and points to the pixel values of self (no pixel data is
-    // copied).
-    //
-    // The returned image must not outlive self and the pixel buffer of self must not be
-    // reallocated or freed while the view is alive.
-    fn row_range_view(&mut self, start_row: u32, height: u32) -> AvifResult<Image> {
-        if height == 0 || checked_add!(start_row, height)? > self.height {
-            return AvifError::invalid_argument();
-        }
-        let ptr = if self.depth == 8 {
-            self.row_mut(start_row)?.as_mut_ptr()
-        } else {
-            self.row16_mut(start_row)?.as_mut_ptr() as *mut u8
-        };
-        Ok(Image {
-            width: self.width,
-            height,
-            depth: self.depth,
-            format: self.format,
-            chroma_upsampling: self.chroma_upsampling,
-            chroma_downsampling: self.chroma_downsampling,
-            premultiply_alpha: self.premultiply_alpha,
-            is_float: self.is_float,
-            max_threads: 1,
-            pixels: Some(Pixels::from_raw_pointer(
-                ptr,
-                self.depth as u32,
-                height,
-                self.row_bytes,
-            )?),
-            row_bytes: self.row_bytes,
-        })
-    }
-
     pub fn convert_from_yuv(&mut self, image: &crate::image::Image) -> AvifResult<()> {
         if self.width != image.width
             || self.height != image.height
@@ -618,7 +640,8 @@ impl Image {
         };
         let yuv_meta = YuvStripMeta::from(image);
         let rgb_meta = RgbStripMeta::from(&*self);
-        let mut strips: Vec<Strip> = create_vec_exact(usize_from_u32(jobs)?)?;
+        let mut rem_rgb = Some(RgbStripSlice::from_image(self)?);
+        let mut strips: Vec<Strip<'_>> = create_vec_exact(usize_from_u32(jobs)?)?;
         let mut start_row = 0;
         for i in 0..jobs {
             let height = if i == jobs - 1 { image.height - start_row } else { rows_per_job };
@@ -628,12 +651,20 @@ impl Image {
                 width: image.width,
                 height,
             };
+            let current_rgb = rem_rgb.take().ok_or(AvifError::ReformatFailed)?;
+            let rgb_pixels = if i == jobs - 1 {
+                current_rgb
+            } else {
+                let (head, tail) = current_rgb.split_rows(height, rgb_meta.row_bytes)?;
+                rem_rgb = Some(tail);
+                head
+            };
             strips.try_push(Strip {
                 yuv_meta,
                 yuv_planes: image.view(&rect)?.planes,
                 height,
                 rgb_meta,
-                rgb_pixels: self.row_range_view(start_row, height)?.pixels,
+                rgb_pixels,
             })?;
             start_row += height;
         }
