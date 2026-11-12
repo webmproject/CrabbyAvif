@@ -21,14 +21,18 @@ use crate::checked_add;
 use crate::checked_mul;
 use crate::image::Plane;
 use crate::image::YuvRange;
+use crate::image::MAX_PLANE_COUNT;
 use crate::internal_utils::*;
 use crate::utils::clap::CropRect;
 use crate::utils::pixels::*;
 use crate::AvifError;
 use crate::AvifResult;
 use crate::Category;
+use crate::ChromaSamplePosition;
+use crate::ColorPrimaries;
 use crate::MatrixCoefficients;
 use crate::PixelFormat;
+use crate::TransferCharacteristics;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -194,11 +198,117 @@ impl From<&crate::image::Image> for Mode {
 // `Image::max_threads`. Matches libavif.
 const MAX_YUV_TO_RGB_THREADS: i32 = 8;
 
+#[derive(Clone, Copy)]
+struct YuvStripMeta {
+    width: u32,
+    depth: u8,
+    yuv_format: PixelFormat,
+    yuv_range: YuvRange,
+    chroma_sample_position: ChromaSamplePosition,
+    alpha_present: bool,
+    alpha_premultiplied: bool,
+    row_bytes: [u32; MAX_PLANE_COUNT],
+    color_primaries: ColorPrimaries,
+    transfer_characteristics: TransferCharacteristics,
+    matrix_coefficients: MatrixCoefficients,
+}
+
+impl From<&crate::image::Image> for YuvStripMeta {
+    fn from(image: &crate::image::Image) -> Self {
+        Self {
+            width: image.width,
+            depth: image.depth,
+            yuv_format: image.yuv_format,
+            yuv_range: image.yuv_range,
+            chroma_sample_position: image.chroma_sample_position,
+            alpha_present: image.alpha_present,
+            alpha_premultiplied: image.alpha_premultiplied,
+            row_bytes: image.row_bytes,
+            color_primaries: image.color_primaries,
+            transfer_characteristics: image.transfer_characteristics,
+            matrix_coefficients: image.matrix_coefficients,
+        }
+    }
+}
+
+impl YuvStripMeta {
+    fn into_image(
+        self,
+        height: u32,
+        planes: [Option<Pixels>; MAX_PLANE_COUNT],
+    ) -> crate::image::Image {
+        crate::image::Image {
+            width: self.width,
+            height,
+            depth: self.depth,
+            yuv_format: self.yuv_format,
+            yuv_range: self.yuv_range,
+            chroma_sample_position: self.chroma_sample_position,
+            alpha_present: self.alpha_present,
+            alpha_premultiplied: self.alpha_premultiplied,
+            row_bytes: self.row_bytes,
+            planes,
+            color_primaries: self.color_primaries,
+            transfer_characteristics: self.transfer_characteristics,
+            matrix_coefficients: self.matrix_coefficients,
+            ..crate::image::Image::default()
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RgbStripMeta {
+    width: u32,
+    depth: u8,
+    format: Format,
+    chroma_upsampling: ChromaUpsampling,
+    chroma_downsampling: ChromaDownsampling,
+    premultiply_alpha: bool,
+    is_float: bool,
+    row_bytes: u32,
+}
+
+impl From<&Image> for RgbStripMeta {
+    fn from(rgb: &Image) -> Self {
+        Self {
+            width: rgb.width,
+            depth: rgb.depth,
+            format: rgb.format,
+            chroma_upsampling: rgb.chroma_upsampling,
+            chroma_downsampling: rgb.chroma_downsampling,
+            premultiply_alpha: rgb.premultiply_alpha,
+            is_float: rgb.is_float,
+            row_bytes: rgb.row_bytes,
+        }
+    }
+}
+
+impl RgbStripMeta {
+    fn into_image(self, height: u32, pixels: Pixels) -> Image {
+        Image {
+            width: self.width,
+            height,
+            depth: self.depth,
+            format: self.format,
+            chroma_upsampling: self.chroma_upsampling,
+            chroma_downsampling: self.chroma_downsampling,
+            premultiply_alpha: self.premultiply_alpha,
+            is_float: self.is_float,
+            max_threads: 1,
+            pixels: Some(pixels),
+            row_bytes: self.row_bytes,
+        }
+    }
+}
+
 // A horizontal strip of a YUV image and of the RGB image it is converted into. Used to split the
 // YUV to RGB conversion across multiple threads.
 struct Strip {
-    image: crate::image::Image,
-    rgb: Image,
+    yuv_meta: YuvStripMeta,
+    yuv_planes: [Option<Pixels>; MAX_PLANE_COUNT],
+    height: u32,
+    rgb_meta: RgbStripMeta,
+    rgb_pixels: Option<Pixels>,
 }
 
 // SAFETY: The views held by a Strip are only ever created by `Image::convert_from_yuv_threaded`,
@@ -210,7 +320,12 @@ unsafe impl Send for Strip {}
 
 impl Strip {
     fn convert(&mut self) -> AvifResult<()> {
-        self.rgb.convert_from_yuv_impl(&self.image)
+        let yuv_image = self
+            .yuv_meta
+            .into_image(self.height, std::mem::take(&mut self.yuv_planes));
+        let rgb_pixels = self.rgb_pixels.take().ok_or(AvifError::NoContent)?;
+        let mut rgb_image = self.rgb_meta.into_image(self.height, rgb_pixels);
+        rgb_image.convert_from_yuv_impl(&yuv_image)
     }
 }
 
@@ -501,6 +616,8 @@ impl Image {
         } else {
             (jobs, rows)
         };
+        let yuv_meta = YuvStripMeta::from(image);
+        let rgb_meta = RgbStripMeta::from(&*self);
         let mut strips: Vec<Strip> = create_vec_exact(usize_from_u32(jobs)?)?;
         let mut start_row = 0;
         for i in 0..jobs {
@@ -512,8 +629,11 @@ impl Image {
                 height,
             };
             strips.try_push(Strip {
-                image: image.view(&rect)?,
-                rgb: self.row_range_view(start_row, height)?,
+                yuv_meta,
+                yuv_planes: image.view(&rect)?.planes,
+                height,
+                rgb_meta,
+                rgb_pixels: self.row_range_view(start_row, height)?.pixels,
             })?;
             start_row += height;
         }
