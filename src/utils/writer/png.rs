@@ -21,10 +21,13 @@ use std::ffi::CString;
 use std::fs::File;
 use std::io::Write;
 use std::ptr;
+use std::slice;
 
 use super::Writer;
 
 use libpng_sys::bindings::*;
+
+const WRITE_ERROR_MSG: &[u8] = b"Write Error\0";
 
 #[derive(Default)]
 pub struct PngWriter {
@@ -90,32 +93,56 @@ impl Drop for PngWriterNative {
 }
 
 /// # Safety
-/// C-callback function. So it has to be unsafe.
+/// Must only be invoked by `libpng` as the `write_data_fn` callback registered via
+/// `png_set_write_fn`. `png_ptr` must be a valid `libpng` write struct whose `io_ptr` points to a
+/// valid, aligned `File` exclusively accessible for the duration of this call, and when
+/// `length > 0`, `data` must point to a readable buffer of at least `length` initialized bytes
+/// disjoint from the `File`.
 unsafe extern "C" fn crabbyavif_png_write_data(
     png_ptr: png_structp,
     data: png_bytep,
     length: png_size_t,
 ) {
-    // # Safety: Calling a C function with valid parameters.
+    if length == 0 || png_ptr.is_null() {
+        return;
+    }
+    // SAFETY: `png_ptr` is verified non-null and valid per `libpng`'s callback contract;
+    // `png_get_io_ptr` returns the `io_ptr` registered in `png_set_write_fn`.
     let io_ptr = unsafe { png_get_io_ptr(png_ptr) };
-    // # Safety: The best we can do is trust the pointer and buffer length reported by the libpng.
-    let data = unsafe { std::slice::from_raw_parts(data, length as _) };
-    // # Safety: Dereferencing a valid pointer that was set in png_set_write_fn.
-    let file = unsafe { &mut *(io_ptr as *mut File) };
-    if file.write_all(data).is_err() {
-        // # Safety: Calling a C function with valid parameters.
+    let write_ok = if !data.is_null() && !io_ptr.is_null() {
+        let data_const: *const u8 = data;
+        let file_ptr = io_ptr.cast::<File>();
+        // SAFETY: `data` is verified non-null and `length > 0`; per `libpng`'s `png_rw_ptr`
+        // contract, `data` points to `length` initialized bytes valid for reading during this
+        // callback (`u8` has alignment 1) and disjoint from `file`.
+        let buf = unsafe { slice::from_raw_parts(data_const, length) };
+        // SAFETY: `file_ptr` is verified non-null and was set to `file` (`*mut File`) in
+        // `png_set_write_fn`; `file` outlives `png_ptr` and is not accessed elsewhere while
+        // `libpng` invokes this callback.
+        let file = unsafe { &mut *file_ptr };
+        file.write_all(buf).is_ok()
+    } else {
+        false
+    };
+    if !write_ok {
+        let err_msg = WRITE_ERROR_MSG.as_ptr().cast::<c_char>();
+        // With no `setjmp` handler installed, `libpng`'s default error handler aborts; no `Drop`
+        // values are live on this frame.
+        // SAFETY: `png_ptr` is verified non-null and valid, and `err_msg` points to a static
+        // NUL-terminated C string.
         unsafe {
-            png_error(png_ptr, CString::new("Write Error").unwrap().as_ptr());
+            png_error(png_ptr, err_msg);
         }
     }
 }
 
-/// # Safety
-/// C-callback function. So it has to be unsafe.
-unsafe extern "C" fn crabbyavif_png_output_flush(_png_ptr: png_structp) {}
+extern "C" fn crabbyavif_png_output_flush(_png_ptr: png_structp) {}
 
 impl Writer for PngWriter {
     fn write_frame(&mut self, file: &mut File, image: &Image) -> AvifResult<()> {
+        if image.width == 0 || image.height == 0 {
+            return AvifError::invalid_argument();
+        }
         if image.matrix_coefficients == MatrixCoefficients::YcgcoRo {
             return Err(AvifError::UnknownError(
                 "YcgcoRo cannot be used with PNG because it has an even bit depth.".into(),
@@ -336,5 +363,63 @@ impl Writer for PngWriter {
             png_write_end(png.png, ptr::null_mut());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_frame_rejects_zero_dimensions() {
+        let path = std::env::temp_dir().join(format!(
+            "crabbyavif_png_writer_zero_dim_{}.png",
+            std::process::id()
+        ));
+        let mut file = File::create(&path).unwrap();
+
+        let mut writer = PngWriter::default();
+        assert!(matches!(
+            writer.write_frame(&mut file, &Image::default()),
+            Err(AvifError::InvalidArgument)
+        ));
+
+        let yuv400_zero_w = Image {
+            width: 0,
+            height: 4,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv400,
+            ..Image::default()
+        };
+        assert!(matches!(
+            writer.write_frame(&mut file, &yuv400_zero_w),
+            Err(AvifError::InvalidArgument)
+        ));
+
+        let yuv400_zero_h = Image {
+            width: 4,
+            height: 0,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv400,
+            ..Image::default()
+        };
+        assert!(matches!(
+            writer.write_frame(&mut file, &yuv400_zero_h),
+            Err(AvifError::InvalidArgument)
+        ));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_data_callback_ignores_zero_len_and_null_png_ptr() {
+        // SAFETY: `crabbyavif_png_write_data` returns early before dereferencing any pointer when
+        // `length == 0` or `png_ptr` is null.
+        unsafe {
+            crabbyavif_png_write_data(ptr::null_mut(), ptr::null_mut(), 0);
+            crabbyavif_png_write_data(ptr::null_mut(), ptr::null_mut(), 16);
+            let png = PngWriterNative::new().unwrap();
+            crabbyavif_png_write_data(png.png, ptr::null_mut(), 0);
+        }
     }
 }
