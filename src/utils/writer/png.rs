@@ -16,6 +16,7 @@ use crate::image::*;
 use crate::reformat::rgb;
 use crate::utils::*;
 
+use std::ffi::c_char;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::Write;
@@ -31,18 +32,58 @@ pub struct PngWriter {
     pub compression_level: Option<i32>,
 }
 
-#[derive(Default)]
+/// Owns a valid non-null `libpng` write struct (`png`) and info struct (`info`) pair, destroying
+/// both on drop.
 struct PngWriterNative {
     png: png_structp,
     info: png_infop,
 }
 
+impl PngWriterNative {
+    fn new() -> AvifResult<Self> {
+        let ver = PNG_LIBPNG_VER_STRING.as_ptr().cast::<c_char>();
+        // SAFETY: `PNG_LIBPNG_VER_STRING` is a static NUL-terminated byte string generated from
+        // `libpng`'s header, and null/`None` error arguments select `libpng`'s default handlers.
+        let png = unsafe { png_create_write_struct(ver, ptr::null_mut(), None, None) };
+        if png.is_null() {
+            return Err(AvifError::UnknownError(
+                "png_create_write_struct failed".into(),
+            ));
+        }
+        let mut writer = Self {
+            png,
+            info: ptr::null_mut(),
+        };
+        // SAFETY: `writer.png` was just allocated by `png_create_write_struct` and verified
+        // non-null; `writer` drops it automatically if `png_create_info_struct` fails.
+        let info = unsafe {
+            png_set_benign_errors(writer.png, 1);
+            png_create_info_struct(writer.png)
+        };
+        if info.is_null() {
+            return Err(AvifError::UnknownError(
+                "png_create_info_struct failed".into(),
+            ));
+        }
+        writer.info = info;
+        Ok(writer)
+    }
+}
+
 impl Drop for PngWriterNative {
     fn drop(&mut self) {
         if !self.png.is_null() {
-            // # Safety: Calling a C function with valid parameters.
+            let png_ptr = ptr::from_mut(&mut self.png);
+            let info_ptr = if self.info.is_null() {
+                ptr::null_mut()
+            } else {
+                ptr::from_mut(&mut self.info)
+            };
+            // SAFETY: `self.png` is non-null and was allocated by `png_create_write_struct`;
+            // `info_ptr` is either null or points to `self.info` allocated by
+            // `png_create_info_struct`. Both are owned exclusively by `self` and destroyed once.
             unsafe {
-                png_destroy_write_struct((&mut self.png) as *mut _, (&mut self.info) as *mut _);
+                png_destroy_write_struct(png_ptr, info_ptr);
             }
         }
     }
@@ -138,33 +179,7 @@ impl Writer for PngWriter {
             rgb.convert_from_yuv(image)?;
         }
         let height = image.height;
-        let mut png = PngWriterNative {
-            // # Safety: Calling a C function with valid parameters.
-            png: unsafe {
-                png_create_write_struct(
-                    PNG_LIBPNG_VER_STRING.as_ptr() as _,
-                    ptr::null_mut(),
-                    None,
-                    None,
-                )
-            },
-            ..Default::default()
-        };
-        if png.png.is_null() {
-            return Err(AvifError::UnknownError(
-                "png_create_write_struct failed".into(),
-            ));
-        }
-        // # Safety: Calling C functions with valid parameters.
-        unsafe {
-            png_set_benign_errors(png.png, 1);
-            png.info = png_create_info_struct(png.png);
-        }
-        if png.info.is_null() {
-            return Err(AvifError::UnknownError(
-                "png_create_info_struct failed".into(),
-            ));
-        }
+        let png = PngWriterNative::new()?;
         // # Safety: Calling C functions with valid parameters.
         unsafe {
             png_set_write_fn(
