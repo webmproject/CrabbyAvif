@@ -321,8 +321,11 @@ pub struct Encoder {
     alpha_present: bool,
     duration_in_timescales: Vec<u64>,
     codec_specific_options: CodecSpecificOptions,
-    final_recipe: Option<Recipe>, // Decided when the first image is added.
-                                  // Guaranteed not to be Recipe::Auto.
+    // Decided when the first image is added. Guaranteed not to be Recipe::Auto.
+    final_recipe: Option<Recipe>,
+    // True if the first image was added as a single image (not as a frame of an image sequence
+    // nor as a layer of a layered image). No other image can be added in that case.
+    single_image: bool,
 }
 
 impl Encoder {
@@ -590,6 +593,14 @@ impl Encoder {
         if cell_count == 0 || cell_images.len() != cell_count {
             return AvifError::invalid_argument();
         }
+        if self.single_image {
+            // Nothing can be added after a single image.
+            return AvifError::encode_color_failed();
+        }
+        if is_single_image && !self.items.is_empty() {
+            // A single image can only be the first and only image.
+            return AvifError::invalid_argument();
+        }
         if duration == 0 {
             duration = 1;
         }
@@ -604,6 +615,7 @@ impl Encoder {
                 height: (grid_rows - 1) * first_image.height + last_image.height,
             };
             Self::validate_image_grid(&grid, cell_images, final_recipe)?;
+            self.single_image = is_single_image;
             self.image_metadata = first_image.shallow_clone();
             self.image_metadata.exif = first_image.exif.try_clone()?;
             self.image_metadata.xmp = first_image.xmp.try_clone()?;
@@ -869,7 +881,6 @@ impl Encoder {
         if self.settings.extra_layer_count != 0 {
             return AvifError::invalid_argument();
         }
-        // TODO: this and add_image cannot be used on the same instance.
         self.add_image_impl(1, 1, &[image], duration, false, None)
     }
 

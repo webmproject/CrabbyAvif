@@ -549,6 +549,83 @@ fn sequence_alpha_combinations(first_image_has_alpha: bool) -> AvifResult<()> {
     Ok(())
 }
 
+#[test_matrix([0, 1, 2])]
+fn add_image_after_single_image(test_case_index: u8) -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let image = generate_gradient_image(64, 64, 8, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    let gainmap = GainMap {
+        image: generate_gradient_image(32, 32, 8, PixelFormat::Yuv420, YuvRange::Full, false)?,
+        metadata: gainmap_metadata(false),
+        ..Default::default()
+    };
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    match test_case_index {
+        0 => encoder.add_image(&image)?,
+        1 => encoder.add_image_grid(2, 1, &[&image, &image])?,
+        _ => encoder.add_image_gainmap(&image, &gainmap)?,
+    }
+    // Nothing can be added after a single image.
+    assert_eq!(encoder.add_image(&image), Err(AvifError::EncodeColorFailed));
+    assert_eq!(
+        encoder.add_image_grid(2, 1, &[&image, &image]),
+        Err(AvifError::EncodeColorFailed)
+    );
+    assert_eq!(
+        encoder.add_image_gainmap(&image, &gainmap),
+        Err(AvifError::EncodeColorFailed)
+    );
+    assert_eq!(
+        encoder.add_image_for_sequence(&image, 1),
+        Err(AvifError::EncodeColorFailed)
+    );
+    // The single image is still encoded as is.
+    let edata = encoder.finish()?;
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.parse()?;
+    assert_eq!(decoder.image_count(), 1);
+    assert!(
+        !decoder
+            .image()
+            .expect("image was none")
+            .image_sequence_track_present
+    );
+    Ok(())
+}
+
+#[test]
+fn single_image_after_sequence_frame() -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let image = generate_gradient_image(64, 64, 8, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_for_sequence(&image, 1)?;
+    // A single image can only be the first and only image.
+    assert_eq!(encoder.add_image(&image), Err(AvifError::InvalidArgument));
+    assert_eq!(
+        encoder.add_image_grid(2, 1, &[&image, &image]),
+        Err(AvifError::InvalidArgument)
+    );
+    encoder.add_image_for_sequence(&image, 1)?;
+    let edata = encoder.finish()?;
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.parse()?;
+    assert_eq!(decoder.image_count(), 2);
+    Ok(())
+}
+
 #[test_matrix([0, 1, 65535], [0, 1, 65535])]
 fn clli(max_cll: u16, max_pall: u16) -> AvifResult<()> {
     if !HAS_ENCODER || !HAS_DECODER {
