@@ -331,6 +331,28 @@ TEST(ImageTest, CopyViewRectAtRightEdge) {
   }
 }
 
+TEST(ImageTest, CopyToItself) {
+  ImagePtr image = testutil::CreateImage(/*width=*/4, /*height=*/4, /*depth=*/8,
+                                         AVIF_PIXEL_FORMAT_YUV420,
+                                         AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+  ASSERT_NE(image, nullptr);
+  testutil::FillImageGradient(image.get(), /*offset=*/0);
+  ImagePtr expected(avifImageCreateEmpty());
+  ASSERT_NE(expected, nullptr);
+  ASSERT_EQ(avifImageCopy(expected.get(), image.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+
+  // An image cannot be copied to itself or be a view of itself.
+  EXPECT_EQ(avifImageCopy(image.get(), image.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_INVALID_ARGUMENT);
+  const avifCropRect rect = {/*x=*/0, /*y=*/0, /*width=*/2, /*height=*/2};
+  EXPECT_EQ(avifImageSetViewRect(image.get(), image.get(), &rect),
+            AVIF_RESULT_INVALID_ARGUMENT);
+  // The image must be left untouched.
+  EXPECT_TRUE(
+      testutil::AreImagesEqual(*image, *expected, /*ignore_alpha=*/false));
+}
+
 TEST(ImageTest, SetViewRectEmptyRect) {
   ImagePtr src(avifImageCreate(2, 2, /*depth=*/8, AVIF_PIXEL_FORMAT_YUV444));
   ASSERT_NE(src, nullptr);
