@@ -252,6 +252,8 @@ impl TryFrom<&avifDecoder> for Settings {
             codec_choice: match decoder.codecChoice {
                 avifCodecChoice::Auto => CodecChoice::Auto,
                 avifCodecChoice::Dav1d => CodecChoice::Dav1d,
+                #[cfg(feature = "avm")]
+                avifCodecChoice::Avm => CodecChoice::Avm,
                 #[cfg(feature = "native_av1")]
                 avifCodecChoice::Native => CodecChoice::Native,
                 // Silently treat all other choices the same as Auto.
@@ -753,4 +755,20 @@ pub unsafe extern "C" fn crabby_avifPeekCompatibleFileType(input: *const avifROD
 pub unsafe extern "C" fn crabby_avifDecoderReset(decoder: *mut avifDecoder) -> avifResult {
     check_pointer!(decoder);
     avif_decoder_parse(deref_mut!(decoder))
+}
+
+#[cfg(all(test, feature = "avm"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codec_choice_avm() -> AvifResult<()> {
+        let decoder = avifDecoder {
+            codecChoice: avifCodecChoice::Avm,
+            ..Default::default()
+        };
+        let settings = Settings::try_from(&decoder)?;
+        assert_eq!(settings.codec_choice, CodecChoice::Avm);
+        Ok(())
+    }
 }
