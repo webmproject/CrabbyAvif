@@ -3478,7 +3478,7 @@ impl Decoder {
                         }
                     }
                 }
-                16 => {
+                8 | 10 | 12 | 16 => {
                     self.tile_info[DecodingItem::COLOR.usize()]
                         .sample_transform
                         .allocate_planes_and_apply(
