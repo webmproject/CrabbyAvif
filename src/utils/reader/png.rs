@@ -26,7 +26,6 @@ use super::Reader;
 use std::ffi::c_char;
 use std::ffi::c_int;
 use std::ffi::CStr;
-use std::ffi::CString;
 use std::fs::File;
 use std::io::Read;
 use std::ptr;
@@ -35,63 +34,73 @@ use std::slice;
 use libpng_sys::bindings::*;
 
 const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+const READ_ERROR_MSG: &[u8] = b"Read Error\0";
+
 pub struct PngReader {
     filename: String,
 }
 
 fn set_png_cicp(image: &mut Image, cicp: &[png_byte; 4]) {
-    image.color_primaries = (cicp[0] as u16).into();
-    image.transfer_characteristics = (cicp[1] as u16).into();
+    let &[cp, tc, mc, full_range] = cicp;
+    image.color_primaries = u16::from(cp).into();
+    image.transfer_characteristics = u16::from(tc).into();
     // PNG specification Third Edition Section 4.3:
     //  RGB is currently the only supported color model in PNG, and as such Matrix Coefficients shall be set to 0.
     // Note that we don't set image.matrix_coefficients to this value as the Avif's YUV matrix is independent from the PNG's.
-    if cicp[2] != 0 {
-        println!(
-            "Warning: Unsupported PNG CICP matrix coefficients value {}. Expected to be 0.",
-            cicp[2]
-        );
+    if mc != 0 {
+        println!("Warning: Unsupported PNG CICP matrix coefficients value {mc}. Expected to be 0.");
     }
     // Limited range PNG files are uncommon and would require conversion to full range which we don't support for now for simplicity.
     // See also https://github.com/w3c/png/issues/312#issuecomment-2325281113 and https://svgees.us/blog/cICP.html#the-other-two-numbers
     // Similarly, we don't set image.yuv_range to this value as the Avif's YUV range is independent from the PNG's.
-    if cicp[3] != 1 {
+    if full_range != 1 {
         println!(
-            "Warning: Unsupported PNG CICP full range flag value {}. Expected to be 1.",
-            cicp[3]
+            "Warning: Unsupported PNG CICP full range flag value {full_range}. Expected to be 1."
         );
     }
 }
 
+#[derive(Default)]
 struct UnknownCicpChunkData {
-    image: *mut Image,
-    cicp_chunk_read: bool,
+    cicp: Option<[png_byte; 4]>,
 }
 
 /// # Safety
-/// C-callback function. So it has to be unsafe.
+/// Must only be invoked by `libpng` as the `read_user_chunk_fn` callback registered via
+/// `png_set_read_user_chunk_fn`. `png_ptr` must be a valid `libpng` read struct whose
+/// `user_chunk_ptr` points to a valid, aligned `UnknownCicpChunkData` exclusively accessible for
+/// the duration of this call, and `chunk` must point to a valid `png_unknown_chunk` struct whose
+/// `data` (when non-null) is readable for `chunk.size` bytes.
 unsafe extern "C" fn crabbyavif_png_read_unknown_chunk(
     png_ptr: png_structp,
     chunk: png_unknown_chunkp,
 ) -> c_int {
-    // # Safety: Dereferencing a valid pointer that was set in png_set_read_user_chunk_fn.
-    let data = unsafe { &mut *(png_get_user_chunk_ptr(png_ptr) as *mut UnknownCicpChunkData) };
-    // # Safety: Dereferencing a valid pointer provided by libpng.
+    if png_ptr.is_null() || chunk.is_null() {
+        return 0;
+    }
+    // SAFETY: `png_ptr` is verified non-null and valid per `libpng`'s callback contract;
+    // `png_get_user_chunk_ptr` returns the `user_chunk_ptr` registered in
+    // `png_set_read_user_chunk_fn`.
+    let user_chunk_ptr = unsafe { png_get_user_chunk_ptr(png_ptr) };
+    if user_chunk_ptr.is_null() {
+        return 0;
+    }
+    let data_ptr = user_chunk_ptr.cast::<UnknownCicpChunkData>();
+    // SAFETY: `data_ptr` is verified non-null and was set to `&mut unknown_chunk_data`
+    // (`*mut UnknownCicpChunkData`) in `png_set_read_user_chunk_fn`, which outlives `png_ptr` and
+    // is not accessed elsewhere while `libpng` invokes this callback.
+    let data = unsafe { &mut *data_ptr };
+    // SAFETY: `chunk` is verified non-null and points to `png_ptr->unknown_chunk` initialized by
+    // `libpng` for the duration of this callback.
     let chunk = unsafe { &*chunk };
-    if chunk.name[0] == b'c'
-        && chunk.name[1] == b'I'
-        && chunk.name[2] == b'C'
-        && chunk.name[3] == b'P'
-        && chunk.size >= 4
+    if matches!(chunk.name, [b'c', b'I', b'C', b'P', _]) && chunk.size >= 4 && !chunk.data.is_null()
     {
-        data.cicp_chunk_read = true;
-        // # Safety: The best we can do is trust the pointer and buffer length reported by the libpng.
-        let cicp_data = unsafe { slice::from_raw_parts(chunk.data, 4) };
-        // # Safety: Dereferencing a valid pointer.
-        unsafe {
-            set_png_cicp(
-                &mut *data.image,
-                &[cicp_data[0], cicp_data[1], cicp_data[2], cicp_data[3]],
-            );
+        let chunk_data: *const u8 = chunk.data;
+        // SAFETY: `chunk.data` is verified non-null and `libpng` guarantees `chunk.data` points to
+        // a readable buffer of `chunk.size` (>= 4) initialized bytes (`u8` has alignment 1).
+        let cicp_slice = unsafe { slice::from_raw_parts(chunk_data, 4) };
+        if let Ok(cicp) = cicp_slice.try_into() {
+            data.cicp = Some(cicp);
         }
     }
     1
@@ -265,24 +274,44 @@ impl Drop for PngReaderNative {
 }
 
 /// # Safety
-/// C-callback function. So it has to be unsafe.
+/// Must only be invoked by `libpng` as the `read_data_fn` callback registered via
+/// `png_set_read_fn`. `png_ptr` must be a valid `libpng` read struct whose `io_ptr` points to a
+/// valid, aligned `File` exclusively accessible for the duration of this call, and when
+/// `length > 0`, `data` must point to a writable buffer of at least `length` bytes disjoint from
+/// the `File`.
 unsafe extern "C" fn crabbyavif_png_read_data(
     png_ptr: png_structp,
     data: png_bytep,
     length: png_size_t,
 ) {
-    // # Safety: Calling a C function with valid parameters.
+    if length == 0 || png_ptr.is_null() {
+        return;
+    }
+    // SAFETY: `png_ptr` is verified non-null and valid per `libpng`'s callback contract;
+    // `png_get_io_ptr` returns the `io_ptr` registered in `png_set_read_fn`.
     let io_ptr = unsafe { png_get_io_ptr(png_ptr) };
-    // # Safety: Dereferencing a valid pointer that was set in png_set_read_fn.
-    let file = unsafe { &mut *(io_ptr as *mut File) };
-    // # Safety: The best we can do is trust the pointer and buffer length reported by the libpng.
-    let data = unsafe { std::slice::from_raw_parts_mut(data, length as _) };
-    if file.read_exact(data).is_err() {
-        // libpng uses longjmp for errors. Since we don't set an error handler, the default
-        // handler will be used.
-        // # Safety: Calling a C function with valid parameters.
+    let read_ok = if !data.is_null() && !io_ptr.is_null() {
+        let file_ptr = io_ptr.cast::<File>();
+        // SAFETY: `file_ptr` is verified non-null and was set to `&mut file` (`*mut File`) in
+        // `png_set_read_fn`; `file` outlives `png_ptr` and is not accessed elsewhere while
+        // `libpng` invokes this callback.
+        let file = unsafe { &mut *file_ptr };
+        // SAFETY: `data` is verified non-null and `length > 0`; per `libpng`'s `png_rw_ptr`
+        // contract, `data` points to a valid writable buffer of `length` bytes (`u8` has
+        // alignment 1) disjoint from `file`.
+        let buf = unsafe { slice::from_raw_parts_mut(data, length) };
+        file.read_exact(buf).is_ok()
+    } else {
+        false
+    };
+    if !read_ok {
+        let err_msg = READ_ERROR_MSG.as_ptr().cast::<c_char>();
+        // With no `setjmp` handler installed, `libpng`'s default error handler aborts; no `Drop`
+        // values are live on this frame.
+        // SAFETY: `png_ptr` is verified non-null and valid, and `err_msg` points to a static
+        // NUL-terminated C string.
         unsafe {
-            png_error(png_ptr, CString::new("Read Error").unwrap().as_ptr());
+            png_error(png_ptr, err_msg);
         }
     }
 }
@@ -306,27 +335,26 @@ impl Reader for PngReader {
             return Err(AvifError::UnknownError("not a png".into()));
         }
 
+        // Declared before `png` so both `file` and `unknown_chunk_data` strictly outlive `png`.
+        let mut unknown_chunk_data = UnknownCicpChunkData::default();
         let png = PngReaderNative::new()?;
-
         let mut yuv = Image::default();
-        let mut unknown_chunk_data = UnknownCicpChunkData {
-            image: &mut yuv,
-            cicp_chunk_read: false,
-        };
+
+        let user_chunk_ptr = ptr::from_mut(&mut unknown_chunk_data).cast();
+        let io_ptr = ptr::from_mut(&mut file).cast();
         unsafe {
             png_set_read_user_chunk_fn(
                 png.png,
-                (&mut unknown_chunk_data) as *mut _ as *mut _,
+                user_chunk_ptr,
                 Some(crabbyavif_png_read_unknown_chunk),
             );
 
-            png_set_read_fn(
-                png.png,
-                &mut file as *mut File as *mut _,
-                Some(crabbyavif_png_read_data),
-            );
+            png_set_read_fn(png.png, io_ptr, Some(crabbyavif_png_read_data));
             png_set_sig_bytes(png.png, 8);
             png_read_info(png.png, png.info);
+            // Disarm before reading `unknown_chunk_data.cicp` or running `png_read_image` /
+            // `png_read_end` so trailing chunks cannot re-enter with an invalidated pointer.
+            png_set_read_user_chunk_fn(png.png, ptr::null_mut(), None);
 
             let raw_width = png_get_image_width(png.png, png.info);
             let raw_height = png_get_image_height(png.png, png.info);
@@ -434,8 +462,8 @@ impl Reader for PngReader {
                 ) != 0
                 {
                     set_png_cicp(&mut yuv, &cicp);
-                } else if unknown_chunk_data.cicp_chunk_read {
-                    // Already handled in crabbyavif_png_read_unknown_chunk
+                } else if let Some(unknown_cicp) = unknown_chunk_data.cicp {
+                    set_png_cicp(&mut yuv, &unknown_cicp);
                 } else if png_get_iCCP(
                     png.png,
                     png.info,
@@ -566,5 +594,99 @@ impl Reader for PngReader {
     fn has_more_frames(&mut self) -> bool {
         // TODO: b/403090413 - maybe support APNG?
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_chunk_callback_validates_inputs_and_records_cicp() {
+        let png = PngReaderNative::new().unwrap();
+        let mut payload = [9u8, 16, 0, 1];
+        let mut valid_cicp = png_unknown_chunk {
+            name: *b"cICP\0",
+            data: payload.as_mut_ptr(),
+            size: payload.len(),
+            location: 0,
+        };
+
+        // SAFETY: Tests null-pointer early-return guards before `user_chunk_ptr` is registered.
+        unsafe {
+            assert_eq!(
+                crabbyavif_png_read_unknown_chunk(ptr::null_mut(), &mut valid_cicp),
+                0
+            );
+            assert_eq!(
+                crabbyavif_png_read_unknown_chunk(png.png, ptr::null_mut()),
+                0
+            );
+            assert_eq!(
+                crabbyavif_png_read_unknown_chunk(png.png, &mut valid_cicp),
+                0
+            );
+        }
+
+        let mut chunk_state = UnknownCicpChunkData::default();
+        // SAFETY: `png.png` is valid and `chunk_state` outlives all callback invocations below.
+        unsafe {
+            png_set_read_user_chunk_fn(
+                png.png,
+                ptr::from_mut(&mut chunk_state).cast(),
+                Some(crabbyavif_png_read_unknown_chunk),
+            );
+
+            let mut other = png_unknown_chunk {
+                name: *b"tEXt\0",
+                data: payload.as_mut_ptr(),
+                size: payload.len(),
+                location: 0,
+            };
+            assert_eq!(crabbyavif_png_read_unknown_chunk(png.png, &mut other), 1);
+            assert_eq!(chunk_state.cicp, None);
+
+            let mut short_cicp = png_unknown_chunk {
+                name: *b"cICP\0",
+                data: payload.as_mut_ptr(),
+                size: 3,
+                location: 0,
+            };
+            assert_eq!(
+                crabbyavif_png_read_unknown_chunk(png.png, &mut short_cicp),
+                1
+            );
+            assert_eq!(chunk_state.cicp, None);
+
+            let mut null_data_cicp = png_unknown_chunk {
+                name: *b"cICP\0",
+                data: ptr::null_mut(),
+                size: 4,
+                location: 0,
+            };
+            assert_eq!(
+                crabbyavif_png_read_unknown_chunk(png.png, &mut null_data_cicp),
+                1
+            );
+            assert_eq!(chunk_state.cicp, None);
+
+            assert_eq!(
+                crabbyavif_png_read_unknown_chunk(png.png, &mut valid_cicp),
+                1
+            );
+            assert_eq!(chunk_state.cicp, Some([9, 16, 0, 1]));
+        }
+    }
+
+    #[test]
+    fn read_data_callback_ignores_zero_len_and_null_png_ptr() {
+        // SAFETY: `crabbyavif_png_read_data` returns early before dereferencing any pointer when
+        // `length == 0` or `png_ptr` is null.
+        unsafe {
+            crabbyavif_png_read_data(ptr::null_mut(), ptr::null_mut(), 0);
+            crabbyavif_png_read_data(ptr::null_mut(), ptr::null_mut(), 16);
+            let png = PngReaderNative::new().unwrap();
+            crabbyavif_png_read_data(png.png, ptr::null_mut(), 0);
+        }
     }
 }
