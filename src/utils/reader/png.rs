@@ -388,12 +388,16 @@ impl Reader for PngReader {
             let raw_color_type = png_get_color_type(png.png, png.info);
             let raw_bit_depth = png_get_bit_depth(png.png, png.info);
 
+            // Defense-in-depth (`png_read_info` also rejects zero-dimension `IHDR` chunks).
+            if raw_width == 0 || raw_height == 0 {
+                return AvifError::invalid_argument();
+            }
             if config.image_size_limit > 0 {
-                let total_pixels = (raw_width as u64) * (raw_height as u64);
-                if total_pixels > config.image_size_limit as u64 {
+                let total_pixels = u64::from(raw_width) * u64::from(raw_height);
+                if total_pixels > u64::from(config.image_size_limit) {
                     return Err(AvifError::UnknownError(format!(
-                        "Too big PNG dimensions ({} x {} > {} px)",
-                        raw_width, raw_height, config.image_size_limit
+                        "Too big PNG dimensions ({raw_width} x {raw_height} > {} px)",
+                        config.image_size_limit
                     )));
                 }
             }
@@ -505,10 +509,13 @@ impl Reader for PngReader {
                     {
                         return Err(AvifError::UnknownError("Image contains an ICC profile that is incompatible with the requested output. Pass --ignore-icc to discard the ICC profile".into()));
                     }
-                    let icc_slice =
-                        slice::from_raw_parts(iccp_data, usize_from_u32(iccp_data_len)?);
-                    yuv.icc = create_vec_exact(icc_slice.len())?;
-                    yuv.icc.try_extend_from_slice(icc_slice)?;
+                    let icc_len = usize_from_u32(iccp_data_len)?;
+                    if icc_len > 0 && !iccp_data.is_null() {
+                        let iccp_const: *const u8 = iccp_data;
+                        let icc_slice = slice::from_raw_parts(iccp_const, icc_len);
+                        yuv.icc = create_vec_exact(icc_slice.len())?;
+                        yuv.icc.try_extend_from_slice(icc_slice)?;
+                    }
                 } else if png_get_sRGB(png.png, png.info, (&mut srgb_intent) as *mut _)
                     == PNG_INFO_sRGB
                 {
@@ -552,7 +559,9 @@ impl Reader for PngReader {
                             should_generate_icc = true;
                         }
                     } else {
-                        primaries = ColorPrimaries::Bt709.values().unwrap();
+                        primaries = ColorPrimaries::Bt709.values().ok_or_else(|| {
+                            AvifError::UnknownError("missing Bt709 primaries".into())
+                        })?;
                     }
                     if should_generate_icc {
                         yuv.color_primaries = ColorPrimaries::Unspecified;
@@ -578,19 +587,41 @@ impl Reader for PngReader {
                 }
             };
             rgb.allocate()?;
-            let row_bytes = png_get_rowbytes(png.png, png.info);
-            if rgb.row_bytes != row_bytes as _ {
+            let png_row_bytes = png_get_rowbytes(png.png, png.info);
+            let row_bytes = usize_from_u32(rgb.row_bytes)?;
+            if row_bytes != png_row_bytes {
                 return Err(AvifError::UnknownError(format!(
-                    "rowBytes mismatch libavif {} vs libpng {}",
-                    rgb.row_bytes, row_bytes
+                    "rowBytes mismatch libavif {} vs libpng {png_row_bytes}",
+                    rgb.row_bytes
                 )));
             }
-            let mut row_pointers: Vec<png_bytep> = create_vec_exact(usize_from_u32(rgb.height)?)?;
-            let mut row_pointer = rgb.pixels_mut();
-            let row_bytes = usize_from_u32(rgb.row_bytes)?;
-            for _ in 0..rgb.height {
-                row_pointers.try_push(row_pointer)?;
-                row_pointer = row_pointer.add(row_bytes);
+            let height = usize_from_u32(rgb.height)?;
+            let mut row_pointers: Vec<png_bytep> = create_vec_exact(height)?;
+            let Some(pixels) = rgb.pixels.as_mut() else {
+                return AvifError::no_content();
+            };
+            match pixels {
+                pixels::Pixels::Buffer(buffer) => {
+                    if row_bytes == 0 {
+                        return AvifError::invalid_argument();
+                    }
+                    for row in buffer.chunks_exact_mut(row_bytes) {
+                        row_pointers.try_push(row.as_mut_ptr())?;
+                    }
+                }
+                pixels::Pixels::Buffer16(buffer) => {
+                    let row_u16 = row_bytes / 2;
+                    if row_u16 == 0 || row_bytes % 2 != 0 {
+                        return AvifError::invalid_argument();
+                    }
+                    for row in buffer.chunks_exact_mut(row_u16) {
+                        row_pointers.try_push(row.as_mut_ptr().cast::<u8>())?;
+                    }
+                }
+                _ => return AvifError::no_content(),
+            }
+            if row_pointers.len() != height {
+                return AvifError::invalid_argument();
             }
             png_read_image(png.png, row_pointers.as_mut_ptr());
             rgb.convert_to_yuv(&mut yuv)?;
@@ -816,5 +847,73 @@ mod tests {
             .unwrap();
         assert_eq!(img_app1.exif, b"ABCD");
         assert_eq!(img_app1.xmp, b"XYZ");
+    }
+
+    #[test]
+    fn read_frame_roundtrips_8bit_and_16bit_rows_and_rejects_bad_header() {
+        use crate::utils::writer::png::PngWriter;
+        use crate::utils::writer::Writer;
+        use crate::Category;
+
+        for depth in [8u8, 12u8] {
+            let mut src = Image {
+                width: 3,
+                height: 2,
+                depth,
+                yuv_format: PixelFormat::Yuv444,
+                matrix_coefficients: MatrixCoefficients::Identity,
+                color_primaries: ColorPrimaries::Srgb,
+                transfer_characteristics: TransferCharacteristics::Srgb,
+                ..Image::default()
+            };
+            src.allocate_planes(Category::Color).unwrap();
+            let max_val = src.max_channel();
+            for (i, plane) in [Plane::Y, Plane::U, Plane::V].into_iter().enumerate() {
+                src.fill_plane_with_value(plane, max_val / ((i as u16) + 2))
+                    .unwrap();
+            }
+
+            let path = std::env::temp_dir().join(format!(
+                "crabbyavif_png_roundtrip_{depth}_{}.png",
+                std::process::id()
+            ));
+            {
+                let mut f = File::create(&path).unwrap();
+                let mut writer = PngWriter::default();
+                writer.write_frame(&mut f, &src).unwrap();
+            }
+            let mut reader = PngReader::create(path.to_str().unwrap()).unwrap();
+            let (decoded, _, _) = reader
+                .read_frame(&Config {
+                    depth: Some(depth),
+                    yuv_format: Some(PixelFormat::Yuv444),
+                    matrix_coefficients: Some(MatrixCoefficients::Identity),
+                    ..Config::default()
+                })
+                .unwrap();
+            let _ = std::fs::remove_file(&path);
+            assert_eq!(decoded.width, 3);
+            assert_eq!(decoded.height, 2);
+            assert_eq!(decoded.depth, depth);
+            for plane in [Plane::Y, Plane::U, Plane::V] {
+                for y in 0..decoded.height {
+                    if depth == 8 {
+                        assert_eq!(decoded.row(plane, y).unwrap(), src.row(plane, y).unwrap());
+                    } else {
+                        assert_eq!(
+                            decoded.row16(plane, y).unwrap(),
+                            src.row16(plane, y).unwrap()
+                        );
+                    }
+                }
+            }
+        }
+
+        let bad_path =
+            std::env::temp_dir().join(format!("crabbyavif_png_bad_sig_{}.png", std::process::id()));
+        std::fs::write(&bad_path, b"notapng!").unwrap();
+        let mut bad_reader = PngReader::create(bad_path.to_str().unwrap()).unwrap();
+        assert!(bad_reader.read_frame(&Config::default()).is_err());
+        let _ = std::fs::remove_file(&bad_path);
     }
 }
