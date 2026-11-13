@@ -70,9 +70,9 @@ pub(crate) fn write_grid(stream: &mut OStream, grid: &Grid) -> AvifResult<()> {
     // unsigned int(8) flags;
     stream.write_u8(flags)?;
     // unsigned int(8) rows_minus_one;
-    stream.write_u8(grid.rows as u8 - 1)?;
+    stream.write_u8(u8_from_u32(checked_sub!(grid.rows, 1)?)?)?;
     // unsigned int(8) columns_minus_one;
-    stream.write_u8(grid.columns as u8 - 1)?;
+    stream.write_u8(u8_from_u32(checked_sub!(grid.columns, 1)?)?)?;
     // unsigned int(FieldLength) output_width;
     // unsigned int(FieldLength) output_height;
     if flags == 1 {
@@ -832,5 +832,49 @@ impl Encoder {
             modification_time,
         )?;
         stream.finish_box()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_case::test_case;
+
+    #[test_case(1, 2)]
+    #[test_case(2, 1)]
+    #[test_case(255, 255)]
+    #[test_case(256, 1)]
+    #[test_case(1, 256)]
+    #[test_case(256, 256)]
+    fn write_grid_rows_columns(rows: u32, columns: u32) -> AvifResult<()> {
+        let grid = Grid {
+            rows,
+            columns,
+            width: columns * 64,
+            height: rows * 64,
+        };
+        let mut stream = OStream::default();
+        write_grid(&mut stream, &grid)?;
+        // version, flags, rows_minus_one, columns_minus_one, output_width, output_height
+        let mut expected = vec![0, 0, (rows - 1) as u8, (columns - 1) as u8];
+        expected.extend_from_slice(&(grid.width as u16).to_be_bytes());
+        expected.extend_from_slice(&(grid.height as u16).to_be_bytes());
+        assert_eq!(stream.data, expected);
+        Ok(())
+    }
+
+    #[test_case(0, 1)]
+    #[test_case(1, 0)]
+    #[test_case(257, 1)]
+    #[test_case(1, 257)]
+    fn write_grid_invalid_rows_columns(rows: u32, columns: u32) {
+        let grid = Grid {
+            rows,
+            columns,
+            width: 64,
+            height: 64,
+        };
+        let mut stream = OStream::default();
+        assert!(write_grid(&mut stream, &grid).is_err());
     }
 }
