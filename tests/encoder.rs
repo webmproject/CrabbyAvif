@@ -338,6 +338,39 @@ fn encode_decode_grid_odd_dimensions(
     encode_decode_grid_impl((cells, expect_success), yuv_format, /*depth=*/ 8)
 }
 
+#[test]
+fn encode_decode_large_grid() -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let columns = 8;
+    let rows = 8;
+    let cell = generate_gradient_image(64, 64, 8, PixelFormat::Yuv420, YuvRange::Full, true)?;
+    let cells = vec![&cell; (columns * rows) as usize];
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_grid(columns, rows, &cells)?;
+    // 64 cells with alpha produce > 255 pre-deduplication property streams, which fit into a
+    // handful of deduplicated 'ipco' properties once deduplicated.
+    let edata = encoder.finish()?;
+    assert!(!edata.is_empty());
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.parse()?;
+    let image = decoder.image().expect("image was none");
+    assert_eq!(image.width, columns * 64);
+    assert_eq!(image.height, rows * 64);
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    decoder.next_image()?;
+    Ok(())
+}
+
 #[test_matrix([true, false])]
 fn encode_decode_grid_matrix_coefficients(same_matrix_coefficients: bool) -> AvifResult<()> {
     if !HAS_ENCODER {

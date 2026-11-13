@@ -472,7 +472,7 @@ impl Encoder {
         }
         // Deduplicate the property streams.
         let mut property_index_map = Vec::new();
-        let mut last_written_property_index = 0u8;
+        let mut last_written_property_index = 0usize;
         for i in 0..property_streams.len() {
             let current_data = &property_streams[i].data;
             match property_streams[0..i]
@@ -509,21 +509,29 @@ impl Encoder {
             if item.associations.is_empty() {
                 continue;
             }
+            let mut deduped_associations: Vec<(usize, bool)> = Vec::new();
+            for &(property_index, essential) in &item.associations {
+                // property_index_map is 0-indexed whereas the index stored in item.associations is
+                // 1-indexed.
+                let index = *property_index_map
+                    .get(checked_sub!(property_index, 1)?)
+                    .ok_or(AvifError::InvalidArgument)?;
+                if !deduped_associations.iter().any(|&(idx, _)| idx == index) {
+                    deduped_associations.try_push((index, essential))?;
+                }
+            }
             // unsigned int(16) item_ID;
             stream.write_u16(item.id)?;
             // unsigned int(8) association_count;
-            stream.write_u8(u8_from_usize(item.associations.len())?)?;
-            for (property_index, essential) in &item.associations {
+            stream.write_u8(u8_from_usize(deduped_associations.len())?)?;
+            for &(index, essential) in &deduped_associations {
                 // bit(1) essential;
-                stream.write_bool(*essential)?;
-                // property_index_map is 0-indexed whereas the index stored in item.associations is
-                // 1-indexed.
-                let index = property_index_map[*property_index as usize - 1];
+                stream.write_bool(essential)?;
                 if index >= (1 << 7) {
-                    return AvifError::unknown_error("");
+                    return AvifError::invalid_argument();
                 }
                 // unsigned int(7) property_index;
-                stream.write_bits(index.into(), 7)?;
+                stream.write_bits(index as u32, 7)?;
             }
         }
         stream.finish_box()?;
