@@ -999,3 +999,53 @@ fn yuv_to_rgb_threading_invalid_yuv_planes(yuv_depth: u8) -> AvifResult<()> {
     }
     Ok(())
 }
+
+// Converting an image with premultiplied alpha into a format without alpha should keep the color
+// samples as is, which is the same as compositing the image onto a black background.
+#[test_matrix(
+    [8, 16],
+    [8, 10],
+    [PixelFormat::Yuv444, PixelFormat::Yuv420],
+    [rgb::Format::Rgb, rgb::Format::Bgr, rgb::Format::Gray],
+    [false, true]
+)]
+fn premultiplied_alpha_to_format_without_alpha(
+    rgb_depth: u8,
+    yuv_depth: u8,
+    yuv_format: PixelFormat,
+    rgb_format: rgb::Format,
+    premultiply_alpha: bool,
+) -> AvifResult<()> {
+    let width = 7;
+    let height = 5;
+    let mut image =
+        generate_gradient_image(width, height, yuv_depth, yuv_format, YuvRange::Full, true)?;
+    image.matrix_coefficients = MatrixCoefficients::Bt601;
+    image.alpha_premultiplied = true;
+    assert!(!image.is_opaque()?);
+    let mut opaque_image =
+        generate_gradient_image(width, height, yuv_depth, yuv_format, YuvRange::Full, false)?;
+    opaque_image.matrix_coefficients = MatrixCoefficients::Bt601;
+
+    let mut rgb = rgb::Image::create_from_yuv(&image);
+    rgb.depth = rgb_depth;
+    rgb.format = rgb_format;
+    rgb.premultiply_alpha = premultiply_alpha;
+    rgb.allocate()?;
+    rgb.convert_from_yuv(&image)?;
+
+    let mut expected_rgb = rgb::Image::create_from_yuv(&opaque_image);
+    expected_rgb.depth = rgb_depth;
+    expected_rgb.format = rgb_format;
+    expected_rgb.allocate()?;
+    expected_rgb.convert_from_yuv(&opaque_image)?;
+
+    for y in 0..height {
+        if rgb_depth == 8 {
+            assert_eq!(rgb.row(y)?, expected_rgb.row(y)?);
+        } else {
+            assert_eq!(rgb.row16(y)?, expected_rgb.row16(y)?);
+        }
+    }
+    Ok(())
+}
