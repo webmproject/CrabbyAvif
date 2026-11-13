@@ -17,7 +17,7 @@ use crate::reformat::rgb;
 use crate::utils::*;
 
 use std::ffi::c_char;
-use std::ffi::CString;
+use std::ffi::c_int;
 use std::fs::File;
 use std::io::Write;
 use std::ptr;
@@ -28,6 +28,8 @@ use super::Writer;
 use libpng_sys::bindings::*;
 
 const WRITE_ERROR_MSG: &[u8] = b"Write Error\0";
+const ICC_PROFILE_NAME: &[u8] = b"libavif\0";
+const XMP_KEY: &[u8] = b"XML:com.adobe.xmp\0";
 
 #[derive(Default)]
 pub struct PngWriter {
@@ -207,65 +209,70 @@ impl Writer for PngWriter {
         }
         let height = image.height;
         let png = PngWriterNative::new()?;
-        // # Safety: Calling C functions with valid parameters.
+
+        let io_ptr = ptr::from_mut(file).cast();
+        let rgb_depth_c = c_int::from(rgb_depth);
+        let color_type_c = color_type as c_int;
+        let skip_srgb_check = PNG_SKIP_sRGB_CHECK_PROFILE as c_int;
+        let option_on = PNG_OPTION_ON as c_int;
+        let interlace_none = PNG_INTERLACE_NONE as c_int;
+        let compression_default = PNG_COMPRESSION_TYPE_DEFAULT as c_int;
+        let filter_default = PNG_FILTER_TYPE_DEFAULT as c_int;
+        // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs owned by `png`.
+        // `io_ptr` points to `file`, which outlives `png` and is not accessed directly while
+        // `libpng` writes. `image.width` and `image.height` are verified non-zero above and match
+        // the row pointers written below.
         unsafe {
             png_set_write_fn(
                 png.png,
-                file as *mut File as *mut _,
+                io_ptr,
                 Some(crabbyavif_png_write_data),
                 Some(crabbyavif_png_output_flush),
             );
-            png_set_option(
-                png.png,
-                PNG_SKIP_sRGB_CHECK_PROFILE as _,
-                PNG_OPTION_ON as _,
-            );
-            if let Some(compression_level) = self.compression_level {
-                png_set_compression_level(png.png, compression_level);
-            }
+            png_set_option(png.png, skip_srgb_check, option_on);
             png_set_IHDR(
                 png.png,
                 png.info,
                 image.width,
                 image.height,
-                rgb_depth as _,
-                color_type as _,
-                PNG_INTERLACE_NONE as _,
-                PNG_COMPRESSION_TYPE_DEFAULT as _,
-                PNG_FILTER_TYPE_DEFAULT as _,
+                rgb_depth_c,
+                color_type_c,
+                interlace_none,
+                compression_default,
+                filter_default,
             );
         }
-        let icc_profile_name = CString::new("libavif").unwrap();
+        if let Some(compression_level) = self.compression_level {
+            // SAFETY: `png.png` is a valid non-null `libpng` write struct owned by `png`.
+            unsafe {
+                png_set_compression_level(png.png, compression_level);
+            }
+        }
         if image.icc.is_empty() {
             if image.color_primaries == ColorPrimaries::Srgb
                 && image.transfer_characteristics == TransferCharacteristics::Srgb
             {
-                // # Safety: Calling a C function with valid parameters.
+                let intent = PNG_sRGB_INTENT_PERCEPTUAL as c_int;
+                // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs owned by
+                // `png`.
                 unsafe {
-                    png_set_sRGB_gAMA_and_cHRM(png.png, png.info, PNG_sRGB_INTENT_PERCEPTUAL as _);
+                    png_set_sRGB_gAMA_and_cHRM(png.png, png.info, intent);
                 }
             } else {
                 if let Some(primaries) = image.color_primaries.values() {
-                    // # Safety: Calling a C function with valid parameters.
+                    let [rx, ry, gx, gy, bx, by, wx, wy] = primaries.map(f64::from);
+                    // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs owned
+                    // by `png`.
                     unsafe {
-                        png_set_cHRM(
-                            png.png,
-                            png.info,
-                            primaries[6] as _,
-                            primaries[7] as _,
-                            primaries[0] as _,
-                            primaries[1] as _,
-                            primaries[2] as _,
-                            primaries[3] as _,
-                            primaries[4] as _,
-                            primaries[5] as _,
-                        );
+                        png_set_cHRM(png.png, png.info, wx, wy, rx, ry, gx, gy, bx, by);
                     }
                 }
                 if let Some(gamma) = image.transfer_characteristics.gamma() {
-                    // # Safety: Calling a C function with valid parameters.
+                    let file_gamma = f64::from(1.0 / gamma);
+                    // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs owned
+                    // by `png`.
                     unsafe {
-                        png_set_gAMA(png.png, png.info, (1.0 / gamma) as _);
+                        png_set_gAMA(png.png, png.info, file_gamma);
                     }
                 }
             }
@@ -273,93 +280,109 @@ impl Writer for PngWriter {
             // If there is an ICC profile, the CICP values are irrelevant and only the ICC
             // profile is written. If we could extract the primaries/transfer curve from the
             // ICC profile, then they could be written in cHRM/gAMA chunks.
-            let size = u32_from_usize(image.icc.len())?;
-            // # Safety: Calling a C function with valid parameters.
+            let icc_size = u32_from_usize(image.icc.len())?;
+            let icc_ptr = image.icc.as_ptr();
+            let icc_name = ICC_PROFILE_NAME.as_ptr().cast::<c_char>();
+            // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs, `icc_name`
+            // points to a static NUL-terminated C string, and `icc_ptr` points to `icc_size` (> 0)
+            // initialized bytes in `image.icc`.
             unsafe {
-                png_set_iCCP(
-                    png.png,
-                    png.info,
-                    icc_profile_name.as_ptr(),
-                    0,
-                    image.icc.as_ptr() as _,
-                    size,
-                );
+                png_set_iCCP(png.png, png.info, icc_name, 0, icc_ptr, icc_size);
             }
         }
         if !image.exif.is_empty() {
-            // # Safety: Calling a C function with valid parameters.
+            let exif_size = u32_from_usize(image.exif.len())?;
+            let exif_ptr = image.exif.as_ptr().cast_mut();
+            // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs, and `exif_ptr`
+            // points to `exif_size` (> 0) initialized bytes in `image.exif`. `png_set_eXIf_1` only
+            // reads from `exif_ptr` (`memcpy` into `info_ptr->exif`) despite lacking `const` in C.
             unsafe {
-                png_set_eXIf_1(
-                    png.png,
-                    png.info,
-                    u32_from_usize(image.exif.len())?,
-                    image.exif.as_ptr() as _,
-                );
+                png_set_eXIf_1(png.png, png.info, exif_size, exif_ptr);
             }
         }
-        let text: png_text;
-        let xmp_key = CString::new("XML:com.adobe.xmp").unwrap();
-        let mut xmp = image.xmp.try_clone()?;
-        if !xmp.is_empty() {
+        if !image.xmp.is_empty() {
+            let xmp_with_nul_len = image
+                .xmp
+                .len()
+                .checked_add(1)
+                .ok_or(AvifError::OutOfMemory)?;
+            let mut xmp = create_vec_exact(xmp_with_nul_len)?;
+            xmp.try_extend_from_slice(&image.xmp)?;
             xmp.try_push(0)?;
-            text = png_text {
-                compression: PNG_ITXT_COMPRESSION_NONE as _,
-                key: xmp_key.as_ptr() as _,
-                text: xmp.as_mut_ptr() as _,
+            let text = png_text {
+                compression: PNG_ITXT_COMPRESSION_NONE as c_int,
+                key: XMP_KEY.as_ptr().cast::<c_char>().cast_mut(),
+                text: xmp.as_mut_ptr().cast::<c_char>(),
                 text_length: 0,
-                itxt_length: xmp.len() as _,
+                itxt_length: xmp.len(),
                 lang: ptr::null_mut(),
                 lang_key: ptr::null_mut(),
             };
-            // # Safety: Calling a C function with valid parameters.
+            let text_ptr = ptr::from_ref(&text);
+            // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs, and `text_ptr`
+            // points to an initialized `png_text` whose `key` and `text` are valid NUL-terminated
+            // strings. `png_set_text` copies `key` and `text` into `png.info`-owned allocations
+            // before returning without mutating the input buffers.
             unsafe {
-                png_set_text(png.png, png.info, (&text) as *const _, 1);
+                png_set_text(png.png, png.info, text_ptr, 1);
             }
         }
-        // # Safety: Calling a C function with valid parameters.
+        // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs with `IHDR` and
+        // write callbacks configured above.
         unsafe {
             png_write_info(png.png, png.info);
         }
         if image.icc.is_empty() {
-            let cicp: [png_byte; 5] = [b'c', b'I', b'C', b'P', 0];
+            let cicp_name: &[png_byte; 5] = b"cICP\0";
             let cicp_data: [png_byte; 4] = [
-                image.color_primaries as _,
-                image.transfer_characteristics as _,
-                MatrixCoefficients::Identity as _,
+                image.color_primaries as png_byte,
+                image.transfer_characteristics as png_byte,
+                MatrixCoefficients::Identity as png_byte,
                 1, // full_range
             ];
-            // # Safety: Calling a C function with valid parameters.
+            let cicp_name_ptr = cicp_name.as_ptr();
+            let cicp_data_ptr = cicp_data.as_ptr();
+            let cicp_len = cicp_data.len();
+            // SAFETY: `png.png` is a valid non-null `libpng` write struct after `png_write_info`,
+            // `cicp_name_ptr` points to 4 chunk-type bytes (plus NUL), and `cicp_data_ptr` points
+            // to `cicp_len` (4) initialized bytes.
             unsafe {
-                png_write_chunk(png.png, cicp.as_ptr() as _, cicp_data.as_ptr() as _, 4);
+                png_write_chunk(png.png, cicp_name_ptr, cicp_data_ptr, cicp_len);
             }
         }
-        let mut row_pointers: Vec<png_bytep> = create_vec_exact(usize_from_u32(height)?)?;
+        let height_usize = usize_from_u32(height)?;
+        let mut row_pointers: Vec<png_bytep> = create_vec_exact(height_usize)?;
         if copy_y_plane {
             for y in 0..height {
                 if image.depth == 8 {
-                    row_pointers.try_push(image.row(Plane::Y, y)?.as_ptr() as _)?;
+                    row_pointers.try_push(image.row(Plane::Y, y)?.as_ptr().cast_mut())?;
                 } else {
-                    row_pointers.try_push(image.row16(Plane::Y, y)?.as_ptr() as _)?;
+                    row_pointers
+                        .try_push(image.row16(Plane::Y, y)?.as_ptr().cast::<u8>().cast_mut())?;
                 }
             }
         } else {
             for y in 0..height {
                 if rgb.depth == 8 {
-                    row_pointers.try_push(rgb.row(y)?.as_ptr() as _)?;
+                    row_pointers.try_push(rgb.row(y)?.as_ptr().cast_mut())?;
                 } else {
-                    row_pointers.try_push(rgb.row16(y)?.as_ptr() as _)?;
+                    row_pointers.try_push(rgb.row16(y)?.as_ptr().cast::<u8>().cast_mut())?;
                 }
             }
         }
         if rgb_depth > 8 {
-            // # Safety: Calling a C function with valid parameters.
+            // SAFETY: `png.png` is a valid non-null `libpng` write struct owned by `png`.
             unsafe {
                 png_set_swap(png.png);
             }
         }
-        // # Safety: Calling C functions with valid parameters.
+        let row_pointers_ptr = row_pointers.as_mut_ptr();
+        // SAFETY: `png.png` is a valid non-null `libpng` write struct. `row_pointers_ptr` points
+        // to `height` valid row pointers, each referencing a readable row slice of at least
+        // `width * bytes_per_pixel` bytes in `image` or `rgb`, both of which remain alive and
+        // immutable throughout `png_write_image` (`libpng` only reads the row buffers).
         unsafe {
-            png_write_image(png.png, row_pointers.as_mut_ptr());
+            png_write_image(png.png, row_pointers_ptr);
             png_write_end(png.png, ptr::null_mut());
         }
         Ok(())
