@@ -24,6 +24,7 @@
 use crabby_avif::decoder::ImageContentType;
 use crabby_avif::image::*;
 use crabby_avif::utils::clap::CropRect;
+use crabby_avif::utils::pixels::Pixels;
 use crabby_avif::*;
 
 mod utils;
@@ -621,5 +622,44 @@ fn region_decode_scaled_frame(ispe: (u32, u32), codec: CodecChoice) -> AvifResul
     }
     assert_eq!(patched, 1);
     assert!(check_regions(&data, codec, false, 0, "scaled")?);
+    Ok(())
+}
+
+// Region decodes covering the whole image do not copy the planes decoded by dav1d.
+#[test]
+fn dav1d_whole_image_region_decode_does_not_copy() -> AvifResult<()> {
+    if codec_unavailable(DAV1D) {
+        return Ok(());
+    }
+    let data = region_decode_file("formats_420_8bpc_alpha_301x203.avif");
+    let mut decoder = decoder_for_data(&data, DAV1D, false);
+    decoder.parse()?;
+    let (w, h) = {
+        let image = decoder.image().unwrap();
+        (image.width, image.height)
+    };
+    for (rect, copied) in [
+        (crop(0, 0, w, h), false),
+        (crop(0, 0, w, h - 1), true),
+        (crop(0, 0, w, h), false),
+    ] {
+        decoder.nth_image_with_options(
+            0,
+            &decoder::DecodeOptions {
+                crop_rect: Some(rect),
+            },
+        )?;
+        let image = decoder.image().unwrap();
+        assert_eq!((image.width, image.height), (rect.width, rect.height));
+        assert_eq!(image.clap, None);
+        for plane in ALL_PLANES {
+            assert!(image.has_plane(plane));
+            assert_eq!(
+                matches!(image.planes[plane as usize], Some(Pixels::Buffer(_))),
+                copied,
+                "{rect:?} {plane:?}"
+            );
+        }
+    }
     Ok(())
 }

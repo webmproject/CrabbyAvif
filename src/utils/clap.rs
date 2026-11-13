@@ -97,6 +97,16 @@ impl CropRect {
         right <= image_width && bottom <= image_height
     }
 
+    // Returns true if self is not empty and covers the whole image_width x image_height image.
+    pub(crate) fn covers(&self, image_width: u32, image_height: u32) -> bool {
+        self.x == 0
+            && self.y == 0
+            && self.width > 0
+            && self.height > 0
+            && self.width == image_width
+            && self.height == image_height
+    }
+
     pub(crate) fn align_to_pixel_format(&self, pixel_format: PixelFormat) -> Self {
         let x = if pixel_format.chroma_shift_x().0 == 1 { self.x & !1 } else { self.x };
         let y = if pixel_format.chroma_shift_y() == 1 { self.y & !1 } else { self.y };

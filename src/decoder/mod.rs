@@ -3243,7 +3243,9 @@ impl Decoder {
                         }
                     }
                     if temp_alpha_image.has_plane(Plane::A) {
-                        temp_alpha_image.crop_planes_in_place(&A_PLANE, &rect)?;
+                        if !rect.covers(temp_alpha_image.width, temp_alpha_image.height) {
+                            temp_alpha_image.crop_planes_in_place(&A_PLANE, &rect)?;
+                        }
                         self.image.planes[Plane::A.as_usize()] =
                             temp_alpha_image.planes[Plane::A.as_usize()].take();
                         self.image.row_bytes[Plane::A.as_usize()] =

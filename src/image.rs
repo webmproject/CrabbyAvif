@@ -375,6 +375,10 @@ impl Image {
     }
 
     pub(crate) fn crop_in_place(&mut self, rect: &CropRect) -> AvifResult<()> {
+        if rect.covers(self.width, self.height) {
+            self.clap = None;
+            return Ok(());
+        }
         let aligned = rect.align_to_pixel_format(self.yuv_format);
         self.crop_planes_in_place(&ALL_PLANES, &aligned)?;
         self.width = aligned.width;
