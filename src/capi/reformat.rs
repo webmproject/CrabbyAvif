@@ -288,12 +288,15 @@ pub unsafe extern "C" fn crabby_avifImageScale(
     let dst_image = deref_mut!(image);
     let orig_width = dst_image.width;
     let orig_height = dst_image.height;
+    if dstWidth == orig_width && dstHeight == orig_height {
+        return avifResult::Ok;
+    }
+    if dstWidth == 0 || dstHeight == 0 {
+        return avifResult::InvalidArgument;
+    }
     if dstWidth > orig_width || dstHeight > orig_height {
         // To avoid buffer reallocations, we only support scaling to a smaller size.
         return avifResult::NotImplemented;
-    }
-    if dstWidth == orig_width && dstHeight == orig_height {
-        return avifResult::Ok;
     }
 
     let mut rust_image: image::Image = dst_image.as_rust_image_no_metadata();
@@ -361,6 +364,9 @@ pub unsafe extern "C" fn crabby_avifRGBImageAllocatePixels(rgb: *mut avifRGBImag
     check_pointer!(rgb);
     let rgb = deref_mut!(rgb);
     rgb.free_pixels();
+    if rgb.width == 0 || rgb.height == 0 {
+        return avifResult::InvalidArgument;
+    }
     let pixel_size = rgb.format.pixel_size(rgb.depth);
     let Ok(row_bytes_u32) = checked_mul!(rgb.width, pixel_size) else {
         return avifResult::InvalidArgument;
