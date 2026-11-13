@@ -739,8 +739,17 @@ pub unsafe extern "C" fn crabby_avifImageIsOpaque(image: *const avifImage) -> av
     if image.is_null() {
         return AVIF_FALSE;
     }
-    // TODO: Check for pixel level opacity as well.
-    to_avifBool(deref_const!(image).alphaPlane.is_null())
+    let image = deref_const!(image);
+    if image.alphaPlane.is_null() {
+        return AVIF_TRUE;
+    }
+    // Other depths are not supported by Image::is_opaque().
+    if !matches!(image.depth, 8 | 10 | 12 | 16) {
+        return AVIF_FALSE;
+    }
+    // The image is opaque if all its alpha samples have the maximum value.
+    let rust_image = image.as_rust_image_no_metadata();
+    to_avifBool(rust_image.is_opaque().unwrap_or(false))
 }
 
 /// # Safety

@@ -353,6 +353,48 @@ TEST(ImageTest, CopyToItself) {
       testutil::AreImagesEqual(*image, *expected, /*ignore_alpha=*/false));
 }
 
+TEST(ImageTest, IsOpaque) {
+  for (uint32_t depth : {8, 10, 12, 16}) {
+    SCOPED_TRACE(depth);
+    // Odd dimensions to make sure the padding of the planes is not checked.
+    ImagePtr image = testutil::CreateImage(
+        /*width=*/3, /*height=*/3, depth, AVIF_PIXEL_FORMAT_YUV444,
+        AVIF_PLANES_YUV, AVIF_RANGE_FULL);
+    ASSERT_NE(image, nullptr);
+    EXPECT_TRUE(avifImageIsOpaque(image.get()));
+
+    ASSERT_EQ(avifImageAllocatePlanes(image.get(), AVIF_PLANES_A),
+              AVIF_RESULT_OK);
+    const uint32_t opaque_value = (1u << depth) - 1u;
+    auto set_alpha = [&](uint32_t x, uint32_t y, uint32_t value) {
+      uint8_t* row = image->alphaPlane + y * image->alphaRowBytes;
+      if (avifImageUsesU16(image.get())) {
+        reinterpret_cast<uint16_t*>(row)[x] = static_cast<uint16_t>(value);
+      } else {
+        row[x] = static_cast<uint8_t>(value);
+      }
+    };
+    for (uint32_t y = 0; y < image->height; ++y) {
+      for (uint32_t x = 0; x < image->width; ++x) {
+        set_alpha(x, y, opaque_value);
+      }
+    }
+    // An alpha plane with only opaque samples is opaque.
+    EXPECT_TRUE(avifImageIsOpaque(image.get()));
+
+    set_alpha(/*x=*/2, /*y=*/2, opaque_value - 1);
+    EXPECT_FALSE(avifImageIsOpaque(image.get()));
+
+    // A view excluding the non-opaque sample is opaque.
+    ImagePtr view(avifImageCreateEmpty());
+    ASSERT_NE(view, nullptr);
+    const avifCropRect rect = {/*x=*/0, /*y=*/0, /*width=*/2, /*height=*/3};
+    ASSERT_EQ(avifImageSetViewRect(view.get(), image.get(), &rect),
+              AVIF_RESULT_OK);
+    EXPECT_TRUE(avifImageIsOpaque(view.get()));
+  }
+}
+
 TEST(ImageTest, SetViewRectEmptyRect) {
   ImagePtr src(avifImageCreate(2, 2, /*depth=*/8, AVIF_PIXEL_FORMAT_YUV444));
   ASSERT_NE(src, nullptr);
