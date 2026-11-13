@@ -418,7 +418,7 @@ impl Encoder for Avm {
                     self.codec_control(
                         avme_enc_control_id_AV2E_SET_COLOR_RANGE,
                         avm_color_range_AVM_CR_FULL_RANGE,
-                    )?
+                    )?;
                     // Keep the default AVM_CSP_UNKNOWN value.
 
                     // CICP (CP/TC/MC) does not apply to the alpha auxiliary image.
@@ -452,16 +452,18 @@ impl Encoder for Avm {
                     // This key is already processed before initialization of the encoder.
                     continue;
                 }
-                let key_str = CString::new(key).unwrap();
-                let value_str = CString::new(value).unwrap();
-                // # Safety: Calling a C function with valid parameters.
-                let err = unsafe {
-                    avm_codec_set_option(
-                        self.context.unwrap_mut() as *mut _,
-                        key_str.as_ptr(),
-                        value_str.as_ptr(),
-                    )
-                };
+                let key_str =
+                    CString::new(key).map_err(|_| AvifError::InvalidCodecSpecificOption)?;
+                let value_str =
+                    CString::new(value).map_err(|_| AvifError::InvalidCodecSpecificOption)?;
+                let ctx = self.context.as_mut().ok_or(AvifError::InvalidArgument)?;
+                let ctx_ptr: *mut avm_codec_ctx_t = ctx;
+                let key_ptr = key_str.as_ptr();
+                let value_ptr = value_str.as_ptr();
+                // SAFETY: `ctx_ptr` points to an initialized `avm_codec_ctx_t`, and `key_ptr` and
+                // `value_ptr` are valid NUL-terminated C strings borrowed from `key_str` and
+                // `value_str` which outlive the call.
+                let err = unsafe { avm_codec_set_option(ctx_ptr, key_ptr, value_ptr) };
                 if err != avm_codec_err_t_AVM_CODEC_OK {
                     return AvifError::unknown_error(format!(
                         "avm_codec_set_option({key}, {value}) failed: {err}"
@@ -478,34 +480,48 @@ impl Encoder for Avm {
 
             self.encoder_avm_config = Some(avm_config);
             self.encoder_config = Some(config.try_clone()?);
-        } else if self.encoder_config.unwrap_ref() != config {
-            let avm_config = self.encoder_avm_config.unwrap_mut();
+        } else if self
+            .encoder_config
+            .as_ref()
+            .ok_or(AvifError::InvalidArgument)?
+            != config
+        {
+            let avm_config = self
+                .encoder_avm_config
+                .as_ref()
+                .ok_or(AvifError::InvalidArgument)?;
             if avm_config.g_w != image.width || avm_config.g_h != image.height {
                 // Dimension changes are forbidden.
                 return AvifError::invalid_argument();
             }
-            if self.encoder_config.unwrap_ref().quality != config.quality {
-                if avm_config.rc_end_usage == avm_rc_mode_AVM_VBR
-                    || avm_config.rc_end_usage == avm_rc_mode_AVM_CBR
-                {
-                    let (min, max) = avm_min_max_quantizers(quantizer);
-                    avm_config.rc_min_quantizer = min;
-                    avm_config.rc_max_quantizer = max;
-                    // # Safety: Calling a C function with valid parameters.
-                    let err = unsafe {
-                        avm_codec_enc_config_set(
-                            self.context.unwrap_mut() as *mut _,
-                            self.encoder_avm_config.unwrap_ref() as *const _,
-                        )
-                    };
+            let rc_end_usage = avm_config.rc_end_usage;
+            let last_config = self
+                .encoder_config
+                .as_ref()
+                .ok_or(AvifError::InvalidArgument)?;
+            let quality_changed = last_config.quality != config.quality;
+            let tile_rows_changed = last_config.tile_rows_log2 != config.tile_rows_log2;
+            let tile_cols_changed = last_config.tile_columns_log2 != config.tile_columns_log2;
+            if quality_changed {
+                if rc_end_usage == avm_rc_mode_AVM_VBR || rc_end_usage == avm_rc_mode_AVM_CBR {
+                    let ctx = self.context.as_mut().ok_or(AvifError::InvalidArgument)?;
+                    let avm_config = self
+                        .encoder_avm_config
+                        .as_mut()
+                        .ok_or(AvifError::InvalidArgument)?;
+                    (avm_config.rc_min_quantizer, avm_config.rc_max_quantizer) =
+                        avm_min_max_quantizers(quantizer);
+                    let ctx_ptr: *mut avm_codec_ctx_t = ctx;
+                    let cfg_ptr: *const avm_codec_enc_cfg = avm_config;
+                    // SAFETY: `ctx_ptr` points to an initialized `avm_codec_ctx_t` and `cfg_ptr`
+                    // points to the initialized `avm_codec_enc_cfg` stored in `self`.
+                    let err = unsafe { avm_codec_enc_config_set(ctx_ptr, cfg_ptr) };
                     if err != avm_codec_err_t_AVM_CODEC_OK {
                         return AvifError::unknown_error(format!(
                             "avm_codec_enc_config_set() failed: {err}"
                         ));
                     }
-                } else if avm_config.rc_end_usage == avm_rc_mode_AVM_CQ
-                    || avm_config.rc_end_usage == avm_rc_mode_AVM_Q
-                {
+                } else if rc_end_usage == avm_rc_mode_AVM_CQ || rc_end_usage == avm_rc_mode_AVM_Q {
                     self.codec_control(avme_enc_control_id_AVME_SET_QP, quantizer)?;
                 }
                 self.codec_control(
@@ -513,13 +529,13 @@ impl Encoder for Avm {
                     if quantizer == 0 { 1 } else { 0 },
                 )?;
             }
-            if self.encoder_config.unwrap_ref().tile_rows_log2 != config.tile_rows_log2 {
+            if tile_rows_changed {
                 self.codec_control(
                     avme_enc_control_id_AV2E_SET_TILE_ROWS,
                     config.tile_rows_log2,
                 )?;
             }
-            if self.encoder_config.unwrap_ref().tile_columns_log2 != config.tile_columns_log2 {
+            if tile_cols_changed {
                 self.codec_control(
                     avme_enc_control_id_AV2E_SET_TILE_COLUMNS,
                     config.tile_columns_log2,
@@ -541,17 +557,19 @@ impl Encoder for Avm {
                 if quantizer == 0 { 1 } else { 0 },
             )?;
         }
-        let scaling_mode = avm_scaling_mode(&self.encoder_config.unwrap_ref().scaling_mode)?;
+        let current_encoder_config = self
+            .encoder_config
+            .as_ref()
+            .ok_or(AvifError::InvalidArgument)?;
+        let scaling_mode = avm_scaling_mode(&current_encoder_config.scaling_mode)?;
         if scaling_mode.h_scaling_mode != avm_scaling_mode_1d_AVME_NORMAL
             || scaling_mode.v_scaling_mode != avm_scaling_mode_1d_AVME_NORMAL
         {
-            self.codec_control(
-                avme_enc_control_id_AVME_SET_SCALEMODE,
-                &scaling_mode as *const _,
-            )?;
+            let scaling_mode_ptr: *const avm_scaling_mode_t = &scaling_mode;
+            self.codec_control(avme_enc_control_id_AVME_SET_SCALEMODE, scaling_mode_ptr)?;
         }
-        // # Safety: Zero initializing a C-struct. This is safe because this is the same usage
-        // pattern as the equivalent C-code. The relevant fields are populated in the lines below.
+        // SAFETY: Zero-initializing the C `avm_image_t` struct matches the C API usage
+        // before populating active fields and remains compatible across libavm versions.
         let mut avm_image: avm_image_t = unsafe { std::mem::zeroed() };
         avm_image.fmt = avm_format(image, category)?;
         avm_image.bit_depth = if image.depth > 8 { 16 } else { 8 };
@@ -617,23 +635,22 @@ impl Encoder for Avm {
                 | AVM_EFLAG_NO_REF_ARF2 as i64;
         }
         let duration = 1;
-        // # Safety: Calling a C function with valid parameters.
-        let err = unsafe {
-            avm_codec_encode(
-                self.context.unwrap_mut() as *mut _,
-                &avm_image as *const _,
-                avm_codec_pts_t::default(),
-                duration,
-                encode_flags as _,
-            )
-        };
+        let ctx = self.context.as_mut().ok_or(AvifError::InvalidArgument)?;
+        let ctx_ptr: *mut avm_codec_ctx_t = ctx;
+        let avm_image_ptr: *const avm_image_t = &avm_image;
+        let pts = avm_codec_pts_t::default();
+        let flags = encode_flags as _;
+        // SAFETY: `ctx_ptr` points to an initialized `avm_codec_ctx_t`, and `avm_image_ptr` points
+        // to `avm_image` whose active plane pointers borrow from `image` (validated to have
+        // allocated planes above) and remain valid for the duration of `avm_codec_encode`.
+        let err = unsafe { avm_codec_encode(ctx_ptr, avm_image_ptr, pts, duration, flags) };
         if err != avm_codec_err_t_AVM_CODEC_OK {
             return AvifError::unknown_error(format!("avm_codec_encode() failed: {err}"));
         }
         if self.has_alpha_layer {
             let mut combined_data = Vec::new();
             let mut sync = false;
-            for_each_avm_frame_pkt(self.context.unwrap_mut(), |encoded_data, pkt_sync| {
+            for_each_avm_frame_pkt(ctx, |encoded_data, pkt_sync| {
                 sync |= pkt_sync;
                 combined_data.try_extend_from_slice(encoded_data)
             })?;
@@ -647,9 +664,8 @@ impl Encoder for Avm {
                 if quantizer_alpha == 0 { 1 } else { 0 },
             )?;
 
-            // # Safety: Zero initializing a C-struct. This is safe because this is the same usage
-            // pattern as the equivalent C-code. The relevant fields are populated in the lines
-            // below.
+            // SAFETY: Zero-initializing the C `avm_image_t` struct matches the C API usage
+            // before populating active fields and remains compatible across libavm versions.
             let mut avm_alpha_image: avm_image_t = unsafe { std::mem::zeroed() };
             // All embedded layers share a single SequenceHeader in libavm, so fmt, bps,
             // x_chroma_shift, and y_chroma_shift must match avm_image to pass libavm's
@@ -676,15 +692,16 @@ impl Encoder for Avm {
             avm_alpha_image.stride[0] = image.row_bytes[3] as i32;
             // Leave CICP values as unspecified.
 
-            // # Safety: Calling a C function with valid parameters.
+            let ctx = self.context.as_mut().ok_or(AvifError::InvalidArgument)?;
+            let ctx_ptr: *mut avm_codec_ctx_t = ctx;
+            let alpha_img_ptr: *const avm_image_t = &avm_alpha_image;
+            let alpha_pts = avm_codec_pts_t::default();
+            let alpha_flags = encode_flags as _;
+            // SAFETY: `ctx_ptr` points to an initialized `avm_codec_ctx_t`, and `alpha_img_ptr`
+            // points to `avm_alpha_image` whose alpha plane pointer borrows from `image`
+            // (validated to have an allocated alpha plane above) and remains valid for the call.
             let err = unsafe {
-                avm_codec_encode(
-                    self.context.unwrap_mut() as *mut _,
-                    &avm_alpha_image as *const _,
-                    avm_codec_pts_t::default(),
-                    duration,
-                    encode_flags as _,
-                )
+                avm_codec_encode(ctx_ptr, alpha_img_ptr, alpha_pts, duration, alpha_flags)
             };
             if err != avm_codec_err_t_AVM_CODEC_OK {
                 return AvifError::unknown_error(format!(
@@ -692,7 +709,7 @@ impl Encoder for Avm {
                 ));
             }
 
-            for_each_avm_frame_pkt(self.context.unwrap_mut(), |encoded_data, pkt_sync| {
+            for_each_avm_frame_pkt(ctx, |encoded_data, pkt_sync| {
                 sync |= pkt_sync;
                 let sample_range = Av2CodecConfiguration::get_sample_obus_range(encoded_data)?;
                 let sample_slice = encoded_data.get(sample_range).ok_or(AvifError::NoContent)?;
@@ -700,7 +717,7 @@ impl Encoder for Avm {
             })?;
             add_output_sample(combined_data, sync, output_samples)?;
         } else {
-            add_avm_pkts_to_output_samples(self.context.unwrap_mut(), output_samples)?;
+            add_avm_pkts_to_output_samples(ctx, output_samples)?;
         }
         if config.is_single_image
             || (config.extra_layer_count > 0 && config.extra_layer_count == self.current_layer)
@@ -715,29 +732,26 @@ impl Encoder for Avm {
     }
 
     fn finish(&mut self, output_samples: &mut Vec<crate::encoder::Sample>) -> AvifResult<()> {
-        if self.context.is_none() {
+        let Some(ctx) = self.context.as_mut() else {
             return Ok(());
-        }
+        };
         loop {
             // Flush the encoder.
             let duration = 1;
-            // # Safety: Calling a C function with valid parameters.
-            let err = unsafe {
-                avm_codec_encode(
-                    self.context.unwrap_mut() as *mut _,
-                    std::ptr::null(),
-                    avm_codec_pts_t::default(),
-                    duration,
-                    avm_enc_frame_flags_t::default(),
-                )
-            };
+            let ctx_ptr: *mut avm_codec_ctx_t = ctx;
+            let null_img: *const avm_image_t = std::ptr::null();
+            let pts = avm_codec_pts_t::default();
+            let flags = avm_enc_frame_flags_t::default();
+            // SAFETY: `ctx_ptr` points to an initialized `avm_codec_ctx_t`, and passing a null
+            // `img` pointer is the documented libavm API for flushing buffered frames.
+            let err = unsafe { avm_codec_encode(ctx_ptr, null_img, pts, duration, flags) };
             if err != avm_codec_err_t_AVM_CODEC_OK {
                 return AvifError::unknown_error(format!("Flush avm_codec_encode() failed: {err}"));
             }
             let got_packet = if let Some(last_sample) =
                 output_samples.last_mut().filter(|_| self.has_alpha_layer)
             {
-                for_each_avm_frame_pkt(self.context.unwrap_mut(), |encoded_data, sync| {
+                for_each_avm_frame_pkt(ctx, |encoded_data, sync| {
                     let mut combined = last_sample.data_output_by_codec().try_to_vec()?;
                     let sample_range = Av2CodecConfiguration::get_sample_obus_range(encoded_data)?;
                     let sample_slice =
@@ -750,7 +764,7 @@ impl Encoder for Avm {
                     Ok(())
                 })?
             } else {
-                add_avm_pkts_to_output_samples(self.context.unwrap_mut(), output_samples)?
+                add_avm_pkts_to_output_samples(ctx, output_samples)?
             };
             if !got_packet {
                 break;
@@ -1222,9 +1236,13 @@ impl Avm {
 
     // Convenience avm_codec_control() wrapper.
     fn codec_control<T>(&mut self, key: u32, value: T) -> AvifResult<()> {
-        // # Safety: Calling a C function with valid parameters.
-        let err =
-            unsafe { avm_codec_control(self.context.unwrap_mut() as *mut _, key as i32, value) };
+        let ctx = self.context.as_mut().ok_or(AvifError::InvalidArgument)?;
+        let ctx_ptr: *mut avm_codec_ctx_t = ctx;
+        let key_id = key as i32;
+        // SAFETY: `ctx_ptr` points to an initialized `avm_codec_ctx_t`, and every caller in this
+        // module supplies the C-ABI control argument type matching `key` (`i32`, `u32`, or
+        // `*const avm_scaling_mode_t`).
+        let err = unsafe { avm_codec_control(ctx_ptr, key_id, value) };
         if err != avm_codec_err_t_AVM_CODEC_OK {
             return AvifError::unknown_error(format!("avm_codec_control({key}) failed: {err}"));
         }
