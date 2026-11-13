@@ -263,14 +263,16 @@ impl<const N: usize> TxLanes for Wide<N> {
 /// Every value stored by the spec's butterflies and Hadamard steps then
 /// fits in 16 bits: the Hadamard outputs are clamped to 16 bits, which is
 /// exactly a saturating add / subtract, and conformance requires the
-/// butterfly outputs `Round2(x, 12)` to be representable with `r = 16`
-/// bits (7.13.2.1). The products are computed widened to `i32` (inputs of
-/// 16 bits times constants of at most 14 bits, at most 4 terms, fit) and
-/// narrowed with saturation (on aarch64, products with constants `|k| <=
-/// 4096` are narrowed modulo 2^16 instead, see `dot_rnd12_wrap`; the same
-/// for conformant streams). Negations saturate (`-(-32768)` gives 32767
-/// instead of 32768, which is the same after the clamp / `Round2` that
-/// follows every negated output).
+/// 2-input `B` butterfly outputs `Round2(x, 12)` to be representable with
+/// `r = 16` bits (7.13.2.1). The products are computed widened to `i32`
+/// (inputs of 16 bits times constants of at most 14 bits, at most 4 terms,
+/// fit) and narrowed with saturation (on aarch64, 1- and 2-term `B`
+/// products with constants `|k| <= 4096` are narrowed modulo 2^16 instead,
+/// see `dot_rnd12_wrap`; `ADST4`'s `dot_rnd12` saturates because 7.13.2.6
+/// only bounds the unrounded 4-term sums to `r + 12` bits `< 2^27`, which
+/// allows `Round2(x, 12) == 32768` on conformant streams). Negations
+/// saturate (`-(-32768)` gives 32767 instead of 32768, which is the same
+/// after the clamp / `Round2` that follows every negated output).
 ///
 /// For non-conformant streams the results may differ from the spec (but
 /// all arithmetic is wrapping or saturating, so it never panics).
@@ -599,9 +601,6 @@ impl<const N: usize> TxLanes for S16<N> {
     }
     #[inline(always)]
     fn dot_rnd12<const K: usize>(a: [Self; K], k: [i32; K]) -> Self {
-        if let Some(r) = dot_rnd12_wrap::<N, K, false>(amap(a, |a| a.0), k) {
-            return S16(r);
-        }
         if let Some(r) = dot_rnd12_pmadd::<N, K, false>(amap(a, |a| a.0), k) {
             return S16(r);
         }
@@ -2058,10 +2057,11 @@ fn transpose4x4_packed(a: Simd<i16, 8>, b: Simd<i16, 8>) -> [Simd<i16, 8>; 2] {
     [c01, c23]
 }
 
-/// `Round2(x, 12)` of the two 4-lane sums narrowed *modulo 2^16* and
-/// packed as `[lo | hi]` (`rshrn` + `rshrn2` on NEON). Exact whenever the
-/// results fit in 16 bits, which they do for conformant streams (see
-/// `S16`; for 10-bit rows [`transform_add_4x4_neon`] checks it).
+/// `Round2(x, 12)` of the two 4-lane `B` butterfly sums narrowed *modulo
+/// 2^16* and packed as `[lo | hi]` (`rshrn` + `rshrn2` on NEON). Exact
+/// whenever the results fit in 16 bits, which 7.13.2.1 guarantees for
+/// conformant `DCT4` streams (see `S16`; for 10-bit rows
+/// [`transform_add_4x4_neon`] checks it).
 #[inline(always)]
 fn narrow2_rnd12(lo: Simd<i32, 4>, hi: Simd<i32, 4>) -> Simd<i16, 8> {
     let r = Simd::splat(1 << 11);
@@ -2079,7 +2079,9 @@ fn narrow2_rnd12(lo: Simd<i32, 4>, hi: Simd<i32, 4>) -> Simd<i16, 8> {
 /// constant vector `k` (`ADST4_K` or `DCT4_K`), so that the constants
 /// live in one register instead of one `dup` each. The `i32` sums are
 /// exact for 16-bit inputs (the absolute constants of an output add up
-/// to at most 10950 < 2^16).
+/// to at most 10950 < 2^16). `ADST4` narrows with saturation (`pack_rnd12`)
+/// because 7.13.2.6 bounds `o0..o3` to `< 2^27` before `Round2(.., 12)`,
+/// allowing `Round2(o, 12) == 32768` on conformant streams.
 #[inline(always)]
 fn dct_adst4_neon(
     adst: bool,
@@ -2102,7 +2104,7 @@ fn dct_adst4_neon(
         let o1 = x0 * kl!(1) + x1 * kl!(2) + x2 * kl!(4) + x3 * kl!(7);
         let o2 = x0 * kl!(2) + x2 * kl!(6) + x3 * kl!(2);
         let o3 = x0 * kl!(3) + x1 * kl!(6) + x2 * kl!(1) + x3 * kl!(4);
-        [narrow2_rnd12(o0, o1), narrow2_rnd12(o2, o3)]
+        [pack_rnd12(o0, o1), pack_rnd12(o2, o3)]
     } else {
         // k = [2896, -2896, 1567, 3784, -3784, 0, 0, 0].
         let a0 = x0 * kl!(0) + x2 * kl!(0);
@@ -3328,6 +3330,73 @@ mod tests {
         }
         run::<u8, 8>(0x1357_9bdf_2468_ace0);
         run::<u16, 10>(0x0246_8ace_1357_9bdf);
+    }
+
+    /// Conformant `ADST4` inputs whose unrounded 4-term sum `x` lies in
+    /// `[2^27 - 2048, 2^27 - 1]` satisfy the `(r + 12)`-bit bound of spec
+    /// 7.13.2.6 while producing `Round2(x, 12) == 32768`, which must
+    /// saturate to `32767` rather than wrap to `-32768` on Arm.
+    #[test]
+    fn adst4_round2_32768_matches_portable() {
+        fn run<T: Pixel, const BD: u32>() {
+            // Row [1952, 872, 32767, 1656]: x0 = 134_217_653 < 2^27, Round2(x0, 12) = 32768.
+            // Row [32767, -1230, 1230, -1845]: x3 = 134_216_126 < 2^27, Round2(x3, 12) = 32768.
+            for row in [[1952, 872, 32767, 1656], [32767, -1230, 1230, -1845]] {
+                for tx_size in [TxSize::Tx4x4, TxSize::Tx4x8, TxSize::Tx4x16] {
+                    let w = 1usize << TX_WIDTH_LOG2[tx_size.idx()];
+                    let h = 1usize << TX_HEIGHT_LOG2[tx_size.idx()];
+                    for tx_type in [
+                        TxType::ADST_ADST,
+                        TxType::DCT_ADST,
+                        TxType::ADST_DCT,
+                        TxType::FLIPADST_ADST,
+                    ] {
+                        let mut coeffs = vec![0i32; w * h];
+                        coeffs[..4].copy_from_slice(&row);
+                        let eob = w * h;
+                        let frame = vec![T::from_i32(1 << (BD - 1)); w * h];
+                        let mut want = frame.clone();
+                        portable::conformance::take_violated();
+                        let mut c_want = coeffs.clone();
+                        portable::inv_txfm_add(
+                            &mut want,
+                            w,
+                            &mut c_want,
+                            tx_size,
+                            tx_type,
+                            false,
+                            eob,
+                            BD,
+                        );
+                        assert!(!portable::conformance::take_violated());
+                        let mut got = frame.clone();
+                        let mut c_got = coeffs.clone();
+                        inv_txfm_add_bd::<T, BD>(
+                            &mut got, w, &mut c_got, tx_size, tx_type, false, eob, BD,
+                        );
+                        assert_eq!(got, want, "mismatch: {tx_size:?} {tx_type:?} bd={BD}");
+                        if tx_size == TxSize::Tx4x4 && !flip_lr(tx_type) && !flip_ud(tx_type) {
+                            let (col_kind, row_kind) = tx1d_kinds(tx_type);
+                            let mut got_neon = frame;
+                            let mut c_neon = coeffs;
+                            transform_add_4x4_neon_impl::<T, BD>(
+                                &mut got_neon,
+                                w,
+                                &mut c_neon,
+                                row_kind,
+                                col_kind,
+                            );
+                            assert_eq!(
+                                got_neon, want,
+                                "neon mismatch: {tx_size:?} {tx_type:?} bd={BD}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        run::<u8, 8>();
+        run::<u16, 10>();
     }
 
     /// Sparse blocks with `nz_rows` and `nz_cols` in `1..=4` exercise the
