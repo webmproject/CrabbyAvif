@@ -369,141 +369,190 @@ impl Reader for PngReader {
 
         let user_chunk_ptr = ptr::from_mut(&mut unknown_chunk_data).cast();
         let io_ptr = ptr::from_mut(&mut file).cast();
+        // SAFETY: `png.png` is a valid non-null `libpng` read struct owned by `png`, and
+        // `user_chunk_ptr` points to `unknown_chunk_data`, which outlives `png` and is not
+        // accessed directly while `libpng` runs callbacks.
         unsafe {
             png_set_read_user_chunk_fn(
                 png.png,
                 user_chunk_ptr,
                 Some(crabbyavif_png_read_unknown_chunk),
             );
-
+        }
+        // SAFETY: `png.png` is a valid non-null `libpng` read struct owned by `png`, and `io_ptr`
+        // points to `file`, which outlives `png` and is not accessed directly while `libpng` runs
+        // callbacks.
+        unsafe {
             png_set_read_fn(png.png, io_ptr, Some(crabbyavif_png_read_data));
+        }
+        // SAFETY: `png.png` is a valid non-null `libpng` read struct, and the 8-byte PNG signature
+        // was already read from `file` above.
+        unsafe {
             png_set_sig_bytes(png.png, 8);
+        }
+        // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs with read callbacks
+        // and signature offset configured above.
+        unsafe {
             png_read_info(png.png, png.info);
-            // Disarm before reading `unknown_chunk_data.cicp` or running `png_read_image` /
-            // `png_read_end` so trailing chunks cannot re-enter with an invalidated pointer.
+        }
+        // Disarm before reading `unknown_chunk_data.cicp` or running `png_read_image` /
+        // `png_read_end` so trailing chunks cannot re-enter with an invalidated pointer.
+        // SAFETY: `png.png` is a valid non-null `libpng` read struct owned by `png`.
+        unsafe {
             png_set_read_user_chunk_fn(png.png, ptr::null_mut(), None);
+        }
+        // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs populated by
+        // `png_read_info`.
+        let raw_width = unsafe { png_get_image_width(png.png, png.info) };
+        // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs populated by
+        // `png_read_info`.
+        let raw_height = unsafe { png_get_image_height(png.png, png.info) };
+        // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs populated by
+        // `png_read_info`.
+        let raw_color_type = unsafe { png_get_color_type(png.png, png.info) };
+        // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs populated by
+        // `png_read_info`.
+        let raw_bit_depth = unsafe { png_get_bit_depth(png.png, png.info) };
 
-            let raw_width = png_get_image_width(png.png, png.info);
-            let raw_height = png_get_image_height(png.png, png.info);
-            let raw_color_type = png_get_color_type(png.png, png.info);
-            let raw_bit_depth = png_get_bit_depth(png.png, png.info);
-
-            // Defense-in-depth (`png_read_info` also rejects zero-dimension `IHDR` chunks).
-            if raw_width == 0 || raw_height == 0 {
-                return AvifError::invalid_argument();
+        // Defense-in-depth (`png_read_info` also rejects zero-dimension `IHDR` chunks).
+        if raw_width == 0 || raw_height == 0 {
+            return AvifError::invalid_argument();
+        }
+        if config.image_size_limit > 0 {
+            let total_pixels = u64::from(raw_width) * u64::from(raw_height);
+            if total_pixels > u64::from(config.image_size_limit) {
+                return Err(AvifError::UnknownError(format!(
+                    "Too big PNG dimensions ({raw_width} x {raw_height} > {} px)",
+                    config.image_size_limit
+                )));
             }
-            if config.image_size_limit > 0 {
-                let total_pixels = u64::from(raw_width) * u64::from(raw_height);
-                if total_pixels > u64::from(config.image_size_limit) {
+        }
+
+        if raw_color_type == PNG_COLOR_TYPE_PALETTE as u8 {
+            // SAFETY: `png.png` is a valid non-null `libpng` read struct owned by `png`.
+            unsafe {
+                png_set_palette_to_rgb(png.png);
+            }
+        }
+        if raw_color_type == PNG_COLOR_TYPE_GRAY as u8 && raw_bit_depth < 8 {
+            // SAFETY: `png.png` is a valid non-null `libpng` read struct owned by `png`.
+            unsafe {
+                png_set_expand_gray_1_2_4_to_8(png.png);
+            }
+        }
+        // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs owned by `png`.
+        let has_trns = unsafe { png_get_valid(png.png, png.info, PNG_INFO_tRNS) } != 0;
+        if has_trns {
+            // SAFETY: `png.png` is a valid non-null `libpng` read struct owned by `png`.
+            unsafe {
+                png_set_tRNS_to_alpha(png.png);
+            }
+        }
+        let raw_color_type_is_gray = raw_color_type == PNG_COLOR_TYPE_GRAY as u8
+            || raw_color_type == PNG_COLOR_TYPE_GRAY_ALPHA as u8;
+
+        let bit_depth = if raw_bit_depth == 16 {
+            // SAFETY: `png.png` is a valid non-null `libpng` read struct owned by `png`.
+            unsafe {
+                png_set_swap(png.png);
+            }
+            16
+        } else {
+            8
+        };
+        // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs owned by `png`,
+        // called once after configuring all read transformations above.
+        unsafe {
+            png_read_update_info(png.png, png.info);
+        }
+
+        yuv.width = raw_width;
+        yuv.height = raw_height;
+        yuv.matrix_coefficients = config
+            .matrix_coefficients
+            .unwrap_or(MatrixCoefficients::Bt601);
+        if yuv.matrix_coefficients == MatrixCoefficients::YcgcoRo {
+            return Err(AvifError::UnknownError(
+                "YcgcoRo cannot be used with PNG because it has an even bit depth.".into(),
+            ));
+        }
+        yuv.yuv_format = match config.yuv_format {
+            Some(yuv_format) => yuv_format,
+            None => {
+                if raw_color_type_is_gray {
+                    PixelFormat::Yuv400
+                } else if matches!(
+                    yuv.matrix_coefficients,
+                    MatrixCoefficients::Identity | MatrixCoefficients::YcgcoRe
+                ) {
+                    // Identity and YCgCo-R are valid only with Yuv444.
+                    PixelFormat::Yuv444
+                } else {
+                    PixelFormat::Yuv444
+                }
+            }
+        };
+        yuv.depth = match config.depth {
+            Some(depth) => depth,
+            None => {
+                if bit_depth == 8 {
+                    8
+                } else if config.allow_sample_transform {
+                    16
+                } else {
+                    12
+                }
+            }
+        };
+        if yuv.matrix_coefficients == MatrixCoefficients::YcgcoRe {
+            if bit_depth != 8 {
+                return Err(AvifError::UnknownError(
+                    "YcgcoRe cannot be used on 16 bit input because it adds two bits.".into(),
+                ));
+            }
+            if let Some(d) = config.depth {
+                if d != 10 {
                     return Err(AvifError::UnknownError(format!(
-                        "Too big PNG dimensions ({raw_width} x {raw_height} > {} px)",
-                        config.image_size_limit
+                        "Cannot request {d} bits for YCgCo-Re as it uses two extra bits"
                     )));
                 }
             }
-
-            if raw_color_type == PNG_COLOR_TYPE_PALETTE as _ {
-                png_set_palette_to_rgb(png.png);
-            }
-            if raw_color_type == PNG_COLOR_TYPE_GRAY as _ && raw_bit_depth < 8 {
-                png_set_expand_gray_1_2_4_to_8(png.png);
-            }
-            if png_get_valid(png.png, png.info, PNG_INFO_tRNS) != 0 {
-                png_set_tRNS_to_alpha(png.png);
-            }
-            let raw_color_type_is_gray = raw_color_type == PNG_COLOR_TYPE_GRAY as _
-                || raw_color_type == PNG_COLOR_TYPE_GRAY_ALPHA as _;
-
-            let bit_depth = if raw_bit_depth == 16 {
-                png_set_swap(png.png);
-                16
+            yuv.depth = 10;
+        }
+        if !config.ignore_icc {
+            let mut cicp: [png_byte; 4] = [0; 4];
+            let has_cicp = {
+                let [c0, c1, c2, c3] = &mut cicp;
+                let (p0, p1, p2, p3) = (
+                    ptr::from_mut(c0),
+                    ptr::from_mut(c1),
+                    ptr::from_mut(c2),
+                    ptr::from_mut(c3),
+                );
+                // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs owned by
+                // `png`, and `p0..p3` are valid disjoint mutable out-pointers to `png_byte`.
+                let cicp_flag = unsafe { png_get_cICP(png.png, png.info, p0, p1, p2, p3) };
+                cicp_flag != 0
+            };
+            if has_cicp {
+                set_png_cicp(&mut yuv, &cicp);
+            } else if let Some(unknown_cicp) = unknown_chunk_data.cicp {
+                set_png_cicp(&mut yuv, &unknown_cicp);
             } else {
-                8
-            };
-            png_read_update_info(png.png, png.info);
-
-            yuv.width = raw_width;
-            yuv.height = raw_height;
-            yuv.matrix_coefficients = config
-                .matrix_coefficients
-                .unwrap_or(MatrixCoefficients::Bt601);
-            if yuv.matrix_coefficients == MatrixCoefficients::YcgcoRo {
-                return Err(AvifError::UnknownError(
-                    "YcgcoRo cannot be used with PNG because it has an even bit depth.".into(),
-                ));
-            }
-            yuv.yuv_format = match config.yuv_format {
-                Some(yuv_format) => yuv_format,
-                None => {
-                    if raw_color_type_is_gray {
-                        PixelFormat::Yuv400
-                    } else if matches!(
-                        yuv.matrix_coefficients,
-                        MatrixCoefficients::Identity | MatrixCoefficients::YcgcoRe
-                    ) {
-                        // Identity and YCgCo-R are valid only with Yuv444.
-                        PixelFormat::Yuv444
-                    } else {
-                        PixelFormat::Yuv444
-                    }
-                }
-            };
-            yuv.depth = match config.depth {
-                Some(depth) => depth,
-                None => {
-                    if bit_depth == 8 {
-                        8
-                    } else if config.allow_sample_transform {
-                        16
-                    } else {
-                        12
-                    }
-                }
-            };
-            if yuv.matrix_coefficients == MatrixCoefficients::YcgcoRe {
-                if bit_depth != 8 {
-                    return Err(AvifError::UnknownError(
-                        "YcgcoRe cannot be used on 16 bit input because it adds two bits.".into(),
-                    ));
-                }
-                if let Some(d) = config.depth {
-                    if d != 10 {
-                        return Err(AvifError::UnknownError(format!(
-                            "Cannot request {} bits for YCgCo-Re as it uses two extra bits",
-                            d
-                        )));
-                    }
-                }
-                yuv.depth = 10;
-            }
-            if !config.ignore_icc {
-                let mut cicp: [png_byte; 4] = [0; 4];
                 let mut icc_profile_name: png_charp = ptr::null_mut();
                 let mut icc_compression_type: c_int = 0;
                 let mut iccp_data: png_bytep = ptr::null_mut();
                 let mut iccp_data_len = 0u32;
-                let mut srgb_intent: c_int = 0;
-                if png_get_cICP(
-                    png.png,
-                    png.info,
-                    (&mut cicp[0]) as *mut _,
-                    (&mut cicp[1]) as *mut _,
-                    (&mut cicp[2]) as *mut _,
-                    (&mut cicp[3]) as *mut _,
-                ) != 0
-                {
-                    set_png_cicp(&mut yuv, &cicp);
-                } else if let Some(unknown_cicp) = unknown_chunk_data.cicp {
-                    set_png_cicp(&mut yuv, &unknown_cicp);
-                } else if png_get_iCCP(
-                    png.png,
-                    png.info,
-                    &mut icc_profile_name as *mut _,
-                    &mut icc_compression_type as *mut _,
-                    &mut iccp_data as *mut _,
-                    &mut iccp_data_len as *mut _,
-                ) == PNG_INFO_iCCP
-                {
+                let name_ptr = ptr::from_mut(&mut icc_profile_name);
+                let comp_ptr = ptr::from_mut(&mut icc_compression_type);
+                let data_ptr = ptr::from_mut(&mut iccp_data);
+                let len_ptr = ptr::from_mut(&mut iccp_data_len);
+                // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs owned by
+                // `png`, and `name_ptr`, `comp_ptr`, `data_ptr`, `len_ptr` are valid out-pointers.
+                let has_iccp = unsafe {
+                    png_get_iCCP(png.png, png.info, name_ptr, comp_ptr, data_ptr, len_ptr)
+                } == PNG_INFO_iCCP;
+                if has_iccp {
                     if (!raw_color_type_is_gray && yuv.yuv_format == PixelFormat::Yuv400)
                         || (raw_color_type_is_gray && yuv.yuv_format != PixelFormat::Yuv400)
                     {
@@ -512,129 +561,168 @@ impl Reader for PngReader {
                     let icc_len = usize_from_u32(iccp_data_len)?;
                     if icc_len > 0 && !iccp_data.is_null() {
                         let iccp_const: *const u8 = iccp_data;
-                        let icc_slice = slice::from_raw_parts(iccp_const, icc_len);
+                        // SAFETY: `png_get_iCCP` returned `PNG_INFO_iCCP`, we verified `iccp_data`
+                        // is non-null and `icc_len > 0`, and `libpng` owns `info_ptr->iccp_profile`
+                        // as a readable buffer of `icc_len` bytes for the lifetime of `png.info`.
+                        let icc_slice = unsafe { slice::from_raw_parts(iccp_const, icc_len) };
                         yuv.icc = create_vec_exact(icc_slice.len())?;
                         yuv.icc.try_extend_from_slice(icc_slice)?;
                     }
-                } else if png_get_sRGB(png.png, png.info, (&mut srgb_intent) as *mut _)
-                    == PNG_INFO_sRGB
-                {
-                    yuv.color_primaries = ColorPrimaries::Srgb;
-                    yuv.transfer_characteristics = TransferCharacteristics::Srgb;
                 } else {
-                    let mut should_generate_icc = false;
-                    let mut gamma: f64 = 0.0;
-                    if png_get_gAMA(png.png, png.info, &mut gamma as *mut _) == PNG_INFO_gAMA {
-                        gamma = 1.0 / gamma;
-                        yuv.transfer_characteristics =
-                            TransferCharacteristics::from_gamma(gamma as f32);
-                        if yuv.transfer_characteristics == TransferCharacteristics::Unknown {
-                            should_generate_icc = true;
-                        }
+                    let mut srgb_intent: c_int = 0;
+                    let srgb_ptr = ptr::from_mut(&mut srgb_intent);
+                    // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs, and
+                    // `srgb_ptr` is a valid mutable out-pointer.
+                    let has_srgb =
+                        unsafe { png_get_sRGB(png.png, png.info, srgb_ptr) } == PNG_INFO_sRGB;
+                    if has_srgb {
+                        yuv.color_primaries = ColorPrimaries::Srgb;
+                        yuv.transfer_characteristics = TransferCharacteristics::Srgb;
                     } else {
-                        // No gamma information in file. Assume the default value.
-                        // PNG specification 1.2 Section 10.5:
-                        // Assume a CRT exponent of 2.2 unless detailed calibration measurements
-                        // of this particular CRT are available.
-                        gamma = 2.2;
-                    }
-                    let mut png_primaries: [f64; 8] = [0.0; 8];
-                    let primaries: [f32; 8];
-                    if png_get_cHRM(
-                        png.png,
-                        png.info,
-                        &mut png_primaries[6] as *mut _,
-                        &mut png_primaries[7] as *mut _,
-                        &mut png_primaries[0] as *mut _,
-                        &mut png_primaries[1] as *mut _,
-                        &mut png_primaries[2] as *mut _,
-                        &mut png_primaries[3] as *mut _,
-                        &mut png_primaries[4] as *mut _,
-                        &mut png_primaries[5] as *mut _,
-                    ) == PNG_INFO_cHRM
-                    {
-                        primaries = png_primaries.map(|x| x as f32);
-                        yuv.color_primaries = ColorPrimaries::find(&primaries);
-                        if yuv.color_primaries == ColorPrimaries::Unknown {
-                            should_generate_icc = true;
+                        let mut should_generate_icc = false;
+                        let mut gamma: f64 = 0.0;
+                        let gamma_ptr = ptr::from_mut(&mut gamma);
+                        // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs,
+                        // and `gamma_ptr` is a valid mutable out-pointer.
+                        let has_gama =
+                            unsafe { png_get_gAMA(png.png, png.info, gamma_ptr) } == PNG_INFO_gAMA;
+                        if has_gama {
+                            gamma = 1.0 / gamma;
+                            yuv.transfer_characteristics =
+                                TransferCharacteristics::from_gamma(gamma as f32);
+                            if yuv.transfer_characteristics == TransferCharacteristics::Unknown {
+                                should_generate_icc = true;
+                            }
+                        } else {
+                            // No gamma information in file. Assume the default value.
+                            // PNG specification 1.2 Section 10.5:
+                            // Assume a CRT exponent of 2.2 unless detailed calibration measurements
+                            // of this particular CRT are available.
+                            gamma = 2.2;
                         }
-                    } else {
-                        primaries = ColorPrimaries::Bt709.values().ok_or_else(|| {
-                            AvifError::UnknownError("missing Bt709 primaries".into())
-                        })?;
-                    }
-                    if should_generate_icc {
-                        yuv.color_primaries = ColorPrimaries::Unspecified;
-                        yuv.transfer_characteristics = TransferCharacteristics::Unspecified;
-                        yuv.icc = icc::generate_icc(yuv.yuv_format, gamma as f32, &primaries)
-                            .unwrap_or_default();
+                        let mut png_primaries: [f64; 8] = [0.0; 8];
+                        let has_chrm = {
+                            let [rx, ry, gx, gy, bx, by, wx, wy] = &mut png_primaries;
+                            let (pwx, pwy, prx, pry, pgx, pgy, pbx, pby) = (
+                                ptr::from_mut(wx),
+                                ptr::from_mut(wy),
+                                ptr::from_mut(rx),
+                                ptr::from_mut(ry),
+                                ptr::from_mut(gx),
+                                ptr::from_mut(gy),
+                                ptr::from_mut(bx),
+                                ptr::from_mut(by),
+                            );
+                            // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs,
+                            // and `pwx..pby` are valid disjoint mutable `f64` out-pointers.
+                            let chrm_flag = unsafe {
+                                png_get_cHRM(
+                                    png.png, png.info, pwx, pwy, prx, pry, pgx, pgy, pbx, pby,
+                                )
+                            };
+                            chrm_flag == PNG_INFO_cHRM
+                        };
+                        let primaries: [f32; 8] = if has_chrm {
+                            let mapped = png_primaries.map(|x| x as f32);
+                            yuv.color_primaries = ColorPrimaries::find(&mapped);
+                            if yuv.color_primaries == ColorPrimaries::Unknown {
+                                should_generate_icc = true;
+                            }
+                            mapped
+                        } else {
+                            ColorPrimaries::Bt709.values().ok_or_else(|| {
+                                AvifError::UnknownError("missing Bt709 primaries".into())
+                            })?
+                        };
+                        if should_generate_icc {
+                            yuv.color_primaries = ColorPrimaries::Unspecified;
+                            yuv.transfer_characteristics = TransferCharacteristics::Unspecified;
+                            yuv.icc = icc::generate_icc(yuv.yuv_format, gamma as f32, &primaries)
+                                .unwrap_or_default();
+                        }
                     }
                 }
             }
+        }
 
-            let num_channels = png_get_channels(png.png, png.info);
-            let mut rgb = rgb::Image::create_from_yuv(&yuv);
-            rgb.depth = bit_depth;
-            rgb.format = match num_channels {
-                1 => rgb::Format::Gray,
-                2 => rgb::Format::GrayA,
-                3 => rgb::Format::Rgb,
-                4 => rgb::Format::Rgba,
-                _ => {
-                    return Err(AvifError::UnknownError(format!(
-                        "png_get_channels() returned an invalid value: {num_channels}"
-                    )));
-                }
-            };
-            rgb.allocate()?;
-            let png_row_bytes = png_get_rowbytes(png.png, png.info);
-            let row_bytes = usize_from_u32(rgb.row_bytes)?;
-            if row_bytes != png_row_bytes {
+        // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs updated by
+        // `png_read_update_info`.
+        let num_channels = unsafe { png_get_channels(png.png, png.info) };
+        // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs updated by
+        // `png_read_update_info`.
+        let png_row_bytes = unsafe { png_get_rowbytes(png.png, png.info) };
+        let mut rgb = rgb::Image::create_from_yuv(&yuv);
+        rgb.depth = bit_depth;
+        rgb.format = match num_channels {
+            1 => rgb::Format::Gray,
+            2 => rgb::Format::GrayA,
+            3 => rgb::Format::Rgb,
+            4 => rgb::Format::Rgba,
+            _ => {
                 return Err(AvifError::UnknownError(format!(
-                    "rowBytes mismatch libavif {} vs libpng {png_row_bytes}",
-                    rgb.row_bytes
+                    "png_get_channels() returned an invalid value: {num_channels}"
                 )));
             }
-            let height = usize_from_u32(rgb.height)?;
-            let mut row_pointers: Vec<png_bytep> = create_vec_exact(height)?;
-            let Some(pixels) = rgb.pixels.as_mut() else {
-                return AvifError::no_content();
-            };
-            match pixels {
-                pixels::Pixels::Buffer(buffer) => {
-                    if row_bytes == 0 {
-                        return AvifError::invalid_argument();
-                    }
-                    for row in buffer.chunks_exact_mut(row_bytes) {
-                        row_pointers.try_push(row.as_mut_ptr())?;
-                    }
-                }
-                pixels::Pixels::Buffer16(buffer) => {
-                    let row_u16 = row_bytes / 2;
-                    if row_u16 == 0 || row_bytes % 2 != 0 {
-                        return AvifError::invalid_argument();
-                    }
-                    for row in buffer.chunks_exact_mut(row_u16) {
-                        row_pointers.try_push(row.as_mut_ptr().cast::<u8>())?;
-                    }
-                }
-                _ => return AvifError::no_content(),
-            }
-            if row_pointers.len() != height {
-                return AvifError::invalid_argument();
-            }
-            png_read_image(png.png, row_pointers.as_mut_ptr());
-            rgb.convert_to_yuv(&mut yuv)?;
-
-            let mut ignore_exif = config.ignore_exif;
-            let mut ignore_xmp = config.ignore_xmp;
-            png.extract_exif_and_xmp(&mut yuv, &mut ignore_exif, &mut ignore_xmp)?;
-            if !ignore_exif || !ignore_xmp {
-                png_read_end(png.png, png.info);
-                png.extract_exif_and_xmp(&mut yuv, &mut ignore_exif, &mut ignore_xmp)?;
-            }
-            Ok((yuv, 0, None))
+        };
+        rgb.allocate()?;
+        let row_bytes = usize_from_u32(rgb.row_bytes)?;
+        if row_bytes != png_row_bytes {
+            return Err(AvifError::UnknownError(format!(
+                "rowBytes mismatch libavif {} vs libpng {png_row_bytes}",
+                rgb.row_bytes
+            )));
         }
+        let height = usize_from_u32(rgb.height)?;
+        let mut row_pointers: Vec<png_bytep> = create_vec_exact(height)?;
+        let Some(pixels) = rgb.pixels.as_mut() else {
+            return AvifError::no_content();
+        };
+        match pixels {
+            pixels::Pixels::Buffer(buffer) => {
+                if row_bytes == 0 {
+                    return AvifError::invalid_argument();
+                }
+                for row in buffer.chunks_exact_mut(row_bytes) {
+                    row_pointers.try_push(row.as_mut_ptr())?;
+                }
+            }
+            pixels::Pixels::Buffer16(buffer) => {
+                let row_u16 = row_bytes / 2;
+                if row_u16 == 0 || row_bytes % 2 != 0 {
+                    return AvifError::invalid_argument();
+                }
+                for row in buffer.chunks_exact_mut(row_u16) {
+                    row_pointers.try_push(row.as_mut_ptr().cast::<u8>())?;
+                }
+            }
+            _ => return AvifError::no_content(),
+        }
+        if row_pointers.len() != height {
+            return AvifError::invalid_argument();
+        }
+        let row_pointers_ptr = row_pointers.as_mut_ptr();
+        // SAFETY: `png.png` is a valid non-null `libpng` read struct configured via
+        // `png_read_update_info`. `row_pointers_ptr` points to `height` (`png_get_image_height`)
+        // valid mutable row pointers, each pointing to a disjoint writable slice of `png_row_bytes`
+        // (`png_get_rowbytes`) bytes in `rgb.pixels`, which remains alive and unaliased throughout
+        // `png_read_image`.
+        unsafe {
+            png_read_image(png.png, row_pointers_ptr);
+        }
+        rgb.convert_to_yuv(&mut yuv)?;
+
+        let mut ignore_exif = config.ignore_exif;
+        let mut ignore_xmp = config.ignore_xmp;
+        png.extract_exif_and_xmp(&mut yuv, &mut ignore_exif, &mut ignore_xmp)?;
+        if !ignore_exif || !ignore_xmp {
+            // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs after
+            // `png_read_image` has consumed all image rows.
+            unsafe {
+                png_read_end(png.png, png.info);
+            }
+            png.extract_exif_and_xmp(&mut yuv, &mut ignore_exif, &mut ignore_xmp)?;
+        }
+        Ok((yuv, 0, None))
     }
 
     fn has_more_frames(&mut self) -> bool {
