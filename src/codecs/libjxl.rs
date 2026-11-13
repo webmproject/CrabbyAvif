@@ -42,12 +42,12 @@ use jxl_api::ExtraChannel;
 
 use std::mem::MaybeUninit;
 use std::ptr::null;
-use std::ptr::null_mut;
+use std::ptr::NonNull;
 
 #[derive(Default)]
 pub struct Libjxl {
     // Encoding
-    encoder: *mut JxlEncoder,
+    encoder: Option<NonNull<JxlEncoder>>,
     expected_header: Option<Vec<u8>>,
 
     // Decoding
@@ -59,14 +59,16 @@ pub struct Libjxl {
 
 // Convenient error mapping.
 trait JxlEncoderStatusTrait {
-    fn map_enc_err(self, encoder: *mut JxlEncoder) -> Result<(), AvifError>;
+    fn map_enc_err(self, encoder: NonNull<JxlEncoder>) -> Result<(), AvifError>;
 }
 impl JxlEncoderStatusTrait for JxlEncoderStatus {
-    fn map_enc_err(self, encoder: *mut JxlEncoder) -> Result<(), AvifError> {
+    fn map_enc_err(self, encoder: NonNull<JxlEncoder>) -> Result<(), AvifError> {
         match self {
             JxlEncoderStatus_JXL_ENC_SUCCESS => Ok(()),
             JxlEncoderStatus_JXL_ENC_ERROR => {
-                let error = unsafe { JxlEncoderGetError(encoder) };
+                // SAFETY: `encoder` is a valid, non-null `JxlEncoder` created by
+                // `JxlEncoderCreate` and kept alive by the calling `Libjxl` instance.
+                let error = unsafe { JxlEncoderGetError(encoder.as_ptr()) };
                 AvifError::unknown_error(format!("JxlEncoderError {error}",))
             }
             _ => AvifError::unknown_error(format!("Unexpected JxlEncoderStatus {self}")),
@@ -124,6 +126,9 @@ fn rgb_image_to_jxl_rs_pixel_format(
 fn rgb_image_to_jxl_pixel_format(
     rgb: &reformat::rgb::Image,
 ) -> Result<(JxlPixelFormat, usize), AvifError> {
+    if rgb.width == 0 || rgb.height == 0 {
+        return AvifError::invalid_argument();
+    }
     let data_type = match rgb.depth {
         8 => JxlDataType_JXL_TYPE_UINT8,
         9..16 => JxlDataType_JXL_TYPE_UINT16,
@@ -136,20 +141,20 @@ fn rgb_image_to_jxl_pixel_format(
             rgb.row_bytes, min_row_bytes
         ));
     }
+    let row_bytes = usize_from_u32(rgb.row_bytes)?;
+    let min_row_bytes_usize = usize_from_u32(min_row_bytes)?;
+    let height = usize_from_u32(rgb.height)?;
     let size = checked_add!(
-        checked_mul!(
-            rgb.row_bytes as usize,
-            checked_sub!(rgb.height as usize, 1)?
-        )?,
+        checked_mul!(row_bytes, checked_sub!(height, 1)?)?,
         // The last row does not need rgb.row_bytes but only min_row_bytes.
-        min_row_bytes as usize
+        min_row_bytes_usize
     )?;
     Ok((
         JxlPixelFormat {
             num_channels: rgb.channel_count(),
             data_type,
             endianness: JxlEndianness_JXL_NATIVE_ENDIAN,
-            align: if rgb.row_bytes == min_row_bytes { 0 } else { rgb.row_bytes as usize },
+            align: if rgb.row_bytes == min_row_bytes { 0 } else { row_bytes },
         },
         size,
     ))
@@ -205,25 +210,38 @@ impl Encoder for Libjxl {
 
         match category {
             Category::Color => {}
-            Category::Alpha => unreachable!(), // Should be a channel, not an auxiliary item.
+            Category::Alpha => return AvifError::invalid_argument(), // Should be a channel, not an auxiliary item.
             Category::Gainmap => return AvifError::not_implemented(),
         }
         let num_channels = rgb.channel_count();
         let num_alpha_channels = if rgb.has_alpha() { 1 } else { 0 };
 
-        if self.encoder.is_null() {
-            // # Safety: Calling a C function.
-            let encoder = unsafe { JxlEncoderCreate(null()) };
-            if encoder.is_null() {
-                return AvifError::unknown_error("JxlEncoderCreate() failed.");
+        let encoder = if let Some(encoder) = self.encoder {
+            if config.is_single_image {
+                return AvifError::unknown_error("Cannot add another frame to a single image");
+            } else if Some(jxl_header) != self.expected_header {
+                return AvifError::unknown_error(
+                    "Cannot add another frame with different features to a JPEG XL animation",
+                );
             }
-            self.encoder = encoder;
+            encoder
+        } else {
+            // SAFETY: `JxlEncoderCreate` accepts a null `JxlMemoryManager` pointer to use
+            // libjxl's default allocator and returns either a new `JxlEncoder` or null on failure.
+            let Some(encoder) = NonNull::new(unsafe { JxlEncoderCreate(null()) }) else {
+                return AvifError::unknown_error("JxlEncoderCreate() failed.");
+            };
+            self.encoder = Some(encoder);
 
-            let mut basic_info: MaybeUninit<JxlBasicInfo> = MaybeUninit::uninit();
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { JxlEncoderInitBasicInfo(basic_info.as_mut_ptr()) };
-            // # Safety: basic_info was initialized in the C function above.
-            let mut basic_info = unsafe { basic_info.assume_init() };
+            let mut basic_info = MaybeUninit::<JxlBasicInfo>::zeroed();
+            // SAFETY: `basic_info.as_mut_ptr()` points to valid, aligned, zero-initialized
+            // `JxlBasicInfo` storage. `JxlEncoderInitBasicInfo` populates libjxl's default field
+            // values, and `zeroed()` ensures trailing padding bytes (`padding: [u8; 100]`) are
+            // initialized before `assume_init()`.
+            let mut basic_info = unsafe {
+                JxlEncoderInitBasicInfo(basic_info.as_mut_ptr());
+                basic_info.assume_init()
+            };
             basic_info.xsize = rgb.width;
             basic_info.ysize = rgb.height;
             basic_info.bits_per_sample = rgb.depth.into();
@@ -238,97 +256,118 @@ impl Encoder for Libjxl {
                 basic_info.have_animation = true.into();
                 // tps_numerator and tps_denominator do not matter.
             }
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { JxlEncoderSetBasicInfo(encoder, &basic_info) }.map_enc_err(encoder)?;
+            // SAFETY: `encoder` is a valid `JxlEncoder` owned by `self.encoder`, and
+            // `&basic_info` is a valid initialized `JxlBasicInfo` reference copied by libjxl.
+            unsafe { JxlEncoderSetBasicInfo(encoder.as_ptr(), &basic_info) }
+                .map_enc_err(encoder)?;
             if rgb.has_alpha() {
                 // Explicitly set extra_channel_info because JxlEncoderSetBasicInfo() in
                 // libjxl <= 0.11.2 did not copy basic_info.alpha_premultiplied.
-                let mut extra_channel_info: MaybeUninit<JxlExtraChannelInfo> =
-                    MaybeUninit::uninit();
-                // # Safety: Calling a C function with valid parameters.
-                unsafe {
+                let mut extra_channel_info = MaybeUninit::<JxlExtraChannelInfo>::zeroed();
+                // SAFETY: `extra_channel_info.as_mut_ptr()` points to valid, aligned,
+                // zero-initialized `JxlExtraChannelInfo` storage, and
+                // `JxlEncoderInitExtraChannelInfo` initializes its fields before `assume_init()`.
+                let mut extra_channel_info = unsafe {
                     JxlEncoderInitExtraChannelInfo(
                         JxlExtraChannelType_JXL_CHANNEL_ALPHA,
                         extra_channel_info.as_mut_ptr(),
                     );
-                }
-                // # Safety: extra_channel_info was initialized in the C function above.
-                let mut extra_channel_info = unsafe { extra_channel_info.assume_init() };
+                    extra_channel_info.assume_init()
+                };
                 extra_channel_info.bits_per_sample = basic_info.alpha_bits;
                 extra_channel_info.alpha_premultiplied = basic_info.alpha_premultiplied;
-                // # Safety: Calling a C function with valid parameters.
-                unsafe { JxlEncoderSetExtraChannelInfo(encoder, 0, &extra_channel_info) }
+                // SAFETY: `encoder` is a valid `JxlEncoder` with `num_extra_channels == 1` set
+                // above, so extra channel index `0` is in bounds and `&extra_channel_info` is
+                // valid for reads during the call.
+                unsafe { JxlEncoderSetExtraChannelInfo(encoder.as_ptr(), 0, &extra_channel_info) }
                     .map_enc_err(encoder)?;
             }
 
-            let mut color_encoding: MaybeUninit<JxlColorEncoding> = MaybeUninit::uninit();
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { JxlColorEncodingSetToSRGB(color_encoding.as_mut_ptr(), is_gray.into()) };
-            // # Safety: color_encoding was initialized in the C function above.
-            let mut color_encoding = unsafe { color_encoding.assume_init() };
+            let mut color_encoding = MaybeUninit::<JxlColorEncoding>::zeroed();
+            // SAFETY: `color_encoding.as_mut_ptr()` points to valid, aligned, zero-initialized
+            // `JxlColorEncoding` storage, and `JxlColorEncodingSetToSRGB` initializes its fields
+            // before `assume_init()`.
+            let mut color_encoding = unsafe {
+                JxlColorEncodingSetToSRGB(color_encoding.as_mut_ptr(), is_gray.into());
+                color_encoding.assume_init()
+            };
             // TODO: b/456440247 - This should be RELATIVE but PERCEPTUAL forces
             //                     color_encoding.all_default to be false.
             color_encoding.rendering_intent = JxlRenderingIntent_JXL_RENDERING_INTENT_PERCEPTUAL;
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { JxlEncoderSetColorEncoding(encoder, &color_encoding) }.map_enc_err(encoder)?;
+            // SAFETY: `encoder` is a valid `JxlEncoder` after `JxlEncoderSetBasicInfo`, and
+            // `&color_encoding` is a valid initialized `JxlColorEncoding` reference.
+            unsafe { JxlEncoderSetColorEncoding(encoder.as_ptr(), &color_encoding) }
+                .map_enc_err(encoder)?;
 
             if let Some(speed) = config.speed {
                 if speed >= 11 {
-                    // # Safety: Calling a C function with valid parameters.
-                    unsafe { JxlEncoderAllowExpertOptions(encoder) };
+                    // SAFETY: `encoder` is a valid `JxlEncoder` owned by `self.encoder`.
+                    unsafe { JxlEncoderAllowExpertOptions(encoder.as_ptr()) };
                 }
             }
 
             self.expected_header = Some(jxl_header);
-        } else if config.is_single_image {
-            return AvifError::unknown_error("Cannot add another frame to a single image");
-        } else if Some(jxl_header) != self.expected_header {
-            return AvifError::unknown_error(
-                "Cannot add another frame with different features to a JPEG XL animation",
-            );
-        }
-        let encoder = self.encoder;
+            encoder
+        };
 
-        // # Safety: Calling a C function with valid parameters.
-        let frame_settings = unsafe { JxlEncoderFrameSettingsCreate(encoder, null()) };
-        if frame_settings.is_null() {
+        // SAFETY: `encoder` is a valid `JxlEncoder` owned by `self.encoder`, and passing null for
+        // `source_frame_settings` creates default-initialized frame settings owned by `encoder`.
+        let Some(frame_settings) =
+            NonNull::new(unsafe { JxlEncoderFrameSettingsCreate(encoder.as_ptr(), null()) })
+        else {
             return AvifError::unknown_error("JxlEncoderFrameSettingsCreate() failed.");
-        }
+        };
 
         if is_lossless {
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { JxlEncoderSetFrameLossless(frame_settings, true.into()) }
+            // SAFETY: `frame_settings` is a valid non-null `JxlEncoderFrameSettings` owned by
+            // `encoder`.
+            unsafe { JxlEncoderSetFrameLossless(frame_settings.as_ptr(), true.into()) }
                 .map_enc_err(encoder)?;
         } else {
-            // # Safety: Calling a C function with valid parameters.
+            // SAFETY: `JxlEncoderDistanceFromQuality` is a pure numeric conversion helper with no
+            // pointer or lifetime preconditions.
             let distance = unsafe { JxlEncoderDistanceFromQuality(config.quality) };
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { JxlEncoderSetFrameDistance(frame_settings, distance) }.map_enc_err(encoder)?;
+            // SAFETY: `frame_settings` is a valid non-null `JxlEncoderFrameSettings` owned by
+            // `encoder`.
+            unsafe { JxlEncoderSetFrameDistance(frame_settings.as_ptr(), distance) }
+                .map_enc_err(encoder)?;
         }
         if let Some(speed) = config.speed {
             let e = JxlEncoderFrameSettingId_JXL_ENC_FRAME_SETTING_EFFORT;
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { JxlEncoderFrameSettingsSetOption(frame_settings, e, speed.into()) }
+            // SAFETY: `frame_settings` is a valid non-null `JxlEncoderFrameSettings` owned by
+            // `encoder`.
+            unsafe { JxlEncoderFrameSettingsSetOption(frame_settings.as_ptr(), e, speed.into()) }
                 .map_enc_err(encoder)?;
         }
 
         // TODO: b/456440247 - Check if a non-zero duration is necessary for sequences.
         if !config.is_single_image {
-            let mut frame_header: MaybeUninit<JxlFrameHeader> = MaybeUninit::uninit();
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { JxlEncoderInitFrameHeader(frame_header.as_mut_ptr()) };
-            // # Safety: frame_header was initialized in the C function above.
-            let mut frame_header = unsafe { frame_header.assume_init() };
+            let mut frame_header = MaybeUninit::<JxlFrameHeader>::zeroed();
+            // SAFETY: `frame_header.as_mut_ptr()` points to valid, aligned, zero-initialized
+            // `JxlFrameHeader` storage, and `JxlEncoderInitFrameHeader` initializes its fields
+            // before `assume_init()`.
+            let mut frame_header = unsafe {
+                JxlEncoderInitFrameHeader(frame_header.as_mut_ptr());
+                frame_header.assume_init()
+            };
             frame_header.duration = 1;
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { JxlEncoderSetFrameHeader(frame_settings, &frame_header) }
+            // SAFETY: `frame_settings` is a valid non-null `JxlEncoderFrameSettings` owned by
+            // `encoder`, and `&frame_header` is a valid initialized `JxlFrameHeader` reference.
+            unsafe { JxlEncoderSetFrameHeader(frame_settings.as_ptr(), &frame_header) }
                 .map_enc_err(encoder)?;
         }
 
         let (pixel_format, size) = rgb_image_to_jxl_pixel_format(&rgb)?;
-        // # Safety: Calling a C function with valid parameters.
+        if !rgb.has_valid_pixels() {
+            return AvifError::invalid_argument();
+        }
+        let pixels = rgb.pixels();
+        // SAFETY: `frame_settings` is a valid non-null pointer owned by `encoder`. `rgb.allocate()`
+        // and `rgb.has_valid_pixels()` guarantee `pixels` is non-null, aligned to `u8` (8-bit) or
+        // `u16` (>8-bit) matching `pixel_format.data_type`, and valid for reads of `size` bytes
+        // during `JxlEncoderAddImageFrame` (which copies the frame data internally).
         unsafe {
-            JxlEncoderAddImageFrame(frame_settings, &pixel_format, rgb.pixels().cast(), size)
+            JxlEncoderAddImageFrame(frame_settings.as_ptr(), &pixel_format, pixels.cast(), size)
         }
         .map_enc_err(encoder)?;
 
@@ -336,10 +375,10 @@ impl Encoder for Libjxl {
     }
 
     fn finish(&mut self, output_samples: &mut Vec<Sample>) -> AvifResult<()> {
-        if self.encoder.is_null() {
+        let Some(encoder) = self.encoder else {
             return Ok(());
-        }
-        let encoded_bytes_with_header = self.encode()?;
+        };
+        let encoded_bytes_with_header = Self::encode(encoder)?;
 
         let expected_header = self
             .expected_header
@@ -382,25 +421,31 @@ impl Encoder for Libjxl {
 }
 
 impl Libjxl {
-    fn encode(&mut self) -> AvifResult<Vec<u8>> {
-        let encoder = self.encoder;
-
-        // # Safety: Calling a C function with valid parameters.
-        unsafe { JxlEncoderCloseInput(encoder) };
+    fn encode(encoder: NonNull<JxlEncoder>) -> AvifResult<Vec<u8>> {
+        // SAFETY: `encoder` is a valid non-null `JxlEncoder` created by `JxlEncoderCreate` and
+        // kept alive by the calling `Libjxl` instance.
+        unsafe { JxlEncoderCloseInput(encoder.as_ptr()) };
 
         let mut data: Vec<u8> = Vec::new(); // Vector of encoded bytes, growing by chunks.
-        let mut chunk = [0; 64]; // Arbitrary chunk size.
+        let mut chunk = [0u8; 64]; // Arbitrary chunk size (>= 32 bytes required by libjxl).
         loop {
             let mut avail_out = chunk.len();
             let mut next_out: *mut u8 = chunk.as_mut_ptr();
-            // # Safety: Calling a C function with valid parameters.
-            let status = unsafe { JxlEncoderProcessOutput(encoder, &mut next_out, &mut avail_out) };
-            // From the libjxl API:
-            //   It is guaranteed that, if *avail_out >= 32, at least one byte of output will be written.
-            assert!(avail_out < chunk.len());
+            // SAFETY: `encoder` is a valid non-null `JxlEncoder` with input closed above,
+            // `next_out` points to the writable `chunk` buffer of `avail_out` (`64`) bytes, and
+            // `&mut next_out` / `&mut avail_out` are valid writable pointers updated in place by
+            // `JxlEncoderProcessOutput`.
+            let status =
+                unsafe { JxlEncoderProcessOutput(encoder.as_ptr(), &mut next_out, &mut avail_out) };
             // avail_out now contains the number of unused bytes among the chunk.len() bytes
             // that were passed to JxlEncoderProcessOutput().
-            let written_bytes = &chunk[..chunk.len() - avail_out];
+            let written_len = checked_sub!(chunk.len(), avail_out)?;
+            if written_len == 0 && status == JxlEncoderStatus_JXL_ENC_NEED_MORE_OUTPUT {
+                return AvifError::unknown_error("JxlEncoderProcessOutput() made no progress");
+            }
+            let Some(written_bytes) = chunk.get(..written_len) else {
+                return AvifError::invalid_argument();
+            };
 
             data.try_extend_from_slice(written_bytes)?;
             if status != JxlEncoderStatus_JXL_ENC_NEED_MORE_OUTPUT {
@@ -454,7 +499,7 @@ impl Decoder for Libjxl {
         }
         match category {
             Category::Color => {}
-            Category::Alpha => unreachable!(), // Should be a channel, not an auxiliary item.
+            Category::Alpha => return AvifError::invalid_argument(), // Should be a channel, not an auxiliary item.
             Category::Gainmap => return AvifError::not_implemented(),
         }
 
@@ -463,32 +508,25 @@ impl Decoder for Libjxl {
             None => self.reconstructed_jxl.insert({
                 // Prepend the JPEG XL payload which is stripped from its header with a reconstructed header.
 
-                let pixi = item.pixi().ok_or_else(|| {
-                    AvifError::bmff_parse_failed::<(), _>("pixi is mandatory with hxlI")
-                        .unwrap_err()
-                })?;
+                let Some(pixi) = item.pixi() else {
+                    return AvifError::bmff_parse_failed("pixi is mandatory with hxlI");
+                };
                 let premultiplied_alpha = item.alpi().is_some_and(|alpi| alpi.is_premultiplied);
-                let codec_config = item
-                    .properties
-                    .iter()
-                    .find_map(|property| {
-                        if let ItemProperty::CodecConfiguration(CodecConfiguration::JpegXl(
-                            codec_config,
-                        )) = property
-                        {
-                            Some(codec_config)
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or_else(|| {
-                        AvifError::bmff_parse_failed::<(), _>("hxlC is mandatory with hxlI")
-                            .unwrap_err()
-                    })?;
-                let _colr_nclx = item.colr_nclx().ok_or_else(|| {
-                    AvifError::bmff_parse_failed::<(), _>("colr nclx is mandatory with hxlI")
-                        .unwrap_err()
-                })?;
+                let Some(codec_config) = item.properties.iter().find_map(|property| {
+                    if let ItemProperty::CodecConfiguration(CodecConfiguration::JpegXl(
+                        codec_config,
+                    )) = property
+                    {
+                        Some(codec_config)
+                    } else {
+                        None
+                    }
+                }) else {
+                    return AvifError::bmff_parse_failed("hxlC is mandatory with hxlI");
+                };
+                let Some(_colr_nclx) = item.colr_nclx() else {
+                    return AvifError::bmff_parse_failed("colr nclx is mandatory with hxlI");
+                };
                 let mut reconstructed = reconstruct_jxl_header(ContainerFeatures {
                     width: item.width,
                     height: item.height,
@@ -667,17 +705,17 @@ impl Libjxl {
 
 impl Drop for Libjxl {
     fn drop(&mut self) {
-        if !self.encoder.is_null() {
-            // # Safety: Calling a C function with valid parameters.
-            unsafe { JxlEncoderDestroy(self.encoder) };
-            self.encoder = null_mut();
+        if let Some(encoder) = self.encoder.take() {
+            // SAFETY: `encoder` is a valid non-null `JxlEncoder` uniquely owned by `self.encoder`
+            // (created by `JxlEncoderCreate`), and `take()` ensures it is destroyed only once.
+            unsafe { JxlEncoderDestroy(encoder.as_ptr()) };
         }
     }
 }
 
 impl Libjxl {
     pub(crate) fn version() -> String {
-        // # Safety: Calling a C function.
+        // SAFETY: `JxlEncoderVersion` takes no arguments and returns a constant `u32` version.
         let version = unsafe { JxlEncoderVersion() };
         format!(
             "jxl: v{}.{}.{}",
@@ -721,7 +759,7 @@ impl OStreamLittleEndian {
                 self.write_bits(0b11, 2)?;
                 self.write_bits(value - 18, 4) // 18 + u(6)
             }
-            _ => unreachable!(),
+            _ => AvifError::invalid_argument(),
         }
     }
 
@@ -812,6 +850,9 @@ fn reconstruct_jxl_header(container: ContainerFeatures) -> AvifResult<Vec<u8>> {
     // See libjxl's SizeHeader::Set().
     let xsize = container.width;
     let ysize = container.height;
+    if xsize == 0 || ysize == 0 {
+        return AvifError::invalid_argument();
+    }
     let ratio = find_aspect_ratio(xsize, ysize);
     const BLOCK_DIM: u32 = 8; // kBlockDim
     let small = container.height <= 256
@@ -871,7 +912,7 @@ fn reconstruct_jxl_header(container: ContainerFeatures) -> AvifResult<Vec<u8>> {
             writer.write_bits(0b00, 2)?; // ec_info[0].name_len = 0
             writer.write_bits(1, 1)?; // ec_info[0].alpha_associated
         }
-        _ => unreachable!(),
+        _ => return AvifError::invalid_argument(),
     }
     writer.write_bits(container.codec_config.xyb_encoded.into(), 1)?; // xyb_encoded
 
@@ -881,7 +922,7 @@ fn reconstruct_jxl_header(container: ContainerFeatures) -> AvifResult<Vec<u8>> {
     writer.enum_table(match container.num_channels {
         1 => 1, // color_encoding.colour_space = kGrey
         3 => 0, // color_encoding.colour_space = kRGB
-        _ => unreachable!(),
+        _ => return AvifError::invalid_argument(),
     })?;
     writer.enum_table(1)?; // color_encoding.white_point = D65
     writer.enum_table(match container.colr_nclx_colour_primaries {
