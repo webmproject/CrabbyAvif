@@ -206,23 +206,35 @@ fn for_each_avm_frame_pkt(
     let mut got_frame = false;
     let mut iter: avm_codec_iter_t = std::ptr::null_mut();
     loop {
-        // # Safety: Calling a C function with valid parameters.
-        let pkt = unsafe { avm_codec_get_cx_data(ctx as *mut _, &mut iter as *mut _) };
+        let ctx_ptr: *mut avm_codec_ctx_t = ctx;
+        let iter_ptr: *mut avm_codec_iter_t = &mut iter;
+        // SAFETY: `ctx_ptr` points to an initialized `avm_codec_ctx_t` and `iter_ptr` points to a
+        // valid stack `avm_codec_iter_t` initialized to null per libavm's iteration protocol.
+        let pkt = unsafe { avm_codec_get_cx_data(ctx_ptr, iter_ptr) };
         if pkt.is_null() {
             break;
         }
-        // # Safety: pkt is guaranteed to be not null (checked) and valid (libavm API contract).
-        let pkt = unsafe { *pkt };
+        // SAFETY: `pkt` was checked to be non-null above, and libavm guarantees the returned
+        // packet pointer is valid and aligned until the next codec call on `ctx`.
+        let pkt = unsafe { &*pkt };
         if pkt.kind != avm_codec_cx_pkt_kind_AVM_CODEC_CX_FRAME_PKT {
             continue;
         }
-        // # Safety: pkt.data is a union. pkt.kind == AVM_CODEC_CX_FRAME_PKT guarantees
-        // that pkt.data.frame is the active field of the union (per libavm API contract).
-        // So this access is safe.
+        // SAFETY: `pkt.data` is a C union; `pkt.kind == AVM_CODEC_CX_FRAME_PKT` guarantees that
+        // `pkt.data.frame` is the active initialized variant per libavm's API contract.
         let frame = unsafe { &pkt.data.frame };
-        // # Safety: buf and sz are guaranteed to be valid as per libavm API contract. So
-        // it is safe to construct a slice from it.
-        let encoded_data = unsafe { std::slice::from_raw_parts(frame.buf as *const u8, frame.sz) };
+        let encoded_data = if frame.sz == 0 {
+            &[][..]
+        } else {
+            if frame.buf.is_null() || frame.sz > isize::MAX as usize {
+                return AvifError::unknown_error("libavm returned invalid frame buffer");
+            }
+            let buf_ptr = frame.buf as *const u8;
+            // SAFETY: `frame.buf` is non-null, `u8` has alignment 1, `frame.sz <= isize::MAX`,
+            // and libavm guarantees `frame.buf` points to `frame.sz` initialized bytes valid
+            // until the next codec call on `ctx`.
+            unsafe { slice::from_raw_parts(buf_ptr, frame.sz) }
+        };
         // TODO(b/437292541): Make sure the sync definition below matches
         //                    https://aomediacodec.github.io/av2-isobmff/main#sync-sample
         let sync = (frame.flags & AVM_FRAME_IS_KEY) != 0;
@@ -677,7 +689,8 @@ impl Encoder for Avm {
             for_each_avm_frame_pkt(self.context.unwrap_mut(), |encoded_data, pkt_sync| {
                 sync |= pkt_sync;
                 let sample_range = Av2CodecConfiguration::get_sample_obus_range(encoded_data)?;
-                combined_data.try_extend_from_slice(&encoded_data[sample_range])
+                let sample_slice = encoded_data.get(sample_range).ok_or(AvifError::NoContent)?;
+                combined_data.try_extend_from_slice(sample_slice)
             })?;
             add_output_sample(combined_data, sync, output_samples)?;
         } else {
@@ -725,7 +738,9 @@ impl Encoder for Avm {
                 for_each_avm_frame_pkt(self.context.unwrap_mut(), |encoded_data, sync| {
                     let mut combined = last_sample.data_output_by_codec().try_to_vec()?;
                     let sample_range = Av2CodecConfiguration::get_sample_obus_range(encoded_data)?;
-                    combined.try_extend_from_slice(&encoded_data[sample_range])?;
+                    let sample_slice =
+                        encoded_data.get(sample_range).ok_or(AvifError::NoContent)?;
+                    combined.try_extend_from_slice(sample_slice)?;
                     let sample_data_range =
                         Av2CodecConfiguration::get_sample_obus_range(&combined)?;
                     *last_sample =
@@ -750,7 +765,8 @@ impl Encoder for Avm {
         output_samples: &[crate::encoder::Sample],
     ) -> AvifResult<CodecConfiguration> {
         // Harvest codec configuration (av2C) from AV2 OBUs.
-        let all_obus = output_samples[0].data_output_by_codec();
+        let first_sample = output_samples.first().ok_or(AvifError::NoContent)?;
+        let all_obus = first_sample.data_output_by_codec();
         let config_obus = Av2CodecConfiguration::get_config_obus_range_and_count(all_obus)?;
         let codec_config = Av2CodecConfiguration::from_av2_config_obus(
             config_obus.count,
