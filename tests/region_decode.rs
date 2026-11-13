@@ -353,3 +353,52 @@ fn region_decode_tests_data_region(codec: CodecChoice) -> AvifResult<()> {
     }
     check_regions_of_dir(&tests_data_dir("region"), codec, 25)
 }
+
+// The files of tests/data/region_decode were pre-encoded with libavif (see tests/data/README.md).
+fn region_decode_file(name: &str) -> Vec<u8> {
+    std::fs::read(format!("{}/{name}", tests_data_dir("region_decode")))
+        .unwrap_or_else(|err| panic!("Unable to read {name}: {err}"))
+}
+
+fn yuv_format_name(yuv_format: PixelFormat) -> &'static str {
+    match yuv_format {
+        PixelFormat::Yuv400 => "400",
+        PixelFormat::Yuv420 => "420",
+        PixelFormat::Yuv422 => "422",
+        PixelFormat::Yuv444 => "444",
+        _ => unreachable!(),
+    }
+}
+
+fn check_file(name: &str, codec: CodecChoice) -> AvifResult<()> {
+    let data = region_decode_file(name);
+    assert!(check_regions(&data, codec, false, 0, name)?, "{name}");
+    Ok(())
+}
+
+// Images with and without alpha (with limited range YUV) of various dimensions.
+#[test_matrix(
+    [PixelFormat::Yuv400, PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444],
+    [8, 10, 12],
+    [false, true],
+    [DAV1D, NATIVE]
+)]
+fn region_decode_formats(
+    yuv_format: PixelFormat,
+    depth: u8,
+    alpha: bool,
+    codec: CodecChoice,
+) -> AvifResult<()> {
+    if codec_unavailable(codec) {
+        return Ok(());
+    }
+    let yuv = yuv_format_name(yuv_format);
+    let alpha = if alpha { "_alpha" } else { "" };
+    for size in ["301x203", "64x64", "1x1", "2x3", "129x66"] {
+        check_file(
+            &format!("formats_{yuv}_{depth}bpc{alpha}_{size}.avif"),
+            codec,
+        )?;
+    }
+    Ok(())
+}
