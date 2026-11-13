@@ -2602,7 +2602,8 @@ impl Decoder {
 
         let codec = &mut self.codecs[tile.codec_index];
         let item = if sample.item_id == 0 { None } else { self.items.get(&sample.item_id) };
-        let data_buffer = if let Some(item) = item { &item.data_buffer } else { &None };
+        let no_buffer = None;
+        let data_buffer = item.map_or(&no_buffer, |i| &i.data_buffer);
         let data = match (
             self.settings.allow_progressive,
             sample.data(io, data_buffer),
@@ -2836,6 +2837,149 @@ impl Decoder {
         Ok(())
     }
 
+    // Returns true if decode_tile_region() may be used for decoding_item, which must then be a
+    // single-tile image (not a grid, an overlay or a sample transform) whose codec can decode a
+    // region of it. For alpha, the alpha tile must also have the given uncropped dimensions of the
+    // color image, since the alpha plane is cropped like the color planes.
+    fn can_decode_tile_region(
+        &self,
+        decoding_item: DecodingItem,
+        uncropped_color_dims: Option<(u32, u32)>,
+    ) -> bool {
+        let tile_info = &self.tile_info[decoding_item.usize()];
+        if decoding_item.item_idx != 0
+            || tile_info.is_grid()
+            || tile_info.is_overlay()
+            || tile_info.is_sample_transform()
+            || tile_info.decoded_tile_count != 0
+            || self.settings.allow_progressive
+            || self.settings.allow_incremental
+        {
+            return false;
+        }
+        let [tile] = self.tiles[decoding_item.usize()].as_slice() else {
+            return false;
+        };
+        if uncropped_color_dims.is_some_and(|dims| dims != (tile.width, tile.height)) {
+            return false;
+        }
+        // Only the native AV1 decoder can decode a region of an image.
+        match self.codecs.get(tile.codec_index).map(|codec| codec.codec()) {
+            #[cfg(feature = "native_av1")]
+            Some(CodecChoice::Native) => true,
+            _ => false,
+        }
+    }
+
+    // Decodes only the region rect of the single tile of decoding_item (see
+    // can_decode_tile_region()) into the image of decoding_item (Decoder::image for color and
+    // alpha, Decoder::gainmap::image for the gain map). The result is identical to decoding the
+    // whole tile with decode_tile() and cropping it to rect afterwards. For color and gain map,
+    // rect must be aligned to the pixel format of the image. For alpha, rect must have the
+    // dimensions of the already decoded and cropped color image.
+    // Returns false without decoding anything if the codec cannot decode that region, in which
+    // case the whole tile has to be decoded and cropped instead.
+    fn decode_tile_region(
+        &mut self,
+        image_index: usize,
+        decoding_item: DecodingItem,
+        rect: &CropRect,
+    ) -> AvifResult<bool> {
+        let category = decoding_item.category;
+        let tile = self.tiles[decoding_item.usize()]
+            .first()
+            .ok_or(AvifError::InvalidArgument)?;
+        let sample = tile
+            .input
+            .samples
+            .get(image_index)
+            .ok_or(AvifError::NoImagesRemaining)?;
+        let item = if sample.item_id == 0 { None } else { self.items.get(&sample.item_id) };
+        let no_buffer = None;
+        let data_buffer = item.map_or(&no_buffer, |i| &i.data_buffer);
+        let io = self.io.as_mut().ok_or(AvifError::IoNotSet)?;
+        let data = sample.data(io, data_buffer)?;
+
+        let mut aligned_rect = *rect;
+        if category == Category::Color || category == Category::Gainmap {
+            let yuv_format = if category == Category::Color {
+                self.image.yuv_format
+            } else {
+                self.gainmap.image.yuv_format
+            };
+            aligned_rect = rect.align_to_pixel_format(yuv_format);
+        }
+
+        if category == Category::Gainmap {
+            self.gainmap.image.free_planes(category.planes());
+        } else {
+            self.image.free_planes(category.planes());
+        }
+
+        let codec = self
+            .codecs
+            .get_mut(tile.codec_index)
+            .ok_or(AvifError::UnknownError("missing codec".into()))?;
+        // Decode into a new image rather than into tile.image, which holds the properties of the
+        // whole image (checked by the codecs when decoding alpha planes).
+        let mut region_image = Image::default();
+        match codec.get_next_image_region(
+            data,
+            sample.spatial_id,
+            &aligned_rect,
+            (tile.width, tile.height),
+            &mut region_image,
+            category,
+        ) {
+            Ok(()) => {}
+            Err(AvifError::NotImplemented) => return Ok(false),
+            Err(err) => return Err(err),
+        }
+        let codec_config = &tile.codec_config;
+        checked_incr!(self.tile_info[decoding_item.usize()].decoded_tile_count, 1);
+
+        if category == Category::Alpha && region_image.yuv_range == YuvRange::Limited {
+            region_image.alpha_to_full_range()?;
+        }
+        let dst_image = match category {
+            Category::Color | Category::Alpha => &mut self.image,
+            Category::Gainmap => &mut self.gainmap.image,
+        };
+        match category {
+            Category::Color | Category::Gainmap => {
+                dst_image.width = region_image.width;
+                dst_image.height = region_image.height;
+                dst_image.copy_properties_from(&region_image, codec_config);
+                // Same as Image::crop_in_place().
+                dst_image.clap = None;
+            }
+            Category::Alpha => {
+                if !dst_image.has_same_properties(&region_image) {
+                    return AvifError::decode_alpha_failed();
+                }
+            }
+        }
+        let planes = if category == Category::Color && region_image.has_plane(Plane::A) {
+            &ALL_PLANES
+        } else {
+            category.planes()
+        };
+        for plane in planes {
+            let plane = plane.as_usize();
+            dst_image.planes[plane] = match region_image.planes[plane].take() {
+                Some(Pixels::Buffer(b)) if b.is_empty() => None,
+                Some(Pixels::Buffer16(b)) if b.is_empty() => None,
+                other => other,
+            };
+            dst_image.row_bytes[plane] = if dst_image.planes[plane].is_some() {
+                region_image.row_bytes[plane]
+            } else {
+                0
+            };
+        }
+        Ok(true)
+    }
+
     // If grid_subset is set, only the given cells are read and decoded, into an image with the
     // dimensions of the given region. This is not compatible with incremental decoding, and the
     // item is considered fully decoded afterwards.
@@ -3066,6 +3210,12 @@ impl Decoder {
                 decoded_something = true;
             } else if let Some(rect) = actual_crop.filter(|_| decoding_item.item_idx == 0) {
                 if decoding_item == DecodingItem::ALPHA {
+                    if self.can_decode_tile_region(decoding_item, Some(uncropped_color_dims))
+                        && self.decode_tile_region(image_index, decoding_item, &rect)?
+                    {
+                        decoded_something = true;
+                        continue;
+                    }
                     let mut temp_alpha_image = self.image.shallow_clone();
                     temp_alpha_image.width = uncropped_color_dims.0;
                     temp_alpha_image.height = uncropped_color_dims.1;
@@ -3098,6 +3248,17 @@ impl Decoder {
                             temp_alpha_image.planes[Plane::A.as_usize()].take();
                         self.image.row_bytes[Plane::A.as_usize()] =
                             temp_alpha_image.row_bytes[Plane::A.as_usize()];
+                    }
+                    decoded_something = true;
+                } else if self.can_decode_tile_region(decoding_item, None)
+                    && self.decode_tile_region(image_index, decoding_item, &rect)?
+                {
+                    if decoding_item == DecodingItem::COLOR {
+                        let tile = self.tiles[decoding_item.usize()]
+                            .first()
+                            .ok_or(AvifError::UnknownError("missing tile".into()))?;
+                        uncropped_color_dims = (tile.width, tile.height);
+                        actual_crop = Some(rect.align_to_pixel_format(self.image.yuv_format));
                     }
                     decoded_something = true;
                 } else {

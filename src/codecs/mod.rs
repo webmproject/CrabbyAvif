@@ -32,14 +32,14 @@ pub mod native;
 
 #[cfg(feature = "encoder")]
 use crate::internal_utils::*;
-#[cfg(feature = "encoder")]
-use crate::AvifError;
 
 use crate::decoder::item::Item;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::parser::mp4box::CodecConfiguration;
+use crate::utils::clap::CropRect;
 use crate::AndroidMediaCodecOutputColorFormat;
+use crate::AvifError;
 use crate::AvifResult;
 use crate::Category;
 use crate::CodecChoice;
@@ -68,7 +68,7 @@ pub(crate) struct DecoderConfig {
 pub(crate) trait Decoder {
     fn codec(&self) -> CodecChoice;
     fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()>;
-    // Decode a single image and write the output into |image|.
+    // Decode a single image and write the output into `image`.
     fn get_next_image(
         &mut self,
         av1_payload: &[u8],
@@ -78,6 +78,28 @@ pub(crate) trait Decoder {
         item: Option<&Item>,
         signal_eos: bool,
     ) -> AvifResult<()>;
+    // Decodes only the region `crop_rect` (in luma samples) of a single image, whose dimensions
+    // must be `full_size`, and writes it into `image`, whose dimensions are then those of
+    // `crop_rect`. The output must be identical to decoding the whole image with get_next_image()
+    // and cropping it to `crop_rect`. For Color and Gainmap, the x and y coordinates of `crop_rect`
+    // must be aligned to the chroma subsampling of the decoded image (as with
+    // Image::crop_in_place()). For Alpha, only the luma plane is used so `crop_rect` needs no
+    // alignment.
+    // Returns AvifError::NotImplemented without modifying `image` if the codec does not support
+    // decoding this region of this image, in which case the caller decodes the whole image and
+    // crops it instead.
+    #[allow(unused_variables)]
+    fn get_next_image_region(
+        &mut self,
+        av1_payload: &[u8],
+        spatial_id: u8,
+        crop_rect: &CropRect,
+        full_size: (u32, u32),
+        image: &mut Image,
+        category: Category,
+    ) -> AvifResult<()> {
+        AvifError::not_implemented()
+    }
     // Decode a list of input images and outputs them into the |grid_image_helper|.
     fn get_next_image_grid(
         &mut self,
@@ -85,7 +107,7 @@ pub(crate) trait Decoder {
         spatial_id: u8,
         grid_image_helper: &mut GridImageHelper,
     ) -> AvifResult<()>;
-    // Decode a list of input images and write the output of the last decoded image into |image|.
+    // Decode a list of input images and write the output of the last decoded image into `image`.
     fn get_last_image(
         &mut self,
         payloads: &[Vec<u8>],
