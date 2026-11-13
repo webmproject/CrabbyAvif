@@ -279,20 +279,25 @@ impl Encoder for Avm {
         let quantizer = avm_quality_to_quantizer(quality);
 
         if self.context.is_none() {
-            // # Safety: Calling a C function.
+            // SAFETY: `avm_codec_av2_cx` has no preconditions and returns a static descriptor.
             let encoder_iface = unsafe { avm_codec_av2_cx() };
+            if encoder_iface.is_null() {
+                return AvifError::unknown_error("avm_codec_av2_cx() returned null");
+            }
             let avm_usage = AVM_USAGE_GOOD_QUALITY;
-            let mut cfg_uninit: MaybeUninit<avm_codec_enc_cfg> = MaybeUninit::uninit();
-            // # Safety: Calling a C function with valid parameters.
-            let err = unsafe {
-                avm_codec_enc_config_default(encoder_iface, cfg_uninit.as_mut_ptr(), avm_usage)
-            };
+            let mut cfg_uninit: MaybeUninit<avm_codec_enc_cfg> = MaybeUninit::zeroed();
+            let cfg_uninit_ptr = cfg_uninit.as_mut_ptr();
+            // SAFETY: `encoder_iface` is non-null and valid, and `cfg_uninit_ptr` points to a
+            // properly aligned `avm_codec_enc_cfg` stack slot to be initialized by libavm.
+            let err =
+                unsafe { avm_codec_enc_config_default(encoder_iface, cfg_uninit_ptr, avm_usage) };
             if err != avm_codec_err_t_AVM_CODEC_OK {
                 return AvifError::unknown_error(format!(
                     "avm_codec_enc_config_default() failed: {err}"
                 ));
             }
-            // # Safety: cfg_uninit was initialized in the C function call above.
+            // SAFETY: `avm_codec_enc_config_default` returned `AVM_CODEC_OK`, guaranteeing that
+            // `cfg_uninit` has been completely initialized.
             let mut avm_config = unsafe { cfg_uninit.assume_init() };
             avm_config.rc_end_usage = avm_rc_mode_AVM_Q;
             avm_config.g_profile = av2_profile(image, category)?.seq_profile;
@@ -343,23 +348,24 @@ impl Encoder for Avm {
                 avm_config.rc_max_quantizer = max;
             }
 
-            let mut encoder_uninit: MaybeUninit<avm_codec_ctx_t> = MaybeUninit::uninit();
+            // Zero initialize the struct first as some defaults (such as `err_detail`) are not
+            // set by `avm_codec_enc_init_ver` when initialization succeeds.
+            // SAFETY: Zero-initializing the C `avm_codec_ctx_t` struct matches the C API usage
+            // before `avm_codec_enc_init_ver` and remains compatible across libavm versions.
+            let mut encoder: avm_codec_ctx_t = unsafe { std::mem::zeroed() };
+            let encoder_ptr: *mut avm_codec_ctx_t = &mut encoder;
+            let cfg_ptr: *const avm_codec_enc_cfg = &avm_config;
             let init_flags = 0x0;
-            // # Safety: Calling a C function with valid parameters.
+            let abi_version = AVM_ENCODER_ABI_VERSION as _;
+            // SAFETY: `encoder_ptr`, `encoder_iface`, and `cfg_ptr` are valid non-null pointers,
+            // and `abi_version` matches the headers linked into this build.
             let err = unsafe {
-                avm_codec_enc_init_ver(
-                    encoder_uninit.as_mut_ptr(),
-                    encoder_iface,
-                    &avm_config as *const _,
-                    init_flags,
-                    AVM_ENCODER_ABI_VERSION as _,
-                )
+                avm_codec_enc_init_ver(encoder_ptr, encoder_iface, cfg_ptr, init_flags, abi_version)
             };
             if err != avm_codec_err_t_AVM_CODEC_OK {
                 return AvifError::unknown_error(format!("avm_codec_enc_init() failed: {err}"));
             }
-            // # Safety: encoder_uninit was initialized in the C function call above.
-            self.context = Some(unsafe { encoder_uninit.assume_init() });
+            self.context = Some(encoder);
 
             if avm_config.rc_end_usage == avm_rc_mode_AVM_CQ
                 || avm_config.rc_end_usage == avm_rc_mode_AVM_Q
@@ -700,11 +706,7 @@ impl Encoder for Avm {
             || (config.extra_layer_count > 0 && config.extra_layer_count == self.current_layer)
         {
             self.finish(output_samples)?;
-            // # Safety: Calling a C function with valid parameters.
-            unsafe {
-                avm_codec_destroy(self.context.unwrap_mut() as *mut _);
-            }
-            self.context = None;
+            self.destroy_context();
         }
         if config.extra_layer_count > 0 {
             self.current_layer += 1;
@@ -856,35 +858,41 @@ impl Decoder for Avm {
     ) -> AvifResult<()> {
         let mut first_time = self.context.is_none();
         if first_time {
-            // # Safety: Calling a C function.
+            let decoder_config = self
+                .decoder_config
+                .as_ref()
+                .ok_or(AvifError::InvalidArgument)?;
+            let max_threads = decoder_config.max_threads;
+            let all_layers = decoder_config.all_layers;
+            // SAFETY: `avm_codec_av2_dx` has no preconditions and returns a static descriptor.
             let decoder_iface = unsafe { avm_codec_av2_dx() };
-            let avm_config = avm_codec_dec_cfg {
-                threads: self.decoder_config.unwrap_ref().max_threads,
-                w: Default::default(),
-                h: Default::default(),
-                path_parakit: Default::default(),
-                suffix_parakit: Default::default(),
-            };
-            let mut context_uninit: MaybeUninit<avm_codec_ctx_t> = MaybeUninit::uninit();
-            // # Safety: Calling a C function with valid parameters.
+            if decoder_iface.is_null() {
+                return AvifError::unknown_error("avm_codec_av2_dx() returned null");
+            }
+            // SAFETY: Zero-initializing the C `avm_codec_dec_cfg` struct is valid for all its
+            // integer and pointer fields and remains compatible across libavm versions.
+            let mut avm_config: avm_codec_dec_cfg = unsafe { std::mem::zeroed() };
+            avm_config.threads = max_threads;
+            // SAFETY: Zero-initializing the C `avm_codec_ctx_t` struct matches the C API usage
+            // before `avm_codec_dec_init_ver` and remains compatible across libavm versions.
+            let mut context: avm_codec_ctx_t = unsafe { std::mem::zeroed() };
+            let ctx_ptr: *mut avm_codec_ctx_t = &mut context;
+            let cfg_ptr: *const avm_codec_dec_cfg = &avm_config;
+            let init_flags = avm_codec_flags_t::default();
+            let abi_version = AVM_DECODER_ABI_VERSION as _;
+            // SAFETY: `ctx_ptr`, `decoder_iface`, and `cfg_ptr` are valid non-null pointers,
+            // and `abi_version` matches the headers linked into this build.
             let err = unsafe {
-                avm_codec_dec_init_ver(
-                    context_uninit.as_mut_ptr(),
-                    decoder_iface,
-                    &avm_config as *const _,
-                    avm_codec_flags_t::default(),
-                    AVM_DECODER_ABI_VERSION as _,
-                )
+                avm_codec_dec_init_ver(ctx_ptr, decoder_iface, cfg_ptr, init_flags, abi_version)
             };
             if err != avm_codec_err_t_AVM_CODEC_OK {
                 return AvifError::unknown_error(format!("avm_codec_dec_init() failed: {err}"));
             }
-            // # Safety: encoder_uninit was initialized in the C function call above.
-            self.context = Some(unsafe { context_uninit.assume_init() });
+            self.context = Some(context);
 
             self.codec_control(
                 avm_dec_control_id_AV2D_SET_OUTPUT_ALL_LAYERS,
-                if self.decoder_config.unwrap_ref().all_layers
+                if all_layers
                     || item.is_some_and(|item| item.has_native_alpha())
                     || (category == Category::Color && image.alpha_present)
                 {
@@ -1179,21 +1187,35 @@ impl Decoder for Avm {
 
 impl Drop for Avm {
     fn drop(&mut self) {
-        if self.context.is_some() {
-            // # Safety: Calling a C function with valid parameters.
-            unsafe {
-                avm_codec_destroy(self.context.unwrap_mut() as *mut _);
-            }
-        }
+        self.destroy_context();
     }
 }
 
 impl Avm {
+    fn destroy_context(&mut self) {
+        self.image = std::ptr::null_mut();
+        self.decoder_iter = std::ptr::null();
+        if let Some(mut ctx) = self.context.take() {
+            let ctx_ptr: *mut avm_codec_ctx_t = &mut ctx;
+            // SAFETY: `ctx` was initialized by a successful `avm_codec_enc_init_ver` or
+            // `avm_codec_dec_init_ver` call, and `self.context.take()` ensures `avm_codec_destroy`
+            // is called at most once. `self.image` and `self.decoder_iter` are cleared first.
+            unsafe {
+                avm_codec_destroy(ctx_ptr);
+            }
+        }
+    }
+
     pub(crate) fn version() -> String {
-        // # Safety: Calling a C function that returns a valid null-terminated C string.
-        let version = match unsafe { CStr::from_ptr(avm_codec_version_str()) }.to_str() {
-            Ok(s) => s.to_owned(),
-            Err(_) => String::new(),
+        // SAFETY: `avm_codec_version_str` has no preconditions and returns a static C string.
+        let version_ptr = unsafe { avm_codec_version_str() };
+        let version = if version_ptr.is_null() {
+            String::new()
+        } else {
+            // SAFETY: `version_ptr` was checked to be non-null above and points to a static
+            // NUL-terminated string literal owned by libavm.
+            let version_cstr = unsafe { CStr::from_ptr(version_ptr) };
+            version_cstr.to_str().unwrap_or_default().to_owned()
         };
         format!("avm: {version}")
     }
