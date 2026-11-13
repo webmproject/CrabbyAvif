@@ -141,10 +141,13 @@ fn crops_for(width: u32, height: u32) -> Vec<CropRect> {
         crop(w - 3.min(w), h - 3.min(h), 3.min(w), 3.min(h)),
         crop(w - 1, 0, 1, h),
         crop(0, h - 1, w, 1),
+        crop(1, h - 1, w - 1, 1),
         crop(0, h / 3, w, (h / 3).max(1)),
         crop(w / 3, 0, (w / 3).max(1), h),
         // Within a single 64x64 superblock.
+        crop(10, 20, 31, 17),
         crop(65, 67, 30, 29),
+        crop(70, 30, 33, 21),
         crop(3, 5, 7, 9),
         // Straddling 64x64 superblock boundaries.
         crop(60, 61, 9, 7),
