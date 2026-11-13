@@ -594,3 +594,29 @@ fn region_decode_sequence_keyframes(codec: CodecChoice) -> AvifResult<()> {
     }
     Ok(())
 }
+
+// The 'ispe' dimensions of the items differ from the dimensions of the AV1 frames, so a full decode
+// scales the frames. A region decode must behave the same way.
+#[test_matrix([(150, 90), (260, 150)], [DAV1D, NATIVE])]
+fn region_decode_scaled_frame(ispe: (u32, u32), codec: CodecChoice) -> AvifResult<()> {
+    if codec_unavailable(codec) {
+        return Ok(());
+    }
+    // Without alpha: decoding an alpha item again after scaling it fails with all the codecs.
+    let mut data = region_decode_file("scaled_200x120.avif");
+    let mut patched = 0;
+    for offset in 0..data.len() - 16 {
+        if &data[offset..offset + 4] == b"ispe" {
+            assert_eq!(
+                data[offset + 4..offset + 16],
+                [0, 0, 0, 0, 0, 0, 0, 200, 0, 0, 0, 120]
+            );
+            data[offset + 8..offset + 12].copy_from_slice(&ispe.0.to_be_bytes());
+            data[offset + 12..offset + 16].copy_from_slice(&ispe.1.to_be_bytes());
+            patched += 1;
+        }
+    }
+    assert_eq!(patched, 1);
+    assert!(check_regions(&data, codec, false, 0, "scaled")?);
+    Ok(())
+}
