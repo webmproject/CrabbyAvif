@@ -295,23 +295,52 @@ impl Encoder {
 
         let orientation_minus1 = image_irot_imir_to_exif_orientation(image)? - 1;
 
-        let (infe_type, codec_config_type, has_explicit_codec_types, codec_config) =
-            match &color_item.codec_configuration {
-                Some(CodecConfiguration::Av1(config)) => ("av01", "av1C", false, {
+        let serialize_codec_config = |item: &Item| -> AvifResult<Vec<u8>> {
+            match &item.codec_configuration {
+                Some(CodecConfiguration::Av1(config)) => {
                     let mut codec_config_stream = OStream::default();
                     codec_config_stream.try_reserve(4)?;
                     Item::write_av1_codec_config(config, &mut codec_config_stream)?;
                     assert_eq!(codec_config_stream.offset(), 4); // 'av1C' is always 4 byte long.
-                    codec_config_stream.data
-                }),
+                    Ok(codec_config_stream.data)
+                }
                 #[cfg(feature = "avm")]
-                Some(CodecConfiguration::Av2(config)) => ("av02", "av2C", false, {
+                Some(CodecConfiguration::Av2(config)) => {
                     let mut codec_config_stream = OStream::default();
                     Item::write_av2_codec_config(config, &mut codec_config_stream)?;
-                    codec_config_stream.data
-                }),
+                    Ok(codec_config_stream.data)
+                }
+                _ => AvifError::not_implemented(),
+            }
+        };
+
+        let (infe_type, codec_config_type, has_explicit_codec_types) =
+            match &color_item.codec_configuration {
+                Some(CodecConfiguration::Av1(_)) => ("av01", "av1C", false),
+                #[cfg(feature = "avm")]
+                Some(CodecConfiguration::Av2(_)) => ("av02", "av2C", false),
                 _ => return AvifError::not_implemented(),
             };
+        let codec_config = serialize_codec_config(color_item)?;
+        let alpha_codec_config = match alpha_item {
+            Some(item)
+                if !alpha_data.unwrap_or(&[]).is_empty()
+                    && item.codec_configuration != color_item.codec_configuration =>
+            {
+                serialize_codec_config(item)?
+            }
+            _ => Vec::new(),
+        };
+        let gainmap_codec_config = match gainmap_item {
+            Some(item)
+                if has_hdr
+                    && !gainmap_data.unwrap_or(&[]).is_empty()
+                    && item.codec_configuration != color_item.codec_configuration =>
+            {
+                serialize_codec_config(item)?
+            }
+            _ => Vec::new(),
+        };
 
         // _minus1 is encoded for these fields.
         assert_ne!(image.width, 0);
@@ -320,10 +349,13 @@ impl Encoder {
 
         let mut large_dimensions_flag = image.width > (1 << 7) || image.height > (1 << 7);
         let codec_config_size = u32_from_usize(codec_config.len())?;
-        let mut alpha_codec_config_size = 0; // 0 if same codec config as main. Equal to codec_config_size otherwise.
-        let mut gainmap_codec_config_size = 0; // 0 if same codec config as main. Equal to codec_config_size otherwise.
+        // 0 if same codec config as main.
+        let alpha_codec_config_size = u32_from_usize(alpha_codec_config.len())?;
+        let gainmap_codec_config_size = u32_from_usize(gainmap_codec_config.len())?;
         let mut gainmap_metadata_size = 0;
-        let large_codec_config_flag = codec_config_size >= (1 << 3);
+        let large_codec_config_flag = codec_config_size >= (1 << 3)
+            || alpha_codec_config_size >= (1 << 3)
+            || gainmap_codec_config_size >= (1 << 3);
         let mut large_item_data_flag = color_data.len() > (1 << 15)
             || (alpha_data.is_some() && alpha_data.unwrap().len() >= (1 << 15));
         let mut large_metadata_flag = (has_icc && image.icc.len() > (1 << 10))
@@ -541,17 +573,6 @@ impl Encoder {
             )?; // unsigned int(large_item_data_flag ? 28 : 15) gainmap_item_data_size;
         }
         if has_hdr && has_gainmap && !gainmap_data.unwrap_or(&[]).is_empty() {
-            if gainmap_item
-                .ok_or(AvifError::UnknownError("gainmap item not found".into()))?
-                .codec_configuration
-                == color_item.codec_configuration
-            {
-                // The gainmap codec config is copied from the main codec config.
-                // This is signaled by a size of 0.
-                gainmap_codec_config_size = 0;
-            } else {
-                gainmap_codec_config_size = codec_config_size;
-            }
             stream.write_bits(
                 gainmap_codec_config_size,
                 if large_codec_config_flag { 12 } else { 3 },
@@ -579,17 +600,6 @@ impl Encoder {
             )?; // unsigned int(large_item_data_flag ? 28 : 15) alpha_item_data_size;
         }
         if has_alpha && !alpha_data.unwrap_or(&[]).is_empty() {
-            if alpha_item
-                .ok_or(AvifError::UnknownError("alpha item not found".into()))?
-                .codec_configuration
-                == color_item.codec_configuration
-            {
-                // The alpha codec config is copied from the main codec config.
-                // This is signaled by a size of 0.
-                alpha_codec_config_size = 0;
-            } else {
-                alpha_codec_config_size = codec_config_size;
-            }
             stream.write_bits(
                 alpha_codec_config_size,
                 if large_codec_config_flag { 12 } else { 3 },
@@ -635,35 +645,11 @@ impl Encoder {
         }
         if has_alpha && !alpha_data.unwrap_or(&[]).is_empty() && alpha_codec_config_size != 0 {
             // unsigned int(8) alpha_item_codec_config[alpha_item_codec_config_size];
-            match &alpha_item
-                .ok_or(AvifError::UnknownError("alpha item not found".into()))?
-                .codec_configuration
-            {
-                Some(CodecConfiguration::Av1(config)) => {
-                    Item::write_av1_codec_config(config, stream)?;
-                }
-                #[cfg(feature = "avm")]
-                Some(CodecConfiguration::Av2(config)) => {
-                    Item::write_av2_codec_config(config, stream)?;
-                }
-                _ => return AvifError::unknown_error("Unexpected codec configuration"),
-            }
+            stream.write_slice(&alpha_codec_config)?;
         }
         if has_hdr && has_gainmap && gainmap_codec_config_size != 0 {
             // unsigned int(8) gainmap_item_codec_config[gainmap_item_codec_config_size];
-            match &gainmap_item
-                .ok_or(AvifError::UnknownError("gainmap item not found".into()))?
-                .codec_configuration
-            {
-                Some(CodecConfiguration::Av1(config)) => {
-                    Item::write_av1_codec_config(config, stream)?;
-                }
-                #[cfg(feature = "avm")]
-                Some(CodecConfiguration::Av2(config)) => {
-                    Item::write_av2_codec_config(config, stream)?;
-                }
-                _ => return AvifError::unknown_error("Unexpected codec configuration"),
-            }
+            stream.write_slice(&gainmap_codec_config)?;
         }
 
         if has_icc {
@@ -806,4 +792,90 @@ fn write_content_light_level_information(
     stream.write_bits(clli.max_pall.into(), 16)?; // unsigned int(16) max_pic_average_light_level;
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "avm"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_mini_differing_codec_config_sizes() -> AvifResult<()> {
+        let encoder = Encoder {
+            settings: Settings {
+                codec_choice: CodecChoice::Avm,
+                header_format: HeaderFormat::Mini,
+                ..Default::default()
+            },
+            primary_item_id: 1,
+            alpha_present: true,
+            image_metadata: Image {
+                width: 16,
+                height: 16,
+                depth: 8,
+                yuv_format: PixelFormat::Yuv420,
+                ..Default::default()
+            },
+            gainmap_image_metadata: Image {
+                width: 8,
+                height: 8,
+                depth: 8,
+                yuv_format: PixelFormat::Yuv400,
+                ..Default::default()
+            },
+            items: try_vec_exact![
+                Item {
+                    id: 1,
+                    item_type: "av02".into(),
+                    category: Category::Color,
+                    samples: try_vec_exact![Sample::create(
+                        try_vec_exact![0x11, 0x22]?,
+                        0..2,
+                        true
+                    )]?,
+                    codec_configuration: Some(CodecConfiguration::Av2(Av2CodecConfiguration {
+                        config_obus_count: 1,
+                        config_obus: try_vec_exact![1, 2, 3]?,
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                Item {
+                    id: 2,
+                    item_type: "av01".into(),
+                    category: Category::Alpha,
+                    iref_to_id: Some(1),
+                    samples: try_vec_exact![Sample::create(try_vec_exact![0x33]?, 0..1, true)]?,
+                    codec_configuration: Some(CodecConfiguration::Av1(
+                        Av1CodecConfiguration::default(),
+                    )),
+                    ..Default::default()
+                },
+                Item {
+                    id: 3,
+                    item_type: "av02".into(),
+                    category: Category::Gainmap,
+                    samples: try_vec_exact![Sample::create(try_vec_exact![0x44]?, 0..1, true)]?,
+                    codec_configuration: Some(CodecConfiguration::Av2(Av2CodecConfiguration {
+                        config_obus_count: 1,
+                        config_obus: try_vec_exact![1, 2, 3, 4, 5, 6, 7, 8]?,
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                Item {
+                    id: 4,
+                    item_type: "tmap".into(),
+                    category: Category::Color,
+                    metadata_payload: try_vec_exact![0, 1, 2, 3]?,
+                    ..Default::default()
+                },
+            ]?,
+            ..Default::default()
+        };
+        assert!(is_mini_compatible(&encoder));
+        let mut stream = OStream::default();
+        encoder.write_ftyp_and_mini(&mut stream)?;
+        assert!(!stream.data.is_empty());
+        Ok(())
+    }
 }
