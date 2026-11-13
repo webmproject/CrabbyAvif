@@ -814,7 +814,7 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
         image.icc = read_file(icc).expect("failed to read icc file");
     }
     if let Some(exif) = &args.exif {
-        image.xmp = read_file(exif).expect("failed to read exif file");
+        image.exif = read_file(exif).expect("failed to read exif file");
     }
     if let Some(xmp) = &args.xmp {
         image.xmp = read_file(xmp).expect("failed to read xmp file");

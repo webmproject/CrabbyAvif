@@ -147,4 +147,81 @@ mod decode_tests {
             Ok((40, 30))
         );
     }
+
+    #[cfg(all(feature = "aom", feature = "png"))]
+    #[test]
+    fn encode_with_exif_only() -> AvifResult<()> {
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+        let exif_path = temp_dir.path().join("meta.exif");
+        let exif_bytes = b"II*\0\x08\0\0\0\0\0".to_vec();
+        std::fs::write(&exif_path, &exif_bytes).unwrap();
+
+        let input_path = get_test_file("sacre_coeur.png");
+        let encoded_path = temp_dir.path().join("output.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                "--exif",
+                exif_path.to_str().unwrap(),
+                input_path.as_str(),
+                encoded_path.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&encoded_path.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        let parsed = decoder.image().expect("parsed image was none");
+        assert_eq!(parsed.exif, exif_bytes);
+        assert!(parsed.xmp.is_empty());
+        Ok(())
+    }
+
+    #[cfg(all(feature = "aom", feature = "png"))]
+    #[test]
+    fn encode_with_icc_exif_xmp() -> AvifResult<()> {
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+        let icc_path = temp_dir.path().join("meta.icc");
+        let exif_path = temp_dir.path().join("meta.exif");
+        let xmp_path = temp_dir.path().join("meta.xmp");
+        let icc_bytes = b"cli test icc profile".to_vec();
+        let exif_bytes = b"II*\0\x08\0\0\0\0\0".to_vec();
+        let xmp_bytes = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/">cli</x:xmpmeta>"#.to_vec();
+        std::fs::write(&icc_path, &icc_bytes).unwrap();
+        std::fs::write(&exif_path, &exif_bytes).unwrap();
+        std::fs::write(&xmp_path, &xmp_bytes).unwrap();
+
+        let input_path = get_test_file("sacre_coeur.png");
+        let encoded_path = temp_dir.path().join("output.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                "--icc",
+                icc_path.to_str().unwrap(),
+                "--exif",
+                exif_path.to_str().unwrap(),
+                "--xmp",
+                xmp_path.to_str().unwrap(),
+                input_path.as_str(),
+                encoded_path.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&encoded_path.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        let parsed = decoder.image().expect("parsed image was none");
+        assert_eq!(parsed.icc, icc_bytes);
+        assert_eq!(parsed.exif, exif_bytes);
+        assert_eq!(parsed.xmp, xmp_bytes);
+        Ok(())
+    }
 }
