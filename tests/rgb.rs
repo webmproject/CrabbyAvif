@@ -624,6 +624,46 @@ fn sharpyuv_16bit(yuv_depth: u8) -> AvifResult<()> {
     })
 }
 
+// libsharpyuv only supports RGB/RGBA/BGRA to YUV 4:2:0. Requesting it for other formats returns an
+// error.
+#[cfg(feature = "sharpyuv")]
+#[test_matrix(
+    [8, 10, 12],
+    [rgb::Format::Rgb, rgb::Format::Rgba, rgb::Format::Gray],
+    [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444, PixelFormat::Yuv400]
+)]
+fn sharpyuv_unsupported(
+    depth: u8,
+    rgb_format: rgb::Format,
+    yuv_format: PixelFormat,
+) -> AvifResult<()> {
+    if rgb_format != rgb::Format::Gray && yuv_format == PixelFormat::Yuv420 {
+        return Ok(());
+    }
+    let mut rgb = rgb::Image {
+        width: 4,
+        height: 4,
+        depth,
+        format: rgb_format,
+        chroma_downsampling: ChromaDownsampling::SharpYuv,
+        ..Default::default()
+    };
+    rgb.allocate()?;
+    let mut image = image::Image {
+        width: 4,
+        height: 4,
+        depth,
+        yuv_format,
+        matrix_coefficients: MatrixCoefficients::Bt601,
+        ..Default::default()
+    };
+    assert_eq!(
+        rgb.convert_to_yuv(&mut image),
+        Err(AvifError::ReformatFailed)
+    );
+    Ok(())
+}
+
 #[test_matrix(
     [(8, 128), (10, 512), (12, 2048), (16, 32768)],
     [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444, PixelFormat::Yuv400],

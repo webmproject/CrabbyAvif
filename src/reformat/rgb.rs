@@ -912,14 +912,13 @@ impl Image {
                 (true, true, false) => AlphaMultiplyMode::UnMultiply,
                 _ => AlphaMultiplyMode::NoOp,
             };
-        if self.format.is_gray() {
+        if self.chroma_downsampling == ChromaDownsampling::SharpYuv {
+            sharpyuv::rgb_to_yuv(self, image)?;
+        } else if self.format.is_gray() {
             rgb_impl::rgb_gray_to_yuv(self, image)?;
         } else {
             let mut conversion_complete = false;
-            if self.chroma_downsampling == ChromaDownsampling::SharpYuv {
-                sharpyuv::rgb_to_yuv(self, image)?;
-                conversion_complete = true;
-            } else if alpha_multiply_mode == AlphaMultiplyMode::NoOp {
+            if alpha_multiply_mode == AlphaMultiplyMode::NoOp {
                 conversion_complete = libyuv::rgb_to_yuv(self, image)?.is_some();
             }
             if !conversion_complete {
