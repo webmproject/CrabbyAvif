@@ -923,16 +923,16 @@ impl Decoder for Avm {
         let mut target_spatial_id = 0xff;
         let mut av2_payload_can_be_used = true;
         loop {
-            // # Safety: Calling a C function with valid parameters.
-            next_frame = unsafe {
-                avm_codec_get_frame(
-                    self.context.unwrap_mut() as *mut _,
-                    (&mut self.decoder_iter) as *mut _,
-                )
-            };
+            let ctx = self.context.as_mut().ok_or(AvifError::InvalidArgument)?;
+            let ctx_ptr: *mut avm_codec_ctx_t = ctx;
+            let iter_ptr: *mut avm_codec_iter_t = &mut self.decoder_iter;
+            // SAFETY: `ctx_ptr` points to an initialized decoder `avm_codec_ctx_t` and `iter_ptr`
+            // points to `self.decoder_iter`, which is initialized to null before each decode batch.
+            next_frame = unsafe { avm_codec_get_frame(ctx_ptr, iter_ptr) };
             if !next_frame.is_null() {
                 if target_spatial_id != 0xff {
-                    // # Safety: Dereferencing a non-NULL pointer.
+                    // SAFETY: `next_frame` was checked to be non-null above, and libavm guarantees
+                    // the returned `avm_image_t` pointer is valid until the next decode/destroy call.
                     let mlayer_id = unsafe { (*next_frame).mlayer_id };
                     if target_spatial_id == mlayer_id {
                         // Found the correct spatial_id.
@@ -950,9 +950,13 @@ impl Decoder for Avm {
                 let mut config_obus_then_av2_payload = Vec::new();
                 let av2_payload = if first_time {
                     first_time = false;
-                    let config_obus = match &self.decoder_config.unwrap_ref().codec_config {
+                    let decoder_config = self
+                        .decoder_config
+                        .as_ref()
+                        .ok_or(AvifError::InvalidArgument)?;
+                    let config_obus = match &decoder_config.codec_config {
                         CodecConfiguration::Av2(av2c) => &av2c.config_obus,
-                        _ => unreachable!(),
+                        _ => return AvifError::invalid_argument(),
                     };
                     let config_obus_then_av2_payload_len = config_obus
                         .len()
@@ -969,24 +973,24 @@ impl Decoder for Avm {
                 };
 
                 self.decoder_iter = std::ptr::null();
+                let ctx = self.context.as_mut().ok_or(AvifError::InvalidArgument)?;
+                let ctx_ptr: *mut avm_codec_ctx_t = ctx;
+                let data_ptr = av2_payload.as_ptr();
+                let data_len = av2_payload.len();
                 let user_priv = std::ptr::null_mut();
-                // # Safety: Calling a C function with valid parameters.
-                let err = unsafe {
-                    avm_codec_decode(
-                        self.context.unwrap_mut() as *mut _,
-                        av2_payload.as_ptr(),
-                        av2_payload.len(),
-                        user_priv,
-                    )
-                };
+                // SAFETY: `ctx_ptr` points to an initialized decoder `avm_codec_ctx_t`, and
+                // `data_ptr` is valid for `data_len` bytes borrowed from `av2_payload`.
+                let err = unsafe { avm_codec_decode(ctx_ptr, data_ptr, data_len, user_priv) };
                 if err != avm_codec_err_t_AVM_CODEC_OK {
-                    // # Safety: Calling a C function with valid parameters.
-                    let ptr =
-                        unsafe { avm_codec_error_detail(self.context.unwrap_mut() as *mut _) };
+                    // SAFETY: `ctx_ptr` points to an initialized decoder `avm_codec_ctx_t`
+                    // (same context whose `avm_codec_decode` call just failed).
+                    let ptr = unsafe { avm_codec_error_detail(ctx_ptr) };
                     let detail = if ptr.is_null() {
                         String::new()
                     } else {
-                        // # Safety: ptr is guaranteed to be a valid null-terminated C string.
+                        // SAFETY: `ptr` was checked to be non-null above and libavm guarantees
+                        // `avm_codec_error_detail` returns a valid NUL-terminated C string owned
+                        // by `ctx_ptr` until the next codec call or destruction.
                         unsafe { CStr::from_ptr(ptr) }
                             .to_string_lossy()
                             .into_owned()
@@ -1009,8 +1013,10 @@ impl Decoder for Avm {
         } else {
             return AvifError::unknown_error("avm_codec_get_frame() failed");
         }
-        // # Safety: Dereferencing a non-NULL pointer.
-        let avm_image = &unsafe { *self.image };
+        // SAFETY: `self.image` is non-null (verified in the branches above and cleared before
+        // `avm_codec_destroy`), and points to a valid `avm_image_t` owned by `self.context` with
+        // no concurrent mutable access.
+        let avm_image = unsafe { &*self.image };
 
         if category == Category::Color {
             // Color (YUV) planes - set image to correct size / format, fill color
@@ -1123,15 +1129,15 @@ impl Decoder for Avm {
                 }
             }
             if item.is_some_and(|item| item.has_native_alpha()) || image.alpha_present {
-                // # Safety: Calling a C function with valid parameters.
-                let alpha_frame = unsafe {
-                    avm_codec_get_frame(
-                        self.context.unwrap_mut() as *mut _,
-                        (&mut self.decoder_iter) as *mut _,
-                    )
-                };
+                let ctx = self.context.as_mut().ok_or(AvifError::InvalidArgument)?;
+                let ctx_ptr: *mut avm_codec_ctx_t = ctx;
+                let iter_ptr: *mut avm_codec_iter_t = &mut self.decoder_iter;
+                // SAFETY: `ctx_ptr` points to an initialized decoder `avm_codec_ctx_t` and
+                // `iter_ptr` points to `self.decoder_iter`.
+                let alpha_frame = unsafe { avm_codec_get_frame(ctx_ptr, iter_ptr) };
                 if !alpha_frame.is_null() {
-                    // # Safety: Dereferencing a non-NULL pointer.
+                    // SAFETY: `alpha_frame` was checked to be non-null above and points to a
+                    // valid `avm_image_t` owned by `self.context`.
                     let avm_alpha_image = unsafe { &*alpha_frame };
                     // TODO(b/437292541): Revisit hardcoded mlayer_id == 1 once AV2-in-HEIF
                     //                    specifies how to find if and where there is alpha.
@@ -1166,15 +1172,12 @@ impl Decoder for Avm {
             assign_avm_alpha_plane(image, avm_image)?;
         }
 
-        // # Safety: Calling a C function with valid parameters.
-        while !unsafe {
-            avm_codec_get_frame(
-                self.context.unwrap_mut() as *mut _,
-                (&mut self.decoder_iter) as *mut _,
-            )
-        }
-        .is_null()
-        {}
+        let ctx = self.context.as_mut().ok_or(AvifError::InvalidArgument)?;
+        let ctx_ptr: *mut avm_codec_ctx_t = ctx;
+        let iter_ptr: *mut avm_codec_iter_t = &mut self.decoder_iter;
+        // SAFETY: `ctx_ptr` points to an initialized decoder `avm_codec_ctx_t` and `iter_ptr`
+        // points to `self.decoder_iter`.
+        while !unsafe { avm_codec_get_frame(ctx_ptr, iter_ptr) }.is_null() {}
 
         Ok(())
     }
