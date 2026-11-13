@@ -792,58 +792,91 @@ impl Encoder for Avm {
     }
 }
 
-fn assign_avm_alpha_plane(image: &mut Image, avm_alpha_image: &avm_image_t) -> AvifResult<()> {
-    image.free_planes(&A_PLANE);
-    if image.depth <= 8 && (avm_alpha_image.fmt & AVM_IMG_FMT_HIGHBITDEPTH) != 0 {
-        image.allocate_planes(Category::Alpha)?;
-        let plane_width = image.width(Plane::A);
-        let plane_height = image.height(Plane::A);
-        let src_plane = avm_alpha_image.planes[0] as *mut u16;
-        if src_plane.is_null() {
-            return AvifError::unknown_error("AVM returned a NULL buffer");
-        }
-        let src_stride_in_bytes = avm_alpha_image.stride[0];
-        if src_stride_in_bytes % 2 != 0 {
-            return AvifError::unknown_error("AVM returned an odd stride for 16-bit samples");
-        }
-        let src_stride_in_samples: usize = (src_stride_in_bytes / 2)
-            .try_into()
-            .map_err(AvifError::map_unknown_error)?;
-        let src_plane_len = checked_add!(
-            checked_mul!(src_stride_in_samples, checked_sub!(plane_height, 1)?)?,
-            plane_width
-        )?;
-        // # Safety: planes[0] and stride[0] are guaranteed to be valid as per
-        // libavm API contract. So it is safe to construct a slice.
-        let src_plane = unsafe { slice::from_raw_parts(src_plane, src_plane_len) };
-        for y in 0..plane_height {
-            let src_row =
-                &src_plane[y * src_stride_in_samples..y * src_stride_in_samples + plane_width];
-            let dst_row = image.row_mut(Plane::A, y as u32)?;
-            for (x, dst_pixel) in dst_row.iter_mut().enumerate().take(plane_width) {
-                *dst_pixel = src_row[x] as u8;
+fn copy_avm_planes(
+    image: &mut Image,
+    avm_image: &avm_image_t,
+    category: Category,
+    plane_mappings: &[(usize, Plane)],
+) -> AvifResult<()> {
+    // CrabbyAvif's Image assumes that a depth of 8 bits means an 8-bit buffer.
+    // avm_image does not. The buffer depth depends on fmt|AVM_IMG_FMT_HIGHBITDEPTH, even for 8-bit values.
+    if image.depth <= 8 && (avm_image.fmt & AVM_IMG_FMT_HIGHBITDEPTH) != 0 {
+        image.allocate_planes(category)?;
+        for &(src_plane_idx, dst_plane) in plane_mappings {
+            let plane_width = image.width(dst_plane);
+            let plane_height = image.height(dst_plane);
+            if plane_width == 0 || plane_height == 0 {
+                continue;
+            }
+            let src_plane = avm_image.planes[src_plane_idx] as *const u16;
+            if src_plane.is_null() {
+                return AvifError::unknown_error("AVM returned a NULL buffer");
+            }
+            if (src_plane as usize) % std::mem::align_of::<u16>() != 0 {
+                return AvifError::unknown_error(
+                    "AVM returned an unaligned buffer for 16-bit samples",
+                );
+            }
+            let src_stride_in_bytes = avm_image.stride[src_plane_idx];
+            if src_stride_in_bytes % 2 != 0 {
+                return AvifError::unknown_error("AVM returned an odd stride for 16-bit samples");
+            }
+            let src_stride_in_samples: usize = (src_stride_in_bytes / 2)
+                .try_into()
+                .map_err(AvifError::map_unknown_error)?;
+            if src_stride_in_samples < plane_width {
+                return AvifError::unknown_error("AVM returned a stride smaller than width");
+            }
+            let src_len = checked_add!(
+                checked_mul!(src_stride_in_samples, checked_sub!(plane_height, 1)?)?,
+                plane_width
+            )?;
+            let _ = isize_from_usize(checked_mul!(src_len, std::mem::size_of::<u16>())?)?;
+            // SAFETY: `src_plane` was checked to be non-null and aligned for `u16`, the total
+            // byte length `src_len * size_of::<u16>()` does not exceed `isize::MAX`, and
+            // libavm guarantees `planes[src_plane_idx]` points to `plane_height` initialized
+            // rows of 16-bit samples with stride `src_stride_in_samples`.
+            let src_plane = unsafe { slice::from_raw_parts(src_plane, src_len) };
+            for y in 0..plane_height {
+                let row_start = y * src_stride_in_samples;
+                let src_row = &src_plane[row_start..row_start + plane_width];
+                let dst_row = image.row_mut(dst_plane, u32_from_usize(y)?)?;
+                for (&src_pixel, dst_pixel) in src_row.iter().zip(dst_row.iter_mut()) {
+                    *dst_pixel = src_pixel as u8;
+                }
             }
         }
     } else {
         // Steal the pointers from the decoder's image directly.
+        for &(src_plane_idx, dst_plane) in plane_mappings {
+            let dst_idx = dst_plane.as_usize();
+            image.row_bytes[dst_idx] = avm_image.stride[src_plane_idx]
+                .try_into()
+                .map_err(AvifError::map_unknown_error)?;
+            image.planes[dst_idx] = Some(Pixels::from_raw_pointer(
+                avm_image.planes[src_plane_idx],
+                image.depth.into(),
+                u32_from_usize(image.height(dst_plane))?,
+                image.row_bytes[dst_idx],
+            )?);
+        }
+    }
+    Ok(())
+}
 
+fn assign_avm_alpha_plane(image: &mut Image, avm_alpha_image: &avm_image_t) -> AvifResult<()> {
+    image.free_planes(&A_PLANE);
+    if !(image.depth <= 8 && (avm_alpha_image.fmt & AVM_IMG_FMT_HIGHBITDEPTH) != 0) {
         // Check that the alpha plane start pointer is distinct from the color plane start pointers.
         // This is a weak assertion that the AVM codec instance for color was not reused for alpha.
         // This check alone does not guarantee that the borrowed 'avm_alpha_image' outlast 'image'.
         for plane in image.planes[..3].iter().flatten() {
-            assert_ne!(plane.ptr_generic(), avm_alpha_image.planes[0].cast_const());
+            if plane.ptr_generic() == avm_alpha_image.planes[0].cast_const() {
+                return AvifError::unknown_error("AVM alpha plane aliases color plane");
+            }
         }
-
-        image.row_bytes[Plane::A.as_usize()] = avm_alpha_image.stride[0]
-            .try_into()
-            .map_err(AvifError::map_unknown_error)?;
-        image.planes[Plane::A.as_usize()] = Some(Pixels::from_raw_pointer(
-            avm_alpha_image.planes[0],
-            image.depth.into(),
-            image.height,
-            image.row_bytes[Plane::A.as_usize()],
-        )?);
     }
+    copy_avm_planes(image, avm_alpha_image, Category::Alpha, &[(0, Plane::A)])?;
     image.alpha_present = true;
     Ok(())
 }
@@ -1018,6 +1051,7 @@ impl Decoder for Avm {
         // no concurrent mutable access.
         let avm_image = unsafe { &*self.image };
 
+        let color_planes = [(0usize, Plane::Y), (1, Plane::U), (2, Plane::V)];
         if category == Category::Color {
             // Color (YUV) planes - set image to correct size / format, fill color
             let yuv_format = if avm_image.monochrome != 0 {
@@ -1077,57 +1111,12 @@ impl Decoder for Avm {
             image.matrix_coefficients = (avm_image.mc as u16).into();
 
             image.free_planes(&YUV_PLANES);
-
-            // CrabbyAvif's Image assumes that a depth of 8 bits means an 8-bit buffer.
-            // avm_image does not. The buffer depth depends on fmt|AVM_IMG_FMT_HIGHBITDEPTH, even for 8-bit values.
-            if image.depth <= 8 && (avm_image.fmt & AVM_IMG_FMT_HIGHBITDEPTH) != 0 {
-                image.allocate_planes(category)?;
-                for plane in 0..image.yuv_format.plane_count() {
-                    let plane_width = image.width(Plane::from(plane));
-                    let plane_height = image.height(Plane::from(plane));
-                    let src_plane = avm_image.planes[plane] as *mut u16;
-                    if src_plane.is_null() {
-                        return AvifError::unknown_error("AVM returned a NULL buffer");
-                    }
-                    let src_stride_in_bytes = avm_image.stride[plane];
-                    if src_stride_in_bytes % 2 != 0 {
-                        return AvifError::unknown_error(
-                            "AVM returned an odd stride for 16-bit samples",
-                        );
-                    }
-                    let src_stride_in_samples: usize = (src_stride_in_bytes / 2)
-                        .try_into()
-                        .map_err(AvifError::map_unknown_error)?;
-                    let src_plane_len = checked_add!(
-                        checked_mul!(src_stride_in_samples, checked_sub!(plane_height, 1)?)?,
-                        plane_width
-                    )?;
-                    // # Safety: planes and stride are guaranteed to be valid as per
-                    // libavm API contract. So it is safe to construct slices.
-                    let src_plane = unsafe { slice::from_raw_parts(src_plane, src_plane_len) };
-                    for y in 0..plane_height {
-                        let src_row = &src_plane
-                            [y * src_stride_in_samples..y * src_stride_in_samples + plane_width];
-                        let dst_row = image.row_mut(Plane::from(plane), y as u32)?;
-                        for (x, dst_pixel) in dst_row.iter_mut().enumerate().take(plane_width) {
-                            *dst_pixel = src_row[x] as u8;
-                        }
-                    }
-                }
-            } else {
-                // Steal the pointers from the decoder's image directly.
-                for plane in 0..image.yuv_format.plane_count() {
-                    image.row_bytes[plane] = avm_image.stride[plane]
-                        .try_into()
-                        .map_err(AvifError::map_unknown_error)?;
-                    image.planes[plane] = Some(Pixels::from_raw_pointer(
-                        avm_image.planes[plane],
-                        image.depth.into(),
-                        u32_from_usize(image.height(plane.into()))?,
-                        image.row_bytes[plane],
-                    )?);
-                }
-            }
+            copy_avm_planes(
+                image,
+                avm_image,
+                category,
+                &color_planes[..image.yuv_format.plane_count()],
+            )?;
             if item.is_some_and(|item| item.has_native_alpha()) || image.alpha_present {
                 let ctx = self.context.as_mut().ok_or(AvifError::InvalidArgument)?;
                 let ctx_ptr: *mut avm_codec_ctx_t = ctx;
@@ -1149,7 +1138,6 @@ impl Decoder for Avm {
         } else {
             // Alpha plane as an auxiliary image item: map AVM's luma plane (0)
             // to CrabbyAvif's alpha plane (3).
-
             if image.width != 0
                 && image.height != 0
                 && (image.width != avm_image.d_w
@@ -1158,9 +1146,9 @@ impl Decoder for Avm {
             {
                 // Alpha plane doesn't match previous alpha plane decode, bail out.
                 return AvifError::unknown_error(format!(
-                        "Alpha plane does not match existing image dimensions: {}-bit {}x{} vs {}-bit {}x{}",
-                        image.depth, image.width, image.height, avm_image.bit_depth, avm_image.d_w, avm_image.d_h,
-                    ));
+                    "Alpha plane does not match existing image dimensions: {}-bit {}x{} vs {}-bit {}x{}",
+                    image.depth, image.width, image.height, avm_image.bit_depth, avm_image.d_w, avm_image.d_h,
+                ));
             }
             image.width = avm_image.d_w;
             image.height = avm_image.d_h;
