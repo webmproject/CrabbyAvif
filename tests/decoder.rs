@@ -2020,6 +2020,16 @@ fn yuv_range(filename: &str, expected_yuv_range: YuvRange) {
     assert!(res.is_ok());
     let image = decoder.image().expect("image was none");
     assert_eq!(image.yuv_range, expected_yuv_range);
+    if HAS_DECODER {
+        assert_eq!(decoder.next_image(), Ok(()));
+        assert_eq!(decoder.image().unwrap().yuv_range, expected_yuv_range);
+        if decoder.image_count() > 1 {
+            assert_eq!(decoder.next_image(), Ok(()));
+            assert_eq!(decoder.image().unwrap().yuv_range, expected_yuv_range);
+            assert_eq!(decoder.nth_image(0), Ok(()));
+            assert_eq!(decoder.image().unwrap().yuv_range, expected_yuv_range);
+        }
+    }
 }
 
 #[test_matrix(
@@ -3960,4 +3970,18 @@ fn region_decode_progressive(filename: &str) -> AvifResult<()> {
     // Full decodes are not affected.
     decoder.nth_image(0)?;
     Ok(())
+}
+
+#[test_matrix([DAV1D, NATIVE])]
+fn sequence_no_content_when_decoding_gainmap_only(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    if !HAS_DECODER {
+        return;
+    }
+    let mut decoder = get_decoder_with_codec("colors-animated-8bpc.avif", codec);
+    decoder.settings.image_content_to_decode = ImageContentType::GainMap;
+    assert_eq!(decoder.parse(), Ok(()));
+    assert_eq!(decoder.next_image(), Err(AvifError::NoContent));
 }

@@ -3617,6 +3617,7 @@ impl Decoder {
             self.begin_region_decode();
         }
         self.decoded_frame_options = None;
+        let mut decoded_something = false;
         for decoding_item in self.settings.image_content_to_decode.decoding_items() {
             if self.tiles[decoding_item.usize()].is_empty() {
                 continue;
@@ -3642,18 +3643,56 @@ impl Decoder {
             if payloads.is_empty() {
                 continue;
             }
+            let category = decoding_item.category;
             // The codec may release the memory that self.image points to. Clear these planes so
             // that they are not left dangling if decoding fails.
-            self.image.free_planes(decoding_item.category.planes());
-            let first_tile = &self.tiles[decoding_item.usize()][0];
+            self.image.free_planes(category.planes());
+            let first_tile = &mut self.tiles[decoding_item.usize()][0];
             let codec = &mut self.codecs[first_tile.codec_index];
             codec.get_last_image(
                 &payloads,
                 spatial_id.unwrap(),
-                &mut self.image,
-                decoding_item.category,
+                &mut first_tile.image,
+                category,
             )?;
+            if category == Category::Alpha && first_tile.image.yuv_range == YuvRange::Limited {
+                first_tile.image.alpha_to_full_range()?;
+            }
+            first_tile
+                .image
+                .scale(first_tile.width, first_tile.height, category)?;
+            match category {
+                Category::Color | Category::Gainmap => {
+                    self.image.width = first_tile.image.width;
+                    self.image.height = first_tile.image.height;
+                    self.image
+                        .copy_properties_from(&first_tile.image, &first_tile.codec_config);
+                }
+                Category::Alpha => {
+                    if !self.image.has_same_properties(&first_tile.image) {
+                        return AvifError::decode_alpha_failed();
+                    }
+                }
+            }
+            let planes = if category == Category::Color && first_tile.image.has_plane(Plane::A) {
+                &ALL_PLANES
+            } else {
+                category.planes()
+            };
+            for plane in planes {
+                let plane = plane.as_usize();
+                self.image.planes[plane] = first_tile.image.planes[plane].take();
+                self.image.row_bytes[plane] = if self.image.planes[plane].is_some() {
+                    first_tile.image.row_bytes[plane]
+                } else {
+                    0
+                };
+            }
             checked_incr!(self.tile_info[decoding_item.usize()].decoded_tile_count, 1);
+            decoded_something = true;
+        }
+        if !decoded_something {
+            return AvifError::no_content();
         }
         if let Some(composed) = composed_crop {
             self.image.crop_in_place(&composed)?;
