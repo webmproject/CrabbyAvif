@@ -1450,18 +1450,25 @@ fn white_2x2_ftyp_size0() -> AvifResult<()> {
     Ok(())
 }
 
-#[test]
-fn white_2x2_unknown_top_level_box_size0() -> AvifResult<()> {
-    // Edit the file to insert an unknown top level box with size 0 after ftyp (invalid).
+#[test_case(0 ; "before ftyp")]
+#[test_case(32 ; "after ftyp")]
+fn white_2x2_unknown_top_level_box_size0(offset: usize) -> AvifResult<()> {
+    // Edit the file to insert an unknown top level box with size 0 (invalid).
     let mut file_bytes = std::fs::read(get_test_file("white_2x2.avif")).unwrap();
-    // Insert a top level box after ftyp (box type and size all 0s).
+    // Insert a top level box before or after ftyp (box type and size all 0s). The ftyp box is 32
+    // bytes long.
     for _ in 0..8 {
-        file_bytes.insert(32, 0);
+        file_bytes.insert(offset, 0);
     }
 
     let mut decoder = decoder::Decoder::default();
     decoder.set_io_vec(file_bytes);
-    assert!(decoder.parse().is_err());
+    // No box can follow a box with size 0, so the mandatory boxes are missing.
+    let result = decoder.parse();
+    assert!(
+        matches!(result, Err(AvifError::BmffParseFailed(_))),
+        "{result:?}"
+    );
     Ok(())
 }
 

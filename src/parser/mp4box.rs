@@ -2236,6 +2236,7 @@ pub(crate) fn parse(io: &mut GenericIO, strictness: &Strictness) -> AvifResult<A
     let mut meta: Option<MetaBox> = None;
     let mut seen_mini = false;
     let mut tracks: Option<Vec<Track>> = None;
+    let mut seen_size_zero_box = false;
     let mut parse_offset: u64 = 0;
     loop {
         // Read just enough to get the longest possible valid box header (4+4+8+16 bytes).
@@ -2298,27 +2299,20 @@ pub(crate) fn parse(io: &mut GenericIO, strictness: &Strictness) -> AvifResult<A
                     }
                     _ => {} // Not reached.
                 }
-                if ftyp.is_some() {
-                    let ftyp = ftyp.unwrap_ref();
-                    let mut enough_information = true;
-                    if ftyp.needs_mini() && !seen_mini {
-                        enough_information = false;
-                    }
-                    if (ftyp.needs_meta() && meta.is_none())
-                        || (ftyp.needs_moov() && tracks.is_none())
-                    {
-                        enough_information = false;
-                    }
-                    if enough_information {
-                        // Enough information has been parsed to consider parse a success.
-                        break;
-                    }
+                let ftyp = ftyp.unwrap_ref();
+                if (!ftyp.needs_mini() || seen_mini)
+                    && (!ftyp.needs_meta() || meta.is_some())
+                    && (!ftyp.needs_moov() || tracks.is_some())
+                {
+                    // Enough information has been parsed to consider parse a success.
+                    break;
                 }
             }
             _ => {}
         }
         if header.size == BoxSize::UntilEndOfStream {
             // There is no other box after this one because it goes till the end of the stream.
+            seen_size_zero_box = true;
             break;
         }
         parse_offset = parse_offset
@@ -2326,7 +2320,13 @@ pub(crate) fn parse(io: &mut GenericIO, strictness: &Strictness) -> AvifResult<A
             .ok_or(AvifError::BmffParseFailed("invalid parse offset".into()))?;
     }
     if ftyp.is_none() {
-        return AvifError::invalid_ftyp();
+        return if seen_size_zero_box {
+            // A non-ftyp box with size 0 extends until the end of the file, so no ftyp box can
+            // follow it.
+            AvifError::bmff_parse_failed("missing ftyp box before end of stream")
+        } else {
+            AvifError::invalid_ftyp()
+        };
     }
     let ftyp = ftyp.unwrap();
     if ftyp.needs_mini() && (ftyp.needs_meta() || ftyp.needs_moov()) {
@@ -2338,7 +2338,14 @@ pub(crate) fn parse(io: &mut GenericIO, strictness: &Strictness) -> AvifResult<A
             && (strictness.hevc_brand_requires_moov() || !ftyp.needs_meta() || meta.is_none()))
         || (ftyp.needs_mini() && !seen_mini)
     {
-        return AvifError::truncated_data();
+        return if seen_size_zero_box {
+            // A box with size 0 extends until the end of the file, so no required metadata box
+            // (meta, moov, or mini) can follow it. Return BmffParseFailed rather than
+            // TruncatedData so incremental decoders do not wait for more bytes.
+            AvifError::bmff_parse_failed("missing metadata box before end of stream")
+        } else {
+            AvifError::truncated_data()
+        };
     }
     Ok(AvifBoxes {
         ftyp,
