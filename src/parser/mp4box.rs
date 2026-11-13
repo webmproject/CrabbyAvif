@@ -870,13 +870,27 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
         planes: create_vec_exact(num_channels)?,
     };
     for _ in 0..num_channels {
+        let depth = stream.read_u8()?; // unsigned int (8) bits_per_channel;
+
+        // Same checks as in libavif.
+        if depth == 0 {
+            return AvifError::bmff_parse_failed("pixi plane depth cannot be 0");
+        }
+        if depth > 16 && !(cfg!(feature = "satofloat") && depth == 32) {
+            return AvifError::not_implemented();
+        }
+        if pixi
+            .planes
+            .first()
+            .is_some_and(|first_plane| first_plane.depth != depth)
+        {
+            // Different depths per channel are not supported.
+            return AvifError::not_implemented();
+        }
         pixi.planes.try_push(PlanePixelInformation {
-            depth: stream.read_u8()?, // unsigned int (8) bits_per_channel;
+            depth,
             ..Default::default()
         })?;
-        if pixi.planes.last().unwrap().depth != pixi.planes.first().unwrap().depth {
-            return AvifError::unsupported_depth();
-        }
     }
     if px_flags & 1 != 0 {
         // See ISO/IEC 23008-12 DAM 2.
@@ -933,9 +947,8 @@ fn parse_pixi(stream: &mut IStream) -> AvifResult<ItemProperty> {
             }
         }
     }
-    if !Image::is_supported_depth(pixi.planes.last().unwrap().depth) {
-        return AvifError::unsupported_depth();
-    }
+    // The support of the depth is checked only for decoded image items in
+    // Item::validate_properties().
     Ok(ItemProperty::PixelInformation(pixi))
 }
 
