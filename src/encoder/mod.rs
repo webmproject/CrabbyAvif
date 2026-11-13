@@ -339,6 +339,12 @@ impl Encoder {
         })
     }
 
+    // This function is not used in all configurations.
+    #[allow(dead_code)]
+    pub(crate) fn settings(&self) -> &Settings {
+        &self.settings
+    }
+
     pub fn update_settings(&mut self, mutable: &MutableSettings) -> AvifResult<()> {
         self.settings.mutable = *mutable;
         Ok(())
