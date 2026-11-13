@@ -34,6 +34,8 @@ use std::slice;
 use libpng_sys::bindings::*;
 
 const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+const EXIF_PREFIX: &[u8] = b"Exif\0\0";
+const XMP_PREFIX: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 const READ_ERROR_MSG: &[u8] = b"Read Error\0";
 
 pub struct PngReader {
@@ -106,116 +108,6 @@ unsafe extern "C" fn crabbyavif_png_read_unknown_chunk(
     1
 }
 
-fn compare_c_str(c_ptr: *const c_char, rust_str: &str) -> bool {
-    if c_ptr.is_null() {
-        return false;
-    }
-    // # Safety: The best we can do is trust that this is a valid C-string.
-    let c_str = unsafe { CStr::from_ptr(c_ptr) };
-    match c_str.to_str() {
-        Ok(converted_s) => converted_s == rust_str,
-        Err(_) => false,
-    }
-}
-
-fn extract_exif_and_xmp(
-    image: &mut Image,
-    png: png_structp,
-    info: png_infop,
-    ignore_exif: &mut bool,
-    ignore_xmp: &mut bool,
-) -> AvifResult<()> {
-    if !*ignore_exif {
-        let mut exif_size = 0u32;
-        let mut exif: png_bytep = ptr::null_mut();
-        unsafe {
-            if png_get_eXIf_1(png, info, &mut exif_size as *mut _, &mut exif as *mut _)
-                == PNG_INFO_eXIf
-            {
-                if exif_size == 0 || exif.is_null() {
-                    return Err(AvifError::UnknownError(
-                        "Exif extraction failed. Empty eXIf chunk".into(),
-                    ));
-                }
-                let exif_slice = slice::from_raw_parts(exif, usize_from_u32(exif_size)?);
-                image.exif = create_vec_exact(exif_slice.len())?;
-                image.exif.try_extend_from_slice(exif_slice)?;
-                let _ = exif::set_orientation(&mut image.exif, 1);
-                *ignore_exif = true;
-            }
-        }
-    }
-    unsafe {
-        let mut text_chunks: png_textp = ptr::null_mut();
-        let num_text_chunks = png_get_text(png, info, &mut text_chunks as *mut _, ptr::null_mut());
-        for i in 0..num_text_chunks {
-            if *ignore_exif && *ignore_xmp {
-                break;
-            }
-            let text = &*text_chunks.add(i as _);
-            let length = if text.compression == PNG_ITXT_COMPRESSION_NONE as _
-                || text.compression == PNG_ITXT_COMPRESSION_zTXt as _
-            {
-                text.itxt_length
-            } else {
-                text.text_length
-            };
-            let exif_prefix = "Exif\0\0".as_bytes();
-            let xmp_prefix = "http://ns.adobe.com/xap/1.0/\0".as_bytes();
-            if !*ignore_exif && compare_c_str(text.key, "Raw profile type exif") {
-                let exif =
-                    icc::copy_raw_profile(slice::from_raw_parts(text.text as *const u8, length))?;
-                image.exif = create_vec_exact(exif.len())?;
-                image.exif.try_extend_from_slice(&exif)?;
-                if image.exif.starts_with(exif_prefix) {
-                    image.exif.drain(..exif_prefix.len());
-                }
-                let _ = exif::set_orientation(&mut image.exif, 1);
-                *ignore_exif = true;
-            } else if !*ignore_xmp && compare_c_str(text.key, "Raw profile type xmp") {
-                let xmp =
-                    icc::copy_raw_profile(slice::from_raw_parts(text.text as *const u8, length))?;
-                image.xmp = create_vec_exact(xmp.len())?;
-                image.xmp.try_extend_from_slice(&xmp)?;
-                if image.xmp.starts_with(xmp_prefix) {
-                    image.xmp.drain(..xmp_prefix.len());
-                }
-                *ignore_xmp = true;
-            } else if compare_c_str(text.key, "Raw profile type APP1")
-                || compare_c_str(text.key, "Raw profile type app1")
-            {
-                // This can be either exif, xmp or something else.
-                let data =
-                    icc::copy_raw_profile(slice::from_raw_parts(text.text as *const u8, length))?;
-                if !*ignore_exif && data.starts_with(exif_prefix) {
-                    image.exif = create_vec_exact(data.len() - exif_prefix.len())?;
-                    image
-                        .exif
-                        .try_extend_from_slice(&data[exif_prefix.len()..])?;
-                    let _ = exif::set_orientation(&mut image.exif, 1);
-                    *ignore_exif = true;
-                } else if !*ignore_xmp && data.starts_with(xmp_prefix) {
-                    image.xmp = create_vec_exact(data.len() - xmp_prefix.len())?;
-                    image.xmp.try_extend_from_slice(&data[xmp_prefix.len()..])?;
-                    *ignore_xmp = true;
-                }
-            } else if !*ignore_xmp && compare_c_str(text.key, "XML:com.adobe.xmp") {
-                if length == 0 {
-                    return Err(AvifError::UnknownError(
-                        "XMP extraction failed: empty XML:com.adobe.xmp payload".into(),
-                    ));
-                }
-                let xmp = slice::from_raw_parts(text.text as *const u8, length);
-                image.xmp = create_vec_exact(xmp.len())?;
-                image.xmp.try_extend_from_slice(xmp)?;
-                *ignore_xmp = true;
-            }
-        }
-    }
-    image.remove_trailing_null_from_xmp();
-    Ok(())
-}
-
 /// Owns a valid non-null `libpng` read struct (`png`) and info struct (`info`) pair, destroying
 /// both on drop.
 struct PngReaderNative {
@@ -251,6 +143,141 @@ impl PngReaderNative {
         }
         reader.info = info;
         Ok(reader)
+    }
+
+    fn extract_exif_and_xmp(
+        &self,
+        image: &mut Image,
+        ignore_exif: &mut bool,
+        ignore_xmp: &mut bool,
+    ) -> AvifResult<()> {
+        if !*ignore_exif {
+            let mut exif_size = 0u32;
+            let mut exif: png_bytep = ptr::null_mut();
+            let exif_size_ptr = ptr::from_mut(&mut exif_size);
+            let exif_ptr = ptr::from_mut(&mut exif);
+            // SAFETY: `self.png` and `self.info` are valid non-null `libpng` structs owned by
+            // `self`, and `exif_size_ptr` and `exif_ptr` are valid mutable out-pointers.
+            let exif_flag = unsafe { png_get_eXIf_1(self.png, self.info, exif_size_ptr, exif_ptr) };
+            if exif_flag == PNG_INFO_eXIf {
+                if exif_size == 0 || exif.is_null() {
+                    return Err(AvifError::UnknownError(
+                        "Exif extraction failed. Empty eXIf chunk".into(),
+                    ));
+                }
+                let exif_len = usize_from_u32(exif_size)?;
+                let exif_const: *const u8 = exif;
+                // SAFETY: `png_get_eXIf_1` returned `PNG_INFO_eXIf`, we verified `exif` is
+                // non-null and `exif_len > 0`, and `libpng` owns `info_ptr->exif` as a valid
+                // readable buffer of `exif_len` bytes for the lifetime of `self.info`.
+                let exif_slice = unsafe { slice::from_raw_parts(exif_const, exif_len) };
+                image.exif = create_vec_exact(exif_slice.len())?;
+                image.exif.try_extend_from_slice(exif_slice)?;
+                let _ = exif::set_orientation(&mut image.exif, 1);
+                *ignore_exif = true;
+            }
+        }
+
+        let mut text_chunks: png_textp = ptr::null_mut();
+        let text_chunks_ptr = ptr::from_mut(&mut text_chunks);
+        // SAFETY: `self.png` and `self.info` are valid non-null `libpng` structs owned by `self`,
+        // `text_chunks_ptr` is a valid out-pointer, and `num_text` may be null per `libpng` API.
+        let num_text_chunks =
+            unsafe { png_get_text(self.png, self.info, text_chunks_ptr, ptr::null_mut()) };
+        let text_slice = if num_text_chunks > 0 && !text_chunks.is_null() {
+            let count = usize::try_from(num_text_chunks).map_err(|_| AvifError::InvalidArgument)?;
+            let text_const: *const png_text = text_chunks;
+            // SAFETY: `png_get_text` returned `num_text_chunks > 0` and set `text_chunks` to
+            // `info_ptr->text`, a non-null array of `count` initialized `png_text` structs owned
+            // by `self.info` and unmutated for the duration of `extract_exif_and_xmp`.
+            unsafe { slice::from_raw_parts(text_const, count) }
+        } else {
+            &[]
+        };
+
+        for text in text_slice {
+            if *ignore_exif && *ignore_xmp {
+                break;
+            }
+            if text.key.is_null() {
+                continue;
+            }
+            let key_ptr: *const c_char = text.key;
+            // SAFETY: `text.key` is verified non-null and comes from a `png_text` entry populated
+            // by `libpng`, which guarantees `key` is a valid NUL-terminated string owned by
+            // `self.info`.
+            let key = unsafe { CStr::from_ptr(key_ptr) }.to_bytes();
+
+            let is_raw_exif = !*ignore_exif && key == b"Raw profile type exif";
+            let is_raw_xmp = !*ignore_xmp && key == b"Raw profile type xmp";
+            let is_raw_app1 = key == b"Raw profile type APP1" || key == b"Raw profile type app1";
+            let is_xmp_itxt = !*ignore_xmp && key == b"XML:com.adobe.xmp";
+            if !is_raw_exif && !is_raw_xmp && !is_raw_app1 && !is_xmp_itxt {
+                continue;
+            }
+
+            let length = if text.compression == PNG_ITXT_COMPRESSION_NONE as c_int
+                || text.compression == PNG_ITXT_COMPRESSION_zTXt as c_int
+            {
+                text.itxt_length
+            } else {
+                text.text_length
+            };
+            let text_bytes = if length == 0 || text.text.is_null() {
+                &[][..]
+            } else {
+                let text_ptr = text.text.cast::<u8>().cast_const();
+                // SAFETY: `text.text` is verified non-null and `length > 0`; `libpng` guarantees
+                // `text.text` points to a readable buffer of at least `length` bytes
+                // (`itxt_length` for iTXt chunks, `text_length` for tEXt/zTXt chunks) owned by
+                // `self.info` (`u8` has alignment 1).
+                unsafe { slice::from_raw_parts(text_ptr, length) }
+            };
+
+            if is_raw_exif {
+                let exif = icc::copy_raw_profile(text_bytes)?;
+                let payload = exif.strip_prefix(EXIF_PREFIX).unwrap_or(&exif);
+                image.exif = create_vec_exact(payload.len())?;
+                image.exif.try_extend_from_slice(payload)?;
+                let _ = exif::set_orientation(&mut image.exif, 1);
+                *ignore_exif = true;
+            } else if is_raw_xmp {
+                let xmp = icc::copy_raw_profile(text_bytes)?;
+                let payload = xmp.strip_prefix(XMP_PREFIX).unwrap_or(&xmp);
+                image.xmp = create_vec_exact(payload.len())?;
+                image.xmp.try_extend_from_slice(payload)?;
+                *ignore_xmp = true;
+            } else if is_raw_app1 {
+                // This can be either exif, xmp or something else.
+                let data = icc::copy_raw_profile(text_bytes)?;
+                if !*ignore_exif {
+                    if let Some(payload) = data.strip_prefix(EXIF_PREFIX) {
+                        image.exif = create_vec_exact(payload.len())?;
+                        image.exif.try_extend_from_slice(payload)?;
+                        let _ = exif::set_orientation(&mut image.exif, 1);
+                        *ignore_exif = true;
+                    }
+                }
+                if !*ignore_xmp {
+                    if let Some(payload) = data.strip_prefix(XMP_PREFIX) {
+                        image.xmp = create_vec_exact(payload.len())?;
+                        image.xmp.try_extend_from_slice(payload)?;
+                        *ignore_xmp = true;
+                    }
+                }
+            } else if is_xmp_itxt {
+                if text_bytes.is_empty() {
+                    return Err(AvifError::UnknownError(
+                        "XMP extraction failed: empty XML:com.adobe.xmp payload".into(),
+                    ));
+                }
+                image.xmp = create_vec_exact(text_bytes.len())?;
+                image.xmp.try_extend_from_slice(text_bytes)?;
+                *ignore_xmp = true;
+            }
+        }
+        image.remove_trailing_null_from_xmp();
+        Ok(())
     }
 }
 
@@ -570,22 +597,10 @@ impl Reader for PngReader {
 
             let mut ignore_exif = config.ignore_exif;
             let mut ignore_xmp = config.ignore_xmp;
-            extract_exif_and_xmp(
-                &mut yuv,
-                png.png,
-                png.info,
-                &mut ignore_exif,
-                &mut ignore_xmp,
-            )?;
+            png.extract_exif_and_xmp(&mut yuv, &mut ignore_exif, &mut ignore_xmp)?;
             if !ignore_exif || !ignore_xmp {
                 png_read_end(png.png, png.info);
-                extract_exif_and_xmp(
-                    &mut yuv,
-                    png.png,
-                    png.info,
-                    &mut ignore_exif,
-                    &mut ignore_xmp,
-                )?;
+                png.extract_exif_and_xmp(&mut yuv, &mut ignore_exif, &mut ignore_xmp)?;
             }
             Ok((yuv, 0, None))
         }
@@ -688,5 +703,118 @@ mod tests {
             let png = PngReaderNative::new().unwrap();
             crabbyavif_png_read_data(png.png, ptr::null_mut(), 0);
         }
+    }
+
+    fn encode_raw_profile(name: &str, payload: &[u8]) -> std::ffi::CString {
+        let hex: String = payload.iter().map(|b| format!("{b:02x}")).collect();
+        std::ffi::CString::new(format!("\n{name}\n{}\n{hex}\n", payload.len())).unwrap()
+    }
+
+    fn set_png_text_entry(png: &PngReaderNative, compression: i32, key: &[u8], val: &mut [u8]) {
+        let text = png_text {
+            compression,
+            key: key.as_ptr().cast::<c_char>().cast_mut(),
+            text: val.as_mut_ptr().cast::<c_char>(),
+            text_length: val.len().saturating_sub(1),
+            itxt_length: val.len().saturating_sub(1),
+            lang: ptr::null_mut(),
+            lang_key: ptr::null_mut(),
+        };
+        // SAFETY: `png` owns valid `libpng` structs and `key`/`val` are NUL-terminated.
+        unsafe {
+            png_set_text(png.png, png.info, ptr::from_ref(&text), 1);
+        }
+    }
+
+    #[test]
+    fn extract_exif_and_xmp_handles_itxt_and_raw_profiles() {
+        // 1. iTXt XML:com.adobe.xmp (strips trailing single NUL) + binary eXIf chunk.
+        let png = PngReaderNative::new().unwrap();
+        let mut exif_bytes = [0x49u8, 0x49, 0x2A, 0x00];
+        // SAFETY: `png` is valid and `exif_bytes` is initialized.
+        unsafe {
+            png_set_eXIf_1(
+                png.png,
+                png.info,
+                exif_bytes.len() as u32,
+                exif_bytes.as_mut_ptr(),
+            );
+        }
+        // Append an explicit NUL inside the payload plus the C-string NUL terminator so
+        // `png_set_text` (`strlen`) copies the non-NUL prefix and `remove_trailing_null_from_xmp`
+        // handles trailing NULs cleanly.
+        let mut xmp_itxt = b"<x:xmpmeta/>\0".to_vec();
+        set_png_text_entry(
+            &png,
+            PNG_ITXT_COMPRESSION_NONE as c_int,
+            b"XML:com.adobe.xmp\0",
+            &mut xmp_itxt,
+        );
+        let mut img = Image::default();
+        let (mut ignore_exif, mut ignore_xmp) = (false, false);
+        png.extract_exif_and_xmp(&mut img, &mut ignore_exif, &mut ignore_xmp)
+            .unwrap();
+        assert!(ignore_exif);
+        assert!(ignore_xmp);
+        assert_eq!(img.exif, exif_bytes);
+        assert_eq!(img.xmp, b"<x:xmpmeta/>");
+
+        // When ignore flags are already set, existing fields remain untouched.
+        let mut skipped = Image::default();
+        png.extract_exif_and_xmp(&mut skipped, &mut ignore_exif, &mut ignore_xmp)
+            .unwrap();
+        assert!(skipped.exif.is_empty());
+        assert!(skipped.xmp.is_empty());
+
+        // 2. Raw profile type exif and Raw profile type xmp strip EXIF_PREFIX / XMP_PREFIX.
+        let png_raw = PngReaderNative::new().unwrap();
+        let mut raw_exif =
+            encode_raw_profile("exif", b"Exif\0\0\x4d\x4d\x00\x2a").into_bytes_with_nul();
+        let mut raw_xmp = encode_raw_profile("xmp", b"http://ns.adobe.com/xap/1.0/\0<rdf/>")
+            .into_bytes_with_nul();
+        set_png_text_entry(
+            &png_raw,
+            PNG_TEXT_COMPRESSION_NONE,
+            b"Raw profile type exif\0",
+            &mut raw_exif,
+        );
+        set_png_text_entry(
+            &png_raw,
+            PNG_TEXT_COMPRESSION_NONE,
+            b"Raw profile type xmp\0",
+            &mut raw_xmp,
+        );
+        let mut img_raw = Image::default();
+        let (mut ig_e, mut ig_x) = (false, false);
+        png_raw
+            .extract_exif_and_xmp(&mut img_raw, &mut ig_e, &mut ig_x)
+            .unwrap();
+        assert_eq!(img_raw.exif, b"\x4d\x4d\x00\x2a");
+        assert_eq!(img_raw.xmp, b"<rdf/>");
+
+        // 3. Raw profile type APP1 / app1 routes Exif and XMP prefixes independently.
+        let png_app1 = PngReaderNative::new().unwrap();
+        let mut app1_exif = encode_raw_profile("APP1", b"Exif\0\0ABCD").into_bytes_with_nul();
+        let mut app1_xmp =
+            encode_raw_profile("app1", b"http://ns.adobe.com/xap/1.0/\0XYZ").into_bytes_with_nul();
+        set_png_text_entry(
+            &png_app1,
+            PNG_TEXT_COMPRESSION_NONE,
+            b"Raw profile type APP1\0",
+            &mut app1_exif,
+        );
+        set_png_text_entry(
+            &png_app1,
+            PNG_TEXT_COMPRESSION_NONE,
+            b"Raw profile type app1\0",
+            &mut app1_xmp,
+        );
+        let mut img_app1 = Image::default();
+        let (mut ig_e2, mut ig_x2) = (false, false);
+        png_app1
+            .extract_exif_and_xmp(&mut img_app1, &mut ig_e2, &mut ig_x2)
+            .unwrap();
+        assert_eq!(img_app1.exif, b"ABCD");
+        assert_eq!(img_app1.xmp, b"XYZ");
     }
 }
