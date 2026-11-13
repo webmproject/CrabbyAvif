@@ -690,6 +690,63 @@ fn gray_round_trip(
     Ok(())
 }
 
+// Converting an image without alpha into a gray format with alpha should result in an opaque alpha
+// channel and in the same gray values as the conversion into a gray format without alpha.
+#[test_matrix(
+    [8, 10, 12, 16],
+    [8, 10, 12],
+    [PixelFormat::Yuv444, PixelFormat::Yuv420, PixelFormat::Yuv400],
+    [rgb::Format::GrayA, rgb::Format::AGray]
+)]
+fn gray_alpha_from_opaque_image(
+    rgb_depth: u8,
+    yuv_depth: u8,
+    yuv_format: PixelFormat,
+    rgb_format: rgb::Format,
+) -> AvifResult<()> {
+    let width = 5;
+    let height = 3;
+    let mut image =
+        generate_gradient_image(width, height, yuv_depth, yuv_format, YuvRange::Full, false)?;
+    image.matrix_coefficients = MatrixCoefficients::Bt601;
+
+    let mut gray = rgb::Image::create_from_yuv(&image);
+    gray.depth = rgb_depth;
+    gray.format = rgb::Format::Gray;
+    gray.allocate()?;
+    gray.convert_from_yuv(&image)?;
+
+    let mut gray_alpha = rgb::Image::create_from_yuv(&image);
+    gray_alpha.depth = rgb_depth;
+    gray_alpha.format = rgb_format;
+    gray_alpha.allocate()?;
+    gray_alpha.convert_from_yuv(&image)?;
+
+    let gray_offset = rgb_format.r_offset();
+    let alpha_offset = rgb_format.alpha_offset();
+    let max_channel = gray_alpha.max_channel();
+    for y in 0..height {
+        if rgb_depth == 8 {
+            let gray_row = gray.row(y)?;
+            let gray_alpha_row = gray_alpha.row(y)?;
+            assert_eq!(gray_alpha_row.len(), gray_row.len() * 2);
+            for (pixel, gray_value) in gray_alpha_row.as_chunks::<2>().0.iter().zip(gray_row) {
+                assert_eq!(pixel[gray_offset], *gray_value);
+                assert_eq!(pixel[alpha_offset], max_channel as u8);
+            }
+        } else {
+            let gray_row = gray.row16(y)?;
+            let gray_alpha_row = gray_alpha.row16(y)?;
+            assert_eq!(gray_alpha_row.len(), gray_row.len() * 2);
+            for (pixel, gray_value) in gray_alpha_row.as_chunks::<2>().0.iter().zip(gray_row) {
+                assert_eq!(pixel[gray_offset], *gray_value);
+                assert_eq!(pixel[alpha_offset], max_channel);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn b_496622631() -> AvifResult<()> {
     let mut image =
