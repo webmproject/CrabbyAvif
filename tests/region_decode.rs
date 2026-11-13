@@ -540,3 +540,57 @@ fn region_decode_cache_and_state_transitions(
     check(&decoder, Some(&crop2))?;
     Ok(())
 }
+
+// Keyframes of an image sequence can be decoded by the native AV1 decoder. Region decodes of
+// these frames, in any order and with different regions, must never return a stale frame.
+#[test_matrix([DAV1D, NATIVE])]
+fn region_decode_sequence_keyframes(codec: CodecChoice) -> AvifResult<()> {
+    // dav1d decodes the reference frames, including the non-keyframes.
+    if codec_unavailable(codec) || !cfg!(feature = "dav1d") {
+        return Ok(());
+    }
+    let data = std::fs::read(get_test_file("colors-animated-12bpc-keyframes-0-2-3.avif"))
+        .expect("Unable to read file");
+    let mut ref_decoder = decoder_for_data(&data, DAV1D, false);
+    ref_decoder.parse()?;
+    let mut ref_frames = Vec::new();
+    for index in 0..ref_decoder.image_count() {
+        ref_decoder.nth_image(index)?;
+        ref_frames.push(ref_decoder.image().unwrap().try_deep_clone()?);
+    }
+    let keyframes: Vec<u32> = (0..ref_decoder.image_count())
+        .filter(|&i| ref_decoder.is_keyframe(i))
+        .collect();
+    assert_eq!(keyframes, [0, 2, 3]);
+    let (w, h) = (ref_frames[0].width, ref_frames[0].height);
+    let crops = [
+        crop(1, 3, w / 2, h / 3),
+        crop(w / 2, h / 2, w / 2, h / 2),
+        crop(0, 0, 1, 1),
+    ];
+    let mut decoder = decoder_for_data(&data, codec, false);
+    decoder.parse()?;
+    for &index in [3u32, 0, 2, 2, 0, 3].iter() {
+        for crop in &crops {
+            decoder.nth_image_with_options(
+                index,
+                &decoder::DecodeOptions {
+                    crop_rect: Some(*crop),
+                },
+            )?;
+            assert!(
+                are_images_equal(
+                    decoder.image().unwrap(),
+                    &crop_reference_image(&ref_frames[index as usize], crop)?
+                )?,
+                "frame {index} region {crop:?}"
+            );
+        }
+        decoder.nth_image(index)?;
+        assert!(are_images_equal(
+            decoder.image().unwrap(),
+            &ref_frames[index as usize]
+        )?);
+    }
+    Ok(())
+}
