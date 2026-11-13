@@ -59,33 +59,36 @@ pub(crate) fn parse(stream: &mut IStream) -> AvifResult<()> {
 pub(crate) fn get_orientation_offset(exif: &[u8]) -> AvifResult<Option<usize>> {
     let mut temp_stream = IStream::create(exif);
     let tiff_offset = usize_from_u32(parse_exif_tiff_header_offset(&mut temp_stream)?)?;
-    let tiff_data = &exif[tiff_offset..];
-    let little_endian = tiff_data[0] == b'I';
+    let tiff_data = exif
+        .get(tiff_offset..)
+        .ok_or(AvifError::InvalidExifPayload)?;
+    let little_endian = tiff_data.first() == Some(&b'I');
     let mut stream = IStream::create(tiff_data);
-    let _ = stream.skip(4); // skip tiff header
+    stream
+        .skip(4)
+        .map_err(AvifError::map_invalid_exif_payload)?; // skip tiff header
 
-    let offset_to_0th_ifd =
-        if little_endian { stream.read_u32_le()? } else { stream.read_u32()? };
+    let read_u16 = |stream: &mut IStream| -> AvifResult<u16> {
+        (if little_endian { stream.read_u16_le() } else { stream.read_u16() })
+            .map_err(AvifError::map_invalid_exif_payload)
+    };
+    let read_u32 = |stream: &mut IStream| -> AvifResult<u32> {
+        (if little_endian { stream.read_u32_le() } else { stream.read_u32() })
+            .map_err(AvifError::map_invalid_exif_payload)
+    };
+
+    let offset_to_0th_ifd = read_u32(&mut stream)?;
     stream.offset = usize_from_u32(offset_to_0th_ifd)?;
 
-    let field_count = if little_endian { stream.read_u16_le()? } else { stream.read_u16()? };
+    let field_count = read_u16(&mut stream)?;
     for _ in 0..field_count {
-        let (tag, field_type, count, value_offset) = if little_endian {
-            (
-                stream.read_u16_le()?,
-                stream.read_u16_le()?,
-                stream.read_u32_le()?,
-                stream.read_u16_le()?,
-            )
-        } else {
-            (
-                stream.read_u16()?,
-                stream.read_u16()?,
-                stream.read_u32()?,
-                stream.read_u16()?,
-            )
-        };
-        let _ = stream.skip(2);
+        let tag = read_u16(&mut stream)?;
+        let field_type = read_u16(&mut stream)?;
+        let count = read_u32(&mut stream)?;
+        let value_offset = read_u16(&mut stream)?;
+        stream
+            .skip(2)
+            .map_err(AvifError::map_invalid_exif_payload)?;
 
         // Orientation tag is 0x0112, type is SHORT (3), count is 1.
         if tag == 0x0112 && field_type == 3 && count == 1 && (1..=8).contains(&value_offset) {
@@ -260,4 +263,63 @@ pub(crate) fn apple_headroom(exif: &[u8]) -> AvifResult<Option<f64>> {
     } else {
         -0.303 * m48 + 2.303
     }))
+}
+
+#[cfg(all(test, feature = "png"))]
+mod tests {
+    use super::*;
+
+    // Little endian TIFF header followed by a 0th IFD containing an orientation tag.
+    const EXIF: [u8; 26] = [
+        b'I', b'I', 42, 0, // TIFF header
+        8, 0, 0, 0, // Offset to the 0th IFD
+        1, 0, // Number of directory entries
+        0x12, 0x01, // Tag: Orientation
+        3, 0, // Type: SHORT
+        1, 0, 0, 0, // Count
+        6, 0, 0, 0, // Value
+        0, 0, 0, 0, // Offset to the next IFD
+    ];
+    const ORIENTATION_OFFSET: usize = 18;
+
+    #[test]
+    fn orientation_offset() {
+        assert_eq!(get_orientation_offset(&EXIF), Ok(Some(ORIENTATION_OFFSET)));
+        // The offset to the next IFD is not needed.
+        assert_eq!(
+            get_orientation_offset(&EXIF[..22]),
+            Ok(Some(ORIENTATION_OFFSET))
+        );
+    }
+
+    #[test]
+    fn orientation_offset_truncated_exif() {
+        for size in 0..22 {
+            assert_eq!(
+                get_orientation_offset(&EXIF[..size]),
+                Err(AvifError::InvalidExifPayload),
+                "size {size}"
+            );
+        }
+    }
+
+    #[test]
+    fn orientation_offset_invalid_ifd_offset() {
+        let mut exif = EXIF;
+        exif[4] = 0xFF; // Offset to the 0th IFD beyond the end of the Exif payload.
+        assert_eq!(
+            get_orientation_offset(&exif),
+            Err(AvifError::InvalidExifPayload)
+        );
+    }
+
+    #[test]
+    fn set_orientation_truncated_exif() {
+        let mut exif = EXIF[..20].to_vec();
+        assert_eq!(
+            set_orientation(&mut exif, 1),
+            Err(AvifError::InvalidExifPayload)
+        );
+        assert_eq!(exif, EXIF[..20]);
+    }
 }
