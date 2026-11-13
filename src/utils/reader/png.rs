@@ -34,6 +34,7 @@ use std::slice;
 
 use libpng_sys::bindings::*;
 
+const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
 pub struct PngReader {
     filename: String,
 }
@@ -206,22 +207,58 @@ fn extract_exif_and_xmp(
     Ok(())
 }
 
-#[derive(Default)]
+/// Owns a valid non-null `libpng` read struct (`png`) and info struct (`info`) pair, destroying
+/// both on drop.
 struct PngReaderNative {
     png: png_structp,
     info: png_infop,
 }
 
+impl PngReaderNative {
+    fn new() -> AvifResult<Self> {
+        let ver = PNG_LIBPNG_VER_STRING.as_ptr().cast::<c_char>();
+        // SAFETY: `PNG_LIBPNG_VER_STRING` is a static NUL-terminated byte string generated from
+        // `libpng`'s header, and null/`None` error arguments select `libpng`'s default handlers.
+        let png = unsafe { png_create_read_struct(ver, ptr::null_mut(), None, None) };
+        if png.is_null() {
+            return Err(AvifError::UnknownError(
+                "png_create_read_struct failed".into(),
+            ));
+        }
+        let mut reader = Self {
+            png,
+            info: ptr::null_mut(),
+        };
+        // SAFETY: `reader.png` was just allocated by `png_create_read_struct` and verified
+        // non-null; `reader` drops it automatically if `png_create_info_struct` fails.
+        let info = unsafe {
+            png_set_benign_errors(reader.png, 1);
+            png_create_info_struct(reader.png)
+        };
+        if info.is_null() {
+            return Err(AvifError::UnknownError(
+                "png_create_info_struct failed".into(),
+            ));
+        }
+        reader.info = info;
+        Ok(reader)
+    }
+}
+
 impl Drop for PngReaderNative {
     fn drop(&mut self) {
         if !self.png.is_null() {
-            // # Safety: Calling a C function with valid parameters.
+            let png_ptr = ptr::from_mut(&mut self.png);
+            let info_ptr = if self.info.is_null() {
+                ptr::null_mut()
+            } else {
+                ptr::from_mut(&mut self.info)
+            };
+            // SAFETY: `self.png` is non-null and was allocated by `png_create_read_struct`;
+            // `info_ptr` is either null or points to `self.info` allocated by
+            // `png_create_info_struct`. Both are owned exclusively by `self` and destroyed once.
             unsafe {
-                png_destroy_read_struct(
-                    (&mut self.png) as *mut _,
-                    (&mut self.info) as *mut _,
-                    ptr::null_mut(),
-                );
+                png_destroy_read_struct(png_ptr, info_ptr, ptr::null_mut());
             }
         }
     }
@@ -265,35 +302,11 @@ impl Reader for PngReader {
         let mut header = [0u8; 8];
         file.read_exact(&mut header)
             .map_err(|_| AvifError::UnknownError("cannot read png header".into()))?;
-        if unsafe { png_sig_cmp(header.as_mut_ptr() as _, 0, 8) } != 0 {
+        if header != PNG_SIGNATURE {
             return Err(AvifError::UnknownError("not a png".into()));
         }
 
-        let mut png = PngReaderNative {
-            png: unsafe {
-                png_create_read_struct(
-                    PNG_LIBPNG_VER_STRING.as_ptr() as _,
-                    ptr::null_mut(),
-                    None,
-                    None,
-                )
-            },
-            ..Default::default()
-        };
-        if png.png.is_null() {
-            return Err(AvifError::UnknownError(
-                "png_create_read_struct failed".into(),
-            ));
-        }
-        unsafe {
-            png_set_benign_errors(png.png, 1);
-            png.info = png_create_info_struct(png.png);
-        }
-        if png.info.is_null() {
-            return Err(AvifError::UnknownError(
-                "png_create_info_struct failed".into(),
-            ));
-        }
+        let png = PngReaderNative::new()?;
 
         let mut yuv = Image::default();
         let mut unknown_chunk_data = UnknownCicpChunkData {
