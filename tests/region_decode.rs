@@ -29,6 +29,8 @@ use crabby_avif::*;
 mod utils;
 use utils::*;
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use test_case::test_matrix;
 
 const DAV1D: CodecChoice =
@@ -400,5 +402,141 @@ fn region_decode_formats(
             codec,
         )?;
     }
+    Ok(())
+}
+
+// IO that records the byte ranges that are read, to check whether a decode reads any data.
+struct TrackingIO {
+    data: Vec<u8>,
+    reads: Rc<RefCell<Vec<(usize, usize)>>>,
+}
+
+impl decoder::IO for TrackingIO {
+    fn read(&mut self, offset: u64, max_read_size: usize) -> AvifResult<&[u8]> {
+        let start = usize::try_from(offset).map_err(|_| AvifError::IoError)?;
+        if start > self.data.len() {
+            return Err(AvifError::IoError);
+        }
+        let end = start + std::cmp::min(max_read_size, self.data.len() - start);
+        self.reads.borrow_mut().push((start, end));
+        Ok(&self.data[start..end])
+    }
+
+    fn size_hint(&self) -> u64 {
+        self.data.len() as u64
+    }
+
+    fn persistent(&self) -> bool {
+        true
+    }
+}
+
+// Region and full decodes of a single-tile image with alpha and of a gain map, in any order,
+// with the same decoder instance.
+#[test_matrix(
+    [
+        ("alpha.avif", false),
+        ("alpha_premultiplied.avif", false),
+        ("seine_sdr_gainmap_srgb.avif", true),
+        ("seine_sdr_gainmap_srgb.avif", false),
+        ("paris_10bpc.avif", false)
+    ],
+    [DAV1D, NATIVE]
+)]
+fn region_decode_cache_and_state_transitions(
+    filename_and_gainmap: (&str, bool),
+    codec: CodecChoice,
+) -> AvifResult<()> {
+    if codec_unavailable(codec) {
+        return Ok(());
+    }
+    let (filename, gainmap) = filename_and_gainmap;
+    let data = std::fs::read(get_test_file(filename)).expect("Unable to read file");
+    let mut ref_decoder = decoder_for_data(&data, codec, gainmap);
+    ref_decoder.parse()?;
+    ref_decoder.nth_image(0)?;
+    let ref_full = decoded_image(&ref_decoder, gainmap).try_deep_clone()?;
+    let (w, h) = (ref_full.width, ref_full.height);
+
+    let reads = Rc::new(RefCell::new(Vec::new()));
+    let mut decoder = decoder::Decoder::default();
+    decoder.settings.codec_choice = codec;
+    if gainmap {
+        decoder.settings.image_content_to_decode = ImageContentType::GainMap;
+    }
+    decoder.set_io(Box::new(TrackingIO {
+        data,
+        reads: reads.clone(),
+    }));
+    decoder.parse()?;
+    let crop1 = crop(3, 5, w / 2, h / 3);
+    let crop2 = crop(w / 3, h / 2, w - w / 3, h - h / 2);
+    let opts1 = decoder::DecodeOptions {
+        crop_rect: Some(crop1),
+    };
+    let opts2 = decoder::DecodeOptions {
+        crop_rect: Some(crop2),
+    };
+    let check = |decoder: &decoder::Decoder, expected_crop: Option<&CropRect>| -> AvifResult<()> {
+        let expected = match expected_crop {
+            Some(rect) => crop_reference_image(&ref_full, rect)?,
+            None => ref_full.try_deep_clone()?,
+        };
+        assert!(
+            are_images_equal(decoded_image(decoder, gainmap), &expected)?,
+            "{filename}: {expected_crop:?}"
+        );
+        Ok(())
+    };
+
+    decoder.nth_image_with_options(0, &opts1)?;
+    check(&decoder, Some(&crop1))?;
+    // Same frame and same options: cache hit, nothing is read.
+    reads.borrow_mut().clear();
+    decoder.nth_image_with_options(0, &opts1)?;
+    assert!(reads.borrow().is_empty());
+    check(&decoder, Some(&crop1))?;
+    // Different region: decoded again.
+    decoder.nth_image_with_options(0, &opts2)?;
+    assert!(!reads.borrow().is_empty());
+    check(&decoder, Some(&crop2))?;
+    // No image past the last one: the decoded region is left untouched.
+    assert!(decoder.next_image_with_options(&opts1).is_err());
+    check(&decoder, Some(&crop2))?;
+    // Full decode after a region decode.
+    decoder.nth_image(0)?;
+    check(&decoder, None)?;
+    reads.borrow_mut().clear();
+    decoder.nth_image(0)?;
+    assert!(reads.borrow().is_empty());
+    check(&decoder, None)?;
+    // Region decode after a full decode.
+    decoder.nth_image_with_options(0, &opts2)?;
+    check(&decoder, Some(&crop2))?;
+    decoder.nth_image_with_options(0, &opts1)?;
+    check(&decoder, Some(&crop1))?;
+    // An invalid region fails without affecting later decodes.
+    assert!(decoder
+        .nth_image_with_options(
+            0,
+            &decoder::DecodeOptions {
+                crop_rect: Some(crop(w - 1, 0, 2, 1)),
+            }
+        )
+        .is_err());
+    decoder.nth_image_with_options(0, &opts1)?;
+    check(&decoder, Some(&crop1))?;
+    decoder.nth_image(0)?;
+    check(&decoder, None)?;
+
+    // A fresh decoder starting with next_image_with_options().
+    let mut decoder = decoder_for_data(
+        &std::fs::read(get_test_file(filename)).unwrap(),
+        codec,
+        gainmap,
+    );
+    decoder.parse()?;
+    decoder.next_image_with_options(&opts2)?;
+    check(&decoder, Some(&crop2))?;
     Ok(())
 }
