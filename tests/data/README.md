@@ -221,6 +221,41 @@ $ avifenc -q 60 --qalpha 60 -s 10 -d 8 -y 420 --crop 12,14,96,132 --irot 1 \
     --imir 0 region_clap.png region/region_clap_irot_imir.avif
 ```
 
+## region_decode/
+
+Images used by the region decoding tests (`tests/region_decode.rs`), which
+check that region decodes are identical to full decodes followed by a crop:
+
+- `formats_${y}_${d}bpc${a}_${w}x${h}.avif`: one image per combination of YUV
+  format (`${y}` in 400, 420, 422, 444), bit depth (`${d}` in 8, 10, 12), alpha
+  (`${a}` is `_alpha` with limited range YUV, or empty with full range YUV) and
+  dimensions (301x203, 64x64, 1x1, 2x3, 129x66).
+- `scaled_200x120.avif`: 200x120 4:2:0 8-bit image without alpha, whose
+  `ispe` box is patched by the tests.
+
+The source images were generated with ffmpeg (noisy test patterns, with an
+alpha gradient for the `_alpha` variant, so that all the samples depend on
+their position and the encoder uses various coding tools), and cropped to the
+dimensions above with `ffmpeg -i <in> -vf crop=<w>:<h>:0:0 <out>`:
+
+```bash
+$ ffmpeg -f lavfi -i testsrc2=size=611x397:rate=1 -frames:v 1 \
+    -vf "noise=alls=40:allf=u,format=rgb24" -pix_fmt rgb24 region_decode.png
+$ GEQ="r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='255*(X+Y)/1006'"
+$ ffmpeg -f lavfi -i testsrc2=size=611x397:rate=1 -frames:v 1 \
+    -vf "noise=alls=40:allf=u,format=rgba,geq=${GEQ}" \
+    -pix_fmt rgba region_decode_alpha.png
+```
+
+and encoded with avifenc (libavif 1.4.2, aom 3.15.2):
+
+```bash
+$ avifenc -q 40 --qalpha 50 -s 6 -d ${d} -y ${y} -r ${range} \
+    ${w}x${h}${a}.png region_decode/formats_${y}_${d}bpc${a}_${w}x${h}.avif
+$ avifenc -q 40 -s 6 -d 8 -y 420 -r full 200x120.png \
+    region_decode/scaled_200x120.avif
+```
+
 ## gainmap_larger_than_base_*.avif
 
 Images with a `tmap` gain map that is larger than the base image, used to
