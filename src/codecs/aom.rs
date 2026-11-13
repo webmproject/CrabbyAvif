@@ -528,6 +528,10 @@ impl Encoder for Aom {
             let tile_rows_changed = last_config.tile_rows_log2 != config.tile_rows_log2;
             let tile_cols_changed = last_config.tile_columns_log2 != config.tile_columns_log2;
             if quality_changed {
+                if use_tune_iq && quantizer == 0 {
+                    // Lossless is incompatible with tune=iq.
+                    return AvifError::invalid_argument();
+                }
                 if rc_end_usage == aom_rc_mode_AOM_VBR || rc_end_usage == aom_rc_mode_AOM_CBR {
                     let encoder = self.encoder.as_mut().ok_or(AvifError::InvalidArgument)?;
                     let aom_config = self.aom_config.as_mut().ok_or(AvifError::InvalidArgument)?;
