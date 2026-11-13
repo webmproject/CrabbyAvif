@@ -26,6 +26,7 @@ use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::image::YuvRange;
 use crate::internal_utils::*;
+use crate::utils::clap::CropRect;
 use crate::utils::pixels::Pixels;
 use crate::*;
 
@@ -283,6 +284,56 @@ impl Decoder for Native {
     ) -> AvifResult<()> {
         let options = self.decode_options(spatial_id)?;
         let frame = decode_payload(av1_payload, &options)?;
+        Self::frame_to_image(frame, image, category, true)
+    }
+
+    fn get_next_image_region(
+        &mut self,
+        av1_payload: &[u8],
+        spatial_id: u8,
+        crop_rect: &CropRect,
+        full_size: (u32, u32),
+        image: &mut Image,
+        category: Category,
+    ) -> AvifResult<()> {
+        if !crop_rect.is_within(full_size.0, full_size.1) {
+            return AvifError::not_implemented();
+        }
+        let mut options = self.decode_options(spatial_id)?;
+        // Decoding the whole frame without a crop rectangle is faster and gives the same output.
+        let whole_frame = crop_rect.x == 0
+            && crop_rect.y == 0
+            && (crop_rect.width, crop_rect.height) == full_size;
+        if !whole_frame {
+            options.crop = Some(av1::Rect {
+                x: usize_from_u32(crop_rect.x)?,
+                y: usize_from_u32(crop_rect.y)?,
+                width: usize_from_u32(crop_rect.width)?,
+                height: usize_from_u32(crop_rect.height)?,
+            });
+        }
+        let frame = match av1::decode_with_info(av1_payload, &options) {
+            Ok((info, frame)) => DecodedFrame { info, frame },
+            // The crop rectangle is not within the frame, whose dimensions do not match full_size.
+            Err(av1::Error::InvalidOptions(_)) => return AvifError::not_implemented(),
+            Err(err) => return Err(err.into()),
+        };
+        // The region is only valid if it is the same as cropping the whole frame, which must have
+        // the expected dimensions (a full decode would scale it otherwise). The position of the
+        // chroma samples of the region must also match the crop of the whole frame, which rounds
+        // x and y down to the chroma subsampling of the frame (see Image::crop_in_place()). Only
+        // the luma plane is used for alpha, so its position does not need to be aligned.
+        let full_width = u32_from_usize(frame.info.width)?;
+        let full_height = u32_from_usize(frame.info.height)?;
+        let yuv_format: PixelFormat = frame.frame.layout.into();
+        if (full_width, full_height) != full_size
+            || (category != Category::Alpha
+                && !crop_rect.is_valid(full_width, full_height, yuv_format))
+            || frame.frame.width != usize_from_u32(crop_rect.width)?
+            || frame.frame.height != usize_from_u32(crop_rect.height)?
+        {
+            return AvifError::not_implemented();
+        }
         Self::frame_to_image(frame, image, category, true)
     }
 
