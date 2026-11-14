@@ -1247,6 +1247,31 @@ fn invalid_grid(test_case_index: u8) -> AvifResult<()> {
     Ok(())
 }
 
+#[test_matrix([false, true])]
+fn grid_with_too_many_cells(with_gainmap: bool) -> AvifResult<()> {
+    let image = generate_gradient_image(64, 64, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    let gainmap = GainMap {
+        image: generate_gradient_image(64, 64, 8, PixelFormat::Yuv444, YuvRange::Full, false)?,
+        metadata: gainmap_metadata(false),
+        ..Default::default()
+    };
+    // The 16-bit reference_count field of the 'dimg' item reference limits the number of cells
+    // to 65535, so a 256x256 grid cannot be encoded.
+    let images = vec![&image; 256 * 256];
+    let gainmaps = vec![&gainmap; 256 * 256];
+    let mut encoder = encoder::Encoder::create_with_settings(&encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    })?;
+    let res = if with_gainmap {
+        encoder.add_image_gainmap_grid(256, 256, &images, &gainmaps)
+    } else {
+        encoder.add_image_grid(256, 256, &images)
+    };
+    assert!(matches!(res, Err(AvifError::InvalidImageGrid(_))));
+    Ok(())
+}
+
 #[test_matrix([8, 10, 12], [false, true])]
 fn opaque_alpha(depth: u8, is_sequence: bool) -> AvifResult<()> {
     if !HAS_ENCODER {
