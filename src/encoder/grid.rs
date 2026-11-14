@@ -79,6 +79,41 @@ pub(crate) fn compute_layout(
     })
 }
 
+// Returns the cell size along an axis of gainmap_pixels samples of a gain map, given that the
+// base image has base_pixels samples along that axis split into count cells of base_cell samples.
+// The cell size is proportional to the gain map dimension, rounded up to an even number if the
+// gain map is subsampled along that axis. If that does not lead to the same number of cells as
+// the base image, ceil(gainmap_pixels / count) is used instead (rounded up to an even number if
+// subsampled).
+pub(crate) fn scale_cell_size(
+    base_cell: u32,
+    base_pixels: u32,
+    gainmap_pixels: u32,
+    count: u32,
+    is_subsampled: bool,
+) -> AvifResult<u32> {
+    if base_cell == 0 || base_pixels == 0 || gainmap_pixels == 0 || count == 0 {
+        return AvifError::invalid_argument();
+    }
+    let gainmap_pixels_u64 = u64::from(gainmap_pixels);
+    let round_up_to_even = |size: u64| if is_subsampled && size % 2 == 1 { size + 1 } else { size };
+    let cell_count = |size: u64| gainmap_pixels_u64.div_ceil(size.min(gainmap_pixels_u64));
+
+    let proportional = round_up_to_even(
+        (u64::from(base_cell) * gainmap_pixels_u64).div_ceil(u64::from(base_pixels)),
+    );
+    if cell_count(proportional) == u64::from(count) {
+        return u32_from_u64(proportional.min(gainmap_pixels_u64));
+    }
+    let fallback = round_up_to_even(gainmap_pixels_u64.div_ceil(u64::from(count)));
+    if cell_count(fallback) == u64::from(count) {
+        return u32_from_u64(fallback.min(gainmap_pixels_u64));
+    }
+    AvifError::invalid_image_grid(format!(
+        "the gain map dimension {gainmap_pixels} cannot be split into {count} cells"
+    ))
+}
+
 // Returns layout.columns * layout.rows views of image in raster order. The views point to the
 // pixels of image (no pixel data is copied). Exif, XMP and ICC data are not copied.
 //
@@ -167,6 +202,46 @@ mod tests {
         cell_height: u32,
     ) {
         assert!(compute_layout(image_width, image_height, cell_width, cell_height).is_err());
+    }
+
+    #[test_case(1024, 4000, 1000, 4, false, 256 ; "proportional quarter")]
+    #[test_case(1024, 3000, 750, 3, false, 256 ; "proportional quarter with remainder")]
+    #[test_case(512, 1000, 500, 2, false, 256 ; "proportional half")]
+    #[test_case(333, 999, 500, 3, false, 167 ; "proportional rounded up")]
+    #[test_case(333, 999, 500, 3, true, 168 ; "proportional rounded up to even")]
+    #[test_case(990, 1000, 10, 2, false, 5 ; "fallback")]
+    #[test_case(990, 1000, 10, 2, true, 6 ; "fallback rounded up to even")]
+    #[test_case(3000, 3000, 750, 1, false, 750 ; "single cell")]
+    fn scale_cell_size_ok(
+        base_cell: u32,
+        base_pixels: u32,
+        gainmap_pixels: u32,
+        count: u32,
+        is_subsampled: bool,
+        expected: u32,
+    ) -> AvifResult<()> {
+        let cell = scale_cell_size(base_cell, base_pixels, gainmap_pixels, count, is_subsampled)?;
+        assert_eq!(cell, expected);
+        assert_eq!(gainmap_pixels.div_ceil(cell), count);
+        Ok(())
+    }
+
+    #[test_case(0, 100, 50, 1, false ; "zero base cell")]
+    #[test_case(100, 0, 50, 1, false ; "zero base pixels")]
+    #[test_case(100, 100, 0, 1, false ; "zero gainmap pixels")]
+    #[test_case(100, 100, 50, 0, false ; "zero count")]
+    #[test_case(64, 256, 3, 4, false ; "fewer gainmap pixels than cells")]
+    #[test_case(64, 256, 6, 4, true ; "fallback with subsampling")]
+    fn scale_cell_size_error(
+        base_cell: u32,
+        base_pixels: u32,
+        gainmap_pixels: u32,
+        count: u32,
+        is_subsampled: bool,
+    ) {
+        assert!(
+            scale_cell_size(base_cell, base_pixels, gainmap_pixels, count, is_subsampled).is_err()
+        );
     }
 
     fn create_image(width: u32, height: u32, yuv_format: PixelFormat) -> AvifResult<Image> {
