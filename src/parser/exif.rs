@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::internal_utils::stream::*;
-#[cfg(feature = "png")]
+#[cfg(any(feature = "png", feature = "jpeg"))]
 use crate::internal_utils::*;
 use crate::parser::mp4box::BoxSize;
 use crate::*;
@@ -55,7 +55,7 @@ pub(crate) fn parse(stream: &mut IStream) -> AvifResult<()> {
     Ok(())
 }
 
-#[cfg(feature = "png")]
+#[cfg(any(feature = "png", feature = "jpeg"))]
 pub(crate) fn get_orientation_offset(exif: &[u8]) -> AvifResult<Option<usize>> {
     let mut temp_stream = IStream::create(exif);
     let tiff_offset = usize_from_u32(parse_exif_tiff_header_offset(&mut temp_stream)?)?;
@@ -96,9 +96,14 @@ pub(crate) fn get_orientation_offset(exif: &[u8]) -> AvifResult<Option<usize>> {
             // In a 12-byte field, the value/offset starts at byte 8.
             // If it fits in 2 or 4 bytes, it's stored directly there.
             // Our stream.offset is at the end of the 12-byte field (after skip(2)).
-            return Ok(Some(
-                tiff_offset + stream.offset - if little_endian { 4 } else { 3 },
-            ));
+            let delta = if little_endian { 4 } else { 3 };
+            let rel_offset = checked_sub!(stream.offset, delta)?;
+            let offset = checked_add!(tiff_offset, rel_offset)?;
+            return if exif.get(offset).is_some() {
+                Ok(Some(offset))
+            } else {
+                AvifError::invalid_exif_payload()
+            };
         }
     }
     Ok(None)
@@ -108,7 +113,7 @@ pub(crate) fn get_orientation_offset(exif: &[u8]) -> AvifResult<Option<usize>> {
 #[cfg(feature = "jpeg")]
 pub(crate) fn get_orientation(exif: &[u8]) -> AvifResult<(Option<u8>, Option<u8>)> {
     Ok(match get_orientation_offset(exif) {
-        Ok(Some(offset)) => match exif[offset] {
+        Ok(Some(offset)) => match exif.get(offset).copied().unwrap_or(0) {
             2 => (None, Some(1)),
             3 => (Some(2), None),
             4 => (None, Some(0)),
@@ -126,7 +131,8 @@ pub(crate) fn get_orientation(exif: &[u8]) -> AvifResult<(Option<u8>, Option<u8>
 pub(crate) fn set_orientation(exif: &mut [u8], orientation: u8) -> AvifResult<()> {
     match get_orientation_offset(exif)? {
         Some(offset) => {
-            exif[offset] = orientation;
+            let slot = exif.get_mut(offset).ok_or(AvifError::InvalidExifPayload)?;
+            *slot = orientation;
             Ok(())
         }
         None => {
@@ -161,7 +167,9 @@ pub(crate) fn apple_headroom(exif: &[u8]) -> AvifResult<Option<f64>> {
         Ok(offset) => offset as usize,
         Err(_) => return Ok(None),
     };
-    let tiff_data = &exif[tiff_offset..];
+    let Some(tiff_data) = exif.get(tiff_offset..) else {
+        return Ok(None);
+    };
     if tiff_data.len() < 8 {
         return Ok(None);
     }
@@ -207,11 +215,10 @@ pub(crate) fn apple_headroom(exif: &[u8]) -> AvifResult<Option<f64>> {
                 break;
             } else if tag_id == 0x927c {
                 // Maker Notes
-                let maker_notes_offset = tag_data as usize;
-                if tiff_data.len() >= maker_notes_offset + 14 {
-                    let maker_tag = &tiff_data[maker_notes_offset..maker_notes_offset + 14];
-                    if maker_tag == b"Apple iOS\0\0\x01MM" {
-                        offset_to_ifd = (maker_notes_offset + 14) as u32;
+                let maker_notes_offset = usize_from_u32(tag_data)?;
+                if let Some(end) = maker_notes_offset.checked_add(14) {
+                    if tiff_data.get(maker_notes_offset..end) == Some(b"Apple iOS\0\0\x01MM") {
+                        offset_to_ifd = u32_from_usize(end)?;
                         in_apple_maker_notes = true;
                         offset_to_next_ifd_already_set = true;
                         is_big_endian = true;
@@ -219,18 +226,22 @@ pub(crate) fn apple_headroom(exif: &[u8]) -> AvifResult<Option<f64>> {
                     }
                 }
             } else if in_apple_maker_notes && (tag_id == 33 || tag_id == 48) && data_format == 10 {
-                let start_of_maker_notes = offset_to_ifd as usize - 14;
-                let tmp_offset = start_of_maker_notes + tag_data as usize;
-                if tiff_data.len() >= tmp_offset + 8 {
-                    let mut rational_stream = IStream::create(&tiff_data[tmp_offset..]);
-                    let numerator = i32_from_u32(read_u32(&mut rational_stream, is_big_endian)?)?;
-                    let denominator = read_u32(&mut rational_stream, is_big_endian)?;
-                    if denominator != 0 {
-                        let v = numerator as f64 / denominator as f64;
-                        if tag_id == 33 {
-                            maker33 = Some(v);
-                        } else {
-                            maker48 = Some(v);
+                let start_of_maker_notes = checked_sub!(usize_from_u32(offset_to_ifd)?, 14)?;
+                let tag_offset = usize_from_u32(tag_data)?;
+                if let Some(tmp_offset) = start_of_maker_notes.checked_add(tag_offset) {
+                    if let Some(slice) = tiff_data.get(tmp_offset..) {
+                        if slice.len() >= 8 {
+                            let mut rational_stream = IStream::create(slice);
+                            let numerator = rational_stream.read_i32()?;
+                            let denominator = read_u32(&mut rational_stream, is_big_endian)?;
+                            if denominator != 0 {
+                                let v = numerator as f64 / denominator as f64;
+                                if tag_id == 33 {
+                                    maker33 = Some(v);
+                                } else {
+                                    maker48 = Some(v);
+                                }
+                            }
                         }
                     }
                 }
@@ -238,11 +249,10 @@ pub(crate) fn apple_headroom(exif: &[u8]) -> AvifResult<Option<f64>> {
         }
 
         if !offset_to_next_ifd_already_set {
-            if stream.bytes_left()? < 4 {
-                offset_to_ifd = 0;
-            } else {
-                offset_to_ifd = read_u32(&mut stream, is_big_endian)?;
+            if in_apple_maker_notes || stream.bytes_left()? < 4 {
+                break;
             }
+            offset_to_ifd = read_u32(&mut stream, is_big_endian)?;
         }
     }
 
@@ -264,8 +274,7 @@ pub(crate) fn apple_headroom(exif: &[u8]) -> AvifResult<Option<f64>> {
         -0.303 * m48 + 2.303
     }))
 }
-
-#[cfg(all(test, feature = "png"))]
+#[cfg(all(test, any(feature = "png", feature = "jpeg")))]
 mod tests {
     use super::*;
 
@@ -313,6 +322,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "png")]
     #[test]
     fn set_orientation_truncated_exif() {
         let mut exif = EXIF[..20].to_vec();
@@ -321,5 +331,108 @@ mod tests {
             Err(AvifError::InvalidExifPayload)
         );
         assert_eq!(exif, EXIF[..20]);
+    }
+
+    fn push_ifd_entry_be(out: &mut Vec<u8>, tag: u16, format: u16, count: u32, data: u32) {
+        out.extend_from_slice(&tag.to_be_bytes());
+        out.extend_from_slice(&format.to_be_bytes());
+        out.extend_from_slice(&count.to_be_bytes());
+        out.extend_from_slice(&data.to_be_bytes());
+    }
+
+    #[cfg(feature = "jpeg")]
+    #[test]
+    fn apple_headroom_with_next_ifd_before_maker_notes_does_not_panic() {
+        for ifd0_offset in [8u32, 16u32] {
+            let mut exif = b"MM\0*".to_vec();
+            exif.extend_from_slice(&ifd0_offset.to_be_bytes());
+            exif.resize(ifd0_offset as usize, 0);
+            // 0th IFD: a rational tag 33 and the maker notes tag pointing past IFD0.
+            let maker_notes_offset = ifd0_offset + 2 + 24 + 4;
+            exif.extend_from_slice(&2u16.to_be_bytes());
+            push_ifd_entry_be(&mut exif, 33, 10, 1, 0);
+            push_ifd_entry_be(&mut exif, 0x927c, 7, 14, maker_notes_offset);
+            exif.extend_from_slice(&0u32.to_be_bytes());
+            // Apple maker notes header followed by an empty IFD whose next_ifd points back to IFD0.
+            exif.extend_from_slice(b"Apple iOS\0\0\x01MM");
+            exif.extend_from_slice(&0u16.to_be_bytes());
+            exif.extend_from_slice(&ifd0_offset.to_be_bytes());
+            assert_eq!(apple_headroom(&exif), Ok(None));
+        }
+    }
+
+    #[cfg(feature = "jpeg")]
+    #[test]
+    fn apple_headroom_supports_negative_srational_numerator() {
+        let mut exif = b"MM\0*".to_vec();
+        exif.extend_from_slice(&8u32.to_be_bytes());
+        // IFD0 at 8: 1 entry (MakerNotes 0x927c -> offset 26).
+        exif.extend_from_slice(&1u16.to_be_bytes());
+        push_ifd_entry_be(&mut exif, 0x927c, 7, 14, 26);
+        exif.extend_from_slice(&0u32.to_be_bytes());
+        // Apple MakerNotes at 26 (14-byte header -> IFD at 40):
+        // 2 entries: tag 33 -> rel offset 44 (abs 70), tag 48 -> rel offset 52 (abs 78).
+        exif.extend_from_slice(b"Apple iOS\0\0\x01MM");
+        exif.extend_from_slice(&2u16.to_be_bytes());
+        push_ifd_entry_be(&mut exif, 33, 10, 1, 44);
+        push_ifd_entry_be(&mut exif, 48, 10, 1, 52);
+        exif.extend_from_slice(&0u32.to_be_bytes());
+        assert_eq!(exif.len(), 70);
+        // Tag 33 = -1 / 2 (-0.5 < 1.0), Tag 48 = 0 / 100 (0.0 <= 0.01) -> headroom = 1.8.
+        exif.extend_from_slice(&(-1i32).to_be_bytes());
+        exif.extend_from_slice(&2u32.to_be_bytes());
+        exif.extend_from_slice(&0i32.to_be_bytes());
+        exif.extend_from_slice(&100u32.to_be_bytes());
+        let hr = apple_headroom(&exif).unwrap().expect("expected headroom");
+        assert!((hr - 1.8).abs() < 1e-9);
+    }
+
+    #[cfg(feature = "jpeg")]
+    #[test]
+    fn orientation_of_truncated_payloads() {
+        let mut exif = b"MM\0*".to_vec();
+        exif.extend_from_slice(&8u32.to_be_bytes());
+        exif.extend_from_slice(&1u16.to_be_bytes());
+        push_ifd_entry_be(&mut exif, 0x0112, 3, 1, 6 << 16);
+        assert_eq!(exif.len(), 22);
+        assert_eq!(get_orientation(&exif), Ok((Some(3), None)));
+        for len in 0..exif.len() {
+            assert!(get_orientation_offset(&exif[..len]).is_err());
+            assert_eq!(get_orientation(&exif[..len]), Ok((None, None)));
+            assert!(!matches!(apple_headroom(&exif[..len]), Ok(Some(_))));
+        }
+    }
+
+    #[cfg(feature = "png")]
+    #[test]
+    fn set_orientation_be_le_and_truncated_entry() {
+        // Big-endian TIFF: orientation at byte 19 (22 - 3).
+        let mut be = b"MM\0*".to_vec();
+        be.extend_from_slice(&8u32.to_be_bytes());
+        be.extend_from_slice(&1u16.to_be_bytes());
+        push_ifd_entry_be(&mut be, 0x0112, 3, 1, 6 << 16);
+        assert_eq!(get_orientation_offset(&be), Ok(Some(19)));
+        assert_eq!(set_orientation(&mut be, 1), Ok(()));
+        assert_eq!(be[19], 1);
+
+        // Truncated at bytes 20..21 (missing trailing 2 bytes of 12-byte IFD entry) must fail
+        // without overwriting `count`.
+        let mut trunc = be[..20].to_vec();
+        let before = trunc.clone();
+        assert!(set_orientation(&mut trunc, 1).is_err());
+        assert_eq!(trunc, before);
+
+        // Little-endian TIFF ("II*\0"): orientation at byte 18 (22 - 4).
+        let mut le = b"II*\0".to_vec();
+        le.extend_from_slice(&8u32.to_le_bytes());
+        le.extend_from_slice(&1u16.to_le_bytes());
+        le.extend_from_slice(&0x0112u16.to_le_bytes());
+        le.extend_from_slice(&3u16.to_le_bytes());
+        le.extend_from_slice(&1u32.to_le_bytes());
+        le.extend_from_slice(&6u16.to_le_bytes());
+        le.extend_from_slice(&0u16.to_le_bytes());
+        assert_eq!(get_orientation_offset(&le), Ok(Some(18)));
+        assert_eq!(set_orientation(&mut le, 1), Ok(()));
+        assert_eq!(le[18], 1);
     }
 }
