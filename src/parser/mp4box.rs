@@ -1388,7 +1388,11 @@ fn parse_ipco(stream: &mut IStream, is_track: bool) -> AvifResult<Vec<ItemProper
     Ok(properties)
 }
 
-fn parse_ipma(stream: &mut IStream, ipma: &mut Vec<ItemPropertyAssociation>) -> AvifResult<()> {
+fn parse_ipma(
+    stream: &mut IStream,
+    ipma: &mut Vec<ItemPropertyAssociation>,
+    strictness: &Strictness,
+) -> AvifResult<()> {
     // Section 8.11.14.2 of ISO/IEC 14496-12.
     let (version, flags) = stream.read_version_and_flags()?;
     // unsigned int(32) entry_count;
@@ -1396,6 +1400,7 @@ fn parse_ipma(stream: &mut IStream, ipma: &mut Vec<ItemPropertyAssociation>) -> 
     ipma.try_reserve(usize_from_u32(entry_count)?)
         .map_err(AvifError::map_out_of_memory)?;
     let mut previous_item_id: Option<u32> = None;
+    let mut item_ids: HashSet<u32> = HashSet::with_hasher(NonRandomHasherState);
     for _ in 0..entry_count {
         let mut entry = ItemPropertyAssociation::default();
         if version < 1 {
@@ -1416,11 +1421,14 @@ fn parse_ipma(stream: &mut IStream, ipma: &mut Vec<ItemPropertyAssociation>) -> 
             //   Each ItemPropertyAssociation box shall be ordered by increasing item_ID, and there
             //   shall be at most one association box for each item_ID, in any
             //   ItemPropertyAssociation box.
-            if entry.item_id <= previous_item_id {
+            if strictness.item_ids_increasing() && entry.item_id <= previous_item_id {
                 return AvifError::bmff_parse_failed(
                     "ipma item ids are not ordered by increasing id",
                 );
             }
+        }
+        if !strictness.item_ids_increasing() && !item_ids.insert(entry.item_id) {
+            return AvifError::bmff_parse_failed("item has duplicate ipma entry");
         }
         // unsigned int(8) association_count;
         let association_count = stream.read_u8()?;
@@ -1449,7 +1457,7 @@ fn parse_ipma(stream: &mut IStream, ipma: &mut Vec<ItemPropertyAssociation>) -> 
     Ok(())
 }
 
-fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
+fn parse_iprp(stream: &mut IStream, strictness: &Strictness) -> AvifResult<ItemPropertyBox> {
     // Section 8.11.14.2 of ISO/IEC 14496-12.
     let header = parse_header(stream, /*top_level=*/ false)?;
     if header.box_type != "ipco" {
@@ -1468,7 +1476,7 @@ fn parse_iprp(stream: &mut IStream) -> AvifResult<ItemPropertyBox> {
             return AvifError::bmff_parse_failed("Found non ipma box in iprp");
         }
         let mut sub_stream = stream.sub_stream(&header.size)?;
-        parse_ipma(&mut sub_stream, &mut iprp.associations)?;
+        parse_ipma(&mut sub_stream, &mut iprp.associations, strictness)?;
     }
     Ok(iprp)
 }
@@ -1522,7 +1530,7 @@ fn parse_infe(stream: &mut IStream) -> AvifResult<ItemInfo> {
     Ok(entry)
 }
 
-fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
+fn parse_iinf(stream: &mut IStream, strictness: &Strictness) -> AvifResult<Vec<ItemInfo>> {
     // Section 8.11.6.2 of ISO/IEC 14496-12.
     let (version, _flags) = stream.read_version_and_flags()?;
     let entry_count: u32 = if version == 0 {
@@ -1533,13 +1541,25 @@ fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
         stream.read_u32()?
     };
     let mut iinf: Vec<ItemInfo> = create_vec_exact(usize_from_u32(entry_count)?)?;
+    let mut item_ids: HashSet<u32> = HashSet::with_hasher(NonRandomHasherState);
     for _i in 0..entry_count {
         let header = parse_header(stream, /*top_level=*/ false)?;
         if header.box_type != "infe" {
             return AvifError::bmff_parse_failed("Found non infe box in iinf");
         }
         let mut sub_stream = stream.sub_stream(&header.size)?;
-        iinf.try_push(parse_infe(&mut sub_stream)?)?;
+        let entry = parse_infe(&mut sub_stream)?;
+        if let Some(previous_entry) = iinf.last() {
+            if strictness.item_ids_increasing() && entry.item_id <= previous_entry.item_id {
+                return AvifError::bmff_parse_failed(
+                    "iinf item ids are not ordered by increasing id",
+                );
+            }
+        }
+        if !strictness.item_ids_increasing() && !item_ids.insert(entry.item_id) {
+            return AvifError::bmff_parse_failed("item has duplicate iinf entry");
+        }
+        iinf.try_push(entry)?;
     }
     Ok(iinf)
 }
@@ -1624,7 +1644,7 @@ fn parse_grpl(stream: &mut IStream) -> AvifResult<Vec<EntityGroup>> {
     Ok(grpl)
 }
 
-fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
+fn parse_meta(stream: &mut IStream, strictness: &Strictness) -> AvifResult<MetaBox> {
     // Section 8.11.1.2 of ISO/IEC 14496-12.
     let (_version, _flags) = stream.read_and_enforce_version_and_flags(0)?;
     let mut meta = MetaBox::default();
@@ -1666,8 +1686,8 @@ fn parse_meta(stream: &mut IStream) -> AvifResult<MetaBox> {
         match header.box_type.as_str() {
             "iloc" => meta.iloc = parse_iloc(&mut sub_stream)?,
             "pitm" => meta.primary_item_id = parse_pitm(&mut sub_stream)?,
-            "iprp" => meta.iprp = parse_iprp(&mut sub_stream)?,
-            "iinf" => meta.iinf = parse_iinf(&mut sub_stream)?,
+            "iprp" => meta.iprp = parse_iprp(&mut sub_stream, strictness)?,
+            "iinf" => meta.iinf = parse_iinf(&mut sub_stream, strictness)?,
             "iref" => meta.iref = parse_iref(&mut sub_stream)?,
             "idat" => meta.idat = parse_idat(&mut sub_stream)?,
             "grpl" => meta.grpl = parse_grpl(&mut sub_stream)?,
@@ -2183,7 +2203,7 @@ fn parse_edts(stream: &mut IStream, track: &mut Track) -> AvifResult<()> {
     Ok(())
 }
 
-fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
+fn parse_trak(stream: &mut IStream, strictness: &Strictness) -> AvifResult<Track> {
     let mut track = Track::default();
     let mut tkhd_seen = false;
     // Section 8.3.1.2 of ISO/IEC 14496-12.
@@ -2201,7 +2221,7 @@ fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
             "mdia" => parse_mdia(&mut sub_stream, &mut track)?,
             "tref" => parse_tref(&mut sub_stream, &mut track)?,
             "edts" => parse_edts(&mut sub_stream, &mut track)?,
-            "meta" => track.meta = Some(parse_meta(&mut sub_stream)?),
+            "meta" => track.meta = Some(parse_meta(&mut sub_stream, strictness)?),
             _ => {}
         }
     }
@@ -2211,14 +2231,14 @@ fn parse_trak(stream: &mut IStream) -> AvifResult<Track> {
     Ok(track)
 }
 
-fn parse_moov(stream: &mut IStream) -> AvifResult<Vec<Track>> {
+fn parse_moov(stream: &mut IStream, strictness: &Strictness) -> AvifResult<Vec<Track>> {
     let mut tracks: Vec<Track> = Vec::new();
     // Section 8.2.1.2 of ISO/IEC 14496-12.
     while stream.has_bytes_left()? {
         let header = parse_header(stream, /*top_level=*/ false)?;
         let mut sub_stream = stream.sub_stream(&header.size)?;
         if header.box_type == "trak" {
-            let track = parse_trak(&mut sub_stream)?;
+            let track = parse_trak(&mut sub_stream, strictness)?;
             if track.is_video_handler() && (track.width == 0 || track.height == 0) {
                 return AvifError::bmff_parse_failed("invalid track dimensions");
             }
@@ -2275,8 +2295,8 @@ pub(crate) fn parse(io: &mut GenericIO, strictness: &Strictness) -> AvifResult<A
                             return AvifError::invalid_ftyp();
                         }
                     }
-                    "meta" => meta = Some(parse_meta(&mut box_stream)?),
-                    "moov" => tracks = Some(parse_moov(&mut box_stream)?),
+                    "meta" => meta = Some(parse_meta(&mut box_stream, strictness)?),
+                    "moov" => tracks = Some(parse_moov(&mut box_stream, strictness)?),
                     "mini" => {
                         seen_mini = true;
                         // The MinimizedImageBox is mapped to a virtually
@@ -2513,6 +2533,182 @@ mod tests {
     use crate::parser::mp4box;
     use crate::AvifError;
     use crate::AvifResult;
+
+    use crate::decoder::{Strictness, StrictnessFlag};
+    use test_case::test_matrix;
+
+    fn ipma_payload(version: u8, flags: u8, item_ids: &[u32]) -> Vec<u8> {
+        let mut data = vec![version, 0, 0, flags];
+        data.extend_from_slice(&(item_ids.len() as u32).to_be_bytes());
+        for item_id in item_ids {
+            if version == 0 {
+                data.extend_from_slice(&(*item_id as u16).to_be_bytes());
+            } else {
+                data.extend_from_slice(&item_id.to_be_bytes());
+            }
+            data.push(1);
+            if flags == 1 {
+                data.extend_from_slice(&0x8101u16.to_be_bytes());
+            } else {
+                data.push(0x81);
+            }
+        }
+        data
+    }
+
+    #[test_matrix([0, 1], [0, 1])]
+    fn ipma_item_ids_increasing(version: u8, flags: u8) -> AvifResult<()> {
+        let data = ipma_payload(version, flags, &[1, 4096, 8192, 8193, 8194, 2]);
+        for (strictness, accepted) in [
+            (Strictness::All, false),
+            (Strictness::None, true),
+            (
+                Strictness::SpecificInclude(vec![StrictnessFlag::ItemIdsIncreasing]),
+                false,
+            ),
+            (
+                Strictness::SpecificExclude(vec![StrictnessFlag::ItemIdsIncreasing]),
+                true,
+            ),
+            (
+                Strictness::SpecificInclude(vec![StrictnessFlag::PixiRequired]),
+                true,
+            ),
+        ] {
+            let mut associations = Vec::new();
+            let result =
+                mp4box::parse_ipma(&mut IStream::create(&data), &mut associations, &strictness);
+            assert_eq!(result.is_ok(), accepted);
+            if accepted {
+                assert_eq!(
+                    associations
+                        .iter()
+                        .map(|entry| entry.item_id)
+                        .collect::<Vec<_>>(),
+                    [1, 4096, 8192, 8193, 8194, 2],
+                );
+                for entry in associations {
+                    assert_eq!(
+                        entry.associations,
+                        [(if flags == 1 { 257 } else { 1 }, true)]
+                    );
+                }
+            }
+        }
+        let ordered = ipma_payload(version, flags, &[1, 2, 4096]);
+        mp4box::parse_ipma(
+            &mut IStream::create(&ordered),
+            &mut Vec::new(),
+            &Strictness::All,
+        )?;
+        Ok(())
+    }
+
+    #[test_matrix([0, 1], [0, 1])]
+    fn ipma_invalid_when_relaxed(version: u8, flags: u8) {
+        for ids in [&[1, 1][..], &[1, 2, 1][..], &[1, 0][..]] {
+            let data = ipma_payload(version, flags, ids);
+            assert!(mp4box::parse_ipma(
+                &mut IStream::create(&data),
+                &mut Vec::new(),
+                &Strictness::None,
+            )
+            .is_err());
+        }
+        let mut truncated = ipma_payload(version, flags, &[2, 1]);
+        truncated.pop();
+        assert!(mp4box::parse_ipma(
+            &mut IStream::create(&truncated),
+            &mut Vec::new(),
+            &Strictness::None,
+        )
+        .is_err());
+    }
+
+    fn iinf_payload(version: u8, infe_version: u8, item_ids: &[u32]) -> Vec<u8> {
+        let mut data = vec![version, 0, 0, 0];
+        if version == 0 {
+            data.extend_from_slice(&(item_ids.len() as u16).to_be_bytes());
+        } else {
+            data.extend_from_slice(&(item_ids.len() as u32).to_be_bytes());
+        }
+        for item_id in item_ids {
+            let mut entry = vec![infe_version, 0, 0, 0];
+            if infe_version == 2 {
+                entry.extend_from_slice(&(*item_id as u16).to_be_bytes());
+            } else {
+                entry.extend_from_slice(&item_id.to_be_bytes());
+            }
+            entry.extend_from_slice(&0u16.to_be_bytes());
+            entry.extend_from_slice(b"av01image\0");
+            data.extend_from_slice(&(8 + entry.len() as u32).to_be_bytes());
+            data.extend_from_slice(b"infe");
+            data.extend_from_slice(&entry);
+        }
+        data
+    }
+
+    #[test_matrix([0, 1], [2, 3])]
+    fn iinf_item_ids_increasing(version: u8, infe_version: u8) -> AvifResult<()> {
+        let largest_item_id = if infe_version == 2 { 8194 } else { u32::MAX };
+        let ids = [1, 4096, 8192, 8193, largest_item_id, 2];
+        let data = iinf_payload(version, infe_version, &ids);
+        for (strictness, accepted) in [
+            (Strictness::All, false),
+            (Strictness::None, true),
+            (
+                Strictness::SpecificInclude(vec![StrictnessFlag::ItemIdsIncreasing]),
+                false,
+            ),
+            (
+                Strictness::SpecificExclude(vec![StrictnessFlag::ItemIdsIncreasing]),
+                true,
+            ),
+            (
+                Strictness::SpecificInclude(vec![StrictnessFlag::PixiRequired]),
+                true,
+            ),
+        ] {
+            let result = mp4box::parse_iinf(&mut IStream::create(&data), &strictness);
+            assert_eq!(result.is_ok(), accepted);
+            if accepted {
+                let entries = result?;
+                assert_eq!(
+                    entries
+                        .iter()
+                        .map(|entry| entry.item_id)
+                        .collect::<Vec<_>>(),
+                    ids,
+                );
+                for entry in entries {
+                    assert_eq!(entry.item_type, "av01");
+                    assert_eq!(entry.item_name, "image");
+                }
+            }
+            for ordered in [&[][..], &[1][..], &[1, 2, largest_item_id][..]] {
+                let data = iinf_payload(version, infe_version, ordered);
+                mp4box::parse_iinf(&mut IStream::create(&data), &strictness)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test_matrix([0, 1], [2, 3])]
+    fn iinf_invalid_when_relaxed(version: u8, infe_version: u8) {
+        for strictness in [
+            Strictness::All,
+            Strictness::None,
+            Strictness::SpecificExclude(vec![StrictnessFlag::ItemIdsIncreasing]),
+        ] {
+            for ids in [&[1, 1][..], &[1, 2, 1][..], &[0][..], &[1, 0][..]] {
+                let data = iinf_payload(version, infe_version, ids);
+                assert!(mp4box::parse_iinf(&mut IStream::create(&data), &strictness).is_err());
+            }
+            let mut truncated = iinf_payload(version, infe_version, &[2, 1]);
+            truncated.pop();
+            assert!(mp4box::parse_iinf(&mut IStream::create(&truncated), &strictness).is_err());
+        }
+    }
 
     #[test]
     fn peek_compatible_file_type() -> AvifResult<()> {

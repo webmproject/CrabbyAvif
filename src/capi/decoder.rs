@@ -230,6 +230,9 @@ impl TryFrom<&avifDecoder> for Settings {
             if (decoder.strictFlags & AVIF_STRICT_ESSENTIAL_TRANSFORMATIVE_PROPERTIES) != 0 {
                 flags.try_push(StrictnessFlag::EssentialTransformativeProperties)?;
             }
+            if (decoder.strictFlags & AVIF_STRICT_ITEM_IDS_INCREASING) != 0 {
+                flags.try_push(StrictnessFlag::ItemIdsIncreasing)?;
+            }
             Strictness::SpecificInclude(flags)
         };
         let image_content_to_decode_flags: ImageContentType = match decoder.imageContentToDecode {
@@ -753,4 +756,33 @@ pub unsafe extern "C" fn crabby_avifPeekCompatibleFileType(input: *const avifROD
 pub unsafe extern "C" fn crabby_avifDecoderReset(decoder: *mut avifDecoder) -> avifResult {
     check_pointer!(decoder);
     avif_decoder_parse(deref_mut!(decoder))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn item_ids_increasing_strictness() -> AvifResult<()> {
+        for (strict_flags, ordered, pixi_required) in [
+            (AVIF_STRICT_ENABLED, true, true),
+            (AVIF_STRICT_DISABLED, false, false),
+            (
+                AVIF_STRICT_ENABLED & !AVIF_STRICT_ITEM_IDS_INCREASING,
+                false,
+                true,
+            ),
+            (AVIF_STRICT_ITEM_IDS_INCREASING, true, false),
+            (AVIF_STRICT_PIXI_REQUIRED, false, true),
+        ] {
+            let decoder = avifDecoder {
+                strictFlags: strict_flags,
+                ..Default::default()
+            };
+            let settings = Settings::try_from(&decoder)?;
+            assert_eq!(settings.strictness.item_ids_increasing(), ordered);
+            assert_eq!(settings.strictness.pixi_required(), pixi_required);
+        }
+        Ok(())
+    }
 }

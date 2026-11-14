@@ -314,3 +314,13 @@ std::fs::write("gainmap_larger_than_base_grid.avif",
 
 followed by overwriting the width and height of the 256x128 `ispe` box with
 128 and 64.
+
+## white_iden_irot_unordered_ipma.avif
+
+Created from `white_iden_irot.avif` by reversing the two entries in the
+`ipma` box, giving item IDs 2, 1.
+
+## white_iden_irot_unordered_iinf.avif
+
+Created from `white_iden_irot.avif` by reversing the two `infe` entries in
+`iinf`, giving item IDs 2, 1.
