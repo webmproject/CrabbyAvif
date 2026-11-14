@@ -38,8 +38,17 @@ impl AvifReader {
 
 impl Reader for AvifReader {
     fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64, Option<GainMap>)> {
+        self.decoder.settings.max_threads = config.max_threads.max(1);
+        if let Some(size_limit) = std::num::NonZero::new(config.image_size_limit) {
+            self.decoder.settings.image_size_limit = Some(size_limit);
+        }
         self.decoder.next_image()?;
         let image = self.decoder.image().unwrap();
+        if config.image_size_limit > 0
+            && (image.width as u64) * (image.height as u64) > config.image_size_limit as u64
+        {
+            return AvifError::unknown_error("Too big AVIF dimensions");
+        }
         if let Some(yuv_format) = config.yuv_format {
             if yuv_format != image.yuv_format {
                 return AvifError::not_implemented();
@@ -55,8 +64,24 @@ impl Reader for AvifReader {
                 return AvifError::not_implemented();
             }
         }
+        let mut cloned = image.try_deep_clone()?;
+        if let Some(range) = config.yuv_range {
+            cloned.yuv_range = range;
+        }
+        if let Some(cp) = config.color_primaries {
+            cloned.color_primaries = cp;
+        }
+        if config.ignore_icc {
+            cloned.icc.clear();
+        }
+        if config.ignore_exif {
+            cloned.exif.clear();
+        }
+        if config.ignore_xmp {
+            cloned.xmp.clear();
+        }
         Ok((
-            image.try_deep_clone()?,
+            cloned,
             (self.decoder.image_timing().duration * 1000.0).round() as u64,
             if self.decoder.gainmap_present() {
                 Some(self.decoder.gainmap().try_deep_clone()?)
@@ -67,7 +92,6 @@ impl Reader for AvifReader {
     }
 
     fn has_more_frames(&mut self) -> bool {
-        self.decoder.image_index() < 0
-            || (self.decoder.image_index() as u32) < self.decoder.image_count()
+        (self.decoder.image_index() + 1) < self.decoder.image_count() as i32
     }
 }

@@ -447,8 +447,49 @@ impl Encoder for Aom {
                     // and matrix coefficients.
                 }
                 _ => {
-                    // libaom's defaults are AOM_CSP_UNKNOWN and 0 (studio/limited range).
-                    // Call aom_codec_control() only if the values are not the defaults.
+                    // AVIF specification, Section 2.2.1. "AV1 Item Configuration Property":
+                    //   The values of the fields in the AV1CodecConfigurationBox shall match those
+                    //   of the Sequence Header OBU in the AV1 Image Item Data.
+                    // Some decoders ignore the colr box and rely on the Sequence Header OBU CICP
+                    // contents instead (matches libavif #2850). libaom's defaults are Unspecified
+                    // (2/2/2), AOM_CSP_UNKNOWN, and 0 (studio/limited range); call
+                    // aom_codec_control() only when values differ from the defaults.
+                    // Per AV1 Section 5.5.2 (`color_config()`), writing 1/13/0 on non-monochrome
+                    // streams omits `color_range` and normatively forces Full range + Yuv444. Keep
+                    // 2/2/2 in the Sequence Header OBU (allowed by AV1-ISOBMFF Section 2.3.4) if
+                    // 1/13/0 is paired with Limited range or subsampled chroma.
+                    let keep_unspecified_for_srgb_identity = !image.yuv_format.is_monochrome()
+                        && image.color_primaries == ColorPrimaries::Bt709
+                        && image.transfer_characteristics == TransferCharacteristics::Srgb
+                        && image.matrix_coefficients == MatrixCoefficients::Identity
+                        && (image.yuv_range != YuvRange::Full
+                            || image.yuv_format != PixelFormat::Yuv444);
+                    if !keep_unspecified_for_srgb_identity {
+                        if !matches!(
+                            image.color_primaries,
+                            ColorPrimaries::Unspecified | ColorPrimaries::Unknown
+                        ) {
+                            self.codec_control(
+                                aome_enc_control_id_AV1E_SET_COLOR_PRIMARIES,
+                                image.color_primaries as i32,
+                            )?;
+                        }
+                        if !matches!(
+                            image.transfer_characteristics,
+                            TransferCharacteristics::Unspecified | TransferCharacteristics::Unknown
+                        ) {
+                            self.codec_control(
+                                aome_enc_control_id_AV1E_SET_TRANSFER_CHARACTERISTICS,
+                                image.transfer_characteristics as i32,
+                            )?;
+                        }
+                        if image.matrix_coefficients != MatrixCoefficients::Unspecified {
+                            self.codec_control(
+                                aome_enc_control_id_AV1E_SET_MATRIX_COEFFICIENTS,
+                                image.matrix_coefficients as i32,
+                            )?;
+                        }
+                    }
                     if image.chroma_sample_position != ChromaSamplePosition::Unknown {
                         self.codec_control(
                             aome_enc_control_id_AV1E_SET_CHROMA_SAMPLE_POSITION,
@@ -464,12 +505,6 @@ impl Encoder for Aom {
                             aom_color_range_AOM_CR_FULL_RANGE as i32,
                         )?;
                     }
-                    // Section 2.3.4 of AV1-ISOBMFF says 'colr' with 'nclx' should be present and
-                    // shall match CICP values in the Sequence Header OBU, unless the latter has
-                    // 2/2/2 (Unspecified). So set CICP values to 2/2/2 (Unspecified) in the
-                    // Sequence Header OBU for simplicity. libaom's defaults are
-                    // AOM_CICP_CP_UNSPECIFIED, AOM_CICP_TC_UNSPECIFIED, and
-                    // AOM_CICP_MC_UNSPECIFIED. No need to call aom_codec_control().
                 }
             }
             if aom_config.g_usage == AOM_USAGE_ALL_INTRA {
@@ -779,5 +814,111 @@ impl Aom {
             let detail = detail_cstr.to_string_lossy();
             format!("{err}: {detail}")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codecs::Encoder;
+
+    fn encode_single_obu(image: &Image) -> AvifResult<Av1SequenceHeader> {
+        let config = EncoderConfig {
+            speed: Some(10),
+            quality: 60.0,
+            is_single_image: true,
+            threads: 1,
+            ..Default::default()
+        };
+        let mut aom = Aom::default();
+        let mut samples = Vec::new();
+        aom.encode_image(image, Category::Color, &config, &mut samples)?;
+        Av1SequenceHeader::parse_from_obus(samples[0].sample_data())
+    }
+
+    #[test]
+    fn sequence_header_obu_cicp_and_chroma_sample_position() -> AvifResult<()> {
+        for csp in [
+            ChromaSamplePosition::Vertical,
+            ChromaSamplePosition::Colocated,
+        ] {
+            let mut img = Image {
+                width: 16,
+                height: 16,
+                depth: 8,
+                yuv_format: PixelFormat::Yuv420,
+                yuv_range: YuvRange::Limited,
+                color_primaries: ColorPrimaries::Bt2020,
+                transfer_characteristics: TransferCharacteristics::Pq,
+                matrix_coefficients: MatrixCoefficients::Bt2020Ncl,
+                chroma_sample_position: csp,
+                ..Default::default()
+            };
+            img.allocate_planes(Category::Color)?;
+            let seq = encode_single_obu(&img)?;
+            assert_eq!(seq.color_primaries, ColorPrimaries::Bt2020);
+            assert_eq!(seq.transfer_characteristics, TransferCharacteristics::Pq);
+            assert_eq!(seq.matrix_coefficients, MatrixCoefficients::Bt2020Ncl);
+            assert_eq!(seq.yuv_range, YuvRange::Limited);
+            assert_eq!(seq.config.chroma_sample_position, csp);
+        }
+
+        // ColorPrimaries::Unknown (0) and TransferCharacteristics::Unknown (0) must not fail
+        // libaom's 1..=22 / 1..=18 control range checks.
+        let mut unknown_cp_tc = Image {
+            width: 16,
+            height: 16,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            yuv_range: YuvRange::Full,
+            color_primaries: ColorPrimaries::Unknown,
+            transfer_characteristics: TransferCharacteristics::Unknown,
+            matrix_coefficients: MatrixCoefficients::Bt601,
+            ..Default::default()
+        };
+        unknown_cp_tc.allocate_planes(Category::Color)?;
+        let seq_unk = encode_single_obu(&unknown_cp_tc)?;
+        assert_eq!(seq_unk.color_primaries, ColorPrimaries::Unspecified);
+        assert_eq!(
+            seq_unk.transfer_characteristics,
+            TransferCharacteristics::Unspecified
+        );
+        assert_eq!(seq_unk.matrix_coefficients, MatrixCoefficients::Bt601);
+        assert_eq!(seq_unk.yuv_range, YuvRange::Full);
+
+        // AV1 Section 5.5.2: 1/13/0 Full Yuv444 writes 1/13/0 in Sequence Header OBU, whereas
+        // 1/13/0 Limited keeps 2/2/2 so OBU `color_range` stays Limited matching `colr`.
+        for range in [YuvRange::Full, YuvRange::Limited] {
+            let mut srgb_id = Image {
+                width: 16,
+                height: 16,
+                depth: 8,
+                yuv_format: PixelFormat::Yuv444,
+                yuv_range: range,
+                color_primaries: ColorPrimaries::Bt709,
+                transfer_characteristics: TransferCharacteristics::Srgb,
+                matrix_coefficients: MatrixCoefficients::Identity,
+                ..Default::default()
+            };
+            srgb_id.allocate_planes(Category::Color)?;
+            let seq_id = encode_single_obu(&srgb_id)?;
+            assert_eq!(seq_id.yuv_range, range);
+            if range == YuvRange::Full {
+                assert_eq!(seq_id.color_primaries, ColorPrimaries::Bt709);
+                assert_eq!(
+                    seq_id.transfer_characteristics,
+                    TransferCharacteristics::Srgb
+                );
+                assert_eq!(seq_id.matrix_coefficients, MatrixCoefficients::Identity);
+            } else {
+                assert_eq!(seq_id.color_primaries, ColorPrimaries::Unspecified);
+                assert_eq!(
+                    seq_id.transfer_characteristics,
+                    TransferCharacteristics::Unspecified
+                );
+                assert_eq!(seq_id.matrix_coefficients, MatrixCoefficients::Unspecified);
+            }
+        }
+        Ok(())
     }
 }

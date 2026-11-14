@@ -101,6 +101,7 @@ fn main() -> Result<(), String> {
         .layout_tests(false)
         .generate_comments(false);
     let allowlist_items = &[
+        "ABGRToARGB",
         "ABGRToI420",
         "ABGRToJ400",
         "ABGRToJ420",
@@ -116,6 +117,7 @@ fn main() -> Result<(), String> {
         "ARGBToJ420",
         "ARGBToJ422",
         "ARGBUnattenuate",
+        "BGRAToARGB",
         "BGRAToI420",
         "Convert16To8Plane",
         "FilterMode",
@@ -165,12 +167,17 @@ fn main() -> Result<(), String> {
         "P010ToAR30Matrix",
         "P010ToARGBMatrix",
         "P010ToI010",
+        "RAWToARGB",
         "RAWToI420",
+        "RAWToI444",
         "RAWToJ400",
         "RAWToJ420",
+        "RAWToJ444",
+        "RGB24ToARGB",
         "RGB24ToI420",
         "RGB24ToJ400",
         "RGB24ToJ420",
+        "RGBAToARGB",
         "RGBAToI420",
         "RGBAToJ400",
         "ScalePlane",
@@ -199,8 +206,22 @@ fn main() -> Result<(), String> {
             err.to_string()
         }
     })?;
-    bindings
-        .write_to_file(outfile.as_path())
-        .map_err(|err| err.to_string())?;
+    let mut generated = bindings.to_string();
+    // System libyuv packages older than 1902/1903 omit RAWToJ444/RAWToI444; emit unreachable
+    // fallback stubs so `src/reformat/libyuv.rs` (guarded by `LIBYUV_VERSION`) links cleanly.
+    for sym in ["RAWToJ444", "RAWToI444"] {
+        if !generated.contains(&format!("fn {sym}")) {
+            generated.push_str(&format!(
+                "\npub unsafe extern \"C\" fn {sym}(\
+                _: *const u8, _: ::std::os::raw::c_int, \
+                _: *mut u8, _: ::std::os::raw::c_int, \
+                _: *mut u8, _: ::std::os::raw::c_int, \
+                _: *mut u8, _: ::std::os::raw::c_int, \
+                _: ::std::os::raw::c_int, _: ::std::os::raw::c_int\
+                ) -> ::std::os::raw::c_int {{ -1 }}\n"
+            ));
+        }
+    }
+    std::fs::write(outfile.as_path(), generated).map_err(|err| err.to_string())?;
     Ok(())
 }

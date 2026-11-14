@@ -184,20 +184,13 @@ impl avifEncoder {
             let settings: Settings = (&*self).into();
             let res = Encoder::create_with_settings(&settings);
             self.diag.set_from_result(&res);
-            match res {
-                Ok(encoder) => self.rust_encoder = Box::new(encoder),
+            let mut encoder = match res {
+                Ok(encoder) => encoder,
                 Err(err) => return (&err).into(),
-            }
+            };
+            encoder.codec_specific_options = std::mem::take(&mut self.codec_specific_options);
+            self.rust_encoder = Box::new(encoder);
             self.rust_encoder_initialized = true;
-            // Push any existing codec specific options.
-            for (key, value) in self.codec_specific_options.iter() {
-                self.rust_encoder.set_codec_specific_option(
-                    key.0,
-                    key.1.to_string(),
-                    value.to_string(),
-                );
-            }
-            self.codec_specific_options.clear();
             avifResult::Ok
         }
     }
@@ -526,33 +519,28 @@ pub unsafe extern "C" fn crabby_avifEncoderSetCodecSpecificOption(
     let (Ok(key), Ok(value)) = (key_cstr.to_str(), value_cstr.to_str()) else {
         return avifResult::InvalidArgument;
     };
-    let (key, value) = (key.to_owned(), value.to_owned());
-    let (key, category) = if let Some(suffix) = key.strip_prefix("c:") {
-        (suffix.to_string(), Some(Category::Color))
+    let (key_slice, category) = if let Some(suffix) = key.strip_prefix("c:") {
+        (suffix, Some(Category::Color))
     } else if let Some(suffix) = key.strip_prefix("color:") {
-        (suffix.to_string(), Some(Category::Color))
+        (suffix, Some(Category::Color))
     } else if let Some(suffix) = key.strip_prefix("a:") {
-        (suffix.to_string(), Some(Category::Alpha))
+        (suffix, Some(Category::Alpha))
     } else if let Some(suffix) = key.strip_prefix("alpha:") {
-        (suffix.to_string(), Some(Category::Alpha))
+        (suffix, Some(Category::Alpha))
     } else if let Some(suffix) = key.strip_prefix("g:") {
-        (suffix.to_string(), Some(Category::Gainmap))
+        (suffix, Some(Category::Gainmap))
     } else if let Some(suffix) = key.strip_prefix("gainmap:") {
-        (suffix.to_string(), Some(Category::Gainmap))
+        (suffix, Some(Category::Gainmap))
     } else {
         (key, None)
     };
     let encoder_ref = deref_mut!(encoder);
-    if encoder_ref.rust_encoder_initialized {
-        encoder_ref
-            .rust_encoder
-            .set_codec_specific_option(category, key, value);
+    let target = if encoder_ref.rust_encoder_initialized {
+        &mut encoder_ref.rust_encoder.codec_specific_options
     } else {
-        encoder_ref
-            .codec_specific_options
-            .insert((category, key), value);
-    }
-    avifResult::Ok
+        &mut encoder_ref.codec_specific_options
+    };
+    target.try_set(category, key_slice, value).into()
 }
 
 #[cfg(test)]

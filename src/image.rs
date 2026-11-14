@@ -514,7 +514,7 @@ impl Image {
         self.allocate_plane_with_default_value(plane, DEFAULT_VALUE)
     }
 
-    fn allocate_plane_with_default_value(
+    pub(crate) fn allocate_plane_with_default_value(
         &mut self,
         plane: Plane,
         default_value: u16,
@@ -624,21 +624,182 @@ impl Image {
     // This function is not used in all configurations.
     #[allow(dead_code)]
     pub fn is_opaque(&self) -> AvifResult<bool> {
-        if let Some(plane_data) = self.plane_data(Plane::A) {
-            let opaque_value = self.max_channel();
-            if self.depth == 8 {
+        let Some(plane_data) = self.plane_data(Plane::A) else {
+            return Ok(true);
+        };
+        let opaque_value = self.max_channel();
+        if self.depth == 8 {
+            let opaque = opaque_value as u8;
+            #[cfg(target_arch = "x86_64")]
+            {
+                if std::arch::is_x86_feature_detected!("avx2") {
+                    // SAFETY: `is_x86_feature_detected!("avx2")` verified AVX2 support.
+                    return unsafe { self.is_opaque_8_avx2(plane_data.height, opaque) };
+                }
+                // SAFETY: SSE2 is baseline on `x86_64`.
+                unsafe { self.is_opaque_8_sse2(plane_data.height, opaque) }
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
                 for y in 0..plane_data.height {
                     let row = self.row(Plane::A, y)?;
-                    if !row.iter().all(|pixel| *pixel == opaque_value as u8) {
+                    if !row.iter().all(|pixel| *pixel == opaque) {
                         return Ok(false);
                     }
                 }
-            } else {
+                Ok(true)
+            }
+        } else {
+            #[cfg(target_arch = "x86_64")]
+            {
+                if std::arch::is_x86_feature_detected!("avx2") {
+                    // SAFETY: `is_x86_feature_detected!("avx2")` verified AVX2 support.
+                    return unsafe { self.is_opaque_16_avx2(plane_data.height, opaque_value) };
+                }
+                // SAFETY: SSE2 is baseline on `x86_64`.
+                unsafe { self.is_opaque_16_sse2(plane_data.height, opaque_value) }
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
                 for y in 0..plane_data.height {
                     let row = self.row16(Plane::A, y)?;
                     if !row.iter().all(|pixel| *pixel == opaque_value) {
                         return Ok(false);
                     }
+                }
+                Ok(true)
+            }
+        }
+    }
+
+    /// # Safety
+    /// The caller must ensure the CPU supports `avx2`.
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    unsafe fn is_opaque_8_avx2(&self, height: u32, opaque: u8) -> AvifResult<bool> {
+        use std::arch::x86_64::*;
+        let target256 = _mm256_set1_epi8(opaque as i8);
+        let target128 = _mm256_castsi256_si128(target256);
+        for y in 0..height {
+            let row = self.row(Plane::A, y)?;
+            let len = row.len();
+            let ptr = row.as_ptr();
+            let mut i = 0usize;
+            while i + 32 <= len {
+                // SAFETY: `i + 32 <= len`, so `ptr.add(i)` is valid for an unaligned 32-byte read.
+                let v = unsafe { _mm256_loadu_si256(ptr.add(i).cast()) };
+                if _mm256_movemask_epi8(_mm256_cmpeq_epi8(v, target256)) != -1 {
+                    return Ok(false);
+                }
+                i += 32;
+            }
+            if i + 16 <= len {
+                // SAFETY: `i + 16 <= len`, so `ptr.add(i)` is valid for an unaligned 16-byte read.
+                let v = unsafe { _mm_loadu_si128(ptr.add(i).cast()) };
+                if _mm_movemask_epi8(_mm_cmpeq_epi8(v, target128)) != 0xFFFF {
+                    return Ok(false);
+                }
+                i += 16;
+            }
+            if let Some(tail) = row.get(i..) {
+                if !tail.iter().all(|&pixel| pixel == opaque) {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// # Safety
+    /// The caller must ensure the CPU supports `sse2` (baseline on `x86_64`).
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "sse2")]
+    unsafe fn is_opaque_8_sse2(&self, height: u32, opaque: u8) -> AvifResult<bool> {
+        use std::arch::x86_64::*;
+        let target128 = _mm_set1_epi8(opaque as i8);
+        for y in 0..height {
+            let row = self.row(Plane::A, y)?;
+            let len = row.len();
+            let ptr = row.as_ptr();
+            let mut i = 0usize;
+            while i + 16 <= len {
+                // SAFETY: `i + 16 <= len`, so `ptr.add(i)` is valid for an unaligned 16-byte read.
+                let v = unsafe { _mm_loadu_si128(ptr.add(i).cast()) };
+                if _mm_movemask_epi8(_mm_cmpeq_epi8(v, target128)) != 0xFFFF {
+                    return Ok(false);
+                }
+                i += 16;
+            }
+            if let Some(tail) = row.get(i..) {
+                if !tail.iter().all(|&pixel| pixel == opaque) {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// # Safety
+    /// The caller must ensure the CPU supports `avx2`.
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    unsafe fn is_opaque_16_avx2(&self, height: u32, opaque: u16) -> AvifResult<bool> {
+        use std::arch::x86_64::*;
+        let target256 = _mm256_set1_epi16(opaque as i16);
+        let target128 = _mm256_castsi256_si128(target256);
+        for y in 0..height {
+            let row = self.row16(Plane::A, y)?;
+            let len = row.len();
+            let ptr = row.as_ptr();
+            let mut i = 0usize;
+            while i + 16 <= len {
+                // SAFETY: `i + 16 <= len`, so `ptr.add(i)` is valid for a 32-byte unaligned read.
+                let v = unsafe { _mm256_loadu_si256(ptr.add(i).cast()) };
+                if _mm256_movemask_epi8(_mm256_cmpeq_epi16(v, target256)) != -1 {
+                    return Ok(false);
+                }
+                i += 16;
+            }
+            if i + 8 <= len {
+                // SAFETY: `i + 8 <= len`, so `ptr.add(i)` is valid for a 16-byte unaligned read.
+                let v = unsafe { _mm_loadu_si128(ptr.add(i).cast()) };
+                if _mm_movemask_epi8(_mm_cmpeq_epi16(v, target128)) != 0xFFFF {
+                    return Ok(false);
+                }
+                i += 8;
+            }
+            if let Some(tail) = row.get(i..) {
+                if !tail.iter().all(|&pixel| pixel == opaque) {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// # Safety
+    /// The caller must ensure the CPU supports `sse2` (baseline on `x86_64`).
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "sse2")]
+    unsafe fn is_opaque_16_sse2(&self, height: u32, opaque: u16) -> AvifResult<bool> {
+        use std::arch::x86_64::*;
+        let target128 = _mm_set1_epi16(opaque as i16);
+        for y in 0..height {
+            let row = self.row16(Plane::A, y)?;
+            let len = row.len();
+            let ptr = row.as_ptr();
+            let mut i = 0usize;
+            while i + 8 <= len {
+                // SAFETY: `i + 8 <= len`, so `ptr.add(i)` is valid for a 16-byte unaligned read.
+                let v = unsafe { _mm_loadu_si128(ptr.add(i).cast()) };
+                if _mm_movemask_epi8(_mm_cmpeq_epi16(v, target128)) != 0xFFFF {
+                    return Ok(false);
+                }
+                i += 8;
+            }
+            if let Some(tail) = row.get(i..) {
+                if !tail.iter().all(|&pixel| pixel == opaque) {
+                    return Ok(false);
                 }
             }
         }
@@ -682,3 +843,312 @@ impl Image {
 
 #[cfg(feature = "satofloat")]
 pub type FloatPlanes = [Option<Vec<f32>>; MAX_PLANE_COUNT];
+
+pub(crate) trait PlanePixel: Copy + 'static {
+    fn from_u16(val: u16) -> Self;
+    fn into_pixels(vec: Vec<Self>) -> Pixels;
+    fn byte_size() -> usize;
+}
+
+impl PlanePixel for u8 {
+    fn from_u16(val: u16) -> Self {
+        val as u8
+    }
+
+    fn into_pixels(vec: Vec<Self>) -> Pixels {
+        Pixels::Buffer(vec)
+    }
+
+    fn byte_size() -> usize {
+        1
+    }
+}
+
+impl PlanePixel for u16 {
+    fn from_u16(val: u16) -> Self {
+        val
+    }
+
+    fn into_pixels(vec: Vec<Self>) -> Pixels {
+        Pixels::Buffer16(vec)
+    }
+
+    fn byte_size() -> usize {
+        2
+    }
+}
+
+/// Sound builder for a YUV/A plane allocation without upfront zero-fill.
+///
+/// Safety invariants maintained by `new` until `finish_into`:
+/// - `total_size == stride_elems * padded_height`, where `stride_elems == round2_usize(width)`
+///   and `padded_height == round2_usize(height)`.
+/// - `vec.len() == 0` and `vec.capacity() >= total_size`.
+/// - `row_bytes == stride_elems * T::byte_size()`.
+///
+/// Only `finish_into` fills trailing `round2_usize` border padding and calls
+/// `Vec::set_len(total_size)`.
+pub(crate) struct UninitPlane<T: PlanePixel> {
+    vec: Vec<T>,
+    width: usize,
+    height: usize,
+    stride_elems: usize,
+    padded_height: usize,
+    row_bytes: u32,
+    total_size: usize,
+}
+
+pub(crate) type UninitPlane8 = UninitPlane<u8>;
+pub(crate) type UninitPlane16 = UninitPlane<u16>;
+
+// Some methods on `UninitPlane` may not be used in all target/feature configurations.
+#[allow(dead_code)]
+impl<T: PlanePixel> UninitPlane<T> {
+    pub(crate) fn new(width: usize, height: usize) -> AvifResult<Self> {
+        let stride_elems = round2_usize(width);
+        let padded_height = round2_usize(height);
+        let total_size = checked_mul!(stride_elems, padded_height)?;
+        let row_bytes = u32_from_usize(checked_mul!(stride_elems, T::byte_size())?)?;
+        let vec = if total_size == 0 { Vec::new() } else { create_vec_exact(total_size)? };
+        Ok(Self {
+            vec,
+            width,
+            height,
+            stride_elems,
+            padded_height,
+            row_bytes,
+            total_size,
+        })
+    }
+
+    pub(crate) fn for_image(image: &Image, plane: Plane) -> AvifResult<Self> {
+        Self::new(image.width(plane), image.height(plane))
+    }
+
+    pub(crate) fn width(&self) -> usize {
+        self.width
+    }
+
+    pub(crate) fn height(&self) -> usize {
+        self.height
+    }
+
+    pub(crate) fn stride_elems(&self) -> usize {
+        self.stride_elems
+    }
+
+    pub(crate) fn row_bytes_i32(&self) -> AvifResult<i32> {
+        i32_from_u32(self.row_bytes)
+    }
+
+    pub(crate) fn as_mut_ptr(&mut self) -> *mut T {
+        self.vec.spare_capacity_mut().as_mut_ptr().cast()
+    }
+
+    pub(crate) fn spare_all_mut(&mut self) -> AvifResult<&mut [std::mem::MaybeUninit<T>]> {
+        self.vec
+            .spare_capacity_mut()
+            .get_mut(..self.total_size)
+            .ok_or(AvifError::NoContent)
+    }
+
+    pub(crate) fn spare_row_mut(
+        &mut self,
+        row: u32,
+    ) -> AvifResult<&mut [std::mem::MaybeUninit<T>]> {
+        let row_usize = usize_from_u32(row)?;
+        if row_usize >= self.height {
+            return AvifError::no_content();
+        }
+        let start = row_usize * self.stride_elems;
+        self.vec
+            .spare_capacity_mut()
+            .get_mut(start..start + self.width)
+            .ok_or(AvifError::NoContent)
+    }
+
+    /// Initializes any trailing odd-width columns and odd-height rows with `pad_value`, sets the
+    /// vector length to `total_size`, and attaches the finalized buffer to `image.planes[plane]`.
+    ///
+    /// # Safety
+    /// The caller MUST have initialized every element in `(0..self.height) x (0..self.width)` (with
+    /// row stride `self.stride_elems`) before calling `finish_into`.
+    pub(crate) unsafe fn finish_into(
+        mut self,
+        image: &mut Image,
+        plane: Plane,
+        pad_value: u16,
+    ) -> AvifResult<()> {
+        if (image.depth > 8) != (T::byte_size() == 2) {
+            return AvifError::invalid_argument();
+        }
+        let plane_index = plane.as_usize();
+        if self.total_size == 0 {
+            image.planes[plane_index] = None;
+            image.row_bytes[plane_index] = 0;
+            return Ok(());
+        }
+        let pad = T::from_u16(pad_value);
+        let spare = self
+            .vec
+            .spare_capacity_mut()
+            .get_mut(..self.total_size)
+            .ok_or(AvifError::NoContent)?;
+        if self.stride_elems > self.width {
+            for row in 0..self.height {
+                let row_start = row * self.stride_elems;
+                let Some(pad_cols) =
+                    spare.get_mut(row_start + self.width..row_start + self.stride_elems)
+                else {
+                    return AvifError::no_content();
+                };
+                for cell in pad_cols {
+                    cell.write(pad);
+                }
+            }
+        }
+        if self.padded_height > self.height {
+            let tail_start = self.height * self.stride_elems;
+            let Some(pad_rows) = spare.get_mut(tail_start..self.total_size) else {
+                return AvifError::no_content();
+            };
+            for cell in pad_rows {
+                cell.write(pad);
+            }
+        }
+        // SAFETY: Caller contract ensures `(0..self.height) x (0..self.width)` was initialized, and
+        // the border loops above initialized all odd-width trailing columns and odd-height trailing
+        // rows across the entire `0..self.total_size` prefix of `self.vec`.
+        unsafe {
+            self.vec.set_len(self.total_size);
+        }
+        image.planes[plane_index] = Some(T::into_pixels(self.vec));
+        image.row_bytes[plane_index] = self.row_bytes;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_opaque_depths_odd_widths_and_trailing_mismatch() {
+        let img_no_alpha = Image {
+            width: 33,
+            height: 3,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            ..Default::default()
+        };
+        assert!(img_no_alpha.is_opaque().unwrap());
+
+        for &depth in &[8u8, 10, 12, 16] {
+            for &width in &[1u32, 7, 8, 15, 16, 17, 31, 32, 33, 47, 63, 64, 65, 97] {
+                for &height in &[1u32, 2, 3] {
+                    let mut img = Image {
+                        width,
+                        height,
+                        depth,
+                        yuv_format: PixelFormat::Yuv444,
+                        ..Default::default()
+                    };
+                    img.allocate_planes(Category::Alpha).unwrap();
+                    let opaque = img.max_channel();
+                    img.fill_plane_with_value(Plane::A, opaque).unwrap();
+                    assert!(
+                        img.is_opaque().unwrap(),
+                        "expected opaque depth={depth} {width}x{height}"
+                    );
+
+                    // Flip first pixel, vector boundary pixels, and trailing odd pixel.
+                    let mismatch_val = opaque - 1;
+                    let mut test_xs = [
+                        0u32,
+                        width - 1,
+                        width / 2,
+                        15.min(width - 1),
+                        16.min(width - 1),
+                        31.min(width - 1),
+                        32.min(width - 1),
+                    ];
+                    test_xs.sort_unstable();
+                    for &mx in &test_xs {
+                        let my = height - 1;
+                        if depth == 8 {
+                            img.row_mut(Plane::A, my).unwrap()[mx as usize] = mismatch_val as u8;
+                            assert!(
+                                !img.is_opaque().unwrap(),
+                                "mismatch missed depth=8 {width}x{height} at ({mx},{my})"
+                            );
+                            img.row_mut(Plane::A, my).unwrap()[mx as usize] = opaque as u8;
+                        } else {
+                            img.row16_mut(Plane::A, my).unwrap()[mx as usize] = mismatch_val;
+                            assert!(
+                                !img.is_opaque().unwrap(),
+                                "mismatch missed depth={depth} {width}x{height} at ({mx},{my})"
+                            );
+                            img.row16_mut(Plane::A, my).unwrap()[mx as usize] = opaque;
+                        }
+                    }
+                    assert!(img.is_opaque().unwrap());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn uninit_plane_odd_dimensions_padding_and_drop_safety() {
+        let mut img = Image {
+            width: 5,
+            height: 3,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv444,
+            ..Default::default()
+        };
+        let mut p8 = UninitPlane8::for_image(&img, Plane::Y).unwrap();
+        assert_eq!(p8.width(), 5);
+        assert_eq!(p8.height(), 3);
+        assert_eq!(p8.stride_elems(), 6);
+        for row in 0..3u32 {
+            let dst = p8.spare_row_mut(row).unwrap();
+            for (col, cell) in dst.iter_mut().enumerate() {
+                cell.write((row * 10 + col as u32) as u8);
+            }
+        }
+        // SAFETY: All 3x5 logical samples were initialized above.
+        unsafe { p8.finish_into(&mut img, Plane::Y, 77).unwrap() };
+        assert_eq!(img.row_bytes[Plane::Y.as_usize()], 6);
+        let Some(Pixels::Buffer(buf)) = &img.planes[Plane::Y.as_usize()] else {
+            panic!("expected Buffer");
+        };
+        assert_eq!(buf.len(), 6 * 4);
+        assert_eq!(buf[5], 77);
+        assert_eq!(buf[6 + 5], 77);
+        assert_eq!(buf[12 + 5], 77);
+        assert_eq!(&buf[18..24], &[77; 6]);
+
+        let mut img16 = Image {
+            width: 3,
+            height: 3,
+            depth: 10,
+            yuv_format: PixelFormat::Yuv444,
+            ..Default::default()
+        };
+        let mut p16 = UninitPlane16::for_image(&img16, Plane::A).unwrap();
+        for row in 0..3u32 {
+            let dst = p16.spare_row_mut(row).unwrap();
+            for (col, cell) in dst.iter_mut().enumerate() {
+                cell.write((row * 100 + col as u32) as u16);
+            }
+        }
+        // SAFETY: All 3x3 logical samples were initialized above.
+        unsafe { p16.finish_into(&mut img16, Plane::A, 1023).unwrap() };
+        let Some(Pixels::Buffer16(buf16)) = &img16.planes[Plane::A.as_usize()] else {
+            panic!("expected Buffer16");
+        };
+        assert_eq!(buf16.len(), 4 * 4);
+        assert_eq!(buf16[3], 1023);
+        assert_eq!(&buf16[12..16], &[1023; 4]);
+    }
+}

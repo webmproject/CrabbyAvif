@@ -17,8 +17,6 @@
 /sys/libjxl-sys/CMake*
 /sys/libjxl-sys/libjxl
 /sys/libjxl-sys/libjxl.rs
-/sys/libpng-sys/libpng
-/sys/libpng-sys/zlib
 /sys/libsharpyuv-sys/libwebp
 /sys/libyuv-sys/libyuv
 /sys/ndk-sys/src/bindings.rs

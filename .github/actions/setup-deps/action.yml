@@ -31,8 +31,7 @@ runs:
         sys/libsharpyuv-sys/libwebp/sharpyuv
         sys/libsharpyuv-sys/libwebp/build
         external/googletest
-        sys/libpng-sys
-      key: cache-ext-${{ github.job }}-${{ runner.os }}-${{ hashFiles('.github/actions/setup-deps/action.yml', 'sys/dav1d-sys/**', 'sys/libyuv-sys/**', 'sys/aom-sys/**', 'sys/libsharpyuv-sys/**', 'external/googletest.cmd', 'sys/libpng-sys/**') }}
+      key: cache-ext-${{ github.job }}-${{ runner.os }}-${{ hashFiles('.github/actions/setup-deps/action.yml', 'sys/dav1d-sys/**', 'sys/libyuv-sys/**', 'sys/aom-sys/**', 'sys/libsharpyuv-sys/**', 'external/googletest.cmd') }}
 
   - name: Cache av1-avif testFiles
     id: cache-av1-avif-testfiles
@@ -75,16 +74,6 @@ runs:
     if: steps.cache-ext.outputs.cache-hit != 'true' && runner.os != 'Windows'
     working-directory: ./external
     run: ./googletest.cmd
-    shell: bash
-  - name: Build libpng (non Windows)
-    if: steps.cache-ext.outputs.cache-hit != 'true' && runner.os != 'Windows'
-    working-directory: ./sys/libpng-sys
-    run: ./zlibpng.cmd
-    shell: bash
-  - name: Build libpng (Windows)
-    if: steps.cache-ext.outputs.cache-hit != 'true' && runner.os == 'Windows'
-    working-directory: ./sys/libpng-sys
-    run: ./zlibpng_windows.cmd
     shell: bash
   - name: Clone av1-avif (specification repository for testFiles)
     if: steps.cache-av1-avif-testfiles.outputs.cache-hit != 'true'

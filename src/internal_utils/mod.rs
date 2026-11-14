@@ -202,6 +202,19 @@ pub(crate) fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
     Ok(v)
 }
 
+#[cfg(all(test, feature = "png"))]
+pub(crate) fn get_test_file(filename: &str) -> String {
+    let base_path = if cfg!(google3) {
+        format!(
+            "{}/google3/third_party/crabbyavif/",
+            std::env::var("TEST_SRCDIR").expect("TEST_SRCDIR is not defined")
+        )
+    } else {
+        format!("{}/", env!("CARGO_MANIFEST_DIR"))
+    };
+    format!("{base_path}tests/data/{filename}")
+}
+
 #[cfg(test)]
 pub(crate) fn assert_eq_f32_array(a: &[f32], b: &[f32]) {
     assert_eq!(a.len(), b.len());

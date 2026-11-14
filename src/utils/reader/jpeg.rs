@@ -60,16 +60,37 @@ impl Reader for JpegReader {
         }
         let width = info.width as u32;
         let height = info.height as u32;
-        let icc = decoder.icc_profile().unwrap_or_default();
-        let exif = match &info.exif_data {
-            Some(data) => data.try_clone()?,
-            None => Vec::new(),
+        if config.image_size_limit > 0
+            && (width as u64) * (height as u64) > config.image_size_limit as u64
+        {
+            return AvifError::unknown_error(format!(
+                "Too big JPEG dimensions ({width} x {height} > {} px)",
+                config.image_size_limit
+            ));
+        }
+        let icc = if config.ignore_icc {
+            Vec::new()
+        } else {
+            decoder.icc_profile().unwrap_or_default()
         };
-        let xmp = match &info.xmp_data {
-            Some(data) => data.try_clone()?,
-            None => Vec::new(),
+        let exif = if config.ignore_exif {
+            Vec::new()
+        } else {
+            match &info.exif_data {
+                Some(data) => data.try_clone()?,
+                None => Vec::new(),
+            }
         };
-        let (irot_angle, imir_axis) = exif::get_orientation(&exif)?;
+        let xmp = if config.ignore_xmp {
+            Vec::new()
+        } else {
+            match &info.xmp_data {
+                Some(data) => data.try_clone()?,
+                None => Vec::new(),
+            }
+        };
+        let (irot_angle, imir_axis) =
+            if config.ignore_exif { (None, None) } else { exif::get_orientation(&exif)? };
         let rgb_bytes = decoder
             .decode()
             .map_err(|e| AvifError::UnknownError(format!("jpeg decode error: {e:?}")))?;
@@ -80,6 +101,7 @@ impl Reader for JpegReader {
             format: rgb::Format::Rgb,
             pixels: Some(Pixels::Buffer(rgb_bytes)),
             row_bytes: checked_mul!(width, 3)?,
+            max_threads: i32::try_from(config.max_threads).unwrap_or(i32::MAX),
             ..Default::default()
         };
         let mut yuv = Image {
@@ -87,7 +109,10 @@ impl Reader for JpegReader {
             height,
             depth: config.depth.unwrap_or(8),
             yuv_format: config.yuv_format.unwrap_or(PixelFormat::Yuv420),
-            yuv_range: YuvRange::Full,
+            yuv_range: config.yuv_range.unwrap_or(YuvRange::Full),
+            color_primaries: config
+                .color_primaries
+                .unwrap_or(ColorPrimaries::Unspecified),
             matrix_coefficients: config
                 .matrix_coefficients
                 .unwrap_or(MatrixCoefficients::Bt601),
