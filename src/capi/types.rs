@@ -334,7 +334,7 @@ pub(crate) fn to_avifBool(val: bool) -> avifBool {
 #[no_mangle]
 pub extern "C" fn crabby_avifResultToString(res: avifResult) -> *const c_char {
     match res {
-        avifResult::Ok => cstr_ptr!(b"Ok\0"),
+        avifResult::Ok => cstr_ptr!(b"OK\0"),
         avifResult::UnknownError => cstr_ptr!(b"Unknown Error\0"),
         avifResult::InvalidFtyp => cstr_ptr!(b"Invalid ftyp\0"),
         avifResult::NoContent => cstr_ptr!(b"No content\0"),

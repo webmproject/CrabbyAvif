@@ -476,6 +476,11 @@ TEST(ImageTest, NullCases) {
   avifIODestroy(nullptr);
 }
 
+TEST(ResultTest, ToString) {
+  // Same string as libavif.
+  EXPECT_STREQ(avifResultToString(AVIF_RESULT_OK), "OK");
+}
+
 }  // namespace
 }  // namespace avif
 
