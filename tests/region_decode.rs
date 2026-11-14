@@ -58,67 +58,6 @@ fn crop(x: u32, y: u32, width: u32, height: u32) -> CropRect {
     }
 }
 
-// Same as Image::crop_in_place(), implemented independently of the library.
-fn crop_reference_image(src: &Image, rect: &CropRect) -> AvifResult<Image> {
-    let x = match src.yuv_format {
-        PixelFormat::Yuv420 | PixelFormat::Yuv422 => rect.x & !1,
-        _ => rect.x,
-    };
-    let y = match src.yuv_format {
-        PixelFormat::Yuv420 => rect.y & !1,
-        _ => rect.y,
-    };
-    let mut dst = Image {
-        width: rect.width,
-        height: rect.height,
-        depth: src.depth,
-        yuv_format: src.yuv_format,
-        yuv_range: src.yuv_range,
-        chroma_sample_position: src.chroma_sample_position,
-        alpha_present: src.alpha_present,
-        alpha_premultiplied: src.alpha_premultiplied,
-        color_primaries: src.color_primaries,
-        transfer_characteristics: src.transfer_characteristics,
-        matrix_coefficients: src.matrix_coefficients,
-        clli: src.clli,
-        pasp: src.pasp,
-        clap: None,
-        irot_angle: src.irot_angle,
-        imir_axis: src.imir_axis,
-        ..Default::default()
-    };
-    if src.has_plane(Plane::Y) {
-        dst.allocate_planes(Category::Color)?;
-    }
-    if src.has_plane(Plane::A) {
-        dst.allocate_planes(Category::Alpha)?;
-    }
-    for plane in ALL_PLANES {
-        if !src.has_plane(plane) {
-            continue;
-        }
-        let (src_x, src_y) = if matches!(plane, Plane::Y | Plane::A) {
-            (x as usize, y)
-        } else {
-            (
-                src.yuv_format.apply_chroma_shift_x(x) as usize,
-                src.yuv_format.apply_chroma_shift_y(y),
-            )
-        };
-        let copy_w = dst.width(plane);
-        for row in 0..dst.height(plane) as u32 {
-            if src.depth == 8 {
-                let s = &src.row(plane, src_y + row)?[src_x..src_x + copy_w];
-                dst.row_mut(plane, row)?[..copy_w].copy_from_slice(s);
-            } else {
-                let s = &src.row16(plane, src_y + row)?[src_x..src_x + copy_w];
-                dst.row16_mut(plane, row)?[..copy_w].copy_from_slice(s);
-            }
-        }
-    }
-    Ok(dst)
-}
-
 // Regions of a width x height image: edges, corners, odd positions and dimensions, 1x1, the whole
 // image, regions within a single 64x64 or 128x128 superblock and regions straddling superblock
 // (and thus potentially tile) boundaries.

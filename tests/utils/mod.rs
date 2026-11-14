@@ -16,6 +16,7 @@
 #![allow(dead_code)]
 
 use crabby_avif::image::*;
+use crabby_avif::utils::clap::CropRect;
 use crabby_avif::*;
 
 pub fn get_test_file(filename: &str) -> String {
@@ -390,4 +391,86 @@ pub fn test_dav1d_vs_native(filename: &str, is_multilayer: bool) {
         are_images_equal(&dav1d_image, &native_image).unwrap(),
         "Decoded images do not match between dav1d and native for {filename}"
     );
+}
+
+pub fn align_crop_for_test(rect: &CropRect, yuv_format: PixelFormat) -> CropRect {
+    let x = match yuv_format {
+        PixelFormat::Yuv420
+        | PixelFormat::Yuv422
+        | PixelFormat::AndroidP010
+        | PixelFormat::AndroidNv12
+        | PixelFormat::AndroidNv21 => rect.x & !1,
+        _ => rect.x,
+    };
+    let y = match yuv_format {
+        PixelFormat::Yuv420
+        | PixelFormat::AndroidP010
+        | PixelFormat::AndroidNv12
+        | PixelFormat::AndroidNv21 => rect.y & !1,
+        _ => rect.y,
+    };
+    CropRect {
+        x,
+        y,
+        width: rect.width,
+        height: rect.height,
+    }
+}
+
+// Returns a copy of the region of src described by rect (with x and y rounded down to the chroma
+// subsampling of src). Same as Image::crop_in_place(), implemented independently of the library.
+pub fn crop_reference_image(src: &Image, rect: &CropRect) -> AvifResult<Image> {
+    let aligned = align_crop_for_test(rect, src.yuv_format);
+    let mut dst = Image {
+        width: aligned.width,
+        height: aligned.height,
+        depth: src.depth,
+        yuv_format: src.yuv_format,
+        yuv_range: src.yuv_range,
+        chroma_sample_position: src.chroma_sample_position,
+        alpha_present: src.alpha_present,
+        alpha_premultiplied: src.alpha_premultiplied,
+        color_primaries: src.color_primaries,
+        transfer_characteristics: src.transfer_characteristics,
+        matrix_coefficients: src.matrix_coefficients,
+        clli: src.clli,
+        pasp: src.pasp,
+        clap: None,
+        irot_angle: src.irot_angle,
+        imir_axis: src.imir_axis,
+        ..Default::default()
+    };
+    if src.has_plane(Plane::Y) {
+        dst.allocate_planes(Category::Color)?;
+    }
+    if src.has_plane(Plane::A) {
+        dst.allocate_planes(Category::Alpha)?;
+    }
+    for plane in ALL_PLANES {
+        if !src.has_plane(plane) {
+            continue;
+        }
+        let (src_x, src_y) = if matches!(plane, Plane::Y | Plane::A) {
+            (aligned.x as usize, aligned.y)
+        } else {
+            (
+                src.yuv_format.apply_chroma_shift_x(aligned.x) as usize,
+                src.yuv_format.apply_chroma_shift_y(aligned.y),
+            )
+        };
+        let copy_w = dst.width(plane);
+        let copy_h = dst.height(plane) as u32;
+        for y in 0..copy_h {
+            if src.depth == 8 {
+                let s = &src.row(plane, src_y + y)?[src_x..src_x + copy_w];
+                let d = &mut dst.row_mut(plane, y)?[..copy_w];
+                d.copy_from_slice(s);
+            } else {
+                let s = &src.row16(plane, src_y + y)?[src_x..src_x + copy_w];
+                let d = &mut dst.row16_mut(plane, y)?[..copy_w];
+                d.copy_from_slice(s);
+            }
+        }
+    }
+    Ok(dst)
 }
