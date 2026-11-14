@@ -933,6 +933,45 @@ impl Encoder {
         self.add_image_impl(grid_columns, grid_rows, images, 0, true, Some(gainmaps))
     }
 
+    // Returns views of the cells of image split according to layout, with the Exif, XMP and ICC
+    // data of image copied into the first cell (the only one these are read from).
+    fn split_into_cells(image: &Image, layout: &grid::GridLayout) -> AvifResult<Vec<Image>> {
+        let mut cells = grid::split_into_views(image, layout)?;
+        let first_cell = cells.first_mut().ok_or(AvifError::InvalidArgument)?;
+        first_cell.exif = image.exif.try_clone()?;
+        first_cell.xmp = image.xmp.try_clone()?;
+        first_cell.icc = image.icc.try_clone()?;
+        Ok(cells)
+    }
+
+    /// Splits `image` into cells of `cell_width` x `cell_height` luma samples and adds them as
+    /// a grid, as if they were passed to [`Encoder::add_image_grid`].
+    ///
+    /// Each cell dimension is clamped to the corresponding image dimension. The number of
+    /// columns is `ceil(image.width / cell_width)` and the number of rows is
+    /// `ceil(image.height / cell_height)`. The right-most column and the bottom-most row hold
+    /// the remaining samples. If there is a single cell, `image` is encoded as a non-grid image.
+    /// If there is more than one cell, the cell dimensions must satisfy the MIAF grid constraints
+    /// (at least 64, even if chroma is subsampled in that dimension, at most 256 columns and rows).
+    pub fn add_image_split_grid(
+        &mut self,
+        cell_width: u32,
+        cell_height: u32,
+        image: &Image,
+    ) -> AvifResult<()> {
+        let layout = grid::compute_layout(image.width, image.height, cell_width, cell_height)?;
+        let cells = Self::split_into_cells(image, &layout)?;
+        let cell_refs: Vec<&Image> = cells.iter().try_collect()?;
+        self.add_image_impl(
+            layout.columns,
+            layout.rows,
+            &cell_refs,
+            0,
+            self.settings.extra_layer_count == 0,
+            None,
+        )
+    }
+
     #[cfg(feature = "satofloat")]
     pub fn add_image_float(
         &mut self,

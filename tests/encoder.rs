@@ -21,6 +21,7 @@ use crabby_avif::decoder::ProgressiveState;
 use crabby_avif::encoder::*;
 use crabby_avif::gainmap::*;
 use crabby_avif::image::*;
+use crabby_avif::utils::clap::CropRect;
 use crabby_avif::utils::*;
 use crabby_avif::*;
 
@@ -1427,6 +1428,113 @@ fn quality_categories() -> AvifResult<()> {
     // Alpha plane should be lossless.
     assert!(are_planes_equal(image, &input_image, Plane::A)?);
 
+    Ok(())
+}
+
+// Splits image into cells of cell_width x cell_height samples by copying pixels. The Exif, XMP
+// and ICC data of image are copied into the first cell.
+fn copy_cells(
+    image: &Image,
+    cell_width: u32,
+    cell_height: u32,
+) -> AvifResult<(u32, u32, Vec<Image>)> {
+    let columns = image.width.div_ceil(cell_width);
+    let rows = image.height.div_ceil(cell_height);
+    let mut cells = Vec::new();
+    for row in 0..rows {
+        for column in 0..columns {
+            let x = column * cell_width;
+            let y = row * cell_height;
+            cells.push(crop_reference_image(
+                image,
+                &CropRect {
+                    x,
+                    y,
+                    width: cell_width.min(image.width - x),
+                    height: cell_height.min(image.height - y),
+                },
+            )?);
+        }
+    }
+    cells[0].exif = image.exif.clone();
+    cells[0].xmp = image.xmp.clone();
+    cells[0].icc = image.icc.clone();
+    Ok((columns, rows, cells))
+}
+
+fn lossless_encoder() -> AvifResult<encoder::Encoder> {
+    let settings = encoder::Settings {
+        speed: Some(10),
+        mutable: encoder::MutableSettings {
+            // Encode losslessly for easier comparison of outputs.
+            quality: 100.0,
+            quality_alpha: 100.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    encoder::Encoder::create_with_settings(&settings)
+}
+
+#[test_matrix(
+    [
+        (200, 150, 80, 64),
+        (128, 128, 64, 64),
+        (256, 130, 128, 64),
+        (300, 200, 512, 512),
+        (300, 200, 512, 64),
+    ],
+    [PixelFormat::Yuv420, PixelFormat::Yuv422, PixelFormat::Yuv444, PixelFormat::Yuv400],
+    [8, 10]
+)]
+fn split_grid(
+    dimensions: (u32, u32, u32, u32),
+    yuv_format: PixelFormat,
+    depth: u8,
+) -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let (width, height, cell_width, cell_height) = dimensions;
+    let mut image =
+        generate_gradient_image(width, height, depth, yuv_format, YuvRange::Full, true)?;
+    // Exif, XMP and ICC must only be associated with the grid, not duplicated for every cell.
+    image.exif = vec![
+        0xff, 0x1, 0x45, 0x78, 0x69, 0x76, 0x32, 0xff, 0xe1, 0x12, 0x5a, 0x45, 0x78, 0x69, 0x66,
+        0x0, 0x0, 0x49, 0x49, 0x2a, 0x0, 0x8, 0x0, 0x0,
+    ];
+    image.xmp = vec![1, 2, 3];
+    image.icc = vec![4, 5, 6, 7];
+
+    let mut encoder = lossless_encoder()?;
+    encoder.add_image_split_grid(cell_width, cell_height, &image)?;
+    let edata = encoder.finish()?;
+
+    // The output must be the same as when splitting the image manually.
+    let (columns, rows, cells) = copy_cells(&image, cell_width, cell_height)?;
+    let cell_refs: Vec<&Image> = cells.iter().collect();
+    let mut reference_encoder = lossless_encoder()?;
+    if cells.len() == 1 {
+        reference_encoder.add_image(&image)?;
+    } else {
+        reference_encoder.add_image_grid(columns, rows, &cell_refs)?;
+    }
+    assert_eq!(edata, reference_encoder.finish()?);
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    assert!(decoder.parse().is_ok());
+    let decoded_image = decoder.image().expect("image was none");
+    assert_eq!(decoded_image.width, width);
+    assert_eq!(decoded_image.height, height);
+    assert_eq!(decoded_image.xmp, image.xmp);
+    assert_eq!(decoded_image.icc, image.icc);
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    assert!(decoder.next_image().is_ok());
+    let decoded_image = decoder.image().expect("image was none");
+    assert!(are_images_equal(decoded_image, &image)?);
     Ok(())
 }
 
