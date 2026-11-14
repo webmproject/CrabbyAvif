@@ -972,6 +972,67 @@ impl Encoder {
         )
     }
 
+    /// Same as [`Encoder::add_image_split_grid`], and also splits `gainmap.image` into the same
+    /// number of columns and rows. The gain map cell dimensions are proportional to the gain map
+    /// dimensions (rounded up, to an even number if the gain map chroma is subsampled in that
+    /// dimension). If that does not lead to the same number of columns or rows,
+    /// `ceil(gainmap.image.width / columns)` (respectively height and rows) is used instead.
+    pub fn add_image_gainmap_split_grid(
+        &mut self,
+        cell_width: u32,
+        cell_height: u32,
+        image: &Image,
+        gainmap: &GainMap,
+    ) -> AvifResult<()> {
+        if self.settings.extra_layer_count != 0 {
+            return AvifError::not_implemented();
+        }
+        let layout = grid::compute_layout(image.width, image.height, cell_width, cell_height)?;
+        let gainmap_image = &gainmap.image;
+        let gainmap_layout = grid::compute_layout(
+            gainmap_image.width,
+            gainmap_image.height,
+            grid::scale_cell_size(
+                layout.cell_width,
+                image.width,
+                gainmap_image.width,
+                layout.columns,
+                gainmap_image.yuv_format.chroma_shift_x().0 != 0,
+            )?,
+            grid::scale_cell_size(
+                layout.cell_height,
+                image.height,
+                gainmap_image.height,
+                layout.rows,
+                gainmap_image.yuv_format.chroma_shift_y() != 0,
+            )?,
+        )?;
+        if gainmap_layout.columns != layout.columns || gainmap_layout.rows != layout.rows {
+            return AvifError::invalid_image_grid("gain map grid does not match the image grid");
+        }
+        let cells = Self::split_into_cells(image, &layout)?;
+        let gainmap_cells = grid::split_into_views(gainmap_image, &gainmap_layout)?;
+        let mut gainmaps: Vec<GainMap> = create_vec_exact(gainmap_cells.len())?;
+        for gainmap_cell in gainmap_cells {
+            gainmaps.try_push(GainMap {
+                image: gainmap_cell,
+                metadata: gainmap.metadata,
+                alt_icc: gainmap.alt_icc.try_clone()?,
+                ..*gainmap
+            })?;
+        }
+        let cell_refs: Vec<&Image> = cells.iter().try_collect()?;
+        let gainmap_refs: Vec<&GainMap> = gainmaps.iter().try_collect()?;
+        self.add_image_impl(
+            layout.columns,
+            layout.rows,
+            &cell_refs,
+            0,
+            true,
+            Some(&gainmap_refs),
+        )
+    }
+
     #[cfg(feature = "satofloat")]
     pub fn add_image_float(
         &mut self,

@@ -1469,6 +1469,7 @@ fn lossless_encoder() -> AvifResult<encoder::Encoder> {
             // Encode losslessly for easier comparison of outputs.
             quality: 100.0,
             quality_alpha: 100.0,
+            quality_gainmap: 100.0,
             ..Default::default()
         },
         ..Default::default()
@@ -1583,6 +1584,86 @@ fn split_grid_metadata() -> AvifResult<()> {
     assert_eq!(decoded_image.icc, image.icc);
     assert_eq!(decoded_image.xmp, image.xmp);
     assert_eq!(decoded_image.irot_angle, Some(1));
+    Ok(())
+}
+
+fn generate_split_gainmap_image(
+    gainmap_width: u32,
+    gainmap_height: u32,
+) -> AvifResult<(Image, GainMap)> {
+    let (_, mut gainmap) = generate_gainmap_image(false)?;
+    let mut image =
+        generate_gradient_image(512, 256, 10, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    image.transfer_characteristics = TransferCharacteristics::Srgb;
+    gainmap.image = generate_gradient_image(
+        gainmap_width,
+        gainmap_height,
+        8,
+        PixelFormat::Yuv420,
+        YuvRange::Full,
+        false,
+    )?;
+    Ok((image, gainmap))
+}
+
+#[test]
+fn split_grid_gainmap() -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let (image, gainmap) = generate_split_gainmap_image(256, 128)?;
+    let mut encoder = lossless_encoder()?;
+    encoder.add_image_gainmap_split_grid(256, 128, &image, &gainmap)?;
+    let edata = encoder.finish()?;
+
+    // The output must be the same as when splitting the image and the gain map manually.
+    let (columns, rows, cells) = copy_cells(&image, 256, 128)?;
+    let (gainmap_columns, gainmap_rows, gainmap_cells) = copy_cells(&gainmap.image, 128, 64)?;
+    assert_eq!((columns, rows), (2, 2));
+    assert_eq!((gainmap_columns, gainmap_rows), (2, 2));
+    let cell_refs: Vec<&Image> = cells.iter().collect();
+    let gainmaps: Vec<GainMap> = gainmap_cells
+        .into_iter()
+        .map(|cell| GainMap {
+            image: cell,
+            metadata: gainmap.metadata,
+            alt_icc: gainmap.alt_icc.clone(),
+            ..gainmap
+        })
+        .collect();
+    let gainmap_refs: Vec<&GainMap> = gainmaps.iter().collect();
+    let mut reference_encoder = lossless_encoder()?;
+    reference_encoder.add_image_gainmap_grid(columns, rows, &cell_refs, &gainmap_refs)?;
+    assert_eq!(edata, reference_encoder.finish()?);
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.settings.image_content_to_decode = ImageContentType::All;
+    assert!(decoder.parse().is_ok());
+    assert!(decoder.gainmap_present());
+    assert_eq!(decoder.gainmap().image.width, 256);
+    assert_eq!(decoder.gainmap().image.height, 128);
+    assert_eq!(decoder.gainmap().metadata, gainmap.metadata);
+    if !HAS_DECODER {
+        return Ok(());
+    }
+    assert!(decoder.next_image().is_ok());
+    assert!(are_images_equal(
+        decoder.image().expect("image was none"),
+        &image
+    )?);
+    assert!(are_images_equal(&decoder.gainmap().image, &gainmap.image)?);
+    Ok(())
+}
+
+#[test_case(64, 32 ; "gain map cells too small")]
+#[test_case(3, 2 ; "gain map smaller than grid")]
+fn split_grid_gainmap_invalid(gainmap_width: u32, gainmap_height: u32) -> AvifResult<()> {
+    let (image, gainmap) = generate_split_gainmap_image(gainmap_width, gainmap_height)?;
+    let mut encoder = lossless_encoder()?;
+    assert!(encoder
+        .add_image_gainmap_split_grid(128, 128, &image, &gainmap)
+        .is_err());
     Ok(())
 }
 

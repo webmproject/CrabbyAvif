@@ -14,10 +14,6 @@
 
 // Helpers to split a single image into the cells of a grid image.
 
-// TODO: b/585625859 - Remove once the helpers are used by Encoder::add_image_split_grid() and
-// Encoder::add_image_gainmap_split_grid().
-#![allow(dead_code)]
-
 use crate::image::*;
 use crate::internal_utils::*;
 use crate::utils::clap::CropRect;
