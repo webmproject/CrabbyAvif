@@ -846,6 +846,7 @@ EncoderPtr CreateLosslessEncoder() {
     encoder->speed = 10;
     encoder->quality = 100;
     encoder->qualityAlpha = 100;
+    encoder->qualityGainMap = 100;
   }
   return encoder;
 }
@@ -1073,6 +1074,117 @@ TEST(SplitGridApiTest, IccExifXmp) {
   EXPECT_TRUE(testutil::AreByteSequencesEqual(
       decoder->image->xmp.data, decoder->image->xmp.size, image->xmp.data,
       image->xmp.size));
+}
+
+ImagePtr CreateSplitGridImageWithGainMap(int gain_map_width,
+                                         int gain_map_height) {
+  ImagePtr image = testutil::CreateImage(/*width=*/512, /*height=*/256,
+                                         /*depth=*/10, AVIF_PIXEL_FORMAT_YUV420,
+                                         AVIF_PLANES_YUV, AVIF_RANGE_FULL);
+  if (image == nullptr) return nullptr;
+  image->transferCharacteristics = AVIF_TRANSFER_CHARACTERISTICS_SRGB;
+  testutil::FillImageGradient(image.get(), /*offset=*/0);
+  ImagePtr gain_map = testutil::CreateImage(
+      gain_map_width, gain_map_height, /*depth=*/8, AVIF_PIXEL_FORMAT_YUV420,
+      AVIF_PLANES_YUV, AVIF_RANGE_FULL);
+  if (gain_map == nullptr) return nullptr;
+  gain_map->colorPrimaries = AVIF_COLOR_PRIMARIES_UNSPECIFIED;
+  gain_map->transferCharacteristics = AVIF_TRANSFER_CHARACTERISTICS_UNSPECIFIED;
+  testutil::FillImageGradient(gain_map.get(), /*offset=*/0);
+  image->gainMap = avifGainMapCreate();
+  if (image->gainMap == nullptr) return nullptr;
+  image->gainMap->image = gain_map.release();  // 'image' now owns the gain map.
+  image->gainMap->useBaseColorSpace = AVIF_TRUE;
+  image->gainMap->baseHdrHeadroom = {0, 1};
+  image->gainMap->alternateHdrHeadroom = {6, 2};
+  for (int c = 0; c < 3; ++c) {
+    image->gainMap->baseOffset[c] = {10 * c, 1000};
+    image->gainMap->alternateOffset[c] = {20 * c, 1000};
+    image->gainMap->gainMapGamma[c] = {1, static_cast<uint32_t>(c + 1)};
+    image->gainMap->gainMapMin[c] = {-1, static_cast<uint32_t>(c + 1)};
+    image->gainMap->gainMapMax[c] = {10 + c + 1, static_cast<uint32_t>(c + 1)};
+  }
+  image->gainMap->altPlaneCount = 3;
+  image->gainMap->altDepth = 10;
+  return image;
+}
+
+TEST(SplitGridApiTest, GainMap) {
+  ImagePtr image = CreateSplitGridImageWithGainMap(256, 128);
+  ASSERT_NE(image, nullptr);
+  EncoderPtr encoder = CreateLosslessEncoder();
+  ASSERT_NE(encoder, nullptr);
+  ASSERT_EQ(avifEncoderAddImageSplitGrid(encoder.get(), image.get(), 256, 128,
+                                         AVIF_ADD_IMAGE_FLAG_SINGLE),
+            AVIF_RESULT_OK);
+  AvifRwData encoded;
+  ASSERT_EQ(avifEncoderFinish(encoder.get(), &encoded), AVIF_RESULT_OK);
+
+  auto decoder = CreateDecoder(encoded);
+  ASSERT_NE(decoder, nullptr);
+  decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_ALL;
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_TRUE(testutil::AreImagesEqual(*image, *decoder->image,
+                                       /*ignore_alpha=*/false));
+  ASSERT_NE(decoder->image->gainMap, nullptr);
+  ASSERT_NE(decoder->image->gainMap->image, nullptr);
+  EXPECT_EQ(decoder->image->gainMap->image->width, 256u);
+  EXPECT_EQ(decoder->image->gainMap->image->height, 128u);
+  EXPECT_TRUE(testutil::AreImagesEqual(*image->gainMap->image,
+                                       *decoder->image->gainMap->image,
+                                       /*ignore_alpha=*/true));
+  EXPECT_EQ(decoder->image->gainMap->alternateHdrHeadroom.n, 6u);
+  EXPECT_EQ(decoder->image->gainMap->alternateHdrHeadroom.d, 2u);
+}
+
+TEST(SplitGridApiTest, GainMapTooSmall) {
+  // 128x128 cells give a 4x2 grid, so 16x16 gain map cells, below 64.
+  ImagePtr image = CreateSplitGridImageWithGainMap(64, 32);
+  ASSERT_NE(image, nullptr);
+  EncoderPtr encoder = CreateLosslessEncoder();
+  ASSERT_NE(encoder, nullptr);
+  EXPECT_EQ(avifEncoderAddImageSplitGrid(encoder.get(), image.get(), 128, 128,
+                                         AVIF_ADD_IMAGE_FLAG_SINGLE),
+            AVIF_RESULT_INVALID_IMAGE_GRID);
+}
+
+TEST(SplitGridApiTest, Layered) {
+  ImagePtr image = testutil::CreateImage(/*width=*/256, /*height=*/128,
+                                         /*depth=*/8, AVIF_PIXEL_FORMAT_YUV444,
+                                         AVIF_PLANES_YUV, AVIF_RANGE_FULL);
+  ASSERT_NE(image, nullptr);
+  testutil::FillImageGradient(image.get(), /*offset=*/0);
+  EncoderPtr encoder(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  encoder->speed = 10;
+  encoder->extraLayerCount = 1;
+  encoder->quality = 10;
+  ASSERT_EQ(avifEncoderAddImageSplitGrid(encoder.get(), image.get(), 128, 128,
+                                         AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+  encoder->quality = 90;
+  ASSERT_EQ(avifEncoderAddImageSplitGrid(encoder.get(), image.get(), 128, 128,
+                                         AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+  AvifRwData encoded;
+  ASSERT_EQ(avifEncoderFinish(encoder.get(), &encoded), AVIF_RESULT_OK);
+
+  auto decoder = CreateDecoder(encoded);
+  ASSERT_NE(decoder, nullptr);
+  decoder->allowProgressive = AVIF_TRUE;
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->progressiveState, AVIF_PROGRESSIVE_STATE_ACTIVE);
+  ASSERT_EQ(decoder->imageCount, 2);
+  std::vector<double> psnr;
+  for (int layer = 0; layer < 2; ++layer) {
+    ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+    EXPECT_EQ(decoder->image->width, image->width);
+    EXPECT_EQ(decoder->image->height, image->height);
+    psnr.push_back(testutil::GetPsnr(*image, *decoder->image,
+                                     /*ignore_alpha=*/true));
+  }
+  EXPECT_GE(psnr[1], psnr[0]);
 }
 
 TEST(EncoderApiTest, SetCodecSpecificOption) {
