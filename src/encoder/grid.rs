@@ -18,6 +18,9 @@
 // Encoder::add_image_gainmap_split_grid().
 #![allow(dead_code)]
 
+use crate::image::*;
+use crate::internal_utils::*;
+use crate::utils::clap::CropRect;
 use crate::*;
 
 // Maximum number of columns or rows of an ImageGrid box (rows_minus_one and columns_minus_one
@@ -32,6 +35,12 @@ pub(crate) struct GridLayout {
     // be narrower and shorter respectively.
     pub cell_width: u32,
     pub cell_height: u32,
+}
+
+impl GridLayout {
+    pub(crate) fn cell_count(&self) -> AvifResult<usize> {
+        usize_from_u32(checked_mul!(self.columns, self.rows)?)
+    }
 }
 
 // Returns the number of cells and the effective cell size along an axis of num_pixels samples
@@ -68,6 +77,45 @@ pub(crate) fn compute_layout(
         cell_width,
         cell_height,
     })
+}
+
+// Returns layout.columns * layout.rows views of image in raster order. The views point to the
+// pixels of image (no pixel data is copied). Exif, XMP and ICC data are not copied.
+//
+// The returned images must not outlive image and the pixel buffers of image must not be
+// reallocated or freed while the views are alive.
+pub(crate) fn split_into_views(image: &Image, layout: &GridLayout) -> AvifResult<Vec<Image>> {
+    // The cell offsets must be aligned to the chroma subsampling. Report it as an invalid grid
+    // (as MIAF requires even cell dimensions in that case) rather than as an invalid argument.
+    if (layout.columns > 1
+        && image.yuv_format.chroma_shift_x().0 != 0
+        && layout.cell_width % 2 != 0)
+        || (layout.rows > 1
+            && image.yuv_format.chroma_shift_y() != 0
+            && layout.cell_height % 2 != 0)
+    {
+        return AvifError::invalid_image_grid(format!(
+            "grid cell width ({}) or height ({}) shall be even if chroma is subsampled in that \
+             dimension. See MIAF (ISO/IEC 23000-22:2019), Section 7.3.11.4.2",
+            layout.cell_width, layout.cell_height
+        ));
+    }
+    let mut views: Vec<Image> = create_vec_exact(layout.cell_count()?)?;
+    for row in 0..layout.rows {
+        let y = checked_mul!(row, layout.cell_height)?;
+        let height = layout.cell_height.min(checked_sub!(image.height, y)?);
+        for column in 0..layout.columns {
+            let x = checked_mul!(column, layout.cell_width)?;
+            let width = layout.cell_width.min(checked_sub!(image.width, x)?);
+            views.try_push(image.view(&CropRect {
+                x,
+                y,
+                width,
+                height,
+            })?)?;
+        }
+    }
+    Ok(views)
 }
 
 #[cfg(test)]
@@ -119,5 +167,98 @@ mod tests {
         cell_height: u32,
     ) {
         assert!(compute_layout(image_width, image_height, cell_width, cell_height).is_err());
+    }
+
+    fn create_image(width: u32, height: u32, yuv_format: PixelFormat) -> AvifResult<Image> {
+        let mut image = Image {
+            width,
+            height,
+            depth: 8,
+            yuv_format,
+            ..Default::default()
+        };
+        image.allocate_planes(Category::Color)?;
+        image.allocate_planes(Category::Alpha)?;
+        image.alpha_present = true;
+        for plane in ALL_PLANES {
+            if !image.has_plane(plane) {
+                continue;
+            }
+            let plane_data = image.plane_data(plane).ok_or(AvifError::NoContent)?;
+            for y in 0..plane_data.height {
+                for (x, pixel) in image.row_mut(plane, y)?.iter_mut().enumerate() {
+                    *pixel = (x as u32 + y * 3 + plane as u32 * 7) as u8;
+                }
+            }
+        }
+        Ok(image)
+    }
+
+    #[test_case(PixelFormat::Yuv400)]
+    #[test_case(PixelFormat::Yuv420)]
+    #[test_case(PixelFormat::Yuv422)]
+    #[test_case(PixelFormat::Yuv444)]
+    fn split_into_views_geometry(yuv_format: PixelFormat) -> AvifResult<()> {
+        let mut image = create_image(200, 150, yuv_format)?;
+        image.icc.try_extend_from_slice(&[1, 2, 3])?;
+        let layout = compute_layout(image.width, image.height, 80, 64)?;
+        assert_eq!((layout.columns, layout.rows), (3, 3));
+        let views = split_into_views(&image, &layout)?;
+        assert_eq!(views.len(), 9);
+        for (index, view) in views.iter().enumerate() {
+            let column = index as u32 % layout.columns;
+            let row = index as u32 / layout.columns;
+            let (x, y) = (column * 80, row * 64);
+            assert_eq!(view.width, if column == 2 { 40 } else { 80 });
+            assert_eq!(view.height, if row == 2 { 22 } else { 64 });
+            assert!(view.icc.is_empty());
+            assert!(view.has_same_cicp(&image));
+            for plane in ALL_PLANES {
+                assert_eq!(view.has_plane(plane), image.has_plane(plane));
+                if !view.has_plane(plane) {
+                    continue;
+                }
+                let (plane_x, plane_y) = if plane == Plane::Y || plane == Plane::A {
+                    (x as usize, y)
+                } else {
+                    (
+                        yuv_format.apply_chroma_shift_x(x) as usize,
+                        yuv_format.apply_chroma_shift_y(y),
+                    )
+                };
+                for view_y in 0..view.height(plane) as u32 {
+                    let view_row = view.row(plane, view_y)?;
+                    let image_row = image.row(plane, plane_y + view_y)?;
+                    assert_eq!(view_row, &image_row[plane_x..plane_x + view.width(plane)]);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test_case(PixelFormat::Yuv420, 200, 150, 81, 64, false ; "420 odd width")]
+    #[test_case(PixelFormat::Yuv420, 200, 150, 80, 65, false ; "420 odd height")]
+    #[test_case(PixelFormat::Yuv422, 200, 150, 81, 64, false ; "422 odd width")]
+    #[test_case(PixelFormat::Yuv422, 200, 150, 80, 65, true ; "422 odd height")]
+    #[test_case(PixelFormat::Yuv444, 200, 150, 81, 65, true ; "444 odd")]
+    #[test_case(PixelFormat::Yuv400, 200, 150, 81, 65, true ; "400 odd")]
+    #[test_case(PixelFormat::Yuv420, 81, 65, 81, 65, true ; "420 odd single cell")]
+    #[test_case(PixelFormat::Yuv420, 81, 150, 81, 64, true ; "420 odd width single column")]
+    fn split_into_views_odd_cells(
+        yuv_format: PixelFormat,
+        width: u32,
+        height: u32,
+        cell_width: u32,
+        cell_height: u32,
+        expect_success: bool,
+    ) -> AvifResult<()> {
+        let image = create_image(width, height, yuv_format)?;
+        let layout = compute_layout(image.width, image.height, cell_width, cell_height)?;
+        let res = split_into_views(&image, &layout);
+        assert_eq!(res.is_ok(), expect_success);
+        if let Err(err) = res {
+            assert!(matches!(err, AvifError::InvalidImageGrid(_)));
+        }
+        Ok(())
     }
 }
