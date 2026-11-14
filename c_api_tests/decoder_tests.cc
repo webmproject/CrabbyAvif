@@ -1592,6 +1592,8 @@ INSTANTIATE_TEST_SUITE_P(
                              AVIF_STRICT_EXIF_VALID},
         StrictnessTestParams{"white_iden_irot_unordered_ipma.avif",
                              AVIF_STRICT_ITEM_IDS_INCREASING},
+        StrictnessTestParams{"white_iden_irot_unordered_iinf.avif",
+                             AVIF_STRICT_ITEM_IDS_INCREASING},
         StrictnessTestParams{"clap_irot_imir_non_essential.avif",
                              AVIF_STRICT_ESSENTIAL_TRANSFORMATIVE_PROPERTIES}));
 

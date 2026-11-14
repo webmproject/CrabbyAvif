@@ -2251,6 +2251,10 @@ fn identity_derivation_invalid(filename: &str) -> AvifResult<()> {
             "white_iden_irot_unordered_ipma.avif",
             decoder::StrictnessFlag::ItemIdsIncreasing
         ),
+        (
+            "white_iden_irot_unordered_iinf.avif",
+            decoder::StrictnessFlag::ItemIdsIncreasing
+        ),
         ("heic/blue_hevc_brand_without_moov.heic", decoder::StrictnessFlag::HevcBrandRequiresMoov),
         (
             "clap_irot_imir_non_essential.avif",

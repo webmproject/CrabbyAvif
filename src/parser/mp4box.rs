@@ -1530,7 +1530,7 @@ fn parse_infe(stream: &mut IStream) -> AvifResult<ItemInfo> {
     Ok(entry)
 }
 
-fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
+fn parse_iinf(stream: &mut IStream, strictness: &Strictness) -> AvifResult<Vec<ItemInfo>> {
     // Section 8.11.6.2 of ISO/IEC 14496-12.
     let (version, _flags) = stream.read_version_and_flags()?;
     let entry_count: u32 = if version == 0 {
@@ -1541,13 +1541,25 @@ fn parse_iinf(stream: &mut IStream) -> AvifResult<Vec<ItemInfo>> {
         stream.read_u32()?
     };
     let mut iinf: Vec<ItemInfo> = create_vec_exact(usize_from_u32(entry_count)?)?;
+    let mut item_ids: HashSet<u32> = HashSet::with_hasher(NonRandomHasherState);
     for _i in 0..entry_count {
         let header = parse_header(stream, /*top_level=*/ false)?;
         if header.box_type != "infe" {
             return AvifError::bmff_parse_failed("Found non infe box in iinf");
         }
         let mut sub_stream = stream.sub_stream(&header.size)?;
-        iinf.try_push(parse_infe(&mut sub_stream)?)?;
+        let entry = parse_infe(&mut sub_stream)?;
+        if let Some(previous_entry) = iinf.last() {
+            if strictness.item_ids_increasing() && entry.item_id <= previous_entry.item_id {
+                return AvifError::bmff_parse_failed(
+                    "iinf item ids are not ordered by increasing id",
+                );
+            }
+        }
+        if !strictness.item_ids_increasing() && !item_ids.insert(entry.item_id) {
+            return AvifError::bmff_parse_failed("item has duplicate iinf entry");
+        }
+        iinf.try_push(entry)?;
     }
     Ok(iinf)
 }
@@ -1675,7 +1687,7 @@ fn parse_meta(stream: &mut IStream, strictness: &Strictness) -> AvifResult<MetaB
             "iloc" => meta.iloc = parse_iloc(&mut sub_stream)?,
             "pitm" => meta.primary_item_id = parse_pitm(&mut sub_stream)?,
             "iprp" => meta.iprp = parse_iprp(&mut sub_stream, strictness)?,
-            "iinf" => meta.iinf = parse_iinf(&mut sub_stream)?,
+            "iinf" => meta.iinf = parse_iinf(&mut sub_stream, strictness)?,
             "iref" => meta.iref = parse_iref(&mut sub_stream)?,
             "idat" => meta.idat = parse_idat(&mut sub_stream)?,
             "grpl" => meta.grpl = parse_grpl(&mut sub_stream)?,
@@ -2611,6 +2623,91 @@ mod tests {
             &Strictness::None,
         )
         .is_err());
+    }
+
+    fn iinf_payload(version: u8, infe_version: u8, item_ids: &[u32]) -> Vec<u8> {
+        let mut data = vec![version, 0, 0, 0];
+        if version == 0 {
+            data.extend_from_slice(&(item_ids.len() as u16).to_be_bytes());
+        } else {
+            data.extend_from_slice(&(item_ids.len() as u32).to_be_bytes());
+        }
+        for item_id in item_ids {
+            let mut entry = vec![infe_version, 0, 0, 0];
+            if infe_version == 2 {
+                entry.extend_from_slice(&(*item_id as u16).to_be_bytes());
+            } else {
+                entry.extend_from_slice(&item_id.to_be_bytes());
+            }
+            entry.extend_from_slice(&0u16.to_be_bytes());
+            entry.extend_from_slice(b"av01image\0");
+            data.extend_from_slice(&(8 + entry.len() as u32).to_be_bytes());
+            data.extend_from_slice(b"infe");
+            data.extend_from_slice(&entry);
+        }
+        data
+    }
+
+    #[test_matrix([0, 1], [2, 3])]
+    fn iinf_item_ids_increasing(version: u8, infe_version: u8) -> AvifResult<()> {
+        let largest_item_id = if infe_version == 2 { 8194 } else { u32::MAX };
+        let ids = [1, 4096, 8192, 8193, largest_item_id, 2];
+        let data = iinf_payload(version, infe_version, &ids);
+        for (strictness, accepted) in [
+            (Strictness::All, false),
+            (Strictness::None, true),
+            (
+                Strictness::SpecificInclude(vec![StrictnessFlag::ItemIdsIncreasing]),
+                false,
+            ),
+            (
+                Strictness::SpecificExclude(vec![StrictnessFlag::ItemIdsIncreasing]),
+                true,
+            ),
+            (
+                Strictness::SpecificInclude(vec![StrictnessFlag::PixiRequired]),
+                true,
+            ),
+        ] {
+            let result = mp4box::parse_iinf(&mut IStream::create(&data), &strictness);
+            assert_eq!(result.is_ok(), accepted);
+            if accepted {
+                let entries = result?;
+                assert_eq!(
+                    entries
+                        .iter()
+                        .map(|entry| entry.item_id)
+                        .collect::<Vec<_>>(),
+                    ids,
+                );
+                for entry in entries {
+                    assert_eq!(entry.item_type, "av01");
+                    assert_eq!(entry.item_name, "image");
+                }
+            }
+            for ordered in [&[][..], &[1][..], &[1, 2, largest_item_id][..]] {
+                let data = iinf_payload(version, infe_version, ordered);
+                mp4box::parse_iinf(&mut IStream::create(&data), &strictness)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test_matrix([0, 1], [2, 3])]
+    fn iinf_invalid_when_relaxed(version: u8, infe_version: u8) {
+        for strictness in [
+            Strictness::All,
+            Strictness::None,
+            Strictness::SpecificExclude(vec![StrictnessFlag::ItemIdsIncreasing]),
+        ] {
+            for ids in [&[1, 1][..], &[1, 2, 1][..], &[0][..], &[1, 0][..]] {
+                let data = iinf_payload(version, infe_version, ids);
+                assert!(mp4box::parse_iinf(&mut IStream::create(&data), &strictness).is_err());
+            }
+            let mut truncated = iinf_payload(version, infe_version, &[2, 1]);
+            truncated.pop();
+            assert!(mp4box::parse_iinf(&mut IStream::create(&truncated), &strictness).is_err());
+        }
     }
 
     #[test]
