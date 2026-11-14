@@ -89,7 +89,10 @@ impl Reader for GifReader {
             height: self.decoder.height() as u32,
             depth: config.depth.unwrap_or(8),
             yuv_format: config.yuv_format.unwrap_or(PixelFormat::Yuv420),
-            yuv_range: YuvRange::Full,
+            yuv_range: config.yuv_range.unwrap_or(YuvRange::Full),
+            color_primaries: config
+                .color_primaries
+                .unwrap_or(ColorPrimaries::Unspecified),
             matrix_coefficients: config
                 .matrix_coefficients
                 .unwrap_or(MatrixCoefficients::Bt601),

@@ -121,14 +121,11 @@ pub(crate) trait Decoder {
 #[cfg(feature = "encoder")]
 impl TryClone for CodecSpecificOptions {
     fn try_clone(&self) -> AvifResult<Self> {
-        let mut cloned = CodecSpecificOptions::default();
-        cloned
-            .try_reserve(self.len())
-            .map_err(AvifError::map_out_of_memory)?;
-        for (key, value) in self {
-            cloned.insert((key.0, key.1.try_clone()?), value.try_clone()?);
+        let mut cloned = create_vec_exact(self.0.len())?;
+        for (key, value) in &self.0 {
+            cloned.try_push(((key.0, key.1.try_clone()?), value.try_clone()?))?;
         }
-        Ok(cloned)
+        Ok(CodecSpecificOptions(cloned))
     }
 }
 
@@ -165,12 +162,12 @@ impl TryClone for EncoderConfig {
 #[allow(dead_code)] // These functions are used only in tests and when aom is enabled.
 impl EncoderConfig {
     pub(crate) fn codec_specific_option(&self, category: Category, key: &str) -> Option<&str> {
-        for (k, v) in &self.codec_specific_options {
+        for (k, v) in &self.codec_specific_options.0 {
             if k.0 == Some(category) && k.1 == key {
                 return Some(v.as_str());
             }
         }
-        for (k, v) in &self.codec_specific_options {
+        for (k, v) in &self.codec_specific_options.0 {
             if k.0.is_none() && k.1 == key {
                 return Some(v.as_str());
             }
@@ -183,6 +180,7 @@ impl EncoderConfig {
         category: Category,
     ) -> AvifResult<Vec<(&str, &str)>> {
         self.codec_specific_options
+            .0
             .iter()
             .filter(|(key, _value)| {
                 // If there is a key in a requested category, return it. Otherwise, return the
@@ -192,6 +190,7 @@ impl EncoderConfig {
                     || (key.0.is_none()
                         && !self
                             .codec_specific_options
+                            .0
                             .iter()
                             .any(|(k, _)| k.0 == Some(category) && k.1 == key.1))
             })
@@ -224,11 +223,10 @@ pub(crate) trait Encoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[test]
     fn codec_specific_options() {
-        let codec_specific_options = HashMap::from([
+        let codec_specific_options = CodecSpecificOptions(vec![
             (
                 (Some(Category::Color), String::from("abcd")),
                 String::from("color_value1"),
@@ -262,20 +260,16 @@ mod tests {
             Some("generic_value2"),
         );
 
-        let mut actual = config.codec_specific_options(Category::Color).unwrap();
-        actual.sort();
-        let mut expected = vec![("hjkl", "generic_value2"), ("abcd", "color_value1")];
-        expected.sort();
+        let actual = config.codec_specific_options(Category::Color).unwrap();
+        let expected = vec![("abcd", "color_value1"), ("hjkl", "generic_value2")];
         assert_eq!(expected, actual);
 
-        actual = config.codec_specific_options(Category::Alpha).unwrap();
-        actual.sort();
-        expected = vec![
-            ("hjkl", "generic_value2"),
-            ("efgh", "alpha_value1"),
+        let actual = config.codec_specific_options(Category::Alpha).unwrap();
+        let expected = vec![
             ("abcd", "generic_value1"),
+            ("efgh", "alpha_value1"),
+            ("hjkl", "generic_value2"),
         ];
-        expected.sort();
         assert_eq!(expected, actual);
     }
 }

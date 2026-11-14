@@ -12,9 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(all(feature = "aom", feature = "dav1d", feature = "png"))]
+use crabby_avif::image::YuvRange;
 use crabby_avif::*;
 
 use crate::r#impl::main_impl;
+
+fn get_test_file(filename: &str) -> String {
+    let base_path = if cfg!(google3) {
+        format!(
+            "{}/google3/third_party/crabbyavif/",
+            std::env::var("TEST_SRCDIR").expect("TEST_SRCDIR is not defined")
+        )
+    } else {
+        "".to_string()
+    };
+    format!("{base_path}tests/data/{filename}")
+}
 
 #[test]
 fn crabbyavif_test() -> AvifResult<()> {
@@ -50,6 +64,294 @@ fn crabbyavif_test() -> AvifResult<()> {
             "crop is not supported with progressive decoding".into()
         ))
     );
+    assert_eq!(
+        main_impl(
+            [
+                "crabbyavif",
+                "--autotiling",
+                "--tilerowslog2",
+                "1",
+                "input.png",
+                "output.avif"
+            ]
+            .iter()
+        ),
+        Err(AvifError::UnknownError(
+            "--autotiling cannot be combined with --tilerowslog2 or --tilecolslog2".into()
+        ))
+    );
+    assert_eq!(
+        main_impl(
+            [
+                "crabbyavif",
+                "--autotiling",
+                "--no-autotiling",
+                "input.png",
+                "output.avif"
+            ]
+            .iter()
+        ),
+        Err(AvifError::UnknownError(
+            "--autotiling and --no-autotiling are mutually exclusive".into()
+        ))
+    );
+    assert_eq!(
+        main_impl(["crabbyavif", "-s", "6", "--info", "input.avif"].iter()),
+        Err(AvifError::UnknownError(
+            "encode-only arguments cannot be used when decoding".into()
+        ))
+    );
+    assert_eq!(
+        main_impl(["crabbyavif", "--header", "mini", "--info", "input.avif"].iter()),
+        Err(AvifError::UnknownError(
+            "encode-only arguments cannot be used when decoding".into()
+        ))
+    );
+    assert_eq!(
+        main_impl(
+            [
+                "crabbyavif",
+                "--repetition-count",
+                "2",
+                "--info",
+                "input.avif"
+            ]
+            .iter()
+        ),
+        Err(AvifError::UnknownError(
+            "encode-only arguments cannot be used when decoding".into()
+        ))
+    );
+    assert_eq!(
+        main_impl(["crabbyavif", "input.png"].iter()),
+        Err(AvifError::UnknownError("output_file is required".into()))
+    );
+    assert_eq!(
+        main_impl(["crabbyavif", "-", "output.avif"].iter()),
+        Err(AvifError::UnknownError(
+            "stdin/stdout ('-') is not supported".into()
+        ))
+    );
+    assert_eq!(
+        main_impl(
+            [
+                "crabbyavif",
+                "--clap",
+                "8,1,8,1,0,1,0,1",
+                "--crop",
+                "0,0,8,8",
+                "input.png",
+                "output.avif"
+            ]
+            .iter()
+        ),
+        Err(AvifError::UnknownError(
+            "--clap and --crop are mutually exclusive".into()
+        ))
+    );
+    Ok(())
+}
+
+#[cfg(all(feature = "aom", feature = "dav1d", feature = "png"))]
+#[test]
+fn cli_exif_and_xmp_flags() -> AvifResult<()> {
+    let tmp = tempfile::tempdir().unwrap();
+    let input_png = get_test_file("abc.png");
+    let exif_path = tmp.path().join("sample.exif");
+    let xmp_path = tmp.path().join("sample.xmp");
+    let out_exif_only = tmp.path().join("exif_only.avif");
+    let out_both = tmp.path().join("exif_and_xmp.avif");
+
+    let exif_bytes: &[u8] = b"MM\x00*\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00";
+    let xmp_bytes: &[u8] = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>";
+    std::fs::write(&exif_path, exif_bytes).unwrap();
+    std::fs::write(&xmp_path, xmp_bytes).unwrap();
+
+    main_impl(
+        [
+            "crabbyavif",
+            "--exif",
+            exif_path.to_str().unwrap(),
+            &input_png,
+            out_exif_only.to_str().unwrap(),
+        ]
+        .iter(),
+    )?;
+    let mut dec = crabby_avif::decoder::Decoder::default();
+    dec.set_io_file(&out_exif_only.to_string_lossy().into_owned())?;
+    dec.parse()?;
+    let img = dec.image().unwrap();
+    assert_eq!(img.exif.as_slice(), exif_bytes);
+    assert!(img.xmp.is_empty());
+
+    main_impl(
+        [
+            "crabbyavif",
+            "--exif",
+            exif_path.to_str().unwrap(),
+            "--xmp",
+            xmp_path.to_str().unwrap(),
+            &input_png,
+            out_both.to_str().unwrap(),
+        ]
+        .iter(),
+    )?;
+    let mut dec2 = crabby_avif::decoder::Decoder::default();
+    dec2.set_io_file(&out_both.to_string_lossy().into_owned())?;
+    dec2.parse()?;
+    let img2 = dec2.image().unwrap();
+    assert_eq!(img2.exif.as_slice(), exif_bytes);
+    assert_eq!(img2.xmp.as_slice(), xmp_bytes);
+    Ok(())
+}
+
+#[cfg(all(feature = "aom", feature = "dav1d", feature = "png"))]
+#[test]
+fn cli_avifenc_defaults_and_options() -> AvifResult<()> {
+    let tmp = tempfile::tempdir().unwrap();
+    let y4m_in = tmp.path().join("seq.y4m");
+    // 2 frames of 16x16 C420mpeg2 at 25:1 fps (16*16 + 2*8*8 = 384 bytes/frame).
+    let frame0 = [120u8; 384];
+    let frame1 = [140u8; 384];
+    let y4m_bytes = [
+        &b"YUV4MPEG2 W16 H16 F25:1 Ip C420mpeg2\n"[..],
+        &b"FRAME\n"[..],
+        &frame0[..],
+        &b"FRAME\n"[..],
+        &frame1[..],
+    ]
+    .concat();
+    std::fs::write(&y4m_in, &y4m_bytes).unwrap();
+
+    let out_y4m = tmp.path().join("seq.avif");
+    main_impl(
+        [
+            "crabbyavif",
+            "-j",
+            "2",
+            y4m_in.to_str().unwrap(),
+            out_y4m.to_str().unwrap(),
+        ]
+        .iter(),
+    )?;
+    let mut dec_y4m = crabby_avif::decoder::Decoder::default();
+    dec_y4m.set_io_file(&out_y4m.to_string_lossy().into_owned())?;
+    dec_y4m.parse()?;
+    assert_eq!(dec_y4m.timescale(), 25);
+    assert_eq!(dec_y4m.image_count(), 2);
+    assert_eq!(dec_y4m.duration_in_timescales(), 2);
+    let y4m_img = dec_y4m.image().unwrap();
+    assert_eq!(y4m_img.color_primaries, ColorPrimaries::Srgb);
+    assert_eq!(
+        y4m_img.transfer_characteristics,
+        TransferCharacteristics::Srgb
+    );
+    assert_eq!(y4m_img.matrix_coefficients, MatrixCoefficients::Bt601);
+    assert_eq!(y4m_img.yuv_range, YuvRange::Limited);
+    assert_eq!(
+        y4m_img.chroma_sample_position,
+        ChromaSamplePosition::Vertical
+    );
+
+    let input_png = get_test_file("abc.png");
+    let out_default = tmp.path().join("default.avif");
+    let out_q90 = tmp.path().join("q90.avif");
+    let out_opts = tmp.path().join("opts.avif");
+    main_impl(["crabbyavif", &input_png, out_default.to_str().unwrap()].iter())?;
+    main_impl(
+        [
+            "crabbyavif",
+            "-q",
+            "90",
+            &input_png,
+            out_q90.to_str().unwrap(),
+        ]
+        .iter(),
+    )?;
+    assert!(
+        std::fs::metadata(&out_default).unwrap().len() < std::fs::metadata(&out_q90).unwrap().len()
+    );
+
+    main_impl(
+        [
+            "crabbyavif",
+            "-j",
+            "all",
+            "-s",
+            "d",
+            "-y",
+            "420",
+            "-r",
+            "limited",
+            "--cicp",
+            "9/16/9",
+            "-a",
+            "tune=ssim",
+            "-a",
+            "a:cq-level=20",
+            &input_png,
+            out_opts.to_str().unwrap(),
+        ]
+        .iter(),
+    )?;
+    let mut dec_opts = crabby_avif::decoder::Decoder::default();
+    dec_opts.set_io_file(&out_opts.to_string_lossy().into_owned())?;
+    dec_opts.parse()?;
+    dec_opts.next_image()?;
+    let img_opts = dec_opts.image().unwrap();
+    assert_eq!(img_opts.yuv_format, PixelFormat::Yuv420);
+    assert_eq!(img_opts.yuv_range, YuvRange::Limited);
+    assert_eq!(img_opts.color_primaries, ColorPrimaries::Bt2020);
+    assert_eq!(
+        img_opts.transfer_characteristics,
+        TransferCharacteristics::Pq
+    );
+    assert_eq!(img_opts.matrix_coefficients, MatrixCoefficients::Bt2020Ncl);
+
+    assert!(main_impl(
+        [
+            "crabbyavif",
+            "-a",
+            "not-a-valid-aom-opt=1",
+            &input_png,
+            out_opts.to_str().unwrap(),
+        ]
+        .iter(),
+    )
+    .is_err());
+
+    // AVIF re-encode (1-frame AVIF -> AVIF) and --cicp 1/13/0 -y 420 Identity->Bt601 downgrade.
+    let out_reencode = tmp.path().join("reencoded.avif");
+    main_impl(
+        [
+            "crabbyavif",
+            "-j",
+            "0",
+            out_default.to_str().unwrap(),
+            out_reencode.to_str().unwrap(),
+        ]
+        .iter(),
+    )?;
+    let out_cicp_420 = tmp.path().join("cicp_420.avif");
+    main_impl(
+        [
+            "crabbyavif",
+            "--cicp",
+            "1/13/0",
+            "-y",
+            "420",
+            &input_png,
+            out_cicp_420.to_str().unwrap(),
+        ]
+        .iter(),
+    )?;
+    let mut dec_420 = crabby_avif::decoder::Decoder::default();
+    dec_420.set_io_file(&out_cicp_420.to_string_lossy().into_owned())?;
+    dec_420.parse()?;
+    assert_eq!(
+        dec_420.image().unwrap().matrix_coefficients,
+        MatrixCoefficients::Bt601
+    );
     Ok(())
 }
 
@@ -64,18 +366,6 @@ mod decode_tests {
     use crabby_avif::utils::reader::y4m::Y4MReader;
     use crabby_avif::utils::reader::Config;
     use crabby_avif::utils::reader::Reader;
-
-    fn get_test_file(filename: &str) -> String {
-        let base_path = if cfg!(google3) {
-            format!(
-                "{}/google3/third_party/crabbyavif/",
-                std::env::var("TEST_SRCDIR").expect("TEST_SRCDIR is not defined")
-            )
-        } else {
-            "".to_string()
-        };
-        format!("{base_path}tests/data/{filename}")
-    }
 
     // Decodes input_file with the given extra arguments into a Y4M file and returns its dimensions.
     fn decode_to_y4m(input_file: &str, extra_args: &[&str]) -> AvifResult<(u32, u32)> {
