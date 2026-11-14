@@ -613,7 +613,7 @@ impl Decoder {
         self.parsing_complete() && self.native_decodable
     }
 
-    fn parsing_complete(&self) -> bool {
+    pub(crate) fn parsing_complete(&self) -> bool {
         self.parse_state == ParseState::Complete
     }
 
