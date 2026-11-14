@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -838,6 +839,241 @@ INSTANTIATE_TEST_SUITE_P(
         /*alpha=*/testing::Bool(),
         /*repetitionCount=*/
         testing::Values(0, 5, INT32_MAX - 1, INT32_MAX, -20)));
+
+EncoderPtr CreateLosslessEncoder() {
+  EncoderPtr encoder(avifEncoderCreate());
+  if (encoder != nullptr) {
+    encoder->speed = 10;
+    encoder->quality = 100;
+    encoder->qualityAlpha = 100;
+  }
+  return encoder;
+}
+
+// Encodes |image| by splitting it into cells of |cell_width| x |cell_height|
+// using avifImageSetViewRect() and avifEncoderAddImageGrid().
+avifResult EncodeManualSplitGrid(const avifImage* image, uint32_t cell_width,
+                                 uint32_t cell_height, AvifRwData* output) {
+  const uint32_t cols = (image->width + cell_width - 1) / cell_width;
+  const uint32_t rows = (image->height + cell_height - 1) / cell_height;
+  std::vector<ImagePtr> cells;
+  std::vector<const avifImage*> cell_ptrs;
+  for (uint32_t row = 0; row < rows; ++row) {
+    for (uint32_t col = 0; col < cols; ++col) {
+      const uint32_t x = col * cell_width;
+      const uint32_t y = row * cell_height;
+      const avifCropRect rect = {x, y, std::min(cell_width, image->width - x),
+                                 std::min(cell_height, image->height - y)};
+      cells.emplace_back(avifImageCreateEmpty());
+      if (cells.back() == nullptr) return AVIF_RESULT_OUT_OF_MEMORY;
+      AVIF_CHECKRES(avifImageSetViewRect(cells.back().get(), image, &rect));
+      cell_ptrs.push_back(cells.back().get());
+    }
+  }
+  if (image->icc.size > 0) {
+    AVIF_CHECKRES(
+        avifRWDataSet(&cells[0]->icc, image->icc.data, image->icc.size));
+  }
+  if (image->exif.size > 0) {
+    AVIF_CHECKRES(
+        avifRWDataSet(&cells[0]->exif, image->exif.data, image->exif.size));
+  }
+  if (image->xmp.size > 0) {
+    AVIF_CHECKRES(
+        avifRWDataSet(&cells[0]->xmp, image->xmp.data, image->xmp.size));
+  }
+  EncoderPtr encoder = CreateLosslessEncoder();
+  if (encoder == nullptr) return AVIF_RESULT_OUT_OF_MEMORY;
+  if (cells.size() == 1) {
+    AVIF_CHECKRES(avifEncoderAddImage(encoder.get(), cell_ptrs[0],
+                                      /*durationInTimescales=*/1,
+                                      AVIF_ADD_IMAGE_FLAG_SINGLE));
+  } else {
+    AVIF_CHECKRES(avifEncoderAddImageGrid(encoder.get(), cols, rows,
+                                          cell_ptrs.data(),
+                                          AVIF_ADD_IMAGE_FLAG_SINGLE));
+  }
+  return avifEncoderFinish(encoder.get(), output);
+}
+
+struct SplitGridTestParam {
+  int width;
+  int height;
+  uint32_t cell_width;
+  uint32_t cell_height;
+};
+
+class SplitGridTest : public testing::TestWithParam<
+                          std::tuple<SplitGridTestParam, avifPixelFormat>> {};
+
+TEST_P(SplitGridTest, EncodeDecode) {
+  const SplitGridTestParam& param = std::get<0>(GetParam());
+  const avifPixelFormat yuv_format = std::get<1>(GetParam());
+  ImagePtr image =
+      testutil::CreateImage(param.width, param.height, /*depth=*/8, yuv_format,
+                            AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+  ASSERT_NE(image, nullptr);
+  testutil::FillImageGradient(image.get(), /*offset=*/0);
+
+  EncoderPtr encoder = CreateLosslessEncoder();
+  ASSERT_NE(encoder, nullptr);
+  ASSERT_EQ(avifEncoderAddImageSplitGrid(encoder.get(), image.get(),
+                                         param.cell_width, param.cell_height,
+                                         AVIF_ADD_IMAGE_FLAG_SINGLE),
+            AVIF_RESULT_OK);
+  AvifRwData encoded;
+  ASSERT_EQ(avifEncoderFinish(encoder.get(), &encoded), AVIF_RESULT_OK);
+
+  // The output must be the same as when splitting the image manually.
+  AvifRwData reference;
+  ASSERT_EQ(EncodeManualSplitGrid(image.get(), param.cell_width,
+                                  param.cell_height, &reference),
+            AVIF_RESULT_OK);
+  EXPECT_TRUE(testutil::AreByteSequencesEqual(encoded, reference));
+
+  auto decoder = CreateDecoder(encoded);
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(decoder->image->width, image->width);
+  EXPECT_EQ(decoder->image->height, image->height);
+  EXPECT_TRUE(testutil::AreImagesEqual(*image, *decoder->image,
+                                       /*ignore_alpha=*/false));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All, SplitGridTest,
+    testing::Combine(testing::Values(SplitGridTestParam{200, 150, 80, 64},
+                                     SplitGridTestParam{128, 128, 64, 64},
+                                     SplitGridTestParam{256, 130, 128, 64},
+                                     // Clamped to a single cell.
+                                     SplitGridTestParam{300, 200, 512, 512},
+                                     // Clamped to a single column.
+                                     SplitGridTestParam{300, 200, 512, 64}),
+                     testing::Values(AVIF_PIXEL_FORMAT_YUV420,
+                                     AVIF_PIXEL_FORMAT_YUV422,
+                                     AVIF_PIXEL_FORMAT_YUV444,
+                                     AVIF_PIXEL_FORMAT_YUV400)));
+
+struct SplitGridInvalidTestParam {
+  int width;
+  int height;
+  avifPixelFormat yuv_format;
+  uint32_t cell_width;
+  uint32_t cell_height;
+  avifResult expected_result;
+};
+
+class SplitGridInvalidTest
+    : public testing::TestWithParam<SplitGridInvalidTestParam> {};
+
+TEST_P(SplitGridInvalidTest, Encode) {
+  const SplitGridInvalidTestParam& param = GetParam();
+  ImagePtr image = testutil::CreateImage(param.width, param.height,
+                                         /*depth=*/8, param.yuv_format,
+                                         AVIF_PLANES_YUV, AVIF_RANGE_FULL);
+  ASSERT_NE(image, nullptr);
+  testutil::FillImageGradient(image.get(), /*offset=*/0);
+  EncoderPtr encoder = CreateLosslessEncoder();
+  ASSERT_NE(encoder, nullptr);
+  EXPECT_EQ(avifEncoderAddImageSplitGrid(encoder.get(), image.get(),
+                                         param.cell_width, param.cell_height,
+                                         AVIF_ADD_IMAGE_FLAG_SINGLE),
+            param.expected_result);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All, SplitGridInvalidTest,
+    testing::Values(
+        SplitGridInvalidTestParam{200, 150, AVIF_PIXEL_FORMAT_YUV420, 0, 64,
+                                  AVIF_RESULT_INVALID_ARGUMENT},
+        SplitGridInvalidTestParam{200, 150, AVIF_PIXEL_FORMAT_YUV420, 64, 0,
+                                  AVIF_RESULT_INVALID_ARGUMENT},
+        SplitGridInvalidTestParam{200, 150, AVIF_PIXEL_FORMAT_YUV420, 81, 64,
+                                  AVIF_RESULT_INVALID_IMAGE_GRID},
+        SplitGridInvalidTestParam{200, 150, AVIF_PIXEL_FORMAT_YUV420, 80, 65,
+                                  AVIF_RESULT_INVALID_IMAGE_GRID},
+        SplitGridInvalidTestParam{200, 150, AVIF_PIXEL_FORMAT_YUV422, 81, 64,
+                                  AVIF_RESULT_INVALID_IMAGE_GRID},
+        SplitGridInvalidTestParam{200, 150, AVIF_PIXEL_FORMAT_YUV444, 32, 64,
+                                  AVIF_RESULT_INVALID_IMAGE_GRID},
+        SplitGridInvalidTestParam{200, 150, AVIF_PIXEL_FORMAT_YUV444, 64, 32,
+                                  AVIF_RESULT_INVALID_IMAGE_GRID},
+        SplitGridInvalidTestParam{201, 150, AVIF_PIXEL_FORMAT_YUV420, 128, 64,
+                                  AVIF_RESULT_INVALID_IMAGE_GRID},
+        SplitGridInvalidTestParam{200, 151, AVIF_PIXEL_FORMAT_YUV420, 128, 64,
+                                  AVIF_RESULT_INVALID_IMAGE_GRID},
+        // 257 columns.
+        SplitGridInvalidTestParam{16448, 64, AVIF_PIXEL_FORMAT_YUV400, 64, 64,
+                                  AVIF_RESULT_INVALID_IMAGE_GRID}));
+
+TEST(SplitGridApiTest, InvalidArguments) {
+  ImagePtr image = testutil::CreateImage(/*width=*/200, /*height=*/150,
+                                         /*depth=*/8, AVIF_PIXEL_FORMAT_YUV420,
+                                         AVIF_PLANES_YUV, AVIF_RANGE_FULL);
+  ASSERT_NE(image, nullptr);
+  testutil::FillImageGradient(image.get(), /*offset=*/0);
+  EncoderPtr encoder = CreateLosslessEncoder();
+  ASSERT_NE(encoder, nullptr);
+  EXPECT_EQ(avifEncoderAddImageSplitGrid(nullptr, image.get(), 128, 64,
+                                         AVIF_ADD_IMAGE_FLAG_SINGLE),
+            AVIF_RESULT_INVALID_ARGUMENT);
+  EXPECT_EQ(avifEncoderAddImageSplitGrid(encoder.get(), nullptr, 128, 64,
+                                         AVIF_ADD_IMAGE_FLAG_SINGLE),
+            AVIF_RESULT_INVALID_ARGUMENT);
+  // AVIF_ADD_IMAGE_FLAG_SINGLE is required without extra layers.
+  EXPECT_EQ(avifEncoderAddImageSplitGrid(encoder.get(), image.get(), 128, 64,
+                                         AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_INVALID_ARGUMENT);
+  // Nothing can be added after a single image.
+  ASSERT_EQ(avifEncoderAddImageSplitGrid(encoder.get(), image.get(), 128, 64,
+                                         AVIF_ADD_IMAGE_FLAG_SINGLE),
+            AVIF_RESULT_OK);
+  EXPECT_NE(avifEncoderAddImageSplitGrid(encoder.get(), image.get(), 128, 64,
+                                         AVIF_ADD_IMAGE_FLAG_SINGLE),
+            AVIF_RESULT_OK);
+}
+
+TEST(SplitGridApiTest, IccExifXmp) {
+  ImagePtr image = testutil::CreateImage(/*width=*/200, /*height=*/150,
+                                         /*depth=*/8, AVIF_PIXEL_FORMAT_YUV420,
+                                         AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+  ASSERT_NE(image, nullptr);
+  testutil::FillImageGradient(image.get(), /*offset=*/0);
+  ASSERT_EQ(avifRWDataSet(&image->icc, kSampleIcc.data(), kSampleIcc.size()),
+            AVIF_RESULT_OK);
+  ASSERT_EQ(avifRWDataSet(&image->exif, kSampleExif.data(), kSampleExif.size()),
+            AVIF_RESULT_OK);
+  ASSERT_EQ(avifRWDataSet(&image->xmp, kSampleXmp.data(), kSampleXmp.size()),
+            AVIF_RESULT_OK);
+
+  EncoderPtr encoder = CreateLosslessEncoder();
+  ASSERT_NE(encoder, nullptr);
+  ASSERT_EQ(avifEncoderAddImageSplitGrid(encoder.get(), image.get(), 128, 64,
+                                         AVIF_ADD_IMAGE_FLAG_SINGLE),
+            AVIF_RESULT_OK);
+  AvifRwData encoded;
+  ASSERT_EQ(avifEncoderFinish(encoder.get(), &encoded), AVIF_RESULT_OK);
+
+  AvifRwData reference;
+  ASSERT_EQ(EncodeManualSplitGrid(image.get(), 128, 64, &reference),
+            AVIF_RESULT_OK);
+  EXPECT_TRUE(testutil::AreByteSequencesEqual(encoded, reference));
+
+  auto decoder = CreateDecoder(encoded);
+  ASSERT_NE(decoder, nullptr);
+  ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+  EXPECT_TRUE(testutil::AreByteSequencesEqual(
+      decoder->image->icc.data, decoder->image->icc.size, image->icc.data,
+      image->icc.size));
+  EXPECT_TRUE(testutil::AreByteSequencesEqual(
+      decoder->image->exif.data, decoder->image->exif.size, image->exif.data,
+      image->exif.size));
+  EXPECT_TRUE(testutil::AreByteSequencesEqual(
+      decoder->image->xmp.data, decoder->image->xmp.size, image->xmp.data,
+      image->xmp.size));
+}
 
 TEST(EncoderApiTest, SetCodecSpecificOption) {
   EncoderPtr encoder(avifEncoderCreate());

@@ -884,6 +884,39 @@ avifResult crabby_avifEncoderAddImageGrid(avifEncoder *encoder,
                                           const avifImage *const *cellImages,
                                           avifAddImageFlags addImageFlags);
 
+/// Splits `image` into a grid of cells of `cellWidth` x `cellHeight` luma samples and adds it to
+/// `encoder`. The result is the same as splitting `image` and passing the cells to
+/// [`crabby_avifEncoderAddImageGrid`].
+///
+/// Each cell dimension is clamped to the corresponding image dimension. The number of columns is
+/// `ceil(image->width / cellWidth)` and the number of rows is `ceil(image->height / cellHeight)`.
+/// The right-most column and the bottom-most row hold the remaining samples. If there is a single
+/// cell, `image` is encoded as a non-grid image.
+///
+/// - `cellWidth` and `cellHeight` must both be non-zero.
+/// - If there is more than one cell, the cell dimensions must satisfy the MIAF grid constraints:
+///   at least 64, `cellWidth` and `image->width` even for 4:2:0 and 4:2:2, `cellHeight` and
+///   `image->height` even for 4:2:0, at most 256 columns and 256 rows. Otherwise
+///   `AVIF_RESULT_INVALID_IMAGE_GRID` is returned.
+/// - `image` is only borrowed for the duration of this call. No pixel data is copied, except for
+///   the padding of the right-most and bottom-most cells.
+/// - The ICC, Exif, XMP and transformative properties of `image` apply to the whole grid.
+/// - If `image->gainMap` and `image->gainMap->image` are not null, the gain map image is split
+///   into the same number of columns and rows, with cell dimensions proportional to the gain map
+///   dimensions.
+/// - `addImageFlags` has the same meaning as in [`crabby_avifEncoderAddImageGrid`].
+///
+/// # Safety
+/// - If `encoder` is non-null, it must point to a valid, mutable [`avifEncoder`] for the duration
+///   of this call, not aliased by `image`.
+/// - If `image` is non-null, it must point to a valid [`avifImage`] (including valid plane,
+///   metadata, and optional `gainMap` buffers matching its fields) for the duration of this call.
+avifResult crabby_avifEncoderAddImageSplitGrid(avifEncoder *encoder,
+                                               const avifImage *image,
+                                               uint32_t cellWidth,
+                                               uint32_t cellHeight,
+                                               avifAddImageFlags addImageFlags);
+
 /// # Safety
 /// - If `encoder` is non-null, it must point to a valid, mutable [`avifEncoder`] for the duration
 ///   of this call.

@@ -47,6 +47,7 @@
 #define avifDiagnosticsClearError crabby_avifDiagnosticsClearError
 #define avifEncoderAddImage crabby_avifEncoderAddImage
 #define avifEncoderAddImageGrid crabby_avifEncoderAddImageGrid
+#define avifEncoderAddImageSplitGrid crabby_avifEncoderAddImageSplitGrid
 #define avifEncoderCreate crabby_avifEncoderCreate
 #define avifEncoderDestroy crabby_avifEncoderDestroy
 #define avifEncoderFinish crabby_avifEncoderFinish

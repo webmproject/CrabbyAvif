@@ -410,6 +410,78 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
     res.into()
 }
 
+/// Splits `image` into a grid of cells of `cellWidth` x `cellHeight` luma samples and adds it to
+/// `encoder`. The result is the same as splitting `image` and passing the cells to
+/// [`crabby_avifEncoderAddImageGrid`].
+///
+/// Each cell dimension is clamped to the corresponding image dimension. The number of columns is
+/// `ceil(image->width / cellWidth)` and the number of rows is `ceil(image->height / cellHeight)`.
+/// The right-most column and the bottom-most row hold the remaining samples. If there is a single
+/// cell, `image` is encoded as a non-grid image.
+///
+/// - `cellWidth` and `cellHeight` must both be non-zero.
+/// - If there is more than one cell, the cell dimensions must satisfy the MIAF grid constraints:
+///   at least 64, `cellWidth` and `image->width` even for 4:2:0 and 4:2:2, `cellHeight` and
+///   `image->height` even for 4:2:0, at most 256 columns and 256 rows. Otherwise
+///   `AVIF_RESULT_INVALID_IMAGE_GRID` is returned.
+/// - `image` is only borrowed for the duration of this call. No pixel data is copied, except for
+///   the padding of the right-most and bottom-most cells.
+/// - The ICC, Exif, XMP and transformative properties of `image` apply to the whole grid.
+/// - If `image->gainMap` and `image->gainMap->image` are not null, the gain map image is split
+///   into the same number of columns and rows, with cell dimensions proportional to the gain map
+///   dimensions.
+/// - `addImageFlags` has the same meaning as in [`crabby_avifEncoderAddImageGrid`].
+///
+/// # Safety
+/// - If `encoder` is non-null, it must point to a valid, mutable [`avifEncoder`] for the duration
+///   of this call, not aliased by `image`.
+/// - If `image` is non-null, it must point to a valid [`avifImage`] (including valid plane,
+///   metadata, and optional `gainMap` buffers matching its fields) for the duration of this call.
+#[no_mangle]
+pub unsafe extern "C" fn crabby_avifEncoderAddImageSplitGrid(
+    encoder: *mut avifEncoder,
+    image: *const avifImage,
+    cellWidth: u32,
+    cellHeight: u32,
+    addImageFlags: avifAddImageFlags,
+) -> avifResult {
+    check_pointer!(encoder);
+    check_pointer!(image);
+
+    let encoder_ref = deref_mut!(encoder);
+    if cellWidth == 0
+        || cellHeight == 0
+        // If we are not encoding a grid image with multiple layers, AVIF_ADD_IMAGE_FLAG_SINGLE has
+        // to be set.
+        || ((addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) == 0 && encoder_ref.extraLayerCount == 0)
+    {
+        return avifResult::InvalidArgument;
+    }
+    let res = encoder_ref.initialize_or_update_rust_encoder();
+    if res != avifResult::Ok {
+        return res;
+    }
+    let image_ref = deref_const!(image);
+    let res = || -> AvifResult<()> {
+        let rust_image: image::Image = image_ref.try_into()?;
+        match image_ref.gainmap()? {
+            Some(gainmap) => encoder_ref.rust_encoder.add_image_gainmap_split_grid(
+                cellWidth,
+                cellHeight,
+                &rust_image,
+                &gainmap,
+            ),
+            None => {
+                encoder_ref
+                    .rust_encoder
+                    .add_image_split_grid(cellWidth, cellHeight, &rust_image)
+            }
+        }
+    }();
+    encoder_ref.diag.set_from_result(&res);
+    res.into()
+}
+
 /// # Safety
 /// - If `encoder` is non-null, it must point to a valid, mutable [`avifEncoder`] for the duration
 ///   of this call.
