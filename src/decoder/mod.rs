@@ -278,6 +278,7 @@ pub enum StrictnessFlag {
     ExifValid, // Fail if the exif payload is invalid.
     HevcBrandRequiresMoov,
     EssentialTransformativeProperties,
+    ItemIdsIncreasing,
 }
 
 #[derive(Debug, Default)]
@@ -321,6 +322,10 @@ impl Strictness {
 
     fn essential_transformative_properties(&self) -> bool {
         self.contains(StrictnessFlag::EssentialTransformativeProperties)
+    }
+
+    pub(crate) fn item_ids_increasing(&self) -> bool {
+        self.contains(StrictnessFlag::ItemIdsIncreasing)
     }
 
     pub(crate) fn hevc_brand_requires_moov(&self) -> bool {
