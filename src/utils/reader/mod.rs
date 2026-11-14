@@ -49,11 +49,15 @@ pub struct Config {
 }
 
 pub trait Reader {
-    // Returns the next frame, its duration in milliseconds, and the gain map if any.
+    // Returns the next frame, its duration in timescale units, and the gain map if any.
     fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64, Option<GainMap>)>;
     // Returns true if the last call to read_frame() returned another frame than the last frame.
     // Meaningless if read_frame() was never called or if read_frame() returned an error.
     fn has_more_frames(&mut self) -> bool;
+    // Timescale (ticks per second) for frame durations returned by read_frame().
+    fn timescale(&self) -> u64 {
+        1000
+    }
 }
 
 impl dyn Reader {
