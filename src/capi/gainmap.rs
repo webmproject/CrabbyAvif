@@ -132,20 +132,27 @@ pub extern "C" fn crabby_avifGainMapCreate() -> *mut avifGainMap {
 
 /// # Safety
 /// If `gainmap` is non-null, it must be a valid pointer obtained from
-/// [`crabby_avifGainMapCreate`] that has not yet been destroyed, and if `(*gainmap).image` is
-/// non-null, it must be a valid pointer obtained from [`crabby_avifImageCreate`] or
-/// [`crabby_avifImageCreateEmpty`] that has not yet been destroyed.
+/// [`crabby_avifGainMapCreate`] that has not yet been destroyed, its `altICC`
+/// field must be either empty/default or managed by `crabby_avifRWData*`, and
+/// if `(*gainmap).image` is non-null, it must be a valid pointer obtained from
+/// [`crabby_avifImageCreate`] or [`crabby_avifImageCreateEmpty`] that has not
+/// yet been destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifGainMapDestroy(gainmap: *mut avifGainMap) {
     check_pointer_or_return!(gainmap);
     // SAFETY: `gainmap` was verified to be non-null and, by caller precondition, was allocated via
     // `Box::into_raw` in `crabby_avifGainMapCreate` and has not yet been freed.
-    let gainmap = unsafe { Box::from_raw(gainmap) };
+    let mut gainmap = unsafe { Box::from_raw(gainmap) };
     if !gainmap.image.is_null() {
         // SAFETY: `gainmap.image` is non-null and, by caller precondition, is a valid `avifImage`
         // allocated by `crabby_avifImageCreate` or `crabby_avifImageCreateEmpty`.
         unsafe {
             crabby_avifImageDestroy(gainmap.image);
         }
+    }
+    // SAFETY: `&mut gainmap.altICC` is a valid pointer to `gainmap`'s owned `avifRWData` field
+    // whose buffer (if non-null) was allocated via `crabby_avifRWData*`.
+    unsafe {
+        crabby_avifRWDataFree(&mut gainmap.altICC);
     }
 }
