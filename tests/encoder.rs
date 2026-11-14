@@ -1538,6 +1538,54 @@ fn split_grid(
     Ok(())
 }
 
+#[test_case(200, 150, PixelFormat::Yuv420, 0, 64 ; "zero cell width")]
+#[test_case(200, 150, PixelFormat::Yuv420, 64, 0 ; "zero cell height")]
+#[test_case(200, 150, PixelFormat::Yuv420, 81, 64 ; "odd cell width")]
+#[test_case(200, 150, PixelFormat::Yuv420, 80, 65 ; "odd cell height")]
+#[test_case(200, 150, PixelFormat::Yuv444, 32, 64 ; "cell width below 64")]
+#[test_case(200, 150, PixelFormat::Yuv444, 64, 32 ; "cell height below 64")]
+#[test_case(201, 150, PixelFormat::Yuv420, 128, 64 ; "odd image width")]
+#[test_case(200, 151, PixelFormat::Yuv420, 128, 64 ; "odd image height")]
+#[test_case(70000, 64, PixelFormat::Yuv400, 256, 64 ; "too many columns")]
+fn split_grid_invalid(
+    width: u32,
+    height: u32,
+    yuv_format: PixelFormat,
+    cell_width: u32,
+    cell_height: u32,
+) -> AvifResult<()> {
+    let image = generate_gradient_image(width, height, 8, yuv_format, YuvRange::Full, false)?;
+    let mut encoder = lossless_encoder()?;
+    assert!(encoder
+        .add_image_split_grid(cell_width, cell_height, &image)
+        .is_err());
+    Ok(())
+}
+
+#[test]
+fn split_grid_metadata() -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let mut image =
+        generate_gradient_image(200, 150, 8, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    image.icc = vec![1, 2, 3, 4];
+    image.xmp = vec![5, 6, 7];
+    image.irot_angle = Some(1);
+    let mut encoder = lossless_encoder()?;
+    encoder.add_image_split_grid(128, 64, &image)?;
+    let edata = encoder.finish()?;
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    assert!(decoder.parse().is_ok());
+    let decoded_image = decoder.image().expect("image was none");
+    assert_eq!(decoded_image.icc, image.icc);
+    assert_eq!(decoded_image.xmp, image.xmp);
+    assert_eq!(decoded_image.irot_angle, Some(1));
+    Ok(())
+}
+
 #[test]
 fn codec_versions() {
     assert!(crabby_avif::codec_versions().contains("dav1d"));
