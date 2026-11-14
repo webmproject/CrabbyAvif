@@ -461,16 +461,20 @@ impl Item {
         self.associations
             .try_push((u8_from_usize(streams.len())?, false))?;
 
-        // TODO: check for is_tmap and alt_plane_depth.
-        streams.try_push(OStream::default())?;
-        self.write_pixi(
-            streams.last_mut().unwrap(),
-            item_metadata,
-            force_write_extended_pixi,
-            codec_supports_native_alpha_channel,
-        )?;
-        self.associations
-            .try_push((u8_from_usize(streams.len())?, false))?;
+        // The 'pixi' property is optional for the 'tmap' item. Omit it if the bit depth and the
+        // plane count of the alternate image are both unknown, signaled by a depth of 0 (see
+        // Encoder::copy_alt_image_metadata()).
+        if !self.is_tmap() || item_metadata.depth != 0 {
+            streams.try_push(OStream::default())?;
+            self.write_pixi(
+                streams.last_mut().unwrap(),
+                item_metadata,
+                force_write_extended_pixi,
+                codec_supports_native_alpha_channel,
+            )?;
+            self.associations
+                .try_push((u8_from_usize(streams.len())?, false))?;
+        }
 
         let force_write_alpi = force_write_extended_pixi; // Assumed.
         if codec_supports_native_alpha_channel

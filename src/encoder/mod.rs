@@ -468,16 +468,22 @@ impl Encoder {
         self.alt_image_metadata.transfer_characteristics = gainmap.alt_transfer_characteristics;
         self.alt_image_metadata.matrix_coefficients = gainmap.alt_matrix_coefficients;
         self.alt_image_metadata.yuv_range = gainmap.alt_yuv_range;
-        self.alt_image_metadata.depth = if gainmap.alt_plane_depth > 0 {
-            gainmap.alt_plane_depth
+        if gainmap.alt_plane_depth == 0 && gainmap.alt_plane_count == 0 {
+            // Unknown. No 'pixi' property is written for the 'tmap' item in that case.
+            self.alt_image_metadata.depth = 0;
+            self.alt_image_metadata.yuv_format = PixelFormat::None;
         } else {
-            std::cmp::max(self.image_metadata.depth, gainmap.image.depth)
-        };
-        self.alt_image_metadata.yuv_format = if gainmap.alt_plane_count == 1 {
-            PixelFormat::Yuv400
-        } else {
-            PixelFormat::Yuv444
-        };
+            self.alt_image_metadata.depth = if gainmap.alt_plane_depth > 0 {
+                gainmap.alt_plane_depth
+            } else {
+                std::cmp::max(self.image_metadata.depth, gainmap.image.depth)
+            };
+            self.alt_image_metadata.yuv_format = if gainmap.alt_plane_count == 1 {
+                PixelFormat::Yuv400
+            } else {
+                PixelFormat::Yuv444
+            };
+        }
         self.alt_image_metadata.clli = Some(gainmap.alt_clli);
         Ok(())
     }
