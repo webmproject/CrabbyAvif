@@ -265,8 +265,7 @@ impl Av1SequenceHeader {
                 _ => {} // Not reached.
             }
             if self.config.chroma_subsampling_x == 1 && self.config.chroma_subsampling_y == 1 {
-                // chroma_sample_position.
-                stream.skip_bits(2)?;
+                self.config.chroma_sample_position = stream.read_bits(2)?.into();
             }
         }
         // separate_uv_delta_q

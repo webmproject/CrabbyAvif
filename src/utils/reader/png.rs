@@ -468,6 +468,7 @@ impl Reader for PngReader {
 
         yuv.width = raw_width;
         yuv.height = raw_height;
+        yuv.yuv_range = config.yuv_range.unwrap_or(YuvRange::Full);
         yuv.matrix_coefficients = config
             .matrix_coefficients
             .unwrap_or(MatrixCoefficients::Bt601);
@@ -645,6 +646,9 @@ impl Reader for PngReader {
             }
         }
 
+        if let Some(cp) = config.color_primaries {
+            yuv.color_primaries = cp;
+        }
         // SAFETY: `png.png` and `png.info` are valid non-null `libpng` structs updated by
         // `png_read_update_info`.
         let num_channels = unsafe { png_get_channels(png.png, png.info) };
@@ -652,6 +656,7 @@ impl Reader for PngReader {
         // `png_read_update_info`.
         let png_row_bytes = unsafe { png_get_rowbytes(png.png, png.info) };
         let mut rgb = rgb::Image::create_from_yuv(&yuv);
+        rgb.max_threads = i32::try_from(config.max_threads).unwrap_or(i32::MAX);
         rgb.depth = bit_depth;
         rgb.format = match num_channels {
             1 => rgb::Format::Gray,

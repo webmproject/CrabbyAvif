@@ -238,7 +238,12 @@ impl rgb::Image {
         Ok(())
     }
 
-    fn rescale_alpha_value(value: u16, src_max_channel_f: f32, dst_max_channel: u16) -> u16 {
+    #[inline]
+    pub(crate) fn rescale_alpha_value(
+        value: u16,
+        src_max_channel_f: f32,
+        dst_max_channel: u16,
+    ) -> u16 {
         let alpha_f = (value as f32) / src_max_channel_f;
         let dst_max_channel_f = dst_max_channel as f32;
         let alpha = (0.5 + (alpha_f * dst_max_channel_f)) as u16;
@@ -403,6 +408,7 @@ impl image::Image {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn import_alpha_from(&mut self, rgb: &rgb::Image) -> AvifResult<()> {
         if !self.has_plane(Plane::A)
             || !rgb.has_alpha()

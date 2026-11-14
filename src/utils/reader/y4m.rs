@@ -15,16 +15,18 @@
 use crate::gainmap::GainMap;
 use crate::image::*;
 use crate::internal_utils::*;
+use crate::utils::pixels::Pixels;
 use crate::*;
 
 use std::fs::File;
 use std::io::prelude::*;
+use std::io::BufReader;
 
 use super::Config;
 use super::Reader;
 
-use std::io::BufReader;
-use std::io::Read;
+const Y4M_BUF_READER_CAP: usize = 64 * 1024;
+const Y4M_MAX_LINE_BYTES: usize = 2048;
 
 #[derive(Debug, Default)]
 pub struct Y4MReader {
@@ -35,7 +37,159 @@ pub struct Y4MReader {
     format: PixelFormat,
     range: YuvRange,
     chroma_sample_position: ChromaSamplePosition,
+    timescale: u64,
+    frame_duration: u64,
     reader: Option<BufReader<File>>,
+    frame_header_buf: Vec<u8>,
+}
+
+fn parse_frame_header(header_bytes: &[u8], default_range: YuvRange) -> AvifResult<YuvRange> {
+    if !header_bytes.ends_with(b"\n") {
+        return AvifError::unknown_error("unterminated frame header");
+    }
+    let frame_marker = std::str::from_utf8(header_bytes).map_err(AvifError::map_unknown_error)?;
+    let frame_header = frame_marker.trim_end_matches(['\r', '\n']);
+    let mut parts = frame_header.split(' ');
+    if parts.next() != Some("FRAME") {
+        return AvifError::unknown_error("could not find frame marker");
+    }
+    let mut frame_range = default_range;
+    for part in parts {
+        if part == "XCOLORRANGE=FULL" {
+            frame_range = YuvRange::Full;
+        } else if part == "XCOLORRANGE=LIMITED" {
+            frame_range = YuvRange::Limited;
+        }
+    }
+    Ok(frame_range)
+}
+
+#[cfg(all(target_arch = "x86_64", target_endian = "little"))]
+/// # Safety
+/// Caller must verify `avx2` support at runtime and pass `src.len() == dst.len() * 2`.
+#[target_feature(enable = "avx2")]
+unsafe fn clamp_le_u16_avx2(src: &[u8], dst: &mut [u16], max_sample: u16) {
+    use std::arch::x86_64::*;
+    let count = dst.len();
+    let vmax = _mm256_set1_epi16(max_sample as i16);
+    let src_ptr = src.as_ptr();
+    let dst_ptr = dst.as_mut_ptr();
+    let mut i = 0usize;
+    while i + 16 <= count {
+        // SAFETY: `i + 16 <= count` and `src.len() == count * 2`, so `src_ptr.add(i * 2)` has
+        // at least 32 readable bytes.
+        let v = unsafe { _mm256_loadu_si256(src_ptr.add(i * 2) as *const __m256i) };
+        let clamped = _mm256_min_epu16(v, vmax);
+        // SAFETY: `i + 16 <= count` and `dst.len() == count`, so `dst_ptr.add(i)` has at least
+        // 16 writable `u16` elements.
+        unsafe {
+            _mm256_storeu_si256(dst_ptr.add(i) as *mut __m256i, clamped);
+        }
+        i += 16;
+    }
+    if i + 8 <= count {
+        let vmax128 = _mm256_castsi256_si128(vmax);
+        // SAFETY: `i + 8 <= count` and `src.len() == count * 2`, so `src_ptr.add(i * 2)` has
+        // at least 16 readable bytes.
+        let v = unsafe { _mm_loadu_si128(src_ptr.add(i * 2) as *const __m128i) };
+        let clamped = _mm_min_epu16(v, vmax128);
+        // SAFETY: `i + 8 <= count` and `dst.len() == count`, so `dst_ptr.add(i)` has at least
+        // 8 writable `u16` elements.
+        unsafe {
+            _mm_storeu_si128(dst_ptr.add(i) as *mut __m128i, clamped);
+        }
+        i += 8;
+    }
+    for j in i..count {
+        dst[j] = u16::from_le_bytes([src[j * 2], src[j * 2 + 1]]).min(max_sample);
+    }
+}
+
+fn clamp_le_u16_into(src: &[u8], dst: &mut [u16], max_sample: u16) {
+    assert_eq!(src.len(), dst.len() * 2);
+    #[cfg(all(target_arch = "x86_64", target_endian = "little"))]
+    if dst.len() >= 16 && is_x86_feature_detected!("avx2") {
+        // SAFETY: `avx2` support verified at runtime and `src.len() == dst.len() * 2` asserted.
+        unsafe {
+            clamp_le_u16_avx2(src, dst, max_sample);
+        }
+        return;
+    }
+    for (j, slot) in dst.iter_mut().enumerate() {
+        *slot = u16::from_le_bytes([src[j * 2], src[j * 2 + 1]]).min(max_sample);
+    }
+}
+
+fn read_and_clamp_u16(
+    reader: &mut BufReader<File>,
+    dst: &mut [u16],
+    max_sample: u16,
+) -> AvifResult<()> {
+    let mut offset = 0usize;
+    let mut pending_lo: Option<u8> = None;
+    while offset < dst.len() {
+        let avail = match reader.fill_buf() {
+            Ok([]) => return AvifError::unknown_error("unexpected end of file"),
+            Ok(buf) => buf,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(AvifError::map_unknown_error(err)),
+        };
+        if let Some(lo) = pending_lo.take() {
+            let hi = avail[0];
+            reader.consume(1);
+            dst[offset] = u16::from_le_bytes([lo, hi]).min(max_sample);
+            offset += 1;
+        } else if avail.len() >= 2 {
+            let pairs = (avail.len() / 2).min(dst.len() - offset);
+            let bytes = pairs * 2;
+            clamp_le_u16_into(
+                &avail[..bytes],
+                &mut dst[offset..offset + pairs],
+                max_sample,
+            );
+            reader.consume(bytes);
+            offset += pairs;
+        } else {
+            pending_lo = Some(avail[0]);
+            reader.consume(1);
+        }
+    }
+    Ok(())
+}
+
+fn read_bounded_line(
+    reader: &mut BufReader<File>,
+    buf: &mut Vec<u8>,
+    max_bytes: usize,
+) -> AvifResult<usize> {
+    buf.clear();
+    let mut total = 0usize;
+    loop {
+        let avail = match reader.fill_buf() {
+            Ok(b) => b,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(AvifError::map_unknown_error(err)),
+        };
+        if avail.is_empty() {
+            return Ok(total);
+        }
+        let rem_limit = max_bytes.saturating_add(1).saturating_sub(total);
+        let search = &avail[..avail.len().min(rem_limit)];
+        if let Some(nl_pos) = search.iter().position(|&b| b == b'\n') {
+            let take = nl_pos + 1;
+            buf.try_extend_from_slice(&search[..take])?;
+            reader.consume(take);
+            total += take;
+            return Ok(total);
+        }
+        let take = search.len();
+        if total + take > max_bytes {
+            return AvifError::unknown_error("y4m header line exceeds maximum length");
+        }
+        buf.try_extend_from_slice(search)?;
+        reader.consume(take);
+        total += take;
+    }
 }
 
 impl Y4MReader {
@@ -148,22 +302,28 @@ impl Y4MReader {
     }
 
     pub fn create(filename: &str) -> AvifResult<Y4MReader> {
-        let mut reader =
-            BufReader::new(File::open(filename).map_err(AvifError::map_unknown_error)?);
-        let mut y4m_line = String::new();
-        let bytes_read = reader
-            .read_line(&mut y4m_line)
-            .map_err(AvifError::map_unknown_error)?;
-        if bytes_read == 0 {
-            return AvifError::unknown_error("no bytes in y4m line");
+        let mut reader = BufReader::with_capacity(
+            Y4M_BUF_READER_CAP,
+            File::open(filename).map_err(AvifError::map_unknown_error)?,
+        );
+        let mut header_buf = create_vec_exact(128)?;
+        let bytes_read = read_bounded_line(&mut reader, &mut header_buf, Y4M_MAX_LINE_BYTES)?;
+        if bytes_read == 0 || !header_buf.ends_with(b"\n") {
+            return AvifError::unknown_error("no terminated header line in y4m file");
         }
-        y4m_line.pop();
-        let parts: Vec<&str> = y4m_line.split(" ").try_collect()?;
+        let header_str = std::str::from_utf8(&header_buf).map_err(AvifError::map_unknown_error)?;
+        let y4m_line = header_str.trim_end_matches(['\r', '\n']);
+        let parts: Vec<&str> = y4m_line.split(' ').try_collect()?;
         if parts[0] != "YUV4MPEG2" {
             return AvifError::unknown_error("Not a Y4M file");
         }
         let mut y4m = Y4MReader {
+            depth: 8,
+            format: PixelFormat::Yuv420,
             range: YuvRange::Limited,
+            timescale: 30,
+            frame_duration: 1,
+            frame_header_buf: create_vec_exact(64)?,
             ..Default::default()
         };
         for part in parts[1..].iter() {
@@ -172,10 +332,20 @@ impl Y4MReader {
                 "H" => y4m.height = part[1..].parse::<u32>().unwrap_or(0),
                 "C" => y4m.parse_colorspace(&part[1..])?,
                 "F" => {
-                    // TODO: Handle frame rate.
+                    if let Some((num_s, den_s)) = part[1..].split_once(':') {
+                        if let (Ok(num), Ok(den)) = (num_s.parse::<u32>(), den_s.parse::<u64>()) {
+                            if num > 0 && den > 0 {
+                                y4m.timescale = num as u64;
+                                y4m.frame_duration = den;
+                            }
+                        }
+                    }
                 }
                 "X" if part[1..] == *"COLORRANGE=FULL" => {
                     y4m.range = YuvRange::Full;
+                }
+                "X" if part[1..] == *"COLORRANGE=LIMITED" => {
+                    y4m.range = YuvRange::Limited;
                 }
                 _ => {}
             }
@@ -189,64 +359,94 @@ impl Y4MReader {
 }
 
 impl Reader for Y4MReader {
-    fn read_frame(&mut self, _config: &Config) -> AvifResult<(Image, u64, Option<GainMap>)> {
-        const FRAME_MARKER: &str = "FRAME";
-        let mut frame_marker = String::new();
-        let bytes_read = self
+    fn read_frame(&mut self, config: &Config) -> AvifResult<(Image, u64, Option<GainMap>)> {
+        if config.image_size_limit > 0
+            && (self.width as u64) * (self.height as u64) > config.image_size_limit as u64
+        {
+            return AvifError::unknown_error("Too big Y4M dimensions");
+        }
+        let default_range = self.range;
+        let reader = self
             .reader
             .as_mut()
-            .unwrap()
-            .read_line(&mut frame_marker)
-            .map_err(AvifError::map_unknown_error)?;
-        if bytes_read == 0 {
-            return AvifError::unknown_error("could not read frame marker");
-        }
-        frame_marker.pop();
-        if frame_marker != FRAME_MARKER {
-            return AvifError::unknown_error("could not find frame marker");
-        }
+            .ok_or(AvifError::UnknownError("reader not initialized".into()))?;
+        let frame_range = {
+            let buf = reader.fill_buf().map_err(AvifError::map_unknown_error)?;
+            if buf.is_empty() {
+                return AvifError::unknown_error("could not read frame marker");
+            }
+            if buf.starts_with(b"FRAME\n") {
+                reader.consume(6);
+                default_range
+            } else if buf.starts_with(b"FRAME\r\n") {
+                reader.consume(7);
+                default_range
+            } else {
+                let bytes_read =
+                    read_bounded_line(reader, &mut self.frame_header_buf, Y4M_MAX_LINE_BYTES)?;
+                if bytes_read == 0 {
+                    return AvifError::unknown_error("could not read frame marker");
+                }
+                parse_frame_header(&self.frame_header_buf, default_range)?
+            }
+        };
         let mut image = image::Image {
             width: self.width,
             height: self.height,
             depth: self.depth,
             yuv_format: self.format,
-            yuv_range: self.range,
+            yuv_range: frame_range,
+            alpha_present: self.has_alpha,
             chroma_sample_position: self.chroma_sample_position,
+            matrix_coefficients: config
+                .matrix_coefficients
+                .unwrap_or(MatrixCoefficients::Bt601),
             ..Default::default()
         };
         image.allocate_planes(Category::Color)?;
         if self.has_alpha {
             image.allocate_planes(Category::Alpha)?;
         }
-        let reader = self
-            .reader
-            .as_mut()
-            .ok_or(AvifError::UnknownError("reader not initialized".into()))?;
+        let max_sample = image.max_channel();
         for plane in ALL_PLANES {
             if !image.has_plane(plane) {
                 continue;
             }
-            let plane_data = image.plane_data(plane).ok_or(AvifError::NoContent)?;
-            for y in 0..plane_data.height {
-                if self.depth == 8 {
-                    let row = image.row_mut(plane, y)?;
+            let actual_width = image.width(plane);
+            let actual_height = image.height(plane);
+            let padded_width = round2_usize(actual_width);
+            let plane_index = plane.as_usize();
+            if self.depth == 8 {
+                if padded_width == actual_width {
+                    let active_len = checked_mul!(actual_width, actual_height)?;
+                    let Some(Pixels::Buffer(buf)) = image.planes[plane_index].as_mut() else {
+                        return AvifError::no_content();
+                    };
                     reader
-                        .read_exact(row)
+                        .read_exact(&mut buf[..active_len])
                         .map_err(AvifError::map_unknown_error)?;
                 } else {
-                    let row = image.row16_mut(plane, y)?;
-                    let mut pixel_bytes: [u8; 2] = [0, 0];
-                    for pixel in row {
+                    for y in 0..u32_from_usize(actual_height)? {
+                        let row = image.row_mut(plane, y)?;
                         reader
-                            .read_exact(&mut pixel_bytes)
+                            .read_exact(&mut row[..actual_width])
                             .map_err(AvifError::map_unknown_error)?;
-                        // y4m is always little endian.
-                        *pixel = u16::from_le_bytes(pixel_bytes);
                     }
+                }
+            } else if padded_width == actual_width {
+                let active_samples = checked_mul!(actual_width, actual_height)?;
+                let Some(Pixels::Buffer16(buf16)) = image.planes[plane_index].as_mut() else {
+                    return AvifError::no_content();
+                };
+                read_and_clamp_u16(reader, &mut buf16[..active_samples], max_sample)?;
+            } else {
+                for y in 0..u32_from_usize(actual_height)? {
+                    let row = image.row16_mut(plane, y)?;
+                    read_and_clamp_u16(reader, &mut row[..actual_width], max_sample)?;
                 }
             }
         }
-        Ok((image, 0, None))
+        Ok((image, self.frame_duration, None))
     }
 
     fn has_more_frames(&mut self) -> bool {
@@ -258,5 +458,9 @@ impl Reader for Y4MReader {
             Err(_) => return false,
         };
         !buffer.is_empty()
+    }
+
+    fn timescale(&self) -> u64 {
+        self.timescale
     }
 }

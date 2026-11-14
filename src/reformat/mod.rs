@@ -38,9 +38,10 @@ pub mod libyuv {
         Ok(None) // Not implemented.
     }
 
-    pub(crate) fn rgb_to_yuv(
+    pub(crate) fn rgb_to_yuv_with_threads(
         _rgb: &rgb::Image,
         _image: &mut image::Image,
+        _threads: u32,
     ) -> AvifResult<Option<()>> {
         Ok(None) // Not implemented.
     }
