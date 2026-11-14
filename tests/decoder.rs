@@ -1183,6 +1183,170 @@ fn incremental_decode(codec: CodecChoice) {
     // TODO: check if incremental and non incremental produces same output.
 }
 
+// Encodes a grid of one column and two rows of 64x64 cells with alpha. The CrabbyAvif encoder
+// stores the alpha cells before the color cells.
+#[cfg(feature = "encoder")]
+fn encode_grid_with_alpha() -> AvifResult<Vec<u8>> {
+    let image = generate_gradient_image(64, 128, 8, PixelFormat::Yuv444, YuvRange::Full, true)?;
+    let mut cells = Vec::new();
+    for cell_row in 0..2 {
+        let mut cell = Image {
+            width: 64,
+            height: 64,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv444,
+            yuv_range: YuvRange::Full,
+            alpha_present: true,
+            ..Default::default()
+        };
+        cell.allocate_planes(Category::Color)?;
+        cell.allocate_planes(Category::Alpha)?;
+        for plane in ALL_PLANES {
+            for y in 0..64 {
+                cell.row_mut(plane, y)?
+                    .copy_from_slice(image.row(plane, cell_row * 64 + y)?);
+            }
+        }
+        cells.push(cell);
+    }
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_grid(1, 2, &[&cells[0], &cells[1]])?;
+    encoder.finish()
+}
+
+// The decoded rows must be available as soon as possible when decoding a grid with alpha
+// incrementally, even if the alpha cells are stored before the color cells.
+#[cfg(feature = "encoder")]
+#[test_matrix([DAV1D, NATIVE])]
+fn incremental_decode_grid_with_alpha(codec: CodecChoice) -> AvifResult<()> {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return Ok(());
+    }
+    if !HAS_ENCODER || !HAS_NON_ANDROID_DECODER {
+        return Ok(());
+    }
+    let data = encode_grid_with_alpha()?;
+    let mut reference_decoder = decoder_with_codec(codec);
+    reference_decoder.set_io_vec(data.clone());
+    reference_decoder.parse()?;
+    reference_decoder.next_image()?;
+
+    let len = data.len();
+    let available_size_rc = Rc::new(RefCell::new(0usize));
+    let mut decoder = decoder_with_codec(codec);
+    decoder.settings.allow_incremental = true;
+    decoder.set_io(Box::new(CustomIO {
+        available_size_rc: available_size_rc.clone(),
+        data,
+    }));
+    let mut max_decoded_row_count = 0;
+    loop {
+        match decoder.parse() {
+            Ok(()) => break,
+            Err(AvifError::WaitingOnIo) => {}
+            Err(err) => return Err(err),
+        }
+        let mut available_size = available_size_rc.borrow_mut();
+        assert!(*available_size < len);
+        *available_size += 1;
+    }
+    loop {
+        match decoder.next_image() {
+            Ok(()) => break,
+            Err(AvifError::WaitingOnIo) => {}
+            Err(err) => return Err(err),
+        }
+        max_decoded_row_count = std::cmp::max(max_decoded_row_count, decoder.decoded_row_count());
+        let mut available_size = available_size_rc.borrow_mut();
+        assert!(*available_size < len);
+        *available_size += 1;
+    }
+    // The first row of cells was available before the whole file.
+    assert_eq!(max_decoded_row_count, 64);
+    assert_eq!(decoder.decoded_row_count(), 128);
+    assert!(are_images_equal(
+        decoder.image().unwrap(),
+        reference_decoder.image().unwrap()
+    )?);
+    Ok(())
+}
+
+// Same as CustomIO but all the bytes are available except the withheld ones.
+struct WithheldBytesIO {
+    data: Vec<u8>,
+    withheld_bytes_rc: Rc<RefCell<std::ops::Range<usize>>>,
+}
+
+impl decoder::IO for WithheldBytesIO {
+    fn read(&mut self, offset: u64, max_read_size: usize) -> AvifResult<&[u8]> {
+        let start = usize::try_from(offset).unwrap();
+        if start > self.data.len() {
+            return Err(AvifError::IoError);
+        }
+        let end = std::cmp::min(start + max_read_size, self.data.len());
+        let withheld_bytes = self.withheld_bytes_rc.borrow();
+        if start < withheld_bytes.end && withheld_bytes.start < end {
+            return Err(AvifError::WaitingOnIo);
+        }
+        Ok(&self.data[start..end])
+    }
+
+    fn size_hint(&self) -> u64 {
+        self.data.len() as u64
+    }
+
+    fn persistent(&self) -> bool {
+        false
+    }
+}
+
+// Some encoders store the color cells before the alpha cells. Decoding such a grid must succeed
+// once the alpha cells are available, even if all the color cells were decoded before.
+#[test_matrix([DAV1D, NATIVE], [false, true])]
+fn decode_grid_with_alpha_after_color(
+    codec: CodecChoice,
+    allow_incremental: bool,
+) -> AvifResult<()> {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return Ok(());
+    }
+    if !HAS_NON_ANDROID_DECODER {
+        return Ok(());
+    }
+    let filename = "color_grid_alpha_grid_gainmap_nogrid.avif";
+    let mut reference_decoder = get_decoder_with_codec(filename, codec);
+    reference_decoder.parse()?;
+    reference_decoder.next_image()?;
+
+    let withheld_bytes_rc = Rc::new(RefCell::new(0..0));
+    let mut decoder = decoder_with_codec(codec);
+    decoder.settings.allow_incremental = allow_incremental;
+    decoder.set_io(Box::new(WithheldBytesIO {
+        data: std::fs::read(get_test_file(filename)).expect("Unable to read file"),
+        withheld_bytes_rc: withheld_bytes_rc.clone(),
+    }));
+    decoder.parse()?;
+    // All the alpha cells of this file share the same extent: 224 bytes at offset 1896. They are
+    // stored before the color cells. Emulate a file in which they are stored after the color cells
+    // and are not available yet.
+    *withheld_bytes_rc.borrow_mut() = 1896..1896 + 224;
+    assert_eq!(decoder.next_image(), Err(AvifError::WaitingOnIo));
+    // All the color cells were decoded. Nothing changed since.
+    assert_eq!(decoder.next_image(), Err(AvifError::WaitingOnIo));
+    // The alpha cells are now available.
+    *withheld_bytes_rc.borrow_mut() = 0..0;
+    assert_eq!(decoder.next_image(), Ok(()));
+    assert!(are_images_equal(
+        decoder.image().unwrap(),
+        reference_decoder.image().unwrap()
+    )?);
+    Ok(())
+}
+
 // The native AV1 decoder does not support progressive (layered) images, so this test only runs with
 // dav1d.
 #[test]

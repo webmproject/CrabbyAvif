@@ -3027,6 +3027,11 @@ impl Decoder {
         } else {
             let previous_decoded_tile_count =
                 self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
+            if previous_decoded_tile_count >= tile_count {
+                // All the cells were decoded during a previous call that returned WaitingOnIo
+                // because of another decoding item.
+                return Ok(());
+            }
             for tile_index in previous_decoded_tile_count..tile_count {
                 let tile = &self.tiles[decoding_item.usize()][tile_index];
                 let sample = &tile.input.samples[image_index];
@@ -3169,6 +3174,7 @@ impl Decoder {
         grid_subsets: &[Option<Vec<usize>>; DecodingItem::COUNT],
     ) -> AvifResult<()> {
         let mut decoded_something = false;
+        let mut waiting_on_io = false;
         // Dimensions of the color image before cropping. The alpha image is decoded to these
         // dimensions before being cropped, if it cannot be cropped while being decoded.
         // parsed_image describes the active thumbnail, if any.
@@ -3292,14 +3298,17 @@ impl Decoder {
                     decoded_something = true;
                 }
             } else if self.can_use_decode_grid(decoding_item) {
-                self.decode_grid(image_index, decoding_item, None, None)?;
-                decoded_something = true;
+                match self.decode_grid(image_index, decoding_item, None, None) {
+                    Ok(()) => decoded_something = true,
+                    Err(AvifError::WaitingOnIo) => waiting_on_io = true,
+                    Err(err) => return Err(err),
+                }
             } else {
                 let previous_decoded_tile_count =
                     self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
                 for tile_index in previous_decoded_tile_count..tile_count {
                     let is_last = tile_index + 1 == tile_count;
-                    self.decode_tile(
+                    match self.decode_tile(
                         image_index,
                         decoding_item,
                         tile_index,
@@ -3307,10 +3316,21 @@ impl Decoder {
                         is_last,
                         /* crop_rect= */ None,
                         None,
-                    )?;
-                    decoded_something = true;
+                    ) {
+                        Ok(()) => decoded_something = true,
+                        Err(AvifError::WaitingOnIo) => {
+                            waiting_on_io = true;
+                            break;
+                        }
+                        Err(err) => return Err(err),
+                    }
                 }
             }
+        }
+        if waiting_on_io {
+            // Decode as many tiles as possible of each item before returning, as the decoded rows
+            // need all the items to be decoded to be accessible to the user.
+            return AvifError::waiting_on_io();
         }
         if decoded_something {
             Ok(())
