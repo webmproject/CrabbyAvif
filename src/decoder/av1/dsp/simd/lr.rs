@@ -2912,7 +2912,7 @@ mod narrow {
     ///
     /// Storing `x = 256 - a2` instead of `a2` lets [`box_out`] compute `f - u`
     /// (`u = px << 4`) directly as `Round2(b - x * px, shift)`.
-    #[inline(always)]
+    #[inline(never)]
     fn ab_from_vsum<const BD: u32, const R: usize>(
         sums: &[i16],
         sqs: &[i32],
@@ -3249,10 +3249,9 @@ mod narrow {
     /// where `tm = t + m`). `w0` / `w2` are the projection weights of the
     /// `r = 2` / `r = 1` passes (the weight of a disabled pass is 0 and is
     /// not read). Const parameters keep each loop body in one basic block so
-    /// widening multiplies select cleanly, and outlining on aarch64 gives the
-    /// projection loop dedicated NEON registers without spills.
-    #[cfg_attr(target_arch = "aarch64", inline(never))]
-    #[cfg_attr(not(target_arch = "aarch64"), inline(always))]
+    /// widening multiplies select cleanly, and outlining gives the
+    /// projection loop dedicated registers without spills.
+    #[inline(never)]
     fn sgr_finish_row<T: Pixel, const BD: u32, const P0: u8, const P1: bool>(
         px_row: &[T],
         out: &mut [T],

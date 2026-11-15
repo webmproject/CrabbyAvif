@@ -32,36 +32,35 @@ pub const fn coeff_cdf_q_ctx(base_q_idx: u8) -> usize {
     }
 }
 
-/// 16-byte-aligned 4-symbol coefficient CDF row (`coeff_base` / `coeff_br`)
-/// stored in pre-inverted packed register form: `f` holds `(32768 - c0) |
-/// ((32768 - c1) << 16) | ((32768 - c2) << 32)` (with bits 48..63 zero) and
-/// `cb` holds `80 + min(count, 32)` so `cb >> 4` gives the adaptation rate
-/// `5..=7` directly and each row loads/stores via a single 16-byte `ldp`/`stp`.
+/// 8-byte 4-symbol coefficient CDF row (`coeff_base` / `coeff_br`) stored in
+/// pre-inverted packed register form: bits `0..15`, `16..31`, `32..47` hold
+/// `(32768 - c0)`, `(32768 - c1)`, `(32768 - c2)`; bits `47..57` are `0` (guard
+/// bits above the 15-bit probabilities); and bits `58..63` hold `cnt = min(count, 32)`
+/// so `cnt == 32` sets the sign bit (bit 63) and `(f >> 62)` gives `0` or `1`
+/// during warm-up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(C, align(16))]
-pub struct CdfRow5 {
-    pub f: u64,
-    pub cb: u64,
-}
+#[repr(transparent)]
+pub struct CdfRow5(pub u64);
 
 impl CdfRow5 {
     #[inline(always)]
     pub const fn from_spec(s: [u16; 5]) -> Self {
+        let cnt = if s[4] < 32 { s[4] as u64 } else { 32 };
         let f = ((32768u16.wrapping_sub(s[0])) as u64)
             | (((32768u16.wrapping_sub(s[1])) as u64) << 16)
-            | (((32768u16.wrapping_sub(s[2])) as u64) << 32);
-        let cnt = if s[4] < 32 { s[4] as u64 } else { 32 };
-        Self { f, cb: 80 + cnt }
+            | (((32768u16.wrapping_sub(s[2])) as u64) << 32)
+            | (cnt << 58);
+        Self(f)
     }
 
     #[inline(always)]
     pub const fn to_spec(self) -> [u16; 5] {
         [
-            32768u16.wrapping_sub(self.f as u16),
-            32768u16.wrapping_sub((self.f >> 16) as u16),
-            32768u16.wrapping_sub((self.f >> 32) as u16),
+            32768u16.wrapping_sub(self.0 as u16),
+            32768u16.wrapping_sub((self.0 >> 16) as u16),
+            32768u16.wrapping_sub((self.0 >> 32) as u16),
             32768,
-            (self.cb.wrapping_sub(80)) as u16,
+            (self.0 >> 58) as u16,
         ]
     }
 }
@@ -73,7 +72,7 @@ impl PartialEq<[u16; 5]> for CdfRow5 {
 }
 
 const fn wrap_coeff_rows<const N: usize>(src: &[[[[u16; 5]; N]; 2]; 5]) -> [[[CdfRow5; N]; 2]; 5] {
-    let mut out = [[[CdfRow5 { f: 0, cb: 80 }; N]; 2]; 5];
+    let mut out = [[[CdfRow5(0); N]; 2]; 5];
     let mut a = 0;
     while a < 5 {
         let mut b = 0;
@@ -90,6 +89,71 @@ const fn wrap_coeff_rows<const N: usize>(src: &[[[[u16; 5]; N]; 2]; 5]) -> [[[Cd
     out
 }
 
+/// 4-byte binary CDF row stored in pre-inverted packed register form:
+/// bits `0..15` hold `32768 - s[0]`, bits `16..25` are `0`, and bits `26..31`
+/// hold `cnt = min(s[2], 32)` so `cnt == 32` sets bit 31 (sign bit of `i32`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct CdfRow3(pub u32);
+
+impl CdfRow3 {
+    #[inline(always)]
+    pub const fn from_spec(s: [u16; 3]) -> Self {
+        let cnt = if s[2] < 32 { s[2] as u32 } else { 32 };
+        let f = (32768u16.wrapping_sub(s[0]) as u32) | (cnt << 26);
+        Self(f)
+    }
+
+    #[inline(always)]
+    pub const fn to_spec(self) -> [u16; 3] {
+        [
+            32768u16.wrapping_sub(self.0 as u16),
+            32768,
+            (self.0 >> 26) as u16,
+        ]
+    }
+}
+
+impl PartialEq<[u16; 3]> for CdfRow3 {
+    fn eq(&self, other: &[u16; 3]) -> bool {
+        self.to_spec() == *other
+    }
+}
+
+const fn wrap_cdf3_1d<const N: usize>(src: &[[u16; 3]; N]) -> [CdfRow3; N] {
+    let mut out = [CdfRow3(0); N];
+    let mut i = 0;
+    while i < N {
+        out[i] = CdfRow3::from_spec(src[i]);
+        i += 1;
+    }
+    out
+}
+
+const fn wrap_cdf3_2d<const A: usize, const B: usize>(
+    src: &[[[u16; 3]; B]; A],
+) -> [[CdfRow3; B]; A] {
+    let mut out = [[CdfRow3(0); B]; A];
+    let mut a = 0;
+    while a < A {
+        out[a] = wrap_cdf3_1d(&src[a]);
+        a += 1;
+    }
+    out
+}
+
+const fn wrap_cdf3_3d<const A: usize, const B: usize, const C: usize>(
+    src: &[[[[u16; 3]; C]; B]; A],
+) -> [[[CdfRow3; C]; B]; A] {
+    let mut out = [[[CdfRow3(0); C]; B]; A];
+    let mut a = 0;
+    while a < A {
+        out[a] = wrap_cdf3_2d(&src[a]);
+        a += 1;
+    }
+    out
+}
+
 /// Visits every CDF row of a (possibly nested) CDF array.
 trait CdfRows {
     fn for_each_row(&self, f: &mut dyn FnMut(&[u16]));
@@ -97,6 +161,18 @@ trait CdfRows {
 }
 
 impl CdfRows for CdfRow5 {
+    fn for_each_row(&self, f: &mut dyn FnMut(&[u16])) {
+        let r = self.to_spec();
+        f(&r);
+    }
+    fn for_each_row_mut(&mut self, f: &mut dyn FnMut(&mut [u16])) {
+        let mut r = self.to_spec();
+        f(&mut r);
+        *self = Self::from_spec(r);
+    }
+}
+
+impl CdfRows for CdfRow3 {
     fn for_each_row(&self, f: &mut dyn FnMut(&[u16])) {
         let r = self.to_spec();
         f(&r);
@@ -5238,9 +5314,9 @@ pub struct CdfContext {
     /// Initialised from [`DEFAULT_INTRA_TX_TYPE_SET2_CDF`].
     pub intra_tx_type_set2: [[[u16; 6]; 13]; 3],
     /// Initialised from [`DEFAULT_TXB_SKIP_CDF`]`[q_ctx]`.
-    pub txb_skip: [[[u16; 3]; 13]; 5],
+    pub txb_skip: [[CdfRow3; 13]; 5],
     /// Initialised from [`DEFAULT_DC_SIGN_CDF`]`[q_ctx]`.
-    pub dc_sign: [[[u16; 3]; 3]; 2],
+    pub dc_sign: [[CdfRow3; 3]; 2],
     /// Initialised from [`DEFAULT_EOB_PT_16_CDF`]`[q_ctx]`.
     pub eob_pt_16: [[[u16; 6]; 2]; 2],
     /// Initialised from [`DEFAULT_EOB_PT_32_CDF`]`[q_ctx]`.
@@ -5254,7 +5330,7 @@ pub struct CdfContext {
     /// Initialised from [`DEFAULT_EOB_PT_1024_CDF`]`[q_ctx]`.
     pub eob_pt_1024: [[u16; 12]; 2],
     /// Initialised from [`DEFAULT_EOB_EXTRA_CDF`]`[q_ctx]`.
-    pub eob_extra: [[[[u16; 3]; 9]; 2]; 5],
+    pub eob_extra: [[[CdfRow3; 9]; 2]; 5],
     /// Initialised from [`DEFAULT_PARTITION_W8_CDF`].
     pub partition_w8: [[u16; 5]; 4],
     /// Initialised from [`DEFAULT_PARTITION_W16_CDF`].
@@ -5266,15 +5342,15 @@ pub struct CdfContext {
     /// Initialised from [`DEFAULT_PARTITION_W128_CDF`].
     pub partition_w128: [[u16; 9]; 4],
     /// Initialised from [`DEFAULT_SKIP_CDF`].
-    pub skip: [[u16; 3]; 3],
+    pub skip: [CdfRow3; 3],
     /// Initialised from [`DEFAULT_TX_8X8_CDF`].
-    pub tx_8x8: [[u16; 3]; 3],
+    pub tx_8x8: [CdfRow3; 3],
     /// Initialised from [`DEFAULT_SEGMENT_ID_CDF`].
     pub segment_id: [[u16; 9]; 3],
     /// Initialised from [`DEFAULT_FILTER_INTRA_MODE_CDF`].
     pub filter_intra_mode: [u16; 6],
     /// Initialised from [`DEFAULT_FILTER_INTRA_CDF`].
-    pub filter_intra: [[u16; 3]; 22],
+    pub filter_intra: [CdfRow3; 22],
     /// Initialised from [`DEFAULT_INTRABC_CDF`].
     pub intrabc: [u16; 3],
     /// Initialised from [`DEFAULT_TXFM_SPLIT_CDF`].
@@ -5514,14 +5590,14 @@ impl CdfContext {
             partition_w64: DEFAULT_PARTITION_W64_CDF,
             partition_w128: DEFAULT_PARTITION_W128_CDF,
             segment_id: DEFAULT_SEGMENT_ID_CDF,
-            tx_8x8: DEFAULT_TX_8X8_CDF,
+            tx_8x8: wrap_cdf3_1d(&DEFAULT_TX_8X8_CDF),
             tx_16x16: DEFAULT_TX_16X16_CDF,
             tx_32x32: DEFAULT_TX_32X32_CDF,
             tx_64x64: DEFAULT_TX_64X64_CDF,
             txfm_split: DEFAULT_TXFM_SPLIT_CDF,
             filter_intra_mode: DEFAULT_FILTER_INTRA_MODE_CDF,
-            filter_intra: DEFAULT_FILTER_INTRA_CDF,
-            skip: DEFAULT_SKIP_CDF,
+            filter_intra: wrap_cdf3_1d(&DEFAULT_FILTER_INTRA_CDF),
+            skip: wrap_cdf3_1d(&DEFAULT_SKIP_CDF),
             mv_joint: DEFAULT_MV_JOINT_CDF,
             mv_class: DEFAULT_MV_CLASS_CDF,
             mv_class0_bit: [DEFAULT_MV_CLASS0_BIT_CDF; 2],
@@ -5562,7 +5638,7 @@ impl CdfContext {
             use_wiener: DEFAULT_USE_WIENER_CDF,
             use_sgrproj: DEFAULT_USE_SGRPROJ_CDF,
             restoration_type: DEFAULT_RESTORATION_TYPE_CDF,
-            txb_skip: DEFAULT_TXB_SKIP_CDF[q],
+            txb_skip: wrap_cdf3_2d(&DEFAULT_TXB_SKIP_CDF[q]),
             eob_pt_16: DEFAULT_EOB_PT_16_CDF[q],
             eob_pt_32: DEFAULT_EOB_PT_32_CDF[q],
             eob_pt_64: DEFAULT_EOB_PT_64_CDF[q],
@@ -5570,8 +5646,8 @@ impl CdfContext {
             eob_pt_256: DEFAULT_EOB_PT_256_CDF[q],
             eob_pt_512: DEFAULT_EOB_PT_512_CDF[q],
             eob_pt_1024: DEFAULT_EOB_PT_1024_CDF[q],
-            eob_extra: DEFAULT_EOB_EXTRA_CDF[q],
-            dc_sign: DEFAULT_DC_SIGN_CDF[q],
+            eob_extra: wrap_cdf3_3d(&DEFAULT_EOB_EXTRA_CDF[q]),
+            dc_sign: wrap_cdf3_2d(&DEFAULT_DC_SIGN_CDF[q]),
             coeff_base_eob: DEFAULT_COEFF_BASE_EOB_CDF[q],
             coeff_base: wrap_coeff_rows(&DEFAULT_COEFF_BASE_CDF[q]),
             coeff_br: wrap_coeff_rows(&DEFAULT_COEFF_BR_CDF[q]),

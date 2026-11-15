@@ -159,7 +159,6 @@ fn golomb_coef_eof(buf: &[u8], pos: usize, mut dif: u64, rng: u32, mut cnt: i32)
     (dif, out)
 }
 
-#[cold]
 #[inline(never)]
 fn golomb_coef_slow<const DUMMY: usize>(
     buf: &[u8],
@@ -169,10 +168,11 @@ fn golomb_coef_slow<const DUMMY: usize>(
     mut cnt: i32,
 ) -> (u64, u64) {
     let mut cur_pos = pos;
-    // Ensure `cnt >= 16` once upfront so up to 8 prefix bits + 7 suffix bits
-    // (`<= 15` equiprobable bits, max `dif` shift `<= 16`) need no per-bit
-    // refill checks, with EOF tail-called so the common path stays frameless.
-    if cnt < 16 {
+    // Ensure `cnt >= 24` once upfront so up to 8 prefix bits + terminating bit
+    // (`<= 9` bits shifted out) still leaves `cnt >= 15` (so `dif >> 33` reads
+    // only valid bits even near EOF), with EOF tail-called so the common path
+    // stays frameless.
+    if cnt < 24 {
         cold_refill();
         if let Some(bytes) = buf.get(pos..).and_then(|s| s.first_chunk::<8>()) {
             let nb = (48i32.wrapping_sub(cnt) >> 3) as usize;
@@ -193,11 +193,14 @@ fn golomb_coef_slow<const DUMMY: usize>(
             dif <<= 1;
             rng = v << 1;
             cnt = cnt.wrapping_sub(1);
+            let rem = length - 1;
             let mut x = 1u32;
-            let mut rem = length - 1;
-            while rem != 0 {
-                x = (x << 1) | equi_nobuf(&mut dif, &mut rng, &mut cnt) as u32;
-                rem -= 1;
+            if rem != 0 {
+                let recip = EQUI_RECIP[((rng >> 8) & 127) as usize] as u64;
+                let t = ((((dif >> 33).wrapping_mul(recip)) >> 46) as u32) >> (16 - rem);
+                x = (1u32 << rem) | ((!t) & ((1u32 << rem) - 1));
+                dif = (dif << rem).wrapping_sub((t as u64).wrapping_mul((rng as u64) << 48));
+                cnt = cnt.wrapping_sub(rem as i32);
             }
             debug_assert!(cnt >= 0);
             let out = (rng as u64)
@@ -288,11 +291,11 @@ fn sign_golomb_slow<const DUMMY: usize>(
 ) -> (u64, u64) {
     use std::hint::select_unpredictable as sel;
     let mut cur_pos = pos;
-    // Ensure `cnt >= 18` once upfront so 1 sign bit + up to 8 prefix bits +
-    // up to 7 suffix bits (`<= 16` equiprobable bits, max `dif` shift `<= 17`)
-    // need no per-bit refill checks, with EOF tail-called so the common path
-    // compiles as a zero-frame leaf function.
-    if cnt < 18 {
+    // Ensure `cnt >= 25` once upfront so 1 sign bit + up to 8 prefix bits
+    // (`<= 10` bits shifted out) still leaves `cnt >= 15` (so `dif >> 33`
+    // reads only valid bits even near EOF), with EOF tail-called so the common
+    // path compiles as a zero-frame leaf function.
+    if cnt < 25 {
         cold_refill();
         if let Some(bytes) = buf.get(pos..).and_then(|s| s.first_chunk::<8>()) {
             let nb = (48i32.wrapping_sub(cnt) >> 3) as usize;
@@ -315,11 +318,14 @@ fn sign_golomb_slow<const DUMMY: usize>(
             dif <<= 1;
             rng = v << 1;
             cnt = cnt.wrapping_sub(1);
+            let rem = length - 1;
             let mut x = 1u32;
-            let mut rem = length - 1;
-            while rem != 0 {
-                x = (x << 1) | equi_nobuf(&mut dif, &mut rng, &mut cnt) as u32;
-                rem -= 1;
+            if rem != 0 {
+                let recip = EQUI_RECIP[((rng >> 8) & 127) as usize] as u64;
+                let t = ((((dif >> 33).wrapping_mul(recip)) >> 46) as u32) >> (16 - rem);
+                x = (1u32 << rem) | ((!t) & ((1u32 << rem) - 1));
+                dif = (dif << rem).wrapping_sub((t as u64).wrapping_mul((rng as u64) << 48));
+                cnt = cnt.wrapping_sub(rem as i32);
             }
             debug_assert!(cnt >= 0);
             let q = x.wrapping_add(14) & 0xFFFFF;
@@ -364,45 +370,66 @@ fn inc_count(count: u16) -> u16 {
 
 const MR4_BASE: u32 = 0x0fff_0fff;
 const MR5_BASE: u64 = 0x07ff_07ff_07ff_07ff;
-const MR5_SHIFT_SRC: u64 = 0xffe0_ffe0_ffe0_ffe0;
+const MR7_64: u64 = 0x0000_00ff_00ff_00ff;
+const MR5_64: u64 = 0x0000_03ff_03ff_03ff;
+const M1_ALL: u64 = 0x0000_0001_0001_0001;
 const TOP3_64: u64 = 0x0000_8000_8000_8000;
 
-use crate::decoder::av1::tables::cdf::CdfRow5;
+pub(crate) const EQUI_RECIP: [u32; 128] = {
+    let mut t = [0u32; 128];
+    let mut i = 0;
+    while i < 128 {
+        let v = (((128 + i) as u64) << 7) + 4;
+        t[i] = ((1u64 << 46).div_ceil(v)) as u32;
+        i += 1;
+    }
+    t
+};
 
-/// Register copy of a 4-symbol CDF in `CdfRow5` layout (`f`: 3 inverted
-/// cumulative probabilities in bits 0..48 with bits 48..63 zero; `cb`:
-/// biased counter `80 + min(count, 32)` so `cb >> 4` is `rate` in `5..=7`).
-#[derive(Clone, Copy)]
-pub struct Cdf5 {
-    f: u64,
-    cb: u64,
+#[inline(always)]
+fn adapt5_m(f: u64, m1: u64) -> u64 {
+    let t = f.wrapping_sub(m1);
+    if (f as i64) < 0 {
+        t.wrapping_add(m1 << 8).wrapping_sub((t >> 7) & MR7_64)
+    } else {
+        cold_refill();
+        let r_idx = (f >> 62) as u32;
+        let mr = (MR5_64 >> r_idx) & MR5_64;
+        let add = (m1 << (10 - r_idx)) | (1u64 << 58);
+        t.wrapping_add(add).wrapping_sub((t >> (5 + r_idx)) & mr)
+    }
 }
+
+use crate::decoder::av1::tables::cdf::{CdfRow3, CdfRow5};
+
+/// Register copy of a 4-symbol CDF in `CdfRow5` layout (3 inverted
+/// cumulative probabilities in bits 0..48, 10 zero guard bits in 48..58, and
+/// unbiased counter `min(count, 32)` in bits 58..64 so `cnt == 32` sets bit 63).
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+pub struct Cdf5(pub u64);
 
 impl Cdf5 {
     #[inline(always)]
     pub fn from_row(c: &CdfRow5) -> Self {
-        Self { f: c.f, cb: c.cb }
+        Self(c.0)
     }
 
     #[inline(always)]
     pub fn store_row(self, c: &mut CdfRow5) {
-        *c = CdfRow5 {
-            f: self.f,
-            cb: self.cb,
-        };
+        c.0 = self.0;
     }
 
     #[inline(always)]
     fn load_spec(c: &[u16; 5]) -> Self {
         let x = (c[0] as u64) | ((c[1] as u64) << 16) | ((c[2] as u64) << 32);
         let f = TOP3_64.wrapping_sub(x);
-        let cb = 80 + (c[4].min(32) as u64);
-        Self { f, cb }
+        Self(f | ((c[4].min(32) as u64) << 58))
     }
 
     #[inline(always)]
     fn store_spec_f(self, c: &mut [u16; 5]) {
-        let x = TOP3_64.wrapping_sub(self.f);
+        let x = TOP3_64.wrapping_sub(self.0);
         c[0] = x as u16;
         c[1] = (x >> 16) as u16;
         c[2] = (x >> 32) as u16;
@@ -456,7 +483,7 @@ macro_rules! simd_symbol_body {
             let mut shift = 40i32.wrapping_sub(cnt0);
             loop {
                 let b = if pos < $self.raw.buf.len() { $self.raw.buf[pos] ^ 0xff } else { 0xff };
-                d |= (b as u64) << shift;
+                d |= (b as u64) << (shift as u32 & 63);
                 pos += 1;
                 shift = shift.wrapping_sub(8);
                 if shift < 0 {
@@ -516,21 +543,25 @@ macro_rules! simd_symbol_body {
             };
             (!ge, u, vv, val)
         };
-        // aarch64: `lt` (`v > c`) drives `u`, `vv`, `val`, and adaptation;
-        // `lt.select(v, splat(r16))` folds the `val == 0 -> r` fallback into
-        // the NEON mask before `uminv` so no scalar `min(r)` follows `fmov`.
+        // aarch64: narrow `ge` (`c >= v`) to 8-byte mask in one `u64` + `trailing_zeros`.
         #[cfg(not(target_arch = "x86_64"))]
         let (lt, u, vv, val) = {
             let r7 = $v::splat(((r >> 8) & 0x7f) as u16);
-            let vr = $v::splat(r as u16);
             let b = (f & $v::splat(0xffc0)) + min_prob;
             let v = b + (((f >> 6) * r7) >> 1);
-            let lt = v.simd_gt($v::splat(c));
-            let lm = lt.to_simd().cast::<u16>();
-            let u = lt.select(v, vr).reduce_min() as u32;
-            let vv = (v & !lm).reduce_max() as u32;
-            let val = lt.to_simd().cast::<i16>().reduce_sum().wrapping_neg() as usize;
-            (lt, u, vv, val)
+            let ge = $v::splat(c).simd_ge(v);
+            let sent: u64 = const { if N < 10 { 1u64 << (8 * (N - 2)) } else { 0 } };
+            let m64 = u64::from_le_bytes(ge.to_simd().cast::<u8>().to_array()) | sent;
+            let val = (m64.trailing_zeros() >> 3) as usize;
+            let vs: [u16; 8] = *v.as_array();
+            let u =
+                std::hint::select_unpredictable(val == 0, r, vs[val.wrapping_sub(1) & 7] as u32);
+            let vv = if N <= 9 {
+                vs[val & 7] as u32
+            } else {
+                std::hint::select_unpredictable(val < 8, vs[val & 7] as u32, 0)
+            };
+            (!ge, u, vv, val)
         };
         let new_dif = dif0.wrapping_sub((vv as u64) << (WIN_SIZE - 16));
         let new_rng = u.wrapping_sub(vv);
@@ -626,15 +657,21 @@ macro_rules! simd_symbol_body_hot {
         #[cfg(not(target_arch = "x86_64"))]
         let (lt, u, vv, val) = {
             let r7 = $v::splat(((r >> 8) & 0x7f) as u16);
-            let vr = $v::splat(r as u16);
             let b = (f & $v::splat(0xffc0)) + min_prob;
             let v = b + (((f >> 6) * r7) >> 1);
-            let lt = v.simd_gt($v::splat(c));
-            let lm = lt.to_simd().cast::<u16>();
-            let u = lt.select(v, vr).reduce_min() as u32;
-            let vv = (v & !lm).reduce_max() as u32;
-            let val = lt.to_simd().cast::<i16>().reduce_sum().wrapping_neg() as usize;
-            (lt, u, vv, val)
+            let ge = $v::splat(c).simd_ge(v);
+            let sent: u64 = const { if N < 10 { 1u64 << (8 * (N - 2)) } else { 0 } };
+            let m64 = u64::from_le_bytes(ge.to_simd().cast::<u8>().to_array()) | sent;
+            let val = (m64.trailing_zeros() >> 3) as usize;
+            let vs: [u16; 8] = *v.as_array();
+            let u =
+                std::hint::select_unpredictable(val == 0, r, vs[val.wrapping_sub(1) & 7] as u32);
+            let vv = if N <= 9 {
+                vs[val & 7] as u32
+            } else {
+                std::hint::select_unpredictable(val < 8, vs[val & 7] as u32, 0)
+            };
+            (!ge, u, vv, val)
         };
         let new_dif = dif0.wrapping_sub((vv as u64) << (WIN_SIZE - 16));
         let new_rng = u.wrapping_sub(vv);
@@ -763,7 +800,7 @@ impl<'a> SymbolDecoder<'a> {
             let mut shift = 40i32.wrapping_sub(cnt);
             loop {
                 let b = if pos < self.raw.buf.len() { self.raw.buf[pos] ^ 0xff } else { 0xff };
-                self.dif |= (b as u64) << shift;
+                self.dif |= (b as u64) << (shift as u32 & 63);
                 pos += 1;
                 shift = shift.wrapping_sub(8);
                 if shift < 0 {
@@ -902,16 +939,21 @@ impl<'a> SymbolDecoder<'a> {
         let new_rng = u.wrapping_sub(v);
         if self.allow_update {
             let count = cdf[3];
-            let r_idx = ((count >> 4) & 3) as u32;
-            let rate = 4 + r_idx;
-            let mr = (MR4_BASE >> r_idx) & MR4_BASE;
-            let y_inc = x.wrapping_add((f >> rate) & mr);
-            let y_dec = x.wrapping_sub((x >> rate) & mr);
-            let y_mid = (y_inc & 0xffff_0000) | (y_dec & 0x0000_ffff);
-            let y = sel(c1, y_dec, sel(c0, y_mid, y_inc));
+            let nm1 = (!c0 as u32) | ((!c1 as u32) << 16);
+            let t = x.wrapping_sub(nm1);
+            let y = if count >= 32 {
+                t.wrapping_add(nm1 << 9)
+                    .wrapping_sub((t >> 6) & 0x03ff_03ff)
+            } else {
+                cold_refill();
+                let r_idx = ((count as u32) >> 4) & 1;
+                let mr = (MR4_BASE >> r_idx) & MR4_BASE;
+                cdf[3] = count.wrapping_add(1);
+                t.wrapping_add(nm1 << (11 - r_idx))
+                    .wrapping_sub((t >> (4 + r_idx)) & mr)
+            };
             cdf[0] = y as u16;
             cdf[1] = (y >> 16) as u16;
-            cdf[3] = inc_count(count);
         }
         self.norm(new_dif, new_rng);
         val as usize
@@ -924,7 +966,6 @@ impl<'a> SymbolDecoder<'a> {
         let c = (self.dif >> (WIN_SIZE - 16)) as u32;
         let r = self.rng >> 8;
         let x = (cdf[0] as u32) | ((cdf[1] as u32) << 16);
-        let count = if UPD { cdf[3] } else { 0 };
         let f = 0x8000_8000u32.wrapping_sub(x);
         let v0 = ((r.wrapping_mul((f >> 6) & 0x3ff)) >> 1).wrapping_add(8);
         let v1 = ((r.wrapping_mul(f >> 22)) >> 1).wrapping_add(4);
@@ -938,16 +979,22 @@ impl<'a> SymbolDecoder<'a> {
         let new_dif = self.dif.wrapping_sub((v as u64) << (WIN_SIZE - 16));
         let new_rng = u.wrapping_sub(v);
         if UPD {
-            let r_idx = ((count >> 4) & 3) as u32;
-            let rate = 4 + r_idx;
-            let mr = (MR4_BASE >> r_idx) & MR4_BASE;
-            let y_inc = x.wrapping_add((f >> rate) & mr);
-            let y_dec = x.wrapping_sub((x >> rate) & mr);
-            let y_mid = (y_inc & 0xffff_0000) | (y_dec & 0x0000_ffff);
-            let y = sel(c1, y_dec, sel(c0, y_mid, y_inc));
+            let count = cdf[3];
+            let nm1 = (!c0 as u32) | ((!c1 as u32) << 16);
+            let t = x.wrapping_sub(nm1);
+            let y = if count >= 32 {
+                t.wrapping_add(nm1 << 9)
+                    .wrapping_sub((t >> 6) & 0x03ff_03ff)
+            } else {
+                cold_refill();
+                let r_idx = ((count as u32) >> 4) & 1;
+                let mr = (MR4_BASE >> r_idx) & MR4_BASE;
+                cdf[3] = count.wrapping_add(1);
+                t.wrapping_add(nm1 << (11 - r_idx))
+                    .wrapping_sub((t >> (4 + r_idx)) & mr)
+            };
             cdf[0] = y as u16;
             cdf[1] = (y >> 16) as u16;
-            cdf[3] = inc_count(count);
         }
         if HOT {
             self.norm_hot(new_dif, new_rng);
@@ -1010,22 +1057,24 @@ impl<'a> SymbolDecoder<'a> {
         let upd_flag = if UPD { self.allow_update } else { false };
         if upd_flag {
             let count = cdf[5];
-            let r_idx = ((count >> 4) & 3) as u32;
-            let rate = 5 + r_idx;
-            let mr = (MR5_BASE >> r_idx) & MR5_BASE;
-            let y_inc = x.wrapping_add((f >> rate) & mr);
-            let y_dec = x.wrapping_sub((x >> rate) & mr);
-            let y_1 = (y_inc & !0xffffu64) | (y_dec & 0xffffu64);
-            let y_2 = (y_inc & !0xffff_ffffu64) | (y_dec & 0xffff_ffffu64);
-            let y_3 = (y_inc & 0xffff_0000_0000_0000u64) | (y_dec & 0x0000_ffff_ffff_ffffu64);
-            let y_lo = sel(c0, y_1, y_inc);
-            let y_hi = sel(c3, y_dec, sel(c2, y_3, y_2));
-            let y = sel(c1, y_hi, y_lo);
+            let nm1 =
+                (!c0 as u64) | ((!c1 as u64) << 16) | ((!c2 as u64) << 32) | ((!c3 as u64) << 48);
+            let t = x.wrapping_sub(nm1);
+            let y = if count >= 32 {
+                t.wrapping_add(nm1 << 8)
+                    .wrapping_sub((t >> 7) & 0x00ff_00ff_00ff_00ff)
+            } else {
+                cold_refill();
+                let r_idx = ((count as u32) >> 4) & 1;
+                let mr = (MR5_BASE >> r_idx) & MR5_BASE;
+                cdf[5] = count.wrapping_add(1);
+                t.wrapping_add(nm1 << (10 - r_idx))
+                    .wrapping_sub((t >> (5 + r_idx)) & mr)
+            };
             cdf[0] = y as u16;
             cdf[1] = (y >> 16) as u16;
             cdf[2] = (y >> 32) as u16;
             cdf[3] = (y >> 48) as u16;
-            cdf[5] = inc_count(count);
         }
         if HOT {
             self.norm_hot(new_dif, new_rng);
@@ -1042,10 +1091,10 @@ impl<'a> SymbolDecoder<'a> {
         use std::hint::select_unpredictable as sel;
         let c = (self.dif >> (WIN_SIZE - 16)) as u32;
         let r = self.rng >> 8;
-        let f = cdf.f;
+        let f = cdf.0;
         let v0 = ((r.wrapping_mul(((f as u32) >> 6) & 0x3ff)) >> 1).wrapping_add(12);
         let v1 = ((r.wrapping_mul((f as u32) >> 22)) >> 1).wrapping_add(8);
-        let v2 = ((r.wrapping_mul((f >> 38) as u32)) >> 1).wrapping_add(4);
+        let v2 = ((r.wrapping_mul(((f >> 38) as u32) & 0x3ff)) >> 1).wrapping_add(4);
         let c0 = lt(c, v0);
         let c1 = lt(c, v1);
         let c2 = lt(c, v2);
@@ -1059,20 +1108,8 @@ impl<'a> SymbolDecoder<'a> {
         let new_dif = self.dif.wrapping_sub((v as u64) << (WIN_SIZE - 16));
         let new_rng = u.wrapping_sub(v);
         let y = if upd {
-            let cb = cdf.cb;
-            let rate = ((cb >> 4) & 7) as u32;
-            let mr = (MR5_SHIFT_SRC >> rate) & MR5_BASE;
-            let f_dec = f.wrapping_sub((f >> rate) & mr);
-            let f_inc = f.wrapping_add((TOP3_64.wrapping_sub(f) >> rate) & mr);
-            let f_1 = (f_dec & !0xffffu64) | (f_inc & 0xffffu64);
-            let f_2 = (f_dec & !0xffff_ffffu64) | (f_inc & 0xffff_ffffu64);
-            let y_lo = sel(c0, f_1, f_dec);
-            let y_hi = sel(c2, f_inc, f_2);
-            let f_new = sel(c1, y_hi, y_lo);
-            Cdf5 {
-                f: f_new,
-                cb: cb.wrapping_add((cb < 112) as u64),
-            }
+            let m1 = (c0 as u64) | ((c1 as u64) << 16) | ((c2 as u64) << 32);
+            Cdf5(adapt5_m(f, m1))
         } else {
             cdf
         };
@@ -1090,18 +1127,17 @@ impl<'a> SymbolDecoder<'a> {
         self.allow_update
     }
 
-    /// `symbol_n::<5>` on a pre-inverted 16-byte `CdfRow5` (`coeff_base`),
+    /// `symbol_n::<5>` on a pre-inverted 8-byte `CdfRow5` (`coeff_base`),
     /// specialized on the adaptation flag.
     #[inline(always)]
     pub fn symbol5_c<const UPD: bool>(&mut self, cdf: &mut CdfRow5) -> u32 {
         use std::hint::select_unpredictable as sel;
         let c = (self.dif >> (WIN_SIZE - 16)) as u32;
         let r = self.rng >> 8;
-        let loaded = Cdf5::from_row(cdf);
-        let f = loaded.f;
+        let f = cdf.0;
         let v0 = ((r.wrapping_mul(((f as u32) >> 6) & 0x3ff)) >> 1).wrapping_add(12);
         let v1 = ((r.wrapping_mul((f as u32) >> 22)) >> 1).wrapping_add(8);
-        let v2 = ((r.wrapping_mul((f >> 38) as u32)) >> 1).wrapping_add(4);
+        let v2 = ((r.wrapping_mul(((f >> 38) as u32) & 0x3ff)) >> 1).wrapping_add(4);
         let c0 = lt(c, v0);
         let c1 = lt(c, v1);
         let c2 = lt(c, v2);
@@ -1115,61 +1151,102 @@ impl<'a> SymbolDecoder<'a> {
         let new_dif = self.dif.wrapping_sub((v as u64) << (WIN_SIZE - 16));
         let new_rng = u.wrapping_sub(v);
         if UPD {
-            let cb = loaded.cb;
-            let rate = ((cb >> 4) & 7) as u32;
-            let mr = (MR5_SHIFT_SRC >> rate) & MR5_BASE;
-            let f_dec = f.wrapping_sub((f >> rate) & mr);
-            let f_inc = f.wrapping_add((TOP3_64.wrapping_sub(f) >> rate) & mr);
-            let f_1 = (f_dec & !0xffffu64) | (f_inc & 0xffffu64);
-            let f_2 = (f_dec & !0xffff_ffffu64) | (f_inc & 0xffff_ffffu64);
-            let y_lo = sel(c0, f_1, f_dec);
-            let y_hi = sel(c2, f_inc, f_2);
-            let f_new = sel(c1, y_hi, y_lo);
-            (Cdf5 {
-                f: f_new,
-                cb: cb.wrapping_add((cb < 112) as u64),
-            })
-            .store_row(cdf);
+            let m1 = (c0 as u64) | ((c1 as u64) << 16) | ((c2 as u64) << 32);
+            cdf.0 = adapt5_m(f, m1);
         }
         self.norm_hot(new_dif, new_rng);
         val
     }
 
+    /// `symbol_n::<5>` fused with `levels` / `nz` stores before adaptation and
+    /// renormalization to hide store-to-load forwarding latency in `coef_tokens`.
+    #[inline(always)]
+    pub fn symbol5_coef<const UPD: bool>(
+        &mut self,
+        cdf: &mut CdfRow5,
+        levels: &mut [u8; 2200],
+        nz: &mut [u16; 1024],
+        idx: usize,
+        pos: usize,
+        k: &mut usize,
+    ) -> bool {
+        use std::hint::select_unpredictable as sel;
+        let c = (self.dif >> (WIN_SIZE - 16)) as u32;
+        let r = self.rng >> 8;
+        let f = cdf.0;
+        let v0 = ((r.wrapping_mul(((f as u32) >> 6) & 0x3ff)) >> 1).wrapping_add(12);
+        let v1 = ((r.wrapping_mul((f as u32) >> 22)) >> 1).wrapping_add(8);
+        let v2 = ((r.wrapping_mul(((f >> 38) as u32) & 0x3ff)) >> 1).wrapping_add(4);
+        let c0 = lt(c, v0);
+        let c1 = lt(c, v1);
+        let c2 = lt(c, v2);
+        let val = (c0 as u32).wrapping_add(c2 as u32).wrapping_add(c1 as u32);
+        let u_lo = sel(c0, v0, self.rng);
+        let u_hi = sel(c2, v2, v1);
+        let u = sel(c1, u_hi, u_lo);
+        let v_lo = sel(c0, v1, v0);
+        let v_hi = sel(c2, 0, v2);
+        let v = sel(c1, v_hi, v_lo);
+        let new_dif = self.dif.wrapping_sub((v as u64) << (WIN_SIZE - 16));
+        let new_rng = u.wrapping_sub(v);
+        let cur_k = *k;
+        levels[idx & 2047] = (val.wrapping_mul(0x41)) as u8;
+        nz[cur_k & 1023] = ((val as u16) << 10) | (pos as u16);
+        *k = cur_k.wrapping_add(c0 as usize);
+        if UPD {
+            let m1 = (c0 as u64) | ((c1 as u64) << 16) | ((c2 as u64) << 32);
+            cdf.0 = adapt5_m(f, m1);
+        }
+        self.norm_hot(new_dif, new_rng);
+        c2
+    }
+
     /// `hi_tok` for loops specialized on the adaptation flag.
     #[inline(always)]
     pub fn hi_tok_c<const UPD: bool>(&mut self, cdf: &mut CdfRow5) -> u32 {
-        let r = Cdf5::from_row(cdf);
-        let (br0, r0) = self.symbol5_r::<true>(r, UPD);
-        'done: {
-            if br0 < 3 {
-                if UPD {
-                    r0.store_row(cdf);
-                }
-                break 'done 3u32.wrapping_add(br0);
+        use std::hint::select_unpredictable as sel;
+        let mut f = cdf.0;
+        let mut base = 3u32;
+        let (c, r, v2) = loop {
+            let c = (self.dif >> (WIN_SIZE - 16)) as u32;
+            let r = self.rng >> 8;
+            let v2 = ((r.wrapping_mul(((f >> 38) as u32) & 0x3ff)) >> 1).wrapping_add(4);
+            if !lt(c, v2) {
+                break (c, r, v2);
             }
-            let (br1, r1) = self.symbol5_r::<true>(r0, UPD);
-            if br1 < 3 {
-                if UPD {
-                    r1.store_row(cdf);
-                }
-                break 'done 6u32.wrapping_add(br1);
-            }
-            let (br2, r2) = self.symbol5_r::<true>(r1, UPD);
-            if br2 < 3 {
-                if UPD {
-                    r2.store_row(cdf);
-                }
-                break 'done 9u32.wrapping_add(br2);
-            }
-            let (br3, r3) = self.symbol5_r::<true>(r2, UPD);
             if UPD {
-                r3.store_row(cdf);
+                f = adapt5_m(f, M1_ALL);
             }
-            if br3 < 3 {
-                break 'done 12u32.wrapping_add(br3);
+            let d = (v2.leading_zeros() ^ 16) as i32;
+            self.dif <<= (d as u32) & 63;
+            self.rng = v2 << ((d as u32) & 31);
+            self.cnt = self.cnt.wrapping_sub(d);
+            if base == 3 && self.cnt < 39 {
+                self.refill_hot();
             }
-            15
+            base = base.wrapping_add(3);
+            if base == 15 {
+                if UPD {
+                    cdf.0 = f;
+                }
+                return 15;
+            }
+        };
+        let v0 = ((r.wrapping_mul(((f as u32) >> 6) & 0x3ff)) >> 1).wrapping_add(12);
+        let v1 = ((r.wrapping_mul((f as u32) >> 22)) >> 1).wrapping_add(8);
+        let c0 = lt(c, v0);
+        let c1 = lt(c, v1);
+        let val = (c0 as u32).wrapping_add(c1 as u32);
+        let u = sel(c1, v1, sel(c0, v0, self.rng));
+        let v = sel(c1, v2, sel(c0, v1, v0));
+        let new_dif = self.dif.wrapping_sub((v as u64) << (WIN_SIZE - 16));
+        let new_rng = u.wrapping_sub(v);
+        if UPD {
+            let m1 = (c0 as u64) | ((c1 as u64) << 16);
+            cdf.0 = adapt5_m(f, m1);
         }
+        self.norm_hot(new_dif, new_rng);
+        base.wrapping_add(val)
     }
 
     /// Dedicated hot symbol helper for palette decoding.
@@ -1263,7 +1340,7 @@ impl<'a> SymbolDecoder<'a> {
             let mut shift = 40i32.wrapping_sub(cnt0);
             loop {
                 let b = if pos < self.raw.buf.len() { self.raw.buf[pos] ^ 0xff } else { 0xff };
-                d |= (b as u64) << shift;
+                d |= (b as u64) << (shift as u32 & 63);
                 pos += 1;
                 shift = shift.wrapping_sub(8);
                 if shift < 0 {
@@ -1333,7 +1410,6 @@ impl<'a> SymbolDecoder<'a> {
         #[cfg(not(target_arch = "x86_64"))]
         let (ge0, ge1, u, vv, val) = {
             let r7 = u16x8::splat(((r >> 8) & 0x7f) as u16);
-            let vr = u16x8::splat(r as u16);
             let mask_ffc0 = u16x8::splat(0xffc0);
             let b0 = (f0 & mask_ffc0) + mp0;
             let b1 = (f1 & mask_ffc0) + mp1;
@@ -1342,13 +1418,18 @@ impl<'a> SymbolDecoder<'a> {
             let vc = u16x8::splat(c);
             let ge0 = vc.simd_ge(v0);
             let ge1 = vc.simd_ge(v1);
-            let gm0 = ge0.to_simd().cast::<u16>();
-            let gm1 = ge1.to_simd().cast::<u16>();
-            let u = ge0.select(vr, v0).simd_min(ge1.select(vr, v1)).reduce_min() as u32;
-            let vv = (v0 & gm0).simd_max(v1 & gm1).reduce_max() as u32;
-            let val = (16i32
-                + (ge0.to_simd().cast::<i16>() + ge1.to_simd().cast::<i16>()).reduce_sum() as i32)
-                as u32 as usize;
+            let u0 = u32x4::from_ne_bytes(ge0.to_simd().cast::<u16>().to_ne_bytes());
+            let u1 = u32x4::from_ne_bytes(ge1.to_simd().cast::<u16>().to_ne_bytes());
+            let u8s = std::simd::simd_swizzle!(u0, u1, [0, 1, 2, 3, 4, 5, 6, 7]);
+            let m64 =
+                u64::from_le_bytes((u8s >> 12).cast::<u8>().to_array()) | (1u64 << (4 * (N - 2)));
+            let val = (m64.trailing_zeros() >> 2) as usize;
+            let mut vs = [0u16; 16];
+            vs[..8].copy_from_slice(v0.as_array());
+            vs[8..].copy_from_slice(v1.as_array());
+            let u =
+                std::hint::select_unpredictable(val == 0, r, vs[val.wrapping_sub(1) & 15] as u32);
+            let vv = vs[val & 15] as u32;
             (ge0, ge1, u, vv, val)
         };
         let new_dif = dif0.wrapping_sub((vv as u64) << (WIN_SIZE - 16));
@@ -1420,13 +1501,12 @@ impl<'a> SymbolDecoder<'a> {
                 return Some(1);
             }
         }
-        cold_refill();
         let (dif, out) =
             golomb_coef_slow::<0>(self.raw.buf, self.raw.pos, self.dif, self.rng, self.cnt);
         self.dif = dif;
         self.rng = (out & 0xFFFF) as u32;
         self.cnt = ((out >> 16) as i8) as i32;
-        self.raw.pos += ((out >> 24) & 0xFF) as usize;
+        self.raw.pos = self.raw.pos.wrapping_add(((out >> 24) & 0xFF) as usize);
         Some((out >> 32) as u32)
     }
 
@@ -1440,14 +1520,15 @@ impl<'a> SymbolDecoder<'a> {
         self.dif = dif;
         self.rng = (out & 0xFFFF) as u32;
         self.cnt = ((out >> 16) as i8) as i32;
-        self.raw.pos += ((out >> 24) & 0xFF) as usize;
+        self.raw.pos = self.raw.pos.wrapping_add(((out >> 24) & 0xFF) as usize);
         let hi = (out >> 32) as u32;
         if hi == 0 {
             return (0, 0);
         }
         let sign = (hi >> 30) & 1;
         let q = hi & 0xFFFFF;
-        let dq = (((q as u64 * q2 as u64) & 0xFFFFFF) >> dq_shift).min(cf_max + sign as u64) as i32;
+        let dq = (((q as u64).wrapping_mul(q2 as u64) & 0xFFFFFF) >> (dq_shift & 31))
+            .min(cf_max.wrapping_add(sign as u64)) as i32;
         let dq_signed = std::hint::select_unpredictable(sign != 0, dq.wrapping_neg(), dq);
         (q | (1 << 31), dq_signed)
     }
@@ -1516,6 +1597,38 @@ impl<'a> SymbolDecoder<'a> {
         !ret
     }
 
+    /// `read_symbol` for a packed 4-byte binary CDF (`CdfRow3`).
+    #[inline(always)]
+    pub fn bool_adapt3<const HOT: bool>(&mut self, cdf: &mut CdfRow3) -> bool {
+        use std::hint::select_unpredictable as sel;
+        let w = cdf.0;
+        let f = w as u16 as u32;
+        let r = self.rng;
+        let dif = self.dif;
+        let v = (((r >> 8).wrapping_mul(f >> EC_PROB_SHIFT)) >> (7 - EC_PROB_SHIFT))
+            .wrapping_add(EC_MIN_PROB);
+        let vw = (v as u64) << (WIN_SIZE - 16);
+        let ret = dif >= vw;
+        let new_dif = sel(ret, dif.wrapping_sub(vw), dif);
+        let new_rng = sel(ret, r.wrapping_sub(v), v);
+        if self.allow_update {
+            cdf.0 = if (w as i32) < 0 {
+                let delta = sel(ret, f, 32768 - f) >> 6;
+                sel(ret, w.wrapping_sub(delta), w.wrapping_add(delta))
+            } else {
+                cold_refill();
+                let delta = sel(ret, f, 32768 - f) >> (4 + (w >> 30));
+                sel(ret, w.wrapping_sub(delta), w.wrapping_add(delta)).wrapping_add(1 << 26)
+            };
+        }
+        if HOT {
+            self.norm_hot(new_dif, new_rng);
+        } else {
+            self.norm(new_dif, new_rng);
+        }
+        !ret
+    }
+
     /// Spec `read_bool()` (equiprobable, no adaptation). Only used by the
     /// tests: the decoder uses `literal`, `bool_cold` and the
     /// `bool_store_neg*` variants.
@@ -1569,17 +1682,48 @@ impl<'a> SymbolDecoder<'a> {
         let ret = dif >= vw;
         let new_rng = sel(ret, r0 << (d0 & 31), v2);
         let shift = sel(ret, d0, 1);
-        let new_dif = sel(ret, dif.wrapping_sub(vw), dif) << (shift & 63);
+        let new_dif = sel(ret, dif.wrapping_sub(vw) << (d0 & 63), dif << 1);
         (ret, new_rng, new_dif, shift)
     }
 
+    #[inline(always)]
+    pub(crate) fn equi_locked(&self) -> bool {
+        (self.rng & 0xff) == 8
+    }
+
+    #[inline(always)]
+    pub(crate) fn equi_recip(&self) -> u64 {
+        EQUI_RECIP[((self.rng >> 8) & 127) as usize] as u64
+    }
+
+    #[inline(always)]
+    pub(crate) fn equi_r_sh48(&self) -> u64 {
+        (self.rng as u64) << 48
+    }
+
+    #[inline(always)]
+    pub(crate) fn equi_peek16_with(&mut self, recip: u64) -> u32 {
+        if self.cnt < 16 {
+            cold_refill();
+            self.refill_hot();
+        }
+        (((self.dif >> 33).wrapping_mul(recip)) >> 46) as u32
+    }
+
+    #[inline(always)]
+    pub(crate) fn equi_consume_with(&mut self, t16: u32, n: u32, r_sh48: u64) {
+        let t = (t16 >> (16u32.wrapping_sub(n) & 31)) as u64;
+        self.dif = (self.dif << (n & 63)).wrapping_sub(t.wrapping_mul(r_sh48));
+        self.cnt = self.cnt.wrapping_sub(n as i32);
+    }
+
     /// Equiprobable `read_literal(n)` for `1 <= n <= 8` (`eob` extra bits).
-    /// Pre-refills once when `cnt < 16` so the bit loop needs no per-bit
-    /// refill branch or duplicate cold refill blocks.
+    /// Pre-refills once when `cnt < 24` so `cnt >= 15` holds even near EOF
+    /// when batching locked equiprobable bits via `EQUI_RECIP`.
     #[inline(always)]
     pub fn literal_short(&mut self, n: usize) -> usize {
         debug_assert!((1..=8).contains(&n));
-        if self.cnt < 16 {
+        if self.cnt < 24 {
             cold_refill();
             self.refill_hot();
         }
@@ -1587,12 +1731,21 @@ impl<'a> SymbolDecoder<'a> {
         let mut dif = self.dif;
         let mut cnt = self.cnt;
         let mut x = 0usize;
-        for _ in 0..n {
+        let mut rem = n as u32;
+        while rem > 0 && (r & 0xff) != 8 {
             let (ret, nr, nd, shift) = Self::equi_step(r, dif);
             r = nr;
             dif = nd;
             cnt = cnt.wrapping_sub(shift as i32);
             x = (x << 1) | (!ret as usize);
+            rem -= 1;
+        }
+        if rem > 0 {
+            let recip = EQUI_RECIP[((r >> 8) & 127) as usize] as u64;
+            let t = ((((dif >> 33).wrapping_mul(recip)) >> 46) as u32) >> (16 - rem);
+            x = (x << rem) | ((!t as usize) & ((1usize << rem) - 1));
+            dif = (dif << rem).wrapping_sub((t as u64).wrapping_mul((r as u64) << 48));
+            cnt = cnt.wrapping_sub(rem as i32);
         }
         self.dif = dif;
         self.rng = r;
@@ -1891,8 +2044,19 @@ mod tests {
                 let mut c4b = c4a;
                 let mut c5b = [8000u16, 16000, 24000, 32768, 0];
                 let mut c5a = CdfRow5::from_spec(c5b);
+                let mut c5_coef_b = [6000u16, 14000, 25000, 32768, 0];
+                let mut c5_coef_a = CdfRow5::from_spec(c5_coef_b);
+                let mut br_b = [14000u16, 20000, 24000, 32768, 0];
+                let mut br_a = CdfRow5::from_spec(br_b);
+                let mut c3b = [12000u16, 32768, 0];
+                let mut c3a = CdfRow3::from_spec(c3b);
+                let mut c6a = [5000u16, 12000, 20000, 28000, 32768, 0];
+                let mut c6b = c6a;
+                let mut levels = [0u8; 2200];
+                let mut nz = [0u16; 1024];
+                let mut k = 0usize;
                 for i in 0..2000 {
-                    match rnd() % 6 {
+                    match rnd() % 11 {
                         0 => {
                             let n = 1 + rnd() % 32;
                             let la = a.literal(n);
@@ -1956,7 +2120,7 @@ mod tests {
                             assert_eq!(sa as usize, sb, "len {len} iter {i}");
                             assert_eq!(c4a, c4b);
                         }
-                        _ => {
+                        5 => {
                             let sa = if update {
                                 a.symbol5_c::<true>(&mut c5a)
                             } else {
@@ -1966,8 +2130,127 @@ mod tests {
                             assert_eq!(sa as usize, sb, "len {len} iter {i}");
                             assert_eq!(c5a, c5b);
                         }
+                        6 => {
+                            let idx = (rnd() % 1800) as usize;
+                            let pos = (rnd() % 1024) as usize;
+                            let k_before = k;
+                            let is_hi = if update {
+                                a.symbol5_coef::<true>(
+                                    &mut c5_coef_a,
+                                    &mut levels,
+                                    &mut nz,
+                                    idx,
+                                    pos,
+                                    &mut k,
+                                )
+                            } else {
+                                a.symbol5_coef::<false>(
+                                    &mut c5_coef_a,
+                                    &mut levels,
+                                    &mut nz,
+                                    idx,
+                                    pos,
+                                    &mut k,
+                                )
+                            };
+                            let sb = b.symbol(&mut c5_coef_b, update) as u32;
+                            assert_eq!(is_hi, sb == 3, "len {len} iter {i}");
+                            assert_eq!(c5_coef_a, c5_coef_b, "len {len} iter {i}");
+                            assert_eq!(levels[idx & 2047], (sb * 0x41) as u8);
+                            assert_eq!(nz[k_before & 1023], ((sb as u16) << 10) | (pos as u16));
+                            assert_eq!(k, k_before + (sb != 0) as usize);
+                        }
+                        7 => {
+                            let ta = if update {
+                                a.hi_tok_c::<true>(&mut br_a)
+                            } else {
+                                a.hi_tok_c::<false>(&mut br_a)
+                            };
+                            let mut tb = 3;
+                            for _ in 0..4 {
+                                let s = b.symbol(&mut br_b, update) as u32;
+                                tb += s;
+                                if s < 3 {
+                                    break;
+                                }
+                            }
+                            assert_eq!(ta, tb, "len {len} iter {i}");
+                            assert_eq!(br_a, br_b, "len {len} iter {i}");
+                        }
+                        8 => {
+                            let hot = rnd() % 2 == 0;
+                            let ba = if hot {
+                                a.bool_adapt3::<true>(&mut c3a)
+                            } else {
+                                a.bool_adapt3::<false>(&mut c3a)
+                            };
+                            let bb = b.symbol(&mut c3b, update) != 0;
+                            assert_eq!(ba, bb, "len {len} iter {i}");
+                            assert_eq!(c3a, c3b, "len {len} iter {i}");
+                        }
+                        9 => {
+                            let n = 1 + (rnd() % 8) as usize;
+                            let la = a.literal_short(n);
+                            let mut lb = 0usize;
+                            for _ in 0..n {
+                                lb = (lb << 1) | b.bool() as usize;
+                            }
+                            assert_eq!(la, lb, "literal_short len {len} iter {i} n {n}");
+                        }
+                        _ => {
+                            let sa = if update {
+                                a.symbol6_c::<true, true>(&mut c6a)
+                            } else {
+                                a.symbol6_c::<false, false>(&mut c6a)
+                            };
+                            let sb = b.symbol(&mut c6b, update);
+                            assert_eq!(sa, sb, "len {len} iter {i}");
+                            assert_eq!(c6a, c6b, "len {len} iter {i}");
+                        }
                     }
                     assert_eq!(a.symbol_max_bits(), b.max_bits, "len {len} iter {i}");
+                }
+            }
+        }
+        // Explicitly test `equi_peek16_with` + `equi_consume_with` (including
+        // short/EOF buffers 0, 1, 2, 7 bytes) and `golomb_coef` against `SpecDecoder`.
+        for len in [0usize, 1, 2, 7, 15, 64, 256] {
+            let data: Vec<u8> = (0..len).map(|_| rnd() as u8).collect();
+            let mut a = SymbolDecoder::new(&data, false);
+            let mut b = SpecDecoder::new(&data);
+            // Drive until `equi_locked()` becomes true.
+            while !a.equi_locked() {
+                let mut dst = 0;
+                a.bool_store_neg(&mut dst, 1);
+                let sb = b.bool();
+                assert_eq!(dst, if sb { -1 } else { 1 });
+            }
+            let recip = a.equi_recip();
+            let r_sh48 = a.equi_r_sh48();
+            for step in 0..64 {
+                let n = 1 + (rnd() % 16);
+                let t16 = a.equi_peek16_with(recip);
+                let mut sbits = (t16 as i32) << 16;
+                for bit in 0..n {
+                    let expected = b.bool();
+                    let got = sbits >= 0;
+                    assert_eq!(got, expected, "locked len {len} step {step} bit {bit}");
+                    sbits = sbits.wrapping_shl(1);
+                }
+                a.equi_consume_with(t16, n, r_sh48);
+                assert_eq!(
+                    a.symbol_max_bits(),
+                    b.max_bits,
+                    "locked len {len} step {step}"
+                );
+                if step % 7 == 0 {
+                    assert_eq!(
+                        a.golomb_coef(),
+                        b.golomb_coef(),
+                        "golomb len {len} step {step}"
+                    );
+                    assert!(a.equi_locked());
+                    assert_eq!(a.symbol_max_bits(), b.max_bits);
                 }
             }
         }
@@ -2081,6 +2364,26 @@ mod tests {
                         (u_ref, vv_ref, val_ref),
                         "n={n} r={r:#x} c={c:#x}"
                     );
+                    let ge = vc.simd_ge(v0);
+                    let sent = if n < 10 { 1u64 << (8 * (n - 2)) } else { 0 };
+                    let m64 = u64::from_le_bytes(ge.to_simd().cast::<u8>().to_array()) | sent;
+                    let val_m = (m64.trailing_zeros() >> 3) as usize;
+                    let vs: [u16; 8] = *v0.as_array();
+                    let u_m = std::hint::select_unpredictable(
+                        val_m == 0,
+                        r,
+                        vs[val_m.wrapping_sub(1) & 7] as u32,
+                    );
+                    let vv_m = if n <= 9 {
+                        vs[val_m & 7] as u32
+                    } else {
+                        std::hint::select_unpredictable(val_m < 8, vs[val_m & 7] as u32, 0)
+                    };
+                    assert_eq!(
+                        (u_m, vv_m, val_m),
+                        (u_ref, vv_ref, val_ref),
+                        "bitmask n={n} r={r:#x} c={c:#x}"
+                    );
                 } else {
                     let f0 = u16x8::from_slice(&f_arr[..8]);
                     let f1 = u16x8::from_slice(&f_arr[8..16]);
@@ -2101,6 +2404,26 @@ mod tests {
                         (u, vv, val),
                         (u_ref, vv_ref, val_ref),
                         "n={n} r={r:#x} c={c:#x}"
+                    );
+                    let u0 = u32x4::from_ne_bytes(ge0.to_simd().cast::<u16>().to_ne_bytes());
+                    let u1 = u32x4::from_ne_bytes(ge1.to_simd().cast::<u16>().to_ne_bytes());
+                    let u8s = std::simd::simd_swizzle!(u0, u1, [0, 1, 2, 3, 4, 5, 6, 7]);
+                    let m64 = u64::from_le_bytes((u8s >> 12).cast::<u8>().to_array())
+                        | (1u64 << (4 * (n - 2)));
+                    let val_m = (m64.trailing_zeros() >> 2) as usize;
+                    let mut vs = [0u16; 16];
+                    vs[..8].copy_from_slice(v0.as_array());
+                    vs[8..].copy_from_slice(v1.as_array());
+                    let u_m = std::hint::select_unpredictable(
+                        val_m == 0,
+                        r,
+                        vs[val_m.wrapping_sub(1) & 15] as u32,
+                    );
+                    let vv_m = vs[val_m & 15] as u32;
+                    assert_eq!(
+                        (u_m, vv_m, val_m),
+                        (u_ref, vv_ref, val_ref),
+                        "bitmask n={n} r={r:#x} c={c:#x}"
                     );
                 }
             }

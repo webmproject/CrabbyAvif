@@ -65,6 +65,11 @@ pub struct PaletteRec {
     pub map_offset: u32,
 }
 
+#[inline(always)]
+pub const fn pack_tx_entry(rc: usize, dq: i32) -> i32 {
+    (((dq as u32) << 10) | ((rc as u32) & 0x3FF)) as i32
+}
+
 #[derive(Clone, Copy, Default)]
 pub struct TxRecHeader {
     pub eob: u16,
@@ -80,7 +85,7 @@ pub struct LogChunk {
     pub palettes: Vec<PaletteRec>,
     pub palette_bytes: Vec<u8>,
     pub tx_headers: Vec<TxRecHeader>,
-    pub tx_entries: Vec<(u16, i32)>,
+    pub tx_entries: Vec<i32>,
 }
 
 impl LogChunk {
@@ -97,7 +102,7 @@ impl LogChunk {
             + self.palettes.len() * std::mem::size_of::<PaletteRec>()
             + self.palette_bytes.len()
             + self.tx_headers.len() * std::mem::size_of::<TxRecHeader>()
-            + self.tx_entries.len() * std::mem::size_of::<(u16, i32)>()
+            + self.tx_entries.len() * std::mem::size_of::<i32>()
     }
 
     pub fn clear(&mut self) {

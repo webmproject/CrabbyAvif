@@ -438,6 +438,8 @@ pub struct Scratch {
     /// Non-zero AC tokens of the current transform block in reverse scan
     /// order, as `level << 10 | pos` (see `coef_tokens`).
     pub nz: [u16; 1024],
+    /// Staging buffer for packed `22:10` `(dq, rc)` entries in Stage P.
+    pub parse_entries: [i32; 1024],
     /// Transform types per 4x4 of the current block (`TxTypes`), indexed
     /// relative to the block's top-left (32x32 4x4 blocks max).
     pub tx_types: [[TxType; 32]; 32],
@@ -459,6 +461,7 @@ impl Scratch {
             coeffs: [0; 1024],
             levels: [0; 2200],
             nz: [0; 1024],
+            parse_entries: [0; 1024],
             tx_types: [[TxType::DCT_DCT; 32]; 32],
             block_decoded: [[BlockDecodedRow(0); 96]; 3],
             color_map_y: Box::new([[0; 64]; 64]),
@@ -616,14 +619,14 @@ fn record_parse_tx_qm(
     if has_dc {
         let val = sc.coeffs[0];
         sc.coeffs[0] = 0;
-        log.tx_entries.push((0, val));
+        log.tx_entries.push(super::stage::pack_tx_entry(0, val));
     }
     let coeffs = &mut sc.coeffs;
     log.tx_entries.extend(sc.nz[..n_ac].iter().rev().map(|&e| {
         let rc = (e & 0x3FF) as usize;
         let val = coeffs[rc];
         coeffs[rc] = 0;
-        (rc as u16, val)
+        super::stage::pack_tx_entry(rc, val)
     }));
     log.tx_headers.push(super::stage::TxRecHeader {
         eob: eob as u16,
@@ -643,6 +646,15 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
     fn bool_cdf(&mut self, sel: impl FnOnce(&mut CdfContext) -> &mut [u16; 3]) -> bool {
         let cdf = sel(&mut self.t.cdf);
         self.t.msac.bool_adapt(cdf)
+    }
+
+    #[inline(always)]
+    fn bool_cdf3(
+        &mut self,
+        sel: impl FnOnce(&mut CdfContext) -> &mut crate::decoder::av1::tables::cdf::CdfRow3,
+    ) -> bool {
+        let cdf = sel(&mut self.t.cdf);
+        self.t.msac.bool_adapt3::<false>(cdf)
     }
 
     #[inline(always)]
@@ -944,22 +956,21 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
             self.recon,
         );
 
-        let (mut hdrs, mut ents): (&'s [super::stage::TxRecHeader], &'s [(u16, i32)]) =
-            if lc.coefs() {
-                let super::stage::DecoderStage::Recon(chunk, cursor) = &self.stage else {
-                    return Err("invalid log");
-                };
-                let chunk = *chunk;
-                let (Some(h), Some(e)) = (
-                    chunk.tx_headers.get(cursor.tx_header_idx..),
-                    chunk.tx_entries.get(cursor.tx_entry_idx..),
-                ) else {
-                    return Err("invalid log");
-                };
-                (h, e)
-            } else {
-                (&[], &[])
+        let (mut hdrs, mut ents): (&'s [super::stage::TxRecHeader], &'s [i32]) = if lc.coefs() {
+            let super::stage::DecoderStage::Recon(chunk, cursor) = &self.stage else {
+                return Err("invalid log");
             };
+            let chunk = *chunk;
+            let (Some(h), Some(e)) = (
+                chunk.tx_headers.get(cursor.tx_header_idx..),
+                chunk.tx_entries.get(cursor.tx_entry_idx..),
+            ) else {
+                return Err("invalid log");
+            };
+            (h, e)
+        } else {
+            (&[], &[])
+        };
 
         for chunk_y in 0..height_chunks {
             for chunk_x in 0..width_chunks {
@@ -1186,7 +1197,7 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
         x: usize,
         y: usize,
         hdrs: &mut &'s [super::stage::TxRecHeader],
-        ents: &mut &'s [(u16, i32)],
+        ents: &mut &'s [i32],
     ) -> BlockResult {
         let f = self.f;
         let pt = CHROMA as usize;
@@ -1236,8 +1247,8 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
                 };
                 *ents = rest_e;
                 let coeffs = &mut self.sc.coeffs;
-                for &(rc, val) in entries {
-                    coeffs[(rc & 0x3FF) as usize] = val;
+                for &entry in entries {
+                    coeffs[(entry as u32 & 0x3FF) as usize] = entry >> 10;
                 }
                 self.reconstruct(plane, start_x, start_y, tx_sz, eob);
             }
@@ -1364,7 +1375,7 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
         let all_zero = self
             .t
             .msac
-            .bool_adapt(&mut self.t.cdf.txb_skip[tx_sz_ctx][all_zero_ctx]);
+            .bool_adapt3::<true>(&mut self.t.cdf.txb_skip[tx_sz_ctx][all_zero_ctx]);
         if all_zero {
             if !PARSE && !CHROMA && plan.tx_mode >= 24 {
                 set_tx_types(
@@ -1498,7 +1509,7 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
         let mut last = eob_bin;
         if eob_bin >= 2 {
             let eb = (eob_bin - 2).min(8);
-            let hi = msac.bool_adapt(&mut cdf.eob_extra[tx_sz_ctx][ptype][eb]) as usize;
+            let hi = msac.bool_adapt3::<true>(&mut cdf.eob_extra[tx_sz_ctx][ptype][eb]) as usize;
             last = ((hi | 2) << eb) | if eb != 0 { msac.literal_short(eb) } else { 0 };
         }
         let eob = last + 1;
@@ -1518,7 +1529,7 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
         };
         if PARSE {
             if let super::stage::DecoderStage::Parse(log) = &mut self.stage {
-                log.tx_entries.push((0, dq));
+                log.tx_entries.push(super::stage::pack_tx_entry(0, dq));
                 log.tx_headers.push(super::stage::TxRecHeader {
                     eob: 1,
                     tx_type,
@@ -1574,10 +1585,14 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
                 ky,
             )
         };
-        let sign = self.t.msac.bool_adapt(&mut self.t.cdf.dc_sign[ptype][ctx]);
+        let sign = self
+            .t
+            .msac
+            .bool_adapt3::<true>(&mut self.t.cdf.dc_sign[ptype][ctx]);
         let dc_q = self.b.dc_q[plane];
         let qm_level = self.b.qm_level[plane] as usize;
         let use_qm = qm_level < 15 && (self.plane_tx_type as usize) < TxType::IDTX as usize;
+        let q2 = if use_qm { dc_q_qm(dc_q, qm_level, ptype, tx_sz) } else { dc_q };
         let dq_shift = (plan.dq_shift & 31) as u32;
         let mut q = dc_tok;
         let dq = if q < 15 {
@@ -1586,15 +1601,7 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
             // time in tables/qm.rs) the worst case at 12-bit is
             // `14 * ((21387 * 35 + 16) >> 5) = 327488 < cf_max = 524287`
             // (see the `qm_dequant_fast_paths` test).
-            let q2 = if use_qm {
-                let qm0 =
-                    crate::decoder::av1::tables::qm::quantizer_matrix_1024(qm_level, ptype, tx_sz)
-                        [0] as u32;
-                (dc_q.wrapping_mul(qm0).wrapping_add(16)) >> 5
-            } else {
-                dc_q
-            };
-            let d = ((q.wrapping_mul(q2)) >> dq_shift) as i32;
+            let d = (q.wrapping_mul(q2) >> dq_shift) as i32;
             std::hint::select_unpredictable(sign, d.wrapping_neg(), d)
         } else {
             let g = self.t.msac.golomb_coef()?;
@@ -1602,11 +1609,172 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
             // Largest magnitude of a positive coefficient; negative ones
             // may be one larger.
             let cf_max = (1u64 << (7 + f.bd)) - 1;
-            dequant_dc_slow(
-                q, dc_q, qm_level, ptype, tx_sz, dq_shift, cf_max, sign, use_qm,
-            )
+            let d = (((q as u64).wrapping_mul(q2 as u64) & 0xFFFFFF) >> dq_shift)
+                .min(cf_max.wrapping_add(sign as u64)) as i32;
+            std::hint::select_unpredictable(sign, d.wrapping_neg(), d)
         };
         Some((q, 2u8.wrapping_sub(sign as u8), dq))
+    }
+
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn coeffs_ac_no_qm<const PARSE: bool, const CLS0: bool>(
+        &mut self,
+        n_ac: usize,
+        ac_q: u32,
+        dq_shift: u32,
+        cf_max: u64,
+        lbwl: usize,
+        dc_dq: i32,
+        eob_has_dc: usize,
+    ) -> Option<u32> {
+        #[cold]
+        #[inline(always)]
+        fn cold_hi_tok() {}
+
+        let has_dc = (eob_has_dc & 1) != 0;
+        let eob = eob_has_dc >> 1;
+        let ac_q_sh2 = ac_q << (2 - (dq_shift & 3));
+        let mut m = self.t.msac.clone();
+        let sc = &mut *self.sc;
+        let mut cul_level = 0u32;
+        let mut out_idx = if PARSE && has_dc {
+            sc.parse_entries[0] = super::stage::pack_tx_entry(0, dc_dq);
+            1usize
+        } else {
+            0usize
+        };
+        let mut i = n_ac;
+        // Phase A: step bit-by-bit until `rng` locks into `(rng & 0xff) == 8`.
+        while i > 0 && !m.equi_locked() {
+            i -= 1;
+            let e = sc.nz[i & 1023] as u32;
+            let rc = (e & 0x3FF) as usize;
+            if CLS0 {
+                sc.levels[rc] = 0;
+            } else {
+                sc.levels[((rc as u32).wrapping_add((rc as u32 >> lbwl) << 2) & 2047) as usize] = 0;
+            }
+            let q = e >> 10;
+            let dq = if q < 15 {
+                let d = (q.wrapping_mul(ac_q_sh2) >> 2) as i32;
+                cul_level = cul_level.wrapping_add(q);
+                let mut tmp = 0i32;
+                m.bool_store_neg(&mut tmp, d);
+                tmp
+            } else {
+                cold_hi_tok();
+                let (q_hi, dq_hi) = m.ac_golomb(ac_q, dq_shift, cf_max);
+                if q_hi == 0 {
+                    self.t.msac.copy_state(&m);
+                    return None;
+                }
+                cul_level = cul_level.wrapping_add(q_hi & 0xFFFFF);
+                dq_hi
+            };
+            if PARSE {
+                sc.parse_entries[out_idx & 1023] = super::stage::pack_tx_entry(rc, dq);
+                out_idx += 1;
+            } else {
+                sc.coeffs[rc] = dq;
+            }
+        }
+        // Phase B: `rng` is locked, so `recip` and `r_sh48` are loop-invariant
+        // across all remaining signs and Golomb tokens.
+        if i > 0 {
+            let recip = m.equi_recip();
+            let r_sh48 = m.equi_r_sh48();
+            while i > 0 {
+                let t16 = m.equi_peek16_with(recip);
+                let mut sbits = (t16 as i32) << 16;
+                let max_k = i.min(16);
+                let mut k = 0usize;
+                while k < max_k {
+                    let e = sc.nz[(i - 1 - k) & 1023] as u32;
+                    let q = e >> 10;
+                    if q >= 15 {
+                        break;
+                    }
+                    let rc = (e & 0x3FF) as usize;
+                    if CLS0 {
+                        sc.levels[rc] = 0;
+                    } else {
+                        sc.levels[((rc as u32).wrapping_add((rc as u32 >> lbwl) << 2) & 2047)
+                            as usize] = 0;
+                    }
+                    let d = (q.wrapping_mul(ac_q_sh2) >> 2) as i32;
+                    cul_level = cul_level.wrapping_add(q);
+                    let dq = std::hint::select_unpredictable(sbits < 0, d, d.wrapping_neg());
+                    sbits = sbits.wrapping_shl(1);
+                    if PARSE {
+                        sc.parse_entries[out_idx & 1023] = super::stage::pack_tx_entry(rc, dq);
+                        out_idx += 1;
+                    } else {
+                        sc.coeffs[rc] = dq;
+                    }
+                    k += 1;
+                }
+                if k > 0 {
+                    m.equi_consume_with(t16, k as u32, r_sh48);
+                    i -= k;
+                }
+                if k < max_k {
+                    cold_hi_tok();
+                    i -= 1;
+                    let e = sc.nz[i & 1023] as u32;
+                    let rc = (e & 0x3FF) as usize;
+                    if CLS0 {
+                        sc.levels[rc] = 0;
+                    } else {
+                        sc.levels[((rc as u32).wrapping_add((rc as u32 >> lbwl) << 2) & 2047)
+                            as usize] = 0;
+                    }
+                    let g16 = if k == 0 { t16 } else { m.equi_peek16_with(recip) };
+                    let u = (!g16) & 0x7fff;
+                    let (q_hi, dq_hi) = if u >= 128 {
+                        let z = u.leading_zeros().wrapping_sub(17);
+                        let x = (1u32 << (z & 7))
+                            | (((!g16) >> (14u32.wrapping_sub(z << 1) & 15))
+                                & ((1u32 << (z & 7)) - 1));
+                        let q = x.wrapping_add(14);
+                        let sign = ((g16 >> 15) ^ 1) as u64;
+                        let d = (((q as u64).wrapping_mul(ac_q as u64) & 0xFFFFFF)
+                            >> (dq_shift & 31))
+                            .min(cf_max.wrapping_add(sign)) as i32;
+                        let dq = std::hint::select_unpredictable(sign != 0, d.wrapping_neg(), d);
+                        m.equi_consume_with(g16, (z << 1).wrapping_add(2), r_sh48);
+                        (q, dq)
+                    } else {
+                        let (q_hi, dq_hi) = m.ac_golomb(ac_q, dq_shift, cf_max);
+                        if q_hi == 0 {
+                            self.t.msac.copy_state(&m);
+                            return None;
+                        }
+                        (q_hi & 0xFFFFF, dq_hi)
+                    };
+                    cul_level = cul_level.wrapping_add(q_hi);
+                    if PARSE {
+                        sc.parse_entries[out_idx & 1023] = super::stage::pack_tx_entry(rc, dq_hi);
+                        out_idx += 1;
+                    } else {
+                        sc.coeffs[rc] = dq_hi;
+                    }
+                }
+            }
+        }
+        self.t.msac.copy_state(&m);
+        if PARSE {
+            if let super::stage::DecoderStage::Parse(log) = &mut self.stage {
+                let count = out_idx.min(1024);
+                log.tx_entries.extend_from_slice(&sc.parse_entries[..count]);
+                log.tx_headers.push(super::stage::TxRecHeader {
+                    eob: eob as u16,
+                    tx_type: self.plane_tx_type,
+                    count: count as u16,
+                });
+            }
+        }
+        Some(cul_level)
     }
 
     /// `coeffs_nz` for `eob > 1`: coefficient tokens, then signs, golomb
@@ -1684,152 +1852,47 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
                 dc_dq = dq;
             }
         }
-        let n_ac = num_ac.min(1024);
+        let n_ac = num_ac.min(1023);
         if use_qm {
             if n_ac != 0 {
                 let Some(c) = self.dequant_ac_qm(n_ac, plane, tx_sz, lbwl.max(2)) else {
                     reset_scratch_on_err(self.sc);
                     return u32::MAX;
                 };
-                cul_level += c;
+                cul_level = cul_level.wrapping_add(c);
             }
             if PARSE {
                 if let super::stage::DecoderStage::Parse(log) = &mut self.stage {
                     record_parse_tx_qm(self.sc, self.plane_tx_type, log, eob, has_dc, n_ac);
                 }
             }
-        } else if PARSE {
-            #[cold]
-            #[inline(always)]
-            fn cold_hi_tok() {}
-
-            let mut ok = true;
-            let mut m = self.t.msac.clone();
-            let msac = &mut m;
-            let sc = &mut *self.sc;
-            let levels = &mut sc.levels;
-            let nz = &sc.nz[..n_ac];
-            if let super::stage::DecoderStage::Parse(log) = &mut self.stage {
-                let count = has_dc as usize + n_ac;
-                log.tx_entries.reserve(count);
-                if has_dc {
-                    log.tx_entries.push((0, dc_dq));
-                }
-                if tx_cls == 0 {
-                    log.tx_entries.extend(nz.iter().rev().map(|&e| {
-                        let e = e as u32;
-                        let rc = (e & 0x3FF) as usize;
-                        levels[rc] = 0;
-                        let q = e >> 10;
-                        let mut dq = 0i32;
-                        if q < 15 {
-                            let d = ((q.wrapping_mul(ac_q)) >> dq_shift) as i32;
-                            cul_level = cul_level.wrapping_add(q);
-                            msac.bool_store_neg(&mut dq, d);
-                        } else {
-                            cold_hi_tok();
-                            let (q_hi, dq_hi) = msac.ac_golomb(ac_q, dq_shift, cf_max);
-                            if q_hi == 0 {
-                                ok = false;
-                            }
-                            cul_level = cul_level.wrapping_add(q_hi & 0xFFFFF);
-                            dq = dq_hi;
-                        }
-                        (rc as u16, dq)
-                    }));
-                } else {
-                    let lbwl = lbwl.max(2);
-                    log.tx_entries.extend(nz.iter().rev().map(|&e| {
-                        let e = e as u32;
-                        let rc = (e & 0x3FF) as usize;
-                        levels[((rc as u32).wrapping_add((rc as u32 >> lbwl) << 2) & 2047)
-                            as usize] = 0;
-                        let q = e >> 10;
-                        let mut dq = 0i32;
-                        if q < 15 {
-                            let d = ((q.wrapping_mul(ac_q)) >> dq_shift) as i32;
-                            cul_level = cul_level.wrapping_add(q);
-                            msac.bool_store_neg(&mut dq, d);
-                        } else {
-                            cold_hi_tok();
-                            let (q_hi, dq_hi) = msac.ac_golomb(ac_q, dq_shift, cf_max);
-                            if q_hi == 0 {
-                                ok = false;
-                            }
-                            cul_level = cul_level.wrapping_add(q_hi & 0xFFFFF);
-                            dq = dq_hi;
-                        }
-                        (rc as u16, dq)
-                    }));
-                }
-                log.tx_headers.push(super::stage::TxRecHeader {
-                    eob: eob as u16,
-                    tx_type: self.plane_tx_type,
-                    count: count as u16,
-                });
-            }
-            self.t.msac.copy_state(&m);
-            if !ok {
+        } else {
+            let eob_has_dc = (eob << 1) | (has_dc as usize);
+            let Some(c) = (if tx_cls == 0 {
+                self.coeffs_ac_no_qm::<PARSE, true>(
+                    n_ac,
+                    ac_q,
+                    dq_shift,
+                    cf_max,
+                    lbwl.max(2),
+                    dc_dq,
+                    eob_has_dc,
+                )
+            } else {
+                self.coeffs_ac_no_qm::<PARSE, false>(
+                    n_ac,
+                    ac_q,
+                    dq_shift,
+                    cf_max,
+                    lbwl.max(2),
+                    dc_dq,
+                    eob_has_dc,
+                )
+            }) else {
                 reset_scratch_on_err(self.sc);
                 return u32::MAX;
-            }
-        } else if n_ac != 0 {
-            #[cold]
-            #[inline(always)]
-            fn cold_hi_tok() {}
-
-            let mut m = self.t.msac.clone();
-            let msac = &mut m;
-            let sc = &mut *self.sc;
-            let cf = &mut sc.coeffs;
-            let levels = &mut sc.levels;
-            let nz = &sc.nz[..n_ac];
-            if tx_cls == 0 {
-                for &e in nz.iter().rev() {
-                    let e = e as u32;
-                    let rc = (e & 0x3FF) as usize;
-                    levels[rc] = 0;
-                    let q = e >> 10;
-                    if q < 15 {
-                        let d = ((q.wrapping_mul(ac_q)) >> dq_shift) as i32;
-                        cul_level = cul_level.wrapping_add(q);
-                        msac.bool_store_neg(&mut cf[rc], d);
-                    } else {
-                        cold_hi_tok();
-                        let (q_hi, dq) = msac.ac_golomb(ac_q, dq_shift, cf_max);
-                        if q_hi == 0 {
-                            reset_scratch_on_err(self.sc);
-                            return u32::MAX;
-                        }
-                        cul_level = cul_level.wrapping_add(q_hi & 0xFFFFF);
-                        cf[rc] = dq;
-                    }
-                }
-            } else {
-                let lbwl = lbwl.max(2);
-                for &e in nz.iter().rev() {
-                    let e = e as u32;
-                    let rc = (e & 0x3FF) as usize;
-                    levels[((rc as u32).wrapping_add((rc as u32 >> lbwl) << 2) & 2047) as usize] =
-                        0;
-                    let q = e >> 10;
-                    if q < 15 {
-                        let d = ((q.wrapping_mul(ac_q)) >> dq_shift) as i32;
-                        cul_level = cul_level.wrapping_add(q);
-                        msac.bool_store_neg(&mut cf[rc], d);
-                    } else {
-                        cold_hi_tok();
-                        let (q_hi, dq) = msac.ac_golomb(ac_q, dq_shift, cf_max);
-                        if q_hi == 0 {
-                            reset_scratch_on_err(self.sc);
-                            return u32::MAX;
-                        }
-                        cul_level = cul_level.wrapping_add(q_hi & 0xFFFFF);
-                        cf[rc] = dq;
-                    }
-                }
-            }
-            self.t.msac.copy_state(&m);
+            };
+            cul_level = cul_level.wrapping_add(c);
         }
         cul_level = cul_level.min(63);
         self.update_coeff_ctx(plane, plan, ax0, ly, cul_level as u8, dc_category);
@@ -1845,69 +1908,152 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
         tx_sz: TxSize,
         lbwl: usize,
     ) -> Option<u32> {
-        #[cold]
-        #[inline(always)]
-        fn cold_hi_tok() {}
-
         let ptype = (plane > 0) as usize;
         let qm_level = (self.b.qm_level[plane] as usize).min(14);
         let ac_q = self.b.ac_q[plane];
         let dq_shift = (TX_DQ_SHIFT[tx_sz as usize] & 31) as u32;
         let cf_max = (1u64 << (7 + self.f.bd)) - 1;
         let tx_cls = tx_class(self.plane_tx_type);
-        let mut m = self.t.msac.clone();
-        let msac = &mut m;
-        let sc = &mut *self.sc;
-        let cf = &mut sc.coeffs;
-        let levels = &mut sc.levels;
-        let nz = &sc.nz[..n_ac];
         let qm = crate::decoder::av1::tables::qm::quantizer_matrix_1024(qm_level, ptype, tx_sz);
         let cf_max32 = cf_max as u32;
         // Largest `q < 15` coefficient magnitude for any QM weight (<= 255).
         // If it fits in `cf_max`, the clamp is a no-op; `& 0xFFFFFF` is
         // always a no-op for `q < 15` (see the `qm_dequant_fast_paths` test).
         let max_d = (14 * ((ac_q * 255 + 16) >> 5)) >> dq_shift;
-        let mut cul_level = 0u32;
         if max_d <= cf_max32 && tx_cls == 0 {
-            for &e in nz.iter().rev() {
-                let e = e as u32;
-                let rc = (e & 0x3FF) as usize;
-                let q2 = (ac_q * qm[rc] as u32 + 16) >> 5;
-                levels[rc] = 0;
-                let q = e >> 10;
-                if q < 15 {
-                    let d = ((q * q2) >> dq_shift) as i32;
-                    cul_level += q;
-                    msac.bool_store_neg(&mut cf[rc], d);
-                } else {
-                    cold_hi_tok();
-                    let (q_hi, dq) = msac.ac_golomb(q2, dq_shift, cf_max);
-                    if q_hi == 0 {
-                        return None;
-                    }
-                    cul_level += q_hi & 0xFFFFF;
-                    cf[rc] = dq;
-                }
-            }
+            self.dequant_ac_qm_loop::<true>(n_ac, ac_q, dq_shift, cf_max, lbwl, qm)
         } else {
-            for &e in nz.iter().rev() {
-                let e = e as u32;
-                let rc = (e & 0x3FF) as usize;
-                let q2 = (ac_q * qm[rc] as u32 + 16) >> 5;
-                levels[((rc as u32 + ((rc as u32 >> lbwl) << 2)) & 2047) as usize] = 0;
-                let q = e >> 10;
-                if q < 15 {
-                    let d = (q * q2) >> dq_shift;
-                    cul_level += q;
-                    msac.bool_store_neg_qm(&mut cf[rc], d, cf_max32);
+            self.dequant_ac_qm_loop::<false>(n_ac, ac_q, dq_shift, cf_max, lbwl, qm)
+        }
+    }
+
+    #[inline(always)]
+    fn dequant_ac_qm_loop<const FAST: bool>(
+        &mut self,
+        n_ac: usize,
+        ac_q: u32,
+        dq_shift: u32,
+        cf_max: u64,
+        lbwl: usize,
+        qm: &[u8; 1024],
+    ) -> Option<u32> {
+        #[cold]
+        #[inline(always)]
+        fn cold_hi_tok() {}
+
+        let cf_max32 = cf_max as u32;
+        let mut m = self.t.msac.clone();
+        let sc = &mut *self.sc;
+        let mut cul_level = 0u32;
+        let mut i = n_ac;
+        while i > 0 && !m.equi_locked() {
+            i -= 1;
+            let e = sc.nz[i & 1023] as u32;
+            let rc = (e & 0x3FF) as usize;
+            let q2 = (ac_q.wrapping_mul(qm[rc] as u32).wrapping_add(16)) >> 5;
+            if FAST {
+                sc.levels[rc] = 0;
+            } else {
+                sc.levels[((rc as u32).wrapping_add((rc as u32 >> lbwl) << 2) & 2047) as usize] = 0;
+            }
+            let q = e >> 10;
+            if q < 15 {
+                let d = q.wrapping_mul(q2) >> dq_shift;
+                cul_level = cul_level.wrapping_add(q);
+                if FAST {
+                    m.bool_store_neg(&mut sc.coeffs[rc], d as i32);
                 } else {
-                    cold_hi_tok();
-                    let (q_hi, dq) = msac.ac_golomb(q2, dq_shift, cf_max);
-                    if q_hi == 0 {
-                        return None;
+                    m.bool_store_neg_qm(&mut sc.coeffs[rc], d, cf_max32);
+                }
+            } else {
+                cold_hi_tok();
+                let (q_hi, dq) = m.ac_golomb(q2, dq_shift, cf_max);
+                if q_hi == 0 {
+                    self.t.msac.copy_state(&m);
+                    return None;
+                }
+                cul_level = cul_level.wrapping_add(q_hi & 0xFFFFF);
+                sc.coeffs[rc] = dq;
+            }
+        }
+        if i > 0 {
+            let recip = m.equi_recip();
+            let r_sh48 = m.equi_r_sh48();
+            while i > 0 {
+                let t16 = m.equi_peek16_with(recip);
+                let mut sbits = (t16 as i32) << 16;
+                let max_k = i.min(16);
+                let mut k = 0usize;
+                while k < max_k {
+                    let e = sc.nz[(i - 1 - k) & 1023] as u32;
+                    let q = e >> 10;
+                    if q >= 15 {
+                        break;
                     }
-                    cul_level += q_hi & 0xFFFFF;
-                    cf[rc] = dq;
+                    let rc = (e & 0x3FF) as usize;
+                    let q2 = (ac_q.wrapping_mul(qm[rc] as u32).wrapping_add(16)) >> 5;
+                    if FAST {
+                        sc.levels[rc] = 0;
+                    } else {
+                        sc.levels[((rc as u32).wrapping_add((rc as u32 >> lbwl) << 2) & 2047)
+                            as usize] = 0;
+                    }
+                    let d = q.wrapping_mul(q2) >> dq_shift;
+                    cul_level = cul_level.wrapping_add(q);
+                    sc.coeffs[rc] = if FAST {
+                        std::hint::select_unpredictable(
+                            sbits < 0,
+                            d as i32,
+                            (d as i32).wrapping_neg(),
+                        )
+                    } else {
+                        let pos = d.min(cf_max32) as i32;
+                        let neg = (d.min(cf_max32.wrapping_add(1)) as i32).wrapping_neg();
+                        std::hint::select_unpredictable(sbits < 0, pos, neg)
+                    };
+                    sbits = sbits.wrapping_shl(1);
+                    k += 1;
+                }
+                if k > 0 {
+                    m.equi_consume_with(t16, k as u32, r_sh48);
+                    i -= k;
+                }
+                if k < max_k {
+                    cold_hi_tok();
+                    i -= 1;
+                    let e = sc.nz[i & 1023] as u32;
+                    let rc = (e & 0x3FF) as usize;
+                    let q2 = (ac_q.wrapping_mul(qm[rc] as u32).wrapping_add(16)) >> 5;
+                    if FAST {
+                        sc.levels[rc] = 0;
+                    } else {
+                        sc.levels[((rc as u32).wrapping_add((rc as u32 >> lbwl) << 2) & 2047)
+                            as usize] = 0;
+                    }
+                    let g16 = if k == 0 { t16 } else { m.equi_peek16_with(recip) };
+                    let u = (!g16) & 0x7fff;
+                    let (q_hi, dq_hi) = if u >= 128 {
+                        let z = u.leading_zeros().wrapping_sub(17);
+                        let x = (1u32 << (z & 7))
+                            | (((!g16) >> (14u32.wrapping_sub(z << 1) & 15))
+                                & ((1u32 << (z & 7)) - 1));
+                        let q = x.wrapping_add(14);
+                        let sign = ((g16 >> 15) ^ 1) as u64;
+                        let d = (((q as u64).wrapping_mul(q2 as u64) & 0xFFFFFF) >> dq_shift)
+                            .min(cf_max.wrapping_add(sign)) as i32;
+                        let dq = std::hint::select_unpredictable(sign != 0, d.wrapping_neg(), d);
+                        m.equi_consume_with(g16, (z << 1).wrapping_add(2), r_sh48);
+                        (q, dq)
+                    } else {
+                        let (q_hi, dq_hi) = m.ac_golomb(q2, dq_shift, cf_max);
+                        if q_hi == 0 {
+                            self.t.msac.copy_state(&m);
+                            return None;
+                        }
+                        (q_hi & 0xFFFFF, dq_hi)
+                    };
+                    cul_level = cul_level.wrapping_add(q_hi);
+                    sc.coeffs[rc] = dq_hi;
                 }
             }
         }
@@ -2062,24 +2208,15 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
             let idx = level_idx::<CLS, BWL>(pos);
             let ctx = lo_ctx::<CLS, BWL>(levels, idx, p32);
             let cdf_row = if CLS == 0 { &mut lo_cdf[ctx] } else { &mut lo_cdf[22 + ctx] };
-            let tok = msac.symbol5_c::<UPD>(cdf_row);
-            // k < scan.len() <= 1024.
-            if tok == 3 {
+            if msac.symbol5_coef::<UPD>(cdf_row, levels, nz, idx, pos, &mut k) {
                 cold_hi_tok();
-                let hi = hi_mag::<CLS, BWL>(levels, idx);
+                let idx3 = level_idx::<CLS, BWL>(pos);
+                let hi = hi_mag::<CLS, BWL>(levels, idx3);
                 let tok = msac.hi_tok_c::<UPD>(
                     &mut hi_cdf[br_pos_ctx::<CLS, BWL>(pos).wrapping_add(hi_ctx(hi))],
                 );
-                levels[level_idx::<CLS, BWL>(pos) & 2047] = (tok as u8) | (3 << 6);
-                nz[k & 1023] = ((tok as u16) << 10) | pos as u16;
-                k = k.wrapping_add(1);
-            } else {
-                // Branch free (zero / non-zero is unpredictable), like
-                // dav1d: zero tokens store 0 (levels are zero there
-                // already) and are dropped from `nz` by not advancing k.
-                levels[idx & 2047] = (tok.wrapping_mul(0x41)) as u8;
-                nz[k & 1023] = ((tok as u16) << 10) | pos as u16;
-                k = k.wrapping_add((tok != 0) as usize);
+                levels[idx3 & 2047] = (tok as u8) | (3 << 6);
+                nz[k.wrapping_sub(1) & 1023] = ((tok as u16) << 10) | (pos as u16);
             }
         }
 
@@ -2162,31 +2299,10 @@ fn set_tx_types(
 
 #[cold]
 #[inline(never)]
-#[allow(clippy::too_many_arguments)]
-fn dequant_dc_slow(
-    q: u32,
-    dc_q: u32,
-    qm_level: usize,
-    ptype: usize,
-    tx_sz: TxSize,
-    dq_shift: u32,
-    cf_max: u64,
-    sign: bool,
-    use_qm: bool,
-) -> i32 {
-    let qv = dc_q as u64;
-    let q2 = if use_qm {
-        let qm = crate::decoder::av1::tables::qm::quantizer_matrix(qm_level.min(14), ptype, tx_sz);
-        (qv * qm[0] as u64 + 16) >> 5
-    } else {
-        qv
-    };
-    let dq = (((q as u64 * q2) & 0xFFFFFF) >> dq_shift).min(cf_max + sign as u64) as i32;
-    if sign {
-        -dq
-    } else {
-        dq
-    }
+fn dc_q_qm(dc_q: u32, qm_level: usize, ptype: usize, tx_sz: TxSize) -> u32 {
+    let qm0 =
+        crate::decoder::av1::tables::qm::quantizer_matrix_1024(qm_level, ptype, tx_sz)[0] as u32;
+    (dc_q.wrapping_mul(qm0).wrapping_add(16)) >> 5
 }
 
 /// Spec `get_scan(txSz)` given PlaneTxType.

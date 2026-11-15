@@ -941,7 +941,7 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
             self.b.segment_id = 0;
             self.b.lossless = fh.lossless_array[0];
             let ctx = self.b.above_mi.skip as usize + self.b.left_mi.skip as usize;
-            self.b.skip = self.bool_cdf(|c| &mut c.skip[ctx]);
+            self.b.skip = self.bool_cdf3(|c| &mut c.skip[ctx]);
         } else {
             self.intra_segment_and_skip()?;
         }
@@ -1034,7 +1034,7 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
         let fh = self.f.fh;
         if !fh.seg.seg_id_pre_skip {
             let ctx = self.b.above_mi.skip as usize + self.b.left_mi.skip as usize;
-            self.b.skip = self.bool_cdf(|c| &mut c.skip[ctx]);
+            self.b.skip = self.bool_cdf3(|c| &mut c.skip[ctx]);
             return self.intra_segment_id();
         }
         self.b.skip = false;
@@ -1043,7 +1043,7 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
             self.b.skip = true;
         } else {
             let ctx = self.b.above_mi.skip as usize + self.b.left_mi.skip as usize;
-            self.b.skip = self.bool_cdf(|c| &mut c.skip[ctx]);
+            self.b.skip = self.bool_cdf3(|c| &mut c.skip[ctx]);
         }
         Ok(())
     }
@@ -1219,7 +1219,7 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
             && (self.b.bw4 | self.b.bh4) < 16
         {
             let bs = self.b.bsize as usize;
-            self.b.use_filter_intra = self.bool_cdf(|c| &mut c.filter_intra[bs]);
+            self.b.use_filter_intra = self.bool_cdf3(|c| &mut c.filter_intra[bs]);
             if self.b.use_filter_intra {
                 self.b.filter_intra_mode = self.sym(|c| &mut c.filter_intra_mode) as u8;
             }
@@ -1531,7 +1531,7 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
                 };
                 self.t.msac.symbol_n(cdf)
             } else {
-                self.bool_cdf(|c| &mut c.tx_8x8[ctx]) as usize
+                self.bool_cdf3(|c| &mut c.tx_8x8[ctx]) as usize
             };
             self.b.tx_size = SPLIT_TX_BY_DEPTH[max_rect as usize][depth.min(4)];
         }
