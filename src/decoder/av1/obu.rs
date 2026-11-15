@@ -167,10 +167,16 @@ fn parse_metadata(data: &[u8]) -> Result<()> {
 
 /// Checks that the data following the first frame splits into well-formed
 /// OBUs (spec 5.3), so that a payload with malformed OBU headers or sizes
-/// is rejected even if they come after the first frame.
+/// is rejected even if they come after the first frame. Sequence header
+/// OBUs (spec 5.5) are also parsed since they do not depend on any decoding
+/// state, so that a truncated or malformed sequence header is rejected.
 fn validate_trailing_obus(mut data: &[u8]) -> Result<()> {
     while !data.is_empty() {
-        data = next_obu(data)?.1;
+        let (obu, rest) = next_obu(data)?;
+        if obu.obu_type == OBU_SEQUENCE_HEADER {
+            SequenceHeader::parse(obu.payload)?;
+        }
+        data = rest;
     }
     Ok(())
 }
