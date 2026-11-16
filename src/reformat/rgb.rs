@@ -156,6 +156,7 @@ pub struct Image {
     pub format: Format,
     pub chroma_upsampling: ChromaUpsampling,
     pub chroma_downsampling: ChromaDownsampling,
+    pub ignore_alpha: bool,
     pub premultiply_alpha: bool,
     pub is_float: bool,
     pub max_threads: i32,
@@ -265,6 +266,7 @@ struct RgbStripMeta {
     format: Format,
     chroma_upsampling: ChromaUpsampling,
     chroma_downsampling: ChromaDownsampling,
+    ignore_alpha: bool,
     premultiply_alpha: bool,
     is_float: bool,
     row_bytes: u32,
@@ -278,6 +280,7 @@ impl From<&Image> for RgbStripMeta {
             format: rgb.format,
             chroma_upsampling: rgb.chroma_upsampling,
             chroma_downsampling: rgb.chroma_downsampling,
+            ignore_alpha: rgb.ignore_alpha,
             premultiply_alpha: rgb.premultiply_alpha,
             is_float: rgb.is_float,
             row_bytes: rgb.row_bytes,
@@ -294,6 +297,7 @@ impl RgbStripMeta {
             format: self.format,
             chroma_upsampling: self.chroma_upsampling,
             chroma_downsampling: self.chroma_downsampling,
+            ignore_alpha: self.ignore_alpha,
             premultiply_alpha: self.premultiply_alpha,
             is_float: self.is_float,
             max_threads: 1,
@@ -481,6 +485,7 @@ impl Image {
             format: Format::Rgba,
             chroma_upsampling: ChromaUpsampling::Automatic,
             chroma_downsampling: ChromaDownsampling::Automatic,
+            ignore_alpha: false,
             premultiply_alpha: false,
             is_float: false,
             max_threads: 1,
@@ -609,16 +614,7 @@ impl Image {
     }
 
     pub fn has_alpha(&self) -> bool {
-        match self.format {
-            Format::Rgba
-            | Format::Bgra
-            | Format::Argb
-            | Format::Abgr
-            | Format::Rgba1010102
-            | Format::GrayA
-            | Format::AGray => true,
-            Format::Rgb | Format::Bgr | Format::Rgb565 | Format::Gray => false,
-        }
+        self.format.has_alpha() && !self.ignore_alpha
     }
 
     pub(crate) fn channel_size(&self) -> u32 {
@@ -646,16 +642,22 @@ impl Image {
 
     fn convert_to_half_float(&mut self) -> AvifResult<()> {
         let scale = 1.0 / self.max_channel_f();
-        if libyuv::convert_to_half_float(self, scale)?.is_some() {
+        let skip_alpha = self.ignore_alpha && self.format.has_alpha();
+        if !skip_alpha && libyuv::convert_to_half_float(self, scale)?.is_some() {
             return Ok(());
         }
         // This constant comes from libyuv. For details, see here:
         // https://chromium.googlesource.com/libyuv/libyuv/+/2f87e9a7/source/row_common.cc#3537
         let reinterpret_f32_as_u32 = |f: f32| u32::from_le_bytes(f.to_le_bytes());
         let multiplier = 1.925_93e-34 * scale;
+        let channel_count = self.channel_count() as usize;
+        let alpha_offset = self.format.alpha_offset();
         for y in 0..self.height {
             let row = self.row16_mut(y)?;
-            for pixel in row {
+            for (i, pixel) in row.iter_mut().enumerate() {
+                if skip_alpha && channel_count > 0 && i % channel_count == alpha_offset {
+                    continue;
+                }
                 *pixel = (reinterpret_f32_as_u32((*pixel as f32) * multiplier) >> 13) as u16;
             }
         }
@@ -827,7 +829,9 @@ impl Image {
 
         let mut converted_with_libyuv: bool = false;
         let mut alpha_reformatted_with_libyuv = false;
-        if alpha_multiply_mode == AlphaMultiplyMode::NoOp || self.has_alpha() {
+        // libyuv writes opaque alpha into 4-channel outputs, so skip it when ignoring alpha.
+        let can_use_libyuv = !self.ignore_alpha || !self.format.has_alpha();
+        if can_use_libyuv && (alpha_multiply_mode == AlphaMultiplyMode::NoOp || self.has_alpha()) {
             if let Some(alpha_reformatted) = libyuv::yuv_to_rgb(image, self)? {
                 alpha_reformatted_with_libyuv = alpha_reformatted;
                 converted_with_libyuv = true;
@@ -836,7 +840,10 @@ impl Image {
         if image.yuv_format == PixelFormat::AndroidNv21 || self.format == Format::Rgba1010102 {
             // These conversions are only supported via libyuv.
             if converted_with_libyuv {
-                if image.has_alpha() && matches!(self.format, Format::Rgba1010102) {
+                if self.has_alpha()
+                    && image.has_alpha()
+                    && matches!(self.format, Format::Rgba1010102)
+                {
                     // If the source image has an alpha channel, scale them to 2 bits and fill it
                     // into the rgb image. Otherwise, libyuv writes them as opaque by default.
                     self.import_alpha_from(image)?;
@@ -860,7 +867,7 @@ impl Image {
                     self.chroma_upsampling,
                     ChromaUpsampling::Nearest | ChromaUpsampling::Fastest
                 ) || matches!(image.yuv_format, PixelFormat::Yuv444 | PixelFormat::Yuv400))
-                && (alpha_multiply_mode == AlphaMultiplyMode::NoOp || self.format.has_alpha())
+                && (alpha_multiply_mode == AlphaMultiplyMode::NoOp || self.has_alpha())
             {
                 converted_by_fast_path = rgb_impl::yuv_to_rgb_fast(image, self)?.is_some();
             }
@@ -895,7 +902,7 @@ impl Image {
         {
             return AvifError::reformat_failed();
         }
-        if self.format == Format::Rgb565 || self.is_float {
+        if matches!(self.format, Format::Rgb565 | Format::Rgba1010102) || self.is_float {
             return AvifError::not_implemented();
         }
         image.allocate_planes(Category::Color)?;

@@ -49,7 +49,7 @@ impl From<rgb::Image> for avifRGBImage {
             format: rgb.format,
             chroma_upsampling: rgb.chroma_upsampling,
             chroma_downsampling: rgb.chroma_downsampling,
-            ignore_alpha: false,
+            ignore_alpha: rgb.ignore_alpha,
             alpha_premultiplied: rgb.premultiply_alpha,
             is_float: rgb.is_float,
             max_threads: rgb.max_threads,
@@ -74,46 +74,22 @@ impl avifRGBImage {
     }
 }
 
-impl TryFrom<&avifRGBImage> for rgb::Image {
-    type Error = AvifError;
-
-    fn try_from(rgb: &avifRGBImage) -> AvifResult<rgb::Image> {
-        let dst = rgb::Image {
+impl From<&avifRGBImage> for rgb::Image {
+    fn from(rgb: &avifRGBImage) -> rgb::Image {
+        rgb::Image {
             width: rgb.width,
             height: rgb.height,
-            depth: rgb.depth as u8,
+            depth: u8::try_from(rgb.depth).unwrap_or(0),
             format: rgb.format,
             chroma_upsampling: rgb.chroma_upsampling,
             chroma_downsampling: rgb.chroma_downsampling,
+            ignore_alpha: rgb.ignore_alpha,
             premultiply_alpha: rgb.alpha_premultiplied,
             is_float: rgb.is_float,
             max_threads: rgb.max_threads,
             pixels: Pixels::from_raw_pointer(rgb.pixels, rgb.depth, rgb.height, rgb.row_bytes).ok(),
             row_bytes: rgb.row_bytes,
-        };
-        let format = match (rgb.format, rgb.ignore_alpha) {
-            (rgb::Format::Rgb, _) => rgb::Format::Rgb,
-            (rgb::Format::Rgba, true) => rgb::Format::Rgb,
-            (rgb::Format::Rgba, false) => rgb::Format::Rgba,
-            (rgb::Format::Argb, true) => rgb::Format::Rgb,
-            (rgb::Format::Argb, false) => rgb::Format::Argb,
-            (rgb::Format::Bgr, _) => rgb::Format::Bgr,
-            (rgb::Format::Bgra, true) => rgb::Format::Bgr,
-            (rgb::Format::Bgra, false) => rgb::Format::Bgra,
-            (rgb::Format::Abgr, true) => rgb::Format::Bgr,
-            (rgb::Format::Abgr, false) => rgb::Format::Abgr,
-            (rgb::Format::Rgb565, _) => rgb::Format::Rgb565,
-            (rgb::Format::Rgba1010102, _) => rgb::Format::Rgba1010102,
-            (rgb::Format::Gray, _) => rgb::Format::Gray,
-            (rgb::Format::GrayA, true) => rgb::Format::Gray,
-            (rgb::Format::GrayA, false) => rgb::Format::GrayA,
-            (rgb::Format::AGray, true) => rgb::Format::Gray,
-            (rgb::Format::AGray, false) => rgb::Format::AGray,
-        };
-        if !dst.has_valid_pixels() {
-            return Ok(dst);
         }
-        dst.shuffle_channels_to(format)
     }
 }
 
@@ -148,10 +124,7 @@ pub unsafe extern "C" fn crabby_avifImageYUVToRGB(
     if image_ref.yuvPlanes[0].is_null() {
         return avifResult::Ok;
     }
-    let mut rgb: rgb::Image = match deref_const!(rgb).try_into() {
-        Ok(rgb) => rgb,
-        Err(err) => return (&err).into(),
-    };
+    let mut rgb: rgb::Image = deref_const!(rgb).into();
     if rgb.pixels.is_none() {
         return avifResult::ReformatFailed;
     }
@@ -185,10 +158,7 @@ pub unsafe extern "C" fn crabby_avifImageRGBToYUV(
 ) -> avifResult {
     check_pointer!(image);
     check_pointer!(rgb);
-    let rgb: rgb::Image = match deref_const!(rgb).try_into() {
-        Ok(rgb) => rgb,
-        Err(err) => return (&err).into(),
-    };
+    let rgb: rgb::Image = deref_const!(rgb).into();
     if rgb.pixels.is_none() {
         return avifResult::ReformatFailed;
     }

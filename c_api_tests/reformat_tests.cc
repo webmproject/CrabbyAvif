@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -1145,6 +1146,160 @@ TEST(YUVToRGBThreadingTest, NegativeMaxThreads) {
   // Values larger than the internal maximum are clamped.
   rgb.maxThreads = 1000;
   EXPECT_EQ(avifImageYUVToRGB(yuv.get(), &rgb), AVIF_RESULT_OK);
+}
+
+TEST(ReformatTest, YUVToRGBIgnoreAlpha) {
+  constexpr uint8_t kSentinelAlpha = 0x5A;
+  for (int p = 0; p < 3; ++p) {
+    ImagePtr image(
+        avifImageCreate(kWidth, kHeight, 8, AVIF_PIXEL_FORMAT_YUV444));
+    ASSERT_NE(image, nullptr);
+    ASSERT_EQ(avifImageAllocatePlanes(image.get(), AVIF_PLANES_YUV),
+              AVIF_RESULT_OK);
+    memcpy(image->yuvPlanes[0], kYuv[p], kPlaneSize);
+    memcpy(image->yuvPlanes[1], kYuv[p] + kUOffset, kPlaneSize);
+    memcpy(image->yuvPlanes[2], kYuv[p] + kVOffset, kPlaneSize);
+
+    for (avifRGBFormat format : {AVIF_RGB_FORMAT_RGBA, AVIF_RGB_FORMAT_BGRA,
+                                 AVIF_RGB_FORMAT_ARGB, AVIF_RGB_FORMAT_ABGR}) {
+      const RgbChannelOffsets offsets = GetRgbChannelOffsets(format);
+      for (int max_threads : {1, 2}) {
+        // Leave RGB bytes uninitialized so MSan catches any pre-write reads.
+        std::unique_ptr<uint8_t[]> rgb_pixels(
+            new uint8_t[kWidth * kHeight * 4]);
+        for (int i = 0; i < kWidth * kHeight; ++i) {
+          rgb_pixels[i * 4 + offsets.a] = kSentinelAlpha;
+        }
+        avifRGBImage rgb;
+        avifRGBImageSetDefaults(&rgb, image.get());
+        rgb.format = format;
+        rgb.ignoreAlpha = AVIF_TRUE;
+        rgb.maxThreads = max_threads;
+        rgb.pixels = rgb_pixels.get();
+        rgb.rowBytes = kWidth * 4;
+        ASSERT_EQ(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+        for (int i = 0; i < kWidth * kHeight; ++i) {
+          EXPECT_NEAR(rgb_pixels[i * 4 + offsets.r], kRgb[p][i * 4 + 0], 1);
+          EXPECT_NEAR(rgb_pixels[i * 4 + offsets.g], kRgb[p][i * 4 + 1], 1);
+          EXPECT_NEAR(rgb_pixels[i * 4 + offsets.b], kRgb[p][i * 4 + 2], 1);
+          EXPECT_EQ(rgb_pixels[i * 4 + offsets.a], kSentinelAlpha);
+        }
+      }
+    }
+  }
+}
+
+TEST(ReformatTest, YUVToRGBIgnoreAlphaWithAlphaPlane) {
+  constexpr uint8_t kSentinelAlpha = 0x5A;
+  ImagePtr image(avifImageCreate(kWidth, kHeight, 8, AVIF_PIXEL_FORMAT_YUV420));
+  ASSERT_NE(image, nullptr);
+  ASSERT_EQ(avifImageAllocatePlanes(image.get(), AVIF_PLANES_ALL),
+            AVIF_RESULT_OK);
+  for (uint32_t y = 0; y < kHeight; ++y) {
+    memset(image->yuvPlanes[0] + y * image->yuvRowBytes[0], 0xff, kWidth);
+    memset(image->alphaPlane + y * image->alphaRowBytes, 0x80, kWidth);
+  }
+  for (uint32_t y = 0; y < kHeight / 2; ++y) {
+    memset(image->yuvPlanes[1] + y * image->yuvRowBytes[1], 0x80, kWidth / 2);
+    memset(image->yuvPlanes[2] + y * image->yuvRowBytes[2], 0x80, kWidth / 2);
+  }
+
+  std::unique_ptr<uint8_t[]> rgb_pixels(new uint8_t[kWidth * kHeight * 4]);
+  for (int i = 0; i < kWidth * kHeight; ++i) {
+    rgb_pixels[i * 4 + 3] = kSentinelAlpha;
+  }
+  avifRGBImage rgb;
+  avifRGBImageSetDefaults(&rgb, image.get());
+  rgb.format = AVIF_RGB_FORMAT_RGBA;
+  rgb.ignoreAlpha = AVIF_TRUE;
+  rgb.pixels = rgb_pixels.get();
+  rgb.rowBytes = kWidth * 4;
+  ASSERT_EQ(avifImageYUVToRGB(image.get(), &rgb), AVIF_RESULT_OK);
+  for (int i = 0; i < kWidth * kHeight; ++i) {
+    // White premultiplied by alpha ~0.502 (128/255) yields ~128.
+    EXPECT_NEAR(rgb_pixels[i * 4 + 0], 128, 2);
+    EXPECT_NEAR(rgb_pixels[i * 4 + 1], 128, 2);
+    EXPECT_NEAR(rgb_pixels[i * 4 + 2], 128, 2);
+    EXPECT_EQ(rgb_pixels[i * 4 + 3], kSentinelAlpha);
+  }
+}
+
+TEST(ReformatTest, RGBToYUVIgnoreAlpha) {
+  constexpr uint8_t kSentinelAlpha = 0x5A;
+  for (avifRGBFormat format : {AVIF_RGB_FORMAT_RGBA, AVIF_RGB_FORMAT_BGRA,
+                               AVIF_RGB_FORMAT_ARGB, AVIF_RGB_FORMAT_ABGR}) {
+    const RgbChannelOffsets offsets = GetRgbChannelOffsets(format);
+    ImagePtr image(
+        avifImageCreate(kWidth, kHeight, 8, AVIF_PIXEL_FORMAT_YUV444));
+    ASSERT_NE(image, nullptr);
+    AvifRgbImage rgb(image.get(), 8, format);
+    rgb.ignoreAlpha = AVIF_TRUE;
+    for (int i = 0; i < kWidth * kHeight; ++i) {
+      rgb.pixels[i * 4 + offsets.r] = kRgb[2][i * 4 + 0];
+      rgb.pixels[i * 4 + offsets.g] = kRgb[2][i * 4 + 1];
+      rgb.pixels[i * 4 + offsets.b] = kRgb[2][i * 4 + 2];
+      rgb.pixels[i * 4 + offsets.a] = kSentinelAlpha;
+    }
+    ASSERT_EQ(avifImageRGBToYUV(image.get(), &rgb), AVIF_RESULT_OK);
+    EXPECT_EQ(image->alphaPlane, nullptr);
+    EXPECT_EQ(image->alphaRowBytes, 0u);
+    ASSERT_NE(image->yuvPlanes[AVIF_CHAN_Y], nullptr);
+    ASSERT_NE(image->yuvPlanes[AVIF_CHAN_U], nullptr);
+    ASSERT_NE(image->yuvPlanes[AVIF_CHAN_V], nullptr);
+    for (int y = 0; y < kHeight; ++y) {
+      for (int x = 0; x < kWidth; ++x) {
+        const int idx = y * kWidth + x;
+        EXPECT_NEAR(
+            image->yuvPlanes[AVIF_CHAN_Y][y * image->yuvRowBytes[0] + x],
+            kYuv[2][idx], 2);
+        EXPECT_NEAR(
+            image->yuvPlanes[AVIF_CHAN_U][y * image->yuvRowBytes[1] + x],
+            kYuv[2][kUOffset + idx], 2);
+        EXPECT_NEAR(
+            image->yuvPlanes[AVIF_CHAN_V][y * image->yuvRowBytes[2] + x],
+            kYuv[2][kVOffset + idx], 2);
+      }
+    }
+  }
+}
+
+TEST(ReformatTest, YUVToRGBIgnoreAlphaUnsupportedFormats) {
+  for (avifBool with_alpha : {AVIF_FALSE, AVIF_TRUE}) {
+    ImagePtr image(
+        avifImageCreate(kWidth, kHeight, 10, AVIF_PIXEL_FORMAT_YUV420));
+    ASSERT_NE(image, nullptr);
+    ASSERT_EQ(avifImageAllocatePlanes(
+                  image.get(), with_alpha ? AVIF_PLANES_ALL : AVIF_PLANES_YUV),
+              AVIF_RESULT_OK);
+    std::vector<uint8_t> pixels(kWidth * kHeight * 4, 0x5A);
+    avifRGBImage rgb;
+    avifRGBImageSetDefaults(&rgb, image.get());
+    rgb.format = AVIF_RGB_FORMAT_RGBA1010102;
+    rgb.depth = 10;
+    rgb.ignoreAlpha = AVIF_TRUE;
+    rgb.pixels = pixels.data();
+    rgb.rowBytes = kWidth * 4;
+    EXPECT_EQ(avifImageYUVToRGB(image.get(), &rgb),
+              AVIF_RESULT_NOT_IMPLEMENTED);
+    for (uint8_t byte : pixels) {
+      EXPECT_EQ(byte, 0x5A);
+    }
+  }
+}
+
+TEST(ReformatTest, RGBToYUVIgnoreAlphaUnsupportedFormats) {
+  ImagePtr image(
+      avifImageCreate(kWidth, kHeight, 10, AVIF_PIXEL_FORMAT_YUV420));
+  ASSERT_NE(image, nullptr);
+  std::vector<uint8_t> pixels(kWidth * kHeight * 4, 0x5A);
+  avifRGBImage rgb;
+  avifRGBImageSetDefaults(&rgb, image.get());
+  rgb.format = AVIF_RGB_FORMAT_RGBA1010102;
+  rgb.depth = 10;
+  rgb.ignoreAlpha = AVIF_TRUE;
+  rgb.pixels = pixels.data();
+  rgb.rowBytes = kWidth * 4;
+  EXPECT_EQ(avifImageRGBToYUV(image.get(), &rgb), AVIF_RESULT_NOT_IMPLEMENTED);
 }
 
 }  // namespace
