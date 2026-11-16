@@ -68,7 +68,6 @@ pub struct Avm {
     // Decoder.
     decoder_config: Option<DecoderConfig>,
     decoder_iter: avm_codec_iter_t,
-    image: *mut avm_image_t,
 }
 
 // Functions mapping from CrabbyAvif structures to AV2 or libavm constants.
@@ -1039,17 +1038,13 @@ impl Decoder for Avm {
             }
         }
 
-        if !next_frame.is_null() {
-            self.image = next_frame;
-        } else if category == Category::Alpha && !self.image.is_null() {
-            // Special case: reuse last alpha frame
-        } else {
+        if next_frame.is_null() {
             return AvifError::unknown_error("avm_codec_get_frame() failed");
         }
-        // SAFETY: `self.image` is non-null (verified in the branches above and cleared before
-        // `avm_codec_destroy`), and points to a valid `avm_image_t` owned by `self.context` with
-        // no concurrent mutable access.
-        let avm_image = unsafe { &*self.image };
+        // SAFETY: `next_frame` was checked to be non-null above, and points to a valid
+        // `avm_image_t` owned by `self.context` until the next decode/destroy call with no
+        // concurrent mutable access.
+        let avm_image = unsafe { &*next_frame };
 
         let color_planes = [(0usize, Plane::Y), (1, Plane::U), (2, Plane::V)];
         if category == Category::Color {
@@ -1198,13 +1193,12 @@ impl Drop for Avm {
 
 impl Avm {
     fn destroy_context(&mut self) {
-        self.image = std::ptr::null_mut();
         self.decoder_iter = std::ptr::null();
         if let Some(mut ctx) = self.context.take() {
             let ctx_ptr: *mut avm_codec_ctx_t = &mut ctx;
             // SAFETY: `ctx` was initialized by a successful `avm_codec_enc_init_ver` or
             // `avm_codec_dec_init_ver` call, and `self.context.take()` ensures `avm_codec_destroy`
-            // is called at most once. `self.image` and `self.decoder_iter` are cleared first.
+            // is called at most once. `self.decoder_iter` is cleared first.
             unsafe {
                 avm_codec_destroy(ctx_ptr);
             }
