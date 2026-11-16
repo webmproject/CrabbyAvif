@@ -45,8 +45,12 @@ use crate::internal_utils::*;
 use crate::decoder::item::Item;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
+#[cfg(feature = "encoder")]
+use crate::image::Plane;
 use crate::parser::mp4box::CodecConfiguration;
 use crate::utils::clap::CropRect;
+#[cfg(feature = "encoder")]
+use crate::utils::pixels::Pixels;
 use crate::AndroidMediaCodecOutputColorFormat;
 use crate::AvifError;
 use crate::AvifResult;
@@ -227,6 +231,57 @@ pub(crate) trait Encoder {
         output_samples: &[crate::encoder::Sample],
     ) -> AvifResult<CodecConfiguration>;
     // Destruction must be implemented using Drop.
+}
+
+#[cfg(feature = "encoder")]
+pub(crate) fn plane_ptr_and_stride(image: &Image, plane: Plane) -> AvifResult<(*mut u8, i32)> {
+    if image.width == 0 || image.height == 0 || !matches!(image.depth, 8 | 10 | 12 | 16) {
+        return AvifError::invalid_argument();
+    }
+    let plane_index = plane.as_usize();
+    let pixels = image.planes[plane_index]
+        .as_ref()
+        .ok_or(AvifError::NoContent)?;
+    let plane_width = u32_from_usize(image.width(plane))?;
+    let plane_height = u32_from_usize(image.height(plane))?;
+    if plane_width == 0 || plane_height == 0 {
+        return AvifError::invalid_argument();
+    }
+    let row_bytes = image.row_bytes[plane_index];
+    let stride = i32_from_u32(row_bytes)?;
+    let bps: u32 = if image.depth == 8 { 1 } else { 2 };
+    let min_row_bytes = crate::checked_mul!(plane_width, bps)?;
+    if row_bytes < min_row_bytes {
+        return AvifError::invalid_argument();
+    }
+    let last_row_byte_offset = crate::checked_mul!(plane_height - 1, row_bytes)?;
+    let _ = i32_from_u32(last_row_byte_offset)?;
+    let ptr = if image.depth == 8 {
+        if !matches!(pixels, Pixels::Buffer(_) | Pixels::Pointer(_)) {
+            return AvifError::invalid_argument();
+        }
+        let _ = pixels.slice(last_row_byte_offset, plane_width)?;
+        let ptr = pixels.ptr();
+        if ptr.is_null() {
+            return AvifError::no_content();
+        }
+        ptr as *mut u8
+    } else {
+        if !matches!(pixels, Pixels::Buffer16(_) | Pixels::Pointer16(_)) {
+            return AvifError::invalid_argument();
+        }
+        if row_bytes % 2 != 0 {
+            return AvifError::invalid_argument();
+        }
+        let last_row_offset = last_row_byte_offset / 2;
+        let _ = pixels.slice16(last_row_offset, plane_width)?;
+        let ptr = pixels.ptr16();
+        if ptr.is_null() || !(ptr as usize).is_multiple_of(std::mem::align_of::<u16>()) {
+            return AvifError::invalid_argument();
+        }
+        ptr as *mut u8
+    };
+    Ok((ptr, stride))
 }
 
 #[cfg(feature = "encoder")]

@@ -18,6 +18,7 @@ use crate::codecs::*;
 use crate::encoder::Sample;
 use crate::encoder::ScalingMode;
 use crate::image::Image;
+use crate::image::Plane;
 use crate::image::YuvRange;
 use crate::internal_utils::*;
 use crate::parser::obu::Av1SequenceHeader;
@@ -603,28 +604,22 @@ impl Encoder for Aom {
             Category::Alpha => {
                 aom_image.x_chroma_shift = 1;
                 aom_image.y_chroma_shift = 1;
-                aom_image.planes[0] = image.planes[3]
-                    .as_ref()
-                    .ok_or(AvifError::NoContent)?
-                    .ptr_generic() as *mut _;
-                aom_image.stride[0] = image.row_bytes[3] as i32;
+                let (ptr, stride) = plane_ptr_and_stride(image, Plane::A)?;
+                aom_image.planes[0] = ptr.cast();
+                aom_image.stride[0] = stride;
             }
             _ => {
                 if image.yuv_format == PixelFormat::Yuv400 {
                     aom_image.x_chroma_shift = 1;
                     aom_image.y_chroma_shift = 1;
-                    aom_image.planes[0] = image.planes[0]
-                        .as_ref()
-                        .ok_or(AvifError::NoContent)?
-                        .ptr_generic() as *mut _;
-                    aom_image.stride[0] = image.row_bytes[0] as i32;
+                    let (ptr, stride) = plane_ptr_and_stride(image, Plane::Y)?;
+                    aom_image.planes[0] = ptr.cast();
+                    aom_image.stride[0] = stride;
                 } else {
-                    for i in 0..=2 {
-                        aom_image.planes[i] = image.planes[i]
-                            .as_ref()
-                            .ok_or(AvifError::NoContent)?
-                            .ptr_generic() as *mut _;
-                        aom_image.stride[i] = image.row_bytes[i] as i32;
+                    for (i, plane) in [Plane::Y, Plane::U, Plane::V].into_iter().enumerate() {
+                        let (ptr, stride) = plane_ptr_and_stride(image, plane)?;
+                        aom_image.planes[i] = ptr.cast();
+                        aom_image.stride[i] = stride;
                     }
                 }
             }
@@ -644,8 +639,10 @@ impl Encoder for Aom {
         let aom_image_ptr: *const aom_image_t = &aom_image;
         let flags = encode_flags as _;
         // SAFETY: `encoder_ptr` points to an initialized `aom_codec_ctx_t`, and `aom_image_ptr`
-        // points to `aom_image` whose active plane pointers borrow from `image` (validated to have
-        // allocated planes above) and remain valid for the duration of `aom_codec_encode`.
+        // points to `aom_image` whose active plane pointers and strides were validated via
+        // `plane_ptr_and_stride` (matching `image.depth`, non-null, aligned, `stride <= i32::MAX`,
+        // and covering `(plane_height - 1) * row_bytes + plane_width * bps`) and borrow from
+        // `image` for the duration of `aom_codec_encode`.
         let err = unsafe { aom_codec_encode(encoder_ptr, aom_image_ptr, 0, 1, flags) };
         if err != aom_codec_err_t_AOM_CODEC_OK {
             return AvifError::unknown_error(format!(

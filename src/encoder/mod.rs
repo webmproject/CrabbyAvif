@@ -324,6 +324,8 @@ pub struct Encoder {
     codec_specific_options: CodecSpecificOptions,
     // Decided when the first image is added. Guaranteed not to be Recipe::Auto.
     final_recipe: Option<Recipe>,
+    // Grid layout and dimensions established by the first image.
+    grid: Option<Grid>,
     // True if the first image was added as a single image (not as a frame of an image sequence
     // nor as a layer of a layered image). No other image can be added in that case.
     single_image: bool,
@@ -482,10 +484,40 @@ impl Encoder {
         Ok(())
     }
 
+    fn validate_image_plane(image: &Image, plane: Plane) -> AvifResult<()> {
+        let _ = crate::codecs::plane_ptr_and_stride(image, plane)?;
+        Ok(())
+    }
+
+    fn validate_input_image(image: &Image, require_alpha: bool) -> AvifResult<()> {
+        if image.width == 0 || image.height == 0 || !matches!(image.depth, 8 | 10 | 12 | 16) {
+            return AvifError::invalid_argument();
+        }
+        if !matches!(
+            image.yuv_format,
+            PixelFormat::Yuv400 | PixelFormat::Yuv420 | PixelFormat::Yuv422 | PixelFormat::Yuv444
+        ) {
+            return AvifError::invalid_argument();
+        }
+        if !image.has_plane(Plane::Y) {
+            return AvifError::no_content();
+        }
+        Self::validate_image_plane(image, Plane::Y)?;
+        if image.yuv_format != PixelFormat::Yuv400 {
+            Self::validate_image_plane(image, Plane::U)?;
+            Self::validate_image_plane(image, Plane::V)?;
+        }
+        if require_alpha || image.alpha_present || image.has_alpha() {
+            Self::validate_image_plane(image, Plane::A)?;
+        }
+        Ok(())
+    }
+
     fn validate_image_grid(grid: &Grid, images: &[&Image], recipe: Recipe) -> AvifResult<()> {
         let first_image = *images.first().ok_or(AvifError::InvalidArgument)?;
         let last_image = *images.last().ok_or(AvifError::InvalidArgument)?;
         for (index, image) in images.iter().enumerate() {
+            Self::validate_input_image(image, /*require_alpha=*/ false)?;
             match (image.depth, recipe) {
                 (8 | 10 | 12, Recipe::None)
                 | (16, Recipe::BitDepthExtension8b8b)
@@ -517,9 +549,6 @@ impl Encoder {
                 && image.yuv_format != PixelFormat::Yuv444
             {
                 return AvifError::invalid_argument();
-            }
-            if !image.has_plane(Plane::Y) {
-                return AvifError::no_content();
             }
         }
         if last_image.width > first_image.width || last_image.height > first_image.height {
@@ -611,6 +640,9 @@ impl Encoder {
         if duration == 0 {
             duration = 1;
         }
+        for image in images {
+            Self::validate_input_image(image, self.alpha_present)?;
+        }
         if self.items.is_empty() {
             assert!(self.final_recipe.is_none());
             self.final_recipe = Some(final_recipe);
@@ -618,10 +650,17 @@ impl Encoder {
             let grid = Grid {
                 rows: grid_rows,
                 columns: grid_columns,
-                width: (grid_columns - 1) * first_image.width + last_image.width,
-                height: (grid_rows - 1) * first_image.height + last_image.height,
+                width: checked_add!(
+                    checked_mul!(grid_columns - 1, first_image.width)?,
+                    last_image.width
+                )?,
+                height: checked_add!(
+                    checked_mul!(grid_rows - 1, first_image.height)?,
+                    last_image.height
+                )?,
             };
             Self::validate_image_grid(&grid, cell_images, final_recipe)?;
+            self.grid = Some(grid);
             self.single_image = is_single_image;
             self.image_metadata = first_image.shallow_clone();
             self.image_metadata.exif = first_image.exif.try_clone()?;
@@ -674,10 +713,14 @@ impl Encoder {
                 let gainmap_grid = Grid {
                     rows: grid_rows,
                     columns: grid_columns,
-                    width: (grid_columns - 1) * first_gainmap_image.width
-                        + last_gainmap_image.width,
-                    height: (grid_rows - 1) * first_gainmap_image.height
-                        + last_gainmap_image.height,
+                    width: checked_add!(
+                        checked_mul!(grid_columns - 1, first_gainmap_image.width)?,
+                        last_gainmap_image.width
+                    )?,
+                    height: checked_add!(
+                        checked_mul!(grid_rows - 1, first_gainmap_image.height)?,
+                        last_gainmap_image.height
+                    )?,
                 };
                 Self::validate_gainmap_grid(&gainmap_grid, gainmaps)?;
                 let tonemap_item_id = self.add_tmap_item(first_gainmap)?;
@@ -727,11 +770,15 @@ impl Encoder {
             }
             // Another frame in an image sequence, or layer in a layered image.
             let first_image = *cell_images.first().ok_or(AvifError::InvalidArgument)?;
-            if !first_image.has_same_cicp(&self.image_metadata)
+            let last_image = *cell_images.last().ok_or(AvifError::InvalidArgument)?;
+            if first_image.width != self.image_metadata.width
+                || first_image.height != self.image_metadata.height
+                || !first_image.has_same_cicp(&self.image_metadata)
                 || first_image.alpha_premultiplied != self.image_metadata.alpha_premultiplied
                 // If the previously added image had an alpha channel, then this image should have
                 // it too. The reverse need not be true as we will simply ignore the alpha channel
                 // of the current image in that case.
+                || (self.alpha_present && !first_image.has_alpha())
                 || (self.image_metadata.alpha_present && !first_image.alpha_present)
             {
                 return AvifError::invalid_argument();
@@ -739,6 +786,22 @@ impl Encoder {
             if self.final_recipe != Some(final_recipe) {
                 return AvifError::invalid_argument();
             }
+            let grid = Grid {
+                rows: grid_rows,
+                columns: grid_columns,
+                width: checked_add!(
+                    checked_mul!(grid_columns - 1, first_image.width)?,
+                    last_image.width
+                )?,
+                height: checked_add!(
+                    checked_mul!(grid_rows - 1, first_image.height)?,
+                    last_image.height
+                )?,
+            };
+            if self.grid != Some(grid) {
+                return AvifError::invalid_argument();
+            }
+            Self::validate_image_grid(&grid, cell_images, final_recipe)?;
         }
 
         let first_cell_image = cell_images.first().ok_or(AvifError::InvalidArgument)?;
@@ -959,6 +1022,7 @@ impl Encoder {
         cell_height: u32,
         image: &Image,
     ) -> AvifResult<()> {
+        Self::validate_input_image(image, self.alpha_present)?;
         let layout = grid::compute_layout(image.width, image.height, cell_width, cell_height)?;
         let cells = Self::split_into_cells(image, &layout)?;
         let cell_refs: Vec<&Image> = cells.iter().try_collect()?;
@@ -987,6 +1051,8 @@ impl Encoder {
         if self.settings.extra_layer_count != 0 {
             return AvifError::not_implemented();
         }
+        Self::validate_input_image(image, self.alpha_present)?;
+        Self::validate_input_image(&gainmap.image, false)?;
         let layout = grid::compute_layout(image.width, image.height, cell_width, cell_height)?;
         let gainmap_image = &gainmap.image;
         let gainmap_layout = grid::compute_layout(

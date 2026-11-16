@@ -18,6 +18,7 @@ use crate::codecs::*;
 use crate::encoder::Sample;
 use crate::encoder::ScalingMode;
 use crate::image::Image;
+use crate::image::Plane;
 use crate::image::YuvRange;
 use crate::internal_utils::*;
 use crate::parser::mp4box::Av2CodecConfiguration;
@@ -593,11 +594,9 @@ impl Encoder for Avm {
                 avm_image.monochrome = 1;
                 avm_image.x_chroma_shift = 1;
                 avm_image.y_chroma_shift = 1;
-                avm_image.planes[0] = image.planes[3]
-                    .as_ref()
-                    .ok_or(AvifError::NoContent)?
-                    .ptr_generic() as *mut _;
-                avm_image.stride[0] = image.row_bytes[3] as i32;
+                let (ptr, stride) = plane_ptr_and_stride(image, Plane::A)?;
+                avm_image.planes[0] = ptr.cast();
+                avm_image.stride[0] = stride;
             }
             _ => {
                 avm_image.range = image.yuv_range as u32;
@@ -605,19 +604,18 @@ impl Encoder for Avm {
                     avm_image.monochrome = 1;
                     avm_image.x_chroma_shift = 1;
                     avm_image.y_chroma_shift = 1;
-                    avm_image.planes[0] = image.planes[0]
-                        .as_ref()
-                        .ok_or(AvifError::NoContent)?
-                        .ptr_generic() as *mut _;
-                    avm_image.stride[0] = image.row_bytes[0] as i32;
+                    let (ptr, stride) = plane_ptr_and_stride(image, Plane::Y)?;
+                    avm_image.planes[0] = ptr.cast();
+                    avm_image.stride[0] = stride;
                 } else {
                     avm_image.monochrome = 0;
-                    for i in 0..=2 {
-                        avm_image.planes[i] = image.planes[i]
-                            .as_ref()
-                            .ok_or(AvifError::NoContent)?
-                            .ptr_generic() as *mut _;
-                        avm_image.stride[i] = image.row_bytes[i] as i32;
+                    for (i, plane) in [Plane::Y, Plane::U, Plane::V].into_iter().enumerate() {
+                        let (ptr, stride) = plane_ptr_and_stride(image, plane)?;
+                        avm_image.planes[i] = ptr.cast();
+                        avm_image.stride[i] = stride;
+                    }
+                    if avm_image.stride[1] != avm_image.stride[2] {
+                        return AvifError::invalid_argument();
                     }
                 }
             }
@@ -640,8 +638,11 @@ impl Encoder for Avm {
         let pts = avm_codec_pts_t::default();
         let flags = encode_flags as _;
         // SAFETY: `ctx_ptr` points to an initialized `avm_codec_ctx_t`, and `avm_image_ptr` points
-        // to `avm_image` whose active plane pointers borrow from `image` (validated to have
-        // allocated planes above) and remain valid for the duration of `avm_codec_encode`.
+        // to `avm_image` whose active plane pointers and strides were validated via
+        // `plane_ptr_and_stride` (matching `image.depth`, non-null, aligned, `stride <= i32::MAX`,
+        // `(plane_height - 1) * row_bytes <= i32::MAX`, and covering
+        // `(plane_height - 1) * row_bytes + plane_width * bps`, plus `stride[1] == stride[2]` for
+        // non-monochrome images) and borrow from `image` for the duration of `avm_codec_encode`.
         let err = unsafe { avm_codec_encode(ctx_ptr, avm_image_ptr, pts, duration, flags) };
         if err != avm_codec_err_t_AVM_CODEC_OK {
             return AvifError::unknown_error(format!("avm_codec_encode() failed: {err}"));
@@ -684,11 +685,9 @@ impl Encoder for Avm {
             avm_alpha_image.y_chroma_shift = avm_image.y_chroma_shift;
             avm_alpha_image.range = avm_color_range_AVM_CR_FULL_RANGE;
             avm_alpha_image.monochrome = 1;
-            avm_alpha_image.planes[0] = image.planes[3]
-                .as_ref()
-                .ok_or(AvifError::NoContent)?
-                .ptr_generic() as *mut _;
-            avm_alpha_image.stride[0] = image.row_bytes[3] as i32;
+            let (alpha_ptr, alpha_stride) = plane_ptr_and_stride(image, Plane::A)?;
+            avm_alpha_image.planes[0] = alpha_ptr.cast();
+            avm_alpha_image.stride[0] = alpha_stride;
             // Leave CICP values as unspecified.
 
             let ctx = self.context.as_mut().ok_or(AvifError::InvalidArgument)?;
@@ -697,8 +696,8 @@ impl Encoder for Avm {
             let alpha_pts = avm_codec_pts_t::default();
             let alpha_flags = encode_flags as _;
             // SAFETY: `ctx_ptr` points to an initialized `avm_codec_ctx_t`, and `alpha_img_ptr`
-            // points to `avm_alpha_image` whose alpha plane pointer borrows from `image`
-            // (validated to have an allocated alpha plane above) and remains valid for the call.
+            // points to `avm_alpha_image` whose alpha plane pointer and stride were validated via
+            // `plane_ptr_and_stride` and borrow from `image` for the duration of the call.
             let err = unsafe {
                 avm_codec_encode(ctx_ptr, alpha_img_ptr, alpha_pts, duration, alpha_flags)
             };
@@ -1449,5 +1448,31 @@ fn avm_enc_dec_opaque_alpha_test() -> Result<(), AvifError> {
     for plane in YUV_PLANES {
         assert!(are_planes_equal(&image, &decoded, plane)?);
     }
+    Ok(())
+}
+
+#[test]
+fn avm_mismatched_uv_stride_rejected() -> Result<(), AvifError> {
+    let mut encoder = Avm::default();
+    let config = EncoderConfig {
+        is_single_image: true,
+        quality: 100.0,
+        ..Default::default()
+    };
+    let mut image = Image {
+        width: 4,
+        height: 4,
+        depth: 8,
+        yuv_format: PixelFormat::Yuv420,
+        ..Default::default()
+    };
+    image.allocate_planes(Category::Color)?;
+    // Widen Plane::U stride relative to Plane::V while keeping its backing buffer large enough.
+    image.row_bytes[1] = 4;
+    image.planes[1] = Some(Pixels::Buffer(vec![0u8; 8]));
+    let mut output_samples = vec![];
+    assert!(encoder
+        .encode_image(&image, Category::Color, &config, &mut output_samples)
+        .is_err());
     Ok(())
 }

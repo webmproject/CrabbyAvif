@@ -22,6 +22,7 @@ use crabby_avif::encoder::*;
 use crabby_avif::gainmap::*;
 use crabby_avif::image::*;
 use crabby_avif::utils::clap::CropRect;
+use crabby_avif::utils::pixels::Pixels;
 use crabby_avif::utils::*;
 use crabby_avif::*;
 
@@ -1671,4 +1672,180 @@ fn split_grid_gainmap_invalid(gainmap_width: u32, gainmap_height: u32) -> AvifRe
 fn codec_versions() {
     assert!(crabby_avif::codec_versions().contains("dav1d"));
     assert!(crabby_avif::codec_versions().contains("aom"));
+}
+
+#[test]
+fn invalid_input_image_rejected() -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let settings = encoder::Settings {
+        speed: Some(10),
+        ..Default::default()
+    };
+
+    // 1024x1024 Image with 1-byte Pixels::Buffer backing buffers must fail validation.
+    let small_buf_image = Image {
+        width: 1024,
+        height: 1024,
+        depth: 8,
+        yuv_format: PixelFormat::Yuv420,
+        row_bytes: [1024, 512, 512, 0],
+        planes: [
+            Some(Pixels::Buffer(vec![0u8; 1])),
+            Some(Pixels::Buffer(vec![0u8; 1])),
+            Some(Pixels::Buffer(vec![0u8; 1])),
+            None,
+        ],
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    assert!(encoder.add_image(&small_buf_image).is_err());
+
+    // Mismatched Buffer16 on 8-bit Image must be rejected.
+    let mismatched_8bit = Image {
+        width: 4,
+        height: 4,
+        depth: 8,
+        yuv_format: PixelFormat::Yuv420,
+        row_bytes: [4, 2, 2, 0],
+        planes: [
+            Some(Pixels::Buffer16(vec![0u16; 16])),
+            Some(Pixels::Buffer16(vec![0u16; 4])),
+            Some(Pixels::Buffer16(vec![0u16; 4])),
+            None,
+        ],
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    assert!(encoder.add_image(&mismatched_8bit).is_err());
+
+    // Mismatched Buffer on 10-bit Image must be rejected.
+    let mismatched_10bit = Image {
+        width: 4,
+        height: 4,
+        depth: 10,
+        yuv_format: PixelFormat::Yuv420,
+        row_bytes: [8, 4, 4, 0],
+        planes: [
+            Some(Pixels::Buffer(vec![0u8; 32])),
+            Some(Pixels::Buffer(vec![0u8; 8])),
+            Some(Pixels::Buffer(vec![0u8; 8])),
+            None,
+        ],
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    assert!(encoder.add_image(&mismatched_10bit).is_err());
+
+    // row_bytes > i32::MAX must be rejected.
+    let oversized_stride = Image {
+        width: 4,
+        height: 1,
+        depth: 8,
+        yuv_format: PixelFormat::Yuv400,
+        row_bytes: [i32::MAX as u32 + 1, 0, 0, 0],
+        planes: [Some(Pixels::Buffer(vec![0u8; 4])), None, None, None],
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    assert!(encoder.add_image(&oversized_stride).is_err());
+
+    // (plane_height - 1) * row_bytes > i32::MAX must be rejected even when row_bytes <= i32::MAX.
+    let oversized_last_row_offset = Image {
+        width: 4,
+        height: 3,
+        depth: 8,
+        yuv_format: PixelFormat::Yuv400,
+        row_bytes: [1 << 30, 0, 0, 0],
+        planes: [Some(Pixels::Buffer(vec![0u8; 4])), None, None, None],
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    assert!(encoder.add_image(&oversized_last_row_offset).is_err());
+
+    // Odd row_bytes on 10-bit Image must be rejected.
+    let odd_stride_10bit = Image {
+        width: 4,
+        height: 2,
+        depth: 10,
+        yuv_format: PixelFormat::Yuv400,
+        row_bytes: [9, 0, 0, 0],
+        planes: [Some(Pixels::Buffer16(vec![0u16; 16])), None, None, None],
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    assert!(encoder.add_image(&odd_stride_10bit).is_err());
+
+    // Subsequent sequence frame with mismatched dimensions or truncated plane buffer must fail.
+    let valid_frame = generate_gradient_image(8, 8, 8, PixelFormat::Yuv420, YuvRange::Full, true)?;
+    let different_dims =
+        generate_gradient_image(16, 16, 8, PixelFormat::Yuv420, YuvRange::Full, true)?;
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_for_sequence(&valid_frame, 1)?;
+    assert!(encoder.add_image_for_sequence(&different_dims, 1).is_err());
+    assert!(encoder.add_image_for_sequence(&small_buf_image, 1).is_err());
+
+    // Subsequent sequence frame missing Plane::A even when alpha_present flag is set must fail.
+    let mut missing_alpha_plane =
+        generate_gradient_image(8, 8, 8, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    missing_alpha_plane.alpha_present = true;
+    assert!(encoder
+        .add_image_for_sequence(&missing_alpha_plane, 1)
+        .is_err());
+
+    // add_image_split_grid and add_image_gainmap_split_grid must reject truncated buffers before
+    // constructing cell views.
+    let truncated_split_image = Image {
+        width: 128,
+        height: 128,
+        depth: 8,
+        yuv_format: PixelFormat::Yuv420,
+        row_bytes: [128, 64, 64, 0],
+        planes: [
+            Some(Pixels::Buffer(vec![0u8; 1])),
+            Some(Pixels::Buffer(vec![0u8; 1])),
+            Some(Pixels::Buffer(vec![0u8; 1])),
+            None,
+        ],
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    assert!(encoder
+        .add_image_split_grid(64, 64, &truncated_split_image)
+        .is_err());
+
+    let (valid_split_image, valid_gainmap) = generate_split_gainmap_image(128, 128)?;
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    assert!(encoder
+        .add_image_gainmap_split_grid(64, 64, &truncated_split_image, &valid_gainmap)
+        .is_err());
+    let truncated_gainmap = GainMap {
+        image: truncated_split_image,
+        metadata: valid_gainmap.metadata,
+        alt_icc: valid_gainmap.alt_icc.clone(),
+        ..valid_gainmap
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    assert!(encoder
+        .add_image_gainmap_split_grid(64, 64, &valid_split_image, &truncated_gainmap)
+        .is_err());
+
+    // Subsequent layered frames must match the initial grid layout and total grid dimensions.
+    let layered_settings = encoder::Settings {
+        speed: Some(10),
+        extra_layer_count: 1,
+        ..Default::default()
+    };
+    let cell_64 = generate_gradient_image(64, 64, 8, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    let cell_32x64 =
+        generate_gradient_image(32, 64, 8, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    let mut encoder = encoder::Encoder::create_with_settings(&layered_settings)?;
+    encoder.add_image_grid(2, 1, &[&cell_64, &cell_64])?;
+    assert!(encoder.add_image_grid(1, 1, &[&cell_64]).is_err());
+    assert!(encoder
+        .add_image_grid(2, 1, &[&cell_64, &cell_32x64])
+        .is_err());
+
+    Ok(())
 }

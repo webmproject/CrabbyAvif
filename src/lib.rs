@@ -465,7 +465,7 @@ pub(crate) use checked_incr;
 pub(crate) use checked_mul;
 pub(crate) use checked_sub;
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Grid {
     pub rows: u32,
     pub columns: u32,
