@@ -1065,11 +1065,15 @@ impl Decoder for MediaCodec {
         _item: Option<&Item>,
         signal_eos: bool,
     ) -> AvifResult<()> {
+        image.free_planes(category.planes());
         while self.codec_index < self.codec_initializers.len() {
             let res = self.get_next_image_impl(payload, spatial_id, image, category, signal_eos);
             if res.is_ok() {
                 return Ok(());
             }
+            // Clear any planes populated from the failing codec before releasing its output buffer
+            // or dropping the codec.
+            image.free_planes(category.planes());
             // Drop the current codec and try the next one.
             self.drop_impl();
             self.codec_index += 1;
