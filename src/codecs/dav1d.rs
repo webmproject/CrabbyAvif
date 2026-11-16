@@ -169,11 +169,13 @@ impl Dav1d {
             return Ok(());
         }
         let config = self.config.as_ref().ok_or(AvifError::InvalidArgument)?;
-        let mut settings_uninit: MaybeUninit<Dav1dSettings> = MaybeUninit::uninit();
+        let mut settings_uninit: MaybeUninit<Dav1dSettings> = MaybeUninit::zeroed();
         let settings_mut_ptr = settings_uninit.as_mut_ptr();
-        // SAFETY: `settings_mut_ptr` is a valid, aligned, non-null pointer to `settings_uninit`.
+        // SAFETY: `settings_mut_ptr` is a valid, aligned, non-null pointer to zero-initialized
+        // `settings_uninit`.
         unsafe { dav1d_default_settings(settings_mut_ptr) };
-        // SAFETY: `dav1d_default_settings` completely initialized `settings_uninit`.
+        // SAFETY: `settings_uninit` was zero-initialized (including `reserved` and any padding)
+        // and all active fields were populated by `dav1d_default_settings`.
         let mut settings = unsafe { settings_uninit.assume_init() };
         if low_latency {
             settings.max_frame_delay = 1;
