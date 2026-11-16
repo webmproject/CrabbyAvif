@@ -323,11 +323,33 @@ unsafe extern "C" fn crabbyavif_png_read_data(
         // `png_set_read_fn`; `file` outlives `png_ptr` and is not accessed elsewhere while
         // `libpng` invokes this callback.
         let file = unsafe { &mut *file_ptr };
-        // SAFETY: `data` is verified non-null and `length > 0`; per `libpng`'s `png_rw_ptr`
-        // contract, `data` points to a valid writable buffer of `length` bytes (`u8` has
-        // alignment 1) disjoint from `file`.
-        let buf = unsafe { slice::from_raw_parts_mut(data, length) };
-        file.read_exact(buf).is_ok()
+        let mut scratch = [0u8; 4096];
+        let mut dst = data;
+        let mut remaining = length;
+        let mut ok = true;
+        while remaining > 0 {
+            let chunk_len = remaining.min(scratch.len());
+            let Some(chunk) = scratch.get_mut(..chunk_len) else {
+                ok = false;
+                break;
+            };
+            if file.read_exact(chunk).is_err() {
+                ok = false;
+                break;
+            }
+            // SAFETY: `data` is verified non-null and, per `libpng`'s `png_rw_ptr` contract,
+            // points to a writable buffer of `length` bytes (`u8` has alignment 1) disjoint from
+            // `file` and the stack-local `scratch`. Each iteration has `chunk_len <= remaining`,
+            // so `dst` and `dst.add(chunk_len)` remain within (or one past the end of) that
+            // allocation, and `scratch` has `chunk_len` initialized readable bytes non-overlapping
+            // with `dst`.
+            unsafe {
+                ptr::copy_nonoverlapping(scratch.as_ptr(), dst, chunk_len);
+                dst = dst.add(chunk_len);
+            }
+            remaining -= chunk_len;
+        }
+        ok
     } else {
         false
     };
