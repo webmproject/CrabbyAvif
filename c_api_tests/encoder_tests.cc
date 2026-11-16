@@ -577,6 +577,67 @@ TEST(GridApiTest, MatrixCoefficients) {
   }
 }
 
+TEST(GridApiTest, AddImageFlagWithoutLayers) {
+  ImagePtr cell =
+      testutil::CreateImage(64, 64, /*depth=*/8, AVIF_PIXEL_FORMAT_YUV444,
+                            AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+  ASSERT_NE(cell, nullptr);
+  testutil::FillImageGradient(cell.get(), 0);
+  const avifImage* cell_image_ptrs[2] = {cell.get(), cell.get()};
+
+  // When extraLayerCount is 0, both AVIF_ADD_IMAGE_FLAG_NONE and
+  // AVIF_ADD_IMAGE_FLAG_SINGLE are accepted for a single-image grid.
+  for (avifAddImageFlags flags :
+       {AVIF_ADD_IMAGE_FLAG_NONE, AVIF_ADD_IMAGE_FLAG_SINGLE}) {
+    EncoderPtr encoder(avifEncoderCreate());
+    ASSERT_NE(encoder, nullptr);
+    encoder->speed = 10;
+    encoder->extraLayerCount = 0;
+    ASSERT_EQ(avifEncoderAddImageGrid(encoder.get(), /*gridCols=*/2,
+                                      /*gridRows=*/1, cell_image_ptrs, flags),
+              AVIF_RESULT_OK);
+    AvifRwData encoded;
+    ASSERT_EQ(avifEncoderFinish(encoder.get(), &encoded), AVIF_RESULT_OK);
+    auto decoder = CreateDecoder(encoded);
+    ASSERT_NE(decoder, nullptr);
+    ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+    EXPECT_EQ(decoder->imageCount, 1);
+    ASSERT_EQ(avifDecoderNextImage(decoder.get()), AVIF_RESULT_OK);
+    EXPECT_EQ(decoder->image->width, 2 * cell->width);
+    EXPECT_EQ(decoder->image->height, cell->height);
+  }
+}
+
+TEST(GridApiTest, AddImageFlagSingleWithLayers) {
+  ImagePtr cell =
+      testutil::CreateImage(64, 64, /*depth=*/8, AVIF_PIXEL_FORMAT_YUV444,
+                            AVIF_PLANES_ALL, AVIF_RANGE_FULL);
+  ASSERT_NE(cell, nullptr);
+  testutil::FillImageGradient(cell.get(), 0);
+  const avifImage* cell_image_ptrs[2] = {cell.get(), cell.get()};
+
+  // AVIF_ADD_IMAGE_FLAG_SINGLE cannot be set for a layered grid because
+  // multiple layers are added.
+  EncoderPtr encoder(avifEncoderCreate());
+  ASSERT_NE(encoder, nullptr);
+  encoder->speed = 10;
+  encoder->extraLayerCount = 1;
+  EXPECT_EQ(avifEncoderAddImageGrid(encoder.get(), /*gridCols=*/2,
+                                    /*gridRows=*/1, cell_image_ptrs,
+                                    AVIF_ADD_IMAGE_FLAG_SINGLE),
+            AVIF_RESULT_INVALID_ARGUMENT);
+  ASSERT_EQ(avifEncoderAddImageGrid(encoder.get(), /*gridCols=*/2,
+                                    /*gridRows=*/1, cell_image_ptrs,
+                                    AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+  ASSERT_EQ(avifEncoderAddImageGrid(encoder.get(), /*gridCols=*/2,
+                                    /*gridRows=*/1, cell_image_ptrs,
+                                    AVIF_ADD_IMAGE_FLAG_NONE),
+            AVIF_RESULT_OK);
+  AvifRwData encoded;
+  ASSERT_EQ(avifEncoderFinish(encoder.get(), &encoded), AVIF_RESULT_OK);
+}
+
 class ProgressiveTest : public testing::Test {
  protected:
   static constexpr uint32_t kImageSize = 256;
@@ -1022,13 +1083,16 @@ TEST(SplitGridApiTest, InvalidArguments) {
   EXPECT_EQ(avifEncoderAddImageSplitGrid(encoder.get(), nullptr, 128, 64,
                                          AVIF_ADD_IMAGE_FLAG_SINGLE),
             AVIF_RESULT_INVALID_ARGUMENT);
-  // AVIF_ADD_IMAGE_FLAG_SINGLE is required without extra layers.
+  // AVIF_ADD_IMAGE_FLAG_SINGLE cannot be set for a layered grid.
+  encoder->extraLayerCount = 1;
   EXPECT_EQ(avifEncoderAddImageSplitGrid(encoder.get(), image.get(), 128, 64,
-                                         AVIF_ADD_IMAGE_FLAG_NONE),
-            AVIF_RESULT_INVALID_ARGUMENT);
-  // Nothing can be added after a single image.
-  ASSERT_EQ(avifEncoderAddImageSplitGrid(encoder.get(), image.get(), 128, 64,
                                          AVIF_ADD_IMAGE_FLAG_SINGLE),
+            AVIF_RESULT_INVALID_ARGUMENT);
+  encoder->extraLayerCount = 0;
+  // AVIF_ADD_IMAGE_FLAG_NONE is accepted without extra layers, and nothing can
+  // be added after a single image.
+  ASSERT_EQ(avifEncoderAddImageSplitGrid(encoder.get(), image.get(), 128, 64,
+                                         AVIF_ADD_IMAGE_FLAG_NONE),
             AVIF_RESULT_OK);
   EXPECT_NE(avifEncoderAddImageSplitGrid(encoder.get(), image.get(), 128, 64,
                                          AVIF_ADD_IMAGE_FLAG_SINGLE),

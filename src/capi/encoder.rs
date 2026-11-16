@@ -338,12 +338,12 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageGrid(
     check_pointer!(cellImages);
 
     let encoder_ref = deref_mut!(encoder);
-    if gridCols == 0
-        || gridRows == 0
-        // If we are not encoding a grid image with multiple layers, AVIF_ADD_IMAGE_FLAG_SINGLE has
-        // to be set.
-        || ((addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) == 0 && encoder_ref.extraLayerCount == 0)
-    {
+    if gridCols == 0 || gridRows == 0 {
+        return avifResult::InvalidArgument;
+    }
+
+    // If we are encoding multiple layers, AVIF_ADD_IMAGE_FLAG_SINGLE cannot be set.
+    if encoder_ref.extraLayerCount > 0 && (addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) != 0 {
         return avifResult::InvalidArgument;
     }
     let Some(cell_count_u32) = gridCols.checked_mul(gridRows) else {
@@ -449,12 +449,12 @@ pub unsafe extern "C" fn crabby_avifEncoderAddImageSplitGrid(
     check_pointer!(image);
 
     let encoder_ref = deref_mut!(encoder);
-    if cellWidth == 0
-        || cellHeight == 0
-        // If we are not encoding a grid image with multiple layers, AVIF_ADD_IMAGE_FLAG_SINGLE has
-        // to be set.
-        || ((addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) == 0 && encoder_ref.extraLayerCount == 0)
-    {
+    if cellWidth == 0 || cellHeight == 0 {
+        return avifResult::InvalidArgument;
+    }
+
+    // If we are encoding multiple layers, AVIF_ADD_IMAGE_FLAG_SINGLE cannot be set.
+    if encoder_ref.extraLayerCount > 0 && (addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) != 0 {
         return avifResult::InvalidArgument;
     }
     let res = encoder_ref.initialize_or_update_rust_encoder();
