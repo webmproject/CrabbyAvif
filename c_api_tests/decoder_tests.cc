@@ -230,23 +230,24 @@ TEST_P(DecoderTest, OneShotDecodeFile) {
   const char* file_name = "sofa_grid1x5_420.avif";
   DecoderPtr decoder(NewDecoder());
   ASSERT_NE(decoder, nullptr);
-  avifImage image;
-  ASSERT_EQ(avifDecoderReadFile(decoder.get(), &image,
+  ImagePtr image(avifImageCreateEmpty());
+  ASSERT_NE(image, nullptr);
+  ASSERT_EQ(avifDecoderReadFile(decoder.get(), image.get(),
                                 GetFilename(file_name).c_str()),
             AVIF_RESULT_OK);
-  EXPECT_EQ(image.width, 1024);
-  EXPECT_EQ(image.height, 770);
-  EXPECT_EQ(image.depth, 8);
+  EXPECT_EQ(image->width, 1024);
+  EXPECT_EQ(image->height, 770);
+  EXPECT_EQ(image->depth, 8);
 
   // Call avifDecoderReadFile with a different file but with the same decoder
   // instance.
   file_name = "white_1x1.avif";
-  ASSERT_EQ(avifDecoderReadFile(decoder.get(), &image,
+  ASSERT_EQ(avifDecoderReadFile(decoder.get(), image.get(),
                                 GetFilename(file_name).c_str()),
             AVIF_RESULT_OK);
-  EXPECT_EQ(image.width, 1);
-  EXPECT_EQ(image.height, 1);
-  EXPECT_EQ(image.depth, 8);
+  EXPECT_EQ(image->width, 1);
+  EXPECT_EQ(image->height, 1);
+  EXPECT_EQ(image->depth, 8);
 }
 
 TEST_P(DecoderTest, OneShotDecodeMemory) {
@@ -257,13 +258,75 @@ TEST_P(DecoderTest, OneShotDecodeMemory) {
   auto file_data = testutil::read_file(GetFilename(file_name).c_str());
   DecoderPtr decoder(NewDecoder());
   ASSERT_NE(decoder, nullptr);
-  avifImage image;
-  ASSERT_EQ(avifDecoderReadMemory(decoder.get(), &image, file_data.data(),
+  ImagePtr image(avifImageCreateEmpty());
+  ASSERT_NE(image, nullptr);
+  ASSERT_EQ(avifDecoderReadMemory(decoder.get(), image.get(), file_data.data(),
                                   file_data.size()),
             AVIF_RESULT_OK);
-  EXPECT_EQ(image.width, 1024);
-  EXPECT_EQ(image.height, 770);
-  EXPECT_EQ(image.depth, 8);
+  EXPECT_EQ(image->width, 1024);
+  EXPECT_EQ(image->height, 770);
+  EXPECT_EQ(image->depth, 8);
+}
+
+TEST_P(DecoderTest, OneShotDecodeMemoryOutlivesDecoder) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  auto file_data =
+      testutil::read_file(GetFilename("paris_icc_exif_xmp.avif").c_str());
+  ASSERT_GT(file_data.size(), 0u);
+  ImagePtr image(avifImageCreateEmpty());
+  ASSERT_NE(image, nullptr);
+  {
+    DecoderPtr decoder(NewDecoder());
+    ASSERT_NE(decoder, nullptr);
+    ASSERT_EQ(avifDecoderReadMemory(decoder.get(), image.get(),
+                                    file_data.data(), file_data.size()),
+              AVIF_RESULT_OK);
+  }
+
+  EXPECT_EQ(image->imageOwnsYUVPlanes, AVIF_TRUE);
+  EXPECT_GT(image->width, 0u);
+  EXPECT_GT(image->height, 0u);
+  const uint32_t pixel_size = avifImageUsesU16(image.get()) ? 2 : 1;
+  uint32_t checksum = 0;
+  for (int p = 0; p < 3; ++p) {
+    const uint32_t plane_width = avifImagePlaneWidth(image.get(), p);
+    const uint32_t plane_height = avifImagePlaneHeight(image.get(), p);
+    if (plane_width == 0 || plane_height == 0) {
+      continue;
+    }
+    const uint8_t* plane = avifImagePlane(image.get(), p);
+    const uint32_t row_bytes = avifImagePlaneRowBytes(image.get(), p);
+    ASSERT_NE(plane, nullptr);
+    ASSERT_GE(row_bytes, plane_width * pixel_size);
+    for (uint32_t y = 0; y < plane_height; ++y) {
+      for (uint32_t x = 0; x < plane_width * pixel_size; ++x) {
+        checksum += plane[y * row_bytes + x];
+      }
+    }
+  }
+  EXPECT_GT(checksum, 0u);
+
+  ASSERT_GE(image->icc.size, 4u);
+  EXPECT_EQ(image->icc.data[0], 0);
+  EXPECT_EQ(image->icc.data[1], 0);
+  EXPECT_EQ(image->icc.data[2], 2);
+  EXPECT_EQ(image->icc.data[3], 84);
+
+  ASSERT_GE(image->exif.size, 4u);
+  EXPECT_EQ(image->exif.data[0], 73);
+  EXPECT_EQ(image->exif.data[1], 73);
+  EXPECT_EQ(image->exif.data[2], 42);
+  EXPECT_EQ(image->exif.data[3], 0);
+
+  ASSERT_GE(image->xmp.size, 4u);
+  EXPECT_EQ(image->xmp.data[0], 60);
+  EXPECT_EQ(image->xmp.data[1], 63);
+  EXPECT_EQ(image->xmp.data[2], 120);
+  EXPECT_EQ(image->xmp.data[3], 112);
+
+  image.reset();
 }
 
 avifResult io_read(struct avifIO* io, uint32_t flags, uint64_t offset,
@@ -296,11 +359,12 @@ TEST_P(DecoderTest, OneShotDecodeCustomIO) {
   DecoderPtr decoder(NewDecoder());
   ASSERT_NE(decoder, nullptr);
   avifDecoderSetIO(decoder.get(), &io);
-  avifImage image;
-  ASSERT_EQ(avifDecoderRead(decoder.get(), &image), AVIF_RESULT_OK);
-  EXPECT_EQ(image.width, 1024);
-  EXPECT_EQ(image.height, 770);
-  EXPECT_EQ(image.depth, 8);
+  ImagePtr image(avifImageCreateEmpty());
+  ASSERT_NE(image, nullptr);
+  ASSERT_EQ(avifDecoderRead(decoder.get(), image.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(image->width, 1024);
+  EXPECT_EQ(image->height, 770);
+  EXPECT_EQ(image->depth, 8);
 }
 
 class DerivedIO : public avifIO {
@@ -349,11 +413,12 @@ TEST_P(DecoderTest, DerivedIO) {
   DecoderPtr decoder(NewDecoder());
   ASSERT_NE(decoder, nullptr);
   avifDecoderSetIO(decoder.get(), io);
-  avifImage image;
-  ASSERT_EQ(avifDecoderRead(decoder.get(), &image), AVIF_RESULT_OK);
-  EXPECT_EQ(image.width, 1024);
-  EXPECT_EQ(image.height, 770);
-  EXPECT_EQ(image.depth, 8);
+  ImagePtr image(avifImageCreateEmpty());
+  ASSERT_NE(image, nullptr);
+  ASSERT_EQ(avifDecoderRead(decoder.get(), image.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(image->width, 1024);
+  EXPECT_EQ(image->height, 770);
+  EXPECT_EQ(image->depth, 8);
 }
 
 TEST_P(DecoderTest, NthImage) {
@@ -612,11 +677,12 @@ TEST_P(DecoderTest, GainMapReadMemoryFails) {
   ASSERT_GT(data.size(), 0);
   DecoderPtr decoder(NewDecoder());
   ASSERT_NE(decoder, nullptr);
-  avifImage image;
+  ImagePtr image(avifImageCreateEmpty());
+  ASSERT_NE(image, nullptr);
   // avifDecoderReadMemory does not support gainmaps.
-  EXPECT_NE(
-      avifDecoderReadMemory(decoder.get(), &image, data.data(), data.size()),
-      AVIF_RESULT_OK);
+  EXPECT_NE(avifDecoderReadMemory(decoder.get(), image.get(), data.data(),
+                                  data.size()),
+            AVIF_RESULT_OK);
 }
 
 // Callers bound memory allocations based on the base image dimensions, so gain

@@ -547,10 +547,12 @@ fn avif_decoder_read(decoder: &mut avifDecoder, image: &mut avifImage) -> avifRe
     decoder.rust_decoder.settings = settings;
 
     let res = decoder.rust_decoder.parse();
+    decoder.diag.set_from_result(&res);
     if res.is_err() {
         return res.into();
     }
     let res = decoder.rust_decoder.next_image();
+    decoder.diag.set_from_result(&res);
     if res.is_err() {
         return res.into();
     }
@@ -558,23 +560,15 @@ fn avif_decoder_read(decoder: &mut avifDecoder, image: &mut avifImage) -> avifRe
     if !decoder.image_object.gainMap.is_null() {
         return avifResult::NotImplemented;
     }
-    let src = &decoder.image_object;
-    *image = avifImage {
-        icc: avifRWData {
-            data: src.icc.data,
-            size: src.icc.size,
-        },
-        exif: avifRWData {
-            data: src.exif.data,
-            size: src.exif.size,
-        },
-        xmp: avifRWData {
-            data: src.xmp.data,
-            size: src.xmp.size,
-        },
-        ..*src
-    };
-    avifResult::Ok
+    // SAFETY: `image` is a valid mutable `avifImage` distinct from `&decoder.image_object`, and
+    // `decoder.image_object` holds valid planes and metadata populated by `sync_from_rust_decoder`.
+    unsafe {
+        crabby_avifImageCopy(
+            image,
+            &decoder.image_object,
+            avifPlanesFlag::AvifPlanesAll as u32,
+        )
+    }
 }
 
 /// # Safety
