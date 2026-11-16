@@ -15,18 +15,26 @@
 // Not all sub-modules are used by all targets. Ignore dead code warnings.
 #![allow(dead_code)]
 
+#[forbid(unsafe_code)]
 pub mod avif;
 #[cfg(feature = "gif")]
+#[forbid(unsafe_code)]
 pub mod gif;
 #[cfg(feature = "jpeg")]
+#[forbid(unsafe_code)]
 pub mod jpeg;
+// Unsafe is required for FFI calls and C callbacks into the `libpng` C library (`libpng-sys`).
 #[cfg(feature = "png")]
+#[allow(unsafe_code)]
 pub mod png;
+#[forbid(unsafe_code)]
 pub mod y4m;
 
 #[cfg(feature = "png")]
+#[forbid(unsafe_code)]
 mod icc;
 #[cfg(feature = "jpeg")]
+#[forbid(unsafe_code)]
 mod xmp;
 
 use crate::gainmap::GainMap;

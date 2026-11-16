@@ -26,9 +26,13 @@ macro_rules! find_property {
 // TODO: b/578110464 - The native AV1 decoder does not conform to the clippy lints used by the
 // rest of CrabbyAvif yet. Remove this once the decoder code has been cleaned up to pass clippy.
 #[allow(clippy::all)]
+#[forbid(unsafe_code)]
 pub mod av1;
+#[forbid(unsafe_code)]
 pub mod item;
+#[forbid(unsafe_code)]
 pub mod tile;
+#[forbid(unsafe_code)]
 pub mod track;
 
 use crate::decoder::item::*;
@@ -635,6 +639,9 @@ impl Decoder {
     ///   object.
     /// - The memory referenced by `data` must remain valid and not be mutated or freed until
     ///   `self` is dropped or its IO source is replaced (via `set_io*`).
+    // Unsafe is required to wrap a caller-owned raw byte pointer for the C API
+    // (`avifDecoderSetIOMemory`).
+    #[allow(unsafe_code)]
     pub unsafe fn set_io_raw(&mut self, data: *const u8, size: usize) -> AvifResult<()> {
         if data.is_null() || size > isize::MAX as usize {
             return AvifError::invalid_argument();

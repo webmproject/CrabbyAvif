@@ -12,21 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Unsafe is required in `libyuv`, `scale`, and `sharpyuv` for FFI calls into the `libyuv`
+// (`libyuv-sys`) and `libsharpyuv` (`libsharpyuv-sys`) C libraries.
 #[cfg(feature = "libyuv")]
+#[allow(unsafe_code)]
 pub mod libyuv;
 #[cfg(feature = "libyuv")]
+#[allow(unsafe_code)]
 pub mod scale;
 #[cfg(feature = "sharpyuv")]
+#[allow(unsafe_code)]
 pub mod sharpyuv;
 
+#[forbid(unsafe_code)]
 pub mod alpha;
+#[forbid(unsafe_code)]
 pub mod coeffs;
+#[forbid(unsafe_code)]
 pub mod rgb;
+#[forbid(unsafe_code)]
 pub mod rgb_impl;
 
 // If libyuv is not present, add placeholder functions so that the library will build successfully
 // without it.
 #[cfg(not(feature = "libyuv"))]
+#[forbid(unsafe_code)]
 pub mod libyuv {
     use crate::reformat::*;
     use crate::*;
@@ -70,6 +80,7 @@ pub mod libyuv {
 // If libsharpyuv is not present, add placeholder functions so that the library will build successfully
 // without it.
 #[cfg(not(feature = "sharpyuv"))]
+#[forbid(unsafe_code)]
 pub mod sharpyuv {
     use crate::reformat::*;
     use crate::*;

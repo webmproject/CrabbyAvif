@@ -12,22 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Unsafe is required in the C codec wrappers below for FFI calls and raw-pointer interop with
+// their respective C libraries (`dav1d-sys`, `ndk-sys`, `libyuv-sys`, `aom-sys`, `avm-sys`, and
+// `libjxl-sys`).
 #[cfg(feature = "dav1d")]
+#[allow(unsafe_code)]
 pub mod dav1d;
 
 #[cfg(feature = "android_mediacodec")]
+#[allow(unsafe_code)]
 pub mod android_mediacodec;
 
 #[cfg(feature = "aom")]
+#[allow(unsafe_code)]
 pub mod aom;
 
 #[cfg(feature = "avm")]
+#[allow(unsafe_code)]
 pub mod avm;
 
 #[cfg(feature = "jpegxl")]
+#[allow(unsafe_code)]
 pub mod libjxl;
 
 #[cfg(feature = "native_av1")]
+#[forbid(unsafe_code)]
 pub mod native;
 
 #[cfg(feature = "encoder")]

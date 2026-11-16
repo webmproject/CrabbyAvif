@@ -16,9 +16,13 @@
 #![allow(dead_code)]
 
 #[cfg(feature = "jpeg")]
+#[forbid(unsafe_code)]
 pub mod jpeg;
+// Unsafe is required for FFI calls and C callbacks into the `libpng` C library (`libpng-sys`).
 #[cfg(feature = "png")]
+#[allow(unsafe_code)]
 pub mod png;
+#[forbid(unsafe_code)]
 pub mod y4m;
 
 use crate::image::Image;

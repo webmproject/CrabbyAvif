@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Deny unsafe code at the crate level. Pure-Rust modules use `#[forbid(unsafe_code)]`, and only
+// modules that require FFI or raw-pointer interop allow `unsafe_code` with an explanation.
+#![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![cfg_attr(feature = "disable_cfi", feature(sanitize))]
 #![cfg_attr(feature = "native_av1", feature(portable_simd))]
@@ -29,18 +32,25 @@ mod internal_utils;
 
 pub mod decoder;
 #[cfg(feature = "encoder")]
+#[forbid(unsafe_code)]
 pub mod encoder;
+#[forbid(unsafe_code)]
 pub mod gainmap;
+#[forbid(unsafe_code)]
 pub mod image;
 pub mod reformat;
 pub mod utils;
 
+// This module and its submodules implement the C API (avif.h) FFI boundary, requiring `unsafe`
+// for `extern "C"` entry points and raw pointer conversions.
 #[cfg(feature = "capi")]
+#[allow(unsafe_code)]
 pub mod capi;
 
 /// cbindgen:ignore
 mod codecs;
 
+#[forbid(unsafe_code)]
 mod parser;
 
 use image::*;

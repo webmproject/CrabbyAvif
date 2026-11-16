@@ -36,8 +36,13 @@ macro_rules! try_vec_exact {
     }};
 }
 
+// Unsafe is required by `DecoderRawIO::create` to wrap a caller-owned raw byte pointer from the
+// C API into a slice.
+#[allow(unsafe_code)]
 pub mod io;
+#[forbid(unsafe_code)]
 pub mod sampletransform;
+#[forbid(unsafe_code)]
 pub mod stream;
 
 use crate::parser::mp4box::*;
@@ -339,6 +344,9 @@ pub struct PointerSlice<T> {
     ptr: *mut [T],
 }
 
+// Unsafe is required by `PointerSlice` to wrap raw pixel buffer pointers from the C API and C
+// codec wrappers into bounds-checked slices.
+#[allow(unsafe_code)]
 impl<T> PointerSlice<T> {
     /// # Safety
     ///
@@ -519,6 +527,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn test_pointer_slice_safety_checks_and_slicing() {
         let mut aligned = [10u16, 20, 30, 40];
 

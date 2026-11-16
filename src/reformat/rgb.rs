@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![forbid(unsafe_code)]
-
 use super::coeffs::*;
 use super::libyuv;
 use super::rgb_impl;

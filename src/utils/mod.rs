@@ -15,8 +15,13 @@
 use crate::internal_utils::*;
 use crate::*;
 
+#[forbid(unsafe_code)]
 pub mod clap;
+#[forbid(unsafe_code)]
 pub mod error;
+// Unsafe is required by `Pixels::from_raw_pointer_and_size` to wrap raw pixel buffer pointers
+// from the C API and C codec wrappers into `PointerSlice`.
+#[allow(unsafe_code)]
 pub mod pixels;
 pub mod reader;
 pub mod writer;
