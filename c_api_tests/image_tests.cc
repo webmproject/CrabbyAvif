@@ -198,25 +198,33 @@ TEST(ImageTest, MetadataFunctions) {
   ImagePtr image(avifImageCreateEmpty());
   ASSERT_NE(image, nullptr);
 
-  for (auto* func : {avifImageSetMetadataExif, avifImageSetProfileICC,
-                     avifImageSetMetadataXMP}) {
-    const auto& metadata =
-        (func == avifImageSetMetadataExif)
-            ? image->exif
-            : ((func == avifImageSetProfileICC) ? image->icc : image->xmp);
-    EXPECT_NE(func(nullptr, nullptr, 0), AVIF_RESULT_OK);
-    EXPECT_EQ(func(image.get(), nullptr, 0), AVIF_RESULT_OK);
+  auto test_metadata = [&](const avifRWData& metadata, auto set_metadata) {
+    EXPECT_NE(set_metadata(nullptr, nullptr, 0), AVIF_RESULT_OK);
+    EXPECT_EQ(set_metadata(image.get(), nullptr, 0), AVIF_RESULT_OK);
     EXPECT_EQ(metadata.data, nullptr);
     EXPECT_EQ(metadata.size, 0);
-    EXPECT_EQ(func(image.get(), data.data(), 0), AVIF_RESULT_OK);
+    EXPECT_EQ(set_metadata(image.get(), data.data(), 0), AVIF_RESULT_OK);
     EXPECT_EQ(metadata.data, nullptr);
     EXPECT_EQ(metadata.size, 0);
-    EXPECT_EQ(func(image.get(), data.data(), kSize), AVIF_RESULT_OK);
+    EXPECT_EQ(set_metadata(image.get(), data.data(), kSize), AVIF_RESULT_OK);
     EXPECT_NE(metadata.data, nullptr);
     EXPECT_NE(metadata.data, data.data());
     ASSERT_EQ(metadata.size, kSize);
     EXPECT_EQ(memcmp(metadata.data, data.data(), kSize), 0);
-  }
+  };
+
+  test_metadata(image->exif,
+                [](avifImage* img, const uint8_t* ptr, size_t size) {
+                  return avifImageSetMetadataExif(img, ptr, size);
+                });
+  test_metadata(image->icc,
+                [](avifImage* img, const uint8_t* ptr, size_t size) {
+                  return avifImageSetProfileICC(img, ptr, size);
+                });
+  test_metadata(image->xmp,
+                [](avifImage* img, const uint8_t* ptr, size_t size) {
+                  return avifImageSetMetadataXMP(img, ptr, size);
+                });
 }
 
 TEST(RWDataTest, Set) {
