@@ -671,9 +671,10 @@ impl Image {
 
     #[cfg(feature = "png")]
     pub(crate) fn remove_trailing_null_from_xmp(&mut self) {
-        if self.xmp.len() >= 2
-            && self.xmp[self.xmp.len() - 1] == 0
-            && self.xmp[self.xmp.len() - 2] != 0
+        let len = self.xmp.len();
+        if len >= 2
+            && self.xmp.get(len - 1) == Some(&0)
+            && self.xmp.get(len - 2).is_some_and(|&b| b != 0)
         {
             self.xmp.pop();
         }
