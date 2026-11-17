@@ -224,7 +224,7 @@ fn for_each_avm_frame_pkt(
         // `pkt.data.frame` is the active initialized variant per libavm's API contract.
         let frame = unsafe { &pkt.data.frame };
         let encoded_data = if frame.sz == 0 {
-            &[][..]
+            &[]
         } else {
             if frame.buf.is_null() || frame.sz > isize::MAX as usize {
                 return AvifError::unknown_error("libavm returned invalid frame buffer");
@@ -782,10 +782,11 @@ impl Encoder for Avm {
         let first_sample = output_samples.first().ok_or(AvifError::NoContent)?;
         let all_obus = first_sample.data_output_by_codec();
         let config_obus = Av2CodecConfiguration::get_config_obus_range_and_count(all_obus)?;
-        let codec_config = Av2CodecConfiguration::from_av2_config_obus(
-            config_obus.count,
-            &all_obus[config_obus.range],
-        )?;
+        let config_obus_slice = all_obus
+            .get(config_obus.range)
+            .ok_or(AvifError::NoContent)?;
+        let codec_config =
+            Av2CodecConfiguration::from_av2_config_obus(config_obus.count, config_obus_slice)?;
         Ok(CodecConfiguration::Av2(codec_config))
     }
 }
@@ -836,8 +837,11 @@ fn copy_avm_planes(
             // rows of 16-bit samples with stride `src_stride_in_samples`.
             let src_plane = unsafe { slice::from_raw_parts(src_plane, src_len) };
             for y in 0..plane_height {
-                let row_start = y * src_stride_in_samples;
-                let src_row = &src_plane[row_start..row_start + plane_width];
+                let row_start = checked_mul!(y, src_stride_in_samples)?;
+                let row_end = checked_add!(row_start, plane_width)?;
+                let src_row = src_plane
+                    .get(row_start..row_end)
+                    .ok_or(AvifError::InvalidArgument)?;
                 let dst_row = image.row_mut(dst_plane, u32_from_usize(y)?)?;
                 for (&src_pixel, dst_pixel) in src_row.iter().zip(dst_row.iter_mut()) {
                     *dst_pixel = src_pixel as u8;

@@ -143,11 +143,15 @@ static TUNE_IQ_QUALITY_TO_QUANTIZER: [i32; 101] = [
               0  // quality 100
 ];
 
-fn aom_quality_to_quantizer(quality: i32, is_tune_iq: bool) -> i32 {
+fn aom_quality_to_quantizer(quality: i32, is_tune_iq: bool) -> AvifResult<i32> {
     if is_tune_iq {
-        TUNE_IQ_QUALITY_TO_QUANTIZER[quality as usize]
+        let index = usize::try_from(quality).map_err(|_| AvifError::InvalidArgument)?;
+        TUNE_IQ_QUALITY_TO_QUANTIZER
+            .get(index)
+            .copied()
+            .ok_or(AvifError::InvalidArgument)
     } else {
-        ((100 - quality) * 63 + 50) / 100
+        Ok(((100 - quality) * 63 + 50) / 100)
     }
 }
 
@@ -188,7 +192,7 @@ fn add_aom_pkts_to_output_samples(
         // `pkt.data.frame` is the active initialized variant per libaom's API contract.
         let frame = unsafe { &pkt.data.frame };
         let encoded_data = if frame.sz == 0 {
-            &[][..]
+            &[]
         } else {
             if frame.buf.is_null() || frame.sz > isize::MAX as usize {
                 return AvifError::unknown_error("libaom returned invalid frame buffer");
@@ -283,7 +287,7 @@ impl Encoder for Aom {
         // Remember the current tune option for the next frame.
         self.previous_frame_used_tune_iq = use_tune_iq;
 
-        let quantizer = aom_quality_to_quantizer(quality, use_tune_iq);
+        let quantizer = aom_quality_to_quantizer(quality, use_tune_iq)?;
 
         if self.encoder.is_none() {
             // Require libaom v3.14.0 or later.
