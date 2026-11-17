@@ -450,7 +450,10 @@ fn parse_av2_num_bytes_in_obu(stream: &mut IStream) -> AvifResult<usize> {
 
 #[cfg(feature = "avm")]
 fn get_one_av2_obu(obus: &[u8], offset: usize) -> AvifResult<(usize, u8)> {
-    let mut stream = IStream::create(&obus[offset..]);
+    let mut stream = IStream::create(
+        obus.get(offset..)
+            .ok_or_else(|| AvifError::BmffParseFailed("invalid OBU offset".into()))?,
+    );
     let num_bytes_in_obu = parse_av2_num_bytes_in_obu(&mut stream)?;
     let num_bytes_in_obu_length = stream.offset;
     let obu_type =

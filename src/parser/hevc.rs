@@ -99,7 +99,10 @@ fn skip_st_ref_pic_set(
         stream.skip_bits(1)?; // delta_rps_sign
         stream.skip_uvlc()?; // abs_delta_rps_minus1
         let mut count = 0;
-        for _j in 0..=num_delta_pocs[st_rps_idx - 1] {
+        let num_delta_poc = *num_delta_pocs
+            .get(st_rps_idx - 1)
+            .ok_or_else(|| AvifError::BmffParseFailed("invalid st_rps_idx".into()))?;
+        for _j in 0..=num_delta_poc {
             let used_by_curr_pic_flag = stream.read_bool()?;
             let use_delta_flag = used_by_curr_pic_flag || stream.read_bool()?;
             if use_delta_flag {

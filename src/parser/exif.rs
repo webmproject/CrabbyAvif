@@ -108,7 +108,7 @@ pub(crate) fn get_orientation_offset(exif: &[u8]) -> AvifResult<Option<usize>> {
 #[cfg(feature = "jpeg")]
 pub(crate) fn get_orientation(exif: &[u8]) -> AvifResult<(Option<u8>, Option<u8>)> {
     Ok(match get_orientation_offset(exif) {
-        Ok(Some(offset)) => match exif[offset] {
+        Ok(Some(offset)) => match exif.get(offset).ok_or(AvifError::InvalidExifPayload)? {
             2 => (None, Some(1)),
             3 => (Some(2), None),
             4 => (None, Some(0)),
@@ -126,7 +126,7 @@ pub(crate) fn get_orientation(exif: &[u8]) -> AvifResult<(Option<u8>, Option<u8>
 pub(crate) fn set_orientation(exif: &mut [u8], orientation: u8) -> AvifResult<()> {
     match get_orientation_offset(exif)? {
         Some(offset) => {
-            exif[offset] = orientation;
+            *exif.get_mut(offset).ok_or(AvifError::InvalidExifPayload)? = orientation;
             Ok(())
         }
         None => {
@@ -161,7 +161,9 @@ pub(crate) fn apple_headroom(exif: &[u8]) -> AvifResult<Option<f64>> {
         Ok(offset) => offset as usize,
         Err(_) => return Ok(None),
     };
-    let tiff_data = &exif[tiff_offset..];
+    let tiff_data = exif
+        .get(tiff_offset..)
+        .ok_or(AvifError::InvalidExifPayload)?;
     if tiff_data.len() < 8 {
         return Ok(None);
     }
@@ -181,7 +183,7 @@ pub(crate) fn apple_headroom(exif: &[u8]) -> AvifResult<Option<f64>> {
         }
     };
 
-    let mut is_big_endian = tiff_data[0] == b'M';
+    let mut is_big_endian = *tiff_data.first().ok_or(AvifError::InvalidExifPayload)? == b'M';
     let mut stream = IStream::create(tiff_data);
     stream.skip(4)?; // skip tiff header
     let mut offset_to_ifd = read_u32(&mut stream, is_big_endian)?;
@@ -209,7 +211,9 @@ pub(crate) fn apple_headroom(exif: &[u8]) -> AvifResult<Option<f64>> {
                 // Maker Notes
                 let maker_notes_offset = tag_data as usize;
                 if tiff_data.len() >= maker_notes_offset + 14 {
-                    let maker_tag = &tiff_data[maker_notes_offset..maker_notes_offset + 14];
+                    let maker_tag = tiff_data
+                        .get(maker_notes_offset..maker_notes_offset + 14)
+                        .ok_or(AvifError::InvalidExifPayload)?;
                     if maker_tag == b"Apple iOS\0\0\x01MM" {
                         offset_to_ifd = (maker_notes_offset + 14) as u32;
                         in_apple_maker_notes = true;
@@ -222,7 +226,11 @@ pub(crate) fn apple_headroom(exif: &[u8]) -> AvifResult<Option<f64>> {
                 let start_of_maker_notes = offset_to_ifd as usize - 14;
                 let tmp_offset = start_of_maker_notes + tag_data as usize;
                 if tiff_data.len() >= tmp_offset + 8 {
-                    let mut rational_stream = IStream::create(&tiff_data[tmp_offset..]);
+                    let mut rational_stream = IStream::create(
+                        tiff_data
+                            .get(tmp_offset..)
+                            .ok_or(AvifError::InvalidExifPayload)?,
+                    );
                     let numerator = i32_from_u32(read_u32(&mut rational_stream, is_big_endian)?)?;
                     let denominator = read_u32(&mut rational_stream, is_big_endian)?;
                     if denominator != 0 {
