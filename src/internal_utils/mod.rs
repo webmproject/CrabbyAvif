@@ -236,11 +236,29 @@ pub(crate) fn are_planes_equal(image1: &Image, image2: &Image, plane: Plane) -> 
     let height = image1.height(plane);
     for y in 0..height as u32 {
         if image1.depth > 8 {
-            if image1.row16(plane, y)?[..width] != image2.row16(plane, y)?[..width] {
+            let row1 = image1
+                .row16(plane, y)?
+                .get(..width)
+                .ok_or(AvifError::NoContent)?;
+            let row2 = image2
+                .row16(plane, y)?
+                .get(..width)
+                .ok_or(AvifError::NoContent)?;
+            if row1 != row2 {
                 return Ok(false);
             }
-        } else if image1.row(plane, y)?[..width] != image2.row(plane, y)?[..width] {
-            return Ok(false);
+        } else {
+            let row1 = image1
+                .row(plane, y)?
+                .get(..width)
+                .ok_or(AvifError::NoContent)?;
+            let row2 = image2
+                .row(plane, y)?
+                .get(..width)
+                .ok_or(AvifError::NoContent)?;
+            if row1 != row2 {
+                return Ok(false);
+            }
         }
     }
     Ok(true)

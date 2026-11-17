@@ -115,8 +115,7 @@ impl decoder::IO for DecoderRawIO<'_> {
         let slice_start = usize_from_u64(offset)?;
         let slice_end = checked_add!(slice_start, size_to_read)?;
         let range = slice_start..slice_end;
-        check_slice_range(self.data.len(), &range)?;
-        Ok(&self.data[range])
+        self.data.get(range).ok_or(AvifError::NoContent)
     }
 
     fn size_hint(&self) -> u64 {
@@ -144,8 +143,7 @@ impl decoder::IO for DecoderMemoryIO {
         let slice_start = usize_from_u64(offset)?;
         let slice_end = checked_add!(slice_start, size_to_read)?;
         let range = slice_start..slice_end;
-        check_slice_range(self.data.len(), &range)?;
-        Ok(&self.data[range])
+        self.data.get(range).ok_or(AvifError::NoContent)
     }
 
     fn size_hint(&self) -> u64 {

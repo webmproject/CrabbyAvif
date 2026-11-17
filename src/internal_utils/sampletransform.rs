@@ -134,22 +134,33 @@ impl SampleTransformToken {
             SampleTransformToken::Constant(c) => StackItem::Constant(*c),
             SampleTransformToken::ImageItem(item_idx) => StackItem::ImageItem(*item_idx),
             SampleTransformToken::UnaryOp(op) => {
-                let value = stack.pop().unwrap();
+                let value = stack
+                    .pop()
+                    .ok_or_else(|| AvifError::InvalidImageGrid("invalid stack".into()))?;
                 match value {
                     StackItem::Values(values) => StackItem::Values(
                         values.iter().map(|v| op.apply(*v, bounds)).try_collect()?,
                     ),
                     StackItem::Constant(c) => StackItem::Constant(op.apply(c, bounds)),
                     StackItem::ImageItem(item_idx) => {
-                        if extra_inputs[item_idx].depth == 8 {
-                            let row8 = extra_inputs[item_idx].row(plane, y)?;
+                        let input = extra_inputs.get(item_idx).ok_or_else(|| {
+                            AvifError::InvalidImageGrid("invalid input image item index".into())
+                        })?;
+                        if input.depth == 8 {
+                            let row8 = input
+                                .row(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
                             StackItem::Values(
                                 row8.iter()
                                     .map(|v| op.apply(*v as i64, bounds))
                                     .try_collect()?,
                             )
                         } else {
-                            let row16 = extra_inputs[item_idx].row16(plane, y)?;
+                            let row16 = input
+                                .row16(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
                             StackItem::Values(
                                 row16
                                     .iter()
@@ -161,8 +172,12 @@ impl SampleTransformToken {
                 }
             }
             SampleTransformToken::BinaryOp(op) => {
-                let right = stack.pop().unwrap();
-                let left = stack.pop().unwrap();
+                let right = stack
+                    .pop()
+                    .ok_or_else(|| AvifError::InvalidImageGrid("invalid stack".into()))?;
+                let left = stack
+                    .pop()
+                    .ok_or_else(|| AvifError::InvalidImageGrid("invalid stack".into()))?;
                 match (left, right) {
                     (StackItem::Values(left), StackItem::Values(right)) => StackItem::Values(
                         left.iter()
@@ -176,18 +191,30 @@ impl SampleTransformToken {
                             .try_collect()?,
                     ),
                     (StackItem::Values(left), StackItem::ImageItem(right_idx)) => {
-                        if extra_inputs[right_idx].depth == 8 {
-                            let row8 = extra_inputs[right_idx].row(plane, y)?;
+                        let right_input = extra_inputs.get(right_idx).ok_or_else(|| {
+                            AvifError::InvalidImageGrid("invalid input image item index".into())
+                        })?;
+                        let left = left.get(..width).ok_or(AvifError::NoContent)?;
+                        if right_input.depth == 8 {
+                            let row8 = right_input
+                                .row(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
                             StackItem::Values(
-                                (0..width)
-                                    .map(|i| op.apply(left[i], row8[i] as i64, bounds))
+                                left.iter()
+                                    .zip(row8.iter())
+                                    .map(|(&l, &r)| op.apply(l, r as i64, bounds))
                                     .try_collect()?,
                             )
                         } else {
-                            let row16 = extra_inputs[right_idx].row16(plane, y)?;
+                            let row16 = right_input
+                                .row16(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
                             StackItem::Values(
-                                (0..width)
-                                    .map(|i| op.apply(left[i], row16[i] as i64, bounds))
+                                left.iter()
+                                    .zip(row16.iter())
+                                    .map(|(&l, &r)| op.apply(l, r as i64, bounds))
                                     .try_collect()?,
                             )
                         }
@@ -202,91 +229,158 @@ impl SampleTransformToken {
                         StackItem::Constant(op.apply(left, right, bounds))
                     }
                     (StackItem::Constant(left), StackItem::ImageItem(right_idx)) => {
-                        if extra_inputs[right_idx].depth == 8 {
-                            let row8 = extra_inputs[right_idx].row(plane, y)?;
+                        let right_input = extra_inputs.get(right_idx).ok_or_else(|| {
+                            AvifError::InvalidImageGrid("invalid input image item index".into())
+                        })?;
+                        if right_input.depth == 8 {
+                            let row8 = right_input
+                                .row(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
                             StackItem::Values(
-                                (0..width)
-                                    .map(|i| op.apply(left, row8[i] as i64, bounds))
+                                row8.iter()
+                                    .map(|&r| op.apply(left, r as i64, bounds))
                                     .try_collect()?,
                             )
                         } else {
-                            let row16 = extra_inputs[right_idx].row16(plane, y)?;
+                            let row16 = right_input
+                                .row16(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
                             StackItem::Values(
-                                (0..width)
-                                    .map(|i| op.apply(left, row16[i] as i64, bounds))
+                                row16
+                                    .iter()
+                                    .map(|&r| op.apply(left, r as i64, bounds))
                                     .try_collect()?,
                             )
                         }
                     }
                     (StackItem::ImageItem(left_idx), StackItem::Values(right)) => {
-                        if extra_inputs[left_idx].depth == 8 {
-                            let row8 = extra_inputs[left_idx].row(plane, y)?;
+                        let left_input = extra_inputs.get(left_idx).ok_or_else(|| {
+                            AvifError::InvalidImageGrid("invalid input image item index".into())
+                        })?;
+                        let right = right.get(..width).ok_or(AvifError::NoContent)?;
+                        if left_input.depth == 8 {
+                            let row8 = left_input
+                                .row(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
                             StackItem::Values(
-                                (0..width)
-                                    .map(|i| op.apply(row8[i] as i64, right[i], bounds))
+                                row8.iter()
+                                    .zip(right.iter())
+                                    .map(|(&l, &r)| op.apply(l as i64, r, bounds))
                                     .try_collect()?,
                             )
                         } else {
-                            let row16 = extra_inputs[left_idx].row16(plane, y)?;
+                            let row16 = left_input
+                                .row16(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
                             StackItem::Values(
-                                (0..width)
-                                    .map(|i| op.apply(row16[i] as i64, right[i], bounds))
+                                row16
+                                    .iter()
+                                    .zip(right.iter())
+                                    .map(|(&l, &r)| op.apply(l as i64, r, bounds))
                                     .try_collect()?,
                             )
                         }
                     }
                     (StackItem::ImageItem(left_idx), StackItem::Constant(right)) => {
-                        if extra_inputs[left_idx].depth == 8 {
-                            let row8 = extra_inputs[left_idx].row(plane, y)?;
+                        let left_input = extra_inputs.get(left_idx).ok_or_else(|| {
+                            AvifError::InvalidImageGrid("invalid input image item index".into())
+                        })?;
+                        if left_input.depth == 8 {
+                            let row8 = left_input
+                                .row(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
                             StackItem::Values(
-                                (0..width)
-                                    .map(|i| op.apply(row8[i] as i64, right, bounds))
+                                row8.iter()
+                                    .map(|&l| op.apply(l as i64, right, bounds))
                                     .try_collect()?,
                             )
                         } else {
-                            let row16 = extra_inputs[left_idx].row16(plane, y)?;
+                            let row16 = left_input
+                                .row16(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
                             StackItem::Values(
-                                (0..width)
-                                    .map(|i| op.apply(row16[i] as i64, right, bounds))
+                                row16
+                                    .iter()
+                                    .map(|&l| op.apply(l as i64, right, bounds))
                                     .try_collect()?,
                             )
                         }
                     }
                     (StackItem::ImageItem(left_idx), StackItem::ImageItem(right_idx)) => {
-                        if extra_inputs[left_idx].depth == 8 && extra_inputs[right_idx].depth == 8 {
-                            let left8 = extra_inputs[left_idx].row(plane, y)?;
-                            let right8 = extra_inputs[right_idx].row(plane, y)?;
+                        let left_input = extra_inputs.get(left_idx).ok_or_else(|| {
+                            AvifError::InvalidImageGrid("invalid input image item index".into())
+                        })?;
+                        let right_input = extra_inputs.get(right_idx).ok_or_else(|| {
+                            AvifError::InvalidImageGrid("invalid input image item index".into())
+                        })?;
+                        if left_input.depth == 8 && right_input.depth == 8 {
+                            let left8 = left_input
+                                .row(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
+                            let right8 = right_input
+                                .row(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
                             StackItem::Values(
-                                (0..width)
-                                    .map(|i| op.apply(left8[i] as i64, right8[i] as i64, bounds))
+                                left8
+                                    .iter()
+                                    .zip(right8.iter())
+                                    .map(|(&l, &r)| op.apply(l as i64, r as i64, bounds))
                                     .try_collect()?,
                             )
-                        } else if extra_inputs[left_idx].depth == 8
-                            && extra_inputs[right_idx].depth > 8
-                        {
-                            let left8 = extra_inputs[left_idx].row(plane, y)?;
-                            let right16 = extra_inputs[right_idx].row16(plane, y)?;
+                        } else if left_input.depth == 8 && right_input.depth > 8 {
+                            let left8 = left_input
+                                .row(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
+                            let right16 = right_input
+                                .row16(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
                             StackItem::Values(
-                                (0..width)
-                                    .map(|i| op.apply(left8[i] as i64, right16[i] as i64, bounds))
+                                left8
+                                    .iter()
+                                    .zip(right16.iter())
+                                    .map(|(&l, &r)| op.apply(l as i64, r as i64, bounds))
                                     .try_collect()?,
                             )
-                        } else if extra_inputs[left_idx].depth > 8
-                            && extra_inputs[right_idx].depth == 8
-                        {
-                            let left16 = extra_inputs[left_idx].row16(plane, y)?;
-                            let right8 = extra_inputs[right_idx].row(plane, y)?;
+                        } else if left_input.depth > 8 && right_input.depth == 8 {
+                            let left16 = left_input
+                                .row16(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
+                            let right8 = right_input
+                                .row(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
                             StackItem::Values(
-                                (0..width)
-                                    .map(|i| op.apply(left16[i] as i64, right8[i] as i64, bounds))
+                                left16
+                                    .iter()
+                                    .zip(right8.iter())
+                                    .map(|(&l, &r)| op.apply(l as i64, r as i64, bounds))
                                     .try_collect()?,
                             )
                         } else {
-                            let left16 = extra_inputs[left_idx].row16(plane, y)?;
-                            let right16 = extra_inputs[right_idx].row16(plane, y)?;
+                            let left16 = left_input
+                                .row16(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
+                            let right16 = right_input
+                                .row16(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
                             StackItem::Values(
-                                (0..width)
-                                    .map(|i| op.apply(left16[i] as i64, right16[i] as i64, bounds))
+                                left16
+                                    .iter()
+                                    .zip(right16.iter())
+                                    .map(|(&l, &r)| op.apply(l as i64, r as i64, bounds))
                                     .try_collect()?,
                             )
                         }
@@ -347,7 +441,7 @@ impl SampleTransform {
             16 => (i16::MIN as i64, i16::MAX as i64),
             32 => (i32::MIN as i64, i32::MAX as i64),
             64 => (i64::MIN, i64::MAX),
-            _ => unreachable!(),
+            _ => return AvifError::invalid_image_grid("invalid sample transform bit depth"),
         };
 
         let width = output.width(plane);
@@ -358,8 +452,12 @@ impl SampleTransform {
                 token.apply(stack, extra_inputs, plane, y, width, bounds)?;
             }
 
-            assert_eq!(stack.len(), 1);
-            let result: StackItem = stack.pop().unwrap();
+            if stack.len() != 1 {
+                return AvifError::invalid_image_grid("invalid stack");
+            }
+            let result: StackItem = stack
+                .pop()
+                .ok_or_else(|| AvifError::InvalidImageGrid("invalid stack".into()))?;
 
             // AVIF specification, Sample Transform Derived Image Item:
             //   The output reconstructed image is made up of the output samples, whose values
@@ -370,17 +468,24 @@ impl SampleTransform {
             let output_max: u16 = output.max_channel();
             match result {
                 StackItem::Values(values) => {
+                    let values = values.get(..width).ok_or(AvifError::NoContent)?;
                     if output.depth == 8 {
-                        let output_row8 = output.row_mut(plane, y)?;
-                        for x in 0..width {
-                            let v = values[x].clamp(output_min as i64, output_max as i64);
-                            output_row8[x] = v as u8;
+                        let output_row8 = output
+                            .row_mut(plane, y)?
+                            .get_mut(..width)
+                            .ok_or(AvifError::NoContent)?;
+                        for (out, &val) in output_row8.iter_mut().zip(values.iter()) {
+                            let v = val.clamp(output_min as i64, output_max as i64);
+                            *out = v as u8;
                         }
                     } else {
-                        let output_row16 = output.row16_mut(plane, y)?;
-                        for x in 0..width {
-                            let v = values[x].clamp(output_min as i64, output_max as i64);
-                            output_row16[x] = v as u16;
+                        let output_row16 = output
+                            .row16_mut(plane, y)?
+                            .get_mut(..width)
+                            .ok_or(AvifError::NoContent)?;
+                        for (out, &val) in output_row16.iter_mut().zip(values.iter()) {
+                            let v = val.clamp(output_min as i64, output_max as i64);
+                            *out = v as u16;
                         }
                     }
                 }
@@ -400,34 +505,67 @@ impl SampleTransform {
                     }
                 }
                 StackItem::ImageItem(item_idx) => {
-                    if output.depth == extra_inputs[item_idx].depth {
+                    let input = extra_inputs.get(item_idx).ok_or_else(|| {
+                        AvifError::InvalidImageGrid("invalid input image item index".into())
+                    })?;
+                    if output.depth == input.depth {
                         if output.depth == 8 {
-                            output
+                            let input_row8 = input
+                                .row(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
+                            let output_row8 = output
                                 .row_mut(plane, y)?
-                                .copy_from_slice(extra_inputs[item_idx].row(plane, y)?);
+                                .get_mut(..width)
+                                .ok_or(AvifError::NoContent)?;
+                            output_row8.copy_from_slice(input_row8);
                         } else {
-                            output
+                            let input_row16 = input
+                                .row16(plane, y)?
+                                .get(..width)
+                                .ok_or(AvifError::NoContent)?;
+                            let output_row16 = output
                                 .row16_mut(plane, y)?
-                                .copy_from_slice(extra_inputs[item_idx].row16(plane, y)?);
+                                .get_mut(..width)
+                                .ok_or(AvifError::NoContent)?;
+                            output_row16.copy_from_slice(input_row16);
                         }
-                    } else if output.depth == 8 && extra_inputs[item_idx].depth > 8 {
-                        let input_row16 = extra_inputs[item_idx].row16(plane, y)?;
-                        let output_row8 = output.row_mut(plane, y)?;
-                        for x in 0..width {
-                            output_row8[x] = input_row16[x].clamp(output_min, output_max) as u8;
+                    } else if output.depth == 8 && input.depth > 8 {
+                        let input_row16 = input
+                            .row16(plane, y)?
+                            .get(..width)
+                            .ok_or(AvifError::NoContent)?;
+                        let output_row8 = output
+                            .row_mut(plane, y)?
+                            .get_mut(..width)
+                            .ok_or(AvifError::NoContent)?;
+                        for (out, &inp) in output_row8.iter_mut().zip(input_row16.iter()) {
+                            *out = inp.clamp(output_min, output_max) as u8;
                         }
-                    } else if output.depth > 8 && extra_inputs[item_idx].depth == 8 {
-                        let input_row8 = extra_inputs[item_idx].row(plane, y)?;
-                        let output_row16 = output.row16_mut(plane, y)?;
-                        for x in 0..width {
-                            output_row16[x] = input_row8[x] as u16;
+                    } else if output.depth > 8 && input.depth == 8 {
+                        let input_row8 = input
+                            .row(plane, y)?
+                            .get(..width)
+                            .ok_or(AvifError::NoContent)?;
+                        let output_row16 = output
+                            .row16_mut(plane, y)?
+                            .get_mut(..width)
+                            .ok_or(AvifError::NoContent)?;
+                        for (out, &inp) in output_row16.iter_mut().zip(input_row8.iter()) {
+                            *out = inp as u16;
                         }
                     } else {
                         // Both are high bit depth.
-                        let input_row16 = extra_inputs[item_idx].row16(plane, y)?;
-                        let output_row16 = output.row16_mut(plane, y)?;
-                        for x in 0..width {
-                            output_row16[x] = input_row16[x].clamp(output_min, output_max);
+                        let input_row16 = input
+                            .row16(plane, y)?
+                            .get(..width)
+                            .ok_or(AvifError::NoContent)?;
+                        let output_row16 = output
+                            .row16_mut(plane, y)?
+                            .get_mut(..width)
+                            .ok_or(AvifError::NoContent)?;
+                        for (out, &inp) in output_row16.iter_mut().zip(input_row16.iter()) {
+                            *out = inp.clamp(output_min, output_max);
                         }
                     }
                 }
@@ -496,7 +634,14 @@ impl SampleTransform {
         output: &mut Image,
     ) -> AvifResult<()> {
         output.allocate_planes(Category::Color)?;
-        if self.num_inputs > 0 && extra_inputs[0].has_alpha() {
+        if self.num_inputs > 0
+            && extra_inputs
+                .first()
+                .ok_or_else(|| {
+                    AvifError::InvalidImageGrid("invalid input image item index".into())
+                })?
+                .has_alpha()
+        {
             output.allocate_planes(Category::Alpha)?;
         }
         self.apply(extra_inputs, output)

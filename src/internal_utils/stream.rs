@@ -56,7 +56,10 @@ impl IStream<'_> {
             }
         );
         Ok(IStream {
-            data: &self.data[offset..self.offset],
+            data: self
+                .data
+                .get(offset..self.offset)
+                .ok_or(AvifError::BmffParseFailed("".into()))?,
             offset: 0,
             num_bits: 0,
         })
@@ -78,13 +81,19 @@ impl IStream<'_> {
         self.check(num_bytes)?;
         let offset_start = self.offset;
         checked_incr!(self.offset, num_bytes);
-        Ok(&self.data[offset_start..offset_start + num_bytes])
+        self.data
+            .get(offset_start..self.offset)
+            .ok_or(AvifError::BmffParseFailed("".into()))
     }
 
     pub(crate) fn get_immutable_vec(&self, num_bytes: usize) -> AvifResult<Vec<u8>> {
         assert_eq!(self.num_bits, 0);
         self.check(num_bytes)?;
-        self.data[self.offset..self.offset + num_bytes].try_to_vec()
+        let end = checked_add!(self.offset, num_bytes)?;
+        self.data
+            .get(self.offset..end)
+            .ok_or(AvifError::BmffParseFailed("".into()))?
+            .try_to_vec()
     }
 
     fn get_vec(&mut self, num_bytes: usize) -> AvifResult<Vec<u8>> {
@@ -95,7 +104,10 @@ impl IStream<'_> {
     pub(crate) fn read_u8(&mut self) -> AvifResult<u8> {
         assert_eq!(self.num_bits, 0);
         self.check(1)?;
-        let value = self.data[self.offset];
+        let value = *self
+            .data
+            .get(self.offset)
+            .ok_or(AvifError::BmffParseFailed("".into()))?;
         checked_incr!(self.offset, 1);
         Ok(value)
     }
@@ -201,13 +213,19 @@ impl IStream<'_> {
     pub(crate) fn read_c_string(&mut self) -> AvifResult<String> {
         assert_eq!(self.num_bits, 0);
         self.check(1)?;
-        let null_position = self.data[self.offset..]
+        let tail = self
+            .data
+            .get(self.offset..)
+            .ok_or(AvifError::BmffParseFailed("".into()))?;
+        let null_position = tail
             .iter()
             .position(|&x| x == b'\0')
             .ok_or(AvifError::BmffParseFailed("".into()))?;
-        let range = self.offset..self.offset + null_position;
+        let str_slice = tail
+            .get(..null_position)
+            .ok_or(AvifError::BmffParseFailed("".into()))?;
         self.offset += null_position + 1;
-        Ok(String::from_utf8(self.data[range].try_to_vec()?).unwrap_or("".into()))
+        Ok(String::from_utf8(str_slice.try_to_vec()?).unwrap_or("".into()))
     }
 
     pub(crate) fn read_version_and_flags(&mut self) -> AvifResult<(u8, u32)> {
@@ -286,7 +304,10 @@ impl IStream<'_> {
         let mut value = 0;
         while remaining_num_bits != 0 {
             self.check(1)?;
-            let byte = self.data[self.offset] as u32;
+            let byte = *self
+                .data
+                .get(self.offset)
+                .ok_or(AvifError::BmffParseFailed("".into()))? as u32;
             // Number of bits among num_bits that can be read in the first byte of self.bytes.
             let num_read_bits = std::cmp::min(8 - self.num_bits, remaining_num_bits);
             // Write the most significant bits first.
@@ -502,13 +523,16 @@ impl<const LITTLE_ENDIAN: bool> OStreamImpl<LITTLE_ENDIAN> {
 
     pub(crate) fn write_u32_at_offset(&mut self, value: u32, offset: usize) -> AvifResult<()> {
         assert_eq!(self.num_bits, 0);
-        let range = offset..offset + 4;
-        check_slice_range(self.data.len(), &range)?;
-        self.data[range].copy_from_slice(&if LITTLE_ENDIAN {
-            value.to_le_bytes()
-        } else {
-            value.to_be_bytes()
-        });
+        let end = checked_add!(offset, 4)?;
+        let range = offset..end;
+        self.data
+            .get_mut(range)
+            .ok_or(AvifError::NoContent)?
+            .copy_from_slice(&if LITTLE_ENDIAN {
+                value.to_le_bytes()
+            } else {
+                value.to_be_bytes()
+            });
         Ok(())
     }
 
