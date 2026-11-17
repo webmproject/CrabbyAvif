@@ -97,52 +97,67 @@ fn clap_parser(s: &str) -> Result<CleanAperture, String> {
     let values = split_and_check_count!("clap", s, ",", 8, i32);
     let values: Vec<_> = values.into_iter().map(|x| x as u32).collect();
     Ok(CleanAperture {
-        width: UFraction(values[0], values[1]),
-        height: UFraction(values[2], values[3]),
-        horiz_off: UFraction(values[4], values[5]),
-        vert_off: UFraction(values[6], values[7]),
+        width: UFraction(
+            *values.first().ok_or("Invalid clap string")?,
+            *values.get(1).ok_or("Invalid clap string")?,
+        ),
+        height: UFraction(
+            *values.get(2).ok_or("Invalid clap string")?,
+            *values.get(3).ok_or("Invalid clap string")?,
+        ),
+        horiz_off: UFraction(
+            *values.get(4).ok_or("Invalid clap string")?,
+            *values.get(5).ok_or("Invalid clap string")?,
+        ),
+        vert_off: UFraction(
+            *values.get(6).ok_or("Invalid clap string")?,
+            *values.get(7).ok_or("Invalid clap string")?,
+        ),
     })
 }
 
 fn crop_parser(s: &str) -> Result<CropRect, String> {
     let values = split_and_check_count!("crop", s, ",", 4, u32);
     Ok(CropRect {
-        x: values[0],
-        y: values[1],
-        width: values[2],
-        height: values[3],
+        x: *values.first().ok_or("Invalid crop string")?,
+        y: *values.get(1).ok_or("Invalid crop string")?,
+        width: *values.get(2).ok_or("Invalid crop string")?,
+        height: *values.get(3).ok_or("Invalid crop string")?,
     })
 }
 
 fn clli_parser(s: &str) -> Result<ContentLightLevelInformation, String> {
     let values = split_and_check_count!("clli", s, ",", 2, u16);
     Ok(ContentLightLevelInformation {
-        max_cll: values[0],
-        max_pall: values[1],
+        max_cll: *values.first().ok_or("Invalid clli string")?,
+        max_pall: *values.get(1).ok_or("Invalid clli string")?,
     })
 }
 
 fn pasp_parser(s: &str) -> Result<PixelAspectRatio, String> {
     let values = split_and_check_count!("pasp", s, ",", 2, u32);
     Ok(PixelAspectRatio {
-        h_spacing: values[0],
-        v_spacing: values[1],
+        h_spacing: *values.first().ok_or("Invalid pasp string")?,
+        v_spacing: *values.get(1).ok_or("Invalid pasp string")?,
     })
 }
 
 fn cicp_parser(s: &str) -> Result<Nclx, String> {
     let values = split_and_check_count!("cicp", s, "/", 3, u16);
     Ok(Nclx {
-        color_primaries: values[0].into(),
-        transfer_characteristics: values[1].into(),
-        matrix_coefficients: values[2].into(),
+        color_primaries: (*values.first().ok_or("Invalid cicp string")?).into(),
+        transfer_characteristics: (*values.get(1).ok_or("Invalid cicp string")?).into(),
+        matrix_coefficients: (*values.get(2).ok_or("Invalid cicp string")?).into(),
         ..Default::default()
     })
 }
 
 fn scaling_mode_parser(s: &str) -> Result<IFraction, String> {
     let values = split_and_check_count!("scaling_mode", s, "/", 2, i32);
-    Ok(IFraction(values[0], values[1]))
+    Ok(IFraction(
+        *values.first().ok_or("Invalid scaling_mode string")?,
+        *values.get(1).ok_or("Invalid scaling_mode string")?,
+    ))
 }
 
 fn yuv_format_parser(s: &str) -> Result<PixelFormat, String> {
