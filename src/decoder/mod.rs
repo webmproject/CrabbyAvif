@@ -701,7 +701,10 @@ impl Decoder {
             Some(id) => id,
             None => return Ok(None),
         };
-        let first_item = self.items.get(&alpha_item_indices[0]).unwrap();
+        let first_item_id = alpha_item_indices
+            .first()
+            .ok_or(AvifError::BmffParseFailed("missing alpha item".into()))?;
+        let first_item = self.items.get(first_item_id).unwrap();
         let properties = match first_item.codec_config() {
             Some(config) => try_vec_exact![ItemProperty::CodecConfiguration(config.try_clone()?)]?,
             None => return Ok(None),
@@ -767,7 +770,11 @@ impl Decoder {
         }
         if let Some(pixi) = tonemap_item.pixi() {
             self.gainmap.alt_plane_count = pixi.planes.len() as u8;
-            self.gainmap.alt_plane_depth = pixi.planes[0].depth;
+            self.gainmap.alt_plane_depth = pixi
+                .planes
+                .first()
+                .ok_or(AvifError::InvalidToneMappedImage("".into()))?
+                .depth;
         }
         // HEIC files created by Apple do not conform to these validation rules so skip them when
         // HEIC is enabled.
@@ -903,14 +910,12 @@ impl Decoder {
     fn harvest_cicp_from_sequence_header(&mut self) -> AvifResult<()> {
         let decoding_item = DecodingItem::COLOR;
         let tile_index = 0;
-        if self.tiles[decoding_item.usize()].is_empty() {
+        let Some(tile) = self.tiles[decoding_item.usize()].get(tile_index) else {
             return Ok(());
-        }
+        };
 
         // For HEVC, the CICP values were parsed from the VUI of the SPS in the codec configuration.
-        if let CodecConfiguration::Hevc(config) =
-            &self.tiles[decoding_item.usize()][tile_index].codec_config
-        {
+        if let CodecConfiguration::Hevc(config) = &tile.codec_config {
             self.image.color_primaries = config.color_primaries;
             self.image.transfer_characteristics = config.transfer_characteristics;
             self.image.matrix_coefficients = config.matrix_coefficients;
@@ -919,10 +924,7 @@ impl Decoder {
         }
 
         // Only AV1 OBUs can be parsed for CICP values for now.
-        if !matches!(
-            self.tiles[decoding_item.usize()][tile_index].codec_config,
-            CodecConfiguration::Av1(_)
-        ) {
+        if !matches!(tile.codec_config, CodecConfiguration::Av1(_)) {
             return Ok(());
         }
 
@@ -952,7 +954,10 @@ impl Decoder {
                 Some(search_size),
             )?;
             let io = &mut self.io.unwrap_mut();
-            let sample = &self.tiles[decoding_item.usize()][tile_index].input.samples[0];
+            let sample = self.tiles[decoding_item.usize()]
+                .get(tile_index)
+                .and_then(|tile| tile.input.samples.first())
+                .ok_or(AvifError::BmffParseFailed("missing sample".into()))?;
             let item_data_buffer = if sample.item_id == 0 {
                 &None
             } else {
@@ -977,7 +982,9 @@ impl Decoder {
     // beginning of the first sample of the tile otherwise. Returns false if no sequence header
     // could be found or read.
     fn tile_has_multiple_layers(&mut self, decoding_item: DecodingItem, tile_index: usize) -> bool {
-        let tile = &self.tiles[decoding_item.usize()][tile_index];
+        let Some(tile) = self.tiles[decoding_item.usize()].get(tile_index) else {
+            return false;
+        };
         let CodecConfiguration::Av1(av1_config) = &tile.codec_config else {
             return false;
         };
@@ -1008,16 +1015,18 @@ impl Decoder {
             for tile in tiles {
                 // Each tile must be a single AV1 payload, without any layer or operating point
                 // selection.
+                let [sample] = tile.input.samples.as_slice() else {
+                    return false;
+                };
                 if !matches!(tile.codec_config, CodecConfiguration::Av1(_))
                     || tile.operating_point != 0
                     || tile.input.all_layers
-                    || tile.input.samples.len() != 1
                 {
                     return false;
                 }
                 // Layered (including progressive) image items are signaled with the a1lx property.
                 // Layer selection with the lsel property is detected through all_layers above.
-                match self.items.get(&tile.input.samples[0].item_id) {
+                match self.items.get(&sample.item_id) {
                     Some(item) if item.a1lx().is_none() => {}
                     _ => return false,
                 }
@@ -1294,12 +1303,12 @@ impl Decoder {
                 levels.try_push(properties)?;
             }
         }
-        let transformative_properties = match levels.len() {
-            0 => Vec::new(),
+        let transformative_properties = match levels.as_slice() {
+            [] => Vec::new(),
             // Copy the properties as is, to support fractional clean apertures.
-            1 => {
+            [level] => {
                 let mut transformative_properties = Vec::new();
-                replace_transformative_properties(levels[0], &mut transformative_properties)?;
+                replace_transformative_properties(level, &mut transformative_properties)?;
                 transformative_properties
             }
             _ => {
@@ -1444,7 +1453,11 @@ impl Decoder {
         // the codec config comes from). The depth from the pixi property should be used instead.
         if is_sample_transform {
             if let Some(pixi) = find_property!(color_properties, PixelInformation) {
-                image.depth = pixi.planes[0].depth;
+                image.depth = pixi
+                    .planes
+                    .first()
+                    .ok_or(AvifError::BmffParseFailed("".into()))?
+                    .depth;
             }
         }
 
@@ -1485,8 +1498,14 @@ impl Decoder {
                 return AvifError::not_implemented();
             }
             // validate_source_items() guarantees that tmap has two source item ids.
-            let base_item_id = primary_item.source_item_ids[0];
-            let gainmap_id = primary_item.source_item_ids[1];
+            let base_item_id = *primary_item
+                .source_item_ids
+                .first()
+                .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
+            let gainmap_id = *primary_item
+                .source_item_ids
+                .get(1)
+                .ok_or(AvifError::InvalidToneMappedImage("".into()))?;
 
             // Set the color item it to the base image and reparse it.
             item_ids[DecodingItem::COLOR.usize()] = base_item_id;
@@ -1676,7 +1695,9 @@ impl Decoder {
 
         if color_item.progressive {
             self.image.progressive_state = ProgressiveState::Available;
-            let sample_count = self.tiles[DecodingItem::COLOR.usize()][0]
+            let sample_count = self.tiles[DecodingItem::COLOR.usize()]
+                .first()
+                .ok_or(AvifError::BmffParseFailed("missing color tile".into()))?
                 .input
                 .samples
                 .len();
@@ -1919,7 +1940,9 @@ impl Decoder {
                     };
 
                     self.image_index = -1;
-                    self.image_count = self.tiles[DecodingItem::COLOR.usize()][0]
+                    self.image_count = self.tiles[DecodingItem::COLOR.usize()]
+                        .first()
+                        .ok_or(AvifError::BmffParseFailed("".into()))?
                         .input
                         .samples
                         .len() as u32;
@@ -1928,8 +1951,9 @@ impl Decoder {
                     // line is correct.
                     if self.image.image_sequence_track_present
                         && !self.tiles.iter().all(|tiles| {
-                            tiles.is_empty()
-                                || tiles[0].input.samples.len() as u32 == self.image_count
+                            tiles.first().is_none_or(|tile| {
+                                tile.input.samples.len() as u32 == self.image_count
+                            })
                         })
                     {
                         return AvifError::bmff_parse_failed(
@@ -2031,7 +2055,10 @@ impl Decoder {
                     // All the thumbnails must be decodable with the native decoder.
                     let mut native_decodable = true;
                     for idx in (0..self.thumbnail_item_ids.len()).rev() {
-                        let item_id = self.thumbnail_item_ids[idx];
+                        let item_id = *self
+                            .thumbnail_item_ids
+                            .get(idx)
+                            .ok_or(AvifError::NoContent)?;
                         let item_cicp_set = self.prepare_still_image_item(
                             item_id,
                             /* allow_gainmap= */ false,
@@ -2089,8 +2116,10 @@ impl Decoder {
 
         // If cicp was not set, try to harvest it from the sequence header.
         self.harvest_cicp_from_sequence_header()?;
-        if self.source == Source::Thumbnail && !self.thumbnail_images.is_empty() {
-            self.thumbnail_images[0] = self.image.shallow_clone();
+        if self.source == Source::Thumbnail {
+            if let Some(first_thumb) = self.thumbnail_images.first_mut() {
+                *first_thumb = self.image.shallow_clone();
+            }
         }
         self.parsed_image = self.image.shallow_clone();
         self.parsed_gainmap_image = self.gainmap.image.shallow_clone();
@@ -2117,7 +2146,9 @@ impl Decoder {
             if !item.is_identity_item() {
                 break;
             }
-            let sub_item_id = item.source_item_ids[0];
+            let sub_item_id = *item.source_item_ids.first().ok_or_else(|| {
+                AvifError::InvalidImageGrid("missing identity source item".into())
+            })?;
             if parsed_item_ids.contains(&sub_item_id) {
                 return AvifError::invalid_image_grid("found a cycle in identity derived items");
             }
@@ -2170,7 +2201,9 @@ impl Decoder {
     }
 
     fn create_codec(&mut self, decoding_item: DecodingItem, tile_index: usize) -> AvifResult<()> {
-        let tile = &self.tiles[decoding_item.usize()][tile_index];
+        let tile = self.tiles[decoding_item.usize()]
+            .get(tile_index)
+            .ok_or(AvifError::InvalidArgument)?;
         let mut codec: Codec = match self
             .settings
             .codec_choice
@@ -2236,8 +2269,11 @@ impl Decoder {
             for decoding_item in self.settings.image_content_to_decode.decoding_items() {
                 for tile_index in 0..self.tiles[decoding_item.usize()].len() {
                     self.create_codec(decoding_item, tile_index)?;
-                    self.tiles[decoding_item.usize()][tile_index].codec_index =
-                        self.codecs.len() - 1;
+                    let codec_index = checked_sub!(self.codecs.len(), 1)?;
+                    self.tiles[decoding_item.usize()]
+                        .get_mut(tile_index)
+                        .ok_or(AvifError::InvalidArgument)?
+                        .codec_index = codec_index;
                 }
             }
         }
@@ -2256,10 +2292,11 @@ impl Decoder {
         let tile = self.tiles[decoding_item.usize()]
             .get(tile_index)
             .ok_or(AvifError::InvalidArgument)?;
-        if tile.input.samples.len() <= image_index {
-            return AvifError::no_images_remaining();
-        }
-        let sample = &tile.input.samples[image_index];
+        let sample = tile
+            .input
+            .samples
+            .get(image_index)
+            .ok_or(AvifError::NoImagesRemaining)?;
         if sample.item_id == 0 {
             // Data comes from a track. Nothing to prepare.
             return Ok(());
@@ -2301,8 +2338,7 @@ impl Decoder {
                 let offset = usize_from_u64(extent.offset)?;
                 let end_offset = checked_add!(offset, extent.size)?;
                 let range = offset..end_offset;
-                check_slice_range(item.idat.len(), &range)?;
-                data.try_extend_from_slice(&item.idat[range])?;
+                data.try_extend_from_slice(item.idat.get(range).ok_or(AvifError::NoContent)?)?;
             }
             if max_num_bytes.is_some_and(|max_num_bytes| data.len() >= max_num_bytes) {
                 return Ok(()); // There are enough merged extents to satisfy max_num_bytes.
@@ -2376,29 +2412,30 @@ impl Decoder {
         {
             return AvifError::not_implemented();
         }
-        let (full_width, full_height, clap, yuv_format) = if self.settings.image_content_to_decode
-            == ImageContentType::GainMap
-        {
-            if !self.gainmap_present {
-                return AvifError::no_content();
-            }
-            (
-                self.parsed_gainmap_image.width,
-                self.parsed_gainmap_image.height,
-                self.parsed_gainmap_image.clap,
-                self.parsed_gainmap_image.yuv_format,
-            )
-        } else if self.source == Source::Thumbnail && target_index < self.thumbnail_images.len() {
-            let thumb = &self.thumbnail_images[target_index];
-            (thumb.width, thumb.height, thumb.clap, thumb.yuv_format)
-        } else {
-            (
-                self.parsed_image.width,
-                self.parsed_image.height,
-                self.parsed_image.clap,
-                self.parsed_image.yuv_format,
-            )
-        };
+        let (full_width, full_height, clap, yuv_format) =
+            if self.settings.image_content_to_decode == ImageContentType::GainMap {
+                if !self.gainmap_present {
+                    return AvifError::no_content();
+                }
+                (
+                    self.parsed_gainmap_image.width,
+                    self.parsed_gainmap_image.height,
+                    self.parsed_gainmap_image.clap,
+                    self.parsed_gainmap_image.yuv_format,
+                )
+            } else if let Some(thumb) = (self.source == Source::Thumbnail)
+                .then(|| self.thumbnail_images.get(target_index))
+                .flatten()
+            {
+                (thumb.width, thumb.height, thumb.clap, thumb.yuv_format)
+            } else {
+                (
+                    self.parsed_image.width,
+                    self.parsed_image.height,
+                    self.parsed_image.clap,
+                    self.parsed_image.yuv_format,
+                )
+            };
 
         let mut base_rect = CropRect {
             x: 0,
@@ -2554,7 +2591,7 @@ impl Decoder {
                     }
                     (indices.as_slice(), 0..0)
                 }
-                None => (&[][..], 0..self.tiles[decoding_item.usize()].len()),
+                None => ([].as_slice(), 0..self.tiles[decoding_item.usize()].len()),
             };
             for tile_index in subset.iter().copied().chain(all_tiles) {
                 match (
@@ -2600,14 +2637,24 @@ impl Decoder {
         let has_alpha_item = !self.tiles[DecodingItem::ALPHA.usize()].is_empty();
         // Split the tiles array into two mutable arrays so that we can validate the
         // properties of tiles with index > first_tile_index with that of the first decoded tile.
+        if tile_index > self.tiles[decoding_item.usize()].len() {
+            return AvifError::invalid_argument();
+        }
         let (tiles_slice1, tiles_slice2) =
             self.tiles[decoding_item.usize()].split_at_mut(tile_index);
-        let tile = &mut tiles_slice2[0];
-        let sample = &tile.input.samples[image_index];
+        let tile = tiles_slice2.first_mut().ok_or(AvifError::InvalidArgument)?;
+        let sample = tile
+            .input
+            .samples
+            .get(image_index)
+            .ok_or(AvifError::NoImagesRemaining)?;
         let io = &mut self.io.unwrap_mut();
         let category = decoding_item.category;
 
-        let codec = &mut self.codecs[tile.codec_index];
+        let codec = self
+            .codecs
+            .get_mut(tile.codec_index)
+            .ok_or(AvifError::InvalidArgument)?;
         let item = if sample.item_id == 0 { None } else { self.items.get(&sample.item_id) };
         let no_buffer = None;
         let data_buffer = item.map_or(&no_buffer, |i| &i.data_buffer);
@@ -2721,12 +2768,13 @@ impl Decoder {
                     }
                 }
             }
-            if tile_index > first_tile_index
-                && !tile
-                    .image
-                    .has_same_properties_and_cicp(&tiles_slice1[first_tile_index].image)
-            {
-                return AvifError::invalid_image_grid("grid image contains mismatched tiles");
+            if tile_index > first_tile_index {
+                let first_tile = tiles_slice1
+                    .get(first_tile_index)
+                    .ok_or(AvifError::InvalidArgument)?;
+                if !tile.image.has_same_properties_and_cicp(&first_tile.image) {
+                    return AvifError::invalid_image_grid("grid image contains mismatched tiles");
+                }
             }
 
             dst_image.copy_from_tile(
@@ -2767,8 +2815,8 @@ impl Decoder {
                     }
                 }
             }
-            if !tiles_slice1.is_empty() {
-                let first_tile_image = &tiles_slice1[0].image;
+            if let Some(first_tile) = tiles_slice1.first() {
+                let first_tile_image = &first_tile.image;
                 if tile.image.width != first_tile_image.width
                     || tile.image.height != first_tile_image.height
                     || tile.image.depth != first_tile_image.depth
@@ -3035,8 +3083,14 @@ impl Decoder {
             let previous_decoded_tile_count =
                 self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
             for tile_index in previous_decoded_tile_count..tile_count {
-                let tile = &self.tiles[decoding_item.usize()][tile_index];
-                let sample = &tile.input.samples[image_index];
+                let tile = self.tiles[decoding_item.usize()]
+                    .get(tile_index)
+                    .ok_or(AvifError::InvalidArgument)?;
+                let sample = tile
+                    .input
+                    .samples
+                    .get(image_index)
+                    .ok_or(AvifError::NoImagesRemaining)?;
                 let item_data_buffer = if sample.item_id == 0 {
                     &None
                 } else {
@@ -3073,7 +3127,14 @@ impl Decoder {
         {
             return AvifError::invalid_argument();
         }
-        let first_tile = &self.tiles[decoding_item.usize()][first_tile_index];
+        let first_tile = self.tiles[decoding_item.usize()]
+            .get(first_tile_index)
+            .ok_or(AvifError::InvalidArgument)?;
+        let first_tile_sample = first_tile
+            .input
+            .samples
+            .get(image_index)
+            .ok_or(AvifError::NoImagesRemaining)?;
         let category = decoding_item.category;
         let dst_image = match dst_image_override {
             Some(img) => img,
@@ -3109,10 +3170,13 @@ impl Decoder {
             cell_indices,
             crop_rect,
         };
-        let codec = &mut self.codecs[first_tile.codec_index];
+        let codec = self
+            .codecs
+            .get_mut(first_tile.codec_index)
+            .ok_or(AvifError::InvalidArgument)?;
         let next_image_result = codec.get_next_image_grid(
             &payloads,
-            first_tile.input.samples[image_index].spatial_id,
+            first_tile_sample.spatial_id,
             &mut grid_image_helper,
         );
         if next_image_result.is_err() {
@@ -3146,8 +3210,13 @@ impl Decoder {
     }
 
     fn can_use_decode_grid(&self, decoding_item: DecodingItem) -> bool {
-        let first_tile = &self.tiles[decoding_item.usize()][0];
-        let codec = self.codecs[first_tile.codec_index].codec();
+        let Some((first_tile, rest_tiles)) = self.tiles[decoding_item.usize()].split_first() else {
+            return false;
+        };
+        let Some(codec) = self.codecs.get(first_tile.codec_index) else {
+            return false;
+        };
+        let codec = codec.codec();
         // Has to be a grid.
         self.tile_info[decoding_item.usize()].is_grid()
             // Has to be one of the supported codecs.
@@ -3158,7 +3227,7 @@ impl Decoder {
                 _ => false,
             }
             // All the tiles must use the same codec instance.
-            && self.tiles[decoding_item.usize()][1..]
+            && rest_tiles
                 .iter()
                 .all(|x| x.codec_index == first_tile.codec_index)
     }
@@ -3372,14 +3441,16 @@ impl Decoder {
 
         let sample_index = if self.source == Source::Thumbnail && self.thumbnail_item_ids.len() > 1
         {
-            if next_image_index < 0 || next_image_index as usize >= self.thumbnail_item_ids.len() {
-                return AvifError::no_images_remaining();
-            }
-            let thumbnail_idx = next_image_index as usize;
+            let thumbnail_idx =
+                usize::try_from(next_image_index).map_err(|_| AvifError::NoImagesRemaining)?;
+            let &thumbnail_item_id = self
+                .thumbnail_item_ids
+                .get(thumbnail_idx)
+                .ok_or(AvifError::NoImagesRemaining)?;
             if self.active_thumbnail_index != Some(thumbnail_idx) {
                 let prev_image_index = self.image_index;
                 let cicp_set = self.prepare_still_image_item(
-                    self.thumbnail_item_ids[thumbnail_idx],
+                    thumbnail_item_id,
                     /* allow_gainmap= */ false,
                     /* update_io_stats= */ false,
                 )?;
@@ -3635,8 +3706,16 @@ impl Decoder {
             let mut spatial_id: Option<u8> = None;
             for image_index in (self.image_index + 1)..=requested_index {
                 let tile_index = 0;
-                let tile = &self.tiles[decoding_item.usize()][tile_index];
-                let sample = &tile.input.samples[image_index as usize];
+                let tile = self.tiles[decoding_item.usize()]
+                    .get(tile_index)
+                    .ok_or(AvifError::InvalidArgument)?;
+                let sample_index =
+                    usize::try_from(image_index).map_err(|_| AvifError::NoImagesRemaining)?;
+                let sample = tile
+                    .input
+                    .samples
+                    .get(sample_index)
+                    .ok_or(AvifError::NoImagesRemaining)?;
                 if spatial_id.is_none() {
                     spatial_id = Some(sample.spatial_id);
                 }
@@ -3656,8 +3735,13 @@ impl Decoder {
             // The codec may release the memory that self.image points to. Clear these planes so
             // that they are not left dangling if decoding fails.
             self.image.free_planes(category.planes());
-            let first_tile = &mut self.tiles[decoding_item.usize()][0];
-            let codec = &mut self.codecs[first_tile.codec_index];
+            let first_tile = self.tiles[decoding_item.usize()]
+                .first_mut()
+                .ok_or(AvifError::InvalidArgument)?;
+            let codec = self
+                .codecs
+                .get_mut(first_tile.codec_index)
+                .ok_or(AvifError::InvalidArgument)?;
             codec.get_last_image(
                 &payloads,
                 spatial_id.unwrap(),
@@ -3746,9 +3830,13 @@ impl Decoder {
                 let exponent_lsb_mantissa_msb_row = self.extra_inputs[1].row16(plane, y)?;
                 let mantissa_lsb_row = self.extra_inputs[2].row16(plane, y)?;
                 for x in 0..width {
-                    let b1 = sign_exponent_msb_row[x] as u32;
-                    let b2 = exponent_lsb_mantissa_msb_row[x] as u32;
-                    let b3 = mantissa_lsb_row[x] as u32;
+                    let b1 = *sign_exponent_msb_row
+                        .get(x)
+                        .ok_or(AvifError::InvalidArgument)? as u32;
+                    let b2 = *exponent_lsb_mantissa_msb_row
+                        .get(x)
+                        .ok_or(AvifError::InvalidArgument)? as u32;
+                    let b3 = *mantissa_lsb_row.get(x).ok_or(AvifError::InvalidArgument)? as u32;
                     let bits = (b1 << 24) | (b2 << 12) | b3;
                     float_plane.try_push(f32::from_bits(bits))?;
                 }
@@ -3797,7 +3885,11 @@ impl Decoder {
             return AvifError::no_images_remaining();
         }
         if self.source == Source::Thumbnail {
-            Ok(self.thumbnail_images[n as usize].shallow_clone())
+            Ok(self
+                .thumbnail_images
+                .get(usize_from_u32(n)?)
+                .ok_or(AvifError::NoImagesRemaining)?
+                .shallow_clone())
         } else {
             let mut props = self.image.shallow_clone();
             props.width = self.parsed_image.width;
@@ -3824,10 +3916,10 @@ impl Decoder {
         let mut min_row_count = self.image.height;
         for decoding_item in self.settings.image_content_to_decode.decoding_items() {
             let decoding_item_usize = decoding_item.usize();
-            if self.tiles[decoding_item_usize].is_empty() {
+            let Some(first_tile) = self.tiles[decoding_item_usize].first() else {
                 continue;
-            }
-            let first_tile_height = self.tiles[decoding_item_usize][0].height;
+            };
+            let first_tile_height = first_tile.height;
             let row_count = if decoding_item.category == Category::Gainmap
                 && self.gainmap_present()
                 && self.settings.image_content_to_decode.gainmap()
@@ -3873,7 +3965,7 @@ impl Decoder {
         // All the tiles for the requested index must be a keyframe.
         for decoding_item in DecodingItem::ALL_USIZE {
             for tile in &self.tiles[decoding_item] {
-                if index >= tile.input.samples.len() || !tile.input.samples[index].sync {
+                if !tile.input.samples.get(index).is_some_and(|s| s.sync) {
                     return false;
                 }
             }
