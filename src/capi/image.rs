@@ -588,7 +588,18 @@ pub unsafe extern "C" fn crabby_avifImageCopy(
             .chunks(src_stride)
             .zip(dst_slice.chunks_mut(dst_stride))
         {
-            dst_row[..row_bytes_to_copy].copy_from_slice(&src_row[..row_bytes_to_copy]);
+            let (Some(src_row_prefix), Some(dst_row_prefix)) = (
+                src_row.get(..row_bytes_to_copy),
+                dst_row.get_mut(..row_bytes_to_copy),
+            ) else {
+                // SAFETY: `dst_plane` was just allocated by `avif_alloc_buffer` (`crabby_avifAlloc`)
+                // and has not yet been stored in `dst`.
+                unsafe {
+                    crabby_avifFree(dst_plane as *mut c_void);
+                }
+                return avifResult::InvalidArgument;
+            };
+            dst_row_prefix.copy_from_slice(src_row_prefix);
         }
         if channel < AVIF_PLANE_COUNT_YUV {
             dst.yuvPlanes[channel] = dst_plane;
