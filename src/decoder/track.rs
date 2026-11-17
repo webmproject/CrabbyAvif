@@ -227,10 +227,10 @@ impl SampleTable {
         usize_from_u32(match &self.sample_size {
             SampleSize::FixedSize(size) => *size,
             SampleSize::Sizes(sizes) => {
-                if index >= sizes.len() {
+                let Some(&size) = sizes.get(index) else {
                     return AvifError::bmff_parse_failed("not enough sampel sizes in the table");
-                }
-                sizes[index]
+                };
+                size
             }
         })
     }

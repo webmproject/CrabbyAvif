@@ -62,14 +62,15 @@ impl Item {
 
     pub(crate) fn stream<'a>(&'a mut self, io: &'a mut GenericIO) -> AvifResult<IStream<'a>> {
         if !self.idat.is_empty() {
-            match self.extents.len() {
-                0 => return AvifError::unknown_error("no extent"),
-                1 => {
+            match self.extents.as_slice() {
+                [] => return AvifError::unknown_error("no extent"),
+                [extent] => {
                     let idat = self.idat.as_slice();
-                    let offset = usize_from_u64(self.extents[0].offset)?;
+                    let offset = usize_from_u64(extent.offset)?;
                     let range = offset..checked_add!(offset, self.size)?;
-                    check_slice_range(idat.len(), &range)?;
-                    return Ok(IStream::create(&idat[range]));
+                    return Ok(IStream::create(
+                        idat.get(range).ok_or(AvifError::NoContent)?,
+                    ));
                 }
                 _ => {
                     return AvifError::unknown_error("idat with multiple extents is not supported");
@@ -77,9 +78,9 @@ impl Item {
             }
         }
 
-        let io_data = match self.extents.len() {
-            0 => return AvifError::unknown_error("no extent"),
-            1 => io.read_exact(self.extents[0].offset, self.size)?,
+        let io_data = match self.extents.as_slice() {
+            [] => return AvifError::unknown_error("no extent"),
+            [extent] => io.read_exact(extent.offset, self.size)?,
             _ => {
                 if self.data_buffer.is_none() {
                     // Decoder::prepare_sample() will merge the extents the same way but only for
@@ -839,11 +840,11 @@ pub(crate) fn construct_items(
                 continue;
             }
             // property_index is 1-based.
-            if property_index > meta.iprp.properties.len() {
+            let Some(property) = meta.iprp.properties.get(property_index - 1) else {
                 return AvifError::bmff_parse_failed("invalid property_index in ipma");
-            }
+            };
 
-            match (&meta.iprp.properties[property_index - 1], essential) {
+            match (property, essential) {
                 (ItemProperty::Unknown(_), true) => item.has_unsupported_essential_property = true,
                 (ItemProperty::AV1LayeredImageIndexing(_), true) => {
                     return AvifError::bmff_parse_failed("invalid essential property");

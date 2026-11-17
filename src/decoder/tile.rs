@@ -40,8 +40,7 @@ impl DecodeSample {
                 let start_offset = usize_from_u64(self.offset)?;
                 let end_offset = checked_add!(start_offset, size)?;
                 let range = start_offset..end_offset;
-                check_slice_range(x.len(), &range)?;
-                Ok(&x[range])
+                x.get(range).ok_or(AvifError::NoContent)
             }
             None => {
                 let data = io.read(self.offset, size)?;
@@ -202,7 +201,10 @@ impl Tile {
         // Progressive images offer layers via the a1lxProp, but don't specify a layer selection with
         // lsel.
         item.progressive = has_a1lx && (!has_lsel || lsel == 0xFFFF);
-        let base_item_offset = if item.extents.len() == 1 { item.extents[0].offset } else { 0 };
+        let base_item_offset = match item.extents.as_slice() {
+            [extent] => extent.offset,
+            _ => 0,
+        };
         if has_lsel && lsel != 0xFFFF {
             // Layer selection. This requires that the underlying AV1 codec decodes all layers, and
             // then only returns the requested layer as a single frame. To the user of libavif,
@@ -351,10 +353,13 @@ impl Tile {
         for sync_sample_number in &sample_table.sync_samples {
             let index = usize_from_u32(*sync_sample_number)?;
             // sample_table.sync_samples is 1-based.
-            if index == 0 || index > tile.input.samples.len() {
+            let Some(sample) = index
+                .checked_sub(1)
+                .and_then(|i| tile.input.samples.get_mut(i))
+            else {
                 return AvifError::bmff_parse_failed(format!("invalid sync sample number {index}"));
-            }
-            tile.input.samples[index - 1].sync = true;
+            };
+            sample.sync = true;
         }
         Ok(tile)
     }
