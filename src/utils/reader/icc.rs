@@ -46,7 +46,7 @@ pub fn hex_string_to_bytes(hex_string: &[u8], num_expected_bytes: usize) -> Avif
 }
 
 pub fn copy_raw_profile(profile: &[u8]) -> AvifResult<Vec<u8>> {
-    if profile.is_empty() || profile[0] != b'\n' {
+    if profile.first() != Some(&b'\n') {
         return Err(AvifError::UnknownError(
             "Metadata extraction failed: truncated or malformed raw profile".into(),
         ));

@@ -159,22 +159,25 @@ impl Y4MReader {
         }
         y4m_line.pop();
         let parts: Vec<&str> = y4m_line.split(" ").try_collect()?;
-        if parts[0] != "YUV4MPEG2" {
+        if parts.first() != Some(&"YUV4MPEG2") {
             return AvifError::unknown_error("Not a Y4M file");
         }
         let mut y4m = Y4MReader {
             range: YuvRange::Limited,
             ..Default::default()
         };
-        for part in parts[1..].iter() {
-            match part.get(0..1).unwrap_or("") {
-                "W" => y4m.width = part[1..].parse::<u32>().unwrap_or(0),
-                "H" => y4m.height = part[1..].parse::<u32>().unwrap_or(0),
-                "C" => y4m.parse_colorspace(&part[1..])?,
+        for part in parts.get(1..).ok_or(AvifError::InvalidArgument)? {
+            let (Some(prefix), Some(value)) = (part.get(0..1), part.get(1..)) else {
+                continue;
+            };
+            match prefix {
+                "W" => y4m.width = value.parse::<u32>().unwrap_or(0),
+                "H" => y4m.height = value.parse::<u32>().unwrap_or(0),
+                "C" => y4m.parse_colorspace(value)?,
                 "F" => {
                     // TODO: Handle frame rate.
                 }
-                "X" if part[1..] == *"COLORRANGE=FULL" => {
+                "X" if value == "COLORRANGE=FULL" => {
                     y4m.range = YuvRange::Full;
                 }
                 _ => {}

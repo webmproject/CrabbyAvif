@@ -224,7 +224,7 @@ impl PngReaderNative {
                 text.text_length
             };
             let text_bytes = if length == 0 || text.text.is_null() {
-                &[][..]
+                &[]
             } else {
                 let text_ptr = text.text.cast::<u8>().cast_const();
                 // SAFETY: `text.text` is verified non-null and `length > 0`; `libpng` guarantees
