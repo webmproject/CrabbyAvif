@@ -474,3 +474,83 @@ pub fn crop_reference_image(src: &Image, rect: &CropRect) -> AvifResult<Image> {
     }
     Ok(dst)
 }
+
+pub fn scale_reference_image(src: &Image, width: u32, height: u32) -> AvifResult<Image> {
+    let mut dst = src.try_deep_clone()?;
+    dst.clap = None;
+    dst.scale(width, height)?;
+    Ok(dst)
+}
+
+pub fn to_rgba(image: &Image) -> AvifResult<reformat::rgb::Image> {
+    let mut rgb = reformat::rgb::Image::create_from_yuv(image);
+    rgb.format = reformat::rgb::Format::Rgba;
+    rgb.allocate()?;
+    rgb.convert_from_yuv(image)?;
+    Ok(rgb)
+}
+
+pub fn are_rgb_images_equal(
+    rgb1: &reformat::rgb::Image,
+    rgb2: &reformat::rgb::Image,
+) -> AvifResult<bool> {
+    if rgb1.width != rgb2.width
+        || rgb1.height != rgb2.height
+        || rgb1.depth != rgb2.depth
+        || rgb1.format != rgb2.format
+    {
+        return Ok(false);
+    }
+    let samples_per_row = (rgb1.width * rgb1.channel_count()) as usize;
+    for y in 0..rgb1.height {
+        if rgb1.depth > 8 {
+            if rgb1.row16(y)?[..samples_per_row] != rgb2.row16(y)?[..samples_per_row] {
+                return Ok(false);
+            }
+        } else if rgb1.row(y)?[..samples_per_row] != rgb2.row(y)?[..samples_per_row] {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+pub fn rgb_psnr(image1: &Image, image2: &Image) -> AvifResult<f64> {
+    assert_eq!(image1.alpha_present, image2.alpha_present);
+    let rgb1 = to_rgba(image1)?;
+    let rgb2 = to_rgba(image2)?;
+    assert_eq!((rgb1.width, rgb1.height), (rgb2.width, rgb2.height));
+    assert_eq!(rgb1.depth, rgb2.depth);
+    let channels = if image1.alpha_present { 4usize } else { 3usize };
+    let mut diff_sum = 0u64;
+    let mut num_samples = 0usize;
+    for y in 0..rgb1.height {
+        if rgb1.depth > 8 {
+            let r1 = rgb1.row16(y)?;
+            let r2 = rgb2.row16(y)?;
+            for x in 0..rgb1.width as usize {
+                for c in 0..channels {
+                    diff_sum += squared_diff_sum(r1[x * 4 + c], r2[x * 4 + c]);
+                }
+            }
+        } else {
+            let r1 = rgb1.row(y)?;
+            let r2 = rgb2.row(y)?;
+            for x in 0..rgb1.width as usize {
+                for c in 0..channels {
+                    diff_sum += squared_diff_sum(r1[x * 4 + c] as u16, r2[x * 4 + c] as u16);
+                }
+            }
+        }
+        num_samples += rgb1.width as usize * channels;
+    }
+    if diff_sum == 0 {
+        return Ok(99.0);
+    }
+    let max_channel_f = rgb1.max_channel() as f64;
+    let normalized_error = diff_sum as f64 / (num_samples as f64 * max_channel_f * max_channel_f);
+    if normalized_error <= f64::EPSILON {
+        Ok(98.99)
+    } else {
+        Ok((-10.0 * normalized_error.log10()).min(98.99))
+    }
+}
