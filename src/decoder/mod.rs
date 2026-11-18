@@ -150,8 +150,15 @@ pub const DEFAULT_IMAGE_SIZE_LIMIT: u32 = 16384 * 16384;
 pub const DEFAULT_IMAGE_DIMENSION_LIMIT: u32 = 32768;
 pub const DEFAULT_IMAGE_COUNT_LIMIT: u32 = 12 * 3600 * 60;
 
+/// Dimensions of a decoded image in pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ImageSize {
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Options for [`Decoder::next_image_with_options()`] and [`Decoder::nth_image_with_options()`].
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DecodeOptions {
     /// If set, only this region of the image is decoded (for regular grid images, only the
     /// intersecting cells are read and decoded). The region is relative to the clean aperture

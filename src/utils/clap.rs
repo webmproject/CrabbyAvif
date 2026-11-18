@@ -22,7 +22,7 @@ pub struct CleanAperture {
     pub vert_off: UFraction,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub struct CropRect {
     pub x: u32,
