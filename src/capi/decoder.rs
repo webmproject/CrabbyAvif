@@ -363,13 +363,40 @@ pub struct avifDecodeOptions {
     /// When decoding fails, decoder->image may be partially decoded or have no pixels.
     pub enableCropRect: avifBool,
     pub cropRect: avifCropRect,
+
+    /// If AVIF_TRUE, the decoded image (or decoded cropRect region when enableCropRect is also
+    /// AVIF_TRUE, or clean aperture region when the image has a valid 'clap' property and
+    /// enableCropRect is AVIF_FALSE) is downscaled to scaledWidth x scaledHeight before rotation
+    /// and mirroring (AVIF_TRANSFORM_IROT and AVIF_TRANSFORM_IMIR are kept on the decoded image).
+    /// For regular grid images, downscaling is performed at the grid cell level so the full
+    /// unscaled grid canvas is not allocated. The decoded image has dimensions scaledWidth x
+    /// scaledHeight and AVIF_TRANSFORM_CLAP is not set. With AVIF_IMAGE_CONTENT_GAIN_MAP, scaling
+    /// applies to the gain map image.
+    ///
+    /// Decoding fails if:
+    /// - scaledWidth == 0 or scaledHeight == 0
+    /// - scaledWidth or scaledHeight exceeds the source region width or height (upscaling is not
+    ///   supported)
+    /// - the clean aperture is invalid and strictFlags contains AVIF_STRICT_CLAP_VALID
+    /// - allowProgressive or allowIncremental is set
+    /// - imageContentToDecode is AVIF_IMAGE_CONTENT_GAIN_MAP and the image has no gain map
+    /// - both the color image and the gain map of an image with a gain map are decoded
+    /// - the image uses a 32-bit float sample transform
+    ///
+    /// When decoding fails, decoder->image may be partially decoded or have no pixels.
+    pub enableScaling: avifBool,
+    pub scaledWidth: u32,
+    pub scaledHeight: u32,
 }
 
 impl From<&avifDecodeOptions> for DecodeOptions {
     fn from(options: &avifDecodeOptions) -> Self {
         Self {
             crop_rect: (options.enableCropRect != AVIF_FALSE).then_some(options.cropRect),
-            ..Default::default()
+            scaled_size: (options.enableScaling != AVIF_FALSE).then_some(ImageSize {
+                width: options.scaledWidth,
+                height: options.scaledHeight,
+            }),
         }
     }
 }
