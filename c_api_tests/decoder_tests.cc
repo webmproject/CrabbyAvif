@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: BSD-2-Clause
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <string>
 #include <tuple>
@@ -1917,10 +1919,14 @@ TEST_P(DecoderTest, DecodeWithOptionsNullAndDisabled) {
             AVIF_RESULT_OK);
   EXPECT_TRUE(CompareImages(*decoder->image, *ref_decoder->image));
 
-  // When enableCropRect is AVIF_FALSE, cropRect values must be ignored.
+  // When enableCropRect / enableScaling are AVIF_FALSE, their payload fields
+  // must be ignored even if invalid.
   avifDecodeOptions disabled_opts{
       .enableCropRect = AVIF_FALSE,
       .cropRect = {.x = 99999, .y = 99999, .width = 0, .height = 0},
+      .enableScaling = AVIF_FALSE,
+      .scaledWidth = 0,
+      .scaledHeight = 99999,
   };
   ASSERT_EQ(avifDecoderReset(decoder.get()), AVIF_RESULT_OK);
   ASSERT_EQ(avifDecoderNthImageWithOptions(decoder.get(), 0, &disabled_opts),
@@ -2264,6 +2270,639 @@ TEST_P(DecoderTest, DecodeRegionCleanAperture) {
   EXPECT_EQ(decoder->image->height, 160u);
   EXPECT_NE(decoder->image->transformFlags & AVIF_TRANSFORM_CLAP, 0u);
   EXPECT_TRUE(CompareImages(*decoder->image, *ref_decoder->image));
+}
+
+double GetRgbPsnr(const avifRGBImage& rgb1, const avifRGBImage& rgb2) {
+  if (rgb1.pixels == nullptr || rgb2.pixels == nullptr || rgb1.width == 0 ||
+      rgb1.height == 0 || rgb1.width != rgb2.width ||
+      rgb1.height != rgb2.height || rgb1.depth != rgb2.depth ||
+      rgb1.format != rgb2.format || rgb1.isFloat || rgb2.isFloat ||
+      rgb1.format == AVIF_RGB_FORMAT_RGB565 ||
+      rgb1.format == AVIF_RGB_FORMAT_RGBA1010102) {
+    return -1.0;
+  }
+  const uint32_t channels = avifRGBFormatChannelCount(rgb1.format);
+  const uint32_t row_samples = rgb1.width * channels;
+  uint64_t squared_diff_sum = 0;
+  for (uint32_t y = 0; y < rgb1.height; ++y) {
+    const uint8_t* row1 = rgb1.pixels + y * rgb1.rowBytes;
+    const uint8_t* row2 = rgb2.pixels + y * rgb2.rowBytes;
+    if (rgb1.depth > 8) {
+      const auto* s1 = reinterpret_cast<const uint16_t*>(row1);
+      const auto* s2 = reinterpret_cast<const uint16_t*>(row2);
+      for (uint32_t x = 0; x < row_samples; ++x) {
+        const int64_t diff = static_cast<int64_t>(s1[x]) - s2[x];
+        squared_diff_sum += static_cast<uint64_t>(diff * diff);
+      }
+    } else {
+      for (uint32_t x = 0; x < row_samples; ++x) {
+        const int64_t diff = static_cast<int64_t>(row1[x]) - row2[x];
+        squared_diff_sum += static_cast<uint64_t>(diff * diff);
+      }
+    }
+  }
+  if (squared_diff_sum == 0) {
+    return 99.0;
+  }
+  const double max_sample = static_cast<double>((1u << rgb1.depth) - 1u);
+  const double total_samples =
+      static_cast<double>(row_samples) * static_cast<double>(rgb1.height);
+  const double normalized_error = static_cast<double>(squared_diff_sum) /
+                                  (total_samples * max_sample * max_sample);
+  if (normalized_error <= std::numeric_limits<double>::epsilon()) {
+    return 98.99;
+  }
+  return std::min(-10.0 * std::log10(normalized_error), 98.99);
+}
+
+avifCropRect BaseClapRect(const avifImage& image) {
+  avifCropRect base{
+      .x = 0, .y = 0, .width = image.width, .height = image.height};
+  if ((image.transformFlags & AVIF_TRANSFORM_CLAP) != 0) {
+    avifCropRect clap_rect{};
+    if (avifCropRectConvertCleanApertureBox(&clap_rect, &image.clap,
+                                            image.width, image.height,
+                                            image.yuvFormat, nullptr)) {
+      base = clap_rect;
+    }
+  }
+  return base;
+}
+
+// Reference implementation for scaled (and cropped+scaled) decoding: apply
+// clean aperture and optional aligned cropRect via avifImageSetViewRect, copy
+// planes, clear AVIF_TRANSFORM_CLAP, and downscale via avifImageScale.
+ImagePtr MakeCroppedAndScaledReference(const avifImage& full,
+                                       const avifDecodeOptions& opts) {
+  const avifCropRect base = BaseClapRect(full);
+  avifCropRect effective = base;
+  if (opts.enableCropRect) {
+    avifPixelFormatInfo format_info{};
+    avifGetPixelFormatInfo(full.yuvFormat, &format_info);
+    uint32_t x = base.x + opts.cropRect.x;
+    uint32_t y = base.y + opts.cropRect.y;
+    const bool subsampled_x =
+        (!format_info.monochrome && format_info.chromaShiftX == 1) ||
+        full.yuvFormat == AVIF_PIXEL_FORMAT_ANDROID_NV12 ||
+        full.yuvFormat == AVIF_PIXEL_FORMAT_ANDROID_NV21 ||
+        full.yuvFormat == AVIF_PIXEL_FORMAT_ANDROID_P010;
+    const bool subsampled_y =
+        (!format_info.monochrome && format_info.chromaShiftY == 1) ||
+        full.yuvFormat == AVIF_PIXEL_FORMAT_ANDROID_NV12 ||
+        full.yuvFormat == AVIF_PIXEL_FORMAT_ANDROID_NV21 ||
+        full.yuvFormat == AVIF_PIXEL_FORMAT_ANDROID_P010;
+    if (subsampled_x) {
+      x &= ~1u;
+    }
+    if (subsampled_y) {
+      y &= ~1u;
+    }
+    effective = {.x = x,
+                 .y = y,
+                 .width = opts.cropRect.width,
+                 .height = opts.cropRect.height};
+  }
+  ImagePtr view(avifImageCreateEmpty());
+  if (view == nullptr) return nullptr;
+  const avifImage* src = &full;
+  if (effective.x != 0 || effective.y != 0 || effective.width != full.width ||
+      effective.height != full.height) {
+    if (avifImageSetViewRect(view.get(), &full, &effective) != AVIF_RESULT_OK) {
+      return nullptr;
+    }
+    src = view.get();
+  }
+  ImagePtr copy(avifImageCreateEmpty());
+  if (copy == nullptr ||
+      avifImageCopy(copy.get(), src, AVIF_PLANES_ALL) != AVIF_RESULT_OK) {
+    return nullptr;
+  }
+  copy->transformFlags &= ~AVIF_TRANSFORM_CLAP;
+  if (opts.enableScaling) {
+    if (avifImageScale(copy.get(), opts.scaledWidth, opts.scaledHeight,
+                       nullptr) != AVIF_RESULT_OK) {
+      return nullptr;
+    }
+  }
+  return copy;
+}
+
+// Non-grid scaled decodes (both alone and combined with cropRect) must match
+// full decode (+ view crop) + avifImageScale bit-for-bit in both YUV and RGBA.
+TEST_P(DecoderTest, DecodeScaleNonGridExactAndRgbParity) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  for (const char* filename : {"alpha.avif", "paris_10bpc.avif",
+                               "region/region_clap_irot_imir.avif"}) {
+    SCOPED_TRACE(filename);
+    auto ref_decoder = CreateDecoder(filename);
+    ASSERT_NE(ref_decoder, nullptr);
+    ASSERT_EQ(avifDecoderParse(ref_decoder.get()), AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderNthImage(ref_decoder.get(), 0), AVIF_RESULT_OK);
+    const avifCropRect base = BaseClapRect(*ref_decoder->image);
+    const uint32_t bw = base.width;
+    const uint32_t bh = base.height;
+
+    const avifDecodeOptions cases[] = {
+        {
+            .enableScaling = AVIF_TRUE,
+            .scaledWidth = std::max(bw / 2, 1u),
+            .scaledHeight = std::max(bh / 2, 1u),
+        },
+        {
+            .enableScaling = AVIF_TRUE,
+            .scaledWidth = std::max((bw * 2) / 3, 1u) | 1u,
+            .scaledHeight = std::max((bh * 2) / 5, 1u) | 1u,
+        },
+        {
+            .enableScaling = AVIF_TRUE,
+            .scaledWidth = 1,
+            .scaledHeight = 1,
+        },
+        {
+            .enableCropRect = AVIF_TRUE,
+            .cropRect = {.x = (bw / 6) | 1u,
+                         .y = (bh / 6) | 1u,
+                         .width = ((bw * 2) / 3) | 1u,
+                         .height = ((bh * 2) / 3) | 1u},
+            .enableScaling = AVIF_TRUE,
+            .scaledWidth = std::max(bw / 3, 1u) | 1u,
+            .scaledHeight = std::max(bh / 4, 1u) | 1u,
+        },
+    };
+
+    auto decoder = CreateDecoder(filename);
+    ASSERT_NE(decoder, nullptr);
+    ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+    for (const avifDecodeOptions& opts : cases) {
+      SCOPED_TRACE(opts.scaledWidth);
+      ASSERT_EQ(avifDecoderNthImageWithOptions(decoder.get(), 0, &opts),
+                AVIF_RESULT_OK);
+      EXPECT_EQ(decoder->image->width, opts.scaledWidth);
+      EXPECT_EQ(decoder->image->height, opts.scaledHeight);
+      EXPECT_EQ(decoder->image->transformFlags & AVIF_TRANSFORM_CLAP, 0u);
+      EXPECT_EQ(decoder->image->transformFlags &
+                    (AVIF_TRANSFORM_IROT | AVIF_TRANSFORM_IMIR),
+                ref_decoder->image->transformFlags &
+                    (AVIF_TRANSFORM_IROT | AVIF_TRANSFORM_IMIR));
+
+      ImagePtr expected =
+          MakeCroppedAndScaledReference(*ref_decoder->image, opts);
+      ASSERT_NE(expected, nullptr);
+      EXPECT_TRUE(CompareImages(*decoder->image, *expected));
+
+      const int rgb_depth =
+          static_cast<int>(std::min(expected->depth, uint32_t{12}));
+      AvifRgbImage rgb_actual(decoder->image, rgb_depth, AVIF_RGB_FORMAT_RGBA);
+      AvifRgbImage rgb_expected(expected.get(), rgb_depth,
+                                AVIF_RGB_FORMAT_RGBA);
+      ASSERT_EQ(avifImageYUVToRGB(decoder->image, &rgb_actual), AVIF_RESULT_OK);
+      ASSERT_EQ(avifImageYUVToRGB(expected.get(), &rgb_expected),
+                AVIF_RESULT_OK);
+      const size_t row_bytes =
+          rgb_actual.width * avifRGBImagePixelSize(&rgb_actual);
+      for (uint32_t y = 0; y < rgb_actual.height; ++y) {
+        EXPECT_TRUE(testutil::AreByteSequencesEqual(
+            rgb_actual.pixels + y * rgb_actual.rowBytes, row_bytes,
+            rgb_expected.pixels + y * rgb_expected.rowBytes, row_bytes))
+            << "row " << y;
+      }
+    }
+  }
+}
+
+// Grid scaled decodes perform downscaling at the cell level and must closely
+// match full decode (+ view crop) + avifImageScale in both YUV and RGBA PSNR
+// (and match bit-for-bit on 1:1 scaling and single-cell crops).
+TEST_P(DecoderTest, DecodeScaleGridAndRgbPsnr) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  struct GridCase {
+    const char* filename;
+    double min_yuv_psnr;
+    double min_rgb_psnr;
+    bool optional_parse;
+  };
+  const GridCase grid_cases[] = {
+      {"sofa_grid1x5_420.avif", 30.0, 29.0, false},
+      {"color_grid_alpha_nogrid.avif", 28.0, 26.0, false},
+      {"region/region_grid_420_10bpc_alpha.avif", 25.0, 22.0, false},
+      {"region/region_grid_clap_irot_imir.avif", 23.5, 19.5, false},
+#ifdef __ANDROID__
+      {"heic/blue_grid_alpha.heic", 30.0, 29.0, true},
+#endif
+  };
+
+  for (const GridCase& gc : grid_cases) {
+    SCOPED_TRACE(gc.filename);
+    auto ref_decoder = CreateDecoder(gc.filename);
+    ASSERT_NE(ref_decoder, nullptr);
+    const avifResult parse_res = avifDecoderParse(ref_decoder.get());
+    if (gc.optional_parse && parse_res != AVIF_RESULT_OK) {
+      continue;
+    }
+    ASSERT_EQ(parse_res, AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderNthImage(ref_decoder.get(), 0), AVIF_RESULT_OK);
+    const avifCropRect base = BaseClapRect(*ref_decoder->image);
+    const uint32_t bw = base.width;
+    const uint32_t bh = base.height;
+
+    auto decoder = CreateDecoder(gc.filename);
+    ASSERT_NE(decoder, nullptr);
+    ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+
+    // 1. 1:1 identity scaled_size must be bit-exact with unscaled reference.
+    const avifDecodeOptions identity_opts{
+        .enableScaling = AVIF_TRUE,
+        .scaledWidth = bw,
+        .scaledHeight = bh,
+    };
+    ASSERT_EQ(avifDecoderNthImageWithOptions(decoder.get(), 0, &identity_opts),
+              AVIF_RESULT_OK);
+    ImagePtr identity_ref =
+        MakeCroppedAndScaledReference(*ref_decoder->image, identity_opts);
+    ASSERT_NE(identity_ref, nullptr);
+    EXPECT_TRUE(CompareImages(*decoder->image, *identity_ref));
+
+    // 2. Downscale-only and combined cropRect + downscale across grid cells.
+    const avifDecodeOptions scale_cases[] = {
+        {
+            .enableScaling = AVIF_TRUE,
+            .scaledWidth = bw / 2,
+            .scaledHeight = bh / 2,
+        },
+        {
+            .enableScaling = AVIF_TRUE,
+            .scaledWidth = ((bw * 2) / 5) | 1u,
+            .scaledHeight = ((bh * 3) / 7) | 1u,
+        },
+        {
+            .enableCropRect = AVIF_TRUE,
+            .cropRect = {.x = (bw / 5) | 1u,
+                         .y = (bh / 5) | 1u,
+                         .width = ((bw * 3) / 5) | 1u,
+                         .height = ((bh * 3) / 5) | 1u},
+            .enableScaling = AVIF_TRUE,
+            .scaledWidth = std::max(bw / 3, 16u),
+            .scaledHeight = std::max(bh / 3, 16u),
+        },
+    };
+
+    for (const avifDecodeOptions& opts : scale_cases) {
+      SCOPED_TRACE(opts.scaledWidth);
+      ASSERT_EQ(avifDecoderNthImageWithOptions(decoder.get(), 0, &opts),
+                AVIF_RESULT_OK);
+      EXPECT_EQ(decoder->image->width, opts.scaledWidth);
+      EXPECT_EQ(decoder->image->height, opts.scaledHeight);
+      EXPECT_EQ(decoder->image->transformFlags & AVIF_TRANSFORM_CLAP, 0u);
+      EXPECT_EQ(decoder->image->transformFlags &
+                    (AVIF_TRANSFORM_IROT | AVIF_TRANSFORM_IMIR),
+                ref_decoder->image->transformFlags &
+                    (AVIF_TRANSFORM_IROT | AVIF_TRANSFORM_IMIR));
+
+      ImagePtr expected =
+          MakeCroppedAndScaledReference(*ref_decoder->image, opts);
+      ASSERT_NE(expected, nullptr);
+      EXPECT_GE(testutil::GetPsnr(*decoder->image, *expected, false),
+                gc.min_yuv_psnr);
+
+      const int rgb_depth =
+          static_cast<int>(std::min(expected->depth, uint32_t{12}));
+      AvifRgbImage rgb_actual(decoder->image, rgb_depth, AVIF_RGB_FORMAT_RGBA);
+      AvifRgbImage rgb_expected(expected.get(), rgb_depth,
+                                AVIF_RGB_FORMAT_RGBA);
+      ASSERT_EQ(avifImageYUVToRGB(decoder->image, &rgb_actual), AVIF_RESULT_OK);
+      ASSERT_EQ(avifImageYUVToRGB(expected.get(), &rgb_expected),
+                AVIF_RESULT_OK);
+      EXPECT_GE(GetRgbPsnr(rgb_actual, rgb_expected), gc.min_rgb_psnr);
+    }
+
+    // 3. Extreme 1x1 downscale where some grid cells round to 0 output pixels.
+    const avifDecodeOptions one_by_one{
+        .enableScaling = AVIF_TRUE,
+        .scaledWidth = 1,
+        .scaledHeight = 1,
+    };
+    ASSERT_EQ(avifDecoderNthImageWithOptions(decoder.get(), 0, &one_by_one),
+              AVIF_RESULT_OK);
+    EXPECT_EQ(decoder->image->width, 1u);
+    EXPECT_EQ(decoder->image->height, 1u);
+    AvifRgbImage rgb_1x1(decoder->image, 8, AVIF_RGB_FORMAT_RGBA);
+    EXPECT_EQ(avifImageYUVToRGB(decoder->image, &rgb_1x1), AVIF_RESULT_OK);
+  }
+}
+
+#ifdef __ANDROID__
+TEST_P(DecoderTest, DecodeScaleAndroidMediaCodecColorFormats) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  // 1. Explicit YUV420_FLEXIBLE (AndroidNv12) on grid and mixed-grid files.
+  for (const char* filename :
+       {"sofa_grid1x5_420.avif", "color_grid_alpha_nogrid.avif"}) {
+    SCOPED_TRACE(filename);
+    auto ref_decoder = CreateDecoder(filename);
+    ASSERT_NE(ref_decoder, nullptr);
+    ref_decoder->androidMediaCodecOutputColorFormat =
+        ANDROID_MEDIA_CODEC_OUTPUT_COLOR_FORMAT_YUV420_FLEXIBLE;
+    ASSERT_EQ(avifDecoderParse(ref_decoder.get()), AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderNthImage(ref_decoder.get(), 0), AVIF_RESULT_OK);
+
+    const avifDecodeOptions opts{
+        .enableCropRect = AVIF_TRUE,
+        .cropRect = {.x = 12,
+                     .y = 16,
+                     .width = ref_decoder->image->width - 24,
+                     .height = ref_decoder->image->height - 32},
+        .enableScaling = AVIF_TRUE,
+        .scaledWidth = (ref_decoder->image->width - 24) / 2,
+        .scaledHeight = (ref_decoder->image->height - 32) / 2,
+    };
+    auto decoder = CreateDecoder(filename);
+    ASSERT_NE(decoder, nullptr);
+    decoder->androidMediaCodecOutputColorFormat =
+        ANDROID_MEDIA_CODEC_OUTPUT_COLOR_FORMAT_YUV420_FLEXIBLE;
+    ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderNthImageWithOptions(decoder.get(), 0, &opts),
+              AVIF_RESULT_OK);
+    // YUV420_FLEXIBLE may decode as YUV420 (software MediaCodec) or
+    // ANDROID_NV12/ANDROID_NV21 (hardware MediaCodec); scaled output preserves
+    // that format.
+    EXPECT_EQ(decoder->image->yuvFormat, ref_decoder->image->yuvFormat);
+    EXPECT_EQ(decoder->image->depth, 8u);
+
+    ImagePtr expected =
+        MakeCroppedAndScaledReference(*ref_decoder->image, opts);
+    ASSERT_NE(expected, nullptr);
+    AvifRgbImage rgb_actual(decoder->image, 8, AVIF_RGB_FORMAT_RGBA);
+    AvifRgbImage rgb_expected(expected.get(), 8, AVIF_RGB_FORMAT_RGBA);
+    ASSERT_EQ(avifImageYUVToRGB(decoder->image, &rgb_actual), AVIF_RESULT_OK);
+    ASSERT_EQ(avifImageYUVToRGB(expected.get(), &rgb_expected), AVIF_RESULT_OK);
+    EXPECT_GE(GetRgbPsnr(rgb_actual, rgb_expected), 28.0);
+
+    AvifRgbImage rgb565(decoder->image, 8, AVIF_RGB_FORMAT_RGB565);
+    EXPECT_EQ(avifImageYUVToRGB(decoder->image, &rgb565), AVIF_RESULT_OK);
+  }
+
+  // 2. Explicit P010 on 10-bit non-grid, 10-bit alpha grid, and 10-bit color
+  // grid ("color_grid_gainmap_different_grid.avif"): scaling converts
+  // AndroidP010 (depth 16) -> planar 10-bit YUV420, and a subsequent unscaled
+  // decode on the same decoder restores AndroidP010 (depth 16).
+  for (const char* filename :
+       {"paris_10bpc.avif", "region/region_grid_420_10bpc_alpha.avif",
+        "color_grid_gainmap_different_grid.avif"}) {
+    SCOPED_TRACE(filename);
+    auto ref_decoder = CreateDecoder(filename);
+    ASSERT_NE(ref_decoder, nullptr);
+    ref_decoder->androidMediaCodecOutputColorFormat =
+        ANDROID_MEDIA_CODEC_OUTPUT_COLOR_FORMAT_P010;
+    ASSERT_EQ(avifDecoderParse(ref_decoder.get()), AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderNthImage(ref_decoder.get(), 0), AVIF_RESULT_OK);
+    ASSERT_EQ(ref_decoder->image->yuvFormat, AVIF_PIXEL_FORMAT_ANDROID_P010);
+    ASSERT_EQ(ref_decoder->image->depth, 16u);
+
+    const avifDecodeOptions opts{
+        .enableCropRect = AVIF_TRUE,
+        .cropRect = {.x = 8,
+                     .y = 10,
+                     .width = ref_decoder->image->width - 16,
+                     .height = ref_decoder->image->height - 20},
+        .enableScaling = AVIF_TRUE,
+        .scaledWidth = (ref_decoder->image->width - 16) / 2,
+        .scaledHeight = (ref_decoder->image->height - 20) / 2,
+    };
+    auto decoder = CreateDecoder(filename);
+    ASSERT_NE(decoder, nullptr);
+    decoder->androidMediaCodecOutputColorFormat =
+        ANDROID_MEDIA_CODEC_OUTPUT_COLOR_FORMAT_P010;
+    ASSERT_EQ(avifDecoderParse(decoder.get()), AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderNthImageWithOptions(decoder.get(), 0, &opts),
+              AVIF_RESULT_OK);
+    EXPECT_EQ(decoder->image->yuvFormat, AVIF_PIXEL_FORMAT_YUV420);
+    EXPECT_EQ(decoder->image->depth, 10u);
+
+    ImagePtr expected =
+        MakeCroppedAndScaledReference(*ref_decoder->image, opts);
+    ASSERT_NE(expected, nullptr);
+    EXPECT_GE(testutil::GetPsnr(*decoder->image, *expected, false), 22.0);
+
+    AvifRgbImage rgb10_actual(decoder->image, 10, AVIF_RGB_FORMAT_RGBA);
+    AvifRgbImage rgb10_expected(expected.get(), 10, AVIF_RGB_FORMAT_RGBA);
+    ASSERT_EQ(avifImageYUVToRGB(decoder->image, &rgb10_actual), AVIF_RESULT_OK);
+    ASSERT_EQ(avifImageYUVToRGB(expected.get(), &rgb10_expected),
+              AVIF_RESULT_OK);
+    EXPECT_GE(GetRgbPsnr(rgb10_actual, rgb10_expected), 21.0);
+
+    AvifRgbImage rgba1010102(decoder->image, 10, AVIF_RGB_FORMAT_RGBA1010102);
+    EXPECT_EQ(avifImageYUVToRGB(decoder->image, &rgba1010102), AVIF_RESULT_OK);
+
+    avifRGBImage rgba_f16{};
+    avifRGBImageSetDefaults(&rgba_f16, decoder->image);
+    rgba_f16.format = AVIF_RGB_FORMAT_RGBA;
+    rgba_f16.depth = 16;
+    rgba_f16.isFloat = true;
+    ASSERT_EQ(avifRGBImageAllocatePixels(&rgba_f16), AVIF_RESULT_OK);
+    EXPECT_EQ(avifImageYUVToRGB(decoder->image, &rgba_f16), AVIF_RESULT_OK);
+    avifRGBImageFreePixels(&rgba_f16);
+
+    // Subsequent full unscaled decode on the same decoder must restore P010.
+    ASSERT_EQ(avifDecoderNthImage(decoder.get(), 0), AVIF_RESULT_OK);
+    EXPECT_EQ(decoder->image->yuvFormat, AVIF_PIXEL_FORMAT_ANDROID_P010);
+    EXPECT_EQ(decoder->image->depth, 16u);
+    EXPECT_TRUE(CompareImages(*decoder->image, *ref_decoder->image));
+  }
+}
+#endif  // __ANDROID__
+
+TEST_P(DecoderTest, DecodeScaleGainMapAnimatedStateAndErrors) {
+  if (!testutil::Av1DecoderAvailable()) {
+    GTEST_SKIP() << "AV1 Codec unavailable, skip test.";
+  }
+  // 1. Gainmap-only scaling and crop+scaling succeed while leaving color planes
+  // unallocated and unscaled; Color + GainMap returns NOT_IMPLEMENTED.
+  auto gm_ref = CreateDecoder("seine_sdr_gainmap_srgb.avif");
+  ASSERT_NE(gm_ref, nullptr);
+  gm_ref->imageContentToDecode = AVIF_IMAGE_CONTENT_GAIN_MAP;
+  ASSERT_EQ(avifDecoderParse(gm_ref.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNthImage(gm_ref.get(), 0), AVIF_RESULT_OK);
+
+  const avifDecodeOptions gm_opts{
+      .enableCropRect = AVIF_TRUE,
+      .cropRect = {.x = 10, .y = 20, .width = 160, .height = 120},
+      .enableScaling = AVIF_TRUE,
+      .scaledWidth = 80,
+      .scaledHeight = 60,
+  };
+  auto gm_dec = CreateDecoder("seine_sdr_gainmap_srgb.avif");
+  ASSERT_NE(gm_dec, nullptr);
+  gm_dec->imageContentToDecode = AVIF_IMAGE_CONTENT_GAIN_MAP;
+  ASSERT_EQ(avifDecoderParse(gm_dec.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNthImageWithOptions(gm_dec.get(), 0, &gm_opts),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(gm_dec->image->width, gm_ref->image->width);
+  EXPECT_EQ(gm_dec->image->height, gm_ref->image->height);
+  EXPECT_EQ(gm_dec->image->yuvPlanes[AVIF_CHAN_Y], nullptr);
+  ASSERT_NE(gm_dec->image->gainMap, nullptr);
+  ASSERT_NE(gm_dec->image->gainMap->image, nullptr);
+  ASSERT_NE(gm_ref->image->gainMap, nullptr);
+  ASSERT_NE(gm_ref->image->gainMap->image, nullptr);
+  ImagePtr gm_expected =
+      MakeCroppedAndScaledReference(*gm_ref->image->gainMap->image, gm_opts);
+  ASSERT_NE(gm_expected, nullptr);
+  EXPECT_TRUE(CompareImages(*gm_dec->image->gainMap->image, *gm_expected));
+
+  auto gm_both = CreateDecoder("seine_sdr_gainmap_srgb.avif");
+  ASSERT_NE(gm_both, nullptr);
+  gm_both->imageContentToDecode = AVIF_IMAGE_CONTENT_ALL;
+  ASSERT_EQ(avifDecoderParse(gm_both.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(avifDecoderNthImageWithOptions(gm_both.get(), 0, &gm_opts),
+            AVIF_RESULT_NOT_IMPLEMENTED);
+
+  auto no_gm = CreateDecoder("sofa_grid1x5_420.avif");
+  ASSERT_NE(no_gm, nullptr);
+  no_gm->imageContentToDecode = AVIF_IMAGE_CONTENT_GAIN_MAP;
+  ASSERT_EQ(avifDecoderParse(no_gm.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(avifDecoderNthImageWithOptions(no_gm.get(), 0, &gm_opts),
+            AVIF_RESULT_NO_CONTENT);
+
+  // 2. Animated sequence with NextImageWithOptions and NthImageWithOptions.
+  if (codec_choice() != AVIF_CODEC_CHOICE_NATIVE) {
+    const avifDecodeOptions anim_opts{
+        .enableCropRect = AVIF_TRUE,
+        .cropRect = {.x = 4, .y = 6, .width = 20, .height = 20},
+        .enableScaling = AVIF_TRUE,
+        .scaledWidth = 10,
+        .scaledHeight = 10,
+    };
+    auto anim_ref = CreateDecoder("colors-animated-8bpc.avif");
+    ASSERT_NE(anim_ref, nullptr);
+    ASSERT_EQ(avifDecoderParse(anim_ref.get()), AVIF_RESULT_OK);
+    auto anim_dec = CreateDecoder("colors-animated-8bpc.avif");
+    ASSERT_NE(anim_dec, nullptr);
+    ASSERT_EQ(avifDecoderParse(anim_dec.get()), AVIF_RESULT_OK);
+    for (int i = 0; i < anim_ref->imageCount; ++i) {
+      SCOPED_TRACE(i);
+      ASSERT_EQ(avifDecoderNextImage(anim_ref.get()), AVIF_RESULT_OK);
+      ASSERT_EQ(avifDecoderNextImageWithOptions(anim_dec.get(), &anim_opts),
+                AVIF_RESULT_OK);
+      ImagePtr expected =
+          MakeCroppedAndScaledReference(*anim_ref->image, anim_opts);
+      ASSERT_NE(expected, nullptr);
+      EXPECT_TRUE(CompareImages(*anim_dec->image, *expected));
+    }
+    ASSERT_EQ(avifDecoderNthImage(anim_ref.get(), 3), AVIF_RESULT_OK);
+    ASSERT_EQ(avifDecoderNthImageWithOptions(anim_dec.get(), 3, &anim_opts),
+              AVIF_RESULT_OK);
+    ImagePtr expected =
+        MakeCroppedAndScaledReference(*anim_ref->image, anim_opts);
+    ASSERT_NE(expected, nullptr);
+    EXPECT_TRUE(CompareImages(*anim_dec->image, *expected));
+  }
+
+  // 3. Interleaved full -> scaled -> NoImagesRemaining -> NthImageProperties ->
+  // full decode on a clean-aperture grid image.
+  auto state_ref = CreateDecoder("region/region_grid_clap_irot_imir.avif");
+  ASSERT_NE(state_ref, nullptr);
+  ASSERT_EQ(avifDecoderParse(state_ref.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNthImage(state_ref.get(), 0), AVIF_RESULT_OK);
+
+  auto state_dec = CreateDecoder("region/region_grid_clap_irot_imir.avif");
+  ASSERT_NE(state_dec, nullptr);
+  ASSERT_EQ(avifDecoderParse(state_dec.get()), AVIF_RESULT_OK);
+  ASSERT_EQ(avifDecoderNthImage(state_dec.get(), 0), AVIF_RESULT_OK);
+  EXPECT_TRUE(CompareImages(*state_dec->image, *state_ref->image));
+
+  const avifDecodeOptions state_scale{
+      .enableScaling = AVIF_TRUE,
+      .scaledWidth = 90,
+      .scaledHeight = 80,
+  };
+  EXPECT_EQ(avifDecoderNextImageWithOptions(state_dec.get(), &state_scale),
+            AVIF_RESULT_NO_IMAGES_REMAINING);
+  ASSERT_EQ(avifDecoderNthImageWithOptions(state_dec.get(), 0, &state_scale),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(state_dec->image->width, 90u);
+  EXPECT_EQ(state_dec->image->height, 80u);
+  EXPECT_EQ(state_dec->image->transformFlags & AVIF_TRANSFORM_CLAP, 0u);
+
+  ImagePtr saved_scaled(avifImageCreateEmpty());
+  ASSERT_EQ(
+      avifImageCopy(saved_scaled.get(), state_dec->image, AVIF_PLANES_ALL),
+      AVIF_RESULT_OK);
+  EXPECT_EQ(avifDecoderNextImage(state_dec.get()),
+            AVIF_RESULT_NO_IMAGES_REMAINING);
+  EXPECT_TRUE(CompareImages(*state_dec->image, *saved_scaled));
+
+  ImagePtr props(avifImageCreateEmpty());
+  ASSERT_EQ(avifDecoderNthImageProperties(state_dec.get(), 0, props.get()),
+            AVIF_RESULT_OK);
+  EXPECT_EQ(props->width, 240u);
+  EXPECT_EQ(props->height, 240u);
+  EXPECT_NE(props->transformFlags & AVIF_TRANSFORM_CLAP, 0u);
+
+  // Upscaling relative to clap (180x160) must fail even though <= 240x240.
+  const avifDecodeOptions over_clap{
+      .enableScaling = AVIF_TRUE,
+      .scaledWidth = 200,
+      .scaledHeight = 160,
+  };
+  EXPECT_EQ(avifDecoderNthImageWithOptions(state_dec.get(), 0, &over_clap),
+            AVIF_RESULT_INVALID_ARGUMENT);
+  EXPECT_TRUE(CompareImages(*state_dec->image, *saved_scaled));
+
+  ASSERT_EQ(avifDecoderNthImage(state_dec.get(), 0), AVIF_RESULT_OK);
+  EXPECT_EQ(state_dec->image->width, 240u);
+  EXPECT_EQ(state_dec->image->height, 240u);
+  EXPECT_NE(state_dec->image->transformFlags & AVIF_TRANSFORM_CLAP, 0u);
+  EXPECT_TRUE(CompareImages(*state_dec->image, *state_ref->image));
+
+  // 4. Incremental / progressive + enableScaling -> NOT_IMPLEMENTED; zero or
+  // upscaling dimensions -> INVALID_ARGUMENT.
+  const avifDecodeOptions valid_scale{
+      .enableScaling = AVIF_TRUE,
+      .scaledWidth = 128,
+      .scaledHeight = 96,
+  };
+  auto inc_dec = CreateDecoder("sofa_grid1x5_420.avif");
+  ASSERT_NE(inc_dec, nullptr);
+  inc_dec->allowIncremental = AVIF_TRUE;
+  ASSERT_EQ(avifDecoderParse(inc_dec.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(avifDecoderNextImageWithOptions(inc_dec.get(), &valid_scale),
+            AVIF_RESULT_NOT_IMPLEMENTED);
+
+  auto prog_dec = CreateDecoder("sofa_grid1x5_420.avif");
+  ASSERT_NE(prog_dec, nullptr);
+  prog_dec->allowProgressive = AVIF_TRUE;
+  ASSERT_EQ(avifDecoderParse(prog_dec.get()), AVIF_RESULT_OK);
+  EXPECT_EQ(avifDecoderNextImageWithOptions(prog_dec.get(), &valid_scale),
+            AVIF_RESULT_NOT_IMPLEMENTED);
+
+  auto err_dec = CreateDecoder("sofa_grid1x5_420.avif");
+  ASSERT_NE(err_dec, nullptr);
+  ASSERT_EQ(avifDecoderParse(err_dec.get()), AVIF_RESULT_OK);
+  const avifDecodeOptions bad_opts_cases[] = {
+      {.enableScaling = AVIF_TRUE, .scaledWidth = 0, .scaledHeight = 10},
+      {.enableScaling = AVIF_TRUE, .scaledWidth = 10, .scaledHeight = 0},
+      {.enableScaling = AVIF_TRUE,
+       .scaledWidth = err_dec->image->width + 1,
+       .scaledHeight = 10},
+      {.enableScaling = AVIF_TRUE,
+       .scaledWidth = 10,
+       .scaledHeight = err_dec->image->height + 1},
+      {.enableCropRect = AVIF_TRUE,
+       .cropRect = {.x = 0, .y = 0, .width = 100, .height = 80},
+       .enableScaling = AVIF_TRUE,
+       .scaledWidth = 101,
+       .scaledHeight = 80},
+  };
+  for (const avifDecodeOptions& bad_opts : bad_opts_cases) {
+    EXPECT_EQ(avifDecoderNthImageWithOptions(err_dec.get(), 0, &bad_opts),
+              AVIF_RESULT_INVALID_ARGUMENT);
+    EXPECT_EQ(avifDecoderNextImageWithOptions(err_dec.get(), &bad_opts),
+              AVIF_RESULT_INVALID_ARGUMENT);
+  }
 }
 
 }  // namespace
