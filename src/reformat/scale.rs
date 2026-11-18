@@ -185,12 +185,70 @@ impl Image {
         Ok(())
     }
 
-    pub(crate) fn scale(&mut self, width: u32, height: u32, category: Category) -> AvifResult<()> {
+    /// Scales all present color and alpha planes of the image to `width x height`.
+    pub fn scale(&mut self, width: u32, height: u32) -> AvifResult<()> {
         if self.width == width && self.height == height {
             return Ok(());
         }
         if width == 0 || height == 0 {
             return AvifError::invalid_argument();
+        }
+        let orig_width = self.width;
+        let orig_height = self.height;
+        let has_color =
+            self.has_plane(Plane::Y) || self.has_plane(Plane::U) || self.has_plane(Plane::V);
+        if has_color {
+            self.scale_category(width, height, Category::Color)?;
+        }
+        if self.has_plane(Plane::A) {
+            self.width = orig_width;
+            self.height = orig_height;
+            if let Err(err) = self.scale_category(width, height, Category::Alpha) {
+                if has_color {
+                    self.width = width;
+                    self.height = height;
+                }
+                return Err(err);
+            }
+        }
+        if !has_color && !self.has_plane(Plane::A) {
+            if self.width > crate::reformat::SCALE_LIMIT
+                || self.height > crate::reformat::SCALE_LIMIT
+                || width > crate::reformat::SCALE_LIMIT
+                || height > crate::reformat::SCALE_LIMIT
+            {
+                return AvifError::not_implemented();
+            }
+            self.width = width;
+            self.height = height;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn scale_category(
+        &mut self,
+        width: u32,
+        height: u32,
+        category: Category,
+    ) -> AvifResult<()> {
+        if self.width == width && self.height == height {
+            return Ok(());
+        }
+        if width == 0 || height == 0 {
+            return AvifError::invalid_argument();
+        }
+        const LIBYUV_LIMIT: u32 = 16384;
+        const LIMIT: u32 = crate::reformat::SCALE_LIMIT;
+        if self.width > LIMIT || self.height > LIMIT || width > LIMIT || height > LIMIT {
+            return AvifError::not_implemented();
+        }
+        if (self.width > LIBYUV_LIMIT
+            || self.height > LIBYUV_LIMIT
+            || width > LIBYUV_LIMIT
+            || height > LIBYUV_LIMIT)
+            && (width > self.width || height > self.height)
+        {
+            return AvifError::not_implemented();
         }
         // The destination planes are only reallocated when the Y plane is present. Reject images
         // that have chroma planes without a Y plane instead of silently dropping the chroma planes.
@@ -327,10 +385,9 @@ impl Image {
         self.height = height;
         self.depth = src.depth;
         self.yuv_format = src.yuv_format;
-        const LIBYUV_LIMIT: u32 = 16384;
-        const LIMIT: u32 = 65536;
         if src.has_plane(Plane::Y) || src.has_plane(Plane::A) {
-            if src.width > LIMIT || src.height > LIMIT {
+            if src.width > LIMIT || src.height > LIMIT || self.width > LIMIT || self.height > LIMIT
+            {
                 return AvifError::not_implemented();
             }
             if src.has_plane(Plane::Y) && category != Category::Alpha {
@@ -340,7 +397,11 @@ impl Image {
                 self.allocate_planes(Category::Alpha)?;
             }
         }
-        if src.width > LIBYUV_LIMIT || src.height > LIBYUV_LIMIT {
+        if src.width > LIBYUV_LIMIT
+            || src.height > LIBYUV_LIMIT
+            || self.width > LIBYUV_LIMIT
+            || self.height > LIBYUV_LIMIT
+        {
             return self.scale_impl(&src, category);
         }
         if category != Category::Alpha
@@ -535,15 +596,7 @@ mod tests {
             };
             yuv.row_bytes[plane.as_usize()] = 2;
         }
-        let categories: &[Category] =
-            if use_alpha { &[Category::Color, Category::Alpha] } else { &[Category::Color] };
-        for category in categories {
-            // Scale will update the width and height when scaling YUV planes. Reset it back before
-            // calling it again.
-            yuv.width = 2;
-            yuv.height = 2;
-            assert!(yuv.scale(4, 4, *category).is_ok());
-        }
+        assert!(yuv.scale(4, 4).is_ok());
         for plane in planes {
             let expected_samples: &[u8] = match (yuv_format, plane) {
                 (PixelFormat::Yuv422, Plane::U | Plane::V) => &[
@@ -584,7 +637,7 @@ mod tests {
         };
         assert_eq!(image.width(Plane::U), 100);
         image.allocate_planes(Category::Color)?;
-        assert!(image.scale(49, 24, Category::Color).is_ok());
+        assert!(image.scale_category(49, 24, Category::Color).is_ok());
         assert_eq!(image.width, 49);
         assert_eq!(image.height, 24);
         Ok(())
@@ -605,7 +658,7 @@ mod tests {
                 *pixel = 512 << 6;
             }
         }
-        image.scale(2, 2, Category::Alpha)?;
+        image.scale_category(2, 2, Category::Alpha)?;
         assert_eq!(image.width, 2);
         assert_eq!(image.height, 2);
         assert_eq!(image.depth, 10);
@@ -629,9 +682,28 @@ mod tests {
         image.allocate_planes(Category::Color)?;
         image.planes[Plane::Y.as_usize()] = None;
         image.row_bytes[Plane::Y.as_usize()] = 0;
-        assert!(image.scale(2, 2, Category::Color).is_err());
+        assert!(image.scale(2, 2).is_err());
         assert_eq!(image.width, 4);
         assert_eq!(image.height, 4);
+        Ok(())
+    }
+
+    #[test]
+    fn scale_target_dimension_limits() -> AvifResult<()> {
+        let mut image = image::Image {
+            width: 2,
+            height: 2,
+            depth: 10,
+            yuv_format: PixelFormat::Yuv400,
+            ..Default::default()
+        };
+        image.allocate_planes(Category::Color)?;
+        for &(bad_w, bad_h) in &[(16385u32, 2u32), (2, 16385), (65537, 2), (0x3fff_ffe1, 3)] {
+            assert_eq!(image.scale(bad_w, bad_h), Err(AvifError::NotImplemented));
+            assert_eq!(image.width, 2);
+            assert_eq!(image.height, 2);
+            assert!(image.has_plane(Plane::Y));
+        }
         Ok(())
     }
 }

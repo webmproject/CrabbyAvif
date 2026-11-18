@@ -280,16 +280,7 @@ pub unsafe extern "C" fn crabby_avifImageScale(
             return avifResult::InvalidArgument;
         }
     }
-    let res = rust_image.scale(dstWidth, dstHeight, Category::Color);
-    if res.is_err() {
-        return res.into();
-    }
-    // The scale function is designed to work only for one category at a time.
-    // Restore the width and height to the original values before scaling the
-    // alpha plane.
-    rust_image.width = orig_width;
-    rust_image.height = orig_height;
-    let res = rust_image.scale(dstWidth, dstHeight, Category::Alpha);
+    let res = rust_image.scale(dstWidth, dstHeight);
     if res.is_err() {
         return res.into();
     }

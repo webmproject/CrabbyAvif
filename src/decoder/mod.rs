@@ -523,7 +523,7 @@ impl GridImageHelper<'_> {
         if self.category == Category::Alpha && cell_image.yuv_range == YuvRange::Limited {
             cell_image.alpha_to_full_range()?;
         }
-        cell_image.scale(self.tile_width, self.tile_height, self.category)?;
+        cell_image.scale_category(self.tile_width, self.tile_height, self.category)?;
         if self.cell_index == 0 {
             validate_grid_image_dimensions(cell_image, self.grid)?;
             if self.category != Category::Alpha {
@@ -2719,7 +2719,8 @@ impl Decoder {
         if category == Category::Alpha && tile.image.yuv_range == YuvRange::Limited {
             tile.image.alpha_to_full_range()?;
         }
-        tile.image.scale(tile.width, tile.height, category)?;
+        tile.image
+            .scale_category(tile.width, tile.height, category)?;
 
         if self.tile_info[decoding_item.usize()].is_grid() {
             if self.tile_info[decoding_item.usize()].is_overlay() {
@@ -3753,7 +3754,7 @@ impl Decoder {
             }
             first_tile
                 .image
-                .scale(first_tile.width, first_tile.height, category)?;
+                .scale_category(first_tile.width, first_tile.height, category)?;
             match category {
                 Category::Color | Category::Gainmap => {
                     self.image.width = first_tile.image.width;

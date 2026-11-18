@@ -33,6 +33,9 @@ pub mod rgb;
 #[forbid(unsafe_code)]
 pub mod rgb_impl;
 
+#[allow(dead_code)] // Used without libyuv in a follow-up change.
+pub(crate) const SCALE_LIMIT: u32 = 65536;
+
 // If libyuv is not present, add placeholder functions so that the library will build successfully
 // without it.
 #[cfg(not(feature = "libyuv"))]
@@ -63,7 +66,18 @@ pub mod libyuv {
     }
 
     impl image::Image {
-        pub(crate) fn scale(
+        /// Scales all present color and alpha planes of the image to `width x height`.
+        pub fn scale(&mut self, width: u32, height: u32) -> AvifResult<()> {
+            if self.width == width && self.height == height {
+                return Ok(());
+            }
+            if width == 0 || height == 0 {
+                return AvifError::invalid_argument();
+            }
+            AvifError::not_implemented()
+        }
+
+        pub(crate) fn scale_category(
             &mut self,
             width: u32,
             height: u32,
@@ -71,6 +85,9 @@ pub mod libyuv {
         ) -> AvifResult<()> {
             if self.width == width && self.height == height {
                 return Ok(());
+            }
+            if width == 0 || height == 0 {
+                return AvifError::invalid_argument();
             }
             AvifError::not_implemented()
         }
