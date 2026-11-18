@@ -126,6 +126,14 @@ fn crop_parser(s: &str) -> Result<CropRect, String> {
     })
 }
 
+fn target_size_parser(s: &str) -> Result<ImageSize, String> {
+    let values = split_and_check_count!("target-size", s, ",", 2, u32);
+    Ok(ImageSize {
+        width: *values.first().ok_or("Invalid target-size string")?,
+        height: *values.get(1).ok_or("Invalid target-size string")?,
+    })
+}
+
 fn clli_parser(s: &str) -> Result<ContentLightLevelInformation, String> {
     let values = split_and_check_count!("clli", s, ",", 2, u16);
     Ok(ContentLightLevelInformation {
@@ -302,6 +310,12 @@ struct CommandLineArgs {
     /// Width, Height
     #[arg(long, value_parser = crop_parser)]
     crop: Option<CropRect>,
+
+    /// AVIF Decode only: Downscale the decoded image (or cropped region when --crop is also set,
+    /// or clean aperture region if the image has a valid one; with --extract-gainmap, the gain
+    /// map) to this size before rotation and mirroring. Width, Height
+    #[arg(long, value_parser = target_size_parser)]
+    target_size: Option<ImageSize>,
 
     /// AVIF Encode only: Add pasp property (aspect ratio). Horizontal spacing, Vertical spacing
     #[arg(long, value_parser = pasp_parser)]
@@ -604,9 +618,9 @@ fn create_decoder_and_parse(args: &CommandLineArgs, input_file: &String) -> Avif
         strictness: if args.no_strict { Strictness::None } else { Strictness::All },
         image_content_to_decode: if args.extract_gainmap {
             ImageContentType::GainMap
-        } else if args.crop.is_some() {
-            // Region decodes cannot decode both the color image and the gain map. The gain map is
-            // only written with --extract-gainmap anyway.
+        } else if args.crop.is_some() || args.target_size.is_some() {
+            // Region and scaled decodes cannot decode both the color image and the gain map. The
+            // gain map is only written with --extract-gainmap anyway.
             ImageContentType::ColorAndAlpha
         } else {
             ImageContentType::All
@@ -711,16 +725,32 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
     }
     let options = DecodeOptions {
         crop_rect: args.crop,
-        ..Default::default()
+        scaled_size: args.target_size,
     };
-    match decoder.nth_image_with_options(args.index.unwrap_or(0), &options) {
-        Err(AvifError::InvalidArgument) if args.crop.is_some() => {
+    match (
+        decoder.nth_image_with_options(args.index.unwrap_or(0), &options),
+        args.crop.is_some(),
+        args.target_size.is_some(),
+    ) {
+        (Err(AvifError::InvalidArgument), true, false) => {
             return Err(AvifError::UnknownError(
                 "Invalid crop rectangle: it must fit in the image (or in its clean aperture)"
                     .into(),
             ));
         }
-        result => result?,
+        (Err(AvifError::InvalidArgument), false, true) => {
+            return Err(AvifError::UnknownError(
+                "Invalid target size: width and height must be non-zero and not exceed the image (or clean aperture) dimensions"
+                    .into(),
+            ));
+        }
+        (Err(AvifError::InvalidArgument), true, true) => {
+            return Err(AvifError::UnknownError(
+                "Invalid crop rectangle or target size: crop must fit in the image (or clean aperture) and target size must be non-zero and not exceed the crop dimensions"
+                    .into(),
+            ));
+        }
+        (result, _, _) => result?,
     }
     println!("Image Decoded: {}", input_file);
     println!("Image details:");
@@ -967,6 +997,7 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                     || args.extract_gainmap
                     || args.extract_thumbnail
                     || args.crop.is_some()
+                    || args.target_size.is_some()
                 {
                     return Err(AvifError::UnknownError(
                         "--info contains unsupported extra arguments".into(),
@@ -1005,12 +1036,22 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                         "crop is not supported with progressive decoding".into(),
                     ));
                 }
+                if args.target_size.is_some() && args.progressive {
+                    return Err(AvifError::UnknownError(
+                        "target-size is not supported with progressive decoding".into(),
+                    ));
+                }
             }
         } else {
             // TODO: b/403090413 - validate encoding args.
             if matches!(args.quality, Some(quality) if !(0.0..=100.0).contains(&quality)) {
                 return Err(AvifError::UnknownError(
                     "quality must be between 0 and 100 inclusive".into(),
+                ));
+            }
+            if args.target_size.is_some() {
+                return Err(AvifError::UnknownError(
+                    "target-size is only supported when decoding".into(),
                 ));
             }
         }

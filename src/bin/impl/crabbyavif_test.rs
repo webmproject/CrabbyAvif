@@ -50,6 +50,43 @@ fn crabbyavif_test() -> AvifResult<()> {
             "crop is not supported with progressive decoding".into()
         ))
     );
+    assert_eq!(
+        main_impl(["crabbyavif", "--info", "--target-size", "8,8", "input.avif"].iter()),
+        Err(AvifError::UnknownError(
+            "--info contains unsupported extra arguments".into()
+        ))
+    );
+    assert_eq!(
+        main_impl(
+            [
+                "crabbyavif",
+                "--progressive",
+                "--target-size",
+                "8,8",
+                "input.avif",
+                "output.y4m"
+            ]
+            .iter()
+        ),
+        Err(AvifError::UnknownError(
+            "target-size is not supported with progressive decoding".into()
+        ))
+    );
+    assert_eq!(
+        main_impl(
+            [
+                "crabbyavif",
+                "--target-size",
+                "8,8",
+                "input.png",
+                "output.avif"
+            ]
+            .iter()
+        ),
+        Err(AvifError::UnknownError(
+            "target-size is only supported when decoding".into()
+        ))
+    );
     Ok(())
 }
 
@@ -143,6 +180,77 @@ mod decode_tests {
             decode_to_y4m(
                 "seine_sdr_gainmap_srgb.avif",
                 &["--extract-gainmap", "--crop", "8,8,40,30"]
+            ),
+            Ok((40, 30))
+        );
+    }
+
+    #[cfg(feature = "libyuv")]
+    #[test]
+    fn target_size() {
+        assert_eq!(
+            decode_to_y4m("paris_10bpc.avif", &["--target-size", "100,75"]),
+            Ok((100, 75))
+        );
+        assert_eq!(
+            decode_to_y4m("sofa_grid1x5_420.avif", &["--target-size", "256,192"]),
+            Ok((256, 192))
+        );
+    }
+
+    #[cfg(feature = "libyuv")]
+    #[test]
+    fn crop_and_target_size() {
+        assert_eq!(
+            decode_to_y4m(
+                "sofa_grid1x5_420.avif",
+                &["--crop", "100,50,400,300", "--target-size", "200,150"]
+            ),
+            Ok((200, 150))
+        );
+    }
+
+    #[cfg(feature = "libyuv")]
+    #[test]
+    fn target_size_invalid() {
+        for bad_size in ["0,10", "500,302"] {
+            assert_eq!(
+                decode_to_y4m("paris_10bpc.avif", &["--target-size", bad_size]),
+                Err(AvifError::UnknownError(
+                    "Invalid target size: width and height must be non-zero and not exceed the image (or clean aperture) dimensions"
+                        .into()
+                ))
+            );
+        }
+        assert_eq!(
+            decode_to_y4m(
+                "paris_10bpc.avif",
+                &["--crop", "0,0,100,100", "--target-size", "101,50"]
+            ),
+            Err(AvifError::UnknownError(
+                "Invalid crop rectangle or target size: crop must fit in the image (or clean aperture) and target size must be non-zero and not exceed the crop dimensions"
+                    .into()
+            ))
+        );
+    }
+
+    #[cfg(feature = "libyuv")]
+    #[test]
+    fn target_size_with_gainmap() {
+        // Only the color image is decoded when scaling an image with a gain map.
+        assert_eq!(
+            decode_to_y4m("seine_sdr_gainmap_srgb.avif", &["--target-size", "100,75"]),
+            Ok((100, 75))
+        );
+    }
+
+    #[cfg(feature = "libyuv")]
+    #[test]
+    fn target_size_extracted_gainmap() {
+        assert_eq!(
+            decode_to_y4m(
+                "seine_sdr_gainmap_srgb.avif",
+                &["--extract-gainmap", "--target-size", "40,30"]
             ),
             Ok((40, 30))
         );
