@@ -465,9 +465,10 @@ pub struct Decoder {
     // that frame (for example because the last decode attempt failed after modifying them).
     decoded_frame_options: Option<DecodeOptions>,
     // True if the decoder state (image dimensions, clap and planes, and decoded tile counts) may
-    // have been modified by a region decode, successful or not. Region decodes cannot be resumed,
-    // so this state is reset before the next decode.
-    region_decode_dirty: bool,
+    // have been modified by decoding with non-default options (crop_rect or scaled_size),
+    // successful or not. Such decodes cannot be resumed, so this state is reset before the next
+    // decode.
+    decode_with_options_dirty: bool,
 }
 
 #[repr(C)]
@@ -1812,7 +1813,7 @@ impl Decoder {
         self.native_decodable = decoder.native_decodable;
         self.parsed_gainmap_image = decoder.parsed_gainmap_image;
         self.decoded_frame_options = decoder.decoded_frame_options;
-        self.region_decode_dirty = decoder.region_decode_dirty;
+        self.decode_with_options_dirty = decoder.decode_with_options_dirty;
     }
 
     pub fn parse(&mut self) -> AvifResult<()> {
@@ -2356,13 +2357,14 @@ impl Decoder {
         Ok(())
     }
 
-    // Region decodes only decode a subset of the tiles and modify the image dimensions, clap and
-    // planes. They cannot be resumed, so if the previous decode was a region decode (successful or
-    // not), this restores the parsed image properties and resets the decoding progress so that the
-    // next decode starts from scratch. The planes are dropped along with the region dimensions so
+    // Decodes with non-default options (crop_rect or scaled_size) may decode only a subset of the
+    // tiles and modify the image dimensions, depth/format (P010 -> I010), clap and planes. They
+    // cannot be resumed, so if the previous decode used non-default options (successful or not),
+    // this restores the parsed image properties and resets the decoding progress so that the next
+    // decode starts from scratch. The planes are dropped along with the modified dimensions so
     // that the image stays self-consistent even if the next decode fails.
-    fn reset_region_decode_state(&mut self) {
-        if !self.region_decode_dirty {
+    fn reset_decode_with_options_state(&mut self) {
+        if !self.decode_with_options_dirty {
             return;
         }
         self.image.width = self.parsed_image.width;
@@ -2385,20 +2387,21 @@ impl Decoder {
         for decoding_item in DecodingItem::ALL_USIZE {
             self.tile_info[decoding_item].decoded_tile_count = 0;
         }
-        self.region_decode_dirty = false;
+        self.decode_with_options_dirty = false;
     }
 
-    // Must be called right before a region decode starts modifying the decoder state. Region
-    // decodes always start from scratch: they never resume a partially decoded frame and they never
-    // carry over planes from a previous decode (which may be stale, for example an alpha plane that
-    // is not decoded again, or point to memory owned by codecs that were destroyed since).
-    fn begin_region_decode(&mut self) {
+    // Must be called right before a decode with non-default options (crop_rect or scaled_size)
+    // starts modifying the decoder state. Such decodes always start from scratch: they never
+    // resume a partially decoded frame and they never carry over planes from a previous decode
+    // (which may be stale, for example an alpha plane that is not decoded again, or point to
+    // memory owned by codecs that were destroyed since).
+    fn begin_decode_with_options(&mut self) {
         for decoding_item in DecodingItem::ALL_USIZE {
             self.tile_info[decoding_item].decoded_tile_count = 0;
         }
         self.image.free_planes(&ALL_PLANES);
         self.gainmap.image.free_planes(&ALL_PLANES);
-        self.region_decode_dirty = true;
+        self.decode_with_options_dirty = true;
     }
 
     fn validate_and_compose_crop_rect(
@@ -3473,7 +3476,7 @@ impl Decoder {
                 self.parsed_image = self.image.shallow_clone();
                 self.parsed_gainmap_image = self.gainmap.image.shallow_clone();
                 // prepare_still_image_item() reset the whole decoder state.
-                self.region_decode_dirty = false;
+                self.decode_with_options_dirty = false;
                 self.decoded_frame_options = None;
             }
             0
@@ -3522,17 +3525,17 @@ impl Decoder {
         }
         // Apart from a thumbnail switch, the previously decoded image has been left untouched so
         // far, for example if there are no images remaining. Prepare the decoder state for decoding
-        // the new image. This drops the planes if this or the previous decode is a region decode,
-        // so a failure from now on may leave the image without pixels.
+        // the new image. This drops the planes if this or the previous decode used options, so a
+        // failure from now on may leave the image without pixels.
         if self.is_current_frame_fully_decoded() {
             for decoding_item in DecodingItem::ALL_USIZE {
                 self.tile_info[decoding_item].decoded_tile_count = 0;
             }
         }
-        self.reset_region_decode_state();
+        self.reset_decode_with_options_state();
         self.create_codecs()?;
         if composed_crop.is_some() {
-            self.begin_region_decode();
+            self.begin_decode_with_options();
         }
         self.decoded_frame_options = None;
         self.decode_tiles(sample_index, effective_crop, &grid_subsets)?;
@@ -3696,13 +3699,13 @@ impl Decoder {
         if requested_index < 0 || requested_index >= i32_from_u32(self.image_count)? {
             return AvifError::no_images_remaining();
         }
-        self.reset_region_decode_state();
+        self.reset_decode_with_options_state();
         self.create_codecs()?;
         for decoding_item in DecodingItem::ALL_USIZE {
             self.tile_info[decoding_item].decoded_tile_count = 0;
         }
         if composed_crop.is_some() {
-            self.begin_region_decode();
+            self.begin_decode_with_options();
         }
         self.decoded_frame_options = None;
         let mut decoded_something = false;
