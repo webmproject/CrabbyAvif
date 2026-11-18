@@ -985,6 +985,49 @@ fn yuv_to_rgb_negative_max_threads() -> AvifResult<()> {
     Ok(())
 }
 
+#[test]
+fn convert_from_yuv_invalid_buffer() -> AvifResult<()> {
+    let mut image = image::Image {
+        width: 10,
+        height: 10,
+        depth: 8,
+        yuv_format: PixelFormat::Yuv420,
+        ..Default::default()
+    };
+    image.allocate_planes(Category::Color)?;
+
+    let mut rgb = rgb::Image::create_from_yuv(&image);
+    rgb.allocate()?;
+    // Valid conversion succeeds.
+    assert!(rgb.convert_from_yuv(&image).is_ok());
+
+    // Row bytes smaller than required.
+    let pixel_size = rgb.format.pixel_size(u32::from(rgb.depth));
+    rgb.row_bytes = rgb.width * pixel_size - 1;
+    assert!(matches!(
+        rgb.convert_from_yuv(&image),
+        Err(AvifError::ReformatFailed)
+    ));
+
+    // Dimension mismatch.
+    rgb.row_bytes = rgb.width * pixel_size;
+    rgb.width = 5;
+    assert!(matches!(
+        rgb.convert_from_yuv(&image),
+        Err(AvifError::ReformatFailed)
+    ));
+
+    // Missing pixels.
+    rgb.width = 10;
+    rgb.pixels = None;
+    assert!(matches!(
+        rgb.convert_from_yuv(&image),
+        Err(AvifError::ReformatFailed)
+    ));
+
+    Ok(())
+}
+
 #[test_matrix(
     [8, 16],
     [15, 16],
