@@ -14,6 +14,7 @@
 
 use crate::image::*;
 use crate::internal_utils::*;
+use crate::utils::pixels::Pixels;
 use crate::*;
 
 use libyuv_sys::bindings::*;
@@ -176,12 +177,41 @@ impl Image {
         Ok(())
     }
     // Converts 16-bit P010 alpha samples (stored in the upper 10 bits) into 10-bit samples.
+    // Allocates an owned buffer if Plane::A borrows external memory (e.g. MediaCodec or view()).
     fn downshift_p010_alpha(&mut self) -> AvifResult<()> {
+        match self.planes[Plane::A.as_usize()] {
+            Some(Pixels::Buffer16(_)) => {
+                for y in 0..self.height {
+                    for pixel in self.row16_mut(Plane::A, y)? {
+                        *pixel >>= 6;
+                    }
+                }
+                return Ok(());
+            }
+            Some(Pixels::Pointer16(_)) => {}
+            _ => return AvifError::no_content(),
+        }
+        let mut dst = image::Image {
+            width: self.width,
+            height: self.height,
+            depth: 10,
+            yuv_format: PixelFormat::Yuv420,
+            ..image::Image::default()
+        };
+        dst.allocate_planes(Category::Alpha)?;
         for y in 0..self.height {
-            for pixel in self.row16_mut(Plane::A, y)? {
-                *pixel >>= 6;
+            let src_row = self.row16(Plane::A, y)?;
+            let dst_row = dst.row16_mut(Plane::A, y)?;
+            if dst_row.len() != src_row.len() {
+                return AvifError::no_content();
+            }
+            for (d, &s) in dst_row.iter_mut().zip(src_row.iter()) {
+                *d = s >> 6;
             }
         }
+        let a = Plane::A.as_usize();
+        self.planes[a] = dst.planes[a].take();
+        self.row_bytes[a] = dst.row_bytes[a];
         Ok(())
     }
 
@@ -695,7 +725,6 @@ mod tests {
         assert_eq!(image.height, 4);
         Ok(())
     }
-
     #[test]
     fn scale_target_dimension_limits() -> AvifResult<()> {
         let mut image = image::Image {
@@ -742,6 +771,58 @@ mod tests {
         for y in 0..2 {
             assert!(image.row16(Plane::Y, y)?.iter().all(|&v| v == 600));
             assert!(image.row16(Plane::A, y)?.iter().all(|&v| v == 800));
+        }
+        assert!(image.row16(Plane::U, 0)?.iter().all(|&v| v == 512));
+        assert!(image.row16(Plane::V, 0)?.iter().all(|&v| v == 512));
+        Ok(())
+    }
+
+    #[test]
+    fn scale_android_p010_pointer_alpha_not_mutated() -> AvifResult<()> {
+        let mut backing_y = [700u16 << 6; 16];
+        let mut backing_uv = [512u16 << 6; 8];
+        let mut backing_a = [900u16 << 6; 16];
+        let mut image = image::Image {
+            width: 4,
+            height: 4,
+            depth: 16,
+            yuv_format: PixelFormat::AndroidP010,
+            ..Default::default()
+        };
+        image.planes[Plane::Y.as_usize()] = Some(Pixels::from_raw_pointer(
+            backing_y.as_mut_ptr() as *mut u8,
+            16,
+            4,
+            8,
+        )?);
+        image.row_bytes[Plane::Y.as_usize()] = 8;
+        image.planes[Plane::U.as_usize()] = Some(Pixels::from_raw_pointer(
+            backing_uv.as_mut_ptr() as *mut u8,
+            16,
+            2,
+            8,
+        )?);
+        image.row_bytes[Plane::U.as_usize()] = 8;
+        image.planes[Plane::A.as_usize()] = Some(Pixels::from_raw_pointer(
+            backing_a.as_mut_ptr() as *mut u8,
+            16,
+            4,
+            8,
+        )?);
+        image.row_bytes[Plane::A.as_usize()] = 8;
+
+        image.scale(2, 2)?;
+        // Borrowed external buffers must remain completely untouched.
+        assert!(backing_y.iter().all(|&v| v == 700u16 << 6));
+        assert!(backing_uv.iter().all(|&v| v == 512u16 << 6));
+        assert!(backing_a.iter().all(|&v| v == 900u16 << 6));
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 2);
+        assert_eq!(image.depth, 10);
+        assert_eq!(image.yuv_format, PixelFormat::Yuv420);
+        for y in 0..2 {
+            assert!(image.row16(Plane::Y, y)?.iter().all(|&v| v == 700));
+            assert!(image.row16(Plane::A, y)?.iter().all(|&v| v == 900));
         }
         assert!(image.row16(Plane::U, 0)?.iter().all(|&v| v == 512));
         assert!(image.row16(Plane::V, 0)?.iter().all(|&v| v == 512));
