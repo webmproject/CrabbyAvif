@@ -501,6 +501,184 @@ impl Image {
         Ok(())
     }
 
+    // Maps a cumulative cell boundary `pos` in `0..=src_len` to `0..=dst_len`, rounding interior
+    // boundaries (`0 < pos < src_len`) to multiples of `align` (1 or 2) so chroma-subsampled cell
+    // seams never split a 2x2 chroma sample.
+    fn map_grid_boundary(pos: u32, src_len: u32, dst_len: u32, align: u32) -> AvifResult<u32> {
+        if pos == 0 {
+            return Ok(0);
+        }
+        if pos >= src_len {
+            return Ok(dst_len);
+        }
+        let pos = u128::from(pos);
+        let src = u128::from(src_len);
+        let dst = u128::from(dst_len);
+        let mapped = if align == 2 {
+            2 * ((pos * dst + src) / (2 * src))
+        } else {
+            (2 * pos * dst + src) / (2 * src)
+        };
+        u32::try_from(mapped).map_err(AvifError::map_unknown_error)
+    }
+
+    #[allow(dead_code)] // Used in a follow-up change.
+    pub(crate) fn copy_scaled_from_tile(
+        &mut self,
+        tile: &Image,
+        grid: &Grid,
+        tile_index: u32,
+        category: Category,
+        crop_rect: Option<&CropRect>,
+        scaled_size: ImageSize,
+    ) -> AvifResult<()> {
+        let tile_count = checked_mul!(grid.rows, grid.columns)?;
+        if grid.rows == 0 || grid.columns == 0 || tile_index >= tile_count {
+            return AvifError::invalid_image_grid("grid tile index out of bounds.");
+        }
+        let p010_to_i010 = tile.yuv_format == PixelFormat::AndroidP010
+            && self.yuv_format == PixelFormat::Yuv420
+            && tile.depth == 16
+            && self.depth == 10;
+        if !p010_to_i010 {
+            if category != Category::Alpha && self.yuv_format != tile.yuv_format {
+                return AvifError::invalid_image_grid("mismatch in grid tile yuv formats.");
+            }
+            if self.depth != tile.depth {
+                return AvifError::invalid_image_grid("mismatch in grid tile depths.");
+            }
+        }
+        // Unlike `copy_from_tile`, interior cell boundaries are rounded to `align_x` / `align_y`
+        // (2 along chroma-subsampled axes of `self.yuv_format`) for both Color and Alpha so color
+        // and alpha seams land on identical output coordinates. That requires `tile.width` and
+        // `tile.height` to be even along `self.yuv_format`'s chroma-subsampled axes even for
+        // `Category::Alpha` (otherwise rounding an odd seam to an even output coordinate can
+        // exceed `luma_w` / `luma_h` and attempt upscaling; `grid_tiles_for_crop` enforces the
+        // same check and falls back to full-grid alpha decode + scale for odd alpha tiles).
+        if (self.yuv_format.chroma_shift_x().0 > 0 && tile.width % 2 != 0)
+            || (self.yuv_format.chroma_shift_y() > 0 && tile.height % 2 != 0)
+        {
+            return AvifError::invalid_image_grid(
+                "grid tile dimensions must be even along chroma-subsampled axes.",
+            );
+        }
+        let default_rect = CropRect {
+            x: 0,
+            y: 0,
+            width: grid.width,
+            height: grid.height,
+        };
+        let target = match crop_rect {
+            Some(rect) => rect.align_to_pixel_format(self.yuv_format),
+            None => default_rect,
+        };
+        if !target.is_within(grid.width, grid.height)
+            || scaled_size.width == 0
+            || scaled_size.height == 0
+            || scaled_size.width > target.width
+            || scaled_size.height > target.height
+            || self.width != scaled_size.width
+            || self.height != scaled_size.height
+        {
+            return AvifError::invalid_argument();
+        }
+        if (tile.yuv_format == PixelFormat::AndroidP010
+            || self.yuv_format == PixelFormat::AndroidP010)
+            && !p010_to_i010
+            && (scaled_size.width != target.width || scaled_size.height != target.height)
+        {
+            return AvifError::invalid_image_grid(
+                "AndroidP010 grid scaling requires a 10-bit Yuv420 destination.",
+            );
+        }
+
+        let row_index = tile_index / grid.columns;
+        let column_index = tile_index % grid.columns;
+        let tile_x0 = checked_mul!(column_index, tile.width)?;
+        let tile_x1 = std::cmp::min(checked_add!(tile_x0, tile.width)?, grid.width);
+        let tile_y0 = checked_mul!(row_index, tile.height)?;
+        let tile_y1 = std::cmp::min(checked_add!(tile_y0, tile.height)?, grid.height);
+
+        let inter_x0 = std::cmp::max(tile_x0, target.x);
+        let inter_x1 = std::cmp::min(tile_x1, checked_add!(target.x, target.width)?);
+        let inter_y0 = std::cmp::max(tile_y0, target.y);
+        let inter_y1 = std::cmp::min(tile_y1, checked_add!(target.y, target.height)?);
+        if inter_x0 >= inter_x1 || inter_y0 >= inter_y1 {
+            return Ok(());
+        }
+
+        let luma_src_x = inter_x0 - tile_x0;
+        let luma_w = inter_x1 - inter_x0;
+        let luma_src_y = inter_y0 - tile_y0;
+        let luma_h = inter_y1 - inter_y0;
+
+        let align_x = if self.yuv_format.chroma_shift_x().0 > 0 { 2 } else { 1 };
+        let align_y = if self.yuv_format.chroma_shift_y() > 0 { 2 } else { 1 };
+        let src_x0_rel = inter_x0 - target.x;
+        let src_x1_rel = inter_x1 - target.x;
+        let src_y0_rel = inter_y0 - target.y;
+        let src_y1_rel = inter_y1 - target.y;
+
+        let dst_x0 = Self::map_grid_boundary(src_x0_rel, target.width, scaled_size.width, align_x)?;
+        let dst_x1 = Self::map_grid_boundary(src_x1_rel, target.width, scaled_size.width, align_x)?;
+        let dst_y0 =
+            Self::map_grid_boundary(src_y0_rel, target.height, scaled_size.height, align_y)?;
+        let dst_y1 =
+            Self::map_grid_boundary(src_y1_rel, target.height, scaled_size.height, align_y)?;
+        let dst_w = checked_sub!(dst_x1, dst_x0)?;
+        let dst_h = checked_sub!(dst_y1, dst_y0)?;
+        if dst_w == 0 || dst_h == 0 {
+            return Ok(());
+        }
+
+        let cell_rect = CropRect {
+            x: luma_src_x,
+            y: luma_src_y,
+            width: luma_w,
+            height: luma_h,
+        };
+        let mut cell_view = if category == Category::Alpha {
+            tile.view_plane_a(&cell_rect)?
+        } else {
+            tile.view(&cell_rect)?
+        };
+        if (dst_w, dst_h) != (luma_w, luma_h) {
+            cell_view.scale_planes_in_place(dst_w, dst_h, category)?;
+        } else if p010_to_i010 {
+            cell_view.convert_p010_to_i010()?;
+        }
+
+        let planes: &[Plane] = if category == Category::Color && cell_view.has_plane(Plane::A) {
+            &ALL_PLANES
+        } else {
+            category.planes()
+        };
+        for &plane in planes {
+            if !cell_view.has_plane(plane) {
+                continue;
+            }
+            let (dst, size) = if matches!(plane, Plane::Y | Plane::A) {
+                (
+                    (usize_from_u32(dst_x0)?, dst_y0),
+                    (usize_from_u32(dst_w)?, dst_h),
+                )
+            } else {
+                (
+                    (
+                        usize_from_u32(self.yuv_format.apply_chroma_shift_x(dst_x0))?,
+                        self.yuv_format.apply_chroma_shift_y(dst_y0),
+                    ),
+                    (
+                        Self::plane_width(self.yuv_format, plane, dst_w),
+                        u32_from_usize(Self::plane_height(self.yuv_format, plane, dst_h))?,
+                    ),
+                )
+            };
+            self.copy_plane_block(&cell_view, plane, (0, 0), dst, size)?;
+        }
+        Ok(())
+    }
+
     // Copies the block of samples of the given size (width, height) at position src (x, y) in
     // the given plane of tile to position dst (x, y) in the same plane of self. Positions and
     // dimensions are expressed in samples of that plane.
@@ -989,6 +1167,352 @@ mod tests {
             image.copy_from_tile(&tile, &grid, 0, Category::Color, Some(&rect)),
             Err(AvifError::InvalidArgument)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn map_grid_boundary_invariants() -> AvifResult<()> {
+        for align in [1u32, 2] {
+            for tile_len in [64u32, 66, 100] {
+                for cols in 1u32..=4 {
+                    for trim in [0u32, 1, 7, 33] {
+                        let grid_len = tile_len * cols - trim.min(tile_len - 1);
+                        for crop_x in [0u32, align, tile_len - align] {
+                            if crop_x >= grid_len {
+                                continue;
+                            }
+                            let src_len = grid_len - crop_x;
+                            for dst_len in [1u32, 2, 3, src_len / 3, src_len / 2, src_len] {
+                                if dst_len == 0 || dst_len > src_len {
+                                    continue;
+                                }
+                                let mut seams = vec![0u32];
+                                for c in 1..cols {
+                                    let raw = c * tile_len;
+                                    if raw > crop_x && raw < grid_len {
+                                        seams.push(raw - crop_x);
+                                    }
+                                }
+                                seams.push(src_len);
+
+                                let mut mapped = Vec::new();
+                                for &s in &seams {
+                                    mapped.push(Image::map_grid_boundary(
+                                        s, src_len, dst_len, align,
+                                    )?);
+                                }
+                                assert_eq!(mapped[0], 0);
+                                assert_eq!(*mapped.last().unwrap(), dst_len);
+                                for i in 0..mapped.len() - 1 {
+                                    assert!(mapped[i] <= mapped[i + 1]);
+                                    let cell_src = seams[i + 1] - seams[i];
+                                    let cell_dst = mapped[i + 1] - mapped[i];
+                                    assert!(cell_dst <= cell_src);
+                                    if i + 1 < mapped.len() - 1 {
+                                        assert_eq!(mapped[i + 1] % align, 0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            Image::map_grid_boundary(u32::MAX - 1, u32::MAX, u32::MAX - 2, 2)?,
+            u32::MAX - 3
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "libyuv")]
+    #[test_case(PixelFormat::Yuv444, 8, Category::Color, 8, 6)]
+    #[test_case(PixelFormat::Yuv422, 10, Category::Color, 8, 6)]
+    #[test_case(PixelFormat::Yuv420, 8, Category::Color, 8, 6)]
+    #[test_case(PixelFormat::Yuv420, 12, Category::Color, 8, 6)]
+    #[test_case(PixelFormat::Yuv400, 8, Category::Color, 7, 5)]
+    #[test_case(PixelFormat::AndroidNv12, 8, Category::Color, 8, 6)]
+    #[test_case(PixelFormat::AndroidP010, 16, Category::Color, 8, 6)]
+    #[test_case(PixelFormat::Yuv420, 8, Category::Alpha, 8, 6)]
+    #[test_case(PixelFormat::Yuv444, 10, Category::Alpha, 7, 5)]
+    #[test_case(PixelFormat::AndroidP010, 16, Category::Alpha, 8, 6)]
+    fn copy_scaled_from_tile_covers_canvas(
+        yuv_format: PixelFormat,
+        depth: u8,
+        category: Category,
+        tile_width: u32,
+        tile_height: u32,
+    ) -> AvifResult<()> {
+        let grid = Grid {
+            rows: 2,
+            columns: 3,
+            width: tile_width * 2 + tile_width / 2 + 1,
+            height: tile_height + tile_height / 2 + 1,
+        };
+        let tile_format = if category == Category::Alpha && yuv_format != PixelFormat::AndroidP010 {
+            PixelFormat::Yuv420
+        } else {
+            yuv_format
+        };
+        let mut tiles = (0..grid.rows * grid.columns)
+            .map(|i| create_tile(tile_format, depth, category, tile_width, tile_height, i))
+            .collect::<AvifResult<Vec<_>>>()?;
+        if yuv_format == PixelFormat::AndroidP010 {
+            for tile in &mut tiles {
+                for plane in category.planes() {
+                    if !tile.has_plane(*plane) {
+                        continue;
+                    }
+                    for y in 0..u32_from_usize(tile.height(*plane))? {
+                        for p in tile.row16_mut(*plane, y)? {
+                            *p = (*p % 1000) << 6;
+                        }
+                    }
+                }
+            }
+        }
+
+        let crop = CropRect {
+            x: 2,
+            y: 2,
+            width: grid.width - 3,
+            height: grid.height - 2,
+        };
+        for opt_crop in [None, Some(&crop)] {
+            let (base_w, base_h) = match opt_crop {
+                Some(r) => {
+                    let aligned = r.align_to_pixel_format(yuv_format);
+                    (aligned.width, aligned.height)
+                }
+                None => (grid.width, grid.height),
+            };
+            // Identity 1:1 scale must match copy_from_tile bit-exactly.
+            let expected_1to1 = copy_tiles(
+                &tiles,
+                &grid,
+                yuv_format,
+                category,
+                (base_w, base_h),
+                opt_crop,
+            )?;
+            let mut actual_1to1 = Image {
+                width: base_w,
+                height: base_h,
+                depth,
+                yuv_format,
+                ..Default::default()
+            };
+            actual_1to1.allocate_planes(category)?;
+            for (i, tile) in tiles.iter().enumerate() {
+                actual_1to1.copy_scaled_from_tile(
+                    tile,
+                    &grid,
+                    u32_from_usize(i)?,
+                    category,
+                    opt_crop,
+                    ImageSize {
+                        width: base_w,
+                        height: base_h,
+                    },
+                )?;
+            }
+            assert_same_planes(&actual_1to1, &expected_1to1, category)?;
+
+            // Downscaling to various sizes (including 1x1, 2x2, odd sizes) must fill all pixels
+            // without error or out-of-bounds access, and convert P010 -> 10-bit Yuv420.
+            for &(dst_w, dst_h) in &[
+                (1u32, 1u32),
+                (2, 2),
+                (3, 3),
+                (base_w / 2, base_h / 2),
+                (base_w - 1, base_h - 1),
+            ] {
+                if dst_w == 0 || dst_h == 0 || dst_w > base_w || dst_h > base_h {
+                    continue;
+                }
+                let (dst_depth, dst_fmt) = if yuv_format == PixelFormat::AndroidP010 {
+                    (10, PixelFormat::Yuv420)
+                } else {
+                    (depth, yuv_format)
+                };
+                let mut dst = Image {
+                    width: dst_w,
+                    height: dst_h,
+                    depth: dst_depth,
+                    yuv_format: dst_fmt,
+                    ..Default::default()
+                };
+                let sentinel: u16 = if dst_depth == 8 { 255 } else { 4095 };
+                dst.allocate_planes_with_default_values(category, [sentinel; 4])?;
+                for (i, tile) in tiles.iter().enumerate() {
+                    dst.copy_scaled_from_tile(
+                        tile,
+                        &grid,
+                        u32_from_usize(i)?,
+                        category,
+                        opt_crop,
+                        ImageSize {
+                            width: dst_w,
+                            height: dst_h,
+                        },
+                    )?;
+                }
+                for &plane in category.planes() {
+                    if !dst.has_plane(plane) {
+                        continue;
+                    }
+                    for y in 0..u32_from_usize(dst.height(plane))? {
+                        if dst.depth == 8 {
+                            assert!(dst.row(plane, y)?.iter().all(|&v| v != sentinel as u8));
+                        } else {
+                            assert!(dst.row16(plane, y)?.iter().all(|&v| v != sentinel));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn copy_scaled_from_tile_edge_validations() -> AvifResult<()> {
+        let grid = Grid {
+            rows: 2,
+            columns: 2,
+            width: 8,
+            height: 8,
+        };
+        let tile = create_tile(PixelFormat::Yuv420, 8, Category::Color, 4, 4, 0)?;
+        let mut dst = Image {
+            width: 4,
+            height: 4,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            ..Default::default()
+        };
+        dst.allocate_planes(Category::Color)?;
+
+        // Out-of-bounds tile index and empty grid dimensions.
+        assert!(matches!(
+            dst.copy_scaled_from_tile(
+                &tile,
+                &grid,
+                4,
+                Category::Color,
+                None,
+                ImageSize {
+                    width: 4,
+                    height: 4
+                },
+            ),
+            Err(AvifError::InvalidImageGrid(_))
+        ));
+        for bad_grid in [
+            Grid {
+                rows: 0,
+                columns: 2,
+                width: 8,
+                height: 8,
+            },
+            Grid {
+                rows: 2,
+                columns: 0,
+                width: 8,
+                height: 8,
+            },
+        ] {
+            assert!(matches!(
+                dst.copy_scaled_from_tile(
+                    &tile,
+                    &bad_grid,
+                    0,
+                    Category::Color,
+                    None,
+                    ImageSize {
+                        width: 4,
+                        height: 4
+                    },
+                ),
+                Err(AvifError::InvalidImageGrid(_))
+            ));
+        }
+
+        // Invalid scaled_size (zero, upscaling, or mismatched with destination dimensions).
+        for bad_size in [
+            ImageSize {
+                width: 0,
+                height: 4,
+            },
+            ImageSize {
+                width: 10,
+                height: 4,
+            },
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+        ] {
+            assert_eq!(
+                dst.copy_scaled_from_tile(&tile, &grid, 0, Category::Color, None, bad_size),
+                Err(AvifError::InvalidArgument)
+            );
+        }
+
+        // Downscaling AndroidP010 directly into an AndroidP010 destination is rejected.
+        let p010_tile = create_tile(PixelFormat::AndroidP010, 16, Category::Color, 4, 4, 0)?;
+        let mut p010_dst = Image {
+            width: 4,
+            height: 4,
+            depth: 16,
+            yuv_format: PixelFormat::AndroidP010,
+            ..Default::default()
+        };
+        p010_dst.allocate_planes(Category::Color)?;
+        assert!(matches!(
+            p010_dst.copy_scaled_from_tile(
+                &p010_tile,
+                &grid,
+                0,
+                Category::Color,
+                None,
+                ImageSize {
+                    width: 4,
+                    height: 4
+                },
+            ),
+            Err(AvifError::InvalidImageGrid(_))
+        ));
+
+        // Odd Alpha tile dimensions on a chroma-subsampled destination image are rejected
+        // (decoder falls back to full-grid alpha decode + scale in that case).
+        let odd_alpha_tile = create_tile(PixelFormat::Yuv400, 8, Category::Alpha, 5, 4, 0)?;
+        let mut alpha_dst = Image {
+            width: 4,
+            height: 4,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            ..Default::default()
+        };
+        alpha_dst.allocate_planes(Category::Alpha)?;
+        assert!(matches!(
+            alpha_dst.copy_scaled_from_tile(
+                &odd_alpha_tile,
+                &Grid {
+                    rows: 2,
+                    columns: 2,
+                    width: 10,
+                    height: 8,
+                },
+                0,
+                Category::Alpha,
+                None,
+                ImageSize {
+                    width: 4,
+                    height: 4
+                },
+            ),
+            Err(AvifError::InvalidImageGrid(_))
+        ));
         Ok(())
     }
 }
