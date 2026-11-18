@@ -185,6 +185,122 @@ impl Image {
         Ok(())
     }
 
+    fn validate_scale_plane(&self, plane: Plane) -> AvifResult<PlaneData> {
+        let pd = self.plane_data(plane).ok_or(AvifError::NoContent)?;
+        if pd.width == 0 || pd.height == 0 {
+            return AvifError::no_content();
+        }
+        let min_row_bytes = checked_mul!(pd.width, pd.pixel_size)?;
+        if pd.row_bytes < min_row_bytes {
+            return AvifError::no_content();
+        }
+        if self.depth > 8 {
+            if pd.row_bytes % 2 != 0 {
+                return AvifError::no_content();
+            }
+            let _ = self.row16(plane, pd.height - 1)?;
+        } else {
+            let _ = self.row(plane, pd.height - 1)?;
+        }
+        Ok(pd)
+    }
+
+    pub(crate) fn convert_p010_to_i010(&mut self) -> AvifResult<()> {
+        if self.yuv_format != PixelFormat::AndroidP010 {
+            return Ok(());
+        }
+        if !self.has_plane(Plane::Y) && !self.has_plane(Plane::A) {
+            return AvifError::no_content();
+        }
+        if self.has_plane(Plane::Y) {
+            // P010 images cannot be scaled using ScalePlane_12 since the U and V planes are
+            // interleaved. Convert them into I010 (10-bit Yuv420) with owned buffers.
+            let src_y_pd = self.validate_scale_plane(Plane::Y)?;
+            let src_uv_pd = self.validate_scale_plane(Plane::U)?;
+            let mut i010 = image::Image {
+                width: self.width,
+                height: self.height,
+                depth: 10,
+                yuv_format: PixelFormat::Yuv420,
+                ..image::Image::default()
+            };
+            i010.allocate_planes(Category::Color)?;
+            let dst_y_pd = i010.validate_scale_plane(Plane::Y)?;
+            let dst_u_pd = i010.validate_scale_plane(Plane::U)?;
+            let dst_v_pd = i010.validate_scale_plane(Plane::V)?;
+            let src_y = self.planes[Plane::Y.as_usize()]
+                .as_ref()
+                .ok_or(AvifError::NoContent)?
+                .ptr16();
+            let src_uv = self.planes[Plane::U.as_usize()]
+                .as_ref()
+                .ok_or(AvifError::NoContent)?
+                .ptr16();
+            let dst_y = i010.planes[Plane::Y.as_usize()]
+                .as_mut()
+                .ok_or(AvifError::NoContent)?
+                .ptr16_mut();
+            let dst_u = i010.planes[Plane::U.as_usize()]
+                .as_mut()
+                .ok_or(AvifError::NoContent)?
+                .ptr16_mut();
+            let dst_v = i010.planes[Plane::V.as_usize()]
+                .as_mut()
+                .ok_or(AvifError::NoContent)?
+                .ptr16_mut();
+            if src_y.is_null()
+                || src_uv.is_null()
+                || dst_y.is_null()
+                || dst_u.is_null()
+                || dst_v.is_null()
+            {
+                return AvifError::no_content();
+            }
+            let src_stride_y = i32_from_u32(src_y_pd.row_bytes / 2)?;
+            let src_stride_uv = i32_from_u32(src_uv_pd.row_bytes / 2)?;
+            let dst_stride_y = i32_from_u32(dst_y_pd.row_bytes / 2)?;
+            let dst_stride_u = i32_from_u32(dst_u_pd.row_bytes / 2)?;
+            let dst_stride_v = i32_from_u32(dst_v_pd.row_bytes / 2)?;
+            let src_width = i32_from_u32(self.width)?;
+            let src_height = i32_from_u32(self.height)?;
+            // SAFETY: `validate_scale_plane` and the null checks above verified that `src_y` and
+            // `src_uv` point to valid, 2-byte aligned `u16` planes covering `src_width x
+            // src_height` P010 samples, and `dst_y`, `dst_u`, `dst_v` point to freshly allocated,
+            // disjoint, 2-byte aligned `u16` buffers in `i010` with valid strides and capacity.
+            let ret = unsafe {
+                P010ToI010(
+                    src_y,
+                    src_stride_y,
+                    src_uv,
+                    src_stride_uv,
+                    dst_y,
+                    dst_stride_y,
+                    dst_u,
+                    dst_stride_u,
+                    dst_v,
+                    dst_stride_v,
+                    src_width,
+                    src_height,
+                )
+            };
+            if ret != 0 {
+                return AvifError::reformat_failed();
+            }
+            for plane in YUV_PLANES {
+                let idx = plane.as_usize();
+                self.planes[idx] = i010.planes[idx].take();
+                self.row_bytes[idx] = i010.row_bytes[idx];
+            }
+        }
+        if self.has_plane(Plane::A) {
+            let _ = self.validate_scale_plane(Plane::A)?;
+            self.downshift_p010_alpha()?;
+        }
+        self.depth = 10;
+        self.yuv_format = PixelFormat::Yuv420;
+        Ok(())
+    }
+
     /// Scales all present color and alpha planes of the image to `width x height`.
     pub fn scale(&mut self, width: u32, height: u32) -> AvifResult<()> {
         if self.width == width && self.height == height {
@@ -258,127 +374,19 @@ impl Image {
         {
             return AvifError::invalid_argument();
         }
-        let validate_plane = |img: &Image, plane: Plane| -> AvifResult<PlaneData> {
-            let pd = img.plane_data(plane).ok_or(AvifError::NoContent)?;
-            if pd.width == 0 || pd.height == 0 {
-                return AvifError::no_content();
-            }
-            let min_row_bytes = checked_mul!(pd.width, pd.pixel_size)?;
-            if pd.row_bytes < min_row_bytes {
-                return AvifError::no_content();
-            }
-            if img.depth > 8 {
-                if pd.row_bytes % 2 != 0 {
-                    return AvifError::no_content();
-                }
-                let _ = img.row16(plane, pd.height - 1)?;
-            } else {
-                let _ = img.row(plane, pd.height - 1)?;
-            }
-            Ok(pd)
-        };
+        if self.yuv_format == PixelFormat::AndroidP010 {
+            self.convert_p010_to_i010()?;
+        }
         let planes = category.planes();
-        let src = if category != Category::Alpha && self.yuv_format == PixelFormat::AndroidP010 {
-            // P010 images cannot be scaled using ScalePlane_12 since the U and V planes are
-            // interleaved. Convert them into I010 and then scale each plane using
-            // ScalePlane_12.
-            let src_y_pd = validate_plane(self, Plane::Y)?;
-            let src_uv_pd = validate_plane(self, Plane::U)?;
-            let mut i010 = image::Image {
-                width: self.width,
-                height: self.height,
-                depth: 10,
-                yuv_format: PixelFormat::Yuv420,
-                ..image::Image::default()
-            };
-            i010.allocate_planes(Category::Color)?;
-            let dst_y_pd = validate_plane(&i010, Plane::Y)?;
-            let dst_u_pd = validate_plane(&i010, Plane::U)?;
-            let dst_v_pd = validate_plane(&i010, Plane::V)?;
-            let src_y = self.planes[Plane::Y.as_usize()]
-                .as_ref()
-                .ok_or(AvifError::NoContent)?
-                .ptr16();
-            let src_uv = self.planes[Plane::U.as_usize()]
-                .as_ref()
-                .ok_or(AvifError::NoContent)?
-                .ptr16();
-            let dst_y = i010.planes[Plane::Y.as_usize()]
-                .as_mut()
-                .ok_or(AvifError::NoContent)?
-                .ptr16_mut();
-            let dst_u = i010.planes[Plane::U.as_usize()]
-                .as_mut()
-                .ok_or(AvifError::NoContent)?
-                .ptr16_mut();
-            let dst_v = i010.planes[Plane::V.as_usize()]
-                .as_mut()
-                .ok_or(AvifError::NoContent)?
-                .ptr16_mut();
-            if src_y.is_null()
-                || src_uv.is_null()
-                || dst_y.is_null()
-                || dst_u.is_null()
-                || dst_v.is_null()
-            {
-                return AvifError::no_content();
+        // Move the planes for this category into `src`; they will be reallocated in `self` below.
+        let mut src = self.shallow_clone();
+        for plane in planes {
+            let plane_index = plane.as_usize();
+            if let Some(self_plane) = self.planes[plane_index].take() {
+                src.planes[plane_index] = Some(self_plane);
+                src.row_bytes[plane_index] = std::mem::take(&mut self.row_bytes[plane_index]);
             }
-            let src_stride_y = i32_from_u32(src_y_pd.row_bytes / 2)?;
-            let src_stride_uv = i32_from_u32(src_uv_pd.row_bytes / 2)?;
-            let dst_stride_y = i32_from_u32(dst_y_pd.row_bytes / 2)?;
-            let dst_stride_u = i32_from_u32(dst_u_pd.row_bytes / 2)?;
-            let dst_stride_v = i32_from_u32(dst_v_pd.row_bytes / 2)?;
-            let src_width = i32_from_u32(self.width)?;
-            let src_height = i32_from_u32(self.height)?;
-            // SAFETY: `validate_plane` and the null checks above verified that `src_y` and
-            // `src_uv` point to valid, 2-byte aligned `u16` planes covering `src_width x
-            // src_height` P010 samples, and `dst_y`, `dst_u`, `dst_v` point to freshly allocated,
-            // disjoint, 2-byte aligned `u16` buffers in `i010` with valid strides and capacity.
-            let ret = unsafe {
-                P010ToI010(
-                    src_y,
-                    src_stride_y,
-                    src_uv,
-                    src_stride_uv,
-                    dst_y,
-                    dst_stride_y,
-                    dst_u,
-                    dst_stride_u,
-                    dst_v,
-                    dst_stride_v,
-                    src_width,
-                    src_height,
-                )
-            };
-            if ret != 0 {
-                return AvifError::reformat_failed();
-            }
-            if self.has_plane(Plane::A) {
-                let _ = validate_plane(self, Plane::A)?;
-                self.downshift_p010_alpha()?;
-            }
-            i010
-        } else {
-            // Alpha decoded separately from an AndroidP010 image (e.g. MediaCodec alpha tiles) is
-            // also 16-bit. Downshift it so that it matches the 10-bit depth of the color planes.
-            if self.yuv_format == PixelFormat::AndroidP010 && self.has_plane(Plane::A) {
-                let _ = validate_plane(self, Plane::A)?;
-                self.downshift_p010_alpha()?;
-                self.depth = 10;
-                self.yuv_format = PixelFormat::Yuv420;
-            }
-            // Move the planes for this category into `src`; they will be reallocated in `self`
-            // below.
-            let mut src = self.shallow_clone();
-            for plane in planes {
-                let plane_index = plane.as_usize();
-                if let Some(self_plane) = self.planes[plane_index].take() {
-                    src.planes[plane_index] = Some(self_plane);
-                    src.row_bytes[plane_index] = std::mem::take(&mut self.row_bytes[plane_index]);
-                }
-            }
-            src
-        };
+        }
 
         let scale_factor = self.width / width;
         self.width = width;
@@ -408,10 +416,10 @@ impl Image {
             && (self.yuv_format == PixelFormat::AndroidNv12
                 || self.yuv_format == PixelFormat::AndroidNv21)
         {
-            let src_y_pd = validate_plane(&src, Plane::Y)?;
-            let src_uv_pd = validate_plane(&src, Plane::U)?;
-            let dst_y_pd = validate_plane(self, Plane::Y)?;
-            let dst_uv_pd = validate_plane(self, Plane::U)?;
+            let src_y_pd = src.validate_scale_plane(Plane::Y)?;
+            let src_uv_pd = src.validate_scale_plane(Plane::U)?;
+            let dst_y_pd = self.validate_scale_plane(Plane::Y)?;
+            let dst_uv_pd = self.validate_scale_plane(Plane::U)?;
             let src_y = src.planes[Plane::Y.as_usize()]
                 .as_ref()
                 .ok_or(AvifError::NoContent)?
@@ -471,8 +479,8 @@ impl Image {
             if !src.has_plane(*plane) || !self.has_plane(*plane) {
                 continue;
             }
-            let src_pd = validate_plane(&src, *plane)?;
-            let dst_pd = validate_plane(self, *plane)?;
+            let src_pd = src.validate_scale_plane(*plane)?;
+            let dst_pd = self.validate_scale_plane(*plane)?;
             let src_width = i32_from_u32(src_pd.width)?;
             let src_height = i32_from_u32(src_pd.height)?;
             let dst_width = i32_from_u32(dst_pd.width)?;
@@ -704,6 +712,39 @@ mod tests {
             assert_eq!(image.height, 2);
             assert!(image.has_plane(Plane::Y));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn scale_android_p010_alpha_then_color() -> AvifResult<()> {
+        let mut image = image::Image {
+            width: 4,
+            height: 4,
+            depth: 16,
+            yuv_format: PixelFormat::AndroidP010,
+            ..Default::default()
+        };
+        image.allocate_planes(Category::Color)?;
+        image.allocate_planes(Category::Alpha)?;
+        for y in 0..4 {
+            image.row16_mut(Plane::Y, y)?.fill(600u16 << 6);
+            image.row16_mut(Plane::A, y)?.fill(800u16 << 6);
+        }
+        for y in 0..2 {
+            image.row16_mut(Plane::U, y)?.fill(512u16 << 6);
+        }
+        image.scale_category(2, 2, Category::Alpha)?;
+        image.width = 4;
+        image.height = 4;
+        image.scale_category(2, 2, Category::Color)?;
+        assert_eq!(image.depth, 10);
+        assert_eq!(image.yuv_format, PixelFormat::Yuv420);
+        for y in 0..2 {
+            assert!(image.row16(Plane::Y, y)?.iter().all(|&v| v == 600));
+            assert!(image.row16(Plane::A, y)?.iter().all(|&v| v == 800));
+        }
+        assert!(image.row16(Plane::U, 0)?.iter().all(|&v| v == 512));
+        assert!(image.row16(Plane::V, 0)?.iter().all(|&v| v == 512));
         Ok(())
     }
 }
