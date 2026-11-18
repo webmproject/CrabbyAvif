@@ -180,6 +180,7 @@ fn check_regions(
     for crop in &crops {
         let options = decoder::DecodeOptions {
             crop_rect: Some(*crop),
+            ..Default::default()
         };
         decoder
             .nth_image_with_options(index, &options)
@@ -416,9 +417,11 @@ fn region_decode_cache_and_state_transitions(
     let crop2 = crop(w / 3, h / 2, w - w / 3, h - h / 2);
     let opts1 = decoder::DecodeOptions {
         crop_rect: Some(crop1),
+        ..Default::default()
     };
     let opts2 = decoder::DecodeOptions {
         crop_rect: Some(crop2),
+        ..Default::default()
     };
     let check = |decoder: &decoder::Decoder, expected_crop: Option<&CropRect>| -> AvifResult<()> {
         let expected = match expected_crop {
@@ -464,6 +467,7 @@ fn region_decode_cache_and_state_transitions(
             0,
             &decoder::DecodeOptions {
                 crop_rect: Some(crop(w - 1, 0, 2, 1)),
+                ..Default::default()
             }
         )
         .is_err());
@@ -519,6 +523,7 @@ fn region_decode_sequence_keyframes(codec: CodecChoice) -> AvifResult<()> {
                 index,
                 &decoder::DecodeOptions {
                     crop_rect: Some(*crop),
+                    ..Default::default()
                 },
             )?;
             assert!(
@@ -586,6 +591,7 @@ fn dav1d_whole_image_region_decode_does_not_copy() -> AvifResult<()> {
             0,
             &decoder::DecodeOptions {
                 crop_rect: Some(rect),
+                ..Default::default()
             },
         )?;
         let image = decoder.image().unwrap();

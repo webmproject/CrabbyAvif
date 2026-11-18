@@ -2513,6 +2513,7 @@ fn region_decode_grid_selective_io_and_corrupted_unused_cells(
     };
     let opts_cell2 = decoder::DecodeOptions {
         crop_rect: Some(crop_cell2),
+        ..Default::default()
     };
     let reads = Rc::new(RefCell::new(Vec::new()));
     let mut tracking_decoder = decoder_with_codec(codec);
@@ -2570,6 +2571,7 @@ fn region_decode_grid_selective_io_and_corrupted_unused_cells(
     };
     let opts_multi = decoder::DecodeOptions {
         crop_rect: Some(crop_multi),
+        ..Default::default()
     };
     let reads_multi = Rc::new(RefCell::new(Vec::new()));
     let mut tracking_multi = decoder_with_codec(codec);
@@ -2659,6 +2661,7 @@ fn region_decode_grid_dimensions_mismatch(
             0,
             &decoder::DecodeOptions {
                 crop_rect: Some(crop),
+                ..Default::default()
             },
         );
         match &ref_full {
@@ -2744,6 +2747,7 @@ fn region_decode_existing_grid_files(filename: &str, codec: CodecChoice) -> Avif
             0,
             &decoder::DecodeOptions {
                 crop_rect: Some(crop),
+                ..Default::default()
             },
         )?;
         let expected = crop_reference_image(&ref_full, &crop)?;
@@ -2760,6 +2764,7 @@ fn region_decode_existing_grid_files(filename: &str, codec: CodecChoice) -> Avif
         0,
         &decoder::DecodeOptions {
             crop_rect: Some(crops[1]),
+            ..Default::default()
         },
     )?;
     decoder.nth_image_with_options(0, &decoder::DecodeOptions::default())?;
@@ -2822,6 +2827,7 @@ fn region_decode_grid_matrix(
             0,
             &decoder::DecodeOptions {
                 crop_rect: Some(crop),
+                ..Default::default()
             },
         )?;
         let expected = crop_reference_image(&ref_full, &crop)?;
@@ -2928,6 +2934,7 @@ fn region_decode_with_clean_aperture(is_grid: bool, codec: CodecChoice) -> AvifR
         0,
         &decoder::DecodeOptions {
             crop_rect: Some(user_crop),
+            ..Default::default()
         },
     )?;
     let decoded = decoder.image().unwrap();
@@ -2963,6 +2970,7 @@ fn region_decode_with_clean_aperture(is_grid: bool, codec: CodecChoice) -> AvifR
             0,
             &decoder::DecodeOptions {
                 crop_rect: Some(out_of_clap),
+                ..Default::default()
             }
         )
         .is_err());
@@ -3031,6 +3039,7 @@ fn region_decode_with_invalid_clean_aperture(codec: CodecChoice) -> AvifResult<(
     };
     let options = decoder::DecodeOptions {
         crop_rect: Some(user_crop),
+        ..Default::default()
     };
 
     // StrictnessFlag::ClapValid is set by default.
@@ -3095,9 +3104,11 @@ fn region_decode_cache_and_state_transitions(codec: CodecChoice) -> AvifResult<(
     };
     let opts1 = decoder::DecodeOptions {
         crop_rect: Some(crop1),
+        ..Default::default()
     };
     let opts2 = decoder::DecodeOptions {
         crop_rect: Some(crop2),
+        ..Default::default()
     };
 
     reads.borrow_mut().clear();
@@ -3175,6 +3186,7 @@ fn region_decode_single_tile_and_overlay(codec: CodecChoice) -> AvifResult<()> {
         decoder.parse()?;
         decoder.next_image_with_options(&decoder::DecodeOptions {
             crop_rect: Some(crop),
+            ..Default::default()
         })?;
         assert!(
             utils::are_images_equal(
@@ -3212,6 +3224,7 @@ fn region_decode_sato_16bit(codec: CodecChoice) -> AvifResult<()> {
             0,
             &decoder::DecodeOptions {
                 crop_rect: Some(crop),
+                ..Default::default()
             },
         )?;
         assert_eq!(decoder.image().unwrap().depth, 16);
@@ -3251,6 +3264,7 @@ fn region_decode_thumbnails(codec: CodecChoice) -> AvifResult<()> {
         0,
         &decoder::DecodeOptions {
             crop_rect: Some(crop_t0),
+            ..Default::default()
         },
     )?;
     assert!(utils::are_images_equal(
@@ -3268,6 +3282,7 @@ fn region_decode_thumbnails(codec: CodecChoice) -> AvifResult<()> {
         1,
         &decoder::DecodeOptions {
             crop_rect: Some(crop_t1),
+            ..Default::default()
         },
     )?;
     assert!(utils::are_images_equal(
@@ -3300,6 +3315,7 @@ fn region_decode_sequence() -> AvifResult<()> {
     };
     let anim_opts = decoder::DecodeOptions {
         crop_rect: Some(anim_crop),
+        ..Default::default()
     };
 
     let mut anim_next = get_decoder_with_codec("colors-animated-8bpc.avif", DAV1D);
@@ -3378,6 +3394,7 @@ fn region_decode_sato_float32(codec: CodecChoice) -> AvifResult<()> {
         0,
         &decoder::DecodeOptions {
             crop_rect: Some(crop),
+            ..Default::default()
         },
     )?;
     assert_eq!(decoder.image().unwrap().width, 4);
@@ -3414,6 +3431,7 @@ fn region_decode_gainmap(codec: CodecChoice) -> AvifResult<()> {
     };
     let gm_opts = decoder::DecodeOptions {
         crop_rect: Some(gm_crop),
+        ..Default::default()
     };
     let mut gm_decoder = get_decoder_with_codec("seine_sdr_gainmap_srgb.avif", codec);
     gm_decoder.settings.image_content_to_decode = ImageContentType::GainMap;
@@ -3451,6 +3469,7 @@ fn region_decode_gainmap(codec: CodecChoice) -> AvifResult<()> {
         0,
         &decoder::DecodeOptions {
             crop_rect: Some(no_gm_crop),
+            ..Default::default()
         },
     )?;
     assert!(utils::are_images_equal(
@@ -3473,6 +3492,7 @@ fn region_decode_error_cases(codec: CodecChoice) -> AvifResult<()> {
             width: 16,
             height: 16,
         }),
+        ..Default::default()
     };
     let mut inc_decoder = get_decoder_with_codec("sofa_grid1x5_420.avif", codec);
     inc_decoder.settings.allow_incremental = true;
@@ -3529,6 +3549,7 @@ fn region_decode_error_cases(codec: CodecChoice) -> AvifResult<()> {
                     0,
                     &decoder::DecodeOptions {
                         crop_rect: Some(bad),
+                        ..Default::default()
                     }
                 )
                 .is_err(),
@@ -3570,6 +3591,7 @@ fn region_decode_interleaved_with_full_decodes(
     let expected = crop_reference_image(&ref_full, &crop)?;
     let options = decoder::DecodeOptions {
         crop_rect: Some(crop),
+        ..Default::default()
     };
 
     let mut decoder = get_decoder_with_codec(filename, codec);
@@ -3700,6 +3722,7 @@ fn region_decode_gainmap_grid_per_tile(codec: CodecChoice) -> AvifResult<()> {
             0,
             &decoder::DecodeOptions {
                 crop_rect: Some(crop),
+                ..Default::default()
             },
         )?;
         assert!(
@@ -3783,6 +3806,7 @@ fn region_decode_grid_codecs_and_threads(
             0,
             &decoder::DecodeOptions {
                 crop_rect: Some(crop),
+                ..Default::default()
             },
         )?;
         assert!(
@@ -3816,6 +3840,7 @@ fn region_decode_then_no_images_remaining(filename: &str, codec: CodecChoice) ->
     let expected = crop_reference_image(&ref_full, &crop)?;
     let options = decoder::DecodeOptions {
         crop_rect: Some(crop),
+        ..Default::default()
     };
 
     let mut decoder = get_decoder_with_codec(filename, codec);
@@ -3871,6 +3896,7 @@ fn region_decode_progressive(filename: &str) -> AvifResult<()> {
     };
     let options = decoder::DecodeOptions {
         crop_rect: Some(crop),
+        ..Default::default()
     };
 
     let mut decoder = get_decoder_with_codec(&path, DAV1D);

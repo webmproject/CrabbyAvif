@@ -711,6 +711,7 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
     }
     let options = DecodeOptions {
         crop_rect: args.crop,
+        ..Default::default()
     };
     match decoder.nth_image_with_options(args.index.unwrap_or(0), &options) {
         Err(AvifError::InvalidArgument) if args.crop.is_some() => {

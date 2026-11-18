@@ -369,6 +369,7 @@ impl From<&avifDecodeOptions> for DecodeOptions {
     fn from(options: &avifDecodeOptions) -> Self {
         Self {
             crop_rect: (options.enableCropRect != AVIF_FALSE).then_some(options.cropRect),
+            ..Default::default()
         }
     }
 }

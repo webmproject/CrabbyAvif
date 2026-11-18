@@ -166,8 +166,8 @@ pub struct DecodeOptions {
     /// fit in it. It is expressed before rotation and mirroring ('irot' and 'imir'
     /// properties, which are kept on the decoded image). Its x and y are rounded down to even
     /// values along the chroma-subsampled axes of the decoded image. The decoded image has the
-    /// dimensions of the region and no clean aperture. With ImageContentType::GainMap, the region
-    /// applies to the gain map image.
+    /// dimensions of the region (unless `scaled_size` is also set) and no clean aperture. With
+    /// ImageContentType::GainMap, the region applies to the gain map image.
     ///
     /// Decoding fails if:
     /// - the region does not fit in the clean aperture or image
@@ -179,6 +179,29 @@ pub struct DecodeOptions {
     ///
     /// When decoding fails, [`Decoder::image()`] may be partially decoded or have no pixels.
     pub crop_rect: Option<CropRect>,
+    /// If set, the decoded image (or decoded `crop_rect` region when both are set, or clean
+    /// aperture region when the image has a valid `'clap'` property and `crop_rect` is `None`) is
+    /// downscaled to `scaled_size.width x scaled_size.height` before rotation and mirroring
+    /// (`'irot'` and `'imir'` properties, which are kept on the decoded image). The decoded image
+    /// has dimensions `scaled_size` and no clean aperture. With ImageContentType::GainMap, scaling
+    /// applies to the gain map image.
+    ///
+    /// Decoding fails if:
+    /// - `width == 0` or `height == 0`
+    /// - `width` or `height` exceeds the source region width or height (upscaling is not
+    ///   supported)
+    /// - the library was built without the `libyuv` feature and `width` or `height` differs from
+    ///   the source region
+    /// - the source region width or height exceeds 65536 and `width` or `height` differs from the
+    ///   source region
+    /// - the clean aperture is invalid and StrictnessFlag::ClapValid is set
+    /// - allow_progressive or allow_incremental is set
+    /// - only the gain map is decoded and the image has no gain map
+    /// - both the color image and the gain map of an image with a gain map are decoded
+    /// - the image uses a 32-bit float sample transform
+    ///
+    /// When decoding fails, [`Decoder::image()`] may be partially decoded or have no pixels.
+    pub scaled_size: Option<ImageSize>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -2369,9 +2392,13 @@ impl Decoder {
         }
         self.image.width = self.parsed_image.width;
         self.image.height = self.parsed_image.height;
+        self.image.depth = self.parsed_image.depth;
+        self.image.yuv_format = self.parsed_image.yuv_format;
         self.image.clap = self.parsed_image.clap;
         self.gainmap.image.width = self.parsed_gainmap_image.width;
         self.gainmap.image.height = self.parsed_gainmap_image.height;
+        self.gainmap.image.depth = self.parsed_gainmap_image.depth;
+        self.gainmap.image.yuv_format = self.parsed_gainmap_image.yuv_format;
         self.gainmap.image.clap = self.parsed_gainmap_image.clap;
         self.image.free_planes(&ALL_PLANES);
         self.gainmap.image.free_planes(&ALL_PLANES);
@@ -2404,15 +2431,15 @@ impl Decoder {
         self.decode_with_options_dirty = true;
     }
 
-    fn validate_and_compose_crop_rect(
+    fn validate_and_resolve_options(
         &self,
         target_index: usize,
         options: &DecodeOptions,
-    ) -> AvifResult<Option<CropRect>> {
-        let Some(user_crop) = options.crop_rect else {
-            return Ok(None);
-        };
-        // Region decodes cannot be resumed, so they require the whole file to be available.
+    ) -> AvifResult<(Option<CropRect>, Option<ImageSize>)> {
+        if options.crop_rect.is_none() && options.scaled_size.is_none() {
+            return Ok((None, None));
+        }
+        // Decodes with options cannot be resumed, so they require the whole file to be available.
         if self.settings.allow_progressive || self.settings.allow_incremental {
             return AvifError::not_implemented();
         }
@@ -2463,15 +2490,57 @@ impl Decoder {
             }
         }
 
-        if !user_crop.is_within(base_rect.width, base_rect.height) {
-            return AvifError::invalid_argument();
+        let region_rect = if let Some(user_crop) = options.crop_rect {
+            if !user_crop.is_within(base_rect.width, base_rect.height) {
+                return AvifError::invalid_argument();
+            }
+            CropRect {
+                x: checked_add!(base_rect.x, user_crop.x)?,
+                y: checked_add!(base_rect.y, user_crop.y)?,
+                width: user_crop.width,
+                height: user_crop.height,
+            }
+        } else {
+            base_rect
+        };
+
+        if let Some(sz) = options.scaled_size {
+            if sz.width == 0
+                || sz.height == 0
+                || sz.width > region_rect.width
+                || sz.height > region_rect.height
+            {
+                return AvifError::invalid_argument();
+            }
+            let switching_multi_thumbnail = self.source == Source::Thumbnail
+                && self.thumbnail_item_ids.len() > 1
+                && self.active_thumbnail_index != Some(target_index);
+            if !switching_multi_thumbnail
+                && self.settings.image_content_to_decode != ImageContentType::GainMap
+                && self.tile_info[DecodingItem::COLOR.usize()].is_sample_transform()
+                && self.parsed_image.depth == 32
+            {
+                return AvifError::not_implemented();
+            }
+            #[cfg(not(feature = "libyuv"))]
+            if sz.width != region_rect.width || sz.height != region_rect.height {
+                return AvifError::not_implemented();
+            }
+            if (sz.width != region_rect.width || sz.height != region_rect.height)
+                && (region_rect.width > crate::reformat::SCALE_LIMIT
+                    || region_rect.height > crate::reformat::SCALE_LIMIT)
+            {
+                return AvifError::not_implemented();
+            }
         }
-        Ok(Some(CropRect {
-            x: checked_add!(base_rect.x, user_crop.x)?,
-            y: checked_add!(base_rect.y, user_crop.y)?,
-            width: user_crop.width,
-            height: user_crop.height,
-        }))
+
+        let composed_crop =
+            if options.crop_rect.is_some() || !region_rect.covers(full_width, full_height) {
+                Some(region_rect)
+            } else {
+                None
+            };
+        Ok((composed_crop, options.scaled_size))
     }
 
     fn align_crop_rect_for_codecs(&self, composed: CropRect) -> (CropRect, PixelFormat) {
@@ -3426,19 +3495,20 @@ impl Decoder {
         {
             return self.nth_image_with_options(u32_from_i32(next_image_index)?, options);
         }
-        let composed_crop = if options.crop_rect.is_some() {
-            if next_image_index as u32 >= self.image_count {
+        let has_options = options.crop_rect.is_some() || options.scaled_size.is_some();
+        let (composed_crop, scaled_size) = if has_options {
+            if next_image_index < 0 || next_image_index as u32 >= self.image_count {
                 return AvifError::no_images_remaining();
             }
-            self.validate_and_compose_crop_rect(next_image_index as usize, options)?
+            self.validate_and_resolve_options(next_image_index as usize, options)?
         } else {
-            None
+            (None, None)
         };
 
         if self.can_use_decode_until() {
             // If decode_until can be used, always prefer that since we cannot conflate calls
             // between get_last_image and get_next_image.
-            match self.decode_until(next_image_index, composed_crop) {
+            match self.decode_until(next_image_index, composed_crop, scaled_size) {
                 Ok(_) => {
                     self.decoded_frame_options = Some(*options);
                     return Ok(());
@@ -3487,6 +3557,9 @@ impl Decoder {
         self.create_codecs()?;
 
         let is_sample_transform = self.tile_info[DecodingItem::COLOR.usize()].is_sample_transform();
+        if is_sample_transform && scaled_size.is_some() && self.parsed_image.depth == 32 {
+            return AvifError::not_implemented();
+        }
         let (effective_crop, grid_subsets) = match composed_crop {
             Some(composed) if !is_sample_transform => {
                 let (aligned, output_format) = self.align_crop_rect_for_codecs(composed);
@@ -3534,7 +3607,7 @@ impl Decoder {
         }
         self.reset_decode_with_options_state();
         self.create_codecs()?;
-        if composed_crop.is_some() {
+        if has_options {
             self.begin_decode_with_options();
         }
         self.decoded_frame_options = None;
@@ -3549,6 +3622,9 @@ impl Decoder {
             match self.image.depth {
                 #[cfg(feature = "satofloat")]
                 32 => {
+                    if scaled_size.is_some() {
+                        return AvifError::not_implemented();
+                    }
                     // 32 bits are supported only for Recipe::Float32b, so expect it.
                     let expected_recipe = SampleTransform::from_float32b_recipe()?;
                     if self.tile_info[DecodingItem::COLOR.usize()].sample_transform
@@ -3582,6 +3658,19 @@ impl Decoder {
             if let Some(composed) = composed_crop {
                 // For 32-bit float samples, this only crops the alpha plane (if any).
                 self.image.crop_in_place(&composed)?;
+            }
+        }
+
+        if let Some(sz) = scaled_size {
+            if self.settings.image_content_to_decode == ImageContentType::GainMap {
+                self.gainmap
+                    .image
+                    .scale_planes_in_place(sz.width, sz.height, Category::Gainmap)?;
+                self.gainmap.image.clap = None;
+            } else if self.settings.image_content_to_decode.color() {
+                self.image
+                    .scale_planes_in_place(sz.width, sz.height, Category::Color)?;
+                self.image.clap = None;
             }
         }
 
@@ -3638,7 +3727,8 @@ impl Decoder {
             // requested. Do nothing.
             return Ok(());
         }
-        let composed_crop = self.validate_and_compose_crop_rect(index as usize, options)?;
+        let (composed_crop, scaled_size) =
+            self.validate_and_resolve_options(index as usize, options)?;
         let nearest_keyframe = i32_from_u32(self.nearest_keyframe(index))?;
         if nearest_keyframe > checked_add!(self.image_index, 1)?
             || requested_index <= self.image_index
@@ -3662,7 +3752,7 @@ impl Decoder {
             self.image_index = nearest_keyframe - 1;
         }
         if self.can_use_decode_until() {
-            match self.decode_until(requested_index, composed_crop) {
+            match self.decode_until(requested_index, composed_crop, scaled_size) {
                 Ok(_) => {
                     self.decoded_frame_options = Some(*options);
                     return Ok(());
@@ -3692,6 +3782,7 @@ impl Decoder {
         &mut self,
         requested_index: i32,
         composed_crop: Option<CropRect>,
+        scaled_size: Option<ImageSize>,
     ) -> AvifResult<()> {
         if self.io.is_none() {
             return AvifError::io_not_set();
@@ -3704,7 +3795,7 @@ impl Decoder {
         for decoding_item in DecodingItem::ALL_USIZE {
             self.tile_info[decoding_item].decoded_tile_count = 0;
         }
-        if composed_crop.is_some() {
+        if composed_crop.is_some() || scaled_size.is_some() {
             self.begin_decode_with_options();
         }
         self.decoded_frame_options = None;
@@ -3800,6 +3891,11 @@ impl Decoder {
         }
         if let Some(composed) = composed_crop {
             self.image.crop_in_place(&composed)?;
+        }
+        if let Some(sz) = scaled_size {
+            self.image
+                .scale_planes_in_place(sz.width, sz.height, Category::Color)?;
+            self.image.clap = None;
         }
         self.image_index = requested_index;
         self.image_timing = self.nth_image_timing(self.image_index as u32)?;
@@ -3905,6 +4001,15 @@ impl Decoder {
             let mut props = self.image.shallow_clone();
             props.width = self.parsed_image.width;
             props.height = self.parsed_image.height;
+            // Scaling an AndroidP010 image converts self.image to 10-bit Yuv420. Restore the
+            // parsed depth and yuv_format when known at parse time (they may be 0 / None before
+            // the first decode if harvested lazily from the bitstream sequence header).
+            if self.parsed_image.depth != 0 {
+                props.depth = self.parsed_image.depth;
+            }
+            if self.parsed_image.yuv_format != PixelFormat::None {
+                props.yuv_format = self.parsed_image.yuv_format;
+            }
             props.clap = self.parsed_image.clap;
             Ok(props)
         }

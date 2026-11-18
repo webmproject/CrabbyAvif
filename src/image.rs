@@ -387,7 +387,6 @@ impl Image {
         Ok(())
     }
 
-    #[allow(dead_code)] // Used in a follow-up change.
     pub(crate) fn scale_planes_in_place(
         &mut self,
         width: u32,
