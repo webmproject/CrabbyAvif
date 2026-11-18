@@ -387,6 +387,85 @@ impl Image {
         Ok(())
     }
 
+    #[allow(dead_code)] // Used in a follow-up change.
+    pub(crate) fn scale_planes_in_place(
+        &mut self,
+        width: u32,
+        height: u32,
+        category: Category,
+    ) -> AvifResult<()> {
+        if self.width == width && self.height == height {
+            return Ok(());
+        }
+        if category == Category::Color {
+            self.scale(width, height)?;
+        } else {
+            self.scale_category(width, height, category)?;
+        }
+        if category != Category::Alpha {
+            self.clap = None;
+        }
+        Ok(())
+    }
+
+    // Returns a view of only the alpha plane of self described by `rect` (in luma coordinates,
+    // with no chroma subsampling alignment requirement). Exif, XMP, ICC, and clap data are not
+    // copied.
+    //
+    // The returned image must not outlive self and the pixel buffers of self must not be
+    // reallocated or freed while the view is alive.
+    #[allow(dead_code)] // Used in a follow-up change.
+    pub(crate) fn view_plane_a(&self, rect: &CropRect) -> AvifResult<Image> {
+        if !rect.is_within(self.width, self.height) || !self.has_plane(Plane::A) {
+            return AvifError::invalid_argument();
+        }
+        let mut image = self.shallow_clone();
+        image.width = rect.width;
+        image.height = rect.height;
+        image.clap = None;
+        let a = Plane::A.as_usize();
+        let x = usize_from_u32(rect.x)?;
+        let x_end = checked_add!(x, usize_from_u32(rect.width)?)?;
+        let last_y = checked_sub!(checked_add!(rect.y, rect.height)?, 1)?;
+        let (ptr, stride) = if image.depth == 8 {
+            let _ = self
+                .row(Plane::A, last_y)?
+                .get(x..x_end)
+                .ok_or(AvifError::NoContent)?;
+            let ptr = self
+                .row(Plane::A, rect.y)?
+                .get(x..x_end)
+                .ok_or(AvifError::NoContent)?
+                .as_ptr() as *mut u8;
+            (ptr, usize_from_u32(self.row_bytes[a])?)
+        } else {
+            if !self.row_bytes[a].is_multiple_of(2) {
+                return AvifError::no_content();
+            }
+            let _ = self
+                .row16(Plane::A, last_y)?
+                .get(x..x_end)
+                .ok_or(AvifError::NoContent)?;
+            let ptr = self
+                .row16(Plane::A, rect.y)?
+                .get(x..x_end)
+                .ok_or(AvifError::NoContent)?
+                .as_ptr() as *mut u8;
+            (ptr, usize_from_u32(self.row_bytes[a] / 2)?)
+        };
+        let size = checked_add!(
+            checked_mul!(usize_from_u32(rect.height - 1)?, stride)?,
+            usize_from_u32(rect.width)?
+        )?;
+        image.planes[a] = Some(Pixels::from_raw_pointer_and_size(
+            ptr,
+            image.depth as _,
+            size,
+        )?);
+        image.row_bytes[a] = self.row_bytes[a];
+        Ok(image)
+    }
+
     // Returns a view of the region of self described by `rect`. The returned image has the same
     // properties as self and points to the pixel values of self (no pixel data is copied). Exif,
     // XMP and ICC data are not copied. `rect` must be a valid rectangle within the bounds of self,
@@ -683,3 +762,129 @@ impl Image {
 
 #[cfg(feature = "satofloat")]
 pub type FloatPlanes = [Option<Vec<f32>>; MAX_PLANE_COUNT];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::clap::CleanAperture;
+    use test_case::test_case;
+
+    #[test_case(8 ; "8bit")]
+    #[test_case(10 ; "10bit")]
+    fn view_plane_a_offsets_and_bottom_right_crop(depth: u8) -> AvifResult<()> {
+        let clap = CleanAperture::create_from(
+            &CropRect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 4,
+            },
+            5,
+            4,
+            PixelFormat::Yuv420,
+        )?;
+        let mut img = Image {
+            width: 5,
+            height: 4,
+            depth,
+            yuv_format: PixelFormat::Yuv420,
+            clap: Some(clap),
+            ..Image::default()
+        };
+        // Use an exact-fit buffer (no extra padding beyond width * height) so a bottom-right
+        // crop with x > 0 and y + height == img.height verifies the view slice does not
+        // overrun the allocation on the final row.
+        let a = Plane::A.as_usize();
+        if depth == 8 {
+            let buf: Vec<u8> = (0..20u8).map(|i| 10 + i).collect();
+            img.planes[a] = Some(Pixels::Buffer(buf));
+            img.row_bytes[a] = 5;
+        } else {
+            let buf: Vec<u16> = (0..20u16).map(|i| 100 + i * 3).collect();
+            img.planes[a] = Some(Pixels::Buffer16(buf));
+            img.row_bytes[a] = 10;
+        }
+
+        // Odd x/y offset (not chroma-aligned) extending to the bottom-right corner (x=1..5, y=1..4).
+        let rect = CropRect {
+            x: 1,
+            y: 1,
+            width: 4,
+            height: 3,
+        };
+        let view = img.view_plane_a(&rect)?;
+        assert_eq!(view.width, 4);
+        assert_eq!(view.height, 3);
+        assert!(view.clap.is_none());
+        assert!(!view.has_plane(Plane::Y));
+        assert!(view.has_plane(Plane::A));
+        for vy in 0..3u32 {
+            if depth == 8 {
+                let row = view.row(Plane::A, vy)?;
+                let expected: Vec<u8> = (0..4u8)
+                    .map(|vx| 10 + ((vy + 1) as u8) * 5 + (vx + 1))
+                    .collect();
+                assert_eq!(row, expected.as_slice());
+            } else {
+                let row = view.row16(Plane::A, vy)?;
+                let expected: Vec<u16> = (0..4u16)
+                    .map(|vx| 100 + ((vy as u16 + 1) * 5 + (vx + 1)) * 3)
+                    .collect();
+                assert_eq!(row, expected.as_slice());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn view_plane_a_rejects_invalid_inputs() -> AvifResult<()> {
+        let mut img = Image {
+            width: 4,
+            height: 4,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv420,
+            ..Image::default()
+        };
+        img.allocate_planes(Category::Color)?;
+        let valid_rect = CropRect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 2,
+        };
+        // Missing alpha plane.
+        assert_eq!(
+            img.view_plane_a(&valid_rect).err(),
+            Some(AvifError::InvalidArgument)
+        );
+
+        img.allocate_planes(Category::Alpha)?;
+        // Out-of-bounds crop rectangles.
+        for bad_rect in [
+            CropRect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 2,
+            },
+            CropRect {
+                x: 3,
+                y: 0,
+                width: 2,
+                height: 2,
+            },
+            CropRect {
+                x: 0,
+                y: 3,
+                width: 2,
+                height: 2,
+            },
+        ] {
+            assert_eq!(
+                img.view_plane_a(&bad_rect).err(),
+                Some(AvifError::InvalidArgument)
+            );
+        }
+        Ok(())
+    }
+}
