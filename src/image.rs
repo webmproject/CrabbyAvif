@@ -413,7 +413,6 @@ impl Image {
     //
     // The returned image must not outlive self and the pixel buffers of self must not be
     // reallocated or freed while the view is alive.
-    #[allow(dead_code)] // Used in a follow-up change.
     pub(crate) fn view_plane_a(&self, rect: &CropRect) -> AvifResult<Image> {
         if !rect.is_within(self.width, self.height) || !self.has_plane(Plane::A) {
             return AvifError::invalid_argument();

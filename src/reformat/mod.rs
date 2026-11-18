@@ -66,7 +66,6 @@ pub mod libyuv {
     }
 
     impl image::Image {
-        #[allow(dead_code)] // Used in a follow-up change.
         pub(crate) fn convert_p010_to_i010(&mut self) -> AvifResult<()> {
             if self.yuv_format != PixelFormat::AndroidP010 {
                 return Ok(());

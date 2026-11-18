@@ -182,9 +182,10 @@ pub struct DecodeOptions {
     /// If set, the decoded image (or decoded `crop_rect` region when both are set, or clean
     /// aperture region when the image has a valid `'clap'` property and `crop_rect` is `None`) is
     /// downscaled to `scaled_size.width x scaled_size.height` before rotation and mirroring
-    /// (`'irot'` and `'imir'` properties, which are kept on the decoded image). The decoded image
-    /// has dimensions `scaled_size` and no clean aperture. With ImageContentType::GainMap, scaling
-    /// applies to the gain map image.
+    /// (`'irot'` and `'imir'` properties, which are kept on the decoded image). For regular grid
+    /// images, downscaling is performed at the grid cell level so the full unscaled grid canvas is
+    /// not allocated. The decoded image has dimensions `scaled_size` and no clean aperture. With
+    /// ImageContentType::GainMap, scaling applies to the gain map image.
     ///
     /// Decoding fails if:
     /// - `width == 0` or `height == 0`
@@ -519,10 +520,12 @@ pub(crate) struct GridImageHelper<'a> {
     tile_width: u32,
     tile_height: u32,
     // If set, only these cells of the grid are copied, in this order, into an image with the
-    // dimensions of crop_rect (only the intersection of each cell with crop_rect is copied).
+    // dimensions of crop_rect (or scaled_size if also set).
     // For Category::Alpha, image must already have the pixel format of the color image.
     cell_indices: Option<&'a [usize]>,
     crop_rect: Option<CropRect>,
+    scaled_size: Option<ImageSize>,
+    raw_cell_props: Option<(u8, PixelFormat)>,
 }
 
 impl Image {
@@ -537,6 +540,60 @@ impl Image {
             self.transfer_characteristics = image.transfer_characteristics;
             self.matrix_coefficients = image.matrix_coefficients;
         }
+    }
+
+    fn resolve_grid_crop_and_scale(
+        &mut self,
+        grid: &Grid,
+        category: Category,
+        crop_rect: Option<CropRect>,
+        scaled_size: Option<ImageSize>,
+    ) -> AvifResult<()> {
+        let aligned = match crop_rect {
+            Some(rect) => {
+                let aligned = rect.align_to_pixel_format(self.yuv_format);
+                if !aligned.is_within(grid.width, grid.height) {
+                    return AvifError::invalid_argument();
+                }
+                aligned
+            }
+            None => CropRect {
+                x: 0,
+                y: 0,
+                width: grid.width,
+                height: grid.height,
+            },
+        };
+        if let Some(sz) = scaled_size {
+            if sz.width == 0
+                || sz.height == 0
+                || sz.width > aligned.width
+                || sz.height > aligned.height
+            {
+                return AvifError::invalid_argument();
+            }
+            if category != Category::Alpha {
+                if (sz.width, sz.height) != (aligned.width, aligned.height)
+                    && self.yuv_format == PixelFormat::AndroidP010
+                {
+                    self.depth = 10;
+                    self.yuv_format = PixelFormat::Yuv420;
+                }
+                self.clap = None;
+            }
+            self.width = sz.width;
+            self.height = sz.height;
+        } else if crop_rect.is_some() {
+            self.width = aligned.width;
+            self.height = aligned.height;
+            if category != Category::Alpha {
+                self.clap = None;
+            }
+        } else if category != Category::Alpha {
+            self.width = grid.width;
+            self.height = grid.height;
+        }
+        Ok(())
     }
 }
 
@@ -557,25 +614,22 @@ impl GridImageHelper<'_> {
         cell_image.scale_category(self.tile_width, self.tile_height, self.category)?;
         if self.cell_index == 0 {
             validate_grid_image_dimensions(cell_image, self.grid)?;
+            self.raw_cell_props = Some((cell_image.depth, cell_image.yuv_format));
             if self.category != Category::Alpha {
                 self.image
                     .copy_properties_from(cell_image, self.codec_config);
             }
-            if let Some(rect) = self.crop_rect {
-                let aligned = rect.align_to_pixel_format(self.image.yuv_format);
-                if !aligned.is_within(self.grid.width, self.grid.height) {
-                    return AvifError::invalid_argument();
-                }
-                self.image.width = aligned.width;
-                self.image.height = aligned.height;
-                if self.category != Category::Alpha {
-                    self.image.clap = None;
-                }
-            } else if self.category != Category::Alpha {
-                self.image.width = self.grid.width;
-                self.image.height = self.grid.height;
-            }
+            self.image.resolve_grid_crop_and_scale(
+                self.grid,
+                self.category,
+                self.crop_rect,
+                self.scaled_size,
+            )?;
             self.image.allocate_planes(self.category)?;
+            if self.category == Category::Color && cell_image.has_plane(Plane::A) {
+                self.image.allocate_planes(Category::Alpha)?;
+                self.image.alpha_present = true;
+            }
         } else if self.first_cell_image.is_some()
             && !cell_image.has_same_properties_and_cicp(self.first_cell_image.unwrap_ref())
         {
@@ -587,13 +641,24 @@ impl GridImageHelper<'_> {
                 .ok_or(AvifError::InvalidArgument)?,
             None => self.cell_index,
         };
-        self.image.copy_from_tile(
-            cell_image,
-            self.grid,
-            u32_from_usize(actual_tile_index)?,
-            self.category,
-            self.crop_rect.as_ref(),
-        )?;
+        if let Some(sz) = self.scaled_size {
+            self.image.copy_scaled_from_tile(
+                cell_image,
+                self.grid,
+                u32_from_usize(actual_tile_index)?,
+                self.category,
+                self.crop_rect.as_ref(),
+                sz,
+            )?;
+        } else {
+            self.image.copy_from_tile(
+                cell_image,
+                self.grid,
+                u32_from_usize(actual_tile_index)?,
+                self.category,
+                self.crop_rect.as_ref(),
+            )?;
+        }
         if self.cell_index == 0 {
             self.first_cell_image = Some(cell_image.shallow_clone());
         }
@@ -2694,11 +2759,12 @@ impl Decoder {
         first_tile_index: usize,
         is_last_tile: bool,
         crop_rect: Option<CropRect>,
+        scaled_size: Option<ImageSize>,
         dst_image_override: Option<&mut Image>,
     ) -> AvifResult<()> {
-        // Only grid cells can be decoded as a subset of the tiles or into a region.
+        // Only grid cells can be decoded as a subset of the tiles or into a cropped/scaled region.
         if tile_index < first_tile_index
-            || ((first_tile_index != 0 || crop_rect.is_some())
+            || ((first_tile_index != 0 || crop_rect.is_some() || scaled_size.is_some())
                 && !self.tile_info[decoding_item.usize()].is_grid())
         {
             return AvifError::invalid_argument();
@@ -2811,19 +2877,13 @@ impl Decoder {
                 validate_grid_image_dimensions(&tile.image, grid)?;
                 match category {
                     Category::Color | Category::Gainmap => {
-                        if let Some(rect) = crop_rect {
-                            let aligned = rect.align_to_pixel_format(tile.image.yuv_format);
-                            if !aligned.is_within(grid.width, grid.height) {
-                                return AvifError::invalid_argument();
-                            }
-                            dst_image.width = aligned.width;
-                            dst_image.height = aligned.height;
-                            dst_image.clap = None;
-                        } else {
-                            dst_image.width = grid.width;
-                            dst_image.height = grid.height;
-                        }
                         dst_image.copy_properties_from(&tile.image, &tile.codec_config);
+                        dst_image.resolve_grid_crop_and_scale(
+                            grid,
+                            category,
+                            crop_rect,
+                            scaled_size,
+                        )?;
                         dst_image.allocate_planes(category)?;
                         if category == Category::Color
                             && ((dst_image.alpha_present && !has_alpha_item)
@@ -2834,14 +2894,12 @@ impl Decoder {
                         }
                     }
                     Category::Alpha => {
-                        if let Some(rect) = crop_rect {
-                            let aligned = rect.align_to_pixel_format(dst_image.yuv_format);
-                            if !aligned.is_within(grid.width, grid.height) {
-                                return AvifError::invalid_argument();
-                            }
-                            dst_image.width = aligned.width;
-                            dst_image.height = aligned.height;
-                        }
+                        dst_image.resolve_grid_crop_and_scale(
+                            grid,
+                            category,
+                            crop_rect,
+                            scaled_size,
+                        )?;
                         // Alpha is always just one plane and the depth has been validated
                         // to be the same as the color planes' depth.
                         dst_image.allocate_planes(category)?;
@@ -2857,13 +2915,24 @@ impl Decoder {
                 }
             }
 
-            dst_image.copy_from_tile(
-                &tile.image,
-                &self.tile_info[decoding_item.usize()].grid,
-                tile_index as u32,
-                category,
-                crop_rect.as_ref(),
-            )?;
+            if let Some(sz) = scaled_size {
+                dst_image.copy_scaled_from_tile(
+                    &tile.image,
+                    &self.tile_info[decoding_item.usize()].grid,
+                    tile_index as u32,
+                    category,
+                    crop_rect.as_ref(),
+                    sz,
+                )?;
+            } else {
+                dst_image.copy_from_tile(
+                    &tile.image,
+                    &self.tile_info[decoding_item.usize()].grid,
+                    tile_index as u32,
+                    category,
+                    crop_rect.as_ref(),
+                )?;
+            }
         } else if self.tile_info[decoding_item.usize()].is_overlay() {
             if tile_index == 0 {
                 let overlay = &self.tile_info[decoding_item.usize()].overlay;
@@ -3116,18 +3185,19 @@ impl Decoder {
     }
 
     // If grid_subset is set, only the given cells are read and decoded, into an image with the
-    // dimensions of the given region. This is not compatible with incremental decoding, and the
-    // item is considered fully decoded afterwards.
+    // dimensions of the given region (or scaled_size if also set). This is not compatible with
+    // incremental decoding, and the item is considered fully decoded afterwards.
     fn decode_grid(
         &mut self,
         image_index: usize,
         decoding_item: DecodingItem,
         grid_subset: Option<(&[usize], CropRect)>,
+        scaled_size: Option<ImageSize>,
         dst_image_override: Option<&mut Image>,
-    ) -> AvifResult<()> {
+    ) -> AvifResult<Option<(u8, PixelFormat)>> {
         let tile_count = self.tiles[decoding_item.usize()].len();
         if tile_count == 0 {
-            return Ok(());
+            return Ok(None);
         }
         let mut payloads = Vec::new();
         let mut pending_read = false;
@@ -3249,6 +3319,8 @@ impl Decoder {
             tile_height: first_tile.height,
             cell_indices,
             crop_rect,
+            scaled_size,
+            raw_cell_props: None,
         };
         let codec = self
             .codecs
@@ -3268,11 +3340,12 @@ impl Decoder {
                 // When decoding HEIC on Android, if the alpha channel decoding fails, simply
                 // ignore it and return the rest of the image.
             } else {
-                return next_image_result;
+                next_image_result?;
             }
         } else if !grid_image_helper.is_grid_complete()? {
             return AvifError::unknown_error("codec did not decode all cells");
         }
+        let raw_cell_props = grid_image_helper.raw_cell_props;
         if grid_subset.is_some() {
             self.tile_info[decoding_item.usize()].decoded_tile_count =
                 self.tile_info[decoding_item.usize()].tile_count;
@@ -3285,7 +3358,7 @@ impl Decoder {
         if pending_read {
             AvifError::waiting_on_io()
         } else {
-            Ok(())
+            Ok(raw_cell_props)
         }
     }
 
@@ -3322,13 +3395,18 @@ impl Decoder {
         &mut self,
         image_index: usize,
         effective_crop: Option<CropRect>,
+        scaled_size: Option<ImageSize>,
         grid_subsets: &[Option<Vec<usize>>; DecodingItem::COUNT],
-    ) -> AvifResult<()> {
+    ) -> AvifResult<(bool, bool)> {
         let mut decoded_something = false;
-        // Dimensions of the color image before cropping. The alpha image is decoded to these
-        // dimensions before being cropped, if it cannot be cropped while being decoded.
+        let mut color_scaled_in_grid = false;
+        let mut gainmap_scaled_in_grid = false;
+        // Dimensions and raw (depth, yuv_format) of the color image before cropping/scaling. The
+        // alpha image is decoded to these properties before being cropped/scaled if it cannot be
+        // cropped/scaled while being decoded.
         // parsed_image describes the active thumbnail, if any.
         let mut uncropped_color_dims = (self.parsed_image.width, self.parsed_image.height);
+        let mut unscaled_color_props: Option<(u8, PixelFormat)> = None;
         let mut actual_crop = effective_crop;
         for decoding_item in self.settings.image_content_to_decode.decoding_items() {
             let tile_count = self.tiles[decoding_item.usize()].len();
@@ -3338,8 +3416,14 @@ impl Decoder {
             if let (Some(indices), Some(rect)) =
                 (grid_subsets[decoding_item.usize()].as_deref(), actual_crop)
             {
-                if self.can_use_decode_grid(decoding_item) {
-                    self.decode_grid(image_index, decoding_item, Some((indices, rect)), None)?;
+                let raw_props = if self.can_use_decode_grid(decoding_item) {
+                    self.decode_grid(
+                        image_index,
+                        decoding_item,
+                        Some((indices, rect)),
+                        scaled_size,
+                        None,
+                    )?
                 } else {
                     let first_tile_index = *indices.first().ok_or(AvifError::InvalidArgument)?;
                     for (pos, &tile_index) in indices.iter().enumerate() {
@@ -3351,22 +3435,33 @@ impl Decoder {
                             first_tile_index,
                             is_last,
                             Some(rect),
+                            scaled_size,
                             None,
                         )?;
                     }
                     self.tile_info[decoding_item.usize()].decoded_tile_count =
                         self.tile_info[decoding_item.usize()].tile_count;
-                }
+                    let first_img = &self.tiles[decoding_item.usize()]
+                        .get(first_tile_index)
+                        .ok_or(AvifError::InvalidArgument)?
+                        .image;
+                    Some((first_img.depth, first_img.yuv_format))
+                };
                 if decoding_item == DecodingItem::COLOR {
                     // Same dimensions as a full decode of the grid.
                     let grid = &self.tile_info[decoding_item.usize()].grid;
                     uncropped_color_dims = (grid.width, grid.height);
+                    unscaled_color_props = raw_props;
                     actual_crop = Some(rect.align_to_pixel_format(self.image.yuv_format));
+                    color_scaled_in_grid = scaled_size.is_some();
+                } else if decoding_item == DecodingItem::GAINMAP {
+                    gainmap_scaled_in_grid = scaled_size.is_some();
                 }
                 decoded_something = true;
             } else if let Some(rect) = actual_crop.filter(|_| decoding_item.item_idx == 0) {
                 if decoding_item == DecodingItem::ALPHA {
-                    if self.can_decode_tile_region(decoding_item, Some(uncropped_color_dims))
+                    if !color_scaled_in_grid
+                        && self.can_decode_tile_region(decoding_item, Some(uncropped_color_dims))
                         && self.decode_tile_region(image_index, decoding_item, &rect)?
                     {
                         decoded_something = true;
@@ -3375,10 +3470,15 @@ impl Decoder {
                     let mut temp_alpha_image = self.image.shallow_clone();
                     temp_alpha_image.width = uncropped_color_dims.0;
                     temp_alpha_image.height = uncropped_color_dims.1;
+                    if let Some((raw_depth, raw_fmt)) = unscaled_color_props {
+                        temp_alpha_image.depth = raw_depth;
+                        temp_alpha_image.yuv_format = raw_fmt;
+                    }
                     if self.can_use_decode_grid(decoding_item) {
                         self.decode_grid(
                             image_index,
                             decoding_item,
+                            None,
                             None,
                             Some(&mut temp_alpha_image),
                         )?;
@@ -3394,6 +3494,7 @@ impl Decoder {
                                 /* first_tile_index= */ 0,
                                 is_last,
                                 /* crop_rect= */ None,
+                                /* scaled_size= */ None,
                                 Some(&mut temp_alpha_image),
                             )?;
                         }
@@ -3401,6 +3502,17 @@ impl Decoder {
                     if temp_alpha_image.has_plane(Plane::A) {
                         if !rect.covers(temp_alpha_image.width, temp_alpha_image.height) {
                             temp_alpha_image.crop_planes_in_place(&A_PLANE, &rect)?;
+                            let aligned_alpha =
+                                rect.align_to_pixel_format(temp_alpha_image.yuv_format);
+                            temp_alpha_image.width = aligned_alpha.width;
+                            temp_alpha_image.height = aligned_alpha.height;
+                        }
+                        if color_scaled_in_grid {
+                            temp_alpha_image.scale_category(
+                                self.image.width,
+                                self.image.height,
+                                Category::Alpha,
+                            )?;
                         }
                         self.image.planes[Plane::A.as_usize()] =
                             temp_alpha_image.planes[Plane::A.as_usize()].take();
@@ -3421,7 +3533,7 @@ impl Decoder {
                     decoded_something = true;
                 } else {
                     if self.can_use_decode_grid(decoding_item) {
-                        self.decode_grid(image_index, decoding_item, None, None)?;
+                        self.decode_grid(image_index, decoding_item, None, None, None)?;
                     } else {
                         let previous_decoded_tile_count =
                             self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
@@ -3434,6 +3546,7 @@ impl Decoder {
                                 /* first_tile_index= */ 0,
                                 is_last,
                                 /* crop_rect= */ None,
+                                /* scaled_size= */ None,
                                 None,
                             )?;
                         }
@@ -3448,7 +3561,7 @@ impl Decoder {
                     decoded_something = true;
                 }
             } else if self.can_use_decode_grid(decoding_item) {
-                self.decode_grid(image_index, decoding_item, None, None)?;
+                self.decode_grid(image_index, decoding_item, None, None, None)?;
                 decoded_something = true;
             } else {
                 let previous_decoded_tile_count =
@@ -3462,6 +3575,7 @@ impl Decoder {
                         /* first_tile_index= */ 0,
                         is_last,
                         /* crop_rect= */ None,
+                        /* scaled_size= */ None,
                         None,
                     )?;
                     decoded_something = true;
@@ -3469,7 +3583,7 @@ impl Decoder {
             }
         }
         if decoded_something {
-            Ok(())
+            Ok((color_scaled_in_grid, gainmap_scaled_in_grid))
         } else {
             AvifError::no_content()
         }
@@ -3560,9 +3674,32 @@ impl Decoder {
         if is_sample_transform && scaled_size.is_some() && self.parsed_image.depth == 32 {
             return AvifError::not_implemented();
         }
-        let (effective_crop, grid_subsets) = match composed_crop {
-            Some(composed) if !is_sample_transform => {
-                let (aligned, output_format) = self.align_crop_rect_for_codecs(composed);
+        let region_for_grids = if is_sample_transform {
+            None
+        } else if let Some(composed) = composed_crop {
+            Some(composed)
+        } else if scaled_size.is_some() {
+            let (full_w, full_h) =
+                if self.settings.image_content_to_decode == ImageContentType::GainMap {
+                    (
+                        self.parsed_gainmap_image.width,
+                        self.parsed_gainmap_image.height,
+                    )
+                } else {
+                    (self.parsed_image.width, self.parsed_image.height)
+                };
+            Some(CropRect {
+                x: 0,
+                y: 0,
+                width: full_w,
+                height: full_h,
+            })
+        } else {
+            None
+        };
+        let (effective_crop, grid_subsets) = match region_for_grids {
+            Some(region) => {
+                let (aligned, output_format) = self.align_crop_rect_for_codecs(region);
                 // The color crop rectangle is aligned again to the actual pixel format of the
                 // decoded color image, which may differ from output_format (so x and y may be
                 // rounded down to even values). The alpha cells must cover that final rectangle.
@@ -3577,16 +3714,30 @@ impl Decoder {
                 let mut subsets: [Option<Vec<usize>>; DecodingItem::COUNT] = Default::default();
                 for decoding_item in self.settings.image_content_to_decode.decoding_items() {
                     let (cells_rect, item_format) = if decoding_item == DecodingItem::ALPHA {
-                        (&alpha_cells_rect, PixelFormat::Yuv400)
+                        // When downscaling per cell, interior cell seams are rounded to the color
+                        // image's chroma subsampling, which requires alpha grid cells to also have
+                        // even dimensions along the color image's chroma-subsampled axes so color
+                        // and alpha cell seams map identically.
+                        (
+                            &alpha_cells_rect,
+                            if scaled_size.is_some() { output_format } else { PixelFormat::Yuv400 },
+                        )
                     } else {
                         (&aligned, output_format)
                     };
                     subsets[decoding_item.usize()] =
                         self.grid_tiles_for_crop(decoding_item, cells_rect, item_format)?;
                 }
-                (Some(aligned), subsets)
+                if scaled_size.is_some() && subsets[DecodingItem::COLOR.usize()].is_none() {
+                    subsets[DecodingItem::ALPHA.usize()] = None;
+                }
+                if composed_crop.is_some() || subsets.iter().any(|s| s.is_some()) {
+                    (Some(aligned), subsets)
+                } else {
+                    (None, subsets)
+                }
             }
-            _ => (None, Default::default()),
+            None => (None, Default::default()),
         };
 
         match (
@@ -3611,7 +3762,8 @@ impl Decoder {
             self.begin_decode_with_options();
         }
         self.decoded_frame_options = None;
-        self.decode_tiles(sample_index, effective_crop, &grid_subsets)?;
+        let (color_scaled_in_grid, gainmap_scaled_in_grid) =
+            self.decode_tiles(sample_index, effective_crop, scaled_size, &grid_subsets)?;
 
         if is_sample_transform {
             // The tokens were created in parse_sato() which was only called
@@ -3663,13 +3815,19 @@ impl Decoder {
 
         if let Some(sz) = scaled_size {
             if self.settings.image_content_to_decode == ImageContentType::GainMap {
-                self.gainmap
-                    .image
-                    .scale_planes_in_place(sz.width, sz.height, Category::Gainmap)?;
+                if !gainmap_scaled_in_grid {
+                    self.gainmap.image.scale_planes_in_place(
+                        sz.width,
+                        sz.height,
+                        Category::Gainmap,
+                    )?;
+                }
                 self.gainmap.image.clap = None;
             } else if self.settings.image_content_to_decode.color() {
-                self.image
-                    .scale_planes_in_place(sz.width, sz.height, Category::Color)?;
+                if !color_scaled_in_grid {
+                    self.image
+                        .scale_planes_in_place(sz.width, sz.height, Category::Color)?;
+                }
                 self.image.clap = None;
             }
         }

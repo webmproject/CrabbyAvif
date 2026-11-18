@@ -522,7 +522,6 @@ impl Image {
         u32::try_from(mapped).map_err(AvifError::map_unknown_error)
     }
 
-    #[allow(dead_code)] // Used in a follow-up change.
     pub(crate) fn copy_scaled_from_tile(
         &mut self,
         tile: &Image,
