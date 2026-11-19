@@ -905,6 +905,14 @@ impl Decoder for Avm {
         item: Option<&Item>,
         _signal_eos: bool,
     ) -> AvifResult<()> {
+        // Do not leave stale planes in `image` if decoding fails, because libavm releases
+        // previous output frame buffers on the next `avm_codec_decode()` call.
+        image.free_planes(category.planes());
+        if category == Category::Color
+            && (item.is_some_and(|item| item.has_native_alpha()) || image.alpha_present)
+        {
+            image.free_planes(&A_PLANE);
+        }
         let mut first_time = self.context.is_none();
         if first_time {
             let decoder_config = self
@@ -1108,7 +1116,6 @@ impl Decoder for Avm {
             image.transfer_characteristics = (avm_image.tc as u16).into();
             image.matrix_coefficients = (avm_image.mc as u16).into();
 
-            image.free_planes(&YUV_PLANES);
             copy_avm_planes(
                 image,
                 avm_image,
@@ -1122,15 +1129,22 @@ impl Decoder for Avm {
                 // SAFETY: `ctx_ptr` points to an initialized decoder `avm_codec_ctx_t` and
                 // `iter_ptr` points to `self.decoder_iter`.
                 let alpha_frame = unsafe { avm_codec_get_frame(ctx_ptr, iter_ptr) };
-                if !alpha_frame.is_null() {
-                    // SAFETY: `alpha_frame` was checked to be non-null above and points to a
-                    // valid `avm_image_t` owned by `self.context`.
-                    let avm_alpha_image = unsafe { &*alpha_frame };
-                    // TODO(b/437292541): Revisit hardcoded mlayer_id == 1 once AV2-in-HEIF
-                    //                    specifies how to find if and where there is alpha.
-                    if avm_alpha_image.mlayer_id == 1 {
-                        assign_avm_alpha_plane(image, avm_alpha_image)?;
-                    }
+                if alpha_frame.is_null() {
+                    image.free_planes(&ALL_PLANES);
+                    return AvifError::decode_alpha_failed();
+                }
+                // SAFETY: `alpha_frame` was checked to be non-null above and points to a
+                // valid `avm_image_t` owned by `self.context`.
+                let avm_alpha_image = unsafe { &*alpha_frame };
+                // TODO(b/437292541): Revisit hardcoded mlayer_id == 1 once AV2-in-HEIF
+                //                    specifies how to find if and where there is alpha.
+                if avm_alpha_image.mlayer_id != 1 {
+                    image.free_planes(&ALL_PLANES);
+                    return AvifError::decode_alpha_failed();
+                }
+                if let Err(err) = assign_avm_alpha_plane(image, avm_alpha_image) {
+                    image.free_planes(&ALL_PLANES);
+                    return Err(err);
                 }
             }
         } else {

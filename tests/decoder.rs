@@ -1472,6 +1472,24 @@ fn white_2x2_unknown_top_level_box_size0(offset: usize) -> AvifResult<()> {
     Ok(())
 }
 
+fn assert_no_alpha_plane(image: &Image) {
+    if image.has_plane(Plane::A) {
+        // Reading a dangling alpha plane is caught by AddressSanitizer.
+        let mut sum = 0u64;
+        for y in 0..image.height {
+            sum += image
+                .row(Plane::A, y)
+                .unwrap()
+                .iter()
+                .map(|&x| x as u64)
+                .sum::<u64>();
+        }
+        std::hint::black_box(sum);
+    }
+    // The alpha plane of the failed frame is not available.
+    assert!(!image.has_plane(Plane::A));
+}
+
 // The second alpha frame of this image sequence has a different size than the first one (see
 // tests/data/README.md). Decoding that frame must fail, and must not leave the alpha plane of the
 // decoder image pointing into a codec buffer that was released.
@@ -1489,22 +1507,64 @@ fn alpha_frame_size_change_in_sequence() {
     assert!(decoder.next_image().is_err());
     // Decode the same frame again so that the decoder reuses the released alpha buffers.
     assert!(decoder.next_image().is_err());
-    let image = decoder.image().unwrap();
-    if image.has_plane(Plane::A) {
-        // Reading a dangling alpha plane is caught by AddressSanitizer.
-        let mut sum = 0u64;
-        for y in 0..image.height {
-            sum += image
-                .row(Plane::A, y)
-                .unwrap()
-                .iter()
-                .map(|&x| x as u64)
-                .sum::<u64>();
-        }
-        std::hint::black_box(sum);
+    assert_no_alpha_plane(decoder.image().unwrap());
+}
+
+fn check_alpha_no_output_frame(
+    filename: &str,
+    expected_format: CompressionFormat,
+    codec: CodecChoice,
+    has_decoder: bool,
+) {
+    let mut decoder = get_decoder_with_codec(filename, codec);
+    assert_eq!(decoder.parse(), Ok(()));
+    assert_eq!(decoder.compression_format(), expected_format);
+    assert_eq!(decoder.image_count(), 2);
+    let image = decoder.image().expect("image was none");
+    assert!(image.alpha_present);
+    assert!(image.image_sequence_track_present);
+    if !has_decoder {
+        return;
     }
-    // The alpha plane of the failed frame is not available.
-    assert!(!image.has_plane(Plane::A));
+
+    assert_eq!(decoder.next_image(), Ok(()));
+    let image = decoder.image().expect("image was none");
+    assert!(image.has_plane(Plane::A));
+    assert!(!image.row(Plane::A, 0).unwrap().is_empty());
+
+    // The second alpha sample produces no output frame. Decoding must fail rather than reusing
+    // the previous alpha frame or leaving the alpha plane pointing to released codec memory.
+    assert!(decoder.next_image().is_err());
+    // Decode the same frame again so that the decoder may reuse released alpha buffers.
+    assert!(decoder.next_image().is_err());
+    assert_no_alpha_plane(decoder.image().expect("image was none"));
+}
+
+// The second alpha sample of this AV1 image sequence produces no output frame (show_frame = 0).
+#[test_matrix([DAV1D, NATIVE])]
+fn alpha_no_output_frame_av1(codec: CodecChoice) {
+    if !cfg!(feature = "native_av1") && codec == NATIVE {
+        return;
+    }
+    check_alpha_no_output_frame(
+        "alpha_no_output_frame_av1.avif",
+        CompressionFormat::Avif,
+        codec,
+        HAS_DECODER,
+    );
+}
+
+// The second alpha sample of this AV2 image sequence produces no output frame
+// (immediate_output_picture = 0).
+#[cfg(feature = "avm")]
+#[test]
+fn alpha_no_output_frame_av2() {
+    check_alpha_no_output_frame(
+        "alpha_no_output_frame_av2.avif",
+        CompressionFormat::Avif2,
+        CodecChoice::Avm,
+        true,
+    );
 }
 
 #[test]

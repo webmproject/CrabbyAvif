@@ -144,3 +144,113 @@ fn encode_decode(
     }
     Ok(())
 }
+
+// Finds the byte offset within `sample` where the first AV2 OBU with `mlayer_id == 1` starts.
+fn find_av2_mlayer1_offset(sample: &[u8]) -> Option<usize> {
+    let mut pos = 0;
+    while pos < sample.len() {
+        let obu_start = pos;
+        let mut obu_size = 0usize;
+        for i in 0..8 {
+            let b = *sample.get(pos)?;
+            pos += 1;
+            obu_size |= ((b & 0x7f) as usize) << (7 * i);
+            if b & 0x80 == 0 {
+                break;
+            }
+        }
+        let header0 = *sample.get(pos)?;
+        let ext_flag = (header0 >> 7) & 1;
+        if ext_flag == 1 {
+            let header1 = *sample.get(pos + 1)?;
+            let mlayer_id = (header1 >> 5) & 0x7;
+            if mlayer_id == 1 {
+                return Some(obu_start);
+            }
+        }
+        pos += obu_size;
+    }
+    None
+}
+
+// Verifies that when an AV2 sequence with embedded (native) alpha fails on a subsequent frame—
+// either because the embedded alpha layer is missing or because decoding the frame fails—
+// decoding returns an error and clears Plane::A (as well as color planes) on decoder.image().
+#[test]
+fn embedded_alpha_failure_in_sequence() -> AvifResult<()> {
+    let frame0 = generate_gradient_image(16, 16, 8, PixelFormat::Yuv420, YuvRange::Full, true)?;
+    let mut frame1 = frame0.try_deep_clone()?;
+    frame1.fill_plane_with_value(Plane::Y, 100)?;
+    fill_plane(&mut frame1, Plane::A, 200)?;
+
+    let encoded = {
+        let settings = encoder::Settings {
+            codec_choice: CodecChoice::Avm,
+            speed: Some(9),
+            mutable: encoder::MutableSettings {
+                quality: 90.0,
+                quality_alpha: 90.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+        encoder.add_image_for_sequence(&frame0, 1)?;
+        encoder.add_image_for_sequence(&frame1, 1)?;
+        encoder.finish()?
+    };
+    assert!(!encoded.windows(4).any(|w| w == b"auxl"));
+
+    // Locate the single track's stco and stsz entries.
+    let stco_pos = encoded.windows(4).position(|w| w == b"stco").unwrap();
+    let chunk_offset =
+        u32::from_be_bytes(encoded[stco_pos + 12..stco_pos + 16].try_into().unwrap()) as usize;
+    let stsz_pos = encoded.windows(4).position(|w| w == b"stsz").unwrap();
+    let sample0_size =
+        u32::from_be_bytes(encoded[stsz_pos + 16..stsz_pos + 20].try_into().unwrap()) as usize;
+    let sample1_size =
+        u32::from_be_bytes(encoded[stsz_pos + 20..stsz_pos + 24].try_into().unwrap()) as usize;
+    let sample1_offset = chunk_offset + sample0_size;
+
+    // Case 1: Drop the embedded alpha OBU (mlayer_id == 1) from frame 1 so color decodes cleanly
+    // but alpha_frame is null.
+    let mut missing_alpha = encoded.clone();
+    let color_only_len =
+        find_av2_mlayer1_offset(&encoded[sample1_offset..sample1_offset + sample1_size])
+            .expect("expected embedded alpha OBU in frame 1");
+    assert!(color_only_len > 0 && color_only_len < sample1_size);
+    missing_alpha[stsz_pos + 20..stsz_pos + 24]
+        .copy_from_slice(&(color_only_len as u32).to_be_bytes());
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.settings.codec_choice = CodecChoice::Avm;
+    decoder.set_io_vec(missing_alpha);
+    assert_eq!(decoder.parse(), Ok(()));
+    assert!(decoder.image().unwrap().alpha_present);
+    assert_eq!(decoder.next_image(), Ok(()));
+    assert!(decoder.image().unwrap().has_plane(Plane::A));
+    assert_eq!(decoder.next_image(), Err(AvifError::DecodeAlphaFailed));
+    assert!(decoder.next_image().is_err());
+    let decoded = decoder.image().unwrap();
+    assert!(!decoded.has_plane(Plane::Y));
+    assert!(!decoded.has_plane(Plane::A));
+
+    // Case 2: Corrupt frame 1 so avm_codec_decode() fails after releasing frame 0's buffers.
+    let mut corrupt_frame1 = encoded;
+    corrupt_frame1[sample1_offset..sample1_offset + sample1_size].fill(0xff);
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.settings.codec_choice = CodecChoice::Avm;
+    decoder.set_io_vec(corrupt_frame1);
+    assert_eq!(decoder.parse(), Ok(()));
+    assert!(decoder.image().unwrap().alpha_present);
+    assert_eq!(decoder.next_image(), Ok(()));
+    assert!(decoder.image().unwrap().has_plane(Plane::A));
+    assert!(decoder.next_image().is_err());
+    assert!(decoder.next_image().is_err());
+    let decoded = decoder.image().unwrap();
+    assert!(!decoded.has_plane(Plane::Y));
+    assert!(!decoded.has_plane(Plane::A));
+
+    Ok(())
+}

@@ -2834,7 +2834,12 @@ impl Decoder {
             // In the non-grid, non-overlay path below, dst_image points to memory owned by the
             // codec, which may be released by get_next_image(). Clear these planes so that they
             // are not left dangling if decoding this tile fails.
-            dst_image.free_planes(category.planes());
+            let planes = if category == Category::Color && !has_alpha_item {
+                &ALL_PLANES
+            } else {
+                category.planes()
+            };
+            dst_image.free_planes(planes);
         }
         let next_image_result = codec.get_next_image(
             data,
@@ -3991,10 +3996,16 @@ impl Decoder {
             if payloads.is_empty() {
                 continue;
             }
+            let has_alpha_item = !self.tiles[DecodingItem::ALPHA.usize()].is_empty();
             let category = decoding_item.category;
             // The codec may release the memory that self.image points to. Clear these planes so
             // that they are not left dangling if decoding fails.
-            self.image.free_planes(category.planes());
+            let planes = if category == Category::Color && !has_alpha_item {
+                &ALL_PLANES
+            } else {
+                category.planes()
+            };
+            self.image.free_planes(planes);
             let first_tile = self.tiles[decoding_item.usize()]
                 .first_mut()
                 .ok_or(AvifError::InvalidArgument)?;

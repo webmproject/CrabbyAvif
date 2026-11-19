@@ -338,3 +338,26 @@ std::fs::write("gainmap_larger_than_base_grid.avif",
 
 followed by overwriting the width and height of the 256x128 `ispe` box with
 128 and 64.
+
+## alpha_no_output_frame_av1.avif and alpha_no_output_frame_av2.avif
+
+16x16 8-bit 2-frame image sequences with a color track (YUV 4:2:0) and an
+auxiliary alpha track (monochrome YUV 4:0:0) whose second alpha sample is a
+valid coded frame that produces no output frame:
+
+- `alpha_no_output_frame_av1.avif`: AV1 (`avis`) sequence. Both color samples
+  are keyframes encoded with `avifenc` (`libaom`). Alpha sample 0 is a shown
+  monochrome keyframe, and alpha sample 1 is a non-shown `INTER_FRAME`
+  (`show_frame = 0`, an altref OBU extracted from a 6-frame `libaom` sequence).
+- `alpha_no_output_frame_av2.avif`: AV2 (`av2s`) sequence. Color samples 0 and 1
+  are a 2-frame `avm` sequence (`OBU_CLOSED_LOOP_KEY` and
+  `OBU_REGULAR_TILE_GROUP`), with `OBU_SEQUENCE_HEADER` and
+  `OBU_CONTENT_INTERPRETATION` stored in `av2C`. Alpha sample 0 is a shown
+  monochrome keyframe (`OBU_CLOSED_LOOP_KEY` + `OBU_REGULAR_TILE_GROUP`), and
+  alpha sample 1 is a non-immediately-output `OBU_REGULAR_TILE_GROUP`
+  (`immediate_output_picture = 0`, extracted from a 6-frame `avmenc
+  --monochrome --lag-in-frames=6 --auto-alt-ref=1` sequence), with
+  `OBU_SEQUENCE_HEADER` stored in `av2C`.
+
+Used to verify that decoding frame 1 fails across all codecs rather than
+reusing the previous alpha frame or leaving a dangling alpha plane.
