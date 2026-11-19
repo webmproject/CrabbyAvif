@@ -203,3 +203,38 @@ fn encode_decode(
     };
     Ok(())
 }
+
+#[test]
+fn encode_decode_exif() -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let mut input_image =
+        generate_gradient_image(16, 16, 8, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    // The TIFF header must be at offset 0 for the Exif metadata to be stored in a
+    // MinimizedImageBox.
+    input_image.exif = vec![
+        b'I', b'I', 42, 0, // Little endian TIFF header
+        8, 0, 0, 0, // Offset to the 0th IFD
+        0, 0, // Number of directory entries
+        0, 0, 0, 0, // Offset to the next IFD
+    ];
+
+    let settings = encoder::Settings {
+        speed: Some(10),
+        header_format: HeaderFormat::Mini,
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image(&input_image)?;
+    let edata = encoder.finish()?;
+    // Make sure a MinimizedImageBox was written and not just a regular MetaBox.
+    assert_eq!(str::from_utf8(&edata.as_slice()[8..12]).unwrap(), "mif3");
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    assert_eq!(decoder.parse(), Ok(()));
+    let image = decoder.image().expect("image was none");
+    assert_eq!(image.exif, input_image.exif);
+    Ok(())
+}
