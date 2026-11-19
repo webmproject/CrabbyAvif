@@ -47,9 +47,14 @@ fn lossless_sample_transform_roundtrip(allow_sample_transform: bool) -> AvifResu
     float_data.extend_from_slice(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.]);
     // Notable values from
     // https://en.wikipedia.org/wiki/Single-precision_floating-point_format#Notable_single-precision_cases
+    // Grouped as sign_exponent_mantissa.
+    #[allow(clippy::unusual_byte_groupings)]
     const SMALLEST_POSITIVE_SUBNORMAL: f32 = f32::from_bits(0b0_00000000_00000000000000000000001);
+    #[allow(clippy::unusual_byte_groupings)]
     const SMALLEST_NEGATIVE_SUBNORMAL: f32 = f32::from_bits(0b1_00000000_00000000000000000000001);
+    #[allow(clippy::unusual_byte_groupings)]
     const LARGEST_SUBNORMAL: f32 = f32::from_bits(0b0_00000000_11111111111111111111111);
+    #[allow(clippy::unusual_byte_groupings)]
     const LARGEST_NUMBER_LESS_THAN_ONE: f32 = f32::from_bits(0b0_01111110_11111111111111111111111);
     float_data.extend_from_slice(&[
         SMALLEST_POSITIVE_SUBNORMAL,

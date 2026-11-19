@@ -2329,7 +2329,7 @@ mod tests {
                     _ => rnd() as u16,
                 };
                 // Reference scalar search
-                let mut u_ref = r;
+                let mut u_ref;
                 let mut vv_ref = r;
                 let mut val_ref = 0usize;
                 loop {

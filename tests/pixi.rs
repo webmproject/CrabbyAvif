@@ -39,7 +39,6 @@ fn encode_decode_extended_pixi() -> AvifResult<()> {
     // Make sure that a PixelInformationProperty was written with px_flags=1.
     assert_ne!(
         edata
-            .as_slice()
             .windows(8)
             .position(|eight_bytes| eight_bytes == [b'p', b'i', b'x', b'i', 0, 0, 0, 1]),
         None

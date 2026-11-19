@@ -193,10 +193,7 @@ pub fn is_mini_compatible(enc: &Encoder) -> bool {
         return false;
     }
     // A primary item is necessary.
-    if color_item.is_none() {
-        return false;
-    }
-    true
+    color_item.is_some()
 }
 
 impl Encoder {

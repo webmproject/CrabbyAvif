@@ -1129,7 +1129,7 @@ fn parse_hvcC(stream: &mut IStream) -> AvifResult<ItemProperty> {
             }
             let nal_unit = stream.get_slice(nal_unit_length as usize)?;
             let nal_unit_type = (nal_unit
-                .get(0)
+                .first()
                 .ok_or_else(|| AvifError::BmffParseFailed("Empty NAL unit in hvcC".into()))?
                 >> 1)
                 & 0x3f;

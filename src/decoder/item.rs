@@ -163,9 +163,9 @@ impl Item {
             }
             // unsigned int(8) flags;
             let flags = stream.read_u8()?;
-            for j in 0..4 {
+            for value in &mut overlay.canvas_fill_value {
                 // unsigned int(16) canvas_fill_value;
-                overlay.canvas_fill_value[j] = stream.read_u16()?;
+                *value = stream.read_u16()?;
             }
             if (flags & 1) == 1 {
                 // unsigned int(32) output_width;

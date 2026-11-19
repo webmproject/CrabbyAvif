@@ -1159,9 +1159,10 @@ mod tests {
         rgb.allocate()?;
         rgb.convert_from_yuv(&image)?;
 
-        for y in 0..rgb.height as usize {
+        assert_eq!(rgb.height as usize, rgb_params.expected_rgba.len());
+        for (y, expected_row) in rgb_params.expected_rgba.iter().enumerate() {
             let row16 = rgb.row16(y as u32)?;
-            assert_eq!(row16, rgb_params.expected_rgba[y]);
+            assert_eq!(row16, *expected_row);
         }
         Ok(())
     }

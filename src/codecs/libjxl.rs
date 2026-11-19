@@ -1049,7 +1049,7 @@ fn libjxl_enc_dec_test() -> Result<(), AvifError> {
         android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat::default(),
     })?;
     decoder.get_next_image(
-        &output_samples[0].sample_data(),
+        output_samples[0].sample_data(),
         0xff,
         &mut decoded,
         Category::Color,

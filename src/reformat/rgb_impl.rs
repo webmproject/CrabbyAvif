@@ -1909,11 +1909,10 @@ mod tests {
                     &v
                 };
                 assert_eq!(yuv.height(plane), samples.len());
-                for y in 0..yuv.height(plane) {
-                    assert_eq!(yuv.width(plane), samples[y].len());
-                    for x in 0..yuv.width(plane) {
-                        yuv.row_mut(plane, y as u32).unwrap()[x] = samples[y][x];
-                    }
+                for (y, sample_row) in samples.iter().enumerate() {
+                    assert_eq!(yuv.width(plane), sample_row.len());
+                    yuv.row_mut(plane, y as u32).unwrap()[..sample_row.len()]
+                        .copy_from_slice(sample_row);
                 }
             }
             yuv
