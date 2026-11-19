@@ -186,7 +186,7 @@ pub unsafe extern "C" fn crabby_avifDecoderSetIOMemory(
 
 /// # Safety
 /// If `decoder` is non-null, it must be properly aligned and point to a valid, initialized
-/// `avifDecoder` valid for exclusive writes during this call. Passing null safely returns
+/// `avifDecoder` valid for exclusive access during this call. Passing null safely returns
 /// `avifResult::InvalidArgument`.
 #[no_mangle]
 pub unsafe extern "C" fn crabby_avifDecoderSetSource(
@@ -194,8 +194,13 @@ pub unsafe extern "C" fn crabby_avifDecoderSetSource(
     source: Source,
 ) -> avifResult {
     check_pointer!(decoder);
-    deref_mut!(decoder).requestedSource = source;
-    avifResult::Ok
+    let decoder_ref = deref_mut!(decoder);
+    decoder_ref.requestedSource = source;
+    if !decoder_ref.rust_decoder.parsed_current_io() {
+        return avifResult::Ok;
+    }
+    // Reset an already parsed decoder so that the new source is used.
+    avif_decoder_parse(decoder_ref)
 }
 
 impl TryFrom<&avifDecoder> for Settings {
@@ -278,6 +283,11 @@ impl avifDecoder {
             self.alphaPresent = to_avifBool(image.alpha_present);
             self.imageSequenceTrackPresent = to_avifBool(image.image_sequence_track_present);
             self.progressiveState = image.progressive_state;
+        } else {
+            self.image_object = avifImage::default();
+            self.alphaPresent = AVIF_FALSE;
+            self.imageSequenceTrackPresent = AVIF_FALSE;
+            self.progressiveState = ProgressiveState::Unavailable;
         }
 
         self.imageTiming = src.image_timing();
@@ -295,13 +305,17 @@ impl avifDecoder {
         self.compressionFormat = src.compression_format();
         self.nativeDecodable = to_avifBool(src.native_decodable());
 
-        if src.gainmap_present() {
+        if src.image().is_some() && src.gainmap_present() {
             self.gainmap_image_object = (&src.gainmap().image).into();
             self.gainmap_object = src.gainmap().into();
             if src.settings.image_content_to_decode.gainmap() {
                 self.gainmap_object.image = (&mut self.gainmap_image_object) as *mut avifImage;
             }
             self.image_object.gainMap = (&mut self.gainmap_object) as *mut avifGainMap;
+        } else {
+            self.gainmap_image_object = avifImage::default();
+            self.gainmap_object = avifGainMap::default();
+            self.image_object.gainMap = std::ptr::null_mut();
         }
         self.image = if src.image().is_some() {
             (&mut self.image_object) as *mut avifImage
@@ -320,11 +334,8 @@ fn avif_decoder_parse(decoder: &mut avifDecoder) -> avifResult {
     decoder.rust_decoder.settings = settings;
     let res = decoder.rust_decoder.parse();
     decoder.diag.set_from_result(&res);
-    if res.is_err() {
-        return res.into();
-    }
     decoder.sync_from_rust_decoder();
-    avifResult::Ok
+    res.into()
 }
 
 /// # Safety

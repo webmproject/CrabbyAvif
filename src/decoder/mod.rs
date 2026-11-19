@@ -473,6 +473,10 @@ pub struct Decoder {
     codecs: Vec<Codec>,
     color_track_id: Option<u32>,
     parse_state: ParseState,
+    // True if parse() has succeeded at least once for the current IO. Reset when the IO changes,
+    // but preserved across reset() so callers can recover from a failed re-parse.
+    #[cfg(feature = "capi")]
+    parsed_current_io: bool,
     io_stats: IOStats,
     compression_format: CompressionFormat,
     thumbnail_item_ids: Vec<u32>,
@@ -717,15 +721,18 @@ impl Decoder {
         self.parse_state == ParseState::Complete
     }
 
+    #[cfg(feature = "capi")]
+    pub(crate) fn parsed_current_io(&self) -> bool {
+        self.parsed_current_io
+    }
+
     pub fn set_io_file(&mut self, filename: &String) -> AvifResult<()> {
-        self.io = Some(Box::new(DecoderFileIO::create(filename)?));
-        self.parse_state = ParseState::None;
+        self.set_io(Box::new(DecoderFileIO::create(filename)?));
         Ok(())
     }
 
     pub fn set_io_vec(&mut self, data: Vec<u8>) {
-        self.io = Some(Box::new(DecoderMemoryIO { data }));
-        self.parse_state = ParseState::None;
+        self.set_io(Box::new(DecoderMemoryIO { data }));
     }
 
     /// # Safety
@@ -746,14 +753,17 @@ impl Decoder {
         // caller upholds that `data` is valid for reads of `size` initialized, immutable bytes for
         // as long as this IO remains attached to `self`.
         let raw_io = unsafe { DecoderRawIO::create(data, size) };
-        self.io = Some(Box::new(raw_io));
-        self.parse_state = ParseState::None;
+        self.set_io(Box::new(raw_io));
         Ok(())
     }
 
     pub fn set_io(&mut self, io: GenericIO) {
         self.io = Some(io);
         self.parse_state = ParseState::None;
+        #[cfg(feature = "capi")]
+        {
+            self.parsed_current_io = false;
+        }
     }
 
     fn find_alpha_item(&mut self, color_item_index: u32) -> AvifResult<Option<u32>> {
@@ -1889,6 +1899,7 @@ impl Decoder {
         self.codecs = decoder.codecs;
         self.color_track_id = decoder.color_track_id;
         self.parse_state = decoder.parse_state;
+        /* Do not reset 'parsed_current_io' */
         self.io_stats = decoder.io_stats;
         self.compression_format = decoder.compression_format;
         self.thumbnail_item_ids = decoder.thumbnail_item_ids;
@@ -2205,6 +2216,10 @@ impl Decoder {
                 self.parsed_image = self.image.shallow_clone();
                 self.parsed_gainmap_image = self.gainmap.image.shallow_clone();
                 self.parse_state = ParseState::Complete;
+                #[cfg(feature = "capi")]
+                {
+                    self.parsed_current_io = true;
+                }
                 return Ok(());
             }
             self.parse_state = ParseState::AwaitingSequenceHeader;
@@ -2220,6 +2235,10 @@ impl Decoder {
         self.parsed_image = self.image.shallow_clone();
         self.parsed_gainmap_image = self.gainmap.image.shallow_clone();
         self.parse_state = ParseState::Complete;
+        #[cfg(feature = "capi")]
+        {
+            self.parsed_current_io = true;
+        }
 
         Ok(())
     }
