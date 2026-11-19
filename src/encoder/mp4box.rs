@@ -349,13 +349,24 @@ impl Encoder {
                     stream.start_full_box("iref", (0, 0))?;
                     box_started = true;
                 }
-                stream.start_box(item.iref_type.as_ref().unwrap().as_str())?;
+                let iref_type = item.iref_type.as_ref().unwrap().as_str();
+                stream.start_box(iref_type)?;
                 // unsigned int(16) from_item_ID;
                 stream.write_u16(item.id)?;
-                // unsigned int(16) reference_count;
-                stream.write_u16(1)?;
-                // unsigned int(16) to_item_ID;
-                stream.write_u16(iref_to_id)?;
+                if iref_type == "cdsc" && self.alternative_item_ids.contains(&iref_to_id) {
+                    // Associate the same metadata with each item in the same 'altr' group.
+                    // unsigned int(16) reference_count;
+                    stream.write_u16(u16_from_usize(self.alternative_item_ids.len())?)?;
+                    for &to_id in &self.alternative_item_ids {
+                        // unsigned int(16) to_item_ID;
+                        stream.write_u16(to_id)?;
+                    }
+                } else {
+                    // unsigned int(16) reference_count;
+                    stream.write_u16(1)?;
+                    // unsigned int(16) to_item_ID;
+                    stream.write_u16(iref_to_id)?;
+                }
                 stream.finish_box()?;
             }
         }
