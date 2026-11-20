@@ -975,13 +975,16 @@ avifImage *crabby_avifImageCreate(uint32_t width,
                                   avifPixelFormat yuvFormat);
 
 /// # Safety
-/// - If `dstImage` is non-null, it must point to a valid, mutable [`avifImage`] whose owned plane
-///   buffers (if `imageOwnsYUVPlanes` / `imageOwnsAlphaPlane` are set) were allocated by
-///   `crabby_avifAlloc` and whose `icc`, `exif`, and `xmp` fields are either empty/default or
-///   managed by `crabby_avifRWData*`.
-/// - If `srcImage` is non-null, it must point to a valid [`avifImage`] distinct from `dstImage`
-///   whose non-null plane and metadata buffers are valid for reads matching its dimensions, row
-///   strides, and metadata sizes.
+/// - If `dstImage` is non-null, it must point to a valid, mutable
+///   [`avifImage`] whose owned plane buffers (if `imageOwnsYUVPlanes` /
+///   `imageOwnsAlphaPlane` are set) were allocated by `crabby_avifAlloc`,
+///   whose `icc`, `exif`, and `xmp` fields are either empty/default or managed
+///   by `crabby_avifRWData*`, and whose `gainMap` (if non-null) is owned by
+///   `dstImage` and was allocated by [`crabby_avifGainMapCreate`].
+/// - If `srcImage` is non-null, it must point to a valid [`avifImage`]
+///   distinct from `dstImage` whose non-null plane, metadata, and `gainMap`
+///   buffers are valid for reads matching its dimensions, row strides, and
+///   metadata sizes.
 avifResult crabby_avifImageCopy(avifImage *dstImage,
                                 const avifImage *srcImage,
                                 avifPlanesFlags planes);
