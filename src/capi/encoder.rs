@@ -128,6 +128,8 @@ impl From<&avifEncoder> for Settings {
             codec_choice: match encoder.codecChoice {
                 avifCodecChoice::Auto => CodecChoice::Auto,
                 avifCodecChoice::Aom => CodecChoice::Aom,
+                #[cfg(feature = "avm")]
+                avifCodecChoice::Avm => CodecChoice::Avm,
                 // Silently treat all other choices the same as Auto.
                 _ => CodecChoice::Auto,
             },
