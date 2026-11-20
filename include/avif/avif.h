@@ -962,9 +962,11 @@ avifGainMap *crabby_avifGainMapCreate();
 
 /// # Safety
 /// If `gainmap` is non-null, it must be a valid pointer obtained from
-/// [`crabby_avifGainMapCreate`] that has not yet been destroyed, and if `(*gainmap).image` is
-/// non-null, it must be a valid pointer obtained from [`crabby_avifImageCreate`] or
-/// [`crabby_avifImageCreateEmpty`] that has not yet been destroyed.
+/// [`crabby_avifGainMapCreate`] that has not yet been destroyed, its `altICC`
+/// field must be either empty/default or managed by `crabby_avifRWData*`, and
+/// if `(*gainmap).image` is non-null, it must be a valid pointer obtained from
+/// [`crabby_avifImageCreate`] or [`crabby_avifImageCreateEmpty`] that has not
+/// yet been destroyed.
 void crabby_avifGainMapDestroy(avifGainMap *gainmap);
 
 avifImage *crabby_avifImageCreateEmpty();

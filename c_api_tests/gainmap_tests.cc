@@ -549,6 +549,17 @@ TEST(GainMapTest, ImageCopy) {
   EXPECT_EQ(copy->gainMap, nullptr);
 }
 
+TEST(GainMapTest, DestroyFreesAltIcc) {
+  avifGainMap* gain_map = avifGainMapCreate();
+  ASSERT_NE(gain_map, nullptr);
+  const uint8_t kAltIcc[] = {1, 2, 3, 4, 5};
+  ASSERT_EQ(avifRWDataSet(&gain_map->altICC, kAltIcc, sizeof(kAltIcc)),
+            AVIF_RESULT_OK);
+  // altICC is owned by the gain map. A leak is reported by sanitizers
+  // otherwise.
+  avifGainMapDestroy(gain_map);
+}
+
 }  // namespace
 }  // namespace avif
 
