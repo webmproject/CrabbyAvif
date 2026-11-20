@@ -954,15 +954,28 @@ impl Encoder {
         self.add_image_impl(1, 1, &[image], duration, false, None)
     }
 
+    fn validate_grid_dimensions(grid_columns: u32, grid_rows: u32) -> AvifResult<()> {
+        if grid_columns == 0 || grid_columns > 256 {
+            return AvifError::invalid_image_grid("grid columns must be in [1, 256]");
+        }
+        if grid_rows == 0 || grid_rows > 256 {
+            return AvifError::invalid_image_grid("grid rows must be in [1, 256]");
+        }
+        // Each cell is referenced by a 'dimg' item reference whose reference_count field is 16-bit
+        // (ISO/IEC 14496-12 Section 8.11.12), so a grid cannot contain more than 65535 cells.
+        if grid_columns * grid_rows > 65535 {
+            return AvifError::invalid_image_grid("grid cannot contain more than 65535 cells");
+        }
+        Ok(())
+    }
+
     pub fn add_image_grid(
         &mut self,
         grid_columns: u32,
         grid_rows: u32,
         images: &[&Image],
     ) -> AvifResult<()> {
-        if grid_columns == 0 || grid_columns > 256 || grid_rows == 0 || grid_rows > 256 {
-            return AvifError::invalid_image_grid("");
-        }
+        Self::validate_grid_dimensions(grid_columns, grid_rows)?;
         self.add_image_impl(
             grid_columns,
             grid_rows,
@@ -987,9 +1000,7 @@ impl Encoder {
         images: &[&Image],
         gainmaps: &[&GainMap],
     ) -> AvifResult<()> {
-        if grid_columns == 0 || grid_columns > 256 || grid_rows == 0 || grid_rows > 256 {
-            return AvifError::invalid_image_grid("");
-        }
+        Self::validate_grid_dimensions(grid_columns, grid_rows)?;
         if self.settings.extra_layer_count != 0 {
             return AvifError::not_implemented();
         }
