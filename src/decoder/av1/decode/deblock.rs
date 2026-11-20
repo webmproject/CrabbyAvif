@@ -15,6 +15,7 @@
 //! Deblocking loop filter edge selection (spec 7.14.1 - 7.14.5) for one
 //! superblock row. Sample filtering is done by `dsp::loopfilter`.
 
+#[cfg(feature = "native_av1_simd")]
 use std::simd::prelude::*;
 
 use crate::decoder::av1::dsp::loopfilter::{filter_limits, kernel_filter_size, FilterLimits};
@@ -77,13 +78,16 @@ const LIMITS_LUT: [[FilterLimits; 64]; 8] = {
     lut
 };
 
+#[cfg(feature = "native_av1_simd")]
 type V16 = Simd<u8, 16>;
 
 /// Lane `i` is `i`.
+#[cfg(feature = "native_av1_simd")]
 const LANES: V16 = V16::from_array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
 
 /// 16 `lf_tx` codes from `row[i..]` (the row has at least 16 entries of
 /// slack past every used column).
+#[cfg(feature = "native_av1_simd")]
 #[inline(always)]
 fn ld16(row: &[u8], i: usize) -> V16 {
     V16::from_slice(&row[i..i + 16])
@@ -92,6 +96,7 @@ fn ld16(row: &[u8], i: usize) -> V16 {
 /// The codes of the 4x4 columns left of the 16 columns `cur` from
 /// `row[i..]` (column `i - 1` is only read if `i > 0`; lane 0 is a
 /// don't care otherwise).
+#[cfg(feature = "native_av1_simd")]
 #[inline(always)]
 fn ld16_left(row: &[u8], i: usize, cur: V16) -> V16 {
     if i > 0 {
@@ -108,6 +113,7 @@ fn ld16_left(row: &[u8], i: usize, cur: V16) -> V16 {
 /// position (low 4 bits) and `valid` the positions with an edge
 /// candidate. Luma: `min(a4, b4, 4) * 4`, chroma: `4` if a transform is
 /// one 4x4 wide, else `6` (spec 7.14.3 / 7.14.4).
+#[cfg(feature = "native_av1_simd")]
 #[inline(always)]
 fn edge_sizes<const CHROMA: bool>(cur: V16, prev: V16, pos: V16, valid: Mask<i8, 16>) -> V16 {
     let start = (pos & cur).simd_eq(V16::splat(0)) & valid;
@@ -237,17 +243,20 @@ pub fn deblock_rows_passes<T: Pixel>(
     // Edges at or beyond the frame width / height are not filtered.
     let col_lim = col_end.min(fh.frame_width.div_ceil(MI_SIZE));
     let row_lim = mi_row1.min(fh.frame_height.div_ceil(MI_SIZE));
-    let seg_lf = fh.seg.enabled
-        && fh.seg.feature_enabled.iter().any(|f| {
-            f[SEG_LVL_ALT_LF_Y_V..SEG_LVL_ALT_LF_Y_V + 4]
-                .iter()
-                .any(|&b| b)
-        });
-    if !seg_lf && !fh.delta_lf_present {
-        deblock_rows_const(
-            f, mi, planes, mi_row0, col_lim, row_lim, cols.0, dsp, limits_lut, grid, passes,
-        );
-        return;
+    #[cfg(feature = "native_av1_simd")]
+    {
+        let seg_lf = fh.seg.enabled
+            && fh.seg.feature_enabled.iter().any(|f| {
+                f[SEG_LVL_ALT_LF_Y_V..SEG_LVL_ALT_LF_Y_V + 4]
+                    .iter()
+                    .any(|&b| b)
+            });
+        if !seg_lf && !fh.delta_lf_present {
+            deblock_rows_const(
+                f, mi, planes, mi_row0, col_lim, row_lim, cols.0, dsp, limits_lut, grid, passes,
+            );
+            return;
+        }
     }
     deblock_rows_var(
         f, mi, planes, mi_row0, col_lim, row_lim, cols.0, dsp, limits_lut, grid, passes,
@@ -410,15 +419,24 @@ fn deblock_rows_var<T: Pixel>(
 /// prebuilt `libcore` and never inlines).
 #[inline(always)]
 fn fill_u8(dst: &mut [u8], val: u8) {
-    let v = V16::splat(val);
-    let mut i = 0;
-    while i + 16 <= dst.len() {
-        v.copy_to_slice(&mut dst[i..i + 16]);
-        i += 16;
+    #[cfg(feature = "native_av1_simd")]
+    {
+        let v = V16::splat(val);
+        let mut i = 0;
+        while i + 16 <= dst.len() {
+            v.copy_to_slice(&mut dst[i..i + 16]);
+            i += 16;
+        }
+        while i < dst.len() {
+            dst[i] = val;
+            i += 1;
+        }
     }
-    while i < dst.len() {
-        dst[i] = val;
-        i += 1;
+    #[cfg(not(feature = "native_av1_simd"))]
+    {
+        for d in dst {
+            *d = val;
+        }
     }
 }
 
@@ -426,6 +444,7 @@ fn fill_u8(dst: &mut [u8], val: u8) {
 /// columns `c4_0..c4_0 + n_c` of plane type `pt`, row major into `vs`
 /// (`ncp`, a multiple of 16, per row). `any[ci]` is non-zero for the
 /// columns with any edge.
+#[cfg(feature = "native_av1_simd")]
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn v_edge_sizes<const CHROMA: bool>(
@@ -471,6 +490,7 @@ fn v_edge_sizes<const CHROMA: bool>(
 /// Filters the vertical edges found by [`v_edge_sizes`] of the planes
 /// `pls` (`(plane, level)`, level 0: skipped; columns from `xp0`, rows
 /// from 4x4 row `r4_0`).
+#[cfg(feature = "native_av1_simd")]
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn v_edges_filter<T: Pixel>(
@@ -525,6 +545,7 @@ fn v_edges_filter<T: Pixel>(
 /// Horizontal edge kernel sizes of the 4x4 row `r4` (> 0) of plane type
 /// `pt`, columns `c4_0..c4_0 + n_c`, into `hs` (`ncp` entries). Returns
 /// whether there is any edge.
+#[cfg(feature = "native_av1_simd")]
 #[inline(always)]
 fn h_edge_sizes<const CHROMA: bool>(
     mi: &MiWin,
@@ -561,6 +582,7 @@ fn h_edge_sizes<const CHROMA: bool>(
 /// are constant per (plane, pass), and U and V share the same chroma
 /// transform edge sizes. The edge sizes are computed for 16 positions at
 /// a time from the `lf_code`s.
+#[cfg(feature = "native_av1_simd")]
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn deblock_rows_const<T: Pixel>(

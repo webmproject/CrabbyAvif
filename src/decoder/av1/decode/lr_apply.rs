@@ -15,7 +15,10 @@
 //! Loop restoration stripe processing (spec 7.17, 7.17.1, 7.17.6). The
 //! filters themselves live in `dsp::lr`.
 
-use crate::decoder::av1::dsp::lr::{LR_BORDER, LR_MAX_H, LR_MAX_W, LR_SRC_SLACK};
+#[cfg(feature = "native_av1_simd")]
+use crate::decoder::av1::dsp::lr::LR_MAX_W;
+use crate::decoder::av1::dsp::lr::{LR_BORDER, LR_MAX_H, LR_SRC_SLACK};
+#[cfg(feature = "native_av1_simd")]
 use crate::decoder::av1::dsp::simd::lr::sgr_filter_units;
 use crate::decoder::av1::headers::RestorationType;
 use crate::decoder::av1::pixel::Pixel;
@@ -202,6 +205,7 @@ pub fn lr_stripe<T: Pixel>(
             }
             // A run of interior self guided units with the same parameter set
             // is filtered in one call (box sums and `A` / `B` are shared).
+            #[cfg(feature = "native_av1_simd")]
             if matches!(unit.typ, RestorationType::Sgrproj)
                 && w % 16 == 0
                 && unit_col < lr.unit_cols

@@ -25,6 +25,7 @@ pub mod ipred;
 pub mod itx;
 pub mod loopfilter;
 pub mod lr;
+#[cfg(feature = "native_av1_simd")]
 pub mod simd;
 
 use crate::decoder::av1::pixel::Pixel;
@@ -32,6 +33,9 @@ use crate::decoder::av1::types::{TxSize, TxType};
 
 /// Inverse transform + add, see [`itx::inv_txfm_add`].
 pub type InvTxfmAddFn<T> = fn(&mut [T], usize, &mut [i32], TxSize, TxType, bool, usize, u32);
+/// Per-`(tx_size, tx_type)` inverse transform + add entry for `eob >= 1`
+/// and not lossless: `fn(dst, stride, coeffs, eob_type)`.
+pub type ItxFn<T> = fn(&mut [T], usize, &mut [i32], usize);
 /// Intra prediction, see [`ipred::predict_intra`].
 pub type PredictIntraFn<T> = fn(&mut [T], usize, &ipred::IntraEdges<T>, &ipred::IntraPredParams);
 /// Chroma from luma AC values, see [`ipred::cfl_ac`].
@@ -81,19 +85,29 @@ pub struct Dsp<T: Pixel> {
     /// Per `[tx_size][tx_type]` inverse transform entries for `eob >= 1`
     /// and not lossless (see [`simd::itx::itx_table`]), if available;
     /// [`Dsp::inv_txfm_add`] is used otherwise.
-    pub itx: Option<&'static [[simd::itx::ItxFn<T>; 16]; 19]>,
+    pub itx: Option<&'static [[ItxFn<T>; 16]; 19]>,
 }
 
 impl<T: Pixel> Dsp<T> {
     /// The kernels of this build for bit depth `bd` (8, 10 or 12): the
-    /// `std::simd` kernels.
+    /// `std::simd` kernels when `native_av1_simd` is enabled, otherwise the
+    /// portable scalar kernels.
     pub fn new(bd: u32) -> Self {
-        Self::simd(bd)
+        #[cfg(feature = "native_av1_simd")]
+        {
+            Self::simd(bd)
+        }
+        #[cfg(not(feature = "native_av1_simd"))]
+        {
+            let _ = bd;
+            Self::portable()
+        }
     }
 
     /// `std::simd` kernels, specialized for bit depth `bd`. The kernels
     /// still receive `bd` as an argument; it is always equal to the `BD`
     /// they were instantiated with.
+    #[cfg(feature = "native_av1_simd")]
     pub fn simd(bd: u32) -> Self {
         match bd {
             8 => Self::simd_bd::<8>(),
@@ -102,6 +116,7 @@ impl<T: Pixel> Dsp<T> {
         }
     }
 
+    #[cfg(feature = "native_av1_simd")]
     fn simd_bd<const BD: u32>() -> Self {
         Self {
             inv_txfm_add: simd::itx::inv_txfm_add_bd::<T, BD>,

@@ -928,7 +928,7 @@ pub(super) const fn rect2(w: usize, h: usize) -> bool {
 /// eob_type)` with `eob_type = eob | (tx_type as usize) << 16`, `eob >= 1`,
 /// non-lossless (see [`itx_table`]). Four integer arguments, so that the
 /// call passes everything in registers.
-pub type ItxFn<T> = fn(&mut [T], usize, &mut [i32], usize);
+pub use crate::decoder::av1::dsp::ItxFn;
 
 /// [`ItxFn`] of each `[tx_size as usize][tx_type as usize]` for
 /// [`inv_txfm_add_bd`]'s contract (`eob >= 1`, not lossless; `bd == BD`),

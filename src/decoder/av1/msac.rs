@@ -437,6 +437,7 @@ impl Cdf5 {
     }
 }
 
+#[cfg(feature = "native_av1_simd")]
 #[inline(always)]
 fn load_partial_u16x8(s: &[u16], k: usize) -> std::simd::u16x8 {
     use std::simd::u16x8;
@@ -454,6 +455,7 @@ fn load_partial_u16x8(s: &[u16], k: usize) -> std::simd::u16x8 {
 }
 
 /// Body of `symbol_simd8` (`8` lanes of `u16x8`).
+#[cfg(feature = "native_av1_simd")]
 macro_rules! simd_symbol_body {
     ($self:ident, $cdf:ident, $l:literal, $v:ident, $b:ident) => {{
         use std::simd::prelude::*;
@@ -600,6 +602,7 @@ macro_rules! simd_symbol_body {
     }};
 }
 
+#[cfg(feature = "native_av1_simd")]
 macro_rules! simd_symbol_body_hot {
     ($self:ident, $cdf:ident, $n_:ident, $l:literal, $v:ident, $b:ident, $upd:ident) => {{
         use std::simd::prelude::*;
@@ -912,10 +915,17 @@ impl<'a> SymbolDecoder<'a> {
         if N == 6 {
             return self.symbol6(cdf.first_chunk_mut().unwrap());
         }
-        if N <= 10 {
-            return self.symbol_simd8::<N>(cdf);
+        #[cfg(feature = "native_av1_simd")]
+        {
+            if N <= 10 {
+                return self.symbol_simd8::<N>(cdf);
+            }
+            self.symbol_simd16::<N>(cdf)
         }
-        self.symbol_simd16::<N>(cdf)
+        #[cfg(not(feature = "native_av1_simd"))]
+        {
+            self.symbol_generic(cdf)
+        }
     }
 
     /// `symbol_n::<4>` (3-symbol CDFs).
@@ -1291,10 +1301,18 @@ impl<'a> SymbolDecoder<'a> {
         } else if N == 6 {
             self.symbol6_c::<UPD, true>(cdf.first_chunk_mut().unwrap())
         } else {
-            self.simd_symbol_hot::<N, UPD>(cdf)
+            #[cfg(feature = "native_av1_simd")]
+            {
+                self.simd_symbol_hot::<N, UPD>(cdf)
+            }
+            #[cfg(not(feature = "native_av1_simd"))]
+            {
+                self.symbol_generic_upd::<UPD>(cdf)
+            }
         }
     }
 
+    #[cfg(feature = "native_av1_simd")]
     #[inline(always)]
     fn simd_symbol_hot<const N: usize, const UPD: bool>(&mut self, cdf: &mut [u16; N]) -> usize {
         simd_symbol_body_hot!(self, cdf, N, 8, u16x8, i8x16, UPD)
@@ -1305,12 +1323,14 @@ impl<'a> SymbolDecoder<'a> {
     /// index given by the compare movemask (measured faster there); on
     /// other targets they come from min / max reductions of the compare
     /// masked `v` lanes.
+    #[cfg(feature = "native_av1_simd")]
     #[inline(never)]
     fn symbol_simd8<const N: usize>(&mut self, cdf: &mut [u16; N]) -> usize {
         simd_symbol_body!(self, cdf, 8, u16x8, i8x16)
     }
 
     /// `symbol_n` for `11 <= N <= 17` with two 8-lane vectors.
+    #[cfg(feature = "native_av1_simd")]
     #[inline(never)]
     fn symbol_simd16<const N: usize>(&mut self, cdf: &mut [u16; N]) -> usize {
         use std::simd::prelude::*;
@@ -1534,6 +1554,14 @@ impl<'a> SymbolDecoder<'a> {
     }
 
     fn symbol_generic(&mut self, cdf: &mut [u16]) -> usize {
+        if self.allow_update {
+            self.symbol_generic_upd::<true>(cdf)
+        } else {
+            self.symbol_generic_upd::<false>(cdf)
+        }
+    }
+
+    fn symbol_generic_upd<const UPD: bool>(&mut self, cdf: &mut [u16]) -> usize {
         let n = cdf.len() - 1;
         debug_assert!(n >= 2 && cdf[n - 1] == 32768);
         let c = (self.dif >> (WIN_SIZE - 16)) as u32;
@@ -1552,7 +1580,7 @@ impl<'a> SymbolDecoder<'a> {
             val += 1;
         }
         self.norm(self.dif - ((v as u64) << (WIN_SIZE - 16)), u - v);
-        if self.allow_update {
+        if UPD {
             let count = cdf[n];
             let rate = 3
                 + (count > 15) as u32
@@ -2258,7 +2286,6 @@ mod tests {
 
     #[test]
     fn long_golomb_and_simd_reduction_match_spec() {
-        use std::simd::prelude::*;
         let mut seed = 99991u32;
         let mut rnd = || {
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
@@ -2303,128 +2330,133 @@ mod tests {
         }
         // Explicitly verify the non-x86_64 SIMD reduction formulas on all N in 7..=17,
         // including boundary CDFs (`cdf[0] = 1`, duplicate entries, extreme `r` and `c`).
-        for n in 7..=17usize {
-            for trial in 0..200 {
-                let mut cdf = vec![0u16; n];
-                for p in &mut cdf[..n - 2] {
-                    *p = if trial == 0 {
-                        1
-                    } else if trial == 1 {
-                        32767
-                    } else {
-                        (1 + rnd() % 32767) as u16
-                    };
-                }
-                cdf[..n - 2].sort();
-                cdf[n - 2] = 32768;
-                cdf[n - 1] = (rnd() % 33) as u16;
-                let r = match trial % 4 {
-                    0 => 0x8000u32,
-                    1 => 0xffffu32,
-                    _ => 0x8000 + (rnd() & 0x7fff),
-                };
-                let c = match trial % 5 {
-                    0 => 0u16,
-                    1 => 0xffffu16,
-                    _ => rnd() as u16,
-                };
-                // Reference scalar search
-                let mut u_ref;
-                let mut vv_ref = r;
-                let mut val_ref = 0usize;
-                loop {
-                    u_ref = vv_ref;
-                    let f = 32768 - cdf[val_ref] as u32;
-                    vv_ref = (((r >> 8) * (f >> 6)) >> 1) + 4 * (n - 2 - val_ref) as u32;
-                    if (c as u32) >= vv_ref {
-                        break;
+        #[cfg(feature = "native_av1_simd")]
+        {
+            use std::simd::prelude::*;
+            for n in 7..=17usize {
+                for trial in 0..200 {
+                    let mut cdf = vec![0u16; n];
+                    for p in &mut cdf[..n - 2] {
+                        *p = if trial == 0 {
+                            1
+                        } else if trial == 1 {
+                            32767
+                        } else {
+                            (1 + rnd() % 32767) as u16
+                        };
                     }
-                    val_ref += 1;
-                }
-                let r7 = u16x8::splat(((r >> 8) & 0x7f) as u16);
-                let vr = u16x8::splat(r as u16);
-                let vc = u16x8::splat(c);
-                let mut f_arr = [0u16; 16];
-                let mut mp_arr = [0u16; 16];
-                for i in 0..(n - 2) {
-                    f_arr[i] = 32768 - cdf[i];
-                    mp_arr[i] = (4 * (n - 2 - i)) as u16;
-                }
-                if n <= 10 {
-                    let f0 = u16x8::from_slice(&f_arr[..8]);
-                    let mp0 = u16x8::from_slice(&mp_arr[..8]);
-                    let v0 = (f0 & u16x8::splat(0xffc0)) + mp0 + (((f0 >> 6) * r7) >> 1);
-                    let lt = v0.simd_gt(vc);
-                    let lm = lt.to_simd().cast::<u16>();
-                    let u = lt.select(v0, vr).reduce_min() as u32;
-                    let vv = (v0 & !lm).reduce_max() as u32;
-                    let val = lt.to_simd().cast::<i16>().reduce_sum().wrapping_neg() as usize;
-                    assert_eq!(
-                        (u, vv, val),
-                        (u_ref, vv_ref, val_ref),
-                        "n={n} r={r:#x} c={c:#x}"
-                    );
-                    let ge = vc.simd_ge(v0);
-                    let sent = if n < 10 { 1u64 << (8 * (n - 2)) } else { 0 };
-                    let m64 = u64::from_le_bytes(ge.to_simd().cast::<u8>().to_array()) | sent;
-                    let val_m = (m64.trailing_zeros() >> 3) as usize;
-                    let vs: [u16; 8] = *v0.as_array();
-                    let u_m = std::hint::select_unpredictable(
-                        val_m == 0,
-                        r,
-                        vs[val_m.wrapping_sub(1) & 7] as u32,
-                    );
-                    let vv_m = if n <= 9 {
-                        vs[val_m & 7] as u32
-                    } else {
-                        std::hint::select_unpredictable(val_m < 8, vs[val_m & 7] as u32, 0)
+                    cdf[..n - 2].sort();
+                    cdf[n - 2] = 32768;
+                    cdf[n - 1] = (rnd() % 33) as u16;
+                    let r = match trial % 4 {
+                        0 => 0x8000u32,
+                        1 => 0xffffu32,
+                        _ => 0x8000 + (rnd() & 0x7fff),
                     };
-                    assert_eq!(
-                        (u_m, vv_m, val_m),
-                        (u_ref, vv_ref, val_ref),
-                        "bitmask n={n} r={r:#x} c={c:#x}"
-                    );
-                } else {
-                    let f0 = u16x8::from_slice(&f_arr[..8]);
-                    let f1 = u16x8::from_slice(&f_arr[8..16]);
-                    let mp0 = u16x8::from_slice(&mp_arr[..8]);
-                    let mp1 = u16x8::from_slice(&mp_arr[8..16]);
-                    let v0 = (f0 & u16x8::splat(0xffc0)) + mp0 + (((f0 >> 6) * r7) >> 1);
-                    let v1 = (f1 & u16x8::splat(0xffc0)) + mp1 + (((f1 >> 6) * r7) >> 1);
-                    let ge0 = vc.simd_ge(v0);
-                    let ge1 = vc.simd_ge(v1);
-                    let gm0 = ge0.to_simd().cast::<u16>();
-                    let gm1 = ge1.to_simd().cast::<u16>();
-                    let u = ge0.select(vr, v0).simd_min(ge1.select(vr, v1)).reduce_min() as u32;
-                    let vv = (v0 & gm0).simd_max(v1 & gm1).reduce_max() as u32;
-                    let val = (16i32
-                        + (ge0.to_simd().cast::<i16>() + ge1.to_simd().cast::<i16>()).reduce_sum()
-                            as i32) as u32 as usize;
-                    assert_eq!(
-                        (u, vv, val),
-                        (u_ref, vv_ref, val_ref),
-                        "n={n} r={r:#x} c={c:#x}"
-                    );
-                    let u0 = u32x4::from_ne_bytes(ge0.to_simd().cast::<u16>().to_ne_bytes());
-                    let u1 = u32x4::from_ne_bytes(ge1.to_simd().cast::<u16>().to_ne_bytes());
-                    let u8s = std::simd::simd_swizzle!(u0, u1, [0, 1, 2, 3, 4, 5, 6, 7]);
-                    let m64 = u64::from_le_bytes((u8s >> 12).cast::<u8>().to_array())
-                        | (1u64 << (4 * (n - 2)));
-                    let val_m = (m64.trailing_zeros() >> 2) as usize;
-                    let mut vs = [0u16; 16];
-                    vs[..8].copy_from_slice(v0.as_array());
-                    vs[8..].copy_from_slice(v1.as_array());
-                    let u_m = std::hint::select_unpredictable(
-                        val_m == 0,
-                        r,
-                        vs[val_m.wrapping_sub(1) & 15] as u32,
-                    );
-                    let vv_m = vs[val_m & 15] as u32;
-                    assert_eq!(
-                        (u_m, vv_m, val_m),
-                        (u_ref, vv_ref, val_ref),
-                        "bitmask n={n} r={r:#x} c={c:#x}"
-                    );
+                    let c = match trial % 5 {
+                        0 => 0u16,
+                        1 => 0xffffu16,
+                        _ => rnd() as u16,
+                    };
+                    // Reference scalar search
+                    let mut u_ref;
+                    let mut vv_ref = r;
+                    let mut val_ref = 0usize;
+                    loop {
+                        u_ref = vv_ref;
+                        let f = 32768 - cdf[val_ref] as u32;
+                        vv_ref = (((r >> 8) * (f >> 6)) >> 1) + 4 * (n - 2 - val_ref) as u32;
+                        if (c as u32) >= vv_ref {
+                            break;
+                        }
+                        val_ref += 1;
+                    }
+                    let r7 = u16x8::splat(((r >> 8) & 0x7f) as u16);
+                    let vr = u16x8::splat(r as u16);
+                    let vc = u16x8::splat(c);
+                    let mut f_arr = [0u16; 16];
+                    let mut mp_arr = [0u16; 16];
+                    for i in 0..(n - 2) {
+                        f_arr[i] = 32768 - cdf[i];
+                        mp_arr[i] = (4 * (n - 2 - i)) as u16;
+                    }
+                    if n <= 10 {
+                        let f0 = u16x8::from_slice(&f_arr[..8]);
+                        let mp0 = u16x8::from_slice(&mp_arr[..8]);
+                        let v0 = (f0 & u16x8::splat(0xffc0)) + mp0 + (((f0 >> 6) * r7) >> 1);
+                        let lt = v0.simd_gt(vc);
+                        let lm = lt.to_simd().cast::<u16>();
+                        let u = lt.select(v0, vr).reduce_min() as u32;
+                        let vv = (v0 & !lm).reduce_max() as u32;
+                        let val = lt.to_simd().cast::<i16>().reduce_sum().wrapping_neg() as usize;
+                        assert_eq!(
+                            (u, vv, val),
+                            (u_ref, vv_ref, val_ref),
+                            "n={n} r={r:#x} c={c:#x}"
+                        );
+                        let ge = vc.simd_ge(v0);
+                        let sent = if n < 10 { 1u64 << (8 * (n - 2)) } else { 0 };
+                        let m64 = u64::from_le_bytes(ge.to_simd().cast::<u8>().to_array()) | sent;
+                        let val_m = (m64.trailing_zeros() >> 3) as usize;
+                        let vs: [u16; 8] = *v0.as_array();
+                        let u_m = std::hint::select_unpredictable(
+                            val_m == 0,
+                            r,
+                            vs[val_m.wrapping_sub(1) & 7] as u32,
+                        );
+                        let vv_m = if n <= 9 {
+                            vs[val_m & 7] as u32
+                        } else {
+                            std::hint::select_unpredictable(val_m < 8, vs[val_m & 7] as u32, 0)
+                        };
+                        assert_eq!(
+                            (u_m, vv_m, val_m),
+                            (u_ref, vv_ref, val_ref),
+                            "bitmask n={n} r={r:#x} c={c:#x}"
+                        );
+                    } else {
+                        let f0 = u16x8::from_slice(&f_arr[..8]);
+                        let f1 = u16x8::from_slice(&f_arr[8..16]);
+                        let mp0 = u16x8::from_slice(&mp_arr[..8]);
+                        let mp1 = u16x8::from_slice(&mp_arr[8..16]);
+                        let v0 = (f0 & u16x8::splat(0xffc0)) + mp0 + (((f0 >> 6) * r7) >> 1);
+                        let v1 = (f1 & u16x8::splat(0xffc0)) + mp1 + (((f1 >> 6) * r7) >> 1);
+                        let ge0 = vc.simd_ge(v0);
+                        let ge1 = vc.simd_ge(v1);
+                        let gm0 = ge0.to_simd().cast::<u16>();
+                        let gm1 = ge1.to_simd().cast::<u16>();
+                        let u = ge0.select(vr, v0).simd_min(ge1.select(vr, v1)).reduce_min() as u32;
+                        let vv = (v0 & gm0).simd_max(v1 & gm1).reduce_max() as u32;
+                        let val = (16i32
+                            + (ge0.to_simd().cast::<i16>() + ge1.to_simd().cast::<i16>())
+                                .reduce_sum() as i32) as u32
+                            as usize;
+                        assert_eq!(
+                            (u, vv, val),
+                            (u_ref, vv_ref, val_ref),
+                            "n={n} r={r:#x} c={c:#x}"
+                        );
+                        let u0 = u32x4::from_ne_bytes(ge0.to_simd().cast::<u16>().to_ne_bytes());
+                        let u1 = u32x4::from_ne_bytes(ge1.to_simd().cast::<u16>().to_ne_bytes());
+                        let u8s = std::simd::simd_swizzle!(u0, u1, [0, 1, 2, 3, 4, 5, 6, 7]);
+                        let m64 = u64::from_le_bytes((u8s >> 12).cast::<u8>().to_array())
+                            | (1u64 << (4 * (n - 2)));
+                        let val_m = (m64.trailing_zeros() >> 2) as usize;
+                        let mut vs = [0u16; 16];
+                        vs[..8].copy_from_slice(v0.as_array());
+                        vs[8..].copy_from_slice(v1.as_array());
+                        let u_m = std::hint::select_unpredictable(
+                            val_m == 0,
+                            r,
+                            vs[val_m.wrapping_sub(1) & 15] as u32,
+                        );
+                        let vv_m = vs[val_m & 15] as u32;
+                        assert_eq!(
+                            (u_m, vv_m, val_m),
+                            (u_ref, vv_ref, val_ref),
+                            "bitmask n={n} r={r:#x} c={c:#x}"
+                        );
+                    }
                 }
             }
         }

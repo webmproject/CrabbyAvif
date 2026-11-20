@@ -367,6 +367,7 @@ impl FilmGrain {
             max: self.max_luma,
         };
         let nb = rands.neighbourhood(false, false);
+        #[cfg(feature = "native_av1_simd")]
         match self.bd {
             8 => super::simd::film_grain::luma_block_bd::<T, 8>(
                 luma,
@@ -401,6 +402,29 @@ impl FilmGrain {
                 h,
                 &p,
             ),
+        }
+        #[cfg(not(feature = "native_av1_simd"))]
+        {
+            let grain_center = 128i32 << (self.bd - 8);
+            let gmin = -grain_center;
+            let gmax = (256i32 << (self.bd - 8)) - 1 - grain_center;
+            let mut noise = [[0i16; BLOCK]; BLOCK];
+            noise_block(
+                &self.grain[0],
+                &nb,
+                false,
+                false,
+                w,
+                h,
+                gmin,
+                gmax,
+                &mut noise,
+            );
+            let y_rel = yb - y0;
+            for (i, nz) in noise.iter().enumerate().take(h) {
+                let start = (y_rel + i) * stride + x0;
+                luma_row(&mut luma[start..start + w], &nz[..w], &p);
+            }
         }
     }
 
@@ -445,6 +469,7 @@ impl FilmGrain {
         };
         let band_y0 = y0 >> sy;
         let nb = rands.neighbourhood(self.sub_x, self.sub_y);
+        #[cfg(feature = "native_av1_simd")]
         match self.bd {
             8 => super::simd::film_grain::chroma_block_bd::<T, 8>(
                 plane,
@@ -494,6 +519,34 @@ impl FilmGrain {
                 h,
                 &p,
             ),
+        }
+        #[cfg(not(feature = "native_av1_simd"))]
+        {
+            let grain_center = 128i32 << (self.bd - 8);
+            let gmin = -grain_center;
+            let gmax = (256i32 << (self.bd - 8)) - 1 - grain_center;
+            let mut noise = [[0i16; BLOCK]; BLOCK];
+            noise_block(
+                &self.grain[ci + 1],
+                &nb,
+                self.sub_x,
+                self.sub_y,
+                w,
+                h,
+                gmin,
+                gmax,
+                &mut noise,
+            );
+            let y_rel = yb - band_y0;
+            let luma_y_rel = (yb << sy) - y0;
+            let lx0 = x0 << sx;
+            for (i, nz) in noise.iter().enumerate().take(h) {
+                let start = (y_rel + i) * stride + x0;
+                let row = &mut plane[start..start + w];
+                let lstart = (luma_y_rel + (i << sy)) * luma_stride;
+                let luma_row = &luma[lstart + lx0..lstart + frame_w];
+                chroma_row(row, &nz[..w], luma_row, &p);
+            }
         }
     }
 }
@@ -635,7 +688,7 @@ pub(crate) fn blend(old: i32, new: i32, idx: usize, len: usize, gmin: i32, gmax:
 /// Computes the noise of the top-left `w x h` samples of a block (plane
 /// units), following the noise stripe / noise image construction of
 /// 7.18.3.5. Reference for the SIMD kernels in the tests.
-#[cfg(test)]
+#[cfg(any(test, not(feature = "native_av1_simd")))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn noise_block(
     grain: &GrainTemplate,

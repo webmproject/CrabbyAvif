@@ -93,6 +93,7 @@ sharpyuv = ["dep:libsharpyuv-sys"]
 jpegxl = ["dep:libjxl-sys", "dep:jxl"]
 satofloat = []
 native_av1 = []
+native_av1_simd = ["native_av1"]
 
 [package.metadata.capi.header]
 name = "avif"
