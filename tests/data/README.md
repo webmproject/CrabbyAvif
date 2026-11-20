@@ -361,3 +361,41 @@ valid coded frame that produces no output frame:
 
 Used to verify that decoding frame 1 fails across all codecs rather than
 reusing the previous alpha frame or leaving a dangling alpha plane.
+
+## grid_1x2_alpha_before_color.avif
+
+64x128 8-bit YUV 4:4:4 full-range 1x2 `grid` image (two 64x64 cells) with an
+auxiliary alpha 1x2 `grid` whose alpha cells are stored before the color cells
+in `mdat`.
+
+Generated with the CrabbyAvif encoder using a temporary test in
+`tests/decoder.rs`:
+
+```rust
+let image = generate_gradient_image(64, 128, 8, PixelFormat::Yuv444, YuvRange::Full, true)?;
+let mut cells = Vec::new();
+for cell_row in 0..2 {
+    let mut cell = Image {
+        width: 64,
+        height: 64,
+        depth: 8,
+        yuv_format: PixelFormat::Yuv444,
+        yuv_range: YuvRange::Full,
+        alpha_present: true,
+        ..Default::default()
+    };
+    cell.allocate_planes(Category::Color)?;
+    cell.allocate_planes(Category::Alpha)?;
+    for plane in ALL_PLANES {
+        for y in 0..64 {
+            cell.row_mut(plane, y)?
+                .copy_from_slice(image.row(plane, cell_row * 64 + y)?);
+        }
+    }
+    cells.push(cell);
+}
+let settings = encoder::Settings { speed: Some(10), ..Default::default() };
+let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+encoder.add_image_grid(1, 2, &[&cells[0], &cells[1]])?;
+std::fs::write("grid_1x2_alpha_before_color.avif", &encoder.finish()?).unwrap();
+```

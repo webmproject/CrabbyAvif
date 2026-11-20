@@ -3256,6 +3256,11 @@ impl Decoder {
         } else {
             let previous_decoded_tile_count =
                 self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
+            if previous_decoded_tile_count >= tile_count {
+                // All the cells were decoded during a previous call that returned WaitingOnIo
+                // because of another decoding item.
+                return Ok(None);
+            }
             for tile_index in previous_decoded_tile_count..tile_count {
                 let tile = self.tiles[decoding_item.usize()]
                     .get(tile_index)
@@ -3423,6 +3428,7 @@ impl Decoder {
         grid_subsets: &[Option<Vec<usize>>; DecodingItem::COUNT],
     ) -> AvifResult<(bool, bool)> {
         let mut decoded_something = false;
+        let mut waiting_on_io = false;
         let mut color_scaled_in_grid = false;
         let mut gainmap_scaled_in_grid = false;
         // Dimensions and raw (depth, yuv_format) of the color image before cropping/scaling. The
@@ -3436,6 +3442,16 @@ impl Decoder {
             let tile_count = self.tiles[decoding_item.usize()].len();
             if tile_count == 0 {
                 continue;
+            }
+            if decoding_item.category == Category::Alpha {
+                // Wait for at least one tile of the corresponding color item to be decoded so
+                // image dimensions and bit depth are populated before decoding alpha.
+                let color_item = DecodingItem::color(decoding_item.item_idx).usize();
+                if !self.tiles[color_item].is_empty()
+                    && self.tile_info[color_item].decoded_tile_count == 0
+                {
+                    continue;
+                }
             }
             if let (Some(indices), Some(rect)) =
                 (grid_subsets[decoding_item.usize()].as_deref(), actual_crop)
@@ -3585,14 +3601,17 @@ impl Decoder {
                     decoded_something = true;
                 }
             } else if self.can_use_decode_grid(decoding_item) {
-                self.decode_grid(image_index, decoding_item, None, None, None)?;
-                decoded_something = true;
+                match self.decode_grid(image_index, decoding_item, None, None, None) {
+                    Ok(_) => decoded_something = true,
+                    Err(AvifError::WaitingOnIo) => waiting_on_io = true,
+                    Err(err) => return Err(err),
+                }
             } else {
                 let previous_decoded_tile_count =
                     self.tile_info[decoding_item.usize()].decoded_tile_count as usize;
                 for tile_index in previous_decoded_tile_count..tile_count {
                     let is_last = tile_index + 1 == tile_count;
-                    self.decode_tile(
+                    match self.decode_tile(
                         image_index,
                         decoding_item,
                         tile_index,
@@ -3601,10 +3620,21 @@ impl Decoder {
                         /* crop_rect= */ None,
                         /* scaled_size= */ None,
                         None,
-                    )?;
-                    decoded_something = true;
+                    ) {
+                        Ok(()) => decoded_something = true,
+                        Err(AvifError::WaitingOnIo) => {
+                            waiting_on_io = true;
+                            break;
+                        }
+                        Err(err) => return Err(err),
+                    }
                 }
             }
+        }
+        if waiting_on_io {
+            // Decode as many tiles as possible of each item before returning, as the decoded rows
+            // need all the items to be decoded to be accessible to the user.
+            return AvifError::waiting_on_io();
         }
         if decoded_something {
             Ok((color_scaled_in_grid, gainmap_scaled_in_grid))
