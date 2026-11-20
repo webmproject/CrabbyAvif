@@ -38,6 +38,7 @@ pub struct Dav1d {
     context: Option<*mut Dav1dContext>,
     picture: Option<Dav1dPictureWrapper>,
     config: Option<DecoderConfig>,
+    low_latency: bool,
 }
 
 // See https://code.videolan.org/videolan/dav1d/-/blob/9849ede1304da1443cfb4a86f197765081034205/include/dav1d/common.h#L55-59
@@ -164,9 +165,15 @@ impl Drop for Dav1dDataWrapper {
 }
 
 impl Dav1d {
+    // Safe to call repeatedly; reuses the existing context when `low_latency` matches and
+    // recreates it otherwise.
     fn initialize_impl(&mut self, low_latency: bool) -> AvifResult<()> {
         if self.context.is_some() {
-            return Ok(());
+            if self.low_latency == low_latency {
+                return Ok(());
+            }
+            // Do not reuse a Dav1dContext across incompatible low_latency modes.
+            self.drop_impl();
         }
         let config = self.config.as_ref().ok_or(AvifError::InvalidArgument)?;
         let mut settings_uninit: MaybeUninit<Dav1dSettings> = MaybeUninit::zeroed();
@@ -209,6 +216,7 @@ impl Dav1d {
             return AvifError::unknown_error(format!("dav1d_open returned {ret}"));
         }
         self.context = Some(dec);
+        self.low_latency = low_latency;
         Ok(())
     }
 
@@ -344,9 +352,7 @@ impl Dav1d {
         spatial_id: u8,
         grid_image_helper: &mut GridImageHelper,
     ) -> AvifResult<()> {
-        if self.context.is_none() {
-            self.initialize_impl(false)?;
-        }
+        self.initialize_impl(false)?;
         let mut payloads_iter = payloads.iter();
         let mut data = Dav1dDataWrapper::default();
         let max_retries = 500;
@@ -439,9 +445,7 @@ impl Decoder for Dav1d {
         // Do not leave stale planes in `image` if decoding fails before reaching
         // set_picture_and_image(), because the other fields of `image` may have changed since.
         image.free_planes(category.planes());
-        if self.context.is_none() {
-            self.initialize_impl(true)?;
-        }
+        self.initialize_impl(true)?;
         let mut data = Dav1dDataWrapper::default();
         data.wrap(av1_payload)?;
         let next_picture: Dav1dPictureWrapper;
@@ -495,9 +499,7 @@ impl Decoder for Dav1d {
         // Do not leave stale planes in `image` if decoding fails before reaching
         // set_picture_and_image(), because the other fields of `image` may have changed since.
         image.free_planes(category.planes());
-        if self.context.is_none() {
-            self.initialize_impl(false)?;
-        }
+        self.initialize_impl(false)?;
         let mut payloads_iter = payloads.iter();
         let mut data = Dav1dDataWrapper::default();
         let max_retries = 500;
@@ -544,5 +546,45 @@ impl Decoder for Dav1d {
 impl Drop for Dav1d {
     fn drop(&mut self) {
         self.drop_impl();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::mp4box::{Av1CodecConfiguration, CodecConfiguration};
+
+    #[test]
+    fn reinitialize_across_low_latency_modes() {
+        let mut dav1d = Dav1d::default();
+        dav1d
+            .initialize(&DecoderConfig {
+                operating_point: 0,
+                all_layers: false,
+                width: 64,
+                height: 64,
+                depth: 8,
+                max_threads: 4,
+                image_size_limit: None,
+                max_input_size: 0,
+                codec_config: CodecConfiguration::Av1(Av1CodecConfiguration::default()),
+                category: Category::Color,
+                android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat::default(
+                ),
+            })
+            .unwrap();
+        dav1d.initialize_impl(false).unwrap();
+        assert!(dav1d.context.is_some());
+        assert!(!dav1d.low_latency);
+        let first_ctx = dav1d.context.unwrap();
+
+        // Calling again with the same mode reuses the existing context.
+        dav1d.initialize_impl(false).unwrap();
+        assert_eq!(dav1d.context.unwrap(), first_ctx);
+
+        // Switching mode recreates the context instead of reusing an incompatible one.
+        dav1d.initialize_impl(true).unwrap();
+        assert!(dav1d.context.is_some());
+        assert!(dav1d.low_latency);
     }
 }

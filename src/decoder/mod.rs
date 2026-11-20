@@ -3673,19 +3673,13 @@ impl Decoder {
             (None, None)
         };
 
-        if self.can_use_decode_until() {
+        if self.can_use_decode_until()
             // If decode_until can be used, always prefer that since we cannot conflate calls
             // between get_last_image and get_next_image.
-            match self.decode_until(next_image_index, composed_crop, scaled_size) {
-                Ok(_) => {
-                    self.decoded_frame_options = Some(*options);
-                    return Ok(());
-                }
-                Err(AvifError::NotImplemented) => {
-                    // If decode_until is not implemented, fallback to next_image.
-                }
-                Err(err) => return Err(err),
-            }
+            && self.decode_until(next_image_index, composed_crop, scaled_size)?
+        {
+            self.decoded_frame_options = Some(*options);
+            return Ok(());
         }
 
         let sample_index = if self.source == Source::Thumbnail && self.thumbnail_item_ids.len() > 1
@@ -3963,17 +3957,11 @@ impl Decoder {
             // Start decoding from the nearest keyframe.
             self.image_index = nearest_keyframe - 1;
         }
-        if self.can_use_decode_until() {
-            match self.decode_until(requested_index, composed_crop, scaled_size) {
-                Ok(_) => {
-                    self.decoded_frame_options = Some(*options);
-                    return Ok(());
-                }
-                Err(AvifError::NotImplemented) => {
-                    // If decode_until is not implemented, fallback to the next_image loop.
-                }
-                Err(err) => return Err(err),
-            }
+        if self.can_use_decode_until()
+            && self.decode_until(requested_index, composed_crop, scaled_size)?
+        {
+            self.decoded_frame_options = Some(*options);
+            return Ok(());
         }
         let default_options = DecodeOptions::default();
         loop {
@@ -3990,20 +3978,34 @@ impl Decoder {
         Ok(())
     }
 
+    // Returns `Ok(true)` if decoded, or `Ok(false)` if `decode_until` is not applicable/supported
+    // for the active codecs and the caller should fall back to `next_image` / `decode_tiles`.
     fn decode_until(
         &mut self,
         requested_index: i32,
         composed_crop: Option<CropRect>,
         scaled_size: Option<ImageSize>,
-    ) -> AvifResult<()> {
+    ) -> AvifResult<bool> {
         if self.io.is_none() {
             return AvifError::io_not_set();
         }
         if requested_index < 0 || requested_index >= i32_from_u32(self.image_count)? {
             return AvifError::no_images_remaining();
         }
-        self.reset_decode_with_options_state();
         self.create_codecs()?;
+        for decoding_item in self.settings.image_content_to_decode.decoding_items() {
+            let Some(first_tile) = self.tiles[decoding_item.usize()].first() else {
+                continue;
+            };
+            let codec = self
+                .codecs
+                .get(first_tile.codec_index)
+                .ok_or(AvifError::InvalidArgument)?;
+            if codec.codec() != CodecChoice::Dav1d {
+                return Ok(false);
+            }
+        }
+        self.reset_decode_with_options_state();
         for decoding_item in DecodingItem::ALL_USIZE {
             self.tile_info[decoding_item].decoded_tile_count = 0;
         }
@@ -4117,7 +4119,7 @@ impl Decoder {
         }
         self.image_index = requested_index;
         self.image_timing = self.nth_image_timing(self.image_index as u32)?;
-        Ok(())
+        Ok(true)
     }
 
     pub fn image(&self) -> Option<&Image> {
