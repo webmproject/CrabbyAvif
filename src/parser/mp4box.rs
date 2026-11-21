@@ -1436,7 +1436,7 @@ fn parse_ipma(stream: &mut IStream, ipma: &mut Vec<ItemPropertyAssociation>) -> 
         let association_count = stream.read_u8()?;
         entry
             .associations
-            .try_reserve_vec(association_count as usize)?;
+            .try_reserve_vec_exact(association_count as usize)?;
         for _ in 0..association_count {
             // bit(1) essential;
             let essential = stream.read_bool()?;

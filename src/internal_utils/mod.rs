@@ -19,18 +19,24 @@ macro_rules! try_vec_exact {
     };
     ($elem:expr; $n:expr) => {{
         let n = $n;
-        let mut vec = Vec::new();
-        crate::internal_utils::VecExtension::try_reserve_vec_exact(&mut vec, n)?;
-        #[allow(clippy::disallowed_methods)]
-        vec.resize(n, $elem);
-        Ok::<_, AvifError>(vec)
+        match crate::internal_utils::create_vec_exact(n) {
+            Ok(mut vec) => {
+                #[allow(clippy::disallowed_methods)]
+                vec.resize(n, $elem);
+                Ok::<_, AvifError>(vec)
+            }
+            Err(err) => Err(err),
+        }
     }};
     ($($x:expr),+ $(,)?) => {{
         let items = [$($x),+];
-        let mut vec = Vec::new();
-        crate::internal_utils::VecExtension::try_reserve_vec_exact(&mut vec, items.len())?;
-        vec.extend(items);
-        Ok::<_, AvifError>(vec)
+        match crate::internal_utils::create_vec_exact(items.len()) {
+            Ok(mut vec) => {
+                vec.extend(items);
+                Ok::<_, AvifError>(vec)
+            }
+            Err(err) => Err(err),
+        }
     }};
 }
 
@@ -186,20 +192,26 @@ pub(crate) fn limited_to_full_y(depth: u8, v: u16) -> u16 {
     }
 }
 
-pub(crate) fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
-    let mut v = Vec::<T>::new();
-    let allocation_size = size
+// TODO: b/342251590 - Do not request allocations of more than what is allowed in Chromium's
+// partition allocator. This is the allowed limit in the chromium fuzzers. The value comes
+// from:
+// https://source.chromium.org/chromium/chromium/src/+/main:base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h;l=433-440;drc=c0265133106c7647e90f9aaa4377d28190b1a6a9.
+// Requesting an allocation larger than this value will cause the fuzzers to crash instead of
+// returning null. Remove this check once that behavior is fixed.
+const MAX_ALLOCATION_SIZE: usize = 2_145_386_496;
+
+fn check_allocation_size<T>(count: usize) -> AvifResult<()> {
+    let allocation_size = count
         .checked_mul(std::mem::size_of::<T>())
         .ok_or_else(|| AvifError::map_out_of_memory(()))?;
-    // TODO: b/342251590 - Do not request allocations of more than what is allowed in Chromium's
-    // partition allocator. This is the allowed limit in the chromium fuzzers. The value comes
-    // from:
-    // https://source.chromium.org/chromium/chromium/src/+/main:base/allocator/partition_allocator/src/partition_alloc/partition_alloc_constants.h;l=433-440;drc=c0265133106c7647e90f9aaa4377d28190b1a6a9.
-    // Requesting an allocation larger than this value will cause the fuzzers to crash instead of
-    // returning null. Remove this check once that behavior is fixed.
-    if u64_from_usize(allocation_size)? >= 2_145_386_496 {
+    if allocation_size >= MAX_ALLOCATION_SIZE {
         return AvifError::out_of_memory();
     }
+    Ok(())
+}
+
+pub(crate) fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
+    let mut v = Vec::<T>::new();
     v.try_reserve_vec_exact(size)?;
     Ok(v)
 }
@@ -488,7 +500,7 @@ impl<T, I: Iterator<Item = T>> IteratorExtension<T> for I {
 }
 
 // Same as Vec.push(), Vec.extend_from_slice(), Vec.reserve(), and Vec.reserve_exact()
-// but maps allocation failures to AvifError::OutOfMemory.
+// but enforces the allocation size limit and maps allocation failures to AvifError::OutOfMemory.
 pub(crate) trait VecExtension<T> {
     fn try_reserve_vec(&mut self, additional: usize) -> AvifResult<()>;
     fn try_reserve_vec_exact(&mut self, additional: usize) -> AvifResult<()>;
@@ -500,12 +512,50 @@ pub(crate) trait VecExtension<T> {
 
 impl<T> VecExtension<T> for Vec<T> {
     fn try_reserve_vec(&mut self, additional: usize) -> AvifResult<()> {
+        let required_capacity = self
+            .len()
+            .checked_add(additional)
+            .ok_or_else(|| AvifError::map_out_of_memory(()))?;
+        if required_capacity <= self.capacity() {
+            return Ok(());
+        }
+        check_allocation_size::<T>(required_capacity)?;
+        // If amortized doubling would exceed the allocation limit, grow geometrically capped at
+        // `MAX_ALLOCATION_SIZE - 1` instead of falling back to exact single-element growth.
+        let doubled_capacity = self.capacity().saturating_mul(2);
+        if doubled_capacity > required_capacity
+            && check_allocation_size::<T>(doubled_capacity).is_err()
+        {
+            let max_count = match std::mem::size_of::<T>() {
+                0 => usize::MAX,
+                size => (MAX_ALLOCATION_SIZE - 1) / size,
+            };
+            let target_cap = self
+                .capacity()
+                .saturating_add((self.capacity() / 4).max(1))
+                .min(max_count)
+                .max(required_capacity);
+            let target_additional = target_cap - self.len();
+            #[allow(clippy::disallowed_methods)]
+            return self
+                .try_reserve_exact(target_additional)
+                .or_else(|_| self.try_reserve_exact(additional))
+                .map_err(AvifError::map_out_of_memory);
+        }
         #[allow(clippy::disallowed_methods)]
         self.try_reserve(additional)
             .map_err(AvifError::map_out_of_memory)
     }
 
     fn try_reserve_vec_exact(&mut self, additional: usize) -> AvifResult<()> {
+        let required_capacity = self
+            .len()
+            .checked_add(additional)
+            .ok_or_else(|| AvifError::map_out_of_memory(()))?;
+        if required_capacity <= self.capacity() {
+            return Ok(());
+        }
+        check_allocation_size::<T>(required_capacity)?;
         #[allow(clippy::disallowed_methods)]
         self.try_reserve_exact(additional)
             .map_err(AvifError::map_out_of_memory)
@@ -588,5 +638,60 @@ mod tests {
 
         ps.slice_mut(1..3).unwrap().copy_from_slice(&[200, 300]);
         assert_eq!(ps.slice(0..4).unwrap(), &[10, 200, 300, 40]);
+    }
+
+    #[test]
+    fn test_allocation_size_limit() -> AvifResult<()> {
+        assert_eq!(
+            create_vec_exact::<u8>(MAX_ALLOCATION_SIZE),
+            Err(AvifError::OutOfMemory)
+        );
+        assert_eq!(
+            try_vec_exact![0u8; MAX_ALLOCATION_SIZE],
+            Err(AvifError::OutOfMemory)
+        );
+        assert_eq!(
+            create_vec_exact::<u32>(usize::MAX / 2),
+            Err(AvifError::OutOfMemory)
+        );
+
+        let mut vec: Vec<u8> = Vec::new();
+        assert_eq!(
+            vec.try_reserve_vec_exact(MAX_ALLOCATION_SIZE),
+            Err(AvifError::OutOfMemory)
+        );
+        assert_eq!(
+            vec.try_reserve_vec(MAX_ALLOCATION_SIZE),
+            Err(AvifError::OutOfMemory)
+        );
+
+        let mut vec_u32: Vec<u32> = Vec::new();
+        assert_eq!(
+            vec_u32.try_reserve_vec(MAX_ALLOCATION_SIZE / 4),
+            Err(AvifError::OutOfMemory)
+        );
+        assert_eq!(
+            vec_u32.try_reserve_vec_exact(MAX_ALLOCATION_SIZE / 4),
+            Err(AvifError::OutOfMemory)
+        );
+
+        let mut non_empty: Vec<u8> = try_vec_exact![1, 2, 3]?;
+        assert_eq!(
+            non_empty.try_reserve_vec_exact(MAX_ALLOCATION_SIZE - non_empty.len()),
+            Err(AvifError::OutOfMemory)
+        );
+        assert_eq!(
+            non_empty.try_reserve_vec(MAX_ALLOCATION_SIZE - non_empty.len()),
+            Err(AvifError::OutOfMemory)
+        );
+        assert_eq!(
+            non_empty.try_reserve_vec_exact(usize::MAX),
+            Err(AvifError::OutOfMemory)
+        );
+        assert_eq!(
+            non_empty.try_reserve_vec(usize::MAX),
+            Err(AvifError::OutOfMemory)
+        );
+        Ok(())
     }
 }
