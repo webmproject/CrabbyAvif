@@ -154,10 +154,295 @@ const fn wrap_cdf3_3d<const A: usize, const B: usize, const C: usize>(
     out
 }
 
+/// 16-byte aligned 8-lane inverted CDF row for `6 <= SYMS <= 8` (`N = SYMS + 1`
+/// in spec layout): lanes `0..SYMS-1` hold `32768 - spec_cdf[i]`, lanes
+/// `SYMS-1..7` are `0`, and lane `7` holds `cnt = min(count, 32)`. Because
+/// `cnt <= 32`, `cnt & 0xffc0 == 0` so lane `7` acts as the `0` sentinel during
+/// SIMD threshold scaling and is preserved unchanged by signed-shift adaptation
+/// before clamping `cnt < 32`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C, align(16))]
+pub struct CdfRow8<const SYMS: usize>(pub [u16; 8]);
+
+impl<const SYMS: usize> CdfRow8<SYMS> {
+    #[inline(always)]
+    pub const fn from_spec<const N: usize>(s: [u16; N]) -> Self {
+        const { assert!(SYMS >= 6 && SYMS <= 8 && N == SYMS + 1) };
+        let mut out = [0u16; 8];
+        let mut i = 0;
+        while i < SYMS - 1 {
+            out[i] = 32768u16.wrapping_sub(s[i]);
+            i += 1;
+        }
+        out[7] = if s[SYMS] < 32 { s[SYMS] } else { 32 };
+        Self(out)
+    }
+
+    #[inline(always)]
+    pub const fn to_spec<const N: usize>(self) -> [u16; N] {
+        const { assert!(SYMS >= 6 && SYMS <= 8 && N == SYMS + 1) };
+        let mut out = [0u16; N];
+        let mut i = 0;
+        while i < SYMS - 1 {
+            out[i] = 32768u16.wrapping_sub(self.0[i]);
+            i += 1;
+        }
+        out[SYMS - 1] = 32768;
+        out[SYMS] = self.0[7];
+        out
+    }
+}
+
+macro_rules! impl_cdf8_eq {
+    ($(($syms:literal, $n:literal)),* $(,)?) => {
+        $(
+            impl PartialEq<[u16; $n]> for CdfRow8<$syms> {
+                fn eq(&self, other: &[u16; $n]) -> bool {
+                    self.to_spec::<$n>() == *other
+                }
+            }
+        )*
+    };
+}
+impl_cdf8_eq!((6, 7), (7, 8), (8, 9));
+
+const fn wrap_cdf8_1d<const SYMS: usize, const N: usize, const A: usize>(
+    src: &[[u16; N]; A],
+) -> [CdfRow8<SYMS>; A] {
+    let mut out = [CdfRow8([0; 8]); A];
+    let mut a = 0;
+    while a < A {
+        out[a] = CdfRow8::from_spec(src[a]);
+        a += 1;
+    }
+    out
+}
+
+const fn wrap_cdf8_2d<const SYMS: usize, const N: usize, const A: usize, const B: usize>(
+    src: &[[[u16; N]; B]; A],
+) -> [[CdfRow8<SYMS>; B]; A] {
+    let mut out = [[CdfRow8([0; 8]); B]; A];
+    let mut a = 0;
+    while a < A {
+        out[a] = wrap_cdf8_1d(&src[a]);
+        a += 1;
+    }
+    out
+}
+
+/// 16-byte aligned 8-lane inverted CDF row for 9-symbol CDFs (`eob_pt_256`,
+/// `N = 10` in spec layout): all 8 active probabilities are stored inverted in
+/// `f[0..8]` and `count` sits in a non-overlapping tail field so vector
+/// load/store (`ldr`/`str q`) never stalls on store-to-load forwarding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C, align(16))]
+pub struct CdfRow9 {
+    pub f: [u16; 8],
+    pub count: u16,
+}
+
+impl CdfRow9 {
+    #[inline(always)]
+    pub const fn from_spec(s: [u16; 10]) -> Self {
+        let mut f = [0u16; 8];
+        let mut i = 0;
+        while i < 8 {
+            f[i] = 32768u16.wrapping_sub(s[i]);
+            i += 1;
+        }
+        let count = if s[9] < 32 { s[9] } else { 32 };
+        Self { f, count }
+    }
+
+    #[inline(always)]
+    pub const fn to_spec(self) -> [u16; 10] {
+        let mut out = [0u16; 10];
+        let mut i = 0;
+        while i < 8 {
+            out[i] = 32768u16.wrapping_sub(self.f[i]);
+            i += 1;
+        }
+        out[8] = 32768;
+        out[9] = self.count;
+        out
+    }
+}
+
+impl PartialEq<[u16; 10]> for CdfRow9 {
+    fn eq(&self, other: &[u16; 10]) -> bool {
+        self.to_spec() == *other
+    }
+}
+
+const fn wrap_cdf9_2d<const A: usize, const B: usize>(
+    src: &[[[u16; 10]; B]; A],
+) -> [[CdfRow9; B]; A] {
+    let mut out = [[CdfRow9 {
+        f: [0; 8],
+        count: 0,
+    }; B]; A];
+    let mut a = 0;
+    while a < A {
+        let mut b = 0;
+        while b < B {
+            out[a][b] = CdfRow9::from_spec(src[a][b]);
+            b += 1;
+        }
+        a += 1;
+    }
+    out
+}
+
+impl CdfRows for CdfRow9 {
+    fn for_each_row(&self, f: &mut dyn FnMut(&[u16])) {
+        let r = self.to_spec();
+        f(&r);
+    }
+    fn for_each_row_mut(&mut self, f: &mut dyn FnMut(&mut [u16])) {
+        let mut r = self.to_spec();
+        f(&mut r);
+        *self = Self::from_spec(r);
+    }
+}
+
+/// 16-byte aligned 16-lane inverted CDF row for `9 <= SYMS <= 16` (`N = SYMS + 1`
+/// in spec layout): `0..SYMS-1` hold `32768 - spec_cdf[i]`, `SYMS-1..15` are `0`,
+/// and lane `15` (`self.0[1][7]`) holds `cnt = min(count, 32)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C, align(16))]
+pub struct CdfRow16<const SYMS: usize>(pub [[u16; 8]; 2]);
+
+impl<const SYMS: usize> CdfRow16<SYMS> {
+    #[inline(always)]
+    pub const fn from_spec<const N: usize>(s: [u16; N]) -> Self {
+        const { assert!(SYMS >= 9 && SYMS <= 16 && N == SYMS + 1) };
+        let mut out = [[0u16; 8]; 2];
+        let mut i = 0;
+        while i < SYMS - 1 {
+            out[i >> 3][i & 7] = 32768u16.wrapping_sub(s[i]);
+            i += 1;
+        }
+        out[1][7] = if s[SYMS] < 32 { s[SYMS] } else { 32 };
+        Self(out)
+    }
+
+    #[inline(always)]
+    pub const fn to_spec<const N: usize>(self) -> [u16; N] {
+        const { assert!(SYMS >= 9 && SYMS <= 16 && N == SYMS + 1) };
+        let mut out = [0u16; N];
+        let mut i = 0;
+        while i < SYMS - 1 {
+            out[i] = 32768u16.wrapping_sub(self.0[i >> 3][i & 7]);
+            i += 1;
+        }
+        out[SYMS - 1] = 32768;
+        out[SYMS] = self.0[1][7];
+        out
+    }
+}
+
+macro_rules! impl_cdf16_eq {
+    ($(($syms:literal, $n:literal)),* $(,)?) => {
+        $(
+            impl PartialEq<[u16; $n]> for CdfRow16<$syms> {
+                fn eq(&self, other: &[u16; $n]) -> bool {
+                    self.to_spec::<$n>() == *other
+                }
+            }
+        )*
+    };
+}
+impl_cdf16_eq!(
+    (9, 10),
+    (10, 11),
+    (11, 12),
+    (12, 13),
+    (13, 14),
+    (14, 15),
+    (15, 16),
+    (16, 17),
+);
+
+const fn wrap_cdf16_1d<const SYMS: usize, const N: usize, const A: usize>(
+    src: &[[u16; N]; A],
+) -> [CdfRow16<SYMS>; A] {
+    let mut out = [CdfRow16([[0; 8]; 2]); A];
+    let mut a = 0;
+    while a < A {
+        out[a] = CdfRow16::from_spec(src[a]);
+        a += 1;
+    }
+    out
+}
+
+const fn wrap_cdf16_2d<const SYMS: usize, const N: usize, const A: usize, const B: usize>(
+    src: &[[[u16; N]; B]; A],
+) -> [[CdfRow16<SYMS>; B]; A] {
+    let mut out = [[CdfRow16([[0; 8]; 2]); B]; A];
+    let mut a = 0;
+    while a < A {
+        out[a] = wrap_cdf16_1d(&src[a]);
+        a += 1;
+    }
+    out
+}
+
 /// Visits every CDF row of a (possibly nested) CDF array.
 trait CdfRows {
     fn for_each_row(&self, f: &mut dyn FnMut(&[u16]));
     fn for_each_row_mut(&mut self, f: &mut dyn FnMut(&mut [u16]));
+}
+
+impl<const SYMS: usize> CdfRows for CdfRow8<SYMS> {
+    fn for_each_row(&self, f: &mut dyn FnMut(&[u16])) {
+        let mut r = [0u16; 9];
+        for i in 0..SYMS - 1 {
+            r[i] = 32768u16.wrapping_sub(self.0[i]);
+        }
+        r[SYMS - 1] = 32768;
+        r[SYMS] = self.0[7];
+        f(&r[..SYMS + 1]);
+    }
+    fn for_each_row_mut(&mut self, f: &mut dyn FnMut(&mut [u16])) {
+        let mut r = [0u16; 9];
+        for i in 0..SYMS - 1 {
+            r[i] = 32768u16.wrapping_sub(self.0[i]);
+        }
+        r[SYMS - 1] = 32768;
+        r[SYMS] = self.0[7];
+        f(&mut r[..SYMS + 1]);
+        self.0 = [0u16; 8];
+        for i in 0..SYMS - 1 {
+            self.0[i] = 32768u16.wrapping_sub(r[i]);
+        }
+        self.0[7] = r[SYMS].min(32);
+    }
+}
+
+impl<const SYMS: usize> CdfRows for CdfRow16<SYMS> {
+    fn for_each_row(&self, f: &mut dyn FnMut(&[u16])) {
+        let mut r = [0u16; 17];
+        for i in 0..SYMS - 1 {
+            r[i] = 32768u16.wrapping_sub(self.0[i >> 3][i & 7]);
+        }
+        r[SYMS - 1] = 32768;
+        r[SYMS] = self.0[1][7];
+        f(&r[..SYMS + 1]);
+    }
+    fn for_each_row_mut(&mut self, f: &mut dyn FnMut(&mut [u16])) {
+        let mut r = [0u16; 17];
+        for i in 0..SYMS - 1 {
+            r[i] = 32768u16.wrapping_sub(self.0[i >> 3][i & 7]);
+        }
+        r[SYMS - 1] = 32768;
+        r[SYMS] = self.0[1][7];
+        f(&mut r[..SYMS + 1]);
+        self.0 = [[0u16; 8]; 2];
+        for i in 0..SYMS - 1 {
+            self.0[i >> 3][i & 7] = 32768u16.wrapping_sub(r[i]);
+        }
+        self.0[1][7] = r[SYMS].min(32);
+    }
 }
 
 impl CdfRows for CdfRow5 {
@@ -5276,15 +5561,51 @@ pub struct CdfContext {
     /// Initialised from [`DEFAULT_COEFF_BASE_CDF`]`[q_ctx]`.
     pub coeff_base: [[[CdfRow5; 42]; 2]; 5],
     /// Initialised from [`DEFAULT_EOB_PT_64_CDF`]`[q_ctx]`.
-    pub eob_pt_64: [[[u16; 8]; 2]; 2],
+    pub eob_pt_64: [[CdfRow8<7>; 2]; 2],
+    /// Initialised from [`DEFAULT_EOB_PT_32_CDF`]`[q_ctx]`.
+    pub eob_pt_32: [[CdfRow8<6>; 2]; 2],
+    /// Initialised from [`DEFAULT_EOB_PT_128_CDF`]`[q_ctx]`.
+    pub eob_pt_128: [[CdfRow8<8>; 2]; 2],
+    /// Initialised from [`DEFAULT_EOB_PT_256_CDF`]`[q_ctx]`.
+    pub eob_pt_256: [[CdfRow9; 2]; 2],
+    /// Initialised from [`DEFAULT_EOB_PT_512_CDF`]`[q_ctx]`.
+    pub eob_pt_512: [CdfRow16<10>; 2],
+    /// Initialised from [`DEFAULT_EOB_PT_1024_CDF`]`[q_ctx]`.
+    pub eob_pt_1024: [CdfRow16<11>; 2],
     /// Initialised from [`DEFAULT_ANGLE_DELTA_CDF`].
-    pub angle_delta: [[u16; 8]; 8],
+    pub angle_delta: [CdfRow8<7>; 8],
     /// Initialised from [`DEFAULT_INTRA_TX_TYPE_SET1_CDF`].
-    pub intra_tx_type_set1: [[[u16; 8]; 13]; 2],
+    pub intra_tx_type_set1: [[CdfRow8<7>; 13]; 2],
     /// Initialised from [`DEFAULT_PALETTE_Y_SIZE_CDF`].
-    pub palette_y_size: [[u16; 8]; 7],
+    pub palette_y_size: [CdfRow8<7>; 7],
     /// Initialised from [`DEFAULT_PALETTE_UV_SIZE_CDF`].
-    pub palette_uv_size: [[u16; 8]; 7],
+    pub palette_uv_size: [CdfRow8<7>; 7],
+    /// Initialised from [`DEFAULT_INTRA_FRAME_Y_MODE_CDF`].
+    pub intra_frame_y_mode: [[CdfRow16<13>; 5]; 5],
+    /// Initialised from [`DEFAULT_UV_MODE_CFL_NOT_ALLOWED_CDF`].
+    pub uv_mode_cfl_not_allowed: [CdfRow16<13>; 13],
+    /// Initialised from [`DEFAULT_UV_MODE_CFL_ALLOWED_CDF`].
+    pub uv_mode_cfl_allowed: [CdfRow16<14>; 13],
+    /// Initialised from [`DEFAULT_CFL_ALPHA_CDF`].
+    pub cfl_alpha: [CdfRow16<16>; 6],
+    /// Initialised from [`DEFAULT_CFL_SIGN_CDF`].
+    pub cfl_sign: CdfRow8<8>,
+    /// Initialised from [`DEFAULT_PARTITION_W16_CDF`].
+    pub partition_w16: [CdfRow16<10>; 4],
+    /// Initialised from [`DEFAULT_PARTITION_W32_CDF`].
+    pub partition_w32: [CdfRow16<10>; 4],
+    /// Initialised from [`DEFAULT_PARTITION_W64_CDF`].
+    pub partition_w64: [CdfRow16<10>; 4],
+    /// Initialised from [`DEFAULT_PARTITION_W128_CDF`].
+    pub partition_w128: [CdfRow8<8>; 4],
+    /// Initialised from [`DEFAULT_SEGMENT_ID_CDF`].
+    pub segment_id: [CdfRow8<8>; 3],
+    /// Initialised from [`DEFAULT_INTER_TX_TYPE_SET1_CDF`].
+    /// Used by intra block copy blocks (`is_inter == 1`).
+    pub inter_tx_type_set1: [CdfRow16<16>; 2],
+    /// Initialised from [`DEFAULT_INTER_TX_TYPE_SET2_CDF`].
+    /// Used by intra block copy blocks (`is_inter == 1`).
+    pub inter_tx_type_set2: CdfRow16<12>,
     /// Initialised from [`DEFAULT_PALETTE_SIZE_7_Y_COLOR_CDF`].
     pub palette_size_7_y_color: [[u16; 8]; 5],
     /// Initialised from [`DEFAULT_PALETTE_SIZE_7_UV_COLOR_CDF`].
@@ -5301,16 +5622,6 @@ pub struct CdfContext {
     pub palette_size_3_y_color: [[u16; 4]; 5],
     /// Initialised from [`DEFAULT_PALETTE_SIZE_3_UV_COLOR_CDF`].
     pub palette_size_3_uv_color: [[u16; 4]; 5],
-    /// Initialised from [`DEFAULT_INTRA_FRAME_Y_MODE_CDF`].
-    pub intra_frame_y_mode: [[[u16; 14]; 5]; 5],
-    /// Initialised from [`DEFAULT_UV_MODE_CFL_NOT_ALLOWED_CDF`].
-    pub uv_mode_cfl_not_allowed: [[u16; 14]; 13],
-    /// Initialised from [`DEFAULT_UV_MODE_CFL_ALLOWED_CDF`].
-    pub uv_mode_cfl_allowed: [[u16; 15]; 13],
-    /// Initialised from [`DEFAULT_CFL_ALPHA_CDF`].
-    pub cfl_alpha: [[u16; 17]; 6],
-    /// Initialised from [`DEFAULT_CFL_SIGN_CDF`].
-    pub cfl_sign: [u16; 9],
     /// Initialised from [`DEFAULT_INTRA_TX_TYPE_SET2_CDF`].
     pub intra_tx_type_set2: [[[u16; 6]; 13]; 3],
     /// Initialised from [`DEFAULT_TXB_SKIP_CDF`]`[q_ctx]`.
@@ -5319,34 +5630,14 @@ pub struct CdfContext {
     pub dc_sign: [[CdfRow3; 3]; 2],
     /// Initialised from [`DEFAULT_EOB_PT_16_CDF`]`[q_ctx]`.
     pub eob_pt_16: [[[u16; 6]; 2]; 2],
-    /// Initialised from [`DEFAULT_EOB_PT_32_CDF`]`[q_ctx]`.
-    pub eob_pt_32: [[[u16; 7]; 2]; 2],
-    /// Initialised from [`DEFAULT_EOB_PT_128_CDF`]`[q_ctx]`.
-    pub eob_pt_128: [[[u16; 9]; 2]; 2],
-    /// Initialised from [`DEFAULT_EOB_PT_256_CDF`]`[q_ctx]`.
-    pub eob_pt_256: [[[u16; 10]; 2]; 2],
-    /// Initialised from [`DEFAULT_EOB_PT_512_CDF`]`[q_ctx]`.
-    pub eob_pt_512: [[u16; 11]; 2],
-    /// Initialised from [`DEFAULT_EOB_PT_1024_CDF`]`[q_ctx]`.
-    pub eob_pt_1024: [[u16; 12]; 2],
     /// Initialised from [`DEFAULT_EOB_EXTRA_CDF`]`[q_ctx]`.
     pub eob_extra: [[[CdfRow3; 9]; 2]; 5],
     /// Initialised from [`DEFAULT_PARTITION_W8_CDF`].
     pub partition_w8: [[u16; 5]; 4],
-    /// Initialised from [`DEFAULT_PARTITION_W16_CDF`].
-    pub partition_w16: [[u16; 11]; 4],
-    /// Initialised from [`DEFAULT_PARTITION_W32_CDF`].
-    pub partition_w32: [[u16; 11]; 4],
-    /// Initialised from [`DEFAULT_PARTITION_W64_CDF`].
-    pub partition_w64: [[u16; 11]; 4],
-    /// Initialised from [`DEFAULT_PARTITION_W128_CDF`].
-    pub partition_w128: [[u16; 9]; 4],
     /// Initialised from [`DEFAULT_SKIP_CDF`].
     pub skip: [CdfRow3; 3],
     /// Initialised from [`DEFAULT_TX_8X8_CDF`].
     pub tx_8x8: [CdfRow3; 3],
-    /// Initialised from [`DEFAULT_SEGMENT_ID_CDF`].
-    pub segment_id: [[u16; 9]; 3],
     /// Initialised from [`DEFAULT_FILTER_INTRA_MODE_CDF`].
     pub filter_intra_mode: [u16; 6],
     /// Initialised from [`DEFAULT_FILTER_INTRA_CDF`].
@@ -5421,12 +5712,6 @@ pub struct CdfContext {
     /// Indexed by the loop filter delta index `i` (`FRAME_LF_COUNT`
     /// copies, used when `delta_lf_multi == 1`).
     pub delta_lf_multi: [[u16; 5]; 4],
-    /// Initialised from [`DEFAULT_INTER_TX_TYPE_SET1_CDF`].
-    /// Used by intra block copy blocks (`is_inter == 1`).
-    pub inter_tx_type_set1: [[u16; 17]; 2],
-    /// Initialised from [`DEFAULT_INTER_TX_TYPE_SET2_CDF`].
-    /// Used by intra block copy blocks (`is_inter == 1`).
-    pub inter_tx_type_set2: [u16; 13],
     /// Initialised from [`DEFAULT_INTER_TX_TYPE_SET3_CDF`].
     /// Used by intra block copy blocks (`is_inter == 1`).
     pub inter_tx_type_set3: [[u16; 3]; 4],
@@ -5579,17 +5864,17 @@ impl CdfContext {
 
     const fn from_q_ctx(q: usize) -> Self {
         CdfContext {
-            intra_frame_y_mode: DEFAULT_INTRA_FRAME_Y_MODE_CDF,
-            uv_mode_cfl_not_allowed: DEFAULT_UV_MODE_CFL_NOT_ALLOWED_CDF,
-            uv_mode_cfl_allowed: DEFAULT_UV_MODE_CFL_ALLOWED_CDF,
-            angle_delta: DEFAULT_ANGLE_DELTA_CDF,
+            intra_frame_y_mode: wrap_cdf16_2d(&DEFAULT_INTRA_FRAME_Y_MODE_CDF),
+            uv_mode_cfl_not_allowed: wrap_cdf16_1d(&DEFAULT_UV_MODE_CFL_NOT_ALLOWED_CDF),
+            uv_mode_cfl_allowed: wrap_cdf16_1d(&DEFAULT_UV_MODE_CFL_ALLOWED_CDF),
+            angle_delta: wrap_cdf8_1d(&DEFAULT_ANGLE_DELTA_CDF),
             intrabc: DEFAULT_INTRABC_CDF,
             partition_w8: DEFAULT_PARTITION_W8_CDF,
-            partition_w16: DEFAULT_PARTITION_W16_CDF,
-            partition_w32: DEFAULT_PARTITION_W32_CDF,
-            partition_w64: DEFAULT_PARTITION_W64_CDF,
-            partition_w128: DEFAULT_PARTITION_W128_CDF,
-            segment_id: DEFAULT_SEGMENT_ID_CDF,
+            partition_w16: wrap_cdf16_1d(&DEFAULT_PARTITION_W16_CDF),
+            partition_w32: wrap_cdf16_1d(&DEFAULT_PARTITION_W32_CDF),
+            partition_w64: wrap_cdf16_1d(&DEFAULT_PARTITION_W64_CDF),
+            partition_w128: wrap_cdf8_1d(&DEFAULT_PARTITION_W128_CDF),
+            segment_id: wrap_cdf8_1d(&DEFAULT_SEGMENT_ID_CDF),
             tx_8x8: wrap_cdf3_1d(&DEFAULT_TX_8X8_CDF),
             tx_16x16: DEFAULT_TX_16X16_CDF,
             tx_32x32: DEFAULT_TX_32X32_CDF,
@@ -5609,8 +5894,8 @@ impl CdfContext {
             mv_hp: [DEFAULT_MV_HP_CDF; 2],
             palette_y_mode: DEFAULT_PALETTE_Y_MODE_CDF,
             palette_uv_mode: DEFAULT_PALETTE_UV_MODE_CDF,
-            palette_y_size: DEFAULT_PALETTE_Y_SIZE_CDF,
-            palette_uv_size: DEFAULT_PALETTE_UV_SIZE_CDF,
+            palette_y_size: wrap_cdf8_1d(&DEFAULT_PALETTE_Y_SIZE_CDF),
+            palette_uv_size: wrap_cdf8_1d(&DEFAULT_PALETTE_UV_SIZE_CDF),
             palette_size_2_y_color: DEFAULT_PALETTE_SIZE_2_Y_COLOR_CDF,
             palette_size_3_y_color: DEFAULT_PALETTE_SIZE_3_Y_COLOR_CDF,
             palette_size_4_y_color: DEFAULT_PALETTE_SIZE_4_Y_COLOR_CDF,
@@ -5628,24 +5913,24 @@ impl CdfContext {
             delta_q: DEFAULT_DELTA_Q_CDF,
             delta_lf: DEFAULT_DELTA_LF_CDF,
             delta_lf_multi: [DEFAULT_DELTA_LF_CDF; 4],
-            intra_tx_type_set1: DEFAULT_INTRA_TX_TYPE_SET1_CDF,
+            intra_tx_type_set1: wrap_cdf8_2d(&DEFAULT_INTRA_TX_TYPE_SET1_CDF),
             intra_tx_type_set2: DEFAULT_INTRA_TX_TYPE_SET2_CDF,
-            inter_tx_type_set1: DEFAULT_INTER_TX_TYPE_SET1_CDF,
-            inter_tx_type_set2: DEFAULT_INTER_TX_TYPE_SET2_CDF,
+            inter_tx_type_set1: wrap_cdf16_1d(&DEFAULT_INTER_TX_TYPE_SET1_CDF),
+            inter_tx_type_set2: CdfRow16::from_spec(DEFAULT_INTER_TX_TYPE_SET2_CDF),
             inter_tx_type_set3: DEFAULT_INTER_TX_TYPE_SET3_CDF,
-            cfl_sign: DEFAULT_CFL_SIGN_CDF,
-            cfl_alpha: DEFAULT_CFL_ALPHA_CDF,
+            cfl_sign: CdfRow8::from_spec(DEFAULT_CFL_SIGN_CDF),
+            cfl_alpha: wrap_cdf16_1d(&DEFAULT_CFL_ALPHA_CDF),
             use_wiener: DEFAULT_USE_WIENER_CDF,
             use_sgrproj: DEFAULT_USE_SGRPROJ_CDF,
             restoration_type: DEFAULT_RESTORATION_TYPE_CDF,
             txb_skip: wrap_cdf3_2d(&DEFAULT_TXB_SKIP_CDF[q]),
             eob_pt_16: DEFAULT_EOB_PT_16_CDF[q],
-            eob_pt_32: DEFAULT_EOB_PT_32_CDF[q],
-            eob_pt_64: DEFAULT_EOB_PT_64_CDF[q],
-            eob_pt_128: DEFAULT_EOB_PT_128_CDF[q],
-            eob_pt_256: DEFAULT_EOB_PT_256_CDF[q],
-            eob_pt_512: DEFAULT_EOB_PT_512_CDF[q],
-            eob_pt_1024: DEFAULT_EOB_PT_1024_CDF[q],
+            eob_pt_32: wrap_cdf8_2d(&DEFAULT_EOB_PT_32_CDF[q]),
+            eob_pt_64: wrap_cdf8_2d(&DEFAULT_EOB_PT_64_CDF[q]),
+            eob_pt_128: wrap_cdf8_2d(&DEFAULT_EOB_PT_128_CDF[q]),
+            eob_pt_256: wrap_cdf9_2d(&DEFAULT_EOB_PT_256_CDF[q]),
+            eob_pt_512: wrap_cdf16_1d(&DEFAULT_EOB_PT_512_CDF[q]),
+            eob_pt_1024: wrap_cdf16_1d(&DEFAULT_EOB_PT_1024_CDF[q]),
             eob_extra: wrap_cdf3_3d(&DEFAULT_EOB_EXTRA_CDF[q]),
             dc_sign: wrap_cdf3_2d(&DEFAULT_DC_SIGN_CDF[q]),
             coeff_base_eob: DEFAULT_COEFF_BASE_EOB_CDF[q],

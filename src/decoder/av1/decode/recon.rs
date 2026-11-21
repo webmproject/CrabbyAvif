@@ -41,6 +41,50 @@ const DIM_MASK: usize = 0x3_ffff;
 // function is monomorphized (codegen unit placement), which measurably
 // changed the generated code. Keep it unless benchmarks show otherwise.
 
+const EDGE_NA_W: u8 = 1 << 0;
+const EDGE_NA_WH: u8 = 1 << 1;
+const EDGE_NL_H: u8 = 1 << 2;
+const EDGE_NL_WH: u8 = 1 << 3;
+const EDGE_FILTER: u8 = 1 << 4;
+const EDGE_TL: u8 = 1 << 5;
+const EDGE_DC: u8 = 1 << 6;
+
+/// Packed `(na, nl, need_filter, need_top_left, dc)` spec for
+/// `((mode as usize & 15) << 2) | ad_sign` where `ad_sign` is `0` for
+/// `angle_delta == 0`, `1` for `> 0`, `2` for `< 0`.
+const INTRA_EDGE_SPEC: [u8; 64] = {
+    let mut t = [EDGE_NA_W | EDGE_NL_H; 64];
+    let mut m = 0usize;
+    while m < 16 {
+        let mut s = 0usize;
+        while s < 4 {
+            t[(m << 2) | s] = match m {
+                0 => EDGE_NA_W | EDGE_NL_H | EDGE_DC, // DC_PRED
+                1 => match s {
+                    // V_PRED
+                    0 => EDGE_NA_W,
+                    1 => EDGE_NA_W | EDGE_NL_H | EDGE_FILTER | EDGE_TL,
+                    _ => EDGE_NA_WH | EDGE_FILTER | EDGE_TL,
+                },
+                2 => match s {
+                    // H_PRED
+                    0 => EDGE_NL_H,
+                    1 => EDGE_NL_WH | EDGE_FILTER | EDGE_TL,
+                    _ => EDGE_NA_W | EDGE_NL_H | EDGE_FILTER | EDGE_TL,
+                },
+                3 | 8 => EDGE_NA_WH | EDGE_FILTER | EDGE_TL, // D45, D67
+                4..=6 => EDGE_NA_W | EDGE_NL_H | EDGE_FILTER | EDGE_TL, // D135, D113, D157
+                7 => EDGE_NL_WH | EDGE_FILTER | EDGE_TL,     // D203
+                12 => EDGE_NA_W | EDGE_NL_H | EDGE_TL,       // PAETH
+                _ => EDGE_NA_W | EDGE_NL_H,                  // SMOOTH*
+            };
+            s += 1;
+        }
+        m += 1;
+    }
+    t
+};
+
 impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
     /// Reads a reconstructed (pre loop filter) sample of the current frame.
     /// Rows above the current superblock row come from the saved line.
@@ -116,34 +160,24 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
         // Edge samples read with both neighbors available (DC_PRED reads
         // only the available ones). Since |angle_delta * 3| <= 9, only
         // V_PRED (90) and H_PRED (180) can cross or land on 90/180.
-        let (na, nl, need_filter) = if use_filter {
-            (w, h, false)
-        } else {
-            match mode {
-                IntraMode::V_PRED => {
-                    if angle_delta == 0 {
-                        (w, 0, false)
-                    } else if angle_delta < 0 {
-                        (w + h, 0, true)
-                    } else {
-                        (w, h, true)
-                    }
-                }
-                IntraMode::H_PRED => {
-                    if angle_delta == 0 {
-                        (0, h, false)
-                    } else if angle_delta < 0 {
-                        (w, h, true)
-                    } else {
-                        (0, w + h, true)
-                    }
-                }
-                IntraMode::D45_PRED | IntraMode::D67_PRED => (w + h, 0, true),
-                IntraMode::D135_PRED | IntraMode::D113_PRED | IntraMode::D157_PRED => (w, h, true),
-                IntraMode::D203_PRED => (0, w + h, true),
-                _ => (w, h, false),
-            }
-        };
+        let ad_sign = ((angle_delta > 0) as usize) | ((((angle_delta as u32) >> 31) as usize) << 1);
+        let spec = std::hint::select_unpredictable(
+            use_filter,
+            EDGE_NA_W | EDGE_NL_H | EDGE_TL,
+            INTRA_EDGE_SPEC[((mode as usize & 15) << 2) | ad_sign],
+        );
+        let wh = w + h;
+        let na = std::hint::select_unpredictable(
+            (spec & EDGE_NA_W) != 0,
+            w,
+            std::hint::select_unpredictable((spec & EDGE_NA_WH) != 0, wh, 0),
+        );
+        let nl = std::hint::select_unpredictable(
+            (spec & EDGE_NL_H) != 0,
+            h,
+            std::hint::select_unpredictable((spec & EDGE_NL_WH) != 0, wh, 0),
+        );
+        let need_filter = (spec & EDGE_FILTER) != 0;
         let smooth_filter_type =
             need_filter && f.seq.enable_intra_edge_filter && self.get_filter_type(plane);
         let pt = (plane != 0) as usize;
@@ -158,8 +192,8 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
         su.nl = nl;
         su.na_lim = [w, na.min(w << 1)];
         su.nl_lim = [h, nl.min(h << 1)];
-        su.dc = !use_filter && mode == IntraMode::DC_PRED;
-        su.need_top_left = use_filter || need_filter || mode == IntraMode::PAETH_PRED;
+        su.dc = (spec & EDGE_DC) != 0;
+        su.need_top_left = (spec & EDGE_TL) != 0;
     }
 
     /// Spec 7.11.2 for one transform block, using the block's
@@ -206,11 +240,14 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
         let na = su.na;
         if na != 0 {
             let m_above = (su.max_x_p1 - x).min(su.na_lim[have_above_right as usize]);
-            let (src, base) = if y != su.above_line_y {
-                (&data[..], left_off.wrapping_sub(stride) & OFF_MASK)
-            } else {
-                (&s.above_line[plane][..], col_off.wrapping_sub(1) & OFF_MASK)
-            };
+            let at_sb_top = y == su.above_line_y;
+            let src =
+                std::hint::select_unpredictable(at_sb_top, &s.above_line[plane][..], &data[..]);
+            let base = std::hint::select_unpredictable(
+                at_sb_top,
+                col_off.wrapping_sub(1) & OFF_MASK,
+                left_off.wrapping_sub(stride) & OFF_MASK,
+            );
             if m_above <= 16 && base + 17 <= src.len() {
                 let win = &src[base..base + 17];
                 e.top_left = win[0];
@@ -490,16 +527,42 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
         let pl = &mut self.s.planes[plane.min(2)];
         let stride = pl.stride;
         // Also leaves the coefficients zero for the next block.
-        if let (Some(tbl), false) = (self.dsp.itx, self.b.lossless) {
-            let ty = self.plane_tx_type as usize;
-            let f = tbl[(tx_sz as usize).min(18)][ty & 15];
-            f(
-                pl.slice_mut(x, y),
-                stride,
-                &mut self.sc.coeffs,
-                eob | (ty << 16),
-            );
-            return;
+        if T::MAX_BITDEPTH == 8 {
+            #[cfg(feature = "native_av1_simd")]
+            if let (Some(tbl), false) = (self.dsp.itx16, self.b.lossless) {
+                let ty = self.plane_tx_type as usize;
+                let f = tbl[(tx_sz as usize).min(18)][ty & 15];
+                f(
+                    pl.slice_mut(x, y),
+                    stride,
+                    &mut self.sc.coeffs16,
+                    eob | (ty << 16),
+                    &mut self.sc.itx_buf,
+                );
+                return;
+            }
+            let n = txw(tx_sz).min(32) * txh(tx_sz).min(32);
+            for (d, s) in self.sc.coeffs[..n]
+                .iter_mut()
+                .zip(&mut self.sc.coeffs16[..n])
+            {
+                *d = *s as i32;
+                *s = 0;
+            }
+        } else {
+            #[cfg(feature = "native_av1_simd")]
+            if let (Some(tbl), false) = (self.dsp.itx, self.b.lossless) {
+                let ty = self.plane_tx_type as usize;
+                let f = tbl[(tx_sz as usize).min(18)][ty & 15];
+                f(
+                    pl.slice_mut(x, y),
+                    stride,
+                    &mut self.sc.coeffs,
+                    eob | (ty << 16),
+                    &mut self.sc.itx_buf,
+                );
+                return;
+            }
         }
         (self.dsp.inv_txfm_add)(
             pl.slice_mut(x, y),
@@ -514,9 +577,12 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
     }
 
     pub(super) fn clear_coeffs(&mut self, tx_sz: TxSize) {
-        let tw = txw(tx_sz).min(32);
-        let th = txh(tx_sz).min(32);
-        self.sc.coeffs[..tw * th].fill(0);
+        let n = txw(tx_sz).min(32) * txh(tx_sz).min(32);
+        if T::MAX_BITDEPTH == 8 {
+            self.sc.coeffs16[..n].fill(0);
+        } else {
+            self.sc.coeffs[..n].fill(0);
+        }
     }
 }
 
@@ -635,7 +701,7 @@ fn gather4<T: Pixel>(dst: &mut [T], data: &[T], left_off: usize, s1: usize) -> T
     let left_off = left_off & OFF_MASK;
     let s1 = s1 & DIM_MASK;
     let s3 = s1 * 3;
-    let col = &data[left_off..left_off + s3 + 1];
+    let col = &data[left_off..][..s3 + 1];
     let v = col[s3];
     dst[..4].copy_from_slice(&[col[0], col[s1], col[s1 * 2], v]);
     v
@@ -648,7 +714,7 @@ fn gather8<T: Pixel>(dst: &mut [T], data: &[T], left_off: usize, s1: usize) -> T
     let s1 = s1 & DIM_MASK;
     let s3 = s1 * 3;
     let s4 = s1 * 4;
-    let col = &data[left_off..left_off + s4 + s3 + 1];
+    let col = &data[left_off..][..s4 + s3 + 1];
     dst[0..4].copy_from_slice(&[col[0], col[s1], col[s1 * 2], col[s3]]);
     let col4 = &col[s4..];
     let v = col4[s3];
@@ -685,7 +751,23 @@ fn gather_left_edge_large<T: Pixel, const DUMMY: usize>(
     let s1 = s1 & DIM_MASK;
     if m == 16 {
         gather16(dst, data, s1);
-    } else if m == 32 {
+        if 16 < nl {
+            fill_edge::<T, 0>(dst, 16, nl, dst[15]);
+        }
+        return;
+    }
+    gather_left_edge_other::<T, DUMMY>(dst, data, s1, m, nl);
+}
+
+#[inline(never)]
+fn gather_left_edge_other<T: Pixel, const DUMMY: usize>(
+    dst: &mut [T; MAX_EDGE],
+    data: &[T],
+    s1: usize,
+    m: usize,
+    nl: usize,
+) {
+    if m == 32 {
         let s16 = s1 * 16;
         let col = &data[..s1 * 31 + 1];
         gather16(&mut dst[0..16], col, s1);

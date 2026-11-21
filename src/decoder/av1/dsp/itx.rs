@@ -59,7 +59,7 @@ pub(crate) const TRANSFORM_ROW_SHIFT: [u8; TxSize::COUNT] =
 
 /// Spec `Cos128_Lookup` (the generated kernels have the values inlined).
 #[cfg(test)]
-const COS128_LOOKUP: [i32; 65] = [
+pub(super) const COS128_LOOKUP: [i32; 65] = [
     4096, 4095, 4091, 4085, 4076, 4065, 4052, 4036, 4017, 3996, 3973, 3948, 3920, 3889, 3857, 3822,
     3784, 3745, 3703, 3659, 3612, 3564, 3513, 3461, 3406, 3349, 3290, 3229, 3166, 3102, 3035, 2967,
     2896, 2824, 2751, 2675, 2598, 2520, 2440, 2359, 2276, 2191, 2106, 2019, 1931, 1842, 1751, 1660,

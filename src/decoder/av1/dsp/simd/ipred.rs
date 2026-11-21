@@ -557,6 +557,17 @@ fn paeth_w<T: Pixel, const W: usize, const N: usize>(
 // Other samples use i32 lanes.
 // ---------------------------------------------------------------------------
 
+/// `(vert + horz + 256) >> 9` for 8-bit smooth prediction, where the sum
+/// of the `u16` lanes may overflow 16 bits: a halving add `(v & h) +
+/// ((v ^ h) >> 1)` followed by a rounding shift, which lower to NEON
+/// `uhadd` + `rshrn` (`floor((floor(s / 2) + 128) / 256) ==
+/// floor((s + 256) / 512)`).
+#[inline(always)]
+fn smooth_round8<const N: usize>(vert: Simd<u16, N>, horz: Simd<u16, N>) -> Simd<u16, N> {
+    let avg = (vert & horz) + ((vert ^ horz) >> 1);
+    (avg + Simd::splat(128)) >> 8
+}
+
 /// Loads `N` smooth weights.
 #[inline(always)]
 fn weights<E: SimdElement + From<u8>, const N: usize>(w: &[u8]) -> Simd<E, N> {
@@ -607,9 +618,8 @@ fn smooth_packed<T: Pixel, const W: usize, const R: usize>(
     type V = Simd<u16, 16>;
     let a_diff = V::from_array(std::array::from_fn(|j| above[j % W].to_u16())) - V::splat(bottom);
     let wxv = V::from_array(std::array::from_fn(|j| wx[j % W] as u16));
-    let hbase = (V::splat(256) - wxv) * V::splat(right) + V::splat(128);
-    let vbase = V::splat(bottom * 256 + 128);
-    let one = V::splat(1);
+    let hbase = (V::splat(256) - wxv) * V::splat(right);
+    let vbase = V::splat(bottom * 256);
     for (g, (wy_r, left_r)) in wy.iter().zip(left_c).enumerate() {
         let i0 = g * R;
         let wyv = V::from_array(std::array::from_fn(|j| wy_r[j / W] as u16));
@@ -618,8 +628,7 @@ fn smooth_packed<T: Pixel, const W: usize, const R: usize>(
         // (mod 2^16, and the true value fits u16).
         let vert = wyv * a_diff + vbase;
         let horz = wxv * lv + hbase;
-        let p = ((vert >> one) + (horz >> one) + (vert & horz & one)) >> 8;
-        store_rows_u8::<T, W>(dst, stride, i0, p.cast::<i16>());
+        store_rows_u8::<T, W>(dst, stride, i0, smooth_round8(vert, horz).cast::<i16>());
     }
 }
 
@@ -644,21 +653,18 @@ fn smooth_w<T: Pixel, const BD: u32, const W: usize, const N: usize>(
     for x in (0..W).step_by(N) {
         let dst_x = &mut dst[x..];
         if BD == 8 {
-            // Add 128 to each of vert and horz (256 total == 1 << 8) so
-            // both stay <= 256 * 255 + 128 = 65408 (fits u16), then
-            // (vert + horz) >> 9 == ((vert >> 1) + (horz >> 1) + (vert & horz & 1)) >> 8.
-            let one = Simd::<u16, N>::splat(1);
+            // vert and horz are at most 256 * 255 (fit u16), see
+            // smooth_round8 for their sum.
             let wxv = weights::<u16, N>(&wx[x..]);
             let a_diff = load_u16::<T, N>(&above[x..]) - Simd::splat(bottom as u16);
-            let vbase = Simd::<u16, N>::splat(bottom as u16 * 256 + 128);
-            let hbase = (Simd::splat(256) - wxv) * Simd::splat(right as u16) + Simd::splat(128);
+            let vbase = Simd::<u16, N>::splat(bottom as u16 * 256);
+            let hbase = (Simd::splat(256) - wxv) * Simd::splat(right as u16);
             visit_row4::<T, N>(dst_x, stride, h, |i4, r0, r1, r2, r3| {
                 let (wy_r, l_r) = (&wy4[i4], &left4[i4]);
                 for ((r, &wy_i), &l_i) in [r0, r1, r2, r3].into_iter().zip(wy_r).zip(l_r) {
                     let vert = Simd::splat(wy_i as u16) * a_diff + vbase;
                     let horz = wxv * Simd::splat(l_i.to_u16()) + hbase;
-                    let avg = (vert >> one) + (horz >> one) + (vert & horz & one);
-                    store_u16(r, avg >> 8);
+                    store_u16(r, smooth_round8(vert, horz));
                 }
             });
         } else {

@@ -817,21 +817,95 @@ pub trait CdefKernels<T: Pixel> {
         edges: u8,
         bd: u32,
     );
+
+    /// [`Self::filter`] of the blocks at the same position of `N` planes
+    /// with the same strides and parameters (the two chroma planes, which
+    /// share the block size, skip flags, directions and strengths), so
+    /// that the per-block work is shared.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    fn filter_n<const N: usize>(
+        dst: [&mut [T]; N],
+        dst_stride: usize,
+        src: [&[T]; N],
+        src_stride: usize,
+        w: usize,
+        h: usize,
+        pri: i32,
+        sec: i32,
+        damping: i32,
+        dir: usize,
+        edges: u8,
+        bd: u32,
+    ) {
+        for (d, s) in dst.into_iter().zip(src) {
+            Self::filter(
+                d, dst_stride, s, src_stride, w, h, pri, sec, damping, dir, edges, bd,
+            );
+        }
+    }
+
+    /// Optional unit-level fast path for 8x8 luma filtering.
+    /// Returns `true` if handled, `false` to fall back to per-block `filter`.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    fn filter_y_8x8_unit(
+        _dst: &mut [T],
+        _dst_stride: usize,
+        _src: &[T],
+        _src_stride: usize,
+        _noskip: &[u8; 8],
+        _dirs: &[u32; 8],
+        _vars: &[[i32; 8]; 8],
+        _col_edges: &[u8; 8],
+        _y0: usize,
+        _plane_h: usize,
+        _y_pri: i32,
+        _y_sec: i32,
+        _damping: i32,
+        _bd: u32,
+    ) -> bool {
+        false
+    }
+
+    /// Optional unit-level fast path for 4:2:0 (4x4) dual-chroma filtering.
+    /// Returns `true` if handled, `false` to fall back to per-block `filter_n`.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    fn filter_uv_4x4_unit(
+        _dst: [&mut [T]; 2],
+        _dst_stride: usize,
+        _src: [&[T]; 2],
+        _src_stride: usize,
+        _noskip: &[u8; 8],
+        _dirs: &[u32; 8],
+        _col_edges: &[u8; 8],
+        _y0: usize,
+        _plane_h: usize,
+        _pri: i32,
+        _sec: i32,
+        _damping: i32,
+        _bd: u32,
+    ) -> bool {
+        false
+    }
 }
 
 /// Spec 7.15.1 adjustment of the luma primary strength by the variance.
 #[inline(always)]
-fn adjust_strength(pri: i32, var: i32) -> i32 {
+pub(crate) fn adjust_strength(pri: i32, var: i32) -> i32 {
     let v6 = (var as u32) >> 6;
     let i = (31 - (v6 | 1).leading_zeros()).min(12) as i32;
     ((pri * (4 + i) + 8) >> 4) * ((var != 0) as i32)
 }
 
-/// Filters the chroma blocks (`W x H`) of one plane of a [`CdefUnit`].
+/// Filters the chroma blocks (`W x H`) of `N` planes of a [`CdefUnit`]
+/// that have the same position, size and strides (see
+/// [`CdefKernels::filter_n`]).
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-fn cdef_uv_plane_wh<T: Pixel, K: CdefKernels<T>, const W: usize, const H: usize>(
-    p: &mut CdefPlane<'_, T>,
+fn cdef_uv_plane_wh<T: Pixel, K: CdefKernels<T>, const W: usize, const H: usize, const N: usize>(
+    ps: [&mut CdefPlane<'_, T>; N],
     noskip: &[u8; 8],
     dirs: &[u32; 8],
     uv_pri: i32,
@@ -839,15 +913,43 @@ fn cdef_uv_plane_wh<T: Pixel, K: CdefKernels<T>, const W: usize, const H: usize>
     damping: i32,
     bd: u32,
 ) {
-    let b_off = CDEF_BORDER * (p.src_stride + 1);
-    let src = &p.src[p.src_base - b_off..];
-    let dst = &mut p.dst[p.dst_base..];
-    let (src_stride, dst_stride) = (p.src_stride, p.dst_stride);
-    let (x0, y0, pw, ph) = (p.x0, p.y0, p.plane_w, p.plane_h);
+    let p0 = &ps[0];
+    let (src_stride, dst_stride) = (p0.src_stride, p0.dst_stride);
+    let (x0, y0, pw, ph) = (p0.x0, p0.y0, p0.plane_w, p0.plane_h);
+    let b_off = CDEF_BORDER * (src_stride + 1);
+    let mut srcs: [&[T]; N] = [&[]; N];
+    let mut dsts: [&mut [T]; N] = std::array::from_fn(|_| -> &mut [T] { &mut [] });
+    for ((p, s), d) in ps.into_iter().zip(&mut srcs).zip(&mut dsts) {
+        *s = &p.src[p.src_base - b_off..];
+        *d = &mut p.dst[p.dst_base..];
+    }
     let col_edges: [u8; 8] = std::array::from_fn(|c| {
         let x = x0 + W * c;
         (x > 0) as u8 * CDEF_HAVE_LEFT | (x + W < pw) as u8 * CDEF_HAVE_RIGHT
     });
+    if W == 4 && H == 4 && N == 2 {
+        let mut dit = dsts.each_mut().into_iter();
+        let (d0, d1) = (&mut **dit.next().unwrap(), &mut **dit.next().unwrap());
+        let mut sit = srcs.into_iter();
+        let (s0, s1) = (sit.next().unwrap(), sit.next().unwrap());
+        if K::filter_uv_4x4_unit(
+            [d0, d1],
+            dst_stride,
+            [s0, s1],
+            src_stride,
+            noskip,
+            dirs,
+            &col_edges,
+            y0,
+            ph,
+            uv_pri,
+            uv_sec,
+            damping,
+            bd,
+        ) {
+            return;
+        }
+    }
     for (r, (&row, &row_dirs)) in noskip.iter().zip(dirs).enumerate() {
         let mut mask = row;
         if mask == 0 {
@@ -856,18 +958,16 @@ fn cdef_uv_plane_wh<T: Pixel, K: CdefKernels<T>, const W: usize, const H: usize>
         let cy = r * H;
         let y = y0 + cy;
         let row_edges = (y > 0) as u8 * CDEF_HAVE_TOP | (y + H < ph) as u8 * CDEF_HAVE_BOTTOM;
-        let row_src = &src[cy * src_stride..];
-        let row_dst = &mut dst[cy * dst_stride..];
         while mask != 0 {
             let c = mask.trailing_zeros() as usize;
             mask &= mask - 1;
-            let cx = c * W;
+            let (sx, dx) = (cy * src_stride + c * W, cy * dst_stride + c * W);
             let dir = ((row_dirs >> (c * 4)) & 7) as usize;
             let edges = row_edges | col_edges[c & 7];
-            K::filter(
-                &mut row_dst[cx..],
+            K::filter_n(
+                dsts.each_mut().map(|d| &mut d[dx..]),
                 dst_stride,
-                &row_src[cx..],
+                srcs.map(|s| &s[sx..]),
                 src_stride,
                 W,
                 H,
@@ -882,11 +982,12 @@ fn cdef_uv_plane_wh<T: Pixel, K: CdefKernels<T>, const W: usize, const H: usize>
     }
 }
 
-/// Filters the chroma blocks of one plane of a [`CdefUnit`].
+/// Filters the chroma blocks of `N` planes of a [`CdefUnit`] (see
+/// [`cdef_uv_plane_wh`]).
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn cdef_uv_plane<T: Pixel, K: CdefKernels<T>>(
-    p: &mut CdefPlane<'_, T>,
+fn cdef_uv_plane<T: Pixel, K: CdefKernels<T>, const N: usize>(
+    ps: [&mut CdefPlane<'_, T>; N],
     noskip: &[u8; 8],
     dirs: &[u32; 8],
     uv_pri: i32,
@@ -897,9 +998,9 @@ fn cdef_uv_plane<T: Pixel, K: CdefKernels<T>>(
     bd: u32,
 ) {
     match (ss_x, ss_y) {
-        (1, 1) => cdef_uv_plane_wh::<T, K, 4, 4>(p, noskip, dirs, uv_pri, uv_sec, damping, bd),
-        (1, 0) => cdef_uv_plane_wh::<T, K, 4, 8>(p, noskip, dirs, uv_pri, uv_sec, damping, bd),
-        _ => cdef_uv_plane_wh::<T, K, 8, 8>(p, noskip, dirs, uv_pri, uv_sec, damping, bd),
+        (1, 1) => cdef_uv_plane_wh::<T, K, 4, 4, N>(ps, noskip, dirs, uv_pri, uv_sec, damping, bd),
+        (1, 0) => cdef_uv_plane_wh::<T, K, 4, 8, N>(ps, noskip, dirs, uv_pri, uv_sec, damping, bd),
+        _ => cdef_uv_plane_wh::<T, K, 8, 8, N>(ps, noskip, dirs, uv_pri, uv_sec, damping, bd),
     }
 }
 
@@ -989,73 +1090,68 @@ pub fn cdef_unit<T: Pixel, K: CdefKernels<T>>(u: &mut CdefUnit<'_, T>) {
                 let x = x0 + 8 * c;
                 (x > 0) as u8 * CDEF_HAVE_LEFT | (x + 8 < pw) as u8 * CDEF_HAVE_RIGHT
             });
-            let y_dir_mask = if y_pri == 0 { 0 } else { 7 };
-            for (r, &row) in noskip.iter().enumerate() {
-                let mut mask = row;
-                if mask == 0 {
-                    continue;
-                }
-                let by = 8 * r;
-                let y = y0 + by;
-                let row_edges =
-                    (y > 0) as u8 * CDEF_HAVE_TOP | (y + 8 < ph) as u8 * CDEF_HAVE_BOTTOM;
-                let row_src = &src[by * src_stride..];
-                let row_dst = &mut dst[by * dst_stride..];
-                let r_ydirs = y_dirs[r];
-                let r_vars = &vars[r];
-                while mask != 0 {
-                    let c = mask.trailing_zeros() as usize;
-                    mask &= mask - 1;
-                    let pri = if y_pri != 0 { adjust_strength(y_pri, r_vars[c & 7]) } else { 0 };
-                    if pri != 0 || y_sec != 0 {
-                        let bx = 8 * c;
-                        let dir = ((r_ydirs >> (c * 4)) as usize) & y_dir_mask;
-                        let edges = row_edges | col_edges[c & 7];
-                        K::filter(
-                            &mut row_dst[bx..],
-                            dst_stride,
-                            &row_src[bx..],
-                            src_stride,
-                            8,
-                            8,
-                            pri,
-                            y_sec,
-                            damping,
-                            dir,
-                            edges,
-                            bd,
-                        );
+            if !K::filter_y_8x8_unit(
+                dst, dst_stride, src, src_stride, &noskip, &y_dirs, &vars, &col_edges, y0, ph,
+                y_pri, y_sec, damping, bd,
+            ) {
+                let y_dir_mask = if y_pri == 0 { 0 } else { 7 };
+                for (r, &row) in noskip.iter().enumerate() {
+                    let mut mask = row;
+                    if mask == 0 {
+                        continue;
+                    }
+                    let by = 8 * r;
+                    let y = y0 + by;
+                    let row_edges =
+                        (y > 0) as u8 * CDEF_HAVE_TOP | (y + 8 < ph) as u8 * CDEF_HAVE_BOTTOM;
+                    let row_src = &src[by * src_stride..];
+                    let row_dst = &mut dst[by * dst_stride..];
+                    let r_ydirs = y_dirs[r];
+                    let r_vars = &vars[r];
+                    while mask != 0 {
+                        let c = mask.trailing_zeros() as usize;
+                        mask &= mask - 1;
+                        let pri =
+                            if y_pri != 0 { adjust_strength(y_pri, r_vars[c & 7]) } else { 0 };
+                        if pri != 0 || y_sec != 0 {
+                            let bx = 8 * c;
+                            let dir = ((r_ydirs >> (c * 4)) as usize) & y_dir_mask;
+                            let edges = row_edges | col_edges[c & 7];
+                            K::filter(
+                                &mut row_dst[bx..],
+                                dst_stride,
+                                &row_src[bx..],
+                                src_stride,
+                                8,
+                                8,
+                                pri,
+                                y_sec,
+                                damping,
+                                dir,
+                                edges,
+                                bd,
+                            );
+                        }
                     }
                 }
             }
         }
     }
     if uv_on {
-        if let Some(p) = pu.as_mut() {
-            cdef_uv_plane::<T, K>(
-                p,
-                &noskip,
-                &uv_dirs,
-                uv_pri,
-                uv_sec,
-                damping - 1,
-                ss_x,
-                ss_y,
-                bd,
-            );
-        }
-        if let Some(p) = pv.as_mut() {
-            cdef_uv_plane::<T, K>(
-                p,
-                &noskip,
-                &uv_dirs,
-                uv_pri,
-                uv_sec,
-                damping - 1,
-                ss_x,
-                ss_y,
-                bd,
-            );
+        let (ns, dirs, damping) = (&noskip, &uv_dirs, damping - 1);
+        let (pri, sec) = (uv_pri, uv_sec);
+        match (pu.as_mut(), pv.as_mut()) {
+            (Some(u), Some(v))
+                if (u.src_stride, u.dst_stride, u.x0, u.y0, u.plane_w, u.plane_h)
+                    == (v.src_stride, v.dst_stride, v.x0, v.y0, v.plane_w, v.plane_h) =>
+            {
+                cdef_uv_plane::<T, K, 2>([u, v], ns, dirs, pri, sec, damping, ss_x, ss_y, bd);
+            }
+            (u, v) => {
+                for p in [u, v].into_iter().flatten() {
+                    cdef_uv_plane::<T, K, 1>([p], ns, dirs, pri, sec, damping, ss_x, ss_y, bd);
+                }
+            }
         }
     }
 }

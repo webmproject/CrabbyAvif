@@ -34,69 +34,49 @@ const SPLIT_TX_BY_DEPTH: [[TxSize; 5]; TxSize::COUNT] = {
     t
 };
 
+/// Zeroes the context bytes `s` of a block side (`s.len()` is 1, 2, 4,
+/// 8, 16 or 32) with fixed-size array stores: `fill` on a `[u8]` is an
+/// out-of-line call into core (`SpecFill` for `u8` is not inlinable).
 #[inline(always)]
-fn zero_ctx2(a: &mut [u8], b: &mut [u8], pos: usize, len: usize) {
-    let a = &mut a[pos..pos + len];
-    let b = &mut b[pos..pos + len];
+fn zero_ctx(s: &mut [u8]) {
+    #[inline(always)]
+    fn zero<const N: usize>(s: &mut [u8]) {
+        if let Some(c) = s.first_chunk_mut::<N>() {
+            *c = [0; N];
+        }
+    }
+    let len = s.len();
     if len >= 8 {
         if len >= 16 {
-            a[..16].fill(0);
-            b[..16].fill(0);
-            a[len - 16..len].fill(0);
-            b[len - 16..len].fill(0);
+            zero::<16>(s);
+            if let Some(c) = s.last_chunk_mut::<16>() {
+                *c = [0; 16];
+            }
         } else {
-            a[..8].fill(0);
-            b[..8].fill(0);
+            zero::<8>(s);
         }
     } else if len >= 4 {
-        a[..4].fill(0);
-        b[..4].fill(0);
+        zero::<4>(s);
     } else if len >= 2 {
-        a[..2].fill(0);
-        b[..2].fill(0);
-    } else if len == 1 {
-        a[0] = 0;
-        b[0] = 0;
+        zero::<2>(s);
+    } else {
+        zero::<1>(s);
     }
 }
 
 #[inline(always)]
-fn zero_ctx4(a1: &mut [u8], b1: &mut [u8], a2: &mut [u8], b2: &mut [u8], pos: usize, len: usize) {
-    let a1 = &mut a1[pos..pos + len];
-    let b1 = &mut b1[pos..pos + len];
-    let a2 = &mut a2[pos..pos + len];
-    let b2 = &mut b2[pos..pos + len];
-    if len >= 8 {
-        if len >= 16 {
-            a1[..16].fill(0);
-            b1[..16].fill(0);
-            a2[..16].fill(0);
-            b2[..16].fill(0);
-            a1[len - 16..len].fill(0);
-            b1[len - 16..len].fill(0);
-            a2[len - 16..len].fill(0);
-            b2[len - 16..len].fill(0);
-        } else {
-            a1[..8].fill(0);
-            b1[..8].fill(0);
-            a2[..8].fill(0);
-            b2[..8].fill(0);
-        }
-    } else if len >= 4 {
-        a1[..4].fill(0);
-        b1[..4].fill(0);
-        a2[..4].fill(0);
-        b2[..4].fill(0);
-    } else if len >= 2 {
-        a1[..2].fill(0);
-        b1[..2].fill(0);
-        a2[..2].fill(0);
-        b2[..2].fill(0);
-    } else if len == 1 {
-        a1[0] = 0;
-        b1[0] = 0;
-        a2[0] = 0;
-        b2[0] = 0;
+fn zero_ctx2(a: &mut [u8], b: &mut [u8], pos: usize, len: usize) {
+    zero_ctx(&mut a[pos..pos + len]);
+    zero_ctx(&mut b[pos..pos + len]);
+}
+
+/// `s.fill(val)` as an inlinable loop (`fill` on `[u8]` / `[i8]` is an
+/// out-of-line call into core; for a constant `s.len()` LLVM emits inline
+/// stores here).
+#[inline(always)]
+fn fill_inline<T: Copy>(s: &mut [T], val: T) {
+    for x in s {
+        *x = val;
     }
 }
 
@@ -142,9 +122,9 @@ fn fill_chroma_lf_tx(
 /// chroma `lf_mask` ring) and a block never crosses a superblock. The
 /// row count (`< 64`) and `stride` (`<= 0xFFFF`) are masked only to give
 /// the compiler bounds; out-of-range values are caught by debug asserts.
-/// `fill` on a constant-length subslice packs `val` into one register and
-/// broadcasts it (copying from a `[val; N]` array made LLVM store `MiInfo`
-/// byte by byte).
+/// `fill_inline` on a constant-length subslice packs `val` into one
+/// register and broadcasts it (copying from a `[val; N]` array made LLVM
+/// store `MiInfo` byte by byte).
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn fill_mi_rows<T: Copy>(
@@ -179,7 +159,7 @@ fn fill_mi_rows<T: Copy>(
         let data = &mut data[i..i + need];
         let mut off = 0;
         for _ in 0..n {
-            data[off..off + N].fill(val);
+            fill_inline(&mut data[off..off + N], val);
             off += s;
         }
     }
@@ -248,8 +228,8 @@ fn fill_mi_rows2<U: Copy>(
         let aux = &mut aux[i..i + need];
         let mut off = 0;
         for _ in 0..n {
-            data[off..off + N].fill(info);
-            aux[off..off + N].fill(aux_val);
+            fill_inline(&mut data[off..off + N], info);
+            fill_inline(&mut aux[off..off + N], aux_val);
             off += s;
         }
     }
@@ -312,15 +292,15 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
 
     pub(crate) fn clear_block_decoded_flags(&mut self, r: usize, c: usize) {
         let sb4 = self.f.sb4;
-        for plane in 0..self.f.num_planes {
-            let (sx, sy) = self.f.sub(plane);
+        for pt in 0..self.f.num_planes.min(2) {
+            let (sx, sy) = self.f.sub(pt);
             let sb_w4 = (self.t.mi_col_end - c) >> sx;
             let sb_h4 = (self.t.mi_row_end - r) >> sy;
             let w = (sb4 >> sx) + 2;
             let h = (sb4 >> sy) + 2;
             let n0 = (sb_w4 + 1).min(w);
             let h_in = sb_h4.min(h - 2);
-            let bd = &mut self.sc.block_decoded[plane];
+            let bd = &mut self.sc.block_decoded[pt];
             bd[0] = BlockDecodedRow((1u64 << n0) - 1);
             bd[1..=h_in].fill(BlockDecodedRow(1));
             bd[1 + h_in..h].fill(BlockDecodedRow(0));
@@ -516,7 +496,7 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
                         3 => &mut self.t.cdf.partition_w32[ctx],
                         _ => &mut self.t.cdf.partition_w64[ctx],
                     };
-                    self.t.msac.symbol_n(cdf)
+                    self.t.msac.symbol_cdf(cdf)
                 }
                 _ => self.sym(|cd| &mut cd.partition_w128[ctx]),
             };
@@ -611,26 +591,26 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
     ) -> Partition {
         use Partition::*;
         let psum = if bsize == BlockSize::B128x128 {
-            let pcdf = &cdf!(self).partition_w128[ctx];
+            let pcdf = &cdf!(self).partition_w128[ctx].0;
             if has_cols {
-                (pcdf[4] as u32 - pcdf[1] as u32) + (pcdf[7] as u32 - pcdf[5] as u32)
+                (pcdf[1] as u32 - pcdf[4] as u32) + pcdf[5] as u32
             } else {
-                (pcdf[1] as u32 - pcdf[0] as u32) + (pcdf[6] as u32 - pcdf[2] as u32)
+                (pcdf[0] as u32 - pcdf[1] as u32) + (pcdf[2] as u32 - pcdf[6] as u32)
             }
         } else {
             let pcdf = match bsl {
-                2 => &cdf!(self).partition_w16[ctx],
-                3 => &cdf!(self).partition_w32[ctx],
-                _ => &cdf!(self).partition_w64[ctx],
+                2 => &cdf!(self).partition_w16[ctx].0,
+                3 => &cdf!(self).partition_w32[ctx].0,
+                _ => &cdf!(self).partition_w64[ctx].0,
             };
             if has_cols {
-                (pcdf[4] as u32 - pcdf[1] as u32)
-                    + (pcdf[7] as u32 - pcdf[5] as u32)
-                    + (pcdf[9] as u32 - pcdf[8] as u32)
+                (pcdf[1][0] as u32)
+                    + (pcdf[0][1] as u32 - pcdf[0][4] as u32)
+                    + (pcdf[0][5] as u32 - pcdf[0][7] as u32)
             } else {
-                (pcdf[1] as u32 - pcdf[0] as u32)
-                    + (pcdf[6] as u32 - pcdf[2] as u32)
-                    + (pcdf[8] as u32 - pcdf[7] as u32)
+                (pcdf[0][0] as u32 - pcdf[0][1] as u32)
+                    + (pcdf[0][2] as u32 - pcdf[0][6] as u32)
+                    + (pcdf[0][7] as u32 - pcdf[1][0] as u32)
             }
         };
         if self.t.msac.bool_inv(psum) {
@@ -711,20 +691,18 @@ impl<'a, 'b, 's, T: Pixel> SbDecoder<'a, 'b, 's, T> {
         let b = &self.b;
         let x4 = b.mi_col - self.s.above.col0;
         let ly = b.mi_row & f.sb_mask_y[0];
-        let [al0, al1, al2] = &mut self.s.above.level;
-        let [ad0, ad1, ad2] = &mut self.s.above.dc;
-        let [ll0, ll1, ll2] = &mut self.s.left.level;
-        let [ld0, ld1, ld2] = &mut self.s.left.dc;
-        zero_ctx2(al0, ad0, x4, b.bw4);
-        zero_ctx2(ll0, ld0, ly, b.bh4);
+        let [al0, al1, al2] = &mut self.s.above.coef_ctx;
+        let [ll0, ll1, ll2] = &mut self.s.left.coef_ctx;
+        zero_ctx(&mut al0[x4..x4 + b.bw4]);
+        zero_ctx(&mut ll0[ly..ly + b.bh4]);
         if b.has_chroma {
             let (sx, sy) = (f.ss_x, f.ss_y);
             let ux4 = x4 >> sx;
             let uw4 = (b.bw4 + sx) >> sx;
             let uly = (b.mi_row >> sy) & f.sb_mask_y[1];
             let uh4 = (b.bh4 + sy) >> sy;
-            zero_ctx4(al1, ad1, al2, ad2, ux4, uw4);
-            zero_ctx4(ll1, ld1, ll2, ld2, uly, uh4);
+            zero_ctx2(al1, al2, ux4, uw4);
+            zero_ctx2(ll1, ll2, uly, uh4);
         }
     }
 

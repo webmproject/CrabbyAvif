@@ -429,10 +429,14 @@ pub(super) fn filter_px<T: Pixel>(dst: &mut [T], dst_stride: usize, src: &[T], s
                     (8, 8) => u8_path::filter_8x8_dir(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set),
                     (8, 4) => u8_path::filter::<T, 8, 4>(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set),
                     (4, 8) => u8_path::filter::<T, 4, 8>(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set),
-                    _ => u8_path::filter_4x4_dir(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set),
+                    _ => u8_path::filter_4x4_dir([dst], dst_stride, [src], src_stride, pri_str, sec_str, damping, dir, tap_set),
                 }
             } else {
-                u8_path::filter_edges(dst, dst_stride, src, src_stride, w, h, pri_str, sec_str, damping, dir, tap_set, edges);
+                match (w, h) {
+                    (8, 8) => u8_path::filter_edges_8x8_dir(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, edges),
+                    (4, 4) => u8_path::filter_edges_4x4_dir([dst], dst_stride, [src], src_stride, pri_str, sec_str, damping, dir, edges),
+                    _ => u8_path::filter_edges_rect(dst, dst_stride, src, src_stride, w, h, pri_str, sec_str, damping, dir, tap_set, edges),
+                }
             }
             return;
         }
@@ -455,6 +459,31 @@ pub(super) fn filter_px<T: Pixel>(dst: &mut [T], dst_stride: usize, src: &[T], s
         return;
     }
     filter_i16::<T, T, false, false>(dst, dst_stride, src, src_stride, w, h, pri_str, sec_str, damping, dir, tap_set);
+}
+
+/// `dsp::cdef::CdefKernels::filter_n`: [`filter_px`] of the blocks of `N`
+/// planes, with one call for all of them on the 8-bit 4x4 fast path.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+pub(super) fn filter_px_n<T: Pixel, const N: usize>(dst: [&mut [T]; N], dst_stride: usize, src: [&[T]; N], src_stride: usize, w: usize, h: usize, pri_str: i32, sec_str: i32, damping: i32, dir: usize, edges: u8) {
+    if BD == 8
+        && std::mem::size_of::<T>() == 1
+        && (w, h) == (4, 4)
+        && (damping as u32) <= 7
+        && ((pri_str | sec_str) as u32) < 16
+        && (pri_str | sec_str) != 0
+    {
+        if edges == CDEF_HAVE_ALL {
+            let tap_set = (pri_str & 1) as usize;
+            u8_path::filter_4x4_dir(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set);
+        } else {
+            u8_path::filter_edges_4x4_dir(dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, edges);
+        }
+        return;
+    }
+    for (d, s) in dst.into_iter().zip(src) {
+        filter_px(d, dst_stride, s, src_stride, w, h, pri_str, sec_str, damping, dir, edges);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -550,8 +579,9 @@ fn acc<const S: usize, const N: usize>(a: &mut [i16x8; 2], x: i16x8) {
 }
 
 /// Adds `[x0, x1, x2, x3]` at offsets `0, 1, 2, 3` for an odd direction
-/// (11 partial sums: `0..8` in the first vector, `8..11` in lanes `4..7`
-/// of the second vector with lane 7 zero).
+/// (11 partial sums: `0..8` in the first vector; on x86_64 `8..11` in
+/// lanes `4..7` of the second vector with lane 7 zero, elsewhere in lanes
+/// `0..3` with lane 3 zero).
 #[inline(always)]
 fn acc_odd(x0: i16x8, x1: i16x8, x2: i16x8, x3: i16x8) -> [i16x8; 2] {
     use std::simd::Swizzle;
@@ -560,14 +590,24 @@ fn acc_odd(x0: i16x8, x1: i16x8, x2: i16x8, x3: i16x8) -> [i16x8; 2] {
         + Ext::<1>::concat_swizzle(z, x1)
         + Ext::<2>::concat_swizzle(z, x2)
         + Ext::<3>::concat_swizzle(z, x3);
-    // Lanes 4..7 of the 64-bit lane shifts (lanes 0..3 are not used).
-    let shr = |v: i16x8, k: u64| i16x8::from_ne_bytes((u64x2::from_ne_bytes(v.to_ne_bytes()) >> k).to_ne_bytes());
-    let hi = shr(x1, 48) + shr(x2, 32) + shr(x3, 16);
+    let hi = if cfg!(target_arch = "x86_64") {
+        // Lanes 4..7 of the 64-bit lane shifts (lanes 0..3 are not used).
+        let shr = |v: i16x8, k: u64| {
+            i16x8::from_ne_bytes((u64x2::from_ne_bytes(v.to_ne_bytes()) >> k).to_ne_bytes())
+        };
+        shr(x1, 48) + shr(x2, 32) + shr(x3, 16)
+    } else {
+        // Lanes 0..3 hold partial[d][8..11] with lane 3 zero (NEON `ext`).
+        Ext::<1>::concat_swizzle(x1, z)
+            + Ext::<2>::concat_swizzle(x2, z)
+            + Ext::<3>::concat_swizzle(x3, z)
+    };
     [lo, hi]
 }
 /// Adds `[q0, q1, q2, q3]` (where `q_i` holds `[row_i, row_{i+4}]`) for
-/// direction 3 (`p3r[0..8]` in the first vector, `p3r[8..11]` in lanes
-/// `4..7` of the second vector with lane 7 zero) without pre-reversing `q`.
+/// direction 3 (`p3r[0..8]` in the first vector; on x86_64 `p3r[8..11]`
+/// in lanes `4..7` of the second vector with lane 7 zero, on non-x86_64
+/// in lanes `0..3` with lane 3 zero) without pre-reversing `q`.
 #[inline(always)]
 fn acc_odd_q3(q0: i16x8, q1: i16x8, q2: i16x8, q3: i16x8) -> [i16x8; 2] {
     if cfg!(target_arch = "x86_64") {
@@ -628,8 +668,9 @@ fn weighted_diag(p: [i16x8; 2]) -> i32x4 {
 }
 
 /// `sum_k p[k]^2 * (w[k] / 35)` folded to 4 lanes for the odd directions
-/// (11 sums: lanes `4..7` of `p[1]` hold `partial[d][8..11]` and lane 7
-/// is 0; on non-x86_64 the common factor 35 is applied after [`hsum4x8`]).
+/// (11 sums: `p[1]` holds `partial[d][8..11]` in lanes `4..7` with lane 7
+/// zero on x86_64, or in lanes `0..3` with lane 3 zero on non-x86_64 where
+/// the common factor 35 is applied after [`hsum4x8`]).
 #[inline(always)]
 fn weighted_odd(p: [i16x8; 2]) -> i32x4 {
     if cfg!(target_arch = "x86_64") {
@@ -643,9 +684,9 @@ fn weighted_odd(p: [i16x8; 2]) -> i32x4 {
     } else {
         let r0_lo = simd_swizzle!(p[0], [2, 1, 0, 3]);
         let p0_hi = simd_swizzle!(p[0], [4, 5, 6, 7]);
-        let p1_hi = simd_swizzle!(p[1], [4, 5, 6, 7]);
+        let p1_lo = simd_swizzle!(p[1], [0, 1, 2, 3]);
         let s_hi = sq4(p0_hi);
-        (sq4(r0_lo) + sq4(p1_hi)) * i32x4::from_array([4, 6, 12, 3]) + (s_hi << 1) + s_hi
+        (sq4(r0_lo) + sq4(p1_lo)) * i32x4::from_array([4, 6, 12, 3]) + (s_hi << 1) + s_hi
     }
 }
 
@@ -764,25 +805,52 @@ pub(super) fn cdef_direction<T: Pixel>(src: &[T], stride: usize) -> (usize, i32)
         let scale = i32x4::from_array([1, 105, 35, 35]);
         (lo * scale, hi * scale)
     };
-    // Lanes hold `(cost[d], cost[d + 4])` for `d = [0, 2, 1, 3]`. For the
-    // winning lane, max_lh[k] is best_cost and min_lh[k] is cost[y_dir ^ 4].
-    // Since `var < 2^20`, setting bits 24..28 to `15 - d` (in `8..16`) for
-    // matching lanes and 0 for non-matching lanes lets `(dir_tag | var)` and
-    // signed `reduce_max` pick the first direction of maximal cost alongside
-    // its variance.
-    let max_lh = lo.simd_max(hi);
-    let min_lh = lo.simd_min(hi);
-    let var = (max_lh - min_lh) >> 10;
-    let m = max_lh.simd_max(simd_swizzle!(max_lh, [2, 3, 0, 1]));
-    let best = m.simd_max(simd_swizzle!(m, [1, 0, 3, 2]));
-    let eq_lo = lo.simd_eq(best);
-    let eq_any = eq_lo | hi.simd_eq(best);
-    let dir_tag = eq_any.select(
-        i32x4::from_array([11 << 24, 9 << 24, 10 << 24, 8 << 24]),
-        i32x4::splat(0),
-    ) | eq_lo.select(i32x4::splat(4 << 24), i32x4::splat(0));
-    let r = (dir_tag | var).reduce_max() as u32;
-    (((!r >> 24) & 7) as usize, (r & 0xff_ffff) as i32)
+    // Lanes hold `(cost[d], cost[d + 4])` for `d = [0, 2, 1, 3]`.
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    {
+        // Parallel 3-level scalar tournament in GPRs (frees NEON pipes,
+        // avoids the SIMD max-broadcast + smaxv latency chain and keeps
+        // tie-breaking exact since {0,1} < {2,3} and {0..3} < {4..7}).
+        let lo = u64x2::from_ne_bytes(lo.to_ne_bytes()).to_array();
+        let hi = u64x2::from_ne_bytes(hi.to_ne_bytes()).to_array();
+        let (c0, c2) = (lo[0] as u32, (lo[0] >> 32) as u32);
+        let (c1, c3) = (lo[1] as u32, (lo[1] >> 32) as u32);
+        let (c4, c6) = (hi[0] as u32, (hi[0] >> 32) as u32);
+        let (c5, c7) = (hi[1] as u32, (hi[1] >> 32) as u32);
+        let d04 = c0.wrapping_sub(c4) as i32;
+        let d15 = c1.wrapping_sub(c5) as i32;
+        let d26 = c2.wrapping_sub(c6) as i32;
+        let d37 = c3.wrapping_sub(c7) as i32;
+        let a01 = if c1 > c0 { (c1, 1usize, d15) } else { (c0, 0, d04) };
+        let a23 = if c3 > c2 { (c3, 3usize, d37) } else { (c2, 2, d26) };
+        let a = if a23.0 > a01.0 { a23 } else { a01 };
+        let b45 = if c5 > c4 { (c5, 5usize, -d15) } else { (c4, 4, -d04) };
+        let b67 = if c7 > c6 { (c7, 7usize, -d37) } else { (c6, 6, -d26) };
+        let b = if b67.0 > b45.0 { b67 } else { b45 };
+        let w = if b.0 > a.0 { b } else { a };
+        (w.1, w.2 >> 10)
+    }
+    #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+    {
+        // For the winning lane, max_lh[k] is best_cost and min_lh[k] is
+        // cost[y_dir ^ 4]. Since `var < 2^20`, setting bits 24..28 to
+        // `15 - d` (in `8..16`) for matching lanes and 0 for non-matching
+        // lanes lets `(dir_tag | var)` and signed `reduce_max` pick the
+        // first direction of maximal cost alongside its variance.
+        let max_lh = lo.simd_max(hi);
+        let min_lh = lo.simd_min(hi);
+        let var = (max_lh - min_lh) >> 10;
+        let m = max_lh.simd_max(simd_swizzle!(max_lh, [2, 3, 0, 1]));
+        let best = m.simd_max(simd_swizzle!(m, [1, 0, 3, 2]));
+        let eq_lo = lo.simd_eq(best);
+        let eq_any = eq_lo | hi.simd_eq(best);
+        let dir_tag = eq_any.select(
+            i32x4::from_array([11 << 24, 9 << 24, 10 << 24, 8 << 24]),
+            i32x4::splat(0),
+        ) | eq_lo.select(i32x4::splat(4 << 24), i32x4::splat(0));
+        let r = (dir_tag | var).reduce_max() as u32;
+        (((!r >> 24) & 7) as usize, (r & 0xff_ffff) as i32)
+    }
 }
 
 
@@ -1040,13 +1108,239 @@ mod u8_path {
         [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
     ];
 
-    /// Filters a `w x h` block of 8-bit pixels at a frame border
-    /// (`edges != CDEF_HAVE_ALL`) in `u8` lanes by replacing unavailable
-    /// tap lanes with the center pixel `x` (`constrain(x, x) == 0`,
-    /// `min(min, x) == min`, `max(max, x) == max`).
+    const ROW_MASK_8: [[u64; 12]; 4] = [
+        [0, 0, !0, !0, !0, !0, !0, !0, !0, !0, 0, 0],
+        [!0, !0, !0, !0, !0, !0, !0, !0, !0, !0, 0, 0],
+        [0, 0, !0, !0, !0, !0, !0, !0, !0, !0, !0, !0],
+        [!0; 12],
+    ];
+
+    const ROW_MASK_4: [[u32; 8]; 4] = [
+        [0, 0, !0, !0, !0, !0, 0, 0],
+        [!0, !0, !0, !0, !0, !0, 0, 0],
+        [0, 0, !0, !0, !0, !0, !0, !0],
+        [!0; 8],
+    ];
+
+    /// Direct-load 8x8 frame-border filter (`edges != CDEF_HAVE_ALL`) in `u8`
+    /// lanes: loads taps directly from `src` and masks unavailable lanes to
+    /// the center pixel `x` using precomputed horizontal/vertical edge masks
+    /// (no `blk`/`msk` stack arrays or copy loop).
     #[allow(clippy::too_many_arguments)]
     #[inline(never)]
-    pub(super) fn filter_edges<T: Pixel>(
+    fn filter_edges_8x8<T: Pixel, const PRI: bool, const SEC: bool>(
+        dst: &mut [T],
+        dst_stride: usize,
+        src: &[T],
+        src_stride: usize,
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+        dir: usize,
+        edges: u8,
+    ) {
+        let (src_stride, dst_stride) = (src_stride as u32 as usize, dst_stride as u32 as usize);
+        assert!(src_stride >= 12 && dst_stride >= 8);
+        let dir = dir & 7;
+        let src = &src[..11 * src_stride + 12];
+        let mut dst = &mut dst[..7 * dst_stride + 8];
+        let col_m = &COL_MASK_8[(edges & 3) as usize];
+        let row_m = &ROW_MASK_8[((edges >> 2) & 3) as usize];
+        let base = (2 * src_stride + 2) as isize;
+        let max_start = 4 * src_stride + 4;
+        let win_len = 7 * src_stride + 8;
+        let make_tap = |d: usize, t: usize, sign: isize| -> (&[T], u64, usize) {
+            let [dy, dx] = CDEF_DIRECTIONS[d][t];
+            let (sy, sx) = (sign * dy, sign * dx);
+            let start = ((base + sy * src_stride as isize + sx) as usize).min(max_start);
+            let c = ((2 + sx) as usize).min(4);
+            let rb = ((2 + sy) as usize).min(4);
+            let h = u64::from_ne_bytes(col_m[c..c + 8].try_into().unwrap());
+            (&src[start..start + win_len], h, rb)
+        };
+        let pair = |d: usize, t: usize| -> [(&[T], u64, usize); 2] {
+            [make_tap(d, t, 1), make_tap(d, t, -1)]
+        };
+        let center = &src[base as usize..base as usize + win_len];
+        let dummy = (center, 0u64, 0usize);
+        let pri_t = if PRI { [pair(dir, 0), pair(dir, 1)] } else { [[dummy; 2]; 2] };
+        let sec_t = if SEC {
+            let (s0, s1) = ((dir + 6) & 7, (dir + 2) & 7);
+            [[pair(s0, 0), pair(s1, 0)], [pair(s0, 1), pair(s1, 1)]]
+        } else {
+            [[[dummy; 2]; 2]; 2]
+        };
+        let k = K8::new::<PRI, SEC>(pri_str, sec_str, damping, (pri_str & 1) as usize);
+        const CONCAT_8X2: [usize; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+        for r in 0..4 {
+            let p0 = (r & 3) * (2 * src_stride);
+            let load2 = |w: &[T]| -> u8x16 {
+                let s = &w[p0..p0 + src_stride + 8];
+                let a = u8x8::from_array(load_px::<T, 8>(&s[..8]));
+                let b = u8x8::from_array(load_px::<T, 8>(&s[src_stride..src_stride + 8]));
+                simd_swizzle!(a, b, CONCAT_8X2)
+            };
+            let x = load2(center);
+            let masked = |(w, h, rb): (&[T], u64, usize)| -> u8x16 {
+                let p = load2(w);
+                let ry = (rb + 2 * (r & 3)).min(10);
+                let m = (u64x2::splat(h) & u64x2::from_slice(&row_m[ry..ry + 2])).to_ne_bytes();
+                (p & m) | (x & !m)
+            };
+            let v = compute_taps::<PRI, SEC>(
+                x,
+                &k,
+                |t, s| masked(pri_t[t][s]),
+                |which, t, s| masked(sec_t[t][which][s]),
+            );
+            dst = store2_8(dst, dst_stride, v, r == 3);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub(super) fn filter_edges_8x8_dir<T: Pixel>(
+        dst: &mut [T],
+        dst_stride: usize,
+        src: &[T],
+        src_stride: usize,
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+        dir: usize,
+        edges: u8,
+    ) {
+        match (pri_str != 0, sec_str != 0) {
+            (true, true) => filter_edges_8x8::<T, true, true>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, edges,
+            ),
+            (true, false) => filter_edges_8x8::<T, true, false>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, edges,
+            ),
+            _ => filter_edges_8x8::<T, false, true>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, edges,
+            ),
+        }
+    }
+
+    /// Direct-load 4x4 frame-border filter (`edges != CDEF_HAVE_ALL`) for `N`
+    /// planes together, sharing tap offset and edge-mask computation.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn filter_edges_4x4<T: Pixel, const PRI: bool, const SEC: bool, const N: usize>(
+        dst: [&mut [T]; N],
+        dst_stride: usize,
+        src: [&[T]; N],
+        src_stride: usize,
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+        dir: usize,
+        edges: u8,
+    ) {
+        let (src_stride, dst_stride) = (src_stride as u32 as usize, dst_stride as u32 as usize);
+        assert!(src_stride >= 8 && dst_stride >= 4);
+        let dir = dir & 7;
+        let k = K8::new::<PRI, SEC>(pri_str, sec_str, damping, (pri_str & 1) as usize);
+        let col_m = &COL_MASK_4[(edges & 3) as usize];
+        let row_m = &ROW_MASK_4[((edges >> 2) & 3) as usize];
+        let base = (2 * src_stride + 2) as isize;
+        let max_start = 4 * src_stride + 4;
+        let win_len = 3 * src_stride + 4;
+        let make_tap = |d: usize, t: usize, sign: isize| -> (usize, u8x16) {
+            let [dy, dx] = CDEF_DIRECTIONS[d][t];
+            let (sy, sx) = (sign * dy, sign * dx);
+            let start = ((base + sy * src_stride as isize + sx) as usize).min(max_start);
+            let c = ((2 + sx) as usize).min(4);
+            let r = ((2 + sy) as usize).min(4);
+            let h = u32::from_ne_bytes(col_m[c..c + 4].try_into().unwrap());
+            let m = (u32x4::splat(h) & u32x4::from_slice(&row_m[r..r + 4])).to_ne_bytes();
+            (start, m)
+        };
+        let pair =
+            |d: usize, t: usize| -> [(usize, u8x16); 2] { [make_tap(d, t, 1), make_tap(d, t, -1)] };
+        let dummy = (0usize, u8x16::splat(0));
+        let pri_t = if PRI { [pair(dir, 0), pair(dir, 1)] } else { [[dummy; 2]; 2] };
+        let sec_t = if SEC {
+            let (s0, s1) = ((dir + 6) & 7, (dir + 2) & 7);
+            [[pair(s0, 0), pair(s1, 0)], [pair(s0, 1), pair(s1, 1)]]
+        } else {
+            [[[dummy; 2]; 2]; 2]
+        };
+        let center_off = base as usize;
+        for (dst, src) in dst.into_iter().zip(src) {
+            let src = &src[..7 * src_stride + 8];
+            let mut dst = &mut dst[..3 * dst_stride + 4];
+            let load4 = |start: usize| -> u8x16 {
+                let w = &src[start..start + win_len];
+                let (r0, w) = w.split_at(src_stride);
+                let (r1, w) = w.split_at(src_stride);
+                let (r2, r3) = w.split_at(src_stride);
+                u32x4::from_array([
+                    u32::from_ne_bytes(load_px::<T, 4>(r0)),
+                    u32::from_ne_bytes(load_px::<T, 4>(r1)),
+                    u32::from_ne_bytes(load_px::<T, 4>(r2)),
+                    u32::from_ne_bytes(load_px::<T, 4>(r3)),
+                ])
+                .to_ne_bytes()
+            };
+            let x = load4(center_off);
+            let masked = |(start, m): (usize, u8x16)| -> u8x16 {
+                let p = load4(start);
+                (p & m) | (x & !m)
+            };
+            let v = compute_taps::<PRI, SEC>(
+                x,
+                &k,
+                |t, s| masked(pri_t[t][s]),
+                |which, t, s| masked(sec_t[t][which][s]),
+            );
+            let rows = u32x4::from_ne_bytes(v).to_array();
+            for (r, &w) in rows.iter().enumerate() {
+                let b = w.to_ne_bytes();
+                let (dr, tail) =
+                    if r < 3 { dst.split_at_mut(dst_stride) } else { (dst, &mut [][..]) };
+                let d: &mut [T; 4] = (&mut dr[..4]).try_into().unwrap();
+                for j in 0..4 {
+                    d[j] = T::from_i32(b[j] as i32);
+                }
+                dst = tail;
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub(super) fn filter_edges_4x4_dir<T: Pixel, const N: usize>(
+        dst: [&mut [T]; N],
+        dst_stride: usize,
+        src: [&[T]; N],
+        src_stride: usize,
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+        dir: usize,
+        edges: u8,
+    ) {
+        match (pri_str != 0, sec_str != 0) {
+            (true, true) => filter_edges_4x4::<T, true, true, N>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, edges,
+            ),
+            (true, false) => filter_edges_4x4::<T, true, false, N>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, edges,
+            ),
+            _ => filter_edges_4x4::<T, false, true, N>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, edges,
+            ),
+        }
+    }
+
+    /// Cold fallback for non-square (`8x4` / `4x8`) frame-border blocks in
+    /// `u8` lanes (4:2:2 / 4:4:0 chroma).
+    #[allow(clippy::too_many_arguments)]
+    #[cold]
+    #[inline(never)]
+    pub(super) fn filter_edges_rect<T: Pixel>(
         dst: &mut [T],
         dst_stride: usize,
         src: &[T],
@@ -1060,19 +1354,14 @@ mod u8_path {
         tap_set: usize,
         edges: u8,
     ) {
-        match (w, h) {
-            (8, 8) => filter_edges_wh::<T, 8, 8>(
+        if (w, h) == (8, 4) {
+            filter_edges_wh::<T, 8, 4>(
                 dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set, edges,
-            ),
-            (4, 4) => filter_edges_wh::<T, 4, 4>(
+            );
+        } else {
+            filter_edges_wh::<T, 4, 8>(
                 dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set, edges,
-            ),
-            (8, 4) => filter_edges_wh::<T, 8, 4>(
-                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set, edges,
-            ),
-            _ => filter_edges_wh::<T, 4, 8>(
-                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir, tap_set, edges,
-            ),
+            );
         }
     }
 
@@ -1269,6 +1558,31 @@ mod u8_path {
         k: &K8,
         tap: impl Fn(usize, usize, isize) -> u8x16,
     ) -> u8x16 {
+        let (s0, s1) = ((dir + 6) & 7, (dir + 2) & 7);
+        compute_taps::<PRI, SEC>(
+            x,
+            k,
+            |t, s| tap(dir, t, if s == 0 { 1 } else { -1 }),
+            |which, t, s| {
+                tap(
+                    if which == 0 { s0 } else { s1 },
+                    t,
+                    if s == 0 { 1 } else { -1 },
+                )
+            },
+        )
+    }
+
+    /// Like [`compute`], with primary (`pri_tap(t, side)`) and secondary
+    /// (`sec_tap(which, t, side)`) taps separated by compile-time indices
+    /// (`t` in `0..2`, `which` in `0..2`, `side` = 0 for `+off`, 1 for `-off`).
+    #[inline(always)]
+    fn compute_taps<const PRI: bool, const SEC: bool>(
+        x: u8x16,
+        k: &K8,
+        pri_tap: impl Fn(usize, usize) -> u8x16,
+        sec_tap: impl Fn(usize, usize, usize) -> u8x16,
+    ) -> u8x16 {
         let clamp = PRI && SEC;
         let mut min = x;
         let mut max = x;
@@ -1297,12 +1611,10 @@ mod u8_path {
             let mut min32 = xx;
             let mut max32 = xx;
             macro_rules! pair32 {
-                ($d:expr, $t:expr, $th:expr, $sh:expr) => {{
-                    let a = tap($d, $t, 1);
-                    let b = tap($d, $t, -1);
+                ($a:expr, $b:expr, $th:expr, $sh:expr) => {{
                     let ab: u8x32 = simd_swizzle!(
-                        a,
-                        b,
+                        $a,
+                        $b,
                         [
                             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
                             20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
@@ -1323,8 +1635,8 @@ mod u8_path {
                     mask: dup(k.pri_sh.mask),
                 };
                 let mask = dup(k.even_mask.cast::<u8>()).cast::<i8>();
-                let p0 = pair32!(dir, 0, th, sh);
-                let p1 = pair32!(dir, 1, th, sh);
+                let p0 = pair32!(pri_tap(0, 0), pri_tap(0, 1), th, sh);
+                let p1 = pair32!(pri_tap(1, 0), pri_tap(1, 1), th, sh);
                 let p01 = p0 + p1;
                 e32 = p01;
                 f32 = p01 + ((p0 - p1) & mask);
@@ -1335,9 +1647,10 @@ mod u8_path {
                     sh: k.sec_sh.sh,
                     mask: dup(k.sec_sh.mask),
                 };
-                let (s0, s1) = ((dir + 6) & 7, (dir + 2) & 7);
-                let c0 = pair32!(s0, 0, th, sh) + pair32!(s1, 0, th, sh);
-                let c1 = pair32!(s0, 1, th, sh) + pair32!(s1, 1, th, sh);
+                let c0 = pair32!(sec_tap(0, 0, 0), sec_tap(0, 0, 1), th, sh)
+                    + pair32!(sec_tap(1, 0, 0), sec_tap(1, 0, 1), th, sh);
+                let c1 = pair32!(sec_tap(0, 1, 0), sec_tap(0, 1, 1), th, sh)
+                    + pair32!(sec_tap(1, 1, 0), sec_tap(1, 1, 1), th, sh);
                 e32 = if PRI { e32 + c0 } else { c0 };
                 f32 = if PRI { f32 + c1 } else { c1 };
             }
@@ -1366,9 +1679,9 @@ mod u8_path {
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
         let (e, f) = {
             macro_rules! pair {
-                ($d:expr, $t:expr, $th:expr, $sh:expr) => {{
-                    let a = tap($d, $t, 1);
-                    let b = tap($d, $t, -1);
+                ($a:expr, $b:expr, $th:expr, $sh:expr) => {{
+                    let a = $a;
+                    let b = $b;
                     if clamp {
                         min = min.simd_min(a).simd_min(b);
                         max = max.simd_max(a).simd_max(b);
@@ -1378,16 +1691,17 @@ mod u8_path {
             }
             let (mut e, mut f) = (i8x16::splat(0), i8x16::splat(0));
             if PRI {
-                let p0 = pair!(dir, 0, k.pri_th, k.pri_sh);
-                let p1 = pair!(dir, 1, k.pri_th, k.pri_sh);
+                let p0 = pair!(pri_tap(0, 0), pri_tap(0, 1), k.pri_th, k.pri_sh);
+                let p1 = pair!(pri_tap(1, 0), pri_tap(1, 1), k.pri_th, k.pri_sh);
                 let p01 = p0 + p1;
                 e = p01;
                 f = p01 + ((p0 - p1) & k.even_mask);
             }
             if SEC {
-                let (s0, s1) = ((dir + 6) & 7, (dir + 2) & 7);
-                let c0 = pair!(s0, 0, k.sec_th, k.sec_sh) + pair!(s1, 0, k.sec_th, k.sec_sh);
-                let c1 = pair!(s0, 1, k.sec_th, k.sec_sh) + pair!(s1, 1, k.sec_th, k.sec_sh);
+                let c0 = pair!(sec_tap(0, 0, 0), sec_tap(0, 0, 1), k.sec_th, k.sec_sh)
+                    + pair!(sec_tap(1, 0, 0), sec_tap(1, 0, 1), k.sec_th, k.sec_sh);
+                let c1 = pair!(sec_tap(0, 1, 0), sec_tap(0, 1, 1), k.sec_th, k.sec_sh)
+                    + pair!(sec_tap(1, 1, 0), sec_tap(1, 1, 1), k.sec_th, k.sec_sh);
                 e = if PRI { e + c0 } else { c0 };
                 f = if PRI { f + c1 } else { c1 };
             }
@@ -1811,73 +2125,483 @@ mod u8_path {
         }
     }
 
-    /// A 4x4 block without a tmp copy: its 8 rows (with the border) are
-    /// loaded once and every tap vector is one table lookup on two row
-    /// pairs. `DIR` is the (constant) direction. Same contract as
-    /// [`filter`].
+    /// Stores two 8-sample rows from `v` into `dst` (stride `dst_stride`),
+    /// returning the remaining rows slice (empty on the last pair).
+    #[inline(always)]
+    fn store2_8<'a, T: Pixel>(
+        dst: &'a mut [T],
+        dst_stride: usize,
+        v: u8x16,
+        last: bool,
+    ) -> &'a mut [T] {
+        let rows = u64x2::from_ne_bytes(v).to_array();
+        let (r0, rest) = dst.split_at_mut(dst_stride);
+        let d0: &mut [T; 8] = (&mut r0[..8]).try_into().unwrap();
+        let b0 = rows[0].to_ne_bytes();
+        for j in 0..8 {
+            d0[j] = T::from_i32(b0[j] as i32);
+        }
+        let b1 = rows[1].to_ne_bytes();
+        if last {
+            let d1: &mut [T; 8] = (&mut rest[..8]).try_into().unwrap();
+            for j in 0..8 {
+                d1[j] = T::from_i32(b1[j] as i32);
+            }
+            rest
+        } else {
+            let (r1, tail) = rest.split_at_mut(dst_stride);
+            let d1: &mut [T; 8] = (&mut r1[..8]).try_into().unwrap();
+            for j in 0..8 {
+                d1[j] = T::from_i32(b1[j] as i32);
+            }
+            tail
+        }
+    }
+
+    /// Constant-stride (`S == 36`, i.e. 4:2:0 `CdefSrc`) fast path of
+    /// [`filter_4x4`]: all tap offsets are table lookups, windows are
+    /// fixed-size thin slices (`&[T; 112]`) with zero inner bounds checks
+    /// and immediate-offset row loads.
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     #[allow(clippy::too_many_arguments)]
     #[inline(never)]
-    pub(super) fn filter_4x4<T: Pixel, const DIR: usize, const PRI: bool, const SEC: bool>(
-        dst: &mut [T],
+    fn filter_4x4_s36<T: Pixel, const PRI: bool, const SEC: bool, const N: usize>(
+        dst: [&mut [T]; N],
         dst_stride: usize,
-        src: &[T],
+        src: [&[T]; N],
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+        dir: usize,
+    ) {
+        const S: usize = 36;
+        const SRC_LEN: usize = 7 * S + 8;
+        const WIN_LEN: usize = 3 * S + 4;
+        const BASE: isize = (2 * S + 2) as isize;
+        const MAX_START: usize = 4 * S + 4;
+        const OFF: [[isize; 2]; 8] = [
+            [-(S as isize) + 1, -2 * (S as isize) + 2],
+            [1, -(S as isize) + 2],
+            [1, 2],
+            [1, (S as isize) + 2],
+            [(S as isize) + 1, 2 * (S as isize) + 2],
+            [S as isize, 2 * (S as isize) + 1],
+            [S as isize, 2 * (S as isize)],
+            [S as isize, 2 * (S as isize) - 1],
+        ];
+        let dst_stride = dst_stride as u32 as usize;
+        assert!(dst_stride >= 4);
+        let dir = dir & 7;
+        let k = K8::new::<PRI, SEC>(pri_str, sec_str, damping, (pri_str & 1) as usize);
+        let off_pair = |d: usize, t: usize| -> [usize; 2] {
+            let off = OFF[d][t];
+            [
+                ((BASE + off) as usize).min(MAX_START),
+                ((BASE - off) as usize).min(MAX_START),
+            ]
+        };
+        let pri_off = if PRI { [off_pair(dir, 0), off_pair(dir, 1)] } else { [[0; 2]; 2] };
+        let sec_off = if SEC {
+            let (s0, s1) = ((dir + 6) & 7, (dir + 2) & 7);
+            [
+                [off_pair(s0, 0), off_pair(s1, 0)],
+                [off_pair(s0, 1), off_pair(s1, 1)],
+            ]
+        } else {
+            [[[0; 2]; 2]; 2]
+        };
+        for (dst, src) in dst.into_iter().zip(src) {
+            let src: &[T; SRC_LEN] = src[..SRC_LEN].try_into().unwrap();
+            let mut dst = &mut dst[..3 * dst_stride + 4];
+            let load4 = |start: usize| -> u8x16 {
+                let s = start.min(MAX_START);
+                let w: &[T; WIN_LEN] = (&src[s..s + WIN_LEN]).try_into().unwrap();
+                u32x4::from_array([
+                    u32::from_ne_bytes(load_px::<T, 4>(&w[..4])),
+                    u32::from_ne_bytes(load_px::<T, 4>(&w[S..S + 4])),
+                    u32::from_ne_bytes(load_px::<T, 4>(&w[2 * S..2 * S + 4])),
+                    u32::from_ne_bytes(load_px::<T, 4>(&w[3 * S..3 * S + 4])),
+                ])
+                .to_ne_bytes()
+            };
+            let v = compute_taps::<PRI, SEC>(
+                load4(BASE as usize),
+                &k,
+                |t, s| load4(pri_off[t][s]),
+                |which, t, s| load4(sec_off[t][which][s]),
+            );
+            let rows = u32x4::from_ne_bytes(v).to_array();
+            for (r, &w) in rows.iter().enumerate() {
+                let b = w.to_ne_bytes();
+                let (dr, tail) =
+                    if r < 3 { dst.split_at_mut(dst_stride) } else { (dst, &mut [][..]) };
+                let d: &mut [T; 4] = (&mut dr[..4]).try_into().unwrap();
+                for j in 0..4 {
+                    d[j] = T::from_i32(b[j] as i32);
+                }
+                dst = tail;
+            }
+        }
+    }
+
+    /// Direction-independent 4x4 block filter without a tmp copy or
+    /// per-direction branch dispatch, for the blocks `src[i]` / `dst[i]` of
+    /// `N` planes (tap offsets and parameter set up are shared).
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    #[allow(clippy::too_many_arguments)]
+    #[cold]
+    #[inline(never)]
+    fn filter_4x4_gen<T: Pixel, const PRI: bool, const SEC: bool, const N: usize>(
+        dst: [&mut [T]; N],
+        dst_stride: usize,
+        src: [&[T]; N],
         src_stride: usize,
         pri_str: i32,
         sec_str: i32,
         damping: i32,
+        dir: usize,
     ) {
         let (src_stride, dst_stride) = (src_stride as u32 as usize, dst_stride as u32 as usize);
-        let src = &src[..7 * src_stride + 8];
-        let dst = &mut dst[..3 * dst_stride + 4];
-        let rows: [u8x8; 8] = std::array::from_fn(|r| {
-            let pos = r * src_stride;
-            u8x8::from_array(load_px::<T, 8>(&src[pos..pos + 8]))
-        });
-        // pairs[r] = rows r and r + 1 as two u64 lanes.
-        let pairs: [u64x2; 7] = std::array::from_fn(|r| {
-            u64x2::from_ne_bytes(simd_swizzle!(
-                rows[r],
-                rows[r + 1],
-                [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-            ))
-        });
-        // Rows 2 + dy..6 + dy, columns 2 + dx..6 + dx. All arguments are
-        // constants after inlining.
-        let at = |dy: isize, dx: isize| {
-            let p0 = pairs[(2 + dy) as usize];
-            let p1 = pairs[(4 + dy) as usize];
-            if dx == 2 {
-                let a = u32x4::from_ne_bytes(p0.to_ne_bytes());
-                let b = u32x4::from_ne_bytes(p1.to_ne_bytes());
-                simd_swizzle!(a, b, [1, 3, 5, 7]).to_ne_bytes()
-            } else if dx == -2 {
-                let a = u32x4::from_ne_bytes(p0.to_ne_bytes());
-                let b = u32x4::from_ne_bytes(p1.to_ne_bytes());
-                simd_swizzle!(a, b, [0, 2, 4, 6]).to_ne_bytes()
-            } else {
-                let sh = ((2 + dx) as u64) * 8;
-                let a = u32x4::from_ne_bytes((p0 >> sh).to_ne_bytes());
-                let b = u32x4::from_ne_bytes((p1 >> sh).to_ne_bytes());
-                simd_swizzle!(a, b, [0, 2, 4, 6]).to_ne_bytes()
-            }
-        };
-        let tap = |d: usize, k: usize, sign: isize| {
-            let [dy, dx] = CDEF_DIRECTIONS[d][k];
-            at(sign * dy, sign * dx)
-        };
+        assert!(src_stride >= 8 && dst_stride >= 4);
+        let dir = dir & 7;
         let k = K8::new::<PRI, SEC>(pri_str, sec_str, damping, (pri_str & 1) as usize);
-        let v = compute::<PRI, SEC>(at(0, 0), DIR, &k, tap);
-        store::<T, 4>(dst, dst_stride, 0, v);
+        let base = (2 * src_stride + 2) as isize;
+        let max_start = 4 * src_stride + 4;
+        let win_len = 3 * src_stride + 4;
+        let off_pair = |d: usize, t: usize| -> [usize; 2] {
+            let off = tap_offset(d, t, src_stride);
+            [
+                ((base + off) as usize).min(max_start),
+                ((base - off) as usize).min(max_start),
+            ]
+        };
+        let pri_off = if PRI { [off_pair(dir, 0), off_pair(dir, 1)] } else { [[0; 2]; 2] };
+        let sec_off = if SEC {
+            let (s0, s1) = ((dir + 6) & 7, (dir + 2) & 7);
+            [
+                [off_pair(s0, 0), off_pair(s1, 0)],
+                [off_pair(s0, 1), off_pair(s1, 1)],
+            ]
+        } else {
+            [[[0; 2]; 2]; 2]
+        };
+        let center_off = base as usize;
+        for (dst, src) in dst.into_iter().zip(src) {
+            let src = &src[..7 * src_stride + 8];
+            let mut dst = &mut dst[..3 * dst_stride + 4];
+            let load4 = |start: usize| -> u8x16 {
+                let w = &src[start..start + win_len];
+                let (r0, w) = w.split_at(src_stride);
+                let (r1, w) = w.split_at(src_stride);
+                let (r2, r3) = w.split_at(src_stride);
+                u32x4::from_array([
+                    u32::from_ne_bytes(load_px::<T, 4>(r0)),
+                    u32::from_ne_bytes(load_px::<T, 4>(r1)),
+                    u32::from_ne_bytes(load_px::<T, 4>(r2)),
+                    u32::from_ne_bytes(load_px::<T, 4>(r3)),
+                ])
+                .to_ne_bytes()
+            };
+            let v = compute_taps::<PRI, SEC>(
+                load4(center_off),
+                &k,
+                |t, s| load4(pri_off[t][s]),
+                |which, t, s| load4(sec_off[t][which][s]),
+            );
+            let rows = u32x4::from_ne_bytes(v).to_array();
+            for (r, &w) in rows.iter().enumerate() {
+                let b = w.to_ne_bytes();
+                let (dr, tail) =
+                    if r < 3 { dst.split_at_mut(dst_stride) } else { (dst, &mut [][..]) };
+                let d: &mut [T; 4] = (&mut dr[..4]).try_into().unwrap();
+                for j in 0..4 {
+                    d[j] = T::from_i32(b[j] as i32);
+                }
+                dst = tail;
+            }
+        }
     }
 
-    /// Calls `$f::<T, DIR, PRI, SEC>` for the runtime direction (`dir <
-    /// 8`; only `dir & 3` matters without primary taps) and strengths.
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    const fn make_off_u8<const S: usize>() -> [[[u8; 2]; 2]; 8] {
+        let base = (2 * S + 2) as isize;
+        let mut out = [[[0u8; 2]; 2]; 8];
+        let mut d = 0;
+        while d < 8 {
+            let mut t = 0;
+            while t < 2 {
+                let [dy, dx] = CDEF_DIRECTIONS[d][t];
+                let off = dy * S as isize + dx;
+                out[d][t][0] = (base + off) as u8;
+                out[d][t][1] = (base - off) as u8;
+                t += 1;
+            }
+            d += 1;
+        }
+        out
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    #[inline(always)]
+    fn load4_s36<T: Pixel>(src: &[T; 260], start: usize) -> u8x16 {
+        const S: usize = 36;
+        const WIN_LEN: usize = 3 * S + 4;
+        const MAX_START: usize = 4 * S + 4;
+        let s = start.min(MAX_START);
+        let w: &[T; WIN_LEN] = (&src[s..s + WIN_LEN]).try_into().unwrap();
+        let r0 = u8x4::from_array(load_px::<T, 4>(&w[..4]));
+        let r1 = u8x4::from_array(load_px::<T, 4>(&w[S..S + 4]));
+        let r2 = u8x4::from_array(load_px::<T, 4>(&w[2 * S..2 * S + 4]));
+        let r3 = u8x4::from_array(load_px::<T, 4>(&w[3 * S..3 * S + 4]));
+        let r01: u8x8 = simd_swizzle!(r0, r1, [0, 1, 2, 3, 4, 5, 6, 7]);
+        let r23: u8x8 = simd_swizzle!(r2, r3, [0, 1, 2, 3, 4, 5, 6, 7]);
+        simd_swizzle!(
+            r01,
+            r23,
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        )
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    #[inline(always)]
+    fn store4_row_slice<T: Pixel>(rows: &mut [&mut [T; 32]; 4], cx: usize, v: u8x16) {
+        let cx = cx & 28;
+        let ws = u32x4::from_ne_bytes(v).to_array();
+        for (row, &w) in rows.iter_mut().zip(&ws) {
+            let b = w.to_ne_bytes();
+            let d: &mut [T; 4] = (&mut row[cx..cx + 4]).try_into().unwrap();
+            for j in 0..4 {
+                d[j] = T::from_i32(b[j] as i32);
+            }
+        }
+    }
+
+    /// Unit-level 8-bit 4:2:0 primary-only dual-chroma filter (`src_stride ==
+    /// 36`, `pri_str > 0`, `sec_str == 0`): hoists `K8` and `src`/`dst` bounds
+    /// checks out of the 64-block loop and separates interior blocks from
+    /// frame-border blocks so the hot interior loop has zero calls, zero
+    /// bounds checks, and zero `K8` reloads.
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn filter_uv_unit_4x4_s36_pri<T: Pixel>(
+        dst: [&mut [T]; 2],
+        dst_stride: usize,
+        src: [&[T]; 2],
+        noskip: &[u8; 8],
+        dirs: &[u32; 8],
+        col_edges: &[u8; 8],
+        y0: usize,
+        plane_h: usize,
+        pri_str: i32,
+        damping: i32,
+        n_rows: usize,
+    ) {
+        const S: usize = 36;
+        const BLK_SRC: usize = 7 * S + 8;
+        const BASE: usize = 2 * S + 2;
+        const OFF_U8: [[[u8; 2]; 2]; 8] = make_off_u8::<S>();
+        use crate::decoder::av1::dsp::cdef::{
+            CDEF_HAVE_BOTTOM, CDEF_HAVE_LEFT, CDEF_HAVE_RIGHT, CDEF_HAVE_TOP,
+        };
+        let dst_stride = dst_stride as u32 as usize;
+        let n_rows = n_rows.min(8);
+        if n_rows == 0 {
+            return;
+        }
+        assert!(dst_stride >= 32);
+        let need_src = (4 * n_rows + 4) * S;
+        let band_len = 3 * dst_stride + 32;
+        let step = 4 * dst_stride;
+        let need_dst = (n_rows - 1) * step + band_len;
+        let src_u = &src[0][..need_src];
+        let src_v = &src[1][..need_src];
+        let [du_all, dv_all] = dst;
+        let mut du_rem = &mut du_all[..need_dst];
+        let mut dv_rem = &mut dv_all[..need_dst];
+        let k = K8::new::<true, false>(pri_str, 0, damping, (pri_str & 1) as usize);
+        let mut inner_col_mask = 0u8;
+        for (c, &ce) in col_edges.iter().enumerate() {
+            if ce == (CDEF_HAVE_LEFT | CDEF_HAVE_RIGHT) {
+                inner_col_mask |= 1 << c;
+            }
+        }
+        for (r, (&row_mask, &row_dirs)) in noskip[..n_rows].iter().zip(dirs).enumerate() {
+            let (du_band, du_next) =
+                if r + 1 < n_rows { du_rem.split_at_mut(step) } else { (du_rem, &mut [][..]) };
+            let (dv_band, dv_next) =
+                if r + 1 < n_rows { dv_rem.split_at_mut(step) } else { (dv_rem, &mut [][..]) };
+            du_rem = du_next;
+            dv_rem = dv_next;
+            if row_mask == 0 {
+                continue;
+            }
+            let du_band = &mut du_band[..band_len];
+            let dv_band = &mut dv_band[..band_len];
+            let r7 = r & 7;
+            let row_src_base = r7 * (4 * S);
+            let y = y0 + 4 * r7;
+            let row_edges =
+                (y > 0) as u8 * CDEF_HAVE_TOP | (y + 4 < plane_h) as u8 * CDEF_HAVE_BOTTOM;
+            let mut inner_mask = if row_edges == (CDEF_HAVE_TOP | CDEF_HAVE_BOTTOM) {
+                row_mask & inner_col_mask
+            } else {
+                0
+            };
+            let mut edge_mask = row_mask & !inner_mask;
+            if edge_mask != 0 {
+                while edge_mask != 0 {
+                    let c = (edge_mask.trailing_zeros() as usize) & 7;
+                    edge_mask &= edge_mask - 1;
+                    let cx = c * 4;
+                    let blk_off = row_src_base + cx;
+                    let dir = ((row_dirs >> (c * 4)) & 7) as usize;
+                    let edges = row_edges | col_edges[c];
+                    filter_edges_4x4::<T, true, false, 2>(
+                        [&mut du_band[cx..], &mut dv_band[cx..]],
+                        dst_stride,
+                        [&src_u[blk_off..], &src_v[blk_off..]],
+                        S,
+                        pri_str,
+                        0,
+                        damping,
+                        dir,
+                        edges,
+                    );
+                }
+            }
+            if inner_mask == 0 {
+                continue;
+            }
+            let (u0, t) = du_band.split_at_mut(dst_stride);
+            let (u1, t) = t.split_at_mut(dst_stride);
+            let (u2, u3) = t.split_at_mut(dst_stride);
+            let mut ru: [&mut [T; 32]; 4] = [
+                (&mut u0[..32]).try_into().unwrap(),
+                (&mut u1[..32]).try_into().unwrap(),
+                (&mut u2[..32]).try_into().unwrap(),
+                (&mut u3[..32]).try_into().unwrap(),
+            ];
+            let (v0, t) = dv_band.split_at_mut(dst_stride);
+            let (v1, t) = t.split_at_mut(dst_stride);
+            let (v2, v3) = t.split_at_mut(dst_stride);
+            let mut rv: [&mut [T; 32]; 4] = [
+                (&mut v0[..32]).try_into().unwrap(),
+                (&mut v1[..32]).try_into().unwrap(),
+                (&mut v2[..32]).try_into().unwrap(),
+                (&mut v3[..32]).try_into().unwrap(),
+            ];
+            let row_u: &[T; 288] = (&src_u[row_src_base..row_src_base + 288])
+                .try_into()
+                .unwrap();
+            let row_v: &[T; 288] = (&src_v[row_src_base..row_src_base + 288])
+                .try_into()
+                .unwrap();
+            while inner_mask != 0 {
+                let c = (inner_mask.trailing_zeros() as usize) & 7;
+                inner_mask &= inner_mask - 1;
+                let cx = c * 4;
+                let dir = ((row_dirs >> (c * 4)) & 7) as usize;
+                let pri_off = OFF_U8[dir];
+                let su: &[T; BLK_SRC] = (&row_u[cx..cx + BLK_SRC]).try_into().unwrap();
+                let vu = compute_taps::<true, false>(
+                    load4_s36(su, BASE),
+                    &k,
+                    |t, s| load4_s36(su, pri_off[t][s] as usize),
+                    |_, _, _| u8x16::splat(0),
+                );
+                store4_row_slice(&mut ru, cx, vu);
+                let sv: &[T; BLK_SRC] = (&row_v[cx..cx + BLK_SRC]).try_into().unwrap();
+                let vv = compute_taps::<true, false>(
+                    load4_s36(sv, BASE),
+                    &k,
+                    |t, s| load4_s36(sv, pri_off[t][s] as usize),
+                    |_, _, _| u8x16::splat(0),
+                );
+                store4_row_slice(&mut rv, cx, vv);
+            }
+        }
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub(super) fn filter_uv_unit_4x4<T: Pixel>(
+        dst: [&mut [T]; 2],
+        dst_stride: usize,
+        src: [&[T]; 2],
+        src_stride: usize,
+        noskip: &[u8; 8],
+        dirs: &[u32; 8],
+        col_edges: &[u8; 8],
+        y0: usize,
+        plane_h: usize,
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+    ) -> bool {
+        if sec_str != 0
+            || pri_str <= 0
+            || pri_str >= 16
+            || src_stride != 36
+            || !(32..=(1 << 24)).contains(&dst_stride)
+            || (damping as u32) > 7
+        {
+            return false;
+        }
+        let mut n_rows = 8usize;
+        while n_rows > 0 && noskip[n_rows - 1] == 0 {
+            n_rows -= 1;
+        }
+        if n_rows == 0 {
+            return true;
+        }
+        let need_src = (4 * n_rows + 4) * 36;
+        let need_dst = (4 * n_rows - 1) * dst_stride + 32;
+        if src[0].len() < need_src
+            || src[1].len() < need_src
+            || dst[0].len() < need_dst
+            || dst[1].len() < need_dst
+        {
+            return false;
+        }
+        filter_uv_unit_4x4_s36_pri(
+            dst, dst_stride, src, noskip, dirs, col_edges, y0, plane_h, pri_str, damping, n_rows,
+        );
+        true
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub(super) fn filter_4x4<T: Pixel, const PRI: bool, const SEC: bool, const N: usize>(
+        dst: [&mut [T]; N],
+        dst_stride: usize,
+        src: [&[T]; N],
+        src_stride: usize,
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+        dir: usize,
+    ) {
+        if src_stride == 36 {
+            filter_4x4_s36::<T, PRI, SEC, N>(dst, dst_stride, src, pri_str, sec_str, damping, dir);
+        } else {
+            filter_4x4_gen::<T, PRI, SEC, N>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir,
+            );
+        }
+    }
+
+    /// Calls `$f::<T, DIR, PRI, SEC $(, $g)*>` for the runtime direction
+    /// (`dir < 8`; only `dir & 3` matters without primary taps) and
+    /// strengths.
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     macro_rules! dispatch_dir {
-        ($f:ident, $pri_str:expr, $sec_str:expr, $dir:expr, ($($arg:expr),*)) => {{
+        ($f:ident $(<$($g:tt),*>)?, $pri_str:expr, $sec_str:expr, $dir:expr, ($($arg:expr),*)) => {{
             macro_rules! call {
                 ($pri:literal, $sec:literal, $d:literal) => {
-                    $f::<T, $d, $pri, $sec>($($arg),*)
+                    $f::<T, $d, $pri, $sec $($(, $g)*)?>($($arg),*)
                 };
             }
             match ($pri_str != 0, $sec_str != 0, $dir & 7) {
@@ -1905,14 +2629,14 @@ mod u8_path {
         }};
     }
 
-    /// [`filter_4x4`] for a runtime direction (`dir < 8`); the strengths
-    /// must not both be 0.
+    /// [`filter_4x4`] for a runtime direction (`dir < 8`) of the blocks of
+    /// `N` planes; the strengths must not both be 0.
     #[allow(clippy::too_many_arguments)]
     #[inline(always)]
-    pub(super) fn filter_4x4_dir<T: Pixel>(
-        dst: &mut [T],
+    pub(super) fn filter_4x4_dir<T: Pixel, const N: usize>(
+        dst: [&mut [T]; N],
         dst_stride: usize,
-        src: &[T],
+        src: [&[T]; N],
         src_stride: usize,
         pri_str: i32,
         sec_str: i32,
@@ -1923,32 +2647,111 @@ mod u8_path {
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
         {
             use avx2::filter_4x4;
-            dispatch_dir!(
-                filter_4x4,
-                pri_str,
-                sec_str,
-                dir,
-                (dst, dst_stride, src, src_stride, pri_str, sec_str, damping, _tap_set)
-            );
+            for (dst, src) in dst.into_iter().zip(src) {
+                dispatch_dir!(
+                    filter_4x4,
+                    pri_str,
+                    sec_str,
+                    dir,
+                    (dst, dst_stride, src, src_stride, pri_str, sec_str, damping, _tap_set)
+                );
+            }
             return;
         }
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-        dispatch_dir!(
-            filter_4x4,
-            pri_str,
-            sec_str,
-            dir,
-            (dst, dst_stride, src, src_stride, pri_str, sec_str, damping)
-        )
+        match (pri_str != 0, sec_str != 0) {
+            (true, false) => filter_4x4::<T, true, false, N>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir,
+            ),
+            (true, true) => filter_4x4::<T, true, true, N>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir,
+            ),
+            _ => filter_4x4::<T, false, true, N>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir,
+            ),
+        }
     }
 
-    /// An 8x8 block without a tmp copy: tap windows are sliced directly on
-    /// `src` and filtered two rows (`u8x16`) at a time. `DIR` is the
-    /// (constant) direction.
+    /// Constant-stride (`S == 68`, i.e. 64-wide `CdefSrc`) fast path of
+    /// [`filter_8x8`]: fixed-size thin tap windows (`&[T; 484]`), table
+    /// lookup offsets, zero inner bounds checks, immediate-offset loads.
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     #[allow(clippy::too_many_arguments)]
     #[inline(never)]
-    pub(super) fn filter_8x8<T: Pixel, const DIR: usize, const PRI: bool, const SEC: bool>(
+    fn filter_8x8_s68<T: Pixel, const PRI: bool, const SEC: bool>(
+        dst: &mut [T],
+        dst_stride: usize,
+        src: &[T],
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+        dir: usize,
+    ) {
+        const S: usize = 68;
+        const SRC_LEN: usize = 11 * S + 12;
+        const WIN_LEN: usize = 7 * S + 8;
+        const BASE: isize = (2 * S + 2) as isize;
+        const MAX_START: usize = 4 * S + 4;
+        const OFF: [[isize; 2]; 8] = [
+            [-(S as isize) + 1, -2 * (S as isize) + 2],
+            [1, -(S as isize) + 2],
+            [1, 2],
+            [1, (S as isize) + 2],
+            [(S as isize) + 1, 2 * (S as isize) + 2],
+            [S as isize, 2 * (S as isize) + 1],
+            [S as isize, 2 * (S as isize)],
+            [S as isize, 2 * (S as isize) - 1],
+        ];
+        let dst_stride = dst_stride as u32 as usize;
+        assert!(dst_stride >= 8);
+        let dir = dir & 7;
+        let src: &[T; SRC_LEN] = src[..SRC_LEN].try_into().unwrap();
+        let mut dst = &mut dst[..7 * dst_stride + 8];
+        let win = |off: isize| -> &[T; WIN_LEN] {
+            let s = ((BASE + off) as usize).min(MAX_START);
+            (&src[s..s + WIN_LEN]).try_into().unwrap()
+        };
+        let pair = |d: usize, t: usize| -> [&[T; WIN_LEN]; 2] {
+            let off = OFF[d][t];
+            [win(off), win(-off)]
+        };
+        let center = win(0);
+        let pri_w = if PRI { [pair(dir, 0), pair(dir, 1)] } else { [[center; 2]; 2] };
+        let sec_w = if SEC {
+            let (s0, s1) = ((dir + 6) & 7, (dir + 2) & 7);
+            [[pair(s0, 0), pair(s1, 0)], [pair(s0, 1), pair(s1, 1)]]
+        } else {
+            [[[center; 2]; 2]; 2]
+        };
+        let k = K8::new::<PRI, SEC>(pri_str, sec_str, damping, (pri_str & 1) as usize);
+        /// Concatenates two `u8x8` rows into one `u8x16`.
+        const CONCAT_8X2: [usize; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+        for r in 0..4 {
+            let p0 = (r & 3) * (2 * S);
+            let p1 = p0 + S;
+            let load2 = |w: &[T; WIN_LEN]| -> u8x16 {
+                let a = u8x8::from_array(load_px::<T, 8>(&w[p0..p0 + 8]));
+                let b = u8x8::from_array(load_px::<T, 8>(&w[p1..p1 + 8]));
+                simd_swizzle!(a, b, CONCAT_8X2)
+            };
+            let v = compute_taps::<PRI, SEC>(
+                load2(center),
+                &k,
+                |t, s| load2(pri_w[t][s]),
+                |which, t, s| load2(sec_w[t][which][s]),
+            );
+            dst = store2_8(dst, dst_stride, v, r == 3);
+        }
+    }
+
+    /// Direction-independent 8x8 block filter without a tmp copy or
+    /// per-direction branch dispatch: tap windows are sliced once on `src`
+    /// and filtered two rows (`u8x16`) at a time.
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    #[allow(clippy::too_many_arguments)]
+    #[cold]
+    #[inline(never)]
+    fn filter_8x8_gen<T: Pixel, const PRI: bool, const SEC: bool>(
         dst: &mut [T],
         dst_stride: usize,
         src: &[T],
@@ -1956,39 +2759,350 @@ mod u8_path {
         pri_str: i32,
         sec_str: i32,
         damping: i32,
+        dir: usize,
     ) {
         let (src_stride, dst_stride) = (src_stride as u32 as usize, dst_stride as u32 as usize);
+        assert!(src_stride >= 12 && dst_stride >= 8);
+        let dir = dir & 7;
         let src = &src[..11 * src_stride + 12];
-        let dst = &mut dst[..7 * dst_stride + 8];
-        let rows: [&[T; 12]; 12] = std::array::from_fn(|r| {
-            (&src[r * src_stride..r * src_stride + 12])
-                .try_into()
-                .unwrap()
-        });
+        let mut dst = &mut dst[..7 * dst_stride + 8];
+        let base = (2 * src_stride + 2) as isize;
+        let max_start = 4 * src_stride + 4;
+        let win_len = 7 * src_stride + 8;
+        let win = |off: isize| -> &[T] {
+            let s = ((base + off) as usize).min(max_start);
+            &src[s..s + win_len]
+        };
+        let pair = |d: usize, t: usize| -> [&[T]; 2] {
+            let off = tap_offset(d, t, src_stride);
+            [win(off), win(-off)]
+        };
+        let mut center = win(0);
+        let mut pri_w = if PRI { [pair(dir, 0), pair(dir, 1)] } else { [[center; 2]; 2] };
+        let mut sec_w = if SEC {
+            let (s0, s1) = ((dir + 6) & 7, (dir + 2) & 7);
+            [[pair(s0, 0), pair(s1, 0)], [pair(s0, 1), pair(s1, 1)]]
+        } else {
+            [[[center; 2]; 2]; 2]
+        };
         let k = K8::new::<PRI, SEC>(pri_str, sec_str, damping, (pri_str & 1) as usize);
         /// Concatenates two `u8x8` rows into one `u8x16`.
         const CONCAT_8X2: [usize; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+        let load2 = |w: &[T]| -> u8x16 {
+            let a = u8x8::from_array(load_px::<T, 8>(&w[..8]));
+            let b = u8x8::from_array(load_px::<T, 8>(&w[src_stride..src_stride + 8]));
+            simd_swizzle!(a, b, CONCAT_8X2)
+        };
         macro_rules! row_pair {
-            ($i:literal) => {{
-                let load2 = |dy: isize, dx: isize| -> u8x16 {
-                    let ry = ($i + 2 + dy) as usize;
-                    let ox = (2 + dx) as usize;
-                    let a = u8x8::from_array(load_px::<T, 8>(&rows[ry][ox..]));
-                    let b = u8x8::from_array(load_px::<T, 8>(&rows[ry + 1][ox..]));
-                    simd_swizzle!(a, b, CONCAT_8X2)
-                };
-                let tap = |d: usize, t: usize, sign: isize| -> u8x16 {
-                    let [dy, dx] = CDEF_DIRECTIONS[d & 7][t];
-                    load2(sign * dy, sign * dx)
-                };
-                let v = compute::<PRI, SEC>(load2(0, 0), DIR, &k, tap);
-                store::<T, 8>(dst, dst_stride, $i, v);
+            (step) => {{
+                let v = compute_taps::<PRI, SEC>(
+                    load2(center),
+                    &k,
+                    |t, s| load2(pri_w[t][s]),
+                    |which, t, s| load2(sec_w[t][which][s]),
+                );
+                dst = store2_8(dst, dst_stride, v, false);
+                let step = 2 * src_stride;
+                center = &center[step..];
+                if PRI {
+                    pri_w[0][0] = &pri_w[0][0][step..];
+                    pri_w[0][1] = &pri_w[0][1][step..];
+                    pri_w[1][0] = &pri_w[1][0][step..];
+                    pri_w[1][1] = &pri_w[1][1][step..];
+                }
+                if SEC {
+                    for t in 0..2 {
+                        for p in 0..2 {
+                            sec_w[t][p][0] = &sec_w[t][p][0][step..];
+                            sec_w[t][p][1] = &sec_w[t][p][1][step..];
+                        }
+                    }
+                }
+            }};
+            (last) => {{
+                let v = compute_taps::<PRI, SEC>(
+                    load2(center),
+                    &k,
+                    |t, s| load2(pri_w[t][s]),
+                    |which, t, s| load2(sec_w[t][which][s]),
+                );
+                let _ = store2_8(dst, dst_stride, v, true);
             }};
         }
-        row_pair!(0);
-        row_pair!(2);
-        row_pair!(4);
-        row_pair!(6);
+        row_pair!(step);
+        row_pair!(step);
+        row_pair!(step);
+        row_pair!(last);
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    const fn make_off_u16<const S: usize>() -> [[[u16; 2]; 2]; 8] {
+        let base = (2 * S + 2) as isize;
+        let mut out = [[[0u16; 2]; 2]; 8];
+        let mut d = 0;
+        while d < 8 {
+            let mut t = 0;
+            while t < 2 {
+                let [dy, dx] = CDEF_DIRECTIONS[d][t];
+                let off = dy * S as isize + dx;
+                out[d][t][0] = (base + off) as u16;
+                out[d][t][1] = (base - off) as u16;
+                t += 1;
+            }
+            d += 1;
+        }
+        out
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    #[inline(always)]
+    fn store2_row_slice<T: Pixel>(r0: &mut [T; 64], r1: &mut [T; 64], bx: usize, v: u8x16) {
+        let bx = bx & 56;
+        let rows = u64x2::from_ne_bytes(v).to_array();
+        let b0 = rows[0].to_ne_bytes();
+        let d0: &mut [T; 8] = (&mut r0[bx..bx + 8]).try_into().unwrap();
+        for j in 0..8 {
+            d0[j] = T::from_i32(b0[j] as i32);
+        }
+        let b1 = rows[1].to_ne_bytes();
+        let d1: &mut [T; 8] = (&mut r1[bx..bx + 8]).try_into().unwrap();
+        for j in 0..8 {
+            d1[j] = T::from_i32(b1[j] as i32);
+        }
+    }
+
+    /// Unit-level 8-bit 8x8 primary-only luma filter (`src_stride == 68`,
+    /// `y_pri in 1..16`, `y_sec == 0`, `damping <= 7`): hoists active-row
+    /// `src`/`dst` slicing and border-block separation out of the 64-block
+    /// loop, fusing `adjust_strength` with zero inner calls or bounds checks.
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn filter_y_unit_8x8_s68_pri<T: Pixel>(
+        dst: &mut [T],
+        dst_stride: usize,
+        src: &[T],
+        noskip: &[u8; 8],
+        dirs: &[u32; 8],
+        vars: &[[i32; 8]; 8],
+        col_edges: &[u8; 8],
+        y0: usize,
+        plane_h: usize,
+        y_pri: i32,
+        damping: i32,
+        n_rows: usize,
+    ) {
+        const S: usize = 68;
+        const ROW_SRC: usize = 12 * S;
+        const BLK_SRC: usize = 11 * S + 12;
+        const WIN_LEN: usize = 7 * S + 8;
+        const BASE: usize = 2 * S + 2;
+        const MAX_START: usize = 4 * S + 4;
+        const OFF_U16: [[[u16; 2]; 2]; 8] = make_off_u16::<S>();
+        const CONCAT_8X2: [usize; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+        use crate::decoder::av1::dsp::cdef::{
+            adjust_strength, CDEF_HAVE_BOTTOM, CDEF_HAVE_LEFT, CDEF_HAVE_RIGHT, CDEF_HAVE_TOP,
+        };
+        let dst_stride = dst_stride as u32 as usize;
+        let n_rows = n_rows.min(8);
+        if n_rows == 0 {
+            return;
+        }
+        assert!(dst_stride >= 64);
+        let need_src = (8 * n_rows + 4) * S;
+        let band_len = 7 * dst_stride + 64;
+        let step = 8 * dst_stride;
+        let need_dst = (n_rows - 1) * step + band_len;
+        let src = &src[..need_src];
+        let mut d_rem = &mut dst[..need_dst];
+        let mut inner_col_mask = 0u8;
+        for (c, &ce) in col_edges.iter().enumerate() {
+            if ce == (CDEF_HAVE_LEFT | CDEF_HAVE_RIGHT) {
+                inner_col_mask |= 1 << c;
+            }
+        }
+        for (r, ((&row_mask, &row_dirs), r_vars)) in
+            noskip[..n_rows].iter().zip(dirs).zip(vars).enumerate()
+        {
+            let (d_band, d_next) =
+                if r + 1 < n_rows { d_rem.split_at_mut(step) } else { (d_rem, &mut [][..]) };
+            d_rem = d_next;
+            if row_mask == 0 {
+                continue;
+            }
+            let d_band = &mut d_band[..band_len];
+            let r7 = r & 7;
+            let row_src_base = r7 * (8 * S);
+            let y = y0 + 8 * r7;
+            let row_edges =
+                (y > 0) as u8 * CDEF_HAVE_TOP | (y + 8 < plane_h) as u8 * CDEF_HAVE_BOTTOM;
+            let mut inner_mask = if row_edges == (CDEF_HAVE_TOP | CDEF_HAVE_BOTTOM) {
+                row_mask & inner_col_mask
+            } else {
+                0
+            };
+            let mut edge_mask = row_mask & !inner_mask;
+            if edge_mask != 0 {
+                while edge_mask != 0 {
+                    let c = (edge_mask.trailing_zeros() as usize) & 7;
+                    edge_mask &= edge_mask - 1;
+                    let pri = adjust_strength(y_pri, r_vars[c]);
+                    if pri != 0 {
+                        let bx = c * 8;
+                        let dir = ((row_dirs >> (c * 4)) & 7) as usize;
+                        let edges = row_edges | col_edges[c];
+                        filter_edges_8x8::<T, true, false>(
+                            &mut d_band[bx..],
+                            dst_stride,
+                            &src[row_src_base + bx..],
+                            S,
+                            pri,
+                            0,
+                            damping,
+                            dir,
+                            edges,
+                        );
+                    }
+                }
+            }
+            if inner_mask == 0 {
+                continue;
+            }
+            let (r0, t) = d_band.split_at_mut(dst_stride);
+            let (r1, t) = t.split_at_mut(dst_stride);
+            let (r2, t) = t.split_at_mut(dst_stride);
+            let (r3, t) = t.split_at_mut(dst_stride);
+            let (r4, t) = t.split_at_mut(dst_stride);
+            let (r5, t) = t.split_at_mut(dst_stride);
+            let (r6, r7_dst) = t.split_at_mut(dst_stride);
+            let mut rd: [(&mut [T; 64], &mut [T; 64]); 4] = [
+                (
+                    (&mut r0[..64]).try_into().unwrap(),
+                    (&mut r1[..64]).try_into().unwrap(),
+                ),
+                (
+                    (&mut r2[..64]).try_into().unwrap(),
+                    (&mut r3[..64]).try_into().unwrap(),
+                ),
+                (
+                    (&mut r4[..64]).try_into().unwrap(),
+                    (&mut r5[..64]).try_into().unwrap(),
+                ),
+                (
+                    (&mut r6[..64]).try_into().unwrap(),
+                    (&mut r7_dst[..64]).try_into().unwrap(),
+                ),
+            ];
+            let row_src: &[T; ROW_SRC] = (&src[row_src_base..row_src_base + ROW_SRC])
+                .try_into()
+                .unwrap();
+            while inner_mask != 0 {
+                let c = (inner_mask.trailing_zeros() as usize) & 7;
+                inner_mask &= inner_mask - 1;
+                let pri = adjust_strength(y_pri, r_vars[c]);
+                if pri == 0 {
+                    continue;
+                }
+                let bx = c * 8;
+                let dir = ((row_dirs >> (c * 4)) & 7) as usize;
+                let pri_off = OFF_U16[dir];
+                let sblk: &[T; BLK_SRC] = (&row_src[bx..bx + BLK_SRC]).try_into().unwrap();
+                let win = |s: usize| -> &[T; WIN_LEN] {
+                    let s = s.min(MAX_START);
+                    (&sblk[s..s + WIN_LEN]).try_into().unwrap()
+                };
+                let center = win(BASE);
+                let pri_w = [
+                    [win(pri_off[0][0] as usize), win(pri_off[0][1] as usize)],
+                    [win(pri_off[1][0] as usize), win(pri_off[1][1] as usize)],
+                ];
+                let k = K8::new::<true, false>(pri, 0, damping, (pri & 1) as usize);
+                for (p, (d0, d1)) in rd.iter_mut().enumerate() {
+                    let p0 = p * (2 * S);
+                    let p1 = p0 + S;
+                    let load2 = |w: &[T; WIN_LEN]| -> u8x16 {
+                        let a = u8x8::from_array(load_px::<T, 8>(&w[p0..p0 + 8]));
+                        let b = u8x8::from_array(load_px::<T, 8>(&w[p1..p1 + 8]));
+                        simd_swizzle!(a, b, CONCAT_8X2)
+                    };
+                    let v = compute_taps::<true, false>(
+                        load2(center),
+                        &k,
+                        |t, s| load2(pri_w[t][s]),
+                        |_, _, _| u8x16::splat(0),
+                    );
+                    store2_row_slice(d0, d1, bx, v);
+                }
+            }
+        }
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub(super) fn filter_y_unit_8x8<T: Pixel>(
+        dst: &mut [T],
+        dst_stride: usize,
+        src: &[T],
+        src_stride: usize,
+        noskip: &[u8; 8],
+        dirs: &[u32; 8],
+        vars: &[[i32; 8]; 8],
+        col_edges: &[u8; 8],
+        y0: usize,
+        plane_h: usize,
+        y_pri: i32,
+        y_sec: i32,
+        damping: i32,
+    ) -> bool {
+        if y_sec != 0
+            || y_pri <= 0
+            || y_pri >= 16
+            || src_stride != 68
+            || !(64..=(1 << 24)).contains(&dst_stride)
+            || (damping as u32) > 7
+        {
+            return false;
+        }
+        let mut n_rows = 8usize;
+        while n_rows > 0 && noskip[n_rows - 1] == 0 {
+            n_rows -= 1;
+        }
+        if n_rows == 0 {
+            return true;
+        }
+        let need_src = (8 * n_rows + 4) * 68;
+        let need_dst = (8 * n_rows - 1) * dst_stride + 64;
+        if src.len() < need_src || dst.len() < need_dst {
+            return false;
+        }
+        filter_y_unit_8x8_s68_pri(
+            dst, dst_stride, src, noskip, dirs, vars, col_edges, y0, plane_h, y_pri, damping,
+            n_rows,
+        );
+        true
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub(super) fn filter_8x8<T: Pixel, const PRI: bool, const SEC: bool>(
+        dst: &mut [T],
+        dst_stride: usize,
+        src: &[T],
+        src_stride: usize,
+        pri_str: i32,
+        sec_str: i32,
+        damping: i32,
+        dir: usize,
+    ) {
+        if src_stride == 68 {
+            filter_8x8_s68::<T, PRI, SEC>(dst, dst_stride, src, pri_str, sec_str, damping, dir);
+        } else {
+            filter_8x8_gen::<T, PRI, SEC>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir,
+            );
+        }
     }
 
     /// [`filter_8x8`] for a runtime direction (`dir < 8`); the strengths
@@ -2019,13 +3133,17 @@ mod u8_path {
             return;
         }
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-        dispatch_dir!(
-            filter_8x8,
-            pri_str,
-            sec_str,
-            dir,
-            (dst, dst_stride, src, src_stride, pri_str, sec_str, damping)
-        )
+        match (pri_str != 0, sec_str != 0) {
+            (true, false) => filter_8x8::<T, true, false>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir,
+            ),
+            (true, true) => filter_8x8::<T, true, true>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir,
+            ),
+            _ => filter_8x8::<T, false, true>(
+                dst, dst_stride, src, src_stride, pri_str, sec_str, damping, dir,
+            ),
+        }
     }
 }
 
@@ -2476,6 +3594,98 @@ impl<T: Pixel, const BD: u32> CdefKernels<T> for SimdCdef<BD> {
             ),
         }
     }
+
+    #[inline(always)]
+    fn filter_n<const N: usize>(
+        dst: [&mut [T]; N],
+        dst_stride: usize,
+        src: [&[T]; N],
+        src_stride: usize,
+        w: usize,
+        h: usize,
+        pri: i32,
+        sec: i32,
+        damping: i32,
+        dir: usize,
+        edges: u8,
+        bd: u32,
+    ) {
+        debug_assert_eq!(bd, BD);
+        match BD {
+            8 => bd8::filter_px_n(
+                dst, dst_stride, src, src_stride, w, h, pri, sec, damping, dir, edges,
+            ),
+            10 => bd10::filter_px_n(
+                dst, dst_stride, src, src_stride, w, h, pri, sec, damping, dir, edges,
+            ),
+            _ => bd12::filter_px_n(
+                dst, dst_stride, src, src_stride, w, h, pri, sec, damping, dir, edges,
+            ),
+        }
+    }
+
+    #[inline(always)]
+    fn filter_y_8x8_unit(
+        dst: &mut [T],
+        dst_stride: usize,
+        src: &[T],
+        src_stride: usize,
+        noskip: &[u8; 8],
+        dirs: &[u32; 8],
+        vars: &[[i32; 8]; 8],
+        col_edges: &[u8; 8],
+        y0: usize,
+        plane_h: usize,
+        y_pri: i32,
+        y_sec: i32,
+        damping: i32,
+        bd: u32,
+    ) -> bool {
+        debug_assert_eq!(bd, BD);
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+        if BD == 8 && std::mem::size_of::<T>() == 1 {
+            return u8_path::filter_y_unit_8x8(
+                dst, dst_stride, src, src_stride, noskip, dirs, vars, col_edges, y0, plane_h,
+                y_pri, y_sec, damping,
+            );
+        }
+        let _ = (
+            dst, dst_stride, src, src_stride, noskip, dirs, vars, col_edges, y0, plane_h, y_pri,
+            y_sec, damping,
+        );
+        false
+    }
+
+    #[inline(always)]
+    fn filter_uv_4x4_unit(
+        dst: [&mut [T]; 2],
+        dst_stride: usize,
+        src: [&[T]; 2],
+        src_stride: usize,
+        noskip: &[u8; 8],
+        dirs: &[u32; 8],
+        col_edges: &[u8; 8],
+        y0: usize,
+        plane_h: usize,
+        pri: i32,
+        sec: i32,
+        damping: i32,
+        bd: u32,
+    ) -> bool {
+        debug_assert_eq!(bd, BD);
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+        if BD == 8 && std::mem::size_of::<T>() == 1 {
+            return u8_path::filter_uv_unit_4x4(
+                dst, dst_stride, src, src_stride, noskip, dirs, col_edges, y0, plane_h, pri, sec,
+                damping,
+            );
+        }
+        let _ = (
+            dst, dst_stride, src, src_stride, noskip, dirs, col_edges, y0, plane_h, pri, sec,
+            damping,
+        );
+        false
+    }
 }
 
 #[cfg(test)]
@@ -2721,7 +3931,11 @@ mod tests {
             let maxv = (1 << BD) - 1;
             for (w, h) in [(8usize, 8usize), (4, 8), (8, 4), (4, 4)] {
                 for iter in 0..20000 {
-                    let stride = w + 4 + rng.range(0, 5) as usize;
+                    let stride = match iter % 10 {
+                        0 if w == 8 && h == 8 => 68,
+                        0 if w == 4 && h == 4 => 36,
+                        _ => w + 4 + rng.range(0, 5) as usize,
+                    };
                     let mut src = gen_src(&mut rng, w, h, stride, BD);
                     src.resize(src.len() + CDEF_SRC_SLACK, 0);
                     let kind = rng.range(0, 3);
@@ -2775,6 +3989,215 @@ mod tests {
         run::<u16, 8>(32);
         run::<u16, 10>(33);
         run::<u16, 12>(34);
+    }
+
+    /// Tests [`SimdCdef::filter_uv_4x4_unit`] across partial/full unit heights
+    /// (`n_rows = 1..=8`), skipped rows, tight `src`/`dst` slices, and frame
+    /// border combinations against [`PortableCdef::filter`].
+    #[test]
+    fn uv_unit_4x4_vs_portable() {
+        use crate::decoder::av1::dsp::cdef::{
+            CdefKernels, PortableCdef, CDEF_HAVE_BOTTOM, CDEF_HAVE_LEFT, CDEF_HAVE_RIGHT,
+            CDEF_HAVE_TOP,
+        };
+        const S: usize = 36;
+        let mut rng = Rng(41);
+        for iter in 0..400usize {
+            let n_rows = (iter % 8) + 1;
+            let dst_stride = 32 + (iter % 5) * 4;
+            let plane_w: usize = if iter % 7 == 0 { 24 } else { 64 };
+            let plane_h: usize = if iter % 5 == 0 { n_rows * 4 } else { 64 };
+            let x0: usize = if iter % 4 == 0 { 0 } else { 32usize.min(plane_w.saturating_sub(32)) };
+            let y0: usize = if iter % 3 == 0 { 0 } else { plane_h.saturating_sub(n_rows * 4) };
+            let col_edges: [u8; 8] = std::array::from_fn(|c| {
+                let x = x0 + 4 * c;
+                (x > 0) as u8 * CDEF_HAVE_LEFT | (x + 4 < plane_w) as u8 * CDEF_HAVE_RIGHT
+            });
+            let mut noskip = [0u8; 8];
+            let max_cols = ((plane_w - x0) / 4).min(8);
+            let col_bits = ((1u16 << max_cols) - 1) as u8;
+            for r in 0..n_rows {
+                noskip[r] = (rng.range(0, 255) as u8) & col_bits;
+            }
+            if n_rows > 0 && noskip[n_rows - 1] == 0 {
+                noskip[n_rows - 1] = 1;
+            }
+            let dirs: [u32; 8] = std::array::from_fn(|_| rng.next() as u32);
+            let pri = rng.range(1, 15);
+            let damping = rng.range(3, 7);
+            let src_len = (4 * n_rows + 4) * S;
+            let dst_len = (4 * n_rows - 1) * dst_stride + 32;
+            let su: Vec<u8> = (0..src_len).map(|_| rng.range(0, 255) as u8).collect();
+            let sv: Vec<u8> = (0..src_len).map(|_| rng.range(0, 255) as u8).collect();
+            let init_u: Vec<u8> = (0..dst_len).map(|_| rng.range(0, 255) as u8).collect();
+            let init_v: Vec<u8> = (0..dst_len).map(|_| rng.range(0, 255) as u8).collect();
+            let (mut want_u, mut want_v) = (init_u.clone(), init_v.clone());
+            let (mut got_u, mut got_v) = (init_u, init_v);
+            for (r, (&row, &row_dirs)) in noskip.iter().zip(&dirs).enumerate() {
+                let mut mask = row;
+                let y = y0 + 4 * r;
+                let row_edges =
+                    (y > 0) as u8 * CDEF_HAVE_TOP | (y + 4 < plane_h) as u8 * CDEF_HAVE_BOTTOM;
+                while mask != 0 {
+                    let c = mask.trailing_zeros() as usize;
+                    mask &= mask - 1;
+                    let dir = ((row_dirs >> (c * 4)) & 7) as usize;
+                    let edges = row_edges | col_edges[c];
+                    let (sx, dx) = (4 * r * S + 4 * c, 4 * r * dst_stride + 4 * c);
+                    PortableCdef::filter(
+                        &mut want_u[dx..],
+                        dst_stride,
+                        &su[sx..],
+                        S,
+                        4,
+                        4,
+                        pri,
+                        0,
+                        damping,
+                        dir,
+                        edges,
+                        8,
+                    );
+                    PortableCdef::filter(
+                        &mut want_v[dx..],
+                        dst_stride,
+                        &sv[sx..],
+                        S,
+                        4,
+                        4,
+                        pri,
+                        0,
+                        damping,
+                        dir,
+                        edges,
+                        8,
+                    );
+                }
+            }
+            let handled = SimdCdef::<8>::filter_uv_4x4_unit(
+                [&mut got_u, &mut got_v],
+                dst_stride,
+                [&su, &sv],
+                S,
+                &noskip,
+                &dirs,
+                &col_edges,
+                y0,
+                plane_h,
+                pri,
+                0,
+                damping,
+                8,
+            );
+            #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+            {
+                assert!(handled, "iter {iter} should hit fast path");
+                assert_eq!(got_u, want_u, "U mismatch iter {iter}");
+                assert_eq!(got_v, want_v, "V mismatch iter {iter}");
+            }
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            {
+                let _ = (got_u, got_v, want_u, want_v);
+                assert!(!handled);
+            }
+        }
+    }
+
+    /// Tests [`SimdCdef::filter_y_8x8_unit`] across partial/full unit heights
+    /// (`n_rows = 1..=8`), skipped rows, zero-variance blocks, tight slices,
+    /// and frame border combinations against [`PortableCdef::filter`].
+    #[test]
+    fn y_unit_8x8_vs_portable() {
+        use crate::decoder::av1::dsp::cdef::{
+            adjust_strength, CdefKernels, PortableCdef, CDEF_HAVE_BOTTOM, CDEF_HAVE_LEFT,
+            CDEF_HAVE_RIGHT, CDEF_HAVE_TOP,
+        };
+        const S: usize = 68;
+        let mut rng = Rng(42);
+        for iter in 0..300usize {
+            let n_rows = (iter % 8) + 1;
+            let dst_stride = 64 + (iter % 5) * 8;
+            let plane_w: usize = if iter % 7 == 0 { 48 } else { 128 };
+            let plane_h: usize = if iter % 5 == 0 { n_rows * 8 } else { 128 };
+            let x0: usize = if iter % 4 == 0 { 0 } else { 64usize.min(plane_w.saturating_sub(64)) };
+            let y0: usize = if iter % 3 == 0 { 0 } else { plane_h.saturating_sub(n_rows * 8) };
+            let col_edges: [u8; 8] = std::array::from_fn(|c| {
+                let x = x0 + 8 * c;
+                (x > 0) as u8 * CDEF_HAVE_LEFT | (x + 8 < plane_w) as u8 * CDEF_HAVE_RIGHT
+            });
+            let mut noskip = [0u8; 8];
+            let max_cols = ((plane_w - x0) / 8).min(8);
+            let col_bits = ((1u16 << max_cols) - 1) as u8;
+            for r in 0..n_rows {
+                noskip[r] = (rng.range(0, 255) as u8) & col_bits;
+            }
+            if noskip[n_rows - 1] == 0 {
+                noskip[n_rows - 1] = 1;
+            }
+            let dirs: [u32; 8] = std::array::from_fn(|_| rng.next() as u32);
+            let vars: [[i32; 8]; 8] =
+                std::array::from_fn(|_| {
+                    std::array::from_fn(|_| {
+                        if rng.range(0, 4) == 0 {
+                            0
+                        } else {
+                            rng.range(1, 1 << 18)
+                        }
+                    })
+                });
+            let y_pri = rng.range(1, 15);
+            let damping = rng.range(3, 7);
+            let src_len = (8 * n_rows + 4) * S;
+            let dst_len = (8 * n_rows - 1) * dst_stride + 64;
+            let src: Vec<u8> = (0..src_len).map(|_| rng.range(0, 255) as u8).collect();
+            let init: Vec<u8> = (0..dst_len).map(|_| rng.range(0, 255) as u8).collect();
+            let mut want = init.clone();
+            let mut got = init;
+            for (r, (&row, &row_dirs)) in noskip.iter().zip(&dirs).enumerate() {
+                let mut mask = row;
+                let y = y0 + 8 * r;
+                let row_edges =
+                    (y > 0) as u8 * CDEF_HAVE_TOP | (y + 8 < plane_h) as u8 * CDEF_HAVE_BOTTOM;
+                while mask != 0 {
+                    let c = mask.trailing_zeros() as usize;
+                    mask &= mask - 1;
+                    let pri = adjust_strength(y_pri, vars[r][c]);
+                    if pri != 0 {
+                        let dir = ((row_dirs >> (c * 4)) & 7) as usize;
+                        let edges = row_edges | col_edges[c];
+                        let (sx, dx) = (8 * r * S + 8 * c, 8 * r * dst_stride + 8 * c);
+                        PortableCdef::filter(
+                            &mut want[dx..],
+                            dst_stride,
+                            &src[sx..],
+                            S,
+                            8,
+                            8,
+                            pri,
+                            0,
+                            damping,
+                            dir,
+                            edges,
+                            8,
+                        );
+                    }
+                }
+            }
+            let handled = SimdCdef::<8>::filter_y_8x8_unit(
+                &mut got, dst_stride, &src, S, &noskip, &dirs, &vars, &col_edges, y0, plane_h,
+                y_pri, 0, damping, 8,
+            );
+            #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+            {
+                assert!(handled, "iter {iter} should hit fast path");
+                assert_eq!(got, want, "Y mismatch iter {iter}");
+            }
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            {
+                let _ = (got, want);
+                assert!(!handled);
+            }
+        }
     }
 
     /// Random 8x8 block (as in the portable tests): noise, oriented

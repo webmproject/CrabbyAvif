@@ -108,13 +108,21 @@ class Net:
         self.loaded = set()
         self.def_line = {}
         self.origin = {}
+        self.raw_mul = set()
+        self.h_pair = {}
         self.pending_barrier = False
         self.t = [f"i{i}" if i < nz else ZERO for i in range(n)]
         for i in range(nz):
             self.bound[f"i{i}"] = LANE_IN_BOUND
 
     def barrier(self):
-        if self.lanes == "simd" and self.loaded and (self.nz > 2 or self.n > 32):
+        if (
+            self.lanes == "simd"
+            and self.loaded
+            and self.n == 16
+            and self.nz >= 8
+            and self.in_map is None
+        ):
             self.pending_barrier = True
 
     def use(self, v):
@@ -139,7 +147,25 @@ class Net:
         orig = self.origin.get(v, v)
         if orig in self.def_line:
             idx = self.def_line[orig]
-            self.lines[idx] = self.lines[idx].replace(".m1(", ".m1_h0(").replace(".m2(", ".m2_h0(")
+            self.lines[idx] = (
+                self.lines[idx]
+                .replace(".m1_c::<", ".m1_c_h0::<")
+                .replace(".m2_c::<", ".m2_c_h0::<")
+            )
+        self.raw_mul.discard(v)
+        self.raw_mul.discard(orig)
+
+    def consume_in_b(self, v):
+        if v is ZERO:
+            return
+        if v in self.h_pair:
+            x, y = self.h_pair.pop(v)
+            ox = self.origin.get(x, x)
+            oy = self.origin.get(y, y)
+            if ox in self.raw_mul and oy in self.raw_mul:
+                self.mark_h0(y)
+        elif self.origin.get(v, v) in self.raw_mul:
+            self.mark_h0(v)
 
     def perm(self, idx):
         copy = list(self.t)
@@ -149,6 +175,9 @@ class Net:
         ta, tb = self.t[a], self.t[b]
         self.use(ta)
         self.use(tb)
+        if self.lanes == "simd":
+            self.consume_in_b(ta)
+            self.consume_in_b(tb)
         c, s = cos128(angle), sin128(angle)
 
         def lin(terms):
@@ -162,11 +191,17 @@ class Net:
                 if len(terms) == 1:
                     (v, k), = terms
                     if self.lanes == "simd":
-                        return self.var(f"{v}.m1({k})", bound)
+                        res = self.var(f"{v}.m1_c::<{k}>(c)", bound)
+                        if k > 0:
+                            self.raw_mul.add(res)
+                        return res
                     return self.var(f"lmul1(&{v}, {k})", bound)
                 (v0, k0), (v1, k1) = terms
                 if self.lanes == "simd":
-                    return self.var(f"{v0}.m2({k0}, {v1}, {k1})", bound)
+                    res = self.var(f"{v0}.m2_c::<{k0}, {k1}>({v1}, c)", bound)
+                    if not (k0 < 0 and k1 < 0):
+                        self.raw_mul.add(res)
+                    return res
                 return self.var(f"lmul2(&{v0}, {k0}, &{v1}, {k1})", bound)
             expr = ""
             for v, k in terms:
@@ -201,19 +236,31 @@ class Net:
                     assert self.bound[v] * 2 <= I32_MAX
             if self.lanes == "simd":
                 if y is ZERO:
-                    self.mark_h0(x)
                     sa = self.var(f"r.apply({x})", B)
-                    self.origin[sa] = self.origin.get(x, x)
+                    orig = self.origin.get(x, x)
+                    self.origin[sa] = orig
+                    if orig in self.raw_mul:
+                        self.raw_mul.add(sa)
+                    if x in self.h_pair:
+                        self.h_pair[sa] = self.h_pair[x]
                     self.t[a], self.t[b] = sa, sa
                 elif x is ZERO:
-                    self.mark_h0(y)
                     sa = self.var(f"r.apply({y})", B)
-                    self.origin[sa] = self.origin.get(y, y)
+                    orig = self.origin.get(y, y)
+                    self.origin[sa] = orig
+                    if orig in self.raw_mul:
+                        self.raw_mul.add(sa)
+                    if y in self.h_pair:
+                        self.h_pair[sa] = self.h_pair[y]
                     self.t[a] = sa
                     self.t[b] = self.var(f"r.apply(-{y})", B)
                 else:
-                    self.t[a] = self.var(f"r.apply({x} + {y})", B)
-                    self.t[b] = self.var(f"r.apply({x} - {y})", B)
+                    sa = self.var(f"r.apply({x} + {y})", B)
+                    sb = self.var(f"r.apply({x} - {y})", B)
+                    if self.origin.get(x, x) in self.raw_mul and self.origin.get(y, y) in self.raw_mul:
+                        self.h_pair[sa] = (x, y)
+                        self.h_pair[sb] = (x, y)
+                    self.t[a], self.t[b] = sa, sb
                 return
             if y is ZERO:
                 sa = self.var(f"lclamp({x}, r)", B)
@@ -547,12 +594,16 @@ def emit_lanes(name, doc, n, lines, out):
 
 
 def emit_simd(name, doc, n, lines, out, inline_never=False):
-    uses_r = any("r.apply" in l or ", r)" in l for l in lines)
+    uses_r = any("r.apply" in l or ", r," in l for l in lines)
+    uses_c = any("(c)" in l or ", c)" in l for l in lines)
     out.append(f"/// {doc}")
     if inline_never:
         out.append("#[inline(never)]")
     out.append("#[rustfmt::skip]")
-    out.append(f"pub(super) fn {name}<V: TxLanes>(t: &mut [V], {'r' if uses_r else '_r'}: Clamp<V>) {{")
+    out.append(
+        f"pub(super) fn {name}<V: TxLanes>(t: &mut [V], "
+        f"{'r' if uses_r else '_r'}: Clamp<V>, {'c' if uses_c else '_c'}: &CosTable) {{"
+    )
     out.append(f"    let t: &mut [V; {n}] = (&mut t[..{n}]).try_into().unwrap();")
     for l in lines:
         out.append("    " + l)
@@ -562,9 +613,13 @@ def emit_simd(name, doc, n, lines, out, inline_never=False):
 
 def emit_simd_odd(name, n, lines, out):
     uses_r = any("r.apply" in l for l in lines)
+    uses_c = any("(c)" in l or ", c)" in l for l in lines)
     out.append("#[inline(never)]")
     out.append("#[rustfmt::skip]")
-    out.append(f"fn {name}<V: TxLanes>(t: &mut [V; {n}], {'r' if uses_r else '_r'}: Clamp<V>) {{")
+    out.append(
+        f"fn {name}<V: TxLanes>(t: &mut [V; {n}], "
+        f"{'r' if uses_r else '_r'}: Clamp<V>, {'c' if uses_c else '_c'}: &CosTable) {{"
+    )
     for l in lines:
         out.append("    " + l)
     out.append("}")
@@ -615,7 +670,7 @@ def dct32_simd(nz, out):
     if nz == 32:
         for i in range(8, 16):
             lines.append(f"let e{i} = t[{2 * i}];")
-    lines.append(f"idct32_odd_nz{nz}(t, r);")
+    lines.append(f"idct32_odd_nz{nz}(t, r, c);")
     if nz == 32:
         for i in range(8, 16):
             lines.append(f"t[{2 * (i - 8) + 1}] = e{i};")
@@ -673,13 +728,13 @@ def dct64_simd(nz, out):
             s_tail.lines.append(f"t[{32 + idx}] = {s_tail.t[idx]};")
 
     lines = [
-        f"idct64_odd0_nz{nz}(t, r);",
-        f"idct64_odd1_nz{nz}(t, r);",
+        f"idct64_odd0_nz{nz}(t, r, c);",
+        f"idct64_odd1_nz{nz}(t, r, c);",
     ] + s_tail.lines + [
         f"t[{i}] = t[{2 * i}];" for i in range(1, nz // 2)
     ]
     even_nz = max(2, nz // 2)
-    lines.append(f"idct32_nz{even_nz}(t, r);")
+    lines.append(f"idct32_nz{even_nz}(t, r, c);")
     lines.append("for i in 0..32 {")
     lines.append("    let a = t[i];")
     lines.append("    let b = t[63 - i];")
@@ -718,7 +773,7 @@ def main_simd():
     out.append("")
     out.append("#![allow(clippy::all, unused_variables)]")
     out.append("")
-    out.append("use super::{Clamp, TxLanes};")
+    out.append("use super::{Clamp, CosTable, TxLanes};")
     out.append("")
     dct_variants = {2: [4, 2], 3: [8, 4, 2], 4: [16, 8, 4, 2]}
     for N, nzs in dct_variants.items():
@@ -738,7 +793,7 @@ def main_simd():
     for nz in [16, 8, 4, 2, 1]:
         doc = f"Inverse ADST16 with inputs `{nz}..` zero." if nz < 16 else "Inverse ADST16."
         emit_simd(f"iadst16_nz{nz}", doc, 16, adst16(nz, "simd"), out)
-    sys.stdout.write("\n".join(out) + "\n")
+    sys.stdout.write("\n".join(out).rstrip() + "\n")
 
 
 def main():
@@ -794,7 +849,7 @@ def main():
     for nz in [16, 8, 4]:
         emit_lanes(f"iadst16_nz{nz}_l", f"Inverse ADST16 with inputs `{nz}..` zero.", 16,
                    adst16(nz, True), out)
-    sys.stdout.write("\n".join(out) + "\n")
+    sys.stdout.write("\n".join(out).rstrip() + "\n")
 
 
 if "--simd" in sys.argv[1:]:

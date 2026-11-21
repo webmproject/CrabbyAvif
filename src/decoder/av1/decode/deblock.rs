@@ -440,10 +440,33 @@ fn fill_u8(dst: &mut [u8], val: u8) {
     }
 }
 
-/// Vertical edge kernel sizes of the 4x4 rows `r4_0..r4_0 + n_r` and
-/// columns `c4_0..c4_0 + n_c` of plane type `pt`, row major into `vs`
-/// (`ncp`, a multiple of 16, per row). `any[ci]` is non-zero for the
-/// columns with any edge.
+/// Transposes a 16x16 byte matrix held as 16 row vectors (four rounds of
+/// the perfect shuffle: each one rotates the 8 index bits by one).
+#[cfg(feature = "native_av1_simd")]
+#[inline(always)]
+fn transpose16(mut v: [V16; 16]) -> [V16; 16] {
+    for _ in 0..4 {
+        let mut w = [V16::splat(0); 16];
+        for j in 0..8 {
+            (w[2 * j], w[2 * j + 1]) = v[j].interleave(v[j + 8]);
+        }
+        v = w;
+    }
+    v
+}
+
+/// Rows of the column major vertical edge size buffer of
+/// [`v_edge_sizes`] (one superblock row of 4x4 rows).
+const VS_ROWS: usize = 32;
+
+/// Vertical edge kernel sizes of the 4x4 rows `r4_0..r4_0 + n_r`
+/// (`n_r <= VS_ROWS`) and columns `c4_0..c4_0 + n_c` of plane type `pt`,
+/// column major into `vs` (`VS_ROWS` entries per column, `ncp`, a
+/// multiple of 16, columns): the sizes of column `ci` are
+/// `vs[ci * VS_ROWS..][..n_r]`, which is what the edge kernels take, so
+/// that no per column gather (and no store to load forwarding stall of
+/// its byte stores) is needed. `any[ci]` is non-zero for the columns with
+/// any edge.
 #[cfg(feature = "native_av1_simd")]
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
@@ -458,32 +481,42 @@ fn v_edge_sizes<const CHROMA: bool>(
     vs: &mut [u8],
     any: &mut [u8],
 ) {
-    debug_assert!(n_r > 0);
+    debug_assert!(n_r > 0 && n_r <= VS_ROWS);
+    let n_r = n_r.min(VS_ROWS);
     let k15 = V16::splat(15);
     let pos = (LANES + V16::splat((c4_0 & 15) as u8)) & k15;
     let any = &mut any[..ncp];
+    let vs = &mut vs[..ncp * VS_ROWS];
     let all = Mask::<i8, 16>::splat(true);
     let last = LANES.simd_lt(V16::splat((n_c - (ncp - 16)) as u8));
-    for ri in 0..n_r {
-        let row = mi.lf_tx_row(pt, r4_0 + ri);
-        let out = &mut vs[ri * ncp..][..ncp];
-        let mut ci = 0;
-        while ci < ncp {
-            let c = c4_0 + ci;
-            let cur = ld16(row, c);
-            let prev = ld16_left(row, c, cur) & k15;
-            let mut valid = if ci + 16 <= n_c { all } else { last };
-            if c == 0 {
-                // No edge left of the first column of the plane.
-                valid &= LANES.simd_ne(V16::splat(0));
-            }
-            let sz = edge_sizes::<CHROMA>(cur & k15, prev, pos, valid);
-            sz.copy_to_slice(&mut out[ci..ci + 16]);
-            let a = &mut any[ci..ci + 16];
-            let acc = if ri == 0 { sz } else { V16::from_slice(a) | sz };
-            acc.copy_to_slice(a);
-            ci += 16;
+    let mut ci = 0;
+    while ci < ncp {
+        let c = c4_0 + ci;
+        let mut valid = if ci + 16 <= n_c { all } else { last };
+        if c == 0 {
+            // No edge left of the first column of the plane.
+            valid &= LANES.simd_ne(V16::splat(0));
         }
+        let mut acc = V16::splat(0);
+        let mut r0 = 0;
+        while r0 < n_r {
+            let mut rows = [V16::splat(0); 16];
+            for (k, out) in rows[..(n_r - r0).min(16)].iter_mut().enumerate() {
+                let row = mi.lf_tx_row(pt, r4_0 + r0 + k);
+                let cur = ld16(row, c);
+                let prev = ld16_left(row, c, cur) & k15;
+                *out = edge_sizes::<CHROMA>(cur & k15, prev, pos, valid);
+                acc |= *out;
+            }
+            let cols = transpose16(rows);
+            let block = &mut vs[ci * VS_ROWS..][..16 * VS_ROWS];
+            for (j, col) in cols.iter().enumerate() {
+                col.copy_to_slice(&mut block[j * VS_ROWS + r0..][..16]);
+            }
+            r0 += 16;
+        }
+        acc.copy_to_slice(&mut any[ci..ci + 16]);
+        ci += 16;
     }
 }
 
@@ -506,7 +539,7 @@ fn v_edges_filter<T: Pixel>(
     limits_lut: &[FilterLimits; 64],
     bd: u32,
 ) {
-    let n_r = n_r.min(32);
+    let n_r = n_r.min(VS_ROWS);
     let mut c16 = 0;
     while c16 < ncp {
         let mut m = V16::from_slice(&any[c16..c16 + 16])
@@ -515,15 +548,12 @@ fn v_edges_filter<T: Pixel>(
         while m != 0 {
             let ci = c16 + m.trailing_zeros() as usize;
             m &= m - 1;
-            let mut col = [0u8; 32];
-            for (ri, s) in col[..n_r].iter_mut().enumerate() {
-                *s = vs[ri * ncp + ci];
-            }
+            let col = &vs[ci * VS_ROWS..][..n_r];
             for &(p, lvl) in pls {
                 if lvl == 0 {
                     continue;
                 }
-                let vl = [lvl; 32];
+                let vl = [lvl; VS_ROWS];
                 let pl = &mut planes[p];
                 let (stride, yp0) = (pl.stride, r4_0 * MI_SIZE - pl.y0);
                 (dsp.lf_v_edge)(
@@ -531,7 +561,7 @@ fn v_edges_filter<T: Pixel>(
                     stride,
                     xp0 + ci * MI_SIZE,
                     yp0,
-                    &col[..n_r],
+                    col,
                     &vl[..n_r],
                     limits_lut,
                     bd,
@@ -622,11 +652,11 @@ fn deblock_rows_const<T: Pixel>(
         let lvl_v = if do_v { const_lvl(0, 0) } else { 0 };
         let lvl_h = if do_h { const_lvl(0, 1) } else { 0 };
         let ncp = n_c.next_multiple_of(16);
-        let needed = (n_r + 3) * ncp;
+        let needed = (VS_ROWS + 3) * ncp;
         if grid.len() < needed {
             grid.resize(needed, 0);
         }
-        let (vs, rest) = grid[..needed].split_at_mut(n_r * ncp);
+        let (vs, rest) = grid[..needed].split_at_mut(VS_ROWS * ncp);
         let (any, rest) = rest.split_at_mut(ncp);
         let (hs, hl) = rest.split_at_mut(ncp);
         let xp0 = col0 * MI_SIZE;
@@ -689,11 +719,11 @@ fn deblock_rows_const<T: Pixel>(
     debug_assert!(n_r <= 32);
     let n_r = n_r.min(32);
     let ncp = n_c.next_multiple_of(16);
-    let needed = (n_r + 4) * ncp;
+    let needed = (VS_ROWS + 4) * ncp;
     if grid.len() < needed {
         grid.resize(needed, 0);
     }
-    let (vs, rest) = grid[..needed].split_at_mut(n_r * ncp);
+    let (vs, rest) = grid[..needed].split_at_mut(VS_ROWS * ncp);
     let (any, rest) = rest.split_at_mut(ncp);
     let (hs, rest) = rest.split_at_mut(ncp);
     let (hl_u, hl_v) = rest.split_at_mut(ncp);

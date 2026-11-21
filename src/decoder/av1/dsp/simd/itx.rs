@@ -71,9 +71,13 @@ pub(super) fn amap<A: Copy, B: Copy, const N: usize>(a: [A; N], f: impl Fn(A) ->
 pub(crate) trait TxLanes:
     Copy + Add<Output = Self> + Sub<Output = Self> + Neg<Output = Self>
 {
-    /// True if the lanes saturate to the only clamping range they are
-    /// used with (16 bits), making [`Clamp::apply`] a no-op.
-    const SATURATING_16: bool = false;
+    /// Clamping bounds carried by [`Clamp<Self>`]: `()` for saturating
+    /// 16-bit lanes so `Clamp<S16<N>>` is zero-sized (zero ABI cost on
+    /// kernel calls), `(Self, Self)` for wider lanes.
+    type ClampData: Copy;
+
+    fn clamp_data(r: u32) -> Self::ClampData;
+    fn apply_clamp(self, data: Self::ClampData) -> Self;
 
     fn splat(v: i32) -> Self;
     /// Lane-wise (wrapping) product with a constant.
@@ -119,6 +123,32 @@ pub(crate) trait TxLanes:
         self.m2(ka, b, kb)
     }
 
+    /// `Round2(a * KA, 12)` using `cos` (see [`COS_TABLE`]) on aarch64 `S16`.
+    #[inline(always)]
+    fn m1_c<const KA: i32>(self, _cos: &CosTable) -> Self {
+        self.m1(KA)
+    }
+
+    /// Same result as [`Self::m1_c`]; codegen hint for products paired in an
+    /// `H()` butterfly whose output feeds another `B()`.
+    #[inline(always)]
+    fn m1_c_h0<const KA: i32>(self, _cos: &CosTable) -> Self {
+        self.m1_h0(KA)
+    }
+
+    /// `Round2(a * KA + b * KB, 12)` using `cos` (see [`COS_TABLE`]) on
+    /// aarch64 `S16`.
+    #[inline(always)]
+    fn m2_c<const KA: i32, const KB: i32>(self, b: Self, _cos: &CosTable) -> Self {
+        self.m2(KA, b, KB)
+    }
+
+    /// Same result as [`Self::m2_c`]; codegen hint (see [`Self::m1_c_h0`]).
+    #[inline(always)]
+    fn m2_c_h0<const KA: i32, const KB: i32>(self, b: Self, _cos: &CosTable) -> Self {
+        self.m2_h0(KA, b, KB)
+    }
+
     /// `Round2(sum(a[i] * k[i]), 12)`.
     #[inline(always)]
     fn dot_rnd12<const K: usize>(a: [Self; K], k: [i32; K]) -> Self {
@@ -133,6 +163,18 @@ pub(crate) trait TxLanes:
 macro_rules! impl_tx_lanes {
     ($t:ty) => {
         impl<const N: usize> TxLanes for Simd<$t, N> {
+            type ClampData = (Self, Self);
+            #[inline(always)]
+            fn clamp_data(r: u32) -> Self::ClampData {
+                (
+                    Self::splat(-(1 << (r - 1))),
+                    Self::splat((1 << (r - 1)) - 1),
+                )
+            }
+            #[inline(always)]
+            fn apply_clamp(self, (lo, hi): Self::ClampData) -> Self {
+                self.simd_max(lo).simd_min(hi)
+            }
             #[inline(always)]
             fn splat(v: i32) -> Self {
                 Simd::splat(v as $t)
@@ -194,6 +236,18 @@ impl<const N: usize> Neg for Wide<N> {
 }
 
 impl<const N: usize> TxLanes for Wide<N> {
+    type ClampData = (Self, Self);
+    #[inline(always)]
+    fn clamp_data(r: u32) -> Self::ClampData {
+        (
+            Self::splat(-(1 << (r - 1))),
+            Self::splat((1 << (r - 1)) - 1),
+        )
+    }
+    #[inline(always)]
+    fn apply_clamp(self, (lo, hi): Self::ClampData) -> Self {
+        self.max(lo).min(hi)
+    }
     #[inline(always)]
     fn splat(v: i32) -> Self {
         Wide(Simd::splat(v))
@@ -279,7 +333,7 @@ impl<const N: usize> TxLanes for Wide<N> {
 /// Identity transforms, whose outputs can exceed 16 bits, are not run on
 /// these lanes (see `row_pass_identity` and `col_pass16`).
 #[derive(Copy, Clone)]
-pub(crate) struct S16<const N: usize>(Simd<i16, N>);
+pub struct S16<const N: usize>(Simd<i16, N>);
 
 impl<const N: usize> Add for S16<N> {
     type Output = Self;
@@ -538,8 +592,181 @@ fn rnd16<const N: usize>(v: Simd<i16, N>, n: u32) -> Simd<i16, N> {
     }
 }
 
+/// Packed AV1 `cos128` constants in full 128-bit `Simd<i16, 8>` vectors:
+/// - `0..8`: positive magnitudes `k` (grouped by transform size)
+/// - `8..16`: `4096 + k` (for `FORCE_CORR` positive multiplies)
+/// - `16..24`: `4096 - k` (for negative and `FORCE_CORR` subtracting
+///   multiplies)
+///
+/// Passed by reference into `Kern<V>` so aarch64 lowers `m1_c` / `m2_c`
+/// to by-element `smull`/`smlal`/`smlsl` + `rshrn`/`rshrn2` with zero
+/// `dup`s and without LLVM's 28-bit negative-constant folding.
+pub(crate) type CosTable = [Simd<i16, 8>; 24];
+
+const COS_BASE: [[i16; 8]; 8] = [
+    // idct4 + idct8 (7 constants; lane 7 unused)
+    [2896, 1567, 3784, 799, 4017, 3406, 2276, 0],
+    // idct16_odd + iadst8
+    [401, 4076, 3166, 2598, 1931, 3612, 3920, 1189],
+    // idct32_odd q0 + iadst16
+    [201, 4091, 3035, 2751, 1751, 3703, 3857, 1380],
+    // idct32_odd q1 + iadst16
+    [995, 3973, 3513, 2106, 2440, 3290, 4052, 601],
+    // idct64_odd q0
+    [101, 4095, 2967, 2824, 1660, 3745, 3822, 1474],
+    // idct64_odd q1
+    [4036, 700, 2359, 3349, 3461, 2191, 897, 3996],
+    // idct64_odd q2
+    [501, 4065, 3229, 2520, 2019, 3564, 3948, 1092],
+    // idct64_odd q3
+    [4085, 301, 2675, 3102, 3659, 1842, 1285, 3889],
+];
+
+pub(super) const COS_TABLE: CosTable = {
+    let mut out = [Simd::splat(0); 24];
+    let mut i = 0;
+    while i < 8 {
+        let b = COS_BASE[i];
+        let mut add = [0i16; 8];
+        let mut sub = [0i16; 8];
+        let mut j = 0;
+        while j < 8 {
+            add[j] = 4096 + b[j];
+            sub[j] = 4096 - b[j];
+            j += 1;
+        }
+        out[i] = Simd::from_array(b);
+        out[8 + i] = Simd::from_array(add);
+        out[16 + i] = Simd::from_array(sub);
+        i += 1;
+    }
+    out
+};
+
+#[cfg(any(target_arch = "aarch64", test))]
+const fn cos_slot(mag: i32) -> (usize, usize) {
+    let mut i = 0;
+    while i < 8 {
+        let mut j = 0;
+        while j < 8 {
+            if COS_BASE[i][j] as i32 == mag {
+                return (i, j);
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    panic!("constant not in COS_BASE")
+}
+
+#[cfg(any(target_arch = "aarch64", test))]
+#[inline(always)]
+fn cos_lane<const N: usize, const BANK: usize, const K: i32>(cos: &CosTable) -> Simd<i32, N> {
+    let (vi, li) = const { cos_slot(K.abs()) };
+    let v = cos[BANK * 8 + vi];
+    let s: Simd<i16, 8> = match li {
+        0 => simd_swizzle!(v, [0; 8]),
+        1 => simd_swizzle!(v, [1; 8]),
+        2 => simd_swizzle!(v, [2; 8]),
+        3 => simd_swizzle!(v, [3; 8]),
+        4 => simd_swizzle!(v, [4; 8]),
+        5 => simd_swizzle!(v, [5; 8]),
+        6 => simd_swizzle!(v, [6; 8]),
+        _ => simd_swizzle!(v, [7; 8]),
+    };
+    if N <= 8 {
+        s.resize::<N>(0).cast::<i32>()
+    } else {
+        Simd::splat(v[li] as i32)
+    }
+}
+
+/// `Round2(a * KA, 12)` on `i16` lanes via by-element multiply from `cos`
+/// (exact whenever the result fits in `i16`, see `S16`). Negative `KA`
+/// uses `(4096 - |KA|)` and subtracts `a` (avoiding `movi #2048` +
+/// `smlsl`); `FORCE_CORR` on positive `KA` uses `(4096 + KA)` and
+/// subtracts `a` so LLVM keeps a following `sqsub` 128-bit instead of
+/// splitting it into two 64-bit `.4h` ops.
+#[cfg(any(target_arch = "aarch64", test))]
+#[inline(always)]
+fn m1_cos<const N: usize, const KA: i32, const FORCE_CORR: bool>(
+    a: Simd<i16, N>,
+    cos: &CosTable,
+) -> Simd<i16, N> {
+    if KA < 0 {
+        let k = cos_lane::<N, 2, KA>(cos);
+        ((a.cast::<i32>() * k + Simd::splat(1 << 11)) >> 12).cast::<i16>() - a
+    } else if FORCE_CORR {
+        let k = cos_lane::<N, 1, KA>(cos);
+        ((a.cast::<i32>() * k + Simd::splat(1 << 11)) >> 12).cast::<i16>() - a
+    } else {
+        let k = cos_lane::<N, 0, KA>(cos);
+        ((a.cast::<i32>() * k + Simd::splat(1 << 11)) >> 12).cast::<i16>()
+    }
+}
+
+/// `Round2(a * KA + b * KB, 12)` on `i16` lanes via by-element
+/// `smull`/`smlal`/`smlsl` + `rshrn`/`rshrn2` from `cos`.
+#[cfg(any(target_arch = "aarch64", test))]
+#[inline(always)]
+fn m2_cos<const N: usize, const KA: i32, const KB: i32, const FORCE_CORR: bool>(
+    a: Simd<i16, N>,
+    b: Simd<i16, N>,
+    cos: &CosTable,
+) -> Simd<i16, N> {
+    if KA < 0 && KB < 0 {
+        let ka = cos_lane::<N, 2, KA>(cos);
+        let kb = cos_lane::<N, 2, KB>(cos);
+        let s = a.cast::<i32>() * ka + b.cast::<i32>() * kb;
+        ((s + Simd::splat(1 << 11)) >> 12).cast::<i16>() - (a + b)
+    } else if KA < 0 {
+        if FORCE_CORR {
+            let kb = cos_lane::<N, 0, KB>(cos);
+            let ka = cos_lane::<N, 2, KA>(cos);
+            let s = b.cast::<i32>() * kb + a.cast::<i32>() * ka;
+            ((s + Simd::splat(1 << 11)) >> 12).cast::<i16>() - a
+        } else {
+            let kb = cos_lane::<N, 0, KB>(cos);
+            let ka = cos_lane::<N, 0, KA>(cos);
+            let s = b.cast::<i32>() * kb - a.cast::<i32>() * ka;
+            ((s + Simd::splat(1 << 11)) >> 12).cast::<i16>()
+        }
+    } else if KB < 0 {
+        if FORCE_CORR {
+            let ka = cos_lane::<N, 0, KA>(cos);
+            let kb = cos_lane::<N, 2, KB>(cos);
+            let s = a.cast::<i32>() * ka + b.cast::<i32>() * kb;
+            ((s + Simd::splat(1 << 11)) >> 12).cast::<i16>() - b
+        } else {
+            let ka = cos_lane::<N, 0, KA>(cos);
+            let kb = cos_lane::<N, 0, KB>(cos);
+            let s = a.cast::<i32>() * ka - b.cast::<i32>() * kb;
+            ((s + Simd::splat(1 << 11)) >> 12).cast::<i16>()
+        }
+    } else if FORCE_CORR {
+        let ka = cos_lane::<N, 1, KA>(cos);
+        let kb = cos_lane::<N, 0, KB>(cos);
+        let s = a.cast::<i32>() * ka + b.cast::<i32>() * kb;
+        ((s + Simd::splat(1 << 11)) >> 12).cast::<i16>() - a
+    } else {
+        let ka = cos_lane::<N, 0, KA>(cos);
+        let kb = cos_lane::<N, 0, KB>(cos);
+        let s = a.cast::<i32>() * ka + b.cast::<i32>() * kb;
+        ((s + Simd::splat(1 << 11)) >> 12).cast::<i16>()
+    }
+}
+
 impl<const N: usize> TxLanes for S16<N> {
-    const SATURATING_16: bool = true;
+    type ClampData = ();
+
+    #[inline(always)]
+    fn clamp_data(r: u32) -> Self::ClampData {
+        debug_assert_eq!(r, 16);
+    }
+    #[inline(always)]
+    fn apply_clamp(self, _data: Self::ClampData) -> Self {
+        self
+    }
 
     #[inline(always)]
     fn splat(v: i32) -> Self {
@@ -600,6 +827,54 @@ impl<const N: usize> TxLanes for S16<N> {
         self.m2(ka, b, kb)
     }
     #[inline(always)]
+    fn m1_c<const KA: i32>(self, cos: &CosTable) -> Self {
+        #[cfg(target_arch = "aarch64")]
+        {
+            return S16(m1_cos::<N, KA, false>(self.0, cos));
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            let _ = cos;
+            self.m1(KA)
+        }
+    }
+    #[inline(always)]
+    fn m1_c_h0<const KA: i32>(self, cos: &CosTable) -> Self {
+        #[cfg(target_arch = "aarch64")]
+        {
+            return S16(m1_cos::<N, KA, true>(self.0, cos));
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            let _ = cos;
+            self.m1_h0(KA)
+        }
+    }
+    #[inline(always)]
+    fn m2_c<const KA: i32, const KB: i32>(self, b: Self, cos: &CosTable) -> Self {
+        #[cfg(target_arch = "aarch64")]
+        {
+            return S16(m2_cos::<N, KA, KB, false>(self.0, b.0, cos));
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            let _ = cos;
+            self.m2(KA, b, KB)
+        }
+    }
+    #[inline(always)]
+    fn m2_c_h0<const KA: i32, const KB: i32>(self, b: Self, cos: &CosTable) -> Self {
+        #[cfg(target_arch = "aarch64")]
+        {
+            return S16(m2_cos::<N, KA, KB, true>(self.0, b.0, cos));
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            let _ = cos;
+            self.m2_h0(KA, b, KB)
+        }
+    }
+    #[inline(always)]
     fn dot_rnd12<const K: usize>(a: [Self; K], k: [i32; K]) -> Self {
         if let Some(r) = dot_rnd12_pmadd::<N, K, false>(amap(a, |a| a.0), k) {
             return S16(r);
@@ -626,6 +901,56 @@ impl<const N: usize> S16<N> {
     }
 }
 
+/// Coefficient buffer element (`i16` for 8-bit `u8` streams, `i32` for
+/// high bit depths and `u16` 8-bit tests).
+pub(super) trait Coeff: Copy + 'static {
+    const ZERO: Self;
+    fn to_i32(self) -> i32;
+    fn load_i16<const N: usize>(src: &[Self]) -> Simd<i16, N>;
+    fn load_sat16<const N: usize>(src: &[Self]) -> Simd<i16, N>;
+    fn load_i32<const N: usize>(src: &[Self]) -> Simd<i32, N>;
+}
+
+impl Coeff for i32 {
+    const ZERO: Self = 0;
+    #[inline(always)]
+    fn to_i32(self) -> i32 {
+        self
+    }
+    #[inline(always)]
+    fn load_i16<const N: usize>(src: &[Self]) -> Simd<i16, N> {
+        Simd::<i32, N>::from_slice(src).cast()
+    }
+    #[inline(always)]
+    fn load_sat16<const N: usize>(src: &[Self]) -> Simd<i16, N> {
+        sat16(Simd::<i32, N>::from_slice(src))
+    }
+    #[inline(always)]
+    fn load_i32<const N: usize>(src: &[Self]) -> Simd<i32, N> {
+        Simd::from_slice(src)
+    }
+}
+
+impl Coeff for i16 {
+    const ZERO: Self = 0;
+    #[inline(always)]
+    fn to_i32(self) -> i32 {
+        self as i32
+    }
+    #[inline(always)]
+    fn load_i16<const N: usize>(src: &[Self]) -> Simd<i16, N> {
+        Simd::from_slice(src)
+    }
+    #[inline(always)]
+    fn load_sat16<const N: usize>(src: &[Self]) -> Simd<i16, N> {
+        Simd::from_slice(src)
+    }
+    #[inline(always)]
+    fn load_i32<const N: usize>(src: &[Self]) -> Simd<i32, N> {
+        Simd::<i16, N>::from_slice(src).cast()
+    }
+}
+
 /// Lane vectors of the row pass: `N` lanes loaded from / stored to `i32`.
 trait RowLanes<const N: usize>: TxLanes {
     /// True for [`Wide`] lanes (split products), which [`row_pass`]
@@ -636,8 +961,8 @@ trait RowLanes<const N: usize>: TxLanes {
     fn bitor(self, o: Self) -> Self;
     fn last_nz_lane(self) -> usize;
     #[inline(always)]
-    fn load_row(src: &[i32; N]) -> Self {
-        Self::from_i32(Simd::from_array(*src))
+    fn load_row<C: Coeff>(src: &[C; N]) -> Self {
+        Self::from_i32(C::load_i32(src))
     }
     /// Narrows to `i16` (the value must fit).
     #[inline(always)]
@@ -715,6 +1040,10 @@ impl<const N: usize> RowLanes<N> for S16<N> {
         last_nz_lane16(self.0)
     }
     #[inline(always)]
+    fn load_row<C: Coeff>(src: &[C; N]) -> Self {
+        S16(C::load_i16(src))
+    }
+    #[inline(always)]
     fn to_i16(self) -> Simd<i16, N> {
         self.0
     }
@@ -730,32 +1059,25 @@ impl<const N: usize> RowLanes<N> for S16<N> {
 
 /// Signed clamping range of `r` bits, splatted.
 #[derive(Copy, Clone)]
-pub(crate) struct Clamp<V> {
-    lo: V,
-    hi: V,
-}
+pub(crate) struct Clamp<V: TxLanes>(V::ClampData);
+
+const _: () = assert!(std::mem::size_of::<Clamp<S16<8>>>() == 0);
+const _: () = assert!(std::mem::size_of::<Clamp<S16<4>>>() == 0);
 
 impl<V: TxLanes> Clamp<V> {
     #[inline(always)]
     fn bits(r: u32) -> Self {
-        debug_assert!(!V::SATURATING_16 || r == 16);
-        Clamp {
-            lo: V::splat(-(1 << (r - 1))),
-            hi: V::splat((1 << (r - 1)) - 1),
-        }
+        Clamp(V::clamp_data(r))
     }
 
     #[inline(always)]
     pub(crate) fn apply(self, v: V) -> V {
-        if V::SATURATING_16 {
-            return v;
-        }
-        v.max(self.lo).min(self.hi)
+        v.apply_clamp(self.0)
     }
 }
 
 /// A 1D kernel transforming the first `n` entries in place.
-type Kern<V> = fn(&mut [V], Clamp<V>);
+type Kern<V> = fn(&mut [V], Clamp<V>, &CosTable);
 
 /// Selects the 1D kernel for a transform kind and length `1 << log2n`,
 /// given that only the first `nz` inputs (`1 <= nz <= 32`) can be
@@ -766,20 +1088,28 @@ fn select<V: TxLanes>(kind: Tx1d, log2n: usize, nz: usize) -> Kern<V> {
     // 0 for nz <= 1, 1 for 2, 2 for 3..=4, 3 for 5..=8, 4 for 9..=16, 5 for 17..=32.
     let tier = (usize::BITS - nz.saturating_sub(1).leading_zeros()) as usize;
     match (kind, log2n) {
-        (Tx1d::Adst, 2) => [iadst4_nz1::<V>, iadst4::<V>][tier.min(1)],
-        (Tx1d::Adst, 3) => [
-            iadst8_nz1::<V>,
-            iadst8_nz2::<V>,
-            iadst8_nz4::<V>,
-            iadst8_nz8::<V>,
-        ][tier.min(3)],
-        (Tx1d::Adst, 4) => [
-            iadst16_nz1::<V>,
-            iadst16_nz2::<V>,
-            iadst16_nz4::<V>,
-            iadst16_nz8::<V>,
-            iadst16_nz16::<V>,
-        ][tier.min(4)],
+        (Tx1d::Adst, 2) => (const { &[iadst4_nz1::<V>, iadst4::<V>] })[tier.min(1)],
+        (Tx1d::Adst, 3) => {
+            (const {
+                &[
+                    iadst8_nz1::<V>,
+                    iadst8_nz2::<V>,
+                    iadst8_nz4::<V>,
+                    iadst8_nz8::<V>,
+                ]
+            })[tier.min(3)]
+        }
+        (Tx1d::Adst, 4) => {
+            (const {
+                &[
+                    iadst16_nz1::<V>,
+                    iadst16_nz2::<V>,
+                    iadst16_nz4::<V>,
+                    iadst16_nz8::<V>,
+                    iadst16_nz16::<V>,
+                ]
+            })[tier.min(4)]
+        }
         (Tx1d::Identity, 2) => iidentity::<V, 4>,
         (Tx1d::Identity, 3) => iidentity::<V, 8>,
         (Tx1d::Identity, 4) => iidentity::<V, 16>,
@@ -791,36 +1121,52 @@ fn select<V: TxLanes>(kind: Tx1d, log2n: usize, nz: usize) -> Kern<V> {
                 1 << n
             );
             match n {
-                2 => [idct4_nz2::<V>, idct4_nz2::<V>, idct4_nz4::<V>][tier.min(2)],
-                3 => [
-                    idct8_nz2::<V>,
-                    idct8_nz2::<V>,
-                    idct8_nz4::<V>,
-                    idct8_nz8::<V>,
-                ][tier.min(3)],
-                4 => [
-                    idct16_nz2::<V>,
-                    idct16_nz2::<V>,
-                    idct16_nz4::<V>,
-                    idct16_nz8::<V>,
-                    idct16_nz16::<V>,
-                ][tier.min(4)],
-                5 => [
-                    idct32_nz2::<V>,
-                    idct32_nz2::<V>,
-                    idct32_nz4::<V>,
-                    idct32_nz8::<V>,
-                    idct32_nz16::<V>,
-                    idct32_nz32::<V>,
-                ][tier.min(5)],
-                _ => [
-                    idct64_nz2::<V>,
-                    idct64_nz2::<V>,
-                    idct64_nz4::<V>,
-                    idct64_nz8::<V>,
-                    idct64_nz16::<V>,
-                    idct64_nz32::<V>,
-                ][tier.min(5)],
+                2 => (const { &[idct4_nz2::<V>, idct4_nz2::<V>, idct4_nz4::<V>] })[tier.min(2)],
+                3 => {
+                    (const {
+                        &[
+                            idct8_nz2::<V>,
+                            idct8_nz2::<V>,
+                            idct8_nz4::<V>,
+                            idct8_nz8::<V>,
+                        ]
+                    })[tier.min(3)]
+                }
+                4 => {
+                    (const {
+                        &[
+                            idct16_nz2::<V>,
+                            idct16_nz2::<V>,
+                            idct16_nz4::<V>,
+                            idct16_nz8::<V>,
+                            idct16_nz16::<V>,
+                        ]
+                    })[tier.min(4)]
+                }
+                5 => {
+                    (const {
+                        &[
+                            idct32_nz2::<V>,
+                            idct32_nz2::<V>,
+                            idct32_nz4::<V>,
+                            idct32_nz8::<V>,
+                            idct32_nz16::<V>,
+                            idct32_nz32::<V>,
+                        ]
+                    })[tier.min(5)]
+                }
+                _ => {
+                    (const {
+                        &[
+                            idct64_nz2::<V>,
+                            idct64_nz2::<V>,
+                            idct64_nz4::<V>,
+                            idct64_nz8::<V>,
+                            idct64_nz16::<V>,
+                            idct64_nz32::<V>,
+                        ]
+                    })[tier.min(5)]
+                }
             }
         }
     }
@@ -828,7 +1174,7 @@ fn select<V: TxLanes>(kind: Tx1d, log2n: usize, nz: usize) -> Kern<V> {
 
 /// Inverse ADST4 with inputs `1..` zero.
 #[inline(always)]
-fn iadst4_nz1<V: TxLanes>(t: &mut [V], _r: Clamp<V>) {
+fn iadst4_nz1<V: TxLanes>(t: &mut [V], _r: Clamp<V>, _c: &CosTable) {
     let t: &mut [V; 4] = (&mut t[..4]).try_into().unwrap();
     let i0 = t[0];
     t[0] = i0.m1(1321);
@@ -841,7 +1187,7 @@ fn iadst4_nz1<V: TxLanes>(t: &mut [V], _r: Clamp<V>) {
 /// linear combination of the inputs per output. With `i32` lanes and
 /// inputs of at most 18 bits every sum fits in 32 bits (the absolute
 /// coefficients add up to 10950 < 2^14).
-fn iadst4<V: TxLanes>(t: &mut [V], _r: Clamp<V>) {
+fn iadst4<V: TxLanes>(t: &mut [V], _r: Clamp<V>, _c: &CosTable) {
     let t: &mut [V; 4] = (&mut t[..4]).try_into().unwrap();
     let i = *t;
     t[0] = V::dot_rnd12(i, [1321, 3344, 3803, 2482]);
@@ -863,7 +1209,7 @@ fn identity<V: TxLanes, const N: usize>(v: V) -> V {
 }
 
 /// Inverse identity transforms (7.13.2.11 - 7.13.2.14).
-fn iidentity<V: TxLanes, const N: usize>(t: &mut [V], _r: Clamp<V>) {
+fn iidentity<V: TxLanes, const N: usize>(t: &mut [V], _r: Clamp<V>, _c: &CosTable) {
     for v in &mut t[..N] {
         *v = identity::<V, N>(*v);
     }
@@ -924,16 +1270,25 @@ pub(super) const fn rect2(w: usize, h: usize) -> bool {
     w * 2 == h || h * 2 == w
 }
 
+/// Reusable column buffer for [`large::transform_add16`] (`CN == 8`,
+/// up to `64 x 32 / 8 = 256` vectors = 4 KiB). Passed from the caller's
+/// scratch space to avoid per-block stack zeroing (`memset`) and TLS
+/// lookup overhead (`pthread_getspecific` on Android).
+pub type ItxBuf = [S16<8>; 256];
+
+/// Zero-initialized [`ItxBuf`].
+pub const ITX_BUF_ZERO: ItxBuf = [S16(Simd::splat(0)); 256];
+
 /// Per transform size and type entry point: `fn(dst, stride, coeffs,
-/// eob_type)` with `eob_type = eob | (tx_type as usize) << 16`, `eob >= 1`,
-/// non-lossless (see [`itx_table`]). Four integer arguments, so that the
-/// call passes everything in registers.
-pub use crate::decoder::av1::dsp::ItxFn;
+/// eob_type, itx_buf)` with `eob_type = eob | (tx_type as usize) << 16`,
+/// `eob >= 1`, non-lossless (see [`itx_table`]). Fits in six integer
+/// argument registers (`x0..x5` on aarch64, `rdi..r9` on x86_64).
+pub use crate::decoder::av1::dsp::{Itx16Fn, ItxFn};
 
 /// [`ItxFn`] of each `[tx_size as usize][tx_type as usize]` for
 /// [`inv_txfm_add_bd`]'s contract (`eob >= 1`, not lossless; `bd == BD`),
 /// so that callers can skip [`inv_txfm_add_bd`]'s dispatch.
-pub fn itx_table<T: Pixel, const BD: u32>() -> &'static [[ItxFn<T>; 16]; 19] {
+pub const fn itx_table<T: Pixel, const BD: u32>() -> &'static [[ItxFn<T>; 16]; 19] {
     // One monomorphized entry per size (and per transform type for the
     // sizes of at most 8x8), so that the size and type dependent
     // parameters are compile-time constants: one table lookup + indirect
@@ -960,6 +1315,39 @@ pub fn itx_table<T: Pixel, const BD: u32>() -> &'static [[ItxFn<T>; 16]; 19] {
             entries!(T, BD, 16, 64),
             entries!(T, BD, 64, 16),
         ]
+    }
+}
+
+/// [`Itx16Fn`] of each `[tx_size as usize][tx_type as usize]` for 8-bit
+/// `u8` streams (`BD == 8 && size_of::<T>() == 1`), taking `i16`
+/// coefficients directly. Returns `None` for other `(T, BD)`.
+pub const fn itx16_table<T: Pixel, const BD: u32>() -> Option<&'static [[Itx16Fn<T>; 16]; 19]> {
+    const {
+        if BD == 8 && std::mem::size_of::<T>() == 1 {
+            Some(&[
+                entries16!(T, 4, 4),
+                entries16!(T, 8, 8),
+                entries16!(T, 16, 16),
+                entries16!(T, 32, 32),
+                entries16!(T, 64, 64),
+                entries16!(T, 4, 8),
+                entries16!(T, 8, 4),
+                entries16!(T, 8, 16),
+                entries16!(T, 16, 8),
+                entries16!(T, 16, 32),
+                entries16!(T, 32, 16),
+                entries16!(T, 32, 64),
+                entries16!(T, 64, 32),
+                entries16!(T, 4, 16),
+                entries16!(T, 16, 4),
+                entries16!(T, 8, 32),
+                entries16!(T, 32, 8),
+                entries16!(T, 16, 64),
+                entries16!(T, 64, 16),
+            ])
+        } else {
+            None
+        }
     }
 }
 
@@ -990,12 +1378,30 @@ pub fn inv_txfm_add_bd<T: Pixel, const BD: u32>(
         inv_wht4x4_add_bd::<T, BD>(dst, stride, coeffs, tx_type);
         return;
     }
-    itx_table::<T, BD>()[tx_size as usize][tx_type as usize](
-        dst,
-        stride,
-        coeffs,
-        eob | (tx_type as usize) << 16,
-    )
+    let mut itx_buf = ITX_BUF_ZERO;
+    let eob_type = eob | (tx_type as usize) << 16;
+    if let Some(tbl) = const { itx16_table::<T, BD>() } {
+        let mut c = [0i16; 1024];
+        let n = coeffs.len().min(1024);
+        for (d, &s) in c[..n].iter_mut().zip(&coeffs[..n]) {
+            *d = s.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        }
+        tbl[tx_size as usize][tx_type as usize](dst, stride, &mut c, eob_type, &mut itx_buf);
+        for (d, &s) in coeffs[..n].iter_mut().zip(&c[..n]) {
+            *d = s as i32;
+        }
+        return;
+    }
+    let f = itx_table::<T, BD>()[tx_size as usize][tx_type as usize];
+    if let Some(c) = coeffs.first_chunk_mut::<1024>() {
+        f(dst, stride, c, eob_type, &mut itx_buf);
+    } else {
+        let mut c = [0i32; 1024];
+        let n = coeffs.len().min(1024);
+        c[..n].copy_from_slice(&coeffs[..n]);
+        f(dst, stride, &mut c, eob_type, &mut itx_buf);
+        coeffs[..n].copy_from_slice(&c[..n]);
+    }
 }
 
 /// The 16 [`ItxFn`]s of a `W x H` transform size, indexed by `TxType`.
@@ -1008,32 +1414,67 @@ pub fn inv_txfm_add_bd<T: Pixel, const BD: u32>(
 macro_rules! entries {
     ($T:ty, $BD:expr, $W:expr, $H:expr) => {{
         let mut e = [size_entry::<$T, $BD, $W, $H> as ItxFn<$T>; 16];
-        if $W <= 8 && $H <= 8 && $BD <= 10 && (std::mem::size_of::<$T>() == 1) == ($BD == 8) {
-            e[0] = typed_entry::<$T, $BD, $W, $H, 0>;
-            e[1] = typed_entry::<$T, $BD, $W, $H, 1>;
-            e[2] = typed_entry::<$T, $BD, $W, $H, 2>;
-            e[3] = typed_entry::<$T, $BD, $W, $H, 3>;
+        if $BD <= 10 && (std::mem::size_of::<$T>() == 1) == ($BD == 8) {
+            if $W <= 8 && $H <= 8 {
+                e[0] = typed_entry::<$T, $BD, $W, $H, 0>;
+                e[1] = typed_entry::<$T, $BD, $W, $H, 1>;
+                e[2] = typed_entry::<$T, $BD, $W, $H, 2>;
+                e[3] = typed_entry::<$T, $BD, $W, $H, 3>;
+            } else if ($W == 16 && $H == 16) || ($W == 32 && $H == 32) {
+                e[0] = typed_entry::<$T, $BD, $W, $H, 0>;
+            }
         }
         e
     }};
 }
 use entries;
 
+/// The 16 [`Itx16Fn`]s of a `W x H` 8-bit transform size, indexed by
+/// `TxType` (see [`entries`]).
+macro_rules! entries16 {
+    ($T:ty, $W:expr, $H:expr) => {{
+        let mut e = [size_entry16::<$T, $W, $H> as Itx16Fn<$T>; 16];
+        if $W <= 8 && $H <= 8 {
+            e[0] = typed_entry16::<$T, $W, $H, 0>;
+            e[1] = typed_entry16::<$T, $W, $H, 1>;
+            e[2] = typed_entry16::<$T, $W, $H, 2>;
+            e[3] = typed_entry16::<$T, $W, $H, 3>;
+        } else if ($W == 16 && $H == 16) || ($W == 32 && $H == 32) {
+            e[0] = typed_entry16::<$T, $W, $H, 0>;
+        }
+        e
+    }};
+}
+use entries16;
+
 /// [`size_entry`] for the transform type `TxType::ALL[TT]` (the type
 /// bits of `eob_type` are ignored).
 fn typed_entry<T: Pixel, const BD: u32, const W: usize, const H: usize, const TT: u8>(
     dst: &mut [T],
     stride: usize,
-    coeffs: &mut [i32],
+    coeffs: &mut [i32; 1024],
     eob_type: usize,
+    itx_buf: &mut ItxBuf,
 ) {
-    size_entry_inl::<T, BD, W, H>(
-        dst,
-        stride,
-        coeffs,
-        TxType::ALL[TT as usize],
-        eob_type & 0xffff,
-    )
+    if TT == 0 {
+        size_entry_inl::<T, BD, W, H, true>(
+            dst,
+            stride,
+            coeffs,
+            TxType::DCT_DCT,
+            eob_type & 0xffff,
+            itx_buf,
+        );
+    } else {
+        size_entry_inl::<T, BD, W, H, false>(
+            dst,
+            stride,
+            coeffs,
+            TxType::ALL[TT as usize],
+            eob_type & 0xffff,
+            itx_buf,
+        );
+    }
 }
 
 /// [`inv_txfm_add_bd`] for one `W x H` transform size (`eob >= 1`, not
@@ -1041,22 +1482,136 @@ fn typed_entry<T: Pixel, const BD: u32, const W: usize, const H: usize, const TT
 fn size_entry<T: Pixel, const BD: u32, const W: usize, const H: usize>(
     dst: &mut [T],
     stride: usize,
-    coeffs: &mut [i32],
+    coeffs: &mut [i32; 1024],
     eob_type: usize,
+    itx_buf: &mut ItxBuf,
 ) {
     let tx_type = TxType::ALL[(eob_type >> 16) & 15];
-    size_entry_inl::<T, BD, W, H>(dst, stride, coeffs, tx_type, eob_type & 0xffff)
+    size_entry_inl::<T, BD, W, H, false>(dst, stride, coeffs, tx_type, eob_type & 0xffff, itx_buf)
+}
+
+/// 8-bit `i16`-coefficient [`typed_entry`] for `TxType::ALL[TT]`.
+fn typed_entry16<T: Pixel, const W: usize, const H: usize, const TT: u8>(
+    dst: &mut [T],
+    stride: usize,
+    coeffs: &mut [i16; 1024],
+    eob_type: usize,
+    itx_buf: &mut ItxBuf,
+) {
+    if TT == 0 {
+        size_entry_inl16::<T, i16, 8, W, H, true>(
+            dst,
+            stride,
+            coeffs,
+            TxType::DCT_DCT,
+            eob_type & 0xffff,
+            itx_buf,
+        );
+    } else {
+        size_entry_inl16::<T, i16, 8, W, H, false>(
+            dst,
+            stride,
+            coeffs,
+            TxType::ALL[TT as usize],
+            eob_type & 0xffff,
+            itx_buf,
+        );
+    }
+}
+
+/// 8-bit `i16`-coefficient [`size_entry`] for one `W x H` transform size.
+fn size_entry16<T: Pixel, const W: usize, const H: usize>(
+    dst: &mut [T],
+    stride: usize,
+    coeffs: &mut [i16; 1024],
+    eob_type: usize,
+    itx_buf: &mut ItxBuf,
+) {
+    let tx_type = TxType::ALL[(eob_type >> 16) & 15];
+    size_entry_inl16::<T, i16, 8, W, H, false>(
+        dst,
+        stride,
+        coeffs,
+        tx_type,
+        eob_type & 0xffff,
+        itx_buf,
+    )
+}
+
+/// Body of [`size_entry`] / [`size_entry16`] for `BD <= 10` (16-bit
+/// intermediates), inlined into the entry points.
+#[inline(always)]
+fn size_entry_inl16<
+    T: Pixel,
+    C: Coeff,
+    const BD: u32,
+    const W: usize,
+    const H: usize,
+    const DCT_ONLY: bool,
+>(
+    dst: &mut [T],
+    stride: usize,
+    coeffs: &mut [C; 1024],
+    tx_type: TxType,
+    eob: usize,
+    itx_buf: &mut ItxBuf,
+) {
+    let (log2w, log2h) = const { (W.ilog2() as usize, H.ilog2() as usize) };
+    let (tw, th) = const { (if W < 32 { W } else { 32 }, if H < 32 { H } else { 32 }) };
+    let row_shift = const { row_shift(W, H) };
+    let rect2 = const { rect2(W, H) };
+    let stride = stride & 0xffff_ffff;
+    let coeffs = &mut coeffs[..tw * th];
+    assert!(stride >= W && dst.len() >= (H - 1) * stride + W);
+
+    if eob == 1
+        && matches!(
+            tx_type,
+            TxType::DCT_DCT | TxType::IDTX | TxType::V_DCT | TxType::H_DCT
+        )
+    {
+        add_dc_only::<T, C, BD, W, H>(dst, stride, coeffs, tx_type);
+        return;
+    }
+
+    let (col_kind, row_kind) = tx1d_kinds(tx_type);
+    let (eob_rows, eob_cols) =
+        if eob == 1 { (1, 1) } else { eob_bounds(eob, tw, th, row_kind, col_kind) };
+    let p = Params {
+        w: W,
+        h: H,
+        tw,
+        th,
+        log2w,
+        log2h,
+        rect2,
+        row_shift,
+        row_kind,
+        col_kind,
+        col_range: 16,
+        flip_ud: H <= 16 && flip_ud(tx_type),
+        flip_lr: W <= 16 && flip_lr(tx_type),
+        bd: BD,
+        eob_rows,
+        eob_cols,
+    };
+    transform_add16_dispatch::<T, C, BD, DCT_ONLY>(dst, stride, coeffs, &p, itx_buf);
 }
 
 /// Body of [`size_entry`], inlined into [`typed_entry`].
 #[inline(always)]
-fn size_entry_inl<T: Pixel, const BD: u32, const W: usize, const H: usize>(
+fn size_entry_inl<T: Pixel, const BD: u32, const W: usize, const H: usize, const DCT_ONLY: bool>(
     dst: &mut [T],
     stride: usize,
-    coeffs: &mut [i32],
+    coeffs: &mut [i32; 1024],
     tx_type: TxType,
     eob: usize,
+    itx_buf: &mut ItxBuf,
 ) {
+    if BD <= 10 {
+        size_entry_inl16::<T, i32, BD, W, H, DCT_ONLY>(dst, stride, coeffs, tx_type, eob, itx_buf);
+        return;
+    }
     let (log2w, log2h) = const { (W.ilog2() as usize, H.ilog2() as usize) };
     let (tw, th) = const { (if W < 32 { W } else { 32 }, if H < 32 { H } else { 32 }) };
     let row_shift = const { row_shift(W, H) };
@@ -1078,7 +1633,7 @@ fn size_entry_inl<T: Pixel, const BD: u32, const W: usize, const H: usize>(
             TxType::DCT_DCT | TxType::IDTX | TxType::V_DCT | TxType::H_DCT
         )
     {
-        add_dc_only::<T, BD, W, H>(dst, stride, coeffs, tx_type);
+        add_dc_only::<T, i32, BD, W, H>(dst, stride, coeffs, tx_type);
         return;
     }
 
@@ -1103,11 +1658,6 @@ fn size_entry_inl<T: Pixel, const BD: u32, const W: usize, const H: usize>(
         eob_rows,
         eob_cols,
     };
-    if BD <= 10 {
-        // 16-bit intermediates (see `S16`).
-        transform_add16_dispatch::<T, BD>(dst, stride, coeffs, &p);
-        return;
-    }
     if W <= 32 {
         // tw == w: row transforms in place in the coefficient buffer.
         transform_add_bd::<T, BD>(dst, stride, coeffs, &p);
@@ -1128,10 +1678,10 @@ fn size_entry_inl<T: Pixel, const BD: u32, const W: usize, const H: usize>(
 /// (`H_DCT`), a constant column (`V_DCT`) or a single sample (`IDTX`).
 /// Leaves `coeffs[0]` zero.
 #[inline(always)]
-fn add_dc_only<T: Pixel, const BD: u32, const W: usize, const H: usize>(
+fn add_dc_only<T: Pixel, C: Coeff, const BD: u32, const W: usize, const H: usize>(
     dst: &mut [T],
     stride: usize,
-    coeffs: &mut [i32],
+    coeffs: &mut [C],
     tx_type: TxType,
 ) {
     let (log2w, log2h) = const { (W.ilog2() as usize, H.ilog2() as usize) };
@@ -1145,8 +1695,8 @@ fn add_dc_only<T: Pixel, const BD: u32, const W: usize, const H: usize>(
     };
     let row_clamp = ScalarClamp::bits(BD + 8);
     let col_clamp = ScalarClamp::bits(col_range);
-    let mut dc = coeffs[0];
-    coeffs[0] = 0;
+    let mut dc = coeffs[0].to_i32();
+    coeffs[0] = C::ZERO;
     if const { rect2(W, H) } {
         dc = round12(dc as i64 * 2896);
     }
@@ -1414,7 +1964,7 @@ fn row_group_tail<V: RowLanes<N>, const N: usize, const W: usize>(
             *v = v.m1(2896);
         }
     }
-    select::<V>(p.row_kind, p.log2w, nz)(t, row_clamp);
+    select::<V>(p.row_kind, p.log2w, nz)(t, row_clamp, &COS_TABLE);
     match p.row_shift {
         0 => store_row_tiles::<V, N, W, 0>(t, i0, buf, col_clamp),
         1 => store_row_tiles::<V, N, W, 1>(t, i0, buf, col_clamp),
@@ -1553,8 +2103,8 @@ fn col_pass_bd<T: Pixel, const N: usize, const H: usize, const BD: u32>(
             }
             c0[nz_rows..k].fill(Simd::splat(0));
             c1[nz_rows..k].fill(Simd::splat(0));
-            kernel4(&mut c0, clamp4);
-            kernel4(&mut c1, clamp4);
+            kernel4(&mut c0, clamp4, &COS_TABLE);
+            kernel4(&mut c1, clamp4, &COS_TABLE);
             let x0 = if p.flip_lr { w - j0 - 8 } else { j0 };
             if !p.flip_lr && !p.flip_ud {
                 visit_rows::<T, 8, H>(&mut dst[x0..], stride, |y, d| {
@@ -1587,7 +2137,7 @@ fn col_pass_bd<T: Pixel, const N: usize, const H: usize, const BD: u32>(
         }
         // The kernel overwrites all h rows.
         c[nz_rows..k].fill(Simd::splat(0));
-        kernel(&mut c, clamp);
+        kernel(&mut c, clamp, &COS_TABLE);
         let x0 = if p.flip_lr { w - j0 - N } else { j0 };
         if !p.flip_lr && !p.flip_ud {
             visit_rows::<T, N, H>(&mut dst[x0..], stride, |y, d| {
@@ -1836,40 +2386,61 @@ fn dct_adst_small<V: TxLanes, const N: usize>(kind: Tx1d, le4: bool, t: &mut [V;
 /// (`eob_rows <= 4 && eob_cols <= 4`). Loads/zeroes only the 4x4
 /// sub-block and transforms the 4 active rows on 4-lane vectors.
 #[inline(always)]
-fn transform_add_8x8_sub4<T: Pixel, const BD: u32>(
+fn transform_add_8x8_sub4<T: Pixel, C: Coeff, const BD: u32>(
     dst: &mut [T],
     stride: usize,
-    coeffs: &mut [i32],
+    coeffs: &mut [C],
     p: &Params,
 ) {
     debug_assert!(p.w == 8 && p.h == 8 && p.eob_rows <= 4 && p.eob_cols <= 4);
     let coeffs = &mut coeffs[..64];
-    let rows: [Simd<i32, 4>; 4] = [
-        Simd::from_slice(&coeffs[..4]),
-        Simd::from_slice(&coeffs[8..12]),
-        Simd::from_slice(&coeffs[16..20]),
-        Simd::from_slice(&coeffs[24..28]),
-    ];
-    for i in 0..4 {
-        coeffs[i * 8..][..4].fill(0);
-    }
     // 8-bit Dequant has 16 bits; 10-bit rows accepted by `rows_fit_s16`
     // (checked on the saturated values) are exact on 16-bit lanes.
-    let tile16 = transpose_e(amap(
-        rows,
-        |r| if BD == 8 { r.cast::<i16>() } else { sat16(r) },
-    ));
-    let t: [Simd<i16, 4>; 8] = if BD == 8 || large::rows_fit_s16(tile16) {
-        let tile = amap(tile16, S16);
+    let t: [Simd<i16, 4>; 8] = if BD == 8 {
+        let rows: [Simd<i16, 4>; 4] = [
+            C::load_i16(&coeffs[..4]),
+            C::load_i16(&coeffs[8..12]),
+            C::load_i16(&coeffs[16..20]),
+            C::load_i16(&coeffs[24..28]),
+        ];
+        for i in 0..4 {
+            coeffs[i * 8..][..4].fill(C::ZERO);
+        }
+        let tile = amap(transpose_e(rows), S16);
         let mut t = [S16::<4>::splat(0); 8];
         t[..4].copy_from_slice(&tile);
         if p.row_kind != Tx1d::Identity {
             dct_adst_small(p.row_kind, true, &mut t, Clamp::bits(16));
-            t = amap(t, |v| v.rnd(1));
+            for v in &mut t {
+                *v = v.rnd(1);
+            }
         }
         amap(t, |v| v.0)
     } else {
-        sub4_8x8_rows32::<BD>(rows, p.row_kind)
+        let rows: [Simd<i32, 4>; 4] = [
+            C::load_i32(&coeffs[..4]),
+            C::load_i32(&coeffs[8..12]),
+            C::load_i32(&coeffs[16..20]),
+            C::load_i32(&coeffs[24..28]),
+        ];
+        for i in 0..4 {
+            coeffs[i * 8..][..4].fill(C::ZERO);
+        }
+        let tile16 = transpose_e(amap(rows, sat16));
+        if large::rows_fit_s16(tile16) {
+            let tile = amap(tile16, S16);
+            let mut t = [S16::<4>::splat(0); 8];
+            t[..4].copy_from_slice(&tile);
+            if p.row_kind != Tx1d::Identity {
+                dct_adst_small(p.row_kind, true, &mut t, Clamp::bits(16));
+                for v in &mut t {
+                    *v = v.rnd(1);
+                }
+            }
+            amap(t, |v| v.0)
+        } else {
+            sub4_8x8_rows32::<BD>(rows, p.row_kind)
+        }
     };
     let lo = transpose_e([t[0], t[1], t[2], t[3]]);
     let hi = transpose_e([t[4], t[5], t[6], t[7]]);
@@ -1959,10 +2530,10 @@ fn dct_adst4_packed(adst: bool, a: Simd<i16, 8>, b: Simd<i16, 8>) -> [Simd<i16, 
 /// `[row 2 | row 3]`) instead of four half-empty 4-lane vectors. Returns
 /// false (doing nothing) for other types.
 #[inline(always)]
-fn transform_add_4x4_packed<T: Pixel, const BD: u32>(
+fn transform_add_4x4_packed<T: Pixel, C: Coeff, const BD: u32>(
     dst: &mut [T],
     stride: usize,
-    coeffs: &mut [i32],
+    coeffs: &mut [C],
     p: &Params,
 ) -> bool {
     if !cfg!(target_arch = "x86_64")
@@ -1974,10 +2545,10 @@ fn transform_add_4x4_packed<T: Pixel, const BD: u32>(
     {
         return false;
     }
-    let c: &mut [i32; 16] = (&mut coeffs[..16]).try_into().unwrap();
+    let c: &mut [C; 16] = (&mut coeffs[..16]).try_into().unwrap();
     // Dequant has 16 bits for 8-bit streams.
-    let a = sat16(Simd::<i32, 8>::from_slice(&c[..8]));
-    let b = sat16(Simd::<i32, 8>::from_slice(&c[8..]));
+    let a = C::load_sat16::<8>(&c[..8]);
+    let b = C::load_sat16::<8>(&c[8..]);
     if BD == 10 {
         // 10-bit rows are exact on 16-bit lanes if their absolute sums
         // are at most `S16_ROW_L1_MAX` (`large::rows_fit_s16`), which holds
@@ -1991,11 +2562,11 @@ fn transform_add_4x4_packed<T: Pixel, const BD: u32>(
             .simd_le(Simd::splat(large::S16_ROW_L1_MAX / 4))
             .all()
         {
-            transform_add_4x4_fallback::<T, BD>(dst, stride, coeffs, p.row_kind, p.col_kind);
+            transform_add_4x4_fallback::<T, C, BD>(dst, stride, coeffs, p.row_kind, p.col_kind);
             return true;
         }
     }
-    *c = [0; 16];
+    *c = [C::ZERO; 16];
     // Rows (rowShift = 0, 16-bit row clamp = saturation).
     let [o01, o23] = dct_adst4_packed(p.row_kind == Tx1d::Adst, a, b);
     // Columns.
@@ -2018,21 +2589,21 @@ fn transform_add_4x4_packed<T: Pixel, const BD: u32>(
 /// coefficient exceeds `S16_ROW_L1_MAX / 4`.
 #[cold]
 #[inline(never)]
-fn transform_add_4x4_fallback<T: Pixel, const BD: u32>(
+fn transform_add_4x4_fallback<T: Pixel, C: Coeff, const BD: u32>(
     dst: &mut [T],
     stride: usize,
-    coeffs: &mut [i32],
+    coeffs: &mut [C],
     row_kind: Tx1d,
     col_kind: Tx1d,
 ) {
     let coeffs = &mut coeffs[..16];
     let rows: [Simd<i32, 4>; 4] = [
-        Simd::from_slice(&coeffs[..4]),
-        Simd::from_slice(&coeffs[4..8]),
-        Simd::from_slice(&coeffs[8..12]),
-        Simd::from_slice(&coeffs[12..16]),
+        C::load_i32(&coeffs[..4]),
+        C::load_i32(&coeffs[4..8]),
+        C::load_i32(&coeffs[8..12]),
+        C::load_i32(&coeffs[12..16]),
     ];
-    coeffs.fill(0);
+    coeffs.fill(C::ZERO);
     let t16 = transpose_e(amap(rows, sat16));
     let t = if large::rows_fit_s16(t16) {
         let mut t = amap(t16, S16);
@@ -2168,10 +2739,10 @@ fn add_rows2_4<T: Pixel, const BD: u32>(da: &mut [T; 4], db: &mut [T; 4], r: Sim
 /// row 3]`) and the transform constants in one register per kind (see
 /// [`dct_adst4_neon`]). Returns false (doing nothing) for other types.
 #[inline(always)]
-fn transform_add_4x4_neon<T: Pixel, const BD: u32>(
+fn transform_add_4x4_neon<T: Pixel, C: Coeff, const BD: u32>(
     dst: &mut [T],
     stride: usize,
-    coeffs: &mut [i32],
+    coeffs: &mut [C],
     p: &Params,
 ) -> bool {
     if !cfg!(target_arch = "aarch64")
@@ -2183,17 +2754,17 @@ fn transform_add_4x4_neon<T: Pixel, const BD: u32>(
     {
         return false;
     }
-    transform_add_4x4_neon_impl::<T, BD>(dst, stride, coeffs, p.row_kind, p.col_kind);
+    transform_add_4x4_neon_impl::<T, C, BD>(dst, stride, coeffs, p.row_kind, p.col_kind);
     true
 }
 
 /// Body of [`transform_add_4x4_neon`] (any architecture, for the tests):
 /// `row_kind` and `col_kind` are DCT or ADST.
 #[inline(always)]
-fn transform_add_4x4_neon_impl<T: Pixel, const BD: u32>(
+fn transform_add_4x4_neon_impl<T: Pixel, C: Coeff, const BD: u32>(
     dst: &mut [T],
     stride: usize,
-    coeffs: &mut [i32],
+    coeffs: &mut [C],
     row_kind: Tx1d,
     col_kind: Tx1d,
 ) {
@@ -2202,8 +2773,8 @@ fn transform_add_4x4_neon_impl<T: Pixel, const BD: u32>(
         return;
     };
     // Dequant has 16 bits for 8-bit streams.
-    let a = sat16(Simd::<i32, 8>::from_slice(&c[..8]));
-    let b = sat16(Simd::<i32, 8>::from_slice(&c[8..]));
+    let a = C::load_sat16::<8>(&c[..8]);
+    let b = C::load_sat16::<8>(&c[8..]);
     if BD == 10 {
         // 10-bit rows are exact on 16-bit lanes if their absolute sums
         // are at most `S16_ROW_L1_MAX` (`large::rows_fit_s16`), which holds
@@ -2214,11 +2785,11 @@ fn transform_add_4x4_neon_impl<T: Pixel, const BD: u32>(
         const L: i16 = large::S16_ROW_L1_MAX / 4;
         let bias = |v: Simd<i16, 8>| (v + Simd::splat(L)).cast::<u16>();
         if bias(a).simd_max(bias(b)).reduce_max() > 2 * L as u16 {
-            transform_add_4x4_fallback::<T, BD>(dst, stride, coeffs, row_kind, col_kind);
+            transform_add_4x4_fallback::<T, C, BD>(dst, stride, coeffs, row_kind, col_kind);
             return;
         }
     }
-    *c = [0; 16];
+    *c = [C::ZERO; 16];
     let (row_adst, col_adst) = (row_kind == Tx1d::Adst, col_kind == Tx1d::Adst);
     // Opaque to the optimizer, so that the products use the constants
     // as vector elements instead of materializing one splat per constant.
@@ -2259,45 +2830,53 @@ fn transform_add_4x4_neon_impl<T: Pixel, const BD: u32>(
 /// registers: one row (column) per lane, transposes between the passes.
 /// 10-bit rows are transformed on `i32` lanes (18-bit clamping range).
 #[inline(always)]
-fn transform_add_square<T: Pixel, const BD: u32, const N: usize>(
+fn transform_add_square<T: Pixel, C: Coeff, const BD: u32, const N: usize>(
     dst: &mut [T],
     stride: usize,
-    coeffs: &mut [i32],
+    coeffs: &mut [C],
     p: &Params,
 ) {
     debug_assert!(p.w == N && p.h == N && p.bd == BD && BD <= 10 && coeffs.len() == N * N);
-    if N == 4 && transform_add_4x4_packed::<T, BD>(dst, stride, coeffs, p) {
+    if N == 4 && transform_add_4x4_packed::<T, C, BD>(dst, stride, coeffs, p) {
         return;
     }
-    if N == 4 && transform_add_4x4_neon::<T, BD>(dst, stride, coeffs, p) {
+    if N == 4 && transform_add_4x4_neon::<T, C, BD>(dst, stride, coeffs, p) {
         return;
     }
     if N == 8 && p.eob_rows <= 4 && p.eob_cols <= 4 {
-        transform_add_8x8_sub4::<T, BD>(dst, stride, coeffs, p);
+        transform_add_8x8_sub4::<T, C, BD>(dst, stride, coeffs, p);
         return;
     }
     let coeffs = &mut coeffs[..N * N];
-    let mut rows = [Simd::<i32, N>::splat(0); N];
-    for i in 0..N {
-        rows[i] = Simd::from_slice(&coeffs[i * N..][..N]);
-    }
-    coeffs.fill(0);
-    let rshift = const { row_shift(N, N) };
-    let rows_le4 = N == 4
-        || p.eob_rows <= 4
-        || ((rows[N / 2] | rows[N / 2 + 1]) | (rows[N - 2] | rows[N - 1])) == Simd::splat(0);
     // Row transforms: t[j] lane i = Residual[i][j] (clamped to 16 bits).
-    let t: [Simd<i16, N>; N] = if BD == 8 {
+    let (rows_le4, t): (bool, [Simd<i16, N>; N]) = if BD == 8 {
+        let mut rows = [Simd::<i16, N>::splat(0); N];
+        for i in 0..N {
+            rows[i] = C::load_i16(&coeffs[i * N..][..N]);
+        }
+        coeffs.fill(C::ZERO);
+        let rows_le4 = N == 4
+            || p.eob_rows <= 4
+            || ((rows[N / 2] | rows[N / 2 + 1]) | (rows[N - 2] | rows[N - 1])) == Simd::splat(0);
         // Dequant has 16 bits for 8-bit streams.
-        square_rows16::<N>(transpose_e(amap(rows, |r| r.cast::<i16>())), p, rshift)
+        (rows_le4, square_rows16::<N>(transpose_e(rows), p))
     } else {
+        let mut rows = [Simd::<i32, N>::splat(0); N];
+        for i in 0..N {
+            rows[i] = C::load_i32(&coeffs[i * N..][..N]);
+        }
+        coeffs.fill(C::ZERO);
+        let rows_le4 = N == 4
+            || p.eob_rows <= 4
+            || ((rows[N / 2] | rows[N / 2 + 1]) | (rows[N - 2] | rows[N - 1])) == Simd::splat(0);
         let t16 = transpose_e(amap(rows, sat16));
-        if large::rows_fit_s16(t16) {
+        let t = if large::rows_fit_s16(t16) {
             // 16-bit lanes are exact for these rows (see `rows_fit_s16`).
-            square_rows16::<N>(t16, p, rshift)
+            square_rows16::<N>(t16, p)
         } else {
             square_rows32::<BD, N>(rows, p.row_kind)
-        }
+        };
+        (rows_le4, t)
     };
     // c[i] lane j = Residual[i][j]; rows at or beyond nz_rows are zero.
     let mut c = amap(transpose_e(t), S16);
@@ -2341,11 +2920,7 @@ fn square_rows32<const BD: u32, const N: usize>(
 /// (4x4) and `x` (8x8) then saturate exactly like the clamp to the
 /// 16-bit column range).
 #[inline(always)]
-fn square_rows16<const N: usize>(
-    t16: [Simd<i16, N>; N],
-    p: &Params,
-    rshift: u32,
-) -> [Simd<i16, N>; N] {
+fn square_rows16<const N: usize>(t16: [Simd<i16, N>; N], p: &Params) -> [Simd<i16, N>; N] {
     let cols_le4 = N == 4
         || p.eob_cols <= 4
         || ((t16[N / 2] | t16[N / 2 + 1]) | (t16[N - 2] | t16[N - 1])) == Simd::splat(0);
@@ -2358,7 +2933,11 @@ fn square_rows16<const N: usize>(
         }
     } else {
         dct_adst_small(p.row_kind, cols_le4, &mut t, Clamp::bits(16));
-        t = amap(t, |v| v.rnd(rshift));
+        if N == 8 {
+            for v in &mut t {
+                *v = v.rnd(1);
+            }
+        }
     }
     amap(t, |v| v.0)
 }
@@ -2366,41 +2945,50 @@ fn square_rows16<const N: usize>(
 /// 8x4 and 4x8 transforms (`BD` = 8 or 10) with all data in registers
 /// (the transposes are done as 8x8 ones with zero padding).
 #[inline(always)]
-fn transform_add_rect<T: Pixel, const BD: u32, const W: usize, const H: usize>(
+fn transform_add_rect<T: Pixel, C: Coeff, const BD: u32, const W: usize, const H: usize>(
     dst: &mut [T],
     stride: usize,
-    coeffs: &mut [i32],
+    coeffs: &mut [C],
     p: &Params,
 ) {
     debug_assert!(p.w == W && p.h == H && p.bd == BD && BD <= 10 && p.rect2 && p.row_shift == 0);
     let coeffs = &mut coeffs[..W * H];
-    let mut rows = [Simd::<i32, W>::splat(0); H];
-    for i in 0..H {
-        rows[i] = Simd::from_slice(&coeffs[i * W..][..W]);
-    }
-    coeffs.fill(0);
-    let rows_le4 = H == 4
-        || p.eob_rows <= 4
-        || ((rows[H / 2] | rows[H / 2 + 1]) | (rows[H - 2] | rows[H - 1])) == Simd::splat(0);
     let z16 = Simd::<i16, 8>::splat(0);
     // Row transforms on 16-bit lanes (see `rect_rows16`).
-    let t_cols: [Simd<i16, H>; W] = if BD == 8 {
+    let (rows_le4, t_cols): (bool, [Simd<i16, H>; W]) = if BD == 8 {
+        let mut rows = [Simd::<i16, W>::splat(0); H];
+        for i in 0..H {
+            rows[i] = C::load_i16(&coeffs[i * W..][..W]);
+        }
+        coeffs.fill(C::ZERO);
+        let rows_le4 = H == 4
+            || p.eob_rows <= 4
+            || ((rows[H / 2] | rows[H / 2 + 1]) | (rows[H - 2] | rows[H - 1])) == Simd::splat(0);
         let mut m = [z16; 8];
         for i in 0..H {
-            m[i] = rows[i].cast::<i16>().resize::<8>(0);
+            m[i] = rows[i].resize::<8>(0);
         }
-        rect_rows16::<W, H>(transpose_e(m), p)
+        (rows_le4, rect_rows16::<W, H>(transpose_e(m), p))
     } else {
+        let mut rows = [Simd::<i32, W>::splat(0); H];
+        for i in 0..H {
+            rows[i] = C::load_i32(&coeffs[i * W..][..W]);
+        }
+        coeffs.fill(C::ZERO);
+        let rows_le4 = H == 4
+            || p.eob_rows <= 4
+            || ((rows[H / 2] | rows[H / 2 + 1]) | (rows[H - 2] | rows[H - 1])) == Simd::splat(0);
         let mut m16 = [z16; 8];
         for i in 0..H {
             m16[i] = sat16(rows[i]).resize::<8>(0);
         }
         let m16 = transpose_e(m16);
-        if large::rows_fit_s16(m16[..W].iter().copied()) {
+        let t_cols = if large::rows_fit_s16(m16[..W].iter().copied()) {
             rect_rows16::<W, H>(m16, p)
         } else {
             rect_rows32::<BD, W, H>(rows, p.row_kind)
-        }
+        };
+        (rows_le4, t_cols)
     };
     let mut m = [z16; 8];
     for j in 0..W {
@@ -2484,41 +3072,144 @@ fn rect_rows32<const BD: u32, const W: usize, const H: usize>(
 /// counts, then the sizes of its column buffers). Inlined into
 /// [`size_entry`], where the size is a constant.
 #[inline(always)]
-fn transform_add16_dispatch<T: Pixel, const BD: u32>(
+fn transform_add16_dispatch<T: Pixel, C: Coeff, const BD: u32, const DCT_ONLY: bool>(
     dst: &mut [T],
     stride: usize,
-    coeffs: &mut [i32],
+    coeffs: &mut [C],
     p: &Params,
+    itx_buf: &mut ItxBuf,
 ) {
     // Column lanes for widths >= 16: one 256-bit vector of 16 `i16` with
     // AVX2, else 8 (two 128-bit NEON registers per vector would double
     // the register pressure of the 32-point kernels).
     const CW: usize = if cfg!(target_feature = "avx2") { 16 } else { 8 };
     match (p.w, p.h) {
-        (4, 4) => return transform_add_square::<T, BD, 4>(dst, stride, coeffs, p),
-        (8, 8) => return transform_add_square::<T, BD, 8>(dst, stride, coeffs, p),
-        (8, 4) => return transform_add_rect::<T, BD, 8, 4>(dst, stride, coeffs, p),
-        (4, 8) => return transform_add_rect::<T, BD, 4, 8>(dst, stride, coeffs, p),
+        (4, 4) => return transform_add_square::<T, C, BD, 4>(dst, stride, coeffs, p),
+        (8, 8) => return transform_add_square::<T, C, BD, 8>(dst, stride, coeffs, p),
+        (8, 4) => return transform_add_rect::<T, C, BD, 8, 4>(dst, stride, coeffs, p),
+        (4, 8) => return transform_add_rect::<T, C, BD, 4, 8>(dst, stride, coeffs, p),
         _ => {}
     }
     let f = match (p.w, p.h) {
-        (4, 16) => large::transform_add16::<T, BD, 4, 16, 16, 4, 4, { 64 / 4 }, { 16 / 4 }>,
-        (8, 16) => large::transform_add16::<T, BD, 8, 16, 16, 8, 8, { 128 / 8 }, { 32 / 8 }>,
-        (8, 32) => large::transform_add16::<T, BD, 8, 32, 32, 8, 8, { 256 / 8 }, { 32 / 8 }>,
-        (16, 4) => large::transform_add16::<T, BD, 16, 4, 4, 4, CW, { 64 / CW }, { 64 / CW }>,
-        (16, 8) => large::transform_add16::<T, BD, 16, 8, 8, 8, CW, { 128 / CW }, { 64 / CW }>,
-        (16, 16) => large::transform_add16::<T, BD, 16, 16, 16, 8, CW, { 256 / CW }, { 64 / CW }>,
-        (16, 32) => large::transform_add16::<T, BD, 16, 32, 32, 8, CW, { 512 / CW }, { 64 / CW }>,
-        (16, 64) => large::transform_add16::<T, BD, 16, 64, 32, 8, CW, { 512 / CW }, { 64 / CW }>,
-        (32, 8) => large::transform_add16::<T, BD, 32, 8, 8, 8, CW, { 256 / CW }, { 128 / CW }>,
-        (32, 16) => large::transform_add16::<T, BD, 32, 16, 16, 8, CW, { 512 / CW }, { 128 / CW }>,
-        (32, 32) => large::transform_add16::<T, BD, 32, 32, 32, 8, CW, { 1024 / CW }, { 128 / CW }>,
-        (32, 64) => large::transform_add16::<T, BD, 32, 64, 32, 8, CW, { 1024 / CW }, { 128 / CW }>,
-        (64, 16) => large::transform_add16::<T, BD, 64, 16, 16, 8, CW, { 1024 / CW }, { 256 / CW }>,
-        (64, 32) => large::transform_add16::<T, BD, 64, 32, 32, 8, CW, { 2048 / CW }, { 256 / CW }>,
-        _ => large::transform_add16::<T, BD, 64, 64, 32, 8, CW, { 2048 / CW }, { 256 / CW }>,
+        (4, 16) => {
+            large::transform_add16::<T, C, BD, 4, 16, 16, 4, 4, { 64 / 4 }, { 16 / 4 }, DCT_ONLY>
+        }
+        (8, 16) => {
+            large::transform_add16::<T, C, BD, 8, 16, 16, 8, 8, { 128 / 8 }, { 32 / 8 }, DCT_ONLY>
+        }
+        (8, 32) => {
+            large::transform_add16::<T, C, BD, 8, 32, 32, 8, 8, { 256 / 8 }, { 32 / 8 }, DCT_ONLY>
+        }
+        (16, 4) => {
+            large::transform_add16::<T, C, BD, 16, 4, 4, 4, CW, { 64 / CW }, { 64 / CW }, DCT_ONLY>
+        }
+        (16, 8) => {
+            large::transform_add16::<T, C, BD, 16, 8, 8, 8, CW, { 128 / CW }, { 64 / CW }, DCT_ONLY>
+        }
+        (16, 16) => {
+            large::transform_add16::<T, C, BD, 16, 16, 16, 8, CW, { 256 / CW }, { 64 / CW }, DCT_ONLY>
+        }
+        (16, 32) => {
+            large::transform_add16::<T, C, BD, 16, 32, 32, 8, CW, { 512 / CW }, { 64 / CW }, DCT_ONLY>
+        }
+        (16, 64) => {
+            large::transform_add16::<T, C, BD, 16, 64, 32, 8, CW, { 512 / CW }, { 64 / CW }, DCT_ONLY>
+        }
+        (32, 8) => {
+            large::transform_add16::<T, C, BD, 32, 8, 8, 8, CW, { 256 / CW }, { 128 / CW }, DCT_ONLY>
+        }
+        (32, 16) => {
+            large::transform_add16::<
+                T,
+                C,
+                BD,
+                32,
+                16,
+                16,
+                8,
+                CW,
+                { 512 / CW },
+                { 128 / CW },
+                DCT_ONLY,
+            >
+        }
+        (32, 32) => {
+            large::transform_add16::<
+                T,
+                C,
+                BD,
+                32,
+                32,
+                32,
+                8,
+                CW,
+                { 1024 / CW },
+                { 128 / CW },
+                DCT_ONLY,
+            >
+        }
+        (32, 64) => {
+            large::transform_add16::<
+                T,
+                C,
+                BD,
+                32,
+                64,
+                32,
+                8,
+                CW,
+                { 1024 / CW },
+                { 128 / CW },
+                DCT_ONLY,
+            >
+        }
+        (64, 16) => {
+            large::transform_add16::<
+                T,
+                C,
+                BD,
+                64,
+                16,
+                16,
+                8,
+                CW,
+                { 1024 / CW },
+                { 256 / CW },
+                DCT_ONLY,
+            >
+        }
+        (64, 32) => {
+            large::transform_add16::<
+                T,
+                C,
+                BD,
+                64,
+                32,
+                32,
+                8,
+                CW,
+                { 2048 / CW },
+                { 256 / CW },
+                DCT_ONLY,
+            >
+        }
+        _ => {
+            large::transform_add16::<
+                T,
+                C,
+                BD,
+                64,
+                64,
+                32,
+                8,
+                CW,
+                { 2048 / CW },
+                { 256 / CW },
+                DCT_ONLY,
+            >
+        }
     };
-    f(dst, stride, coeffs, p)
+    f(dst, stride, coeffs, p, itx_buf)
 }
 
 /// `Round2(identity_H(v), 4)` (the column identity transform and the
@@ -2601,7 +3292,28 @@ fn visit_rows<T, const N: usize, const H: usize>(
     const { assert!(H < 4 || H.is_multiple_of(4)) };
     let s2 = stride * 2;
     let s3 = stride * 3;
+    if H == 4 {
+        let dst = &mut dst[..s3 + N];
+        f(0, (&mut dst[..N]).try_into().unwrap());
+        f(1, (&mut dst[stride..stride + N]).try_into().unwrap());
+        f(2, (&mut dst[s2..s2 + N]).try_into().unwrap());
+        f(3, (&mut dst[s3..s3 + N]).try_into().unwrap());
+        return;
+    }
     let s4 = stride * 4;
+    if H == 8 {
+        let dst = &mut dst[..s4 + s3 + N];
+        let (head, tail) = dst.split_at_mut(s4);
+        f(0, (&mut head[..N]).try_into().unwrap());
+        f(1, (&mut head[stride..stride + N]).try_into().unwrap());
+        f(2, (&mut head[s2..s2 + N]).try_into().unwrap());
+        f(3, (&mut head[s3..s3 + N]).try_into().unwrap());
+        f(4, (&mut tail[..N]).try_into().unwrap());
+        f(5, (&mut tail[stride..stride + N]).try_into().unwrap());
+        f(6, (&mut tail[s2..s2 + N]).try_into().unwrap());
+        f(7, (&mut tail[s3..s3 + N]).try_into().unwrap());
+        return;
+    }
     let head_len = (H / 4 - 1) * s4;
     let dst = &mut dst[..head_len + s3 + N];
     let (head, tail) = dst.split_at_mut(head_len);
@@ -2697,6 +3409,15 @@ fn visit_row_pairs_4<T, const H: usize>(
     let stride = stride & 0xffff_ffff;
     assert!(stride >= 4);
     let s2 = stride * 2;
+    if H == 4 {
+        let dst = &mut dst[..s2 + stride + 4];
+        let (top, bot) = dst.split_at_mut(s2);
+        let (r0, r1) = top.split_at_mut(stride);
+        let (r2, r3) = bot.split_at_mut(stride);
+        f(r0.first_chunk_mut().unwrap(), r1.first_chunk_mut().unwrap());
+        f(r2.first_chunk_mut().unwrap(), r3.first_chunk_mut().unwrap());
+        return;
+    }
     let head_len = (H / 2 - 1) * s2;
     let dst = &mut dst[..head_len + stride + 4];
     let (head, tail) = dst.split_at_mut(head_len);
@@ -2919,6 +3640,77 @@ mod tests {
         /// Uniform in `[lo, hi]`.
         fn range(&mut self, lo: i64, hi: i64) -> i64 {
             lo + (self.next() % ((hi - lo + 1) as u64)) as i64
+        }
+    }
+
+    /// `m1_cos` and `m2_cos` match exact `i64` `Round2(..., 12)` across all
+    /// sign combinations and `FORCE_CORR` values whenever the rounded result
+    /// fits in `i16`.
+    #[test]
+    fn cos_table_m1_m2_exact() {
+        let mut rng = Rng(0xc05_7ab1e_1234);
+        let vals: [i16; 8] = [-32768, -20000, -4096, -1, 0, 1, 16384, 32767];
+        let a = Simd::from_array(vals);
+        let b = Simd::from_array([15000, -15000, 32767, -32768, 2048, -2048, -10000, 10000]);
+        macro_rules! check_m1 {
+            ($k:expr) => {{
+                let g0 = m1_cos::<8, $k, false>(a, &COS_TABLE);
+                let g1 = m1_cos::<8, $k, true>(a, &COS_TABLE);
+                for i in 0..8 {
+                    let want = ((a[i] as i64 * $k as i64 + 2048) >> 12) as i16;
+                    assert_eq!(g0[i], want, "m1({}, false) lane {i}", $k);
+                    assert_eq!(g1[i], want, "m1({}, true) lane {i}", $k);
+                }
+            }};
+        }
+        macro_rules! check_m2 {
+            ($ka:expr, $kb:expr) => {{
+                let g0 = m2_cos::<8, $ka, $kb, false>(a, b, &COS_TABLE);
+                let g1 = m2_cos::<8, $ka, $kb, true>(a, b, &COS_TABLE);
+                for i in 0..8 {
+                    let exact = (a[i] as i64 * $ka as i64 + b[i] as i64 * $kb as i64 + 2048) >> 12;
+                    assert_eq!(g0[i], exact as i16, "m2({}, {}, false) lane {i}", $ka, $kb);
+                    assert_eq!(g1[i], exact as i16, "m2({}, {}, true) lane {i}", $ka, $kb);
+                }
+            }};
+        }
+        check_m1!(2896);
+        check_m1!(-2896);
+        check_m1!(401);
+        check_m1!(-401);
+        check_m1!(4095);
+        check_m1!(-4095);
+        check_m1!(101);
+        check_m1!(-101);
+        check_m1!(2598);
+        check_m1!(-2598);
+        check_m2!(2896, 2896);
+        check_m2!(2896, -2896);
+        check_m2!(-2896, 2896);
+        check_m2!(-2896, -2896);
+        check_m2!(1567, 3784);
+        check_m2!(1567, -3784);
+        check_m2!(-1567, 3784);
+        check_m2!(-1567, -3784);
+        check_m2!(101, 4095);
+        check_m2!(-4095, -101);
+        // Verify all 63 distinct non-zero COS128 magnitudes are in COS_BASE / COS_TABLE.
+        for &mag in &portable::COS128_LOOKUP[1..64] {
+            let (vi, li) = cos_slot(mag);
+            assert_eq!(COS_BASE[vi][li] as i32, mag);
+            assert_eq!(COS_TABLE[vi].as_array()[li] as i32, mag);
+            assert_eq!(COS_TABLE[8 + vi].as_array()[li] as i32, 4096 + mag);
+            assert_eq!(COS_TABLE[16 + vi].as_array()[li] as i32, 4096 - mag);
+        }
+        for _ in 0..64 {
+            let x = Simd::from_array(std::array::from_fn(|_| rng.range(-32768, 32767) as i16));
+            let y = Simd::from_array(std::array::from_fn(|_| rng.range(-32768, 32767) as i16));
+            let r0 = m2_cos::<8, 401, -4076, false>(x, y, &COS_TABLE);
+            let r1 = m2_cos::<8, 401, -4076, true>(x, y, &COS_TABLE);
+            assert_eq!(r0, r1);
+            let r2 = m2_cos::<8, -3784, -1567, false>(x, y, &COS_TABLE);
+            let r3 = m2_cos::<8, -3784, -1567, true>(x, y, &COS_TABLE);
+            assert_eq!(r2, r3);
         }
     }
 
@@ -3317,7 +4109,7 @@ mod tests {
                         let conformant = !portable::conformance::take_violated();
                         let mut got = frame;
                         let mut c_got = coeffs.clone();
-                        transform_add_4x4_neon_impl::<T, BD>(
+                        transform_add_4x4_neon_impl::<T, i32, BD>(
                             &mut got, stride, &mut c_got, row_kind, col_kind,
                         );
                         if conformant {
@@ -3330,6 +4122,182 @@ mod tests {
         }
         run::<u8, 8>(0x1357_9bdf_2468_ace0);
         run::<u16, 10>(0x0246_8ace_1357_9bdf);
+    }
+
+    /// Reusing a single non-zero `ItxBuf` across calls (without zeroing it
+    /// between transforms) must produce bit-identical results to the
+    /// portable transforms for both `itx16_table::<u8, 8>` and
+    /// `itx_table::<u16, 10>`.
+    #[test]
+    fn dirty_itx_buf_reuse_matches_portable() {
+        let mut rng = Rng(0xdead_beef_cafe_1234);
+        let mut buf8: ItxBuf = [S16(Simd::splat(0x5a5a)); 256];
+        let mut buf10: ItxBuf = [S16(Simd::splat(-0x3c3c)); 256];
+        let tbl8 = itx16_table::<u8, 8>().unwrap();
+        let tbl10 = itx_table::<u16, 10>();
+        for &tx_size in TxSize::ALL {
+            let w = 1usize << TX_WIDTH_LOG2[tx_size.idx()];
+            let h = 1usize << TX_HEIGHT_LOG2[tx_size.idx()];
+            let (tw, th) = (w.min(32), h.min(32));
+            for tx_type in types_for(tx_size) {
+                for dist in [0, 1, 2, 4, 6] {
+                    // 8-bit i16 coefficients + dirty buf8.
+                    let (coeffs, eob) = gen_coeffs(&mut rng, dist, tw, th, 8);
+                    let stride = w + rng.range(0, 3) as usize;
+                    let frame: Vec<u8> = (0..stride * h).map(|_| rng.range(0, 255) as u8).collect();
+                    let mut want = frame.clone();
+                    portable::conformance::take_violated();
+                    let mut c_want = coeffs.clone();
+                    portable::inv_txfm_add(
+                        &mut want,
+                        stride,
+                        &mut c_want,
+                        tx_size,
+                        tx_type,
+                        false,
+                        eob,
+                        8,
+                    );
+                    let conformant = !portable::conformance::take_violated();
+                    let mut got = frame;
+                    let mut c16 = [0i16; 1024];
+                    for (d, &s) in c16[..tw * th].iter_mut().zip(&coeffs) {
+                        *d = s as i16;
+                    }
+                    tbl8[tx_size as usize][tx_type as usize](
+                        &mut got,
+                        stride,
+                        &mut c16,
+                        eob | (tx_type as usize) << 16,
+                        &mut buf8,
+                    );
+                    if conformant {
+                        assert_eq!(
+                            got, want,
+                            "8-bit dirty buf: {tx_size:?} {tx_type:?} dist {dist}"
+                        );
+                    }
+                    assert!(c16.iter().all(|&c| c == 0));
+
+                    // 10-bit i32 coefficients + dirty buf10.
+                    let (coeffs, eob) = gen_coeffs(&mut rng, dist, tw, th, 10);
+                    let frame: Vec<u16> =
+                        (0..stride * h).map(|_| rng.range(0, 1023) as u16).collect();
+                    let mut want = frame.clone();
+                    portable::conformance::take_violated();
+                    let mut c_want = coeffs.clone();
+                    portable::inv_txfm_add(
+                        &mut want,
+                        stride,
+                        &mut c_want,
+                        tx_size,
+                        tx_type,
+                        false,
+                        eob,
+                        10,
+                    );
+                    let conformant = !portable::conformance::take_violated();
+                    let mut got = frame;
+                    let mut c32 = [0i32; 1024];
+                    c32[..tw * th].copy_from_slice(&coeffs);
+                    tbl10[tx_size as usize][tx_type as usize](
+                        &mut got,
+                        stride,
+                        &mut c32,
+                        eob | (tx_type as usize) << 16,
+                        &mut buf10,
+                    );
+                    if conformant {
+                        assert_eq!(
+                            got, want,
+                            "10-bit dirty buf: {tx_size:?} {tx_type:?} dist {dist}"
+                        );
+                    }
+                    assert!(c32.iter().all(|&c| c == 0));
+                }
+            }
+        }
+        // Targeted dirty-buf cases on Tx32x32 / Tx64x64 with eob = 200
+        // (eob_bounds = (32, 32)) and active coefficients stopping at row 20
+        // (`nz_rows == 21` in `17..=24`, covering `large.rs` `zero_rows(24, 8, W)`)
+        // and columns up to 20.
+        for (tx_size, tx_type) in [
+            (TxSize::Tx32x32, TxType::DCT_DCT),
+            (TxSize::Tx32x32, TxType::IDTX),
+            (TxSize::Tx64x64, TxType::DCT_DCT),
+        ] {
+            let w = 1usize << TX_WIDTH_LOG2[tx_size.idx()];
+            let h = 1usize << TX_HEIGHT_LOG2[tx_size.idx()];
+            let eob = 200usize;
+            for dirty in [0x5a5ai16, -0x3c3c] {
+                buf8 = [S16(Simd::splat(dirty)); 256];
+                buf10 = [S16(Simd::splat(dirty)); 256];
+                let mut coeffs = vec![0i32; 1024];
+                coeffs[0] = 600;
+                coeffs[20] = -400;
+                coeffs[20 * 32 + 1] = 350;
+                coeffs[20 * 32 + 20] = -250;
+
+                let stride = w + 3;
+                let frame8: Vec<u8> = (0..stride * h).map(|i| (i * 37) as u8).collect();
+                let (mut want8, mut got8) = (frame8.clone(), frame8);
+                let mut c_want = coeffs.clone();
+                portable::inv_txfm_add(
+                    &mut want8,
+                    stride,
+                    &mut c_want,
+                    tx_size,
+                    tx_type,
+                    false,
+                    eob,
+                    8,
+                );
+                let mut c16 = [0i16; 1024];
+                for (d, &s) in c16.iter_mut().zip(&coeffs) {
+                    *d = s as i16;
+                }
+                tbl8[tx_size as usize][tx_type as usize](
+                    &mut got8,
+                    stride,
+                    &mut c16,
+                    eob | (tx_type as usize) << 16,
+                    &mut buf8,
+                );
+                assert_eq!(
+                    got8, want8,
+                    "8-bit targeted dirty buf: {tx_size:?} {tx_type:?}"
+                );
+                assert!(c16.iter().all(|&c| c == 0));
+
+                let frame10: Vec<u16> = (0..stride * h).map(|i| ((i * 73) & 1023) as u16).collect();
+                let (mut want10, mut got10) = (frame10.clone(), frame10);
+                let mut c_want = coeffs.clone();
+                portable::inv_txfm_add(
+                    &mut want10,
+                    stride,
+                    &mut c_want,
+                    tx_size,
+                    tx_type,
+                    false,
+                    eob,
+                    10,
+                );
+                let mut c32 = [0i32; 1024];
+                c32.copy_from_slice(&coeffs);
+                tbl10[tx_size as usize][tx_type as usize](
+                    &mut got10,
+                    stride,
+                    &mut c32,
+                    eob | (tx_type as usize) << 16,
+                    &mut buf10,
+                );
+                assert_eq!(
+                    got10, want10,
+                    "10-bit targeted dirty buf: {tx_size:?} {tx_type:?}"
+                );
+                assert!(c32.iter().all(|&c| c == 0));
+            }
+        }
     }
 
     /// Conformant `ADST4` inputs whose unrounded 4-term sum `x` lies in
@@ -3379,7 +4347,7 @@ mod tests {
                             let (col_kind, row_kind) = tx1d_kinds(tx_type);
                             let mut got_neon = frame;
                             let mut c_neon = coeffs;
-                            transform_add_4x4_neon_impl::<T, BD>(
+                            transform_add_4x4_neon_impl::<T, i32, BD>(
                                 &mut got_neon,
                                 w,
                                 &mut c_neon,

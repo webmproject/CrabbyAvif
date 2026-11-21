@@ -18,7 +18,10 @@ use crate::decoder::av1::dsp::lr::SGR_PARAMS;
 use crate::decoder::av1::headers::{FrameHeader, RestorationType, SequenceHeader};
 use crate::decoder::av1::msac::SymbolDecoder;
 use crate::decoder::av1::pixel::Pixel;
-use crate::decoder::av1::tables::block::{MAX_TX_SIZE_RECT, SUBSAMPLED_SIZE, TX_HEIGHT, TX_WIDTH};
+use crate::decoder::av1::tables::block::{
+    MAX_TX_SIZE_RECT, NUM_4X4_BLOCKS_HIGH, NUM_4X4_BLOCKS_WIDE, SUBSAMPLED_SIZE, TX_HEIGHT,
+    TX_WIDTH,
+};
 use crate::decoder::av1::tables::cdf::CdfContext;
 use crate::decoder::av1::tables::misc::{SGRPROJ_XQD_MID, WIENER_TAPS_MID};
 use crate::decoder::av1::types::*;
@@ -60,16 +63,21 @@ pub struct FrameCtx<'a> {
     pub uv_residual_size: [BlockSize; BlockSize::COUNT],
     /// `get_tx_size(1, ...)` precomputed for each `bsize` at `(ss_x, ss_y)`.
     pub uv_tx_size: [TxSize; BlockSize::COUNT],
+    /// Whether a non-lossless `<= 64x64` coding block of `bsize` has a single
+    /// chroma transform block per plane at `(ss_x, ss_y)`.
+    pub uv_single_tx: [bool; BlockSize::COUNT],
 }
 
 const SUB_TABLES: (
     [[[bool; BlockSize::COUNT]; 2]; 2],
     [[[BlockSize; BlockSize::COUNT]; 2]; 2],
     [[[TxSize; BlockSize::COUNT]; 2]; 2],
+    [[[bool; BlockSize::COUNT]; 2]; 2],
 ) = {
     let mut sub_valid = [[[false; BlockSize::COUNT]; 2]; 2];
     let mut uv_res = [[[BlockSize::B4x4; BlockSize::COUNT]; 2]; 2];
     let mut uv_tx = [[[TxSize::Tx4x4; BlockSize::COUNT]; 2]; 2];
+    let mut uv_single = [[[false; BlockSize::COUNT]; 2]; 2];
     let mut sx = 0;
     while sx < 2 {
         let mut sy = 0;
@@ -85,7 +93,7 @@ const SUB_TABLES: (
                 let tx = MAX_TX_SIZE_RECT[res_sz as usize];
                 let w = TX_WIDTH[tx as usize];
                 let h = TX_HEIGHT[tx as usize];
-                uv_tx[sx][sy][i] = if w == 64 || h == 64 {
+                let uv_t = if w == 64 || h == 64 {
                     if w == 16 {
                         TxSize::Tx16x32
                     } else if h == 16 {
@@ -96,13 +104,17 @@ const SUB_TABLES: (
                 } else {
                     tx
                 };
+                uv_tx[sx][sy][i] = uv_t;
+                uv_single[sx][sy][i] = NUM_4X4_BLOCKS_WIDE[res_sz as usize]
+                    == (TX_WIDTH[uv_t as usize] >> 2)
+                    && NUM_4X4_BLOCKS_HIGH[res_sz as usize] == (TX_HEIGHT[uv_t as usize] >> 2);
                 i += 1;
             }
             sy += 1;
         }
         sx += 1;
     }
-    (sub_valid, uv_res, uv_tx)
+    (sub_valid, uv_res, uv_tx, uv_single)
 };
 
 impl<'a> FrameCtx<'a> {
@@ -137,6 +149,7 @@ impl<'a> FrameCtx<'a> {
             sub_valid: SUB_TABLES.0[ss_x][ss_y],
             uv_residual_size: SUB_TABLES.1[ss_x][ss_y],
             uv_tx_size: SUB_TABLES.2[ss_x][ss_y],
+            uv_single_tx: SUB_TABLES.3[ss_x][ss_y],
         }
     }
 
@@ -295,8 +308,9 @@ pub struct AboveCtx {
     /// Starting luma 4x4 column of this context buffer (0 for full frame, `mi_col_start` for a
     /// tile).
     pub col0: usize,
-    pub level: [Vec<u8>; 3],
-    pub dc: [Vec<u8>; 3],
+    /// Coefficient context bytes (cumulative level and DC category, see
+    /// `block::coef_ctx_byte`).
+    pub coef_ctx: [Vec<u8>; 3],
     /// Palette colors of the last decoded block at each luma 4x4 column
     /// (plane 0: Y, plane 1: U).
     pub palette: [Vec<[u16; 8]>; 2],
@@ -305,7 +319,7 @@ pub struct AboveCtx {
 impl AboveCtx {
     pub fn reset(&mut self, col0: usize, above_w: usize, np: usize, screen_content: bool) {
         self.col0 = col0;
-        for a in self.level[..np].iter_mut().chain(self.dc[..np].iter_mut()) {
+        for a in self.coef_ctx[..np].iter_mut() {
             let pl = a.len().min(above_w);
             a[..pl].fill(0);
             a.resize(above_w, 0);
@@ -320,8 +334,8 @@ impl AboveCtx {
 
 /// Left context arrays (indexed by 4x4 row within the superblock).
 pub struct LeftCtx {
-    pub level: [[u8; 32]; 3],
-    pub dc: [[u8; 32]; 3],
+    /// Coefficient context bytes, as in `AboveCtx`.
+    pub coef_ctx: [[u8; 32]; 3],
     pub palette: [[[u16; 8]; 32]; 2],
 }
 
@@ -334,14 +348,12 @@ impl Default for LeftCtx {
 impl LeftCtx {
     pub fn new() -> Self {
         Self {
-            level: [[0; 32]; 3],
-            dc: [[0; 32]; 3],
+            coef_ctx: [[0; 32]; 3],
             palette: [[[0; 8]; 32]; 2],
         }
     }
     pub fn clear(&mut self) {
-        self.level = [[0; 32]; 3];
-        self.dc = [[0; 32]; 3];
+        self.coef_ctx = [[0; 32]; 3];
     }
 }
 

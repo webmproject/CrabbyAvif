@@ -98,10 +98,10 @@ fn copy_n<T: Copy, const N: usize>(dst: &mut [T], src: &[T]) {
     *d = *s;
 }
 
-/// Fills one row of a full-width strip copy (`W` = 64 or 32, `WB = W + 2`,
-/// `S = W + 4`).
+/// Fills one row of a full-width strip copy (`W` = 64 or 32, `WB` = `W + 2`
+/// or `W`, `WB_L` = `WB + 2`, `S` = `W + 4`).
 #[inline(always)]
-fn fill_row_const<T: Pixel, const W: usize, const WB: usize, const S: usize>(
+fn fill_row_const<T: Pixel, const W: usize, const WB: usize, const WB_L: usize, const S: usize>(
     drow: &mut [T; S],
     line: &[T],
     x0: usize,
@@ -114,18 +114,57 @@ fn fill_row_const<T: Pixel, const W: usize, const WB: usize, const S: usize>(
             drow[1] = drow[W + 1];
             copy_n::<T, WB>(&mut drow[B..], &line[x0..]);
         } else {
-            copy_n::<T, S>(drow, &line[x0 - B..]);
+            copy_n::<T, WB_L>(drow, &line[x0 - B..]);
         }
     } else {
         copy_n::<T, WB>(&mut drow[B..], &line[x0..]);
     }
 }
 
-/// Fast path of [`build_strip`] for interior/full-width strips (`w == W`,
-/// `r_end == x0 + W + B`, `stride == S`).
+/// Copies a contiguous range of plane rows into `dst` (row stride `S`),
+/// with the left-border mode specialized outside the loop:
+/// `MODE == 0`: `x0 < B`, `MODE == 1`: `x0 >= B && !left_from_prev`,
+/// `MODE == 2`: `x0 >= B && left_from_prev`.
 #[inline(always)]
+fn copy_strip_rows<
+    T: Pixel,
+    const W: usize,
+    const WB: usize,
+    const WB_L: usize,
+    const S: usize,
+    const MODE: u8,
+>(
+    dst: &mut [T],
+    src: &[T],
+    src_stride: usize,
+    x0: usize,
+) {
+    const B: usize = CDEF_BORDER;
+    for (drow, srow) in dst.chunks_exact_mut(S).zip(src.chunks_exact(src_stride)) {
+        let drow: &mut [T; S] = drow.try_into().unwrap();
+        match MODE {
+            0 => copy_n::<T, WB>(&mut drow[B..], &srow[x0..]),
+            1 => copy_n::<T, WB_L>(drow, &srow[x0 - B..]),
+            _ => {
+                drow[0] = drow[W];
+                drow[1] = drow[W + 1];
+                copy_n::<T, WB>(&mut drow[B..], &srow[x0..]);
+            }
+        }
+    }
+}
+
+/// Fast path of [`build_strip`] for full-width strips (`w == W`,
+/// `r_end == x0 + WB`, `WB_L == WB + 2`, `stride == S`).
+#[inline(never)]
 #[allow(clippy::too_many_arguments)]
-fn build_strip_const<T: Pixel, const W: usize, const WB: usize, const S: usize>(
+fn build_strip_const<
+    T: Pixel,
+    const W: usize,
+    const WB: usize,
+    const WB_L: usize,
+    const S: usize,
+>(
     data: &mut [T],
     pl: &PlaneWin<T>,
     above: &[Vec<T>; 2],
@@ -146,7 +185,7 @@ fn build_strip_const<T: Pixel, const W: usize, const WB: usize, const S: usize>(
             if y < plane_h {
                 let drow: &mut [T; S] = (&mut data[r * S..(r + 1) * S]).try_into().unwrap();
                 let left = can_left_from_prev && y.wrapping_sub(prev_ya0) < prev_len;
-                fill_row_const::<T, W, WB, S>(drow, &above[r], x0, left);
+                fill_row_const::<T, W, WB, WB_L, S>(drow, &above[r], x0, left);
             }
         }
     }
@@ -155,14 +194,29 @@ fn build_strip_const<T: Pixel, const W: usize, const WB: usize, const S: usize>(
     if y_start >= y_end {
         return;
     }
-    assert!(x0 + WB <= pl.stride);
+    let pl_stride = pl.stride;
+    assert!(x0 + WB <= pl_stride);
     let r0 = y_start - y0 + B;
-    let r1 = y_end - y0 + B;
-    for (i, drow) in data[r0 * S..r1 * S].chunks_exact_mut(S).enumerate() {
-        let y = y_start + i;
-        let drow: &mut [T; S] = drow.try_into().unwrap();
-        let left = can_left_from_prev && y.wrapping_sub(prev_ya0) < prev_len;
-        fill_row_const::<T, W, WB, S>(drow, pl.row(y), x0, left);
+    let n_rows = y_end - y_start;
+    let dst = &mut data[r0 * S..(r0 + n_rows) * S];
+    let src = &pl.data()[(y_start - pl.y0) * pl_stride..(y_end - pl.y0) * pl_stride];
+    if x0 < B {
+        copy_strip_rows::<T, W, WB, WB_L, S, 0>(dst, src, pl_stride, x0);
+    } else if !can_left_from_prev || prev_ya1 <= y_start || prev_ya0 >= y_end {
+        copy_strip_rows::<T, W, WB, WB_L, S, 1>(dst, src, pl_stride, x0);
+    } else if prev_ya0 <= y_start && prev_ya1 >= y_end {
+        copy_strip_rows::<T, W, WB, WB_L, S, 2>(dst, src, pl_stride, x0);
+    } else {
+        for (i, (drow, srow)) in dst
+            .chunks_exact_mut(S)
+            .zip(src.chunks_exact(pl_stride))
+            .enumerate()
+        {
+            let y = y_start + i;
+            let drow: &mut [T; S] = drow.try_into().unwrap();
+            let left = y.wrapping_sub(prev_ya0) < prev_len;
+            fill_row_const::<T, W, WB, WB_L, S>(drow, srow, x0, left);
+        }
     }
 }
 
@@ -252,37 +306,74 @@ fn build_strip<T: Pixel>(
     }
     let r_end_x = (x1 + B).min(plane_w);
     if (!can_left_from_prev || prev_w == w) && (x0 == 0 || x0 >= B) {
-        if max_w == 64 && w == 64 && r_end_x == x0 + 66 {
-            build_strip_const::<T, 64, 66, 68>(
-                data,
-                pl,
-                above,
-                y0,
-                ya0,
-                ya1,
-                x0,
-                plane_h,
-                can_left_from_prev,
-                prev_ya0,
-                prev_ya1,
-            );
-            return;
+        let wb = r_end_x - x0;
+        if max_w == 64 && w == 64 {
+            if wb == 66 {
+                build_strip_const::<T, 64, 66, 68, 68>(
+                    data,
+                    pl,
+                    above,
+                    y0,
+                    ya0,
+                    ya1,
+                    x0,
+                    plane_h,
+                    can_left_from_prev,
+                    prev_ya0,
+                    prev_ya1,
+                );
+                return;
+            }
+            if wb == 64 {
+                build_strip_const::<T, 64, 64, 66, 68>(
+                    data,
+                    pl,
+                    above,
+                    y0,
+                    ya0,
+                    ya1,
+                    x0,
+                    plane_h,
+                    can_left_from_prev,
+                    prev_ya0,
+                    prev_ya1,
+                );
+                return;
+            }
         }
-        if max_w == 32 && w == 32 && r_end_x == x0 + 34 {
-            build_strip_const::<T, 32, 34, 36>(
-                data,
-                pl,
-                above,
-                y0,
-                ya0,
-                ya1,
-                x0,
-                plane_h,
-                can_left_from_prev,
-                prev_ya0,
-                prev_ya1,
-            );
-            return;
+        if max_w == 32 && w == 32 {
+            if wb == 34 {
+                build_strip_const::<T, 32, 34, 36, 36>(
+                    data,
+                    pl,
+                    above,
+                    y0,
+                    ya0,
+                    ya1,
+                    x0,
+                    plane_h,
+                    can_left_from_prev,
+                    prev_ya0,
+                    prev_ya1,
+                );
+                return;
+            }
+            if wb == 32 {
+                build_strip_const::<T, 32, 32, 34, 36>(
+                    data,
+                    pl,
+                    above,
+                    y0,
+                    ya0,
+                    ya1,
+                    x0,
+                    plane_h,
+                    can_left_from_prev,
+                    prev_ya0,
+                    prev_ya1,
+                );
+                return;
+            }
         }
     }
     let r_start = ya0 - y0;

@@ -84,6 +84,27 @@ const _: () = {
     }
 };
 
+/// DC weight (first entry) of every quantizer matrix, indexed by
+/// `[level][plane_type][tx_size]`, so that DC dequantization needs a
+/// single table load.
+pub static QM_DC_WEIGHT: [[[u8; QM_OFFSET.len()]; 2]; 15] = {
+    let mut out = [[[0u8; QM_OFFSET.len()]; 2]; 15];
+    let mut l = 0;
+    while l < 15 {
+        let mut p = 0;
+        while p < 2 {
+            let mut t = 0;
+            while t < QM_OFFSET.len() {
+                out[l][p][t] = QUANTIZER_MATRIX[l][p][QM_OFFSET[t] as usize];
+                t += 1;
+            }
+            p += 1;
+        }
+        l += 1;
+    }
+    out
+};
+
 /// Returns a 1024-element view starting at `Qm_Offset[tx_size]` for `(level, plane_type)`.
 #[inline(always)]
 pub fn quantizer_matrix_1024(
@@ -4884,6 +4905,20 @@ mod tests {
                             assert_eq!(m[i * w + j], d, "{level} {plane} {t:?} {i} {j}");
                         }
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dc_weight_table() {
+        for level in 0..15 {
+            for plane in 0..2 {
+                for &t in TxSize::ALL {
+                    assert_eq!(
+                        QM_DC_WEIGHT[level][plane][t as usize],
+                        quantizer_matrix(level, plane, t)[0]
+                    );
                 }
             }
         }

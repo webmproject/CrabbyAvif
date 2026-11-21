@@ -1069,13 +1069,7 @@ impl<'a, T: Pixel> Pipeline<'a, T> {
                 }
                 if !first_tr {
                     // clear_above_context()
-                    for a in self
-                        .s
-                        .above
-                        .level
-                        .iter_mut()
-                        .chain(self.s.above.dc.iter_mut())
-                    {
+                    for a in self.s.above.coef_ctx.iter_mut() {
                         a.fill(0);
                     }
                 }
