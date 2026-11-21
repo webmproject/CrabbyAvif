@@ -1394,8 +1394,17 @@ fn parse_ipma(stream: &mut IStream, ipma: &mut Vec<ItemPropertyAssociation>) -> 
     // Section 8.11.14.2 of ISO/IEC 14496-12.
     let (version, flags) = stream.read_version_and_flags()?;
     // unsigned int(32) entry_count;
-    let entry_count = stream.read_u32()?;
-    ipma.try_reserve(usize_from_u32(entry_count)?)
+    let entry_count = usize_from_u32(stream.read_u32()?)?;
+    // Each entry has at least item_ID (2 or 4 bytes) and association_count (1 byte).
+    // For version < 1, item_ID is u16, non-zero, and strictly increasing, so at most u16::MAX
+    // entries can be valid.
+    let min_entry_bytes = if version < 1 { 3 } else { 5 };
+    if entry_count > stream.bytes_left()? / min_entry_bytes
+        || (version < 1 && entry_count > usize::from(u16::MAX))
+    {
+        return AvifError::bmff_parse_failed("invalid ipma entry count");
+    }
+    ipma.try_reserve(entry_count)
         .map_err(AvifError::map_out_of_memory)?;
     let mut previous_item_id: Option<u32> = None;
     for _ in 0..entry_count {
@@ -2511,7 +2520,9 @@ pub(crate) fn parse_sato(stream: &mut IStream, num_inputs: usize) -> AvifResult<
 
 #[cfg(test)]
 mod tests {
+    use crate::internal_utils::create_vec_exact;
     use crate::internal_utils::stream::IStream;
+    use crate::internal_utils::VecExtension;
     use crate::parser::mp4box;
     use crate::AvifError;
     use crate::AvifResult;
@@ -2586,6 +2597,33 @@ mod tests {
                 matches!(result, Err(AvifError::InvalidToneMappedImage(_))),
                 "{result:?}"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn parse_ipma_inflated_entry_count() -> AvifResult<()> {
+        for (version, entry_count, trailing_bytes) in [
+            (0u8, 1u32, 2usize),
+            (0, 2, 5),
+            (0, u32::from(u16::MAX) + 1, (usize::from(u16::MAX) + 1) * 3),
+            (1, 1, 4),
+            (1, 2, 9),
+            (1, u32::MAX, 8),
+        ] {
+            let mut payload = create_vec_exact(8 + trailing_bytes)?;
+            payload.try_extend_from_slice(&[version, 0, 0, 0])?;
+            payload.try_extend_from_slice(&entry_count.to_be_bytes())?;
+            for _ in 0..trailing_bytes {
+                payload.try_push(0)?;
+            }
+            let mut ipma = Vec::new();
+            let result = mp4box::parse_ipma(&mut IStream::create(&payload), &mut ipma);
+            assert!(
+                matches!(result, Err(AvifError::BmffParseFailed(_))),
+                "version={version} entry_count={entry_count}: {result:?}"
+            );
+            assert_eq!(ipma.capacity(), 0);
         }
         Ok(())
     }
