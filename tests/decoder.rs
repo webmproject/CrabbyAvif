@@ -4118,3 +4118,80 @@ fn sequence_no_content_when_decoding_gainmap_only(codec: CodecChoice) {
     assert_eq!(decoder.parse(), Ok(()));
     assert_eq!(decoder.next_image(), Err(AvifError::NoContent));
 }
+
+#[test_matrix(
+    [
+        "color_grid_alpha_grid_gainmap_nogrid.avif",
+        "color_grid_alpha_grid_shared_tiles.avif",
+        "sofa_grid1x5_420.avif",
+        "color_grid_gainmap_different_grid.avif",
+        "grid_1x2_alpha_before_color.avif",
+    ],
+    [0, 1, 2, 4, 16, u32::MAX]
+)]
+fn dav1d_grid_threads_parity(filename: &str, max_threads: u32) -> AvifResult<()> {
+    if !HAS_DECODER || codec_unavailable(DAV1D) {
+        return Ok(());
+    }
+    let mut ref_decoder = get_decoder_with_codec(filename, DAV1D);
+    ref_decoder.settings.image_content_to_decode = ImageContentType::All;
+    ref_decoder.settings.max_threads = 1;
+    ref_decoder.parse()?;
+    ref_decoder.nth_image(0)?;
+
+    let mut decoder = get_decoder_with_codec(filename, DAV1D);
+    decoder.settings.image_content_to_decode = ImageContentType::All;
+    decoder.settings.max_threads = max_threads;
+    decoder.parse()?;
+    decoder.nth_image(0)?;
+
+    assert!(utils::are_images_equal(
+        decoder.image().unwrap(),
+        ref_decoder.image().unwrap(),
+    )?);
+    if ref_decoder.gainmap_present() {
+        assert!(utils::are_images_equal(
+            &decoder.gainmap().image,
+            &ref_decoder.gainmap().image,
+        )?);
+    }
+    Ok(())
+}
+
+#[test_matrix([1, 4], [(578, 3258), (22151, 25409)])]
+fn dav1d_grid_corrupt_cell_returns_error(
+    max_threads: u32,
+    corrupt_range: (usize, usize),
+) -> AvifResult<()> {
+    if !HAS_DECODER || codec_unavailable(DAV1D) {
+        return Ok(());
+    }
+    let mut data = std::fs::read(get_test_file("sofa_grid1x5_420.avif")).unwrap();
+    // Corrupt bytes inside the selected cell payload in mdat (cell 0 or cell 4).
+    let (start, end) = corrupt_range;
+    for byte in &mut data[start + 32..end - 16] {
+        *byte ^= 0xA5;
+    }
+    let mut decoder = decoder_with_codec(DAV1D);
+    decoder.settings.max_threads = max_threads;
+    decoder.set_io_vec(data);
+    decoder.parse()?;
+    assert!(decoder.nth_image(0).is_err());
+    Ok(())
+}
+
+#[test_matrix([1, 4])]
+fn dav1d_grid_progressive_threads(max_threads: u32) -> AvifResult<()> {
+    if !HAS_NON_ANDROID_DECODER || codec_unavailable(DAV1D) {
+        return Ok(());
+    }
+    let mut decoder = get_decoder_with_codec("progressive/progressive_layered_grid.avif", DAV1D);
+    decoder.settings.allow_progressive = true;
+    decoder.settings.max_threads = max_threads;
+    decoder.parse()?;
+    assert!(decoder.image_count() > 1);
+    for _ in 0..decoder.image_count() {
+        decoder.next_image()?;
+    }
+    Ok(())
+}

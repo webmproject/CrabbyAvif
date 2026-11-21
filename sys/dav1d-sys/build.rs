@@ -105,6 +105,7 @@ fn main() -> Result<(), String> {
         "dav1d_data_unref",
         "dav1d_default_settings",
         "dav1d_error",
+        "dav1d_flush",
         "dav1d_get_picture",
         "dav1d_open",
         "dav1d_picture_unref",

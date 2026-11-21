@@ -23,8 +23,10 @@ use crate::decoder::item::Item;
 use crate::decoder::GridImageHelper;
 use crate::image::Image;
 use crate::image::YuvRange;
+use crate::internal_utils::create_vec_exact;
 use crate::internal_utils::u32_from_usize;
 use crate::internal_utils::TryClone;
+use crate::internal_utils::VecExtension;
 use crate::utils::pixels::*;
 use crate::*;
 
@@ -32,6 +34,8 @@ use dav1d_sys::bindings::*;
 
 use std::ffi::CStr;
 use std::mem::MaybeUninit;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 #[derive(Default)]
 pub struct Dav1d {
@@ -163,6 +167,21 @@ impl Drop for Dav1dDataWrapper {
         self.unref();
     }
 }
+
+struct SendCell {
+    // Dropped before `_picture` so pointer slices remain valid for `image`'s lifetime.
+    image: Image,
+    _picture: Dav1dPictureWrapper,
+}
+
+// SAFETY: `Dav1d` uses `dav1d`'s default allocator (not a thread-affine custom allocator), and
+// `decode_grid_cell()` flushes the context before constructing `SendCell` so no worker task threads
+// or `c->refs` retain references to `_picture`'s pixel buffers. `Dav1dPictureWrapper` owns a
+// ref-counted `Dav1dPicture` whose `Dav1dRef` / mutex-protected `Dav1dMemPool` are thread-safe to
+// unref from another thread. `image` holds `Pixels::Pointer` / `Pixels::Pointer16` slices
+// referencing only `_picture`'s pixel buffers, and field drop order ensures `image` is dropped
+// before `_picture`.
+unsafe impl Send for SendCell {}
 
 impl Dav1d {
     // Safe to call repeatedly; reuses the existing context when `low_latency` matches and
@@ -346,49 +365,172 @@ impl Dav1d {
         res
     }
 
+    fn flush_context(&mut self) {
+        if let Some(context) = self.context {
+            // SAFETY: `context` is a valid non-null `*mut Dav1dContext` opened by `dav1d_open`
+            // and owned by `self`.
+            unsafe { dav1d_flush(context) };
+        }
+    }
+
+    fn decode_grid_cell(
+        &mut self,
+        payload: &[u8],
+        spatial_id: u8,
+        category: Category,
+    ) -> AvifResult<SendCell> {
+        let mut cell_image = Image::default();
+        self.get_next_image(payload, spatial_id, &mut cell_image, category, None, true)?;
+        let picture = self
+            .picture
+            .take()
+            .ok_or_else(|| AvifError::UnknownError("dav1d returned no picture".into()))?;
+        // Reset sequence and reference frame state so malformed cells cannot leak state into
+        // subsequent cells on the same worker context.
+        self.flush_context();
+        Ok(SendCell {
+            image: cell_image,
+            _picture: picture,
+        })
+    }
+
+    fn grid_thread_counts(max_threads: u32, payload_count: usize) -> (usize, usize) {
+        const MAX_GRID_WORKERS: usize = 32;
+        // Match `initialize_impl`'s `i32::try_from` fallback so out-of-range counts stay 1.
+        let clamped_threads = i32::try_from(max_threads)
+            .ok()
+            .and_then(|t| usize::try_from(t).ok())
+            .unwrap_or(1)
+            .clamp(1, DAV1D_MAX_THREADS as usize);
+        let worker_count = clamped_threads
+            .min(payload_count)
+            .clamp(1, MAX_GRID_WORKERS);
+        (clamped_threads, worker_count)
+    }
+
     fn get_next_image_grid_impl(
         &mut self,
         payloads: &[Vec<u8>],
         spatial_id: u8,
         grid_image_helper: &mut GridImageHelper,
     ) -> AvifResult<()> {
-        self.initialize_impl(false)?;
-        let mut payloads_iter = payloads.iter();
-        let mut data = Dav1dDataWrapper::default();
-        let max_retries = 500;
-        let mut retries = 0;
-        while !grid_image_helper.is_grid_complete()? {
-            if !data.has_data() {
-                if let Some(payload) = payloads_iter.next() {
-                    data.wrap(payload)?;
-                }
-            }
-            if data.has_data() {
-                let res = self.send_data(&mut data)?;
-                if res != 0 && res != DAV1D_EAGAIN {
-                    return AvifError::unknown_error(format!("dav1d_send_data returned {res}"));
-                }
-            }
-            let mut picture = Dav1dPictureWrapper::default();
-            let res = self.get_picture(&mut picture)?;
-            if res != 0 && res != DAV1D_EAGAIN {
-                return AvifError::unknown_error(format!("dav1d_get_picture returned {res}"));
-            } else if res == 0 && picture.use_layer(spatial_id) {
-                let mut cell_image = Image::default();
-                self.picture_to_image(picture.get(), &mut cell_image, grid_image_helper.category)?;
-                grid_image_helper.copy_from_cell_image(&mut cell_image)?;
-                retries = 0;
-            } else {
-                retries += 1;
-                if retries > max_retries {
-                    return AvifError::unknown_error(format!(
-                        "dav1d_get_picture never returned a frame after {max_retries} calls"
-                    ));
-                }
-            }
+        if grid_image_helper.is_grid_complete()? {
+            return Ok(());
         }
-        self.flush()?;
-        Ok(())
+        if payloads.is_empty() {
+            return AvifError::unknown_error("incomplete grid payloads");
+        }
+        let base_config = self.config.as_ref().ok_or(AvifError::InvalidArgument)?;
+        let (max_threads, worker_count) =
+            Self::grid_thread_counts(base_config.max_threads, payloads.len());
+        if worker_count == 1 {
+            for payload in payloads {
+                if grid_image_helper.is_grid_complete()? {
+                    break;
+                }
+                let mut cell =
+                    self.decode_grid_cell(payload, spatial_id, grid_image_helper.category)?;
+                grid_image_helper.copy_from_cell_image(&mut cell.image)?;
+            }
+            if !grid_image_helper.is_grid_complete()? {
+                return AvifError::unknown_error("incomplete grid payloads");
+            }
+            return Ok(());
+        }
+
+        let per_worker_threads = u32_from_usize((max_threads / worker_count).max(1))?;
+        let worker_config = DecoderConfig {
+            max_threads: per_worker_threads,
+            codec_config: base_config.codec_config.try_clone()?,
+            ..*base_config
+        };
+        let category = grid_image_helper.category;
+        let next_index = AtomicUsize::new(0);
+
+        std::thread::scope(|scope| {
+            // Keep `frames` inside `scope` so buffered `SendCell`s drop before returning.
+            // `SendCell` relies on `Dav1dMemPool`'s mutex-protected refcounting to unref safely
+            // even after a worker closes its `Dav1dContext`.
+            let mut frames: Vec<Option<SendCell>> = create_vec_exact(payloads.len())?;
+            for _ in payloads {
+                frames.try_push(None)?;
+            }
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let mut handles = create_vec_exact(worker_count)?;
+            let spawn_result: AvifResult<()> = (|| {
+                for _ in 0..worker_count {
+                    // Cloning Sender only increments an atomic reference count and does not
+                    // allocate buffer memory.
+                    #[allow(clippy::disallowed_methods)]
+                    let sender = sender.clone();
+                    let next_index = &next_index;
+                    let worker_config = &worker_config;
+                    let handle = std::thread::Builder::new()
+                        .spawn_scoped(scope, move || {
+                            let mut dav1d = Dav1d::default();
+                            if let Err(err) = dav1d.initialize(worker_config) {
+                                let _ = sender.send(Err(err));
+                                return;
+                            }
+                            loop {
+                                let cell_index = next_index.fetch_add(1, Ordering::Relaxed);
+                                let Some(payload) = payloads.get(cell_index) else {
+                                    break;
+                                };
+                                let res = dav1d
+                                    .decode_grid_cell(payload, spatial_id, category)
+                                    .map(|cell| (cell_index, cell));
+                                let is_err = res.is_err();
+                                if sender.send(res).is_err() || is_err {
+                                    break;
+                                }
+                            }
+                        })
+                        .map_err(AvifError::map_unknown_error)?;
+                    handles.try_push(handle)?;
+                }
+                Ok(())
+            })();
+            drop(sender);
+            if let Err(err) = spawn_result {
+                drop(receiver);
+                drop(frames);
+                for handle in handles {
+                    let _ = handle.join();
+                }
+                return Err(err);
+            }
+
+            let mut result: AvifResult<()> = (|| {
+                let mut next_frame = 0;
+                'receive: for msg in receiver.iter() {
+                    let (index, cell) = msg?;
+                    *frames.get_mut(index).ok_or_else(|| {
+                        AvifError::UnknownError("dav1d: invalid cell index".into())
+                    })? = Some(cell);
+                    while let Some(mut cell) = frames.get_mut(next_frame).and_then(Option::take) {
+                        grid_image_helper.copy_from_cell_image(&mut cell.image)?;
+                        next_frame += 1;
+                        if grid_image_helper.is_grid_complete()? {
+                            break 'receive;
+                        }
+                    }
+                }
+                Ok(())
+            })();
+
+            drop(receiver);
+            drop(frames);
+            for handle in handles {
+                if handle.join().is_err() && result.is_ok() {
+                    result = AvifError::unknown_error("dav1d: decoding thread panicked");
+                }
+            }
+            if result.is_ok() && !grid_image_helper.is_grid_complete()? {
+                result = AvifError::unknown_error("incomplete grid payloads");
+            }
+            result
+        })
     }
 
     fn flush(&mut self) -> AvifResult<()> {
@@ -586,5 +728,47 @@ mod tests {
         dav1d.initialize_impl(true).unwrap();
         assert!(dav1d.context.is_some());
         assert!(dav1d.low_latency);
+    }
+
+    #[test]
+    fn grid_thread_counts_clamping() {
+        assert_eq!(Dav1d::grid_thread_counts(0, 10), (1, 1));
+        assert_eq!(Dav1d::grid_thread_counts(1, 10), (1, 1));
+        assert_eq!(Dav1d::grid_thread_counts(4, 10), (4, 4));
+        assert_eq!(Dav1d::grid_thread_counts(16, 5), (16, 5));
+        assert_eq!(
+            Dav1d::grid_thread_counts(u32::MAX, 10),
+            (1, 1),
+            "out-of-i32-range max_threads must match initialize_impl"
+        );
+        assert_eq!(Dav1d::grid_thread_counts(1000, 10), (256, 10));
+        assert_eq!(Dav1d::grid_thread_counts(256, 100), (256, 32));
+    }
+
+    #[test]
+    fn decode_grid_cell_and_flush_on_invalid_payload() {
+        let mut dav1d = Dav1d::default();
+        dav1d
+            .initialize(&DecoderConfig {
+                operating_point: 0,
+                all_layers: false,
+                width: 64,
+                height: 64,
+                depth: 8,
+                max_threads: 2,
+                image_size_limit: None,
+                max_input_size: 0,
+                codec_config: CodecConfiguration::Av1(Av1CodecConfiguration::default()),
+                category: Category::Color,
+                android_mediacodec_output_color_format: AndroidMediaCodecOutputColorFormat::default(
+                ),
+            })
+            .unwrap();
+        assert!(dav1d.decode_grid_cell(&[], 0, Category::Color).is_err());
+        assert!(dav1d
+            .decode_grid_cell(&[0xff, 0x00], 0, Category::Color)
+            .is_err());
+        dav1d.flush_context();
+        assert!(dav1d.picture.is_none());
     }
 }

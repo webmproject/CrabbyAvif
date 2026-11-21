@@ -3401,6 +3401,9 @@ impl Decoder {
         let codec = codec.codec();
         // Has to be a grid.
         self.tile_info[decoding_item.usize()].is_grid()
+            // Multi-sample progressive grids need cross-layer reference state preserved across
+            // layers, so keep them on `decode_tile`.
+            && first_tile.input.samples.len() == 1
             // Has to be one of the supported codecs.
             && match codec {
                 CodecChoice::MediaCodec | CodecChoice::Dav1d => true,
