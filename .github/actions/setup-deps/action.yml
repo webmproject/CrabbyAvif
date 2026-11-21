@@ -64,7 +64,12 @@ runs:
   - name: Build aom
     if: steps.cache-ext.outputs.cache-hit != 'true'
     working-directory: ./sys/aom-sys
-    run: ./aom.cmd
+    run: |
+      if [ "${RUNNER_OS:-}" = "Windows" ]; then
+        # Avoid Clang 20 / MSVC 14.52 STL1000 mismatch; fall back to MSVC.
+        unset CC CXX
+      fi
+      ./aom.cmd
     shell: bash
   - name: Build sharpyuv
     if: steps.cache-ext.outputs.cache-hit != 'true'
