@@ -101,18 +101,14 @@ impl Pixels {
             Pixels::Pointer16(_) => return AvifError::invalid_argument(),
             Pixels::Buffer(buffer) => {
                 if buffer.len() < size {
-                    buffer
-                        .try_reserve_exact(size - buffer.len())
-                        .map_err(AvifError::map_out_of_memory)?;
+                    buffer.try_reserve_vec_exact(size - buffer.len())?;
                 }
                 #[allow(clippy::disallowed_methods)]
                 buffer.resize(size, default as u8);
             }
             Pixels::Buffer16(buffer) => {
                 if buffer.len() < size {
-                    buffer
-                        .try_reserve_exact(size - buffer.len())
-                        .map_err(AvifError::map_out_of_memory)?;
+                    buffer.try_reserve_vec_exact(size - buffer.len())?;
                 }
                 #[allow(clippy::disallowed_methods)]
                 buffer.resize(size, default);

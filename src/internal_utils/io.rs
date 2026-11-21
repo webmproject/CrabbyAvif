@@ -45,10 +45,8 @@ impl decoder::IO for DecoderFileIO {
         let size_to_read: usize =
             if max_read_size > available_size { available_size } else { max_read_size };
         if size_to_read > 0 {
-            if self.buffer.capacity() < size_to_read
-                && self.buffer.try_reserve_exact(size_to_read).is_err()
-            {
-                return AvifError::out_of_memory();
+            if self.buffer.capacity() < size_to_read {
+                self.buffer.try_reserve_vec_exact(size_to_read)?;
             }
             #[allow(clippy::disallowed_methods)]
             self.buffer.resize(size_to_read, 0);

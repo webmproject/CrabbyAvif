@@ -1404,8 +1404,7 @@ fn parse_ipma(stream: &mut IStream, ipma: &mut Vec<ItemPropertyAssociation>) -> 
     {
         return AvifError::bmff_parse_failed("invalid ipma entry count");
     }
-    ipma.try_reserve(entry_count)
-        .map_err(AvifError::map_out_of_memory)?;
+    ipma.try_reserve_vec(entry_count)?;
     let mut previous_item_id: Option<u32> = None;
     for _ in 0..entry_count {
         let mut entry = ItemPropertyAssociation::default();
@@ -1437,8 +1436,7 @@ fn parse_ipma(stream: &mut IStream, ipma: &mut Vec<ItemPropertyAssociation>) -> 
         let association_count = stream.read_u8()?;
         entry
             .associations
-            .try_reserve(association_count as usize)
-            .map_err(AvifError::map_out_of_memory)?;
+            .try_reserve_vec(association_count as usize)?;
         for _ in 0..association_count {
             // bit(1) essential;
             let essential = stream.read_bool()?;

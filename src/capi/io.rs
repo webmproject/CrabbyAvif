@@ -95,9 +95,9 @@ pub unsafe extern "C" fn crabby_avifRWDataRealloc(
         }
         return avifResult::Ok;
     }
-    // Ok to use size as capacity here since we use reserve_exact.
+    // Ok to use size as capacity here since we use try_reserve_vec_exact.
     let mut newData: Vec<u8> = Vec::new();
-    if newData.try_reserve_exact(newSize).is_err() {
+    if newData.try_reserve_vec_exact(newSize).is_err() {
         return avifResult::OutOfMemory;
     }
     if !raw.data.is_null() {
@@ -142,7 +142,7 @@ pub unsafe extern "C" fn crabby_avifRWDataSet(
         }
         // Copy the data into a new buffer directly instead of calling crabby_avifRWDataRealloc(),
         // which would zero the new buffer before it is overwritten.
-        if new_data.try_reserve_exact(size).is_err() {
+        if new_data.try_reserve_vec_exact(size).is_err() {
             return avifResult::OutOfMemory;
         }
         // SAFETY: `data` is non-null, `size <= isize::MAX`, and the caller guarantees `data`

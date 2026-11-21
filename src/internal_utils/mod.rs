@@ -20,8 +20,7 @@ macro_rules! try_vec_exact {
     ($elem:expr; $n:expr) => {{
         let n = $n;
         let mut vec = Vec::new();
-        vec.try_reserve_exact(n)
-            .map_err(AvifError::map_out_of_memory)?;
+        crate::internal_utils::VecExtension::try_reserve_vec_exact(&mut vec, n)?;
         #[allow(clippy::disallowed_methods)]
         vec.resize(n, $elem);
         Ok::<_, AvifError>(vec)
@@ -29,8 +28,7 @@ macro_rules! try_vec_exact {
     ($($x:expr),+ $(,)?) => {{
         let items = [$($x),+];
         let mut vec = Vec::new();
-        vec.try_reserve_exact(items.len())
-            .map_err(AvifError::map_out_of_memory)?;
+        crate::internal_utils::VecExtension::try_reserve_vec_exact(&mut vec, items.len())?;
         vec.extend(items);
         Ok::<_, AvifError>(vec)
     }};
@@ -202,8 +200,7 @@ pub(crate) fn create_vec_exact<T>(size: usize) -> AvifResult<Vec<T>> {
     if u64_from_usize(allocation_size)? >= 2_145_386_496 {
         return AvifError::out_of_memory();
     }
-    v.try_reserve_exact(size)
-        .map_err(AvifError::map_out_of_memory)?;
+    v.try_reserve_vec_exact(size)?;
     Ok(v)
 }
 
@@ -490,8 +487,11 @@ impl<T, I: Iterator<Item = T>> IteratorExtension<T> for I {
     }
 }
 
-// Same as Vec.push() and Vec.extend_from_slice() but returns an error if the allocation fails.
+// Same as Vec.push(), Vec.extend_from_slice(), Vec.reserve(), and Vec.reserve_exact()
+// but maps allocation failures to AvifError::OutOfMemory.
 pub(crate) trait VecExtension<T> {
+    fn try_reserve_vec(&mut self, additional: usize) -> AvifResult<()>;
+    fn try_reserve_vec_exact(&mut self, additional: usize) -> AvifResult<()>;
     fn try_push(&mut self, value: T) -> AvifResult<()>;
     fn try_extend_from_slice(&mut self, value: &[T]) -> AvifResult<()>
     where
@@ -499,8 +499,20 @@ pub(crate) trait VecExtension<T> {
 }
 
 impl<T> VecExtension<T> for Vec<T> {
+    fn try_reserve_vec(&mut self, additional: usize) -> AvifResult<()> {
+        #[allow(clippy::disallowed_methods)]
+        self.try_reserve(additional)
+            .map_err(AvifError::map_out_of_memory)
+    }
+
+    fn try_reserve_vec_exact(&mut self, additional: usize) -> AvifResult<()> {
+        #[allow(clippy::disallowed_methods)]
+        self.try_reserve_exact(additional)
+            .map_err(AvifError::map_out_of_memory)
+    }
+
     fn try_push(&mut self, value: T) -> AvifResult<()> {
-        self.try_reserve(1).map_err(AvifError::map_out_of_memory)?;
+        self.try_reserve_vec(1)?;
         #[allow(clippy::disallowed_methods)]
         self.push(value);
         Ok(())
@@ -510,8 +522,7 @@ impl<T> VecExtension<T> for Vec<T> {
     where
         T: Copy,
     {
-        self.try_reserve(value.len())
-            .map_err(AvifError::map_out_of_memory)?;
+        self.try_reserve_vec(value.len())?;
         #[allow(clippy::disallowed_methods)]
         self.extend_from_slice(value);
         Ok(())

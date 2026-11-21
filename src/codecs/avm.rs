@@ -1006,8 +1006,7 @@ impl Decoder for Avm {
                         .checked_add(av2_payload.len())
                         .ok_or_else(|| AvifError::map_out_of_memory(()))?;
                     config_obus_then_av2_payload
-                        .try_reserve_exact(config_obus_then_av2_payload_len)
-                        .map_err(AvifError::map_out_of_memory)?;
+                        .try_reserve_vec_exact(config_obus_then_av2_payload_len)?;
                     config_obus_then_av2_payload.try_extend_from_slice(config_obus)?;
                     config_obus_then_av2_payload.try_extend_from_slice(av2_payload)?;
                     &config_obus_then_av2_payload
