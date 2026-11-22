@@ -134,6 +134,22 @@ fn target_size_parser(s: &str) -> Result<ImageSize, String> {
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GridSize {
+    cols: u32,
+    rows: u32,
+}
+
+fn grid_parser(s: &str) -> Result<GridSize, String> {
+    let values = split_and_check_count!("grid", s, "x", 2, u32);
+    let cols = *values.first().ok_or("Invalid grid string")?;
+    let rows = *values.get(1).ok_or("Invalid grid string")?;
+    if cols == 0 || cols > 256 || rows == 0 || rows > 256 || cols * rows > 65535 {
+        return Err(format!("Invalid grid dimensions: {s}"));
+    }
+    Ok(GridSize { cols, rows })
+}
+
 fn clli_parser(s: &str) -> Result<ContentLightLevelInformation, String> {
     let values = split_and_check_count!("clli", s, ",", 2, u16);
     Ok(ContentLightLevelInformation {
@@ -391,6 +407,10 @@ struct CommandLineArgs {
     /// with gainmap. Ignored otherwise.
     #[arg(long, value_parser = clli_parser)]
     alt_clli: Option<ContentLightLevelInformation>,
+
+    /// AVIF Encode only: Encode a grid AVIF with M cols and N rows, expressed as MxN
+    #[arg(short = 'g', long, value_parser = grid_parser)]
+    grid: Option<GridSize>,
 
     /// Input AVIF file
     #[arg(allow_hyphen_values = false)]
@@ -876,6 +896,60 @@ fn apply_read_ignore_flags(
 }
 
 #[cfg(feature = "encoder")]
+fn best_cell_size(num_pixels: u32, num_cells: u32, is_subsampled: bool) -> AvifResult<u32> {
+    if num_cells == 0 {
+        return Err(AvifError::InvalidImageGrid(
+            "grid dimension must be positive".into(),
+        ));
+    }
+    let mut cell_size = num_pixels.div_ceil(num_cells);
+    if cell_size < 64 {
+        cell_size = 64;
+    }
+    if cell_size > 65536 {
+        return Err(AvifError::InvalidImageGrid(format!(
+            "cell size {cell_size} exceeds maximum frame size 65536"
+        )));
+    }
+    if is_subsampled && !cell_size.is_multiple_of(2) {
+        cell_size += 1;
+    }
+    if u64::from(num_cells - 1) * u64::from(cell_size) >= u64::from(num_pixels) {
+        return Err(AvifError::InvalidImageGrid(format!(
+            "cannot split {num_pixels} pixels into {num_cells} cells (cell size {cell_size})"
+        )));
+    }
+    Ok(cell_size)
+}
+
+#[cfg(feature = "encoder")]
+fn add_image_single_or_grid(
+    encoder: &mut Encoder,
+    image: &image::Image,
+    gainmap: Option<&crabby_avif::gainmap::GainMap>,
+    grid: Option<GridSize>,
+) -> AvifResult<()> {
+    if let Some(GridSize { cols, rows }) = grid {
+        if cols > 1 || rows > 1 {
+            let cell_width =
+                best_cell_size(image.width, cols, image.yuv_format.chroma_shift_x().0 != 0)?;
+            let cell_height =
+                best_cell_size(image.height, rows, image.yuv_format.chroma_shift_y() != 0)?;
+            return match gainmap {
+                Some(gainmap) => {
+                    encoder.add_image_gainmap_split_grid(cell_width, cell_height, image, gainmap)
+                }
+                None => encoder.add_image_split_grid(cell_width, cell_height, image),
+            };
+        }
+    }
+    match gainmap {
+        Some(gainmap) => encoder.add_image_gainmap(image, gainmap),
+        None => encoder.add_image(image),
+    }
+}
+
+#[cfg(feature = "encoder")]
 fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifResult<()> {
     const DEFAULT_ENCODE_QUALITY: f32 = 90.0;
     let mut reader = <dyn Reader>::create(input_file)?;
@@ -989,6 +1063,11 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
             println!("Automatic progressive encoding can only have one input image.");
             return Err(AvifError::InvalidArgument);
         }
+        if args.grid.is_some() {
+            return Err(AvifError::UnknownError(
+                "Grid encoding is not supported for image sequences.".into(),
+            ));
+        }
         loop {
             encoder.add_image_for_sequence(&image, duration_ms)?;
             if !reader.has_more_frames() {
@@ -1006,10 +1085,8 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
         settings.mutable.quality = args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY);
         encoder.update_settings(&settings.mutable)?;
         encoder.add_image(&image)?;
-    } else if let Some(gainmap) = &gainmap {
-        encoder.add_image_gainmap(&image, gainmap)?;
     } else {
-        encoder.add_image(&image)?;
+        add_image_single_or_grid(&mut encoder, &image, gainmap.as_ref(), args.grid)?;
     }
 
     let encoded_data = encoder.finish()?;
@@ -1057,6 +1134,7 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                     || args.extract_thumbnail
                     || args.crop.is_some()
                     || args.target_size.is_some()
+                    || args.grid.is_some()
                 {
                     return Err(AvifError::UnknownError(
                         "--info contains unsupported extra arguments".into(),
@@ -1100,6 +1178,11 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                         "target-size is not supported with progressive decoding".into(),
                     ));
                 }
+                if args.grid.is_some() {
+                    return Err(AvifError::UnknownError(
+                        "grid is only supported when encoding".into(),
+                    ));
+                }
             }
         } else {
             // TODO: b/403090413 - validate encoding args.
@@ -1111,6 +1194,11 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
             if args.target_size.is_some() {
                 return Err(AvifError::UnknownError(
                     "target-size is only supported when decoding".into(),
+                ));
+            }
+            if args.grid.is_some() && args.progressive {
+                return Err(AvifError::UnknownError(
+                    "grid is not supported with progressive encoding".into(),
                 ));
             }
         }

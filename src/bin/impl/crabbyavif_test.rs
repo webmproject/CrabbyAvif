@@ -90,6 +90,57 @@ fn crabbyavif_test() -> AvifResult<()> {
     Ok(())
 }
 
+#[test]
+fn grid_parser_and_validation() {
+    use crate::r#impl::grid_parser;
+    use crate::r#impl::GridSize;
+    assert_eq!(grid_parser("1x1"), Ok(GridSize { cols: 1, rows: 1 }));
+    assert_eq!(grid_parser("2x3"), Ok(GridSize { cols: 2, rows: 3 }));
+    for invalid in ["0x2", "2x0", "2X2", "257x1", "256x256", "abc"] {
+        assert!(grid_parser(invalid).is_err(), "{invalid} should fail");
+    }
+    assert_eq!(
+        main_impl(["crabbyavif", "--grid", "2x2", "--info", "input.avif"].iter()),
+        Err(AvifError::UnknownError(
+            "--info contains unsupported extra arguments".into()
+        ))
+    );
+    assert_eq!(
+        main_impl(["crabbyavif", "-g", "2x2", "--info", "input.avif"].iter()),
+        Err(AvifError::UnknownError(
+            "--info contains unsupported extra arguments".into()
+        ))
+    );
+    assert_eq!(
+        main_impl(["crabbyavif", "--grid", "2x2", "input.avif", "output.png"].iter()),
+        Err(AvifError::UnknownError(
+            "grid is only supported when encoding".into()
+        ))
+    );
+    assert_eq!(
+        main_impl(["crabbyavif", "--grid", "2x2", "input.avif", "output.avif"].iter()),
+        Err(AvifError::UnknownError(
+            "grid is only supported when encoding".into()
+        ))
+    );
+    assert_eq!(
+        main_impl(
+            [
+                "crabbyavif",
+                "--grid",
+                "2x2",
+                "--progressive",
+                "input.png",
+                "output.avif",
+            ]
+            .iter()
+        ),
+        Err(AvifError::UnknownError(
+            "grid is not supported with progressive encoding".into()
+        ))
+    );
+}
+
 // The tests below decode images, so they require an AV1 decoder.
 #[cfg(any(
     feature = "dav1d",
@@ -735,6 +786,256 @@ mod decode_tests {
         assert!(!scaled_decoded.alpha_present);
         assert!(!scaled_decoded.has_alpha());
         assert_eq!((scaled_decoded.width, scaled_decoded.height), (4, 4));
+        Ok(())
+    }
+
+    #[cfg(all(feature = "encoder", feature = "aom"))]
+    #[test]
+    fn encode_grid_cell_size_and_gainmap_edges() -> AvifResult<()> {
+        use crate::r#impl::add_image_single_or_grid;
+        use crate::r#impl::best_cell_size;
+        use crate::r#impl::GridSize;
+        use crabby_avif::encoder;
+        use crabby_avif::gainmap::GainMap;
+
+        // Odd div_ceil rounds up to even on subsampled axes, stays odd on Yuv400.
+        assert_eq!(best_cell_size(200, 3, true)?, 68);
+        assert_eq!(best_cell_size(200, 3, false)?, 67);
+        // 1D grid still validates max cell dimension (<= 65536) without u32 overflow.
+        assert!(matches!(
+            best_cell_size(70000, 1, false),
+            Err(AvifError::InvalidImageGrid(_))
+        ));
+        assert!(matches!(
+            best_cell_size(u32::MAX, 1, true),
+            Err(AvifError::InvalidImageGrid(_))
+        ));
+        assert!(matches!(
+            best_cell_size(64, 2, false),
+            Err(AvifError::InvalidImageGrid(_))
+        ));
+
+        let make_yuv420 = |width, height| -> AvifResult<image::Image> {
+            let mut img = image::Image {
+                width,
+                height,
+                depth: 8,
+                yuv_format: PixelFormat::Yuv420,
+                ..Default::default()
+            };
+            img.allocate_planes(Category::Color)?;
+            img.fill_plane_with_value(image::Plane::Y, 128)?;
+            img.fill_plane_with_value(image::Plane::U, 128)?;
+            img.fill_plane_with_value(image::Plane::V, 128)?;
+            Ok(img)
+        };
+        let settings = encoder::Settings {
+            speed: Some(10),
+            ..Default::default()
+        };
+
+        // 2x2 grid with 1/2-size gain map (128x128 -> 64x64 cells) succeeds and writes grid boxes.
+        let base = make_yuv420(256, 256)?;
+        let gm_ok = GainMap {
+            image: make_yuv420(128, 128)?,
+            ..Default::default()
+        };
+        let mut enc_ok = encoder::Encoder::create_with_settings(&settings)?;
+        add_image_single_or_grid(
+            &mut enc_ok,
+            &base,
+            Some(&gm_ok),
+            Some(GridSize { cols: 2, rows: 2 }),
+        )?;
+        let bytes = enc_ok.finish()?;
+        assert!(bytes.windows(4).any(|w| w == b"grid"));
+
+        // 2x2 grid with too-small gain map (100x100 -> 50px < 64) fails with InvalidImageGrid.
+        let gm_small = GainMap {
+            image: make_yuv420(100, 100)?,
+            ..Default::default()
+        };
+        let mut enc_small = encoder::Encoder::create_with_settings(&settings)?;
+        assert!(matches!(
+            add_image_single_or_grid(
+                &mut enc_small,
+                &base,
+                Some(&gm_small),
+                Some(GridSize { cols: 2, rows: 2 }),
+            ),
+            Err(AvifError::InvalidImageGrid(_))
+        ));
+
+        // Sequence input rejects --grid.
+        use crabby_avif::utils::writer::y4m::Y4MWriter;
+        use crabby_avif::utils::writer::Writer;
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+        let seq_y4m = temp_dir.path().join("seq_grid.y4m");
+        let mut seq_file = std::fs::File::create(&seq_y4m).unwrap();
+        let mut y4m_writer = Y4MWriter::create(false);
+        y4m_writer.write_frame(&mut seq_file, &base)?;
+        y4m_writer.write_frame(&mut seq_file, &base)?;
+        drop(seq_file);
+        let seq_avif = temp_dir.path().join("seq_grid.avif");
+        assert_eq!(
+            main_impl(
+                [
+                    "crabbyavif",
+                    "--speed",
+                    "10",
+                    "--grid",
+                    "2x2",
+                    seq_y4m.to_str().unwrap(),
+                    seq_avif.to_str().unwrap(),
+                ]
+                .iter()
+            ),
+            Err(AvifError::UnknownError(
+                "Grid encoding is not supported for image sequences.".into()
+            ))
+        );
+        Ok(())
+    }
+
+    #[cfg(all(feature = "aom", feature = "png"))]
+    #[test]
+    fn encode_grid_png_odd_rounding_and_too_small() -> AvifResult<()> {
+        use crabby_avif::utils::writer::png::PngWriter;
+        use crabby_avif::utils::writer::Writer;
+
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+
+        // 200x100 PNG with --yuv 420 --grid 3x1 rounds cell width 67 -> 68 and emits a grid.
+        let mut odd_img = image::Image {
+            width: 200,
+            height: 100,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv444,
+            ..Default::default()
+        };
+        odd_img.allocate_planes(Category::Color)?;
+        odd_img.fill_plane_with_value(image::Plane::Y, 128)?;
+        odd_img.fill_plane_with_value(image::Plane::U, 128)?;
+        odd_img.fill_plane_with_value(image::Plane::V, 128)?;
+        let odd_png = temp_dir.path().join("200x100.png");
+        PngWriter::default()
+            .write_frame(&mut std::fs::File::create(&odd_png).unwrap(), &odd_img)?;
+        let odd_grid_avif = temp_dir.path().join("odd_grid.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                "--yuv",
+                "420",
+                "--grid",
+                "3x1",
+                odd_png.to_str().unwrap(),
+                odd_grid_avif.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let grid_bytes = std::fs::read(&odd_grid_avif).unwrap();
+        assert!(grid_bytes.windows(4).any(|w| w == b"grid"));
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&odd_grid_avif.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        assert_eq!(
+            (
+                decoder.image().unwrap().width,
+                decoder.image().unwrap().height
+            ),
+            (200, 100)
+        );
+
+        // 64x64 PNG is too small to split into 2x1 cells (>= 64px each).
+        let mut small_img = image::Image {
+            width: 64,
+            height: 64,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv444,
+            ..Default::default()
+        };
+        small_img.allocate_planes(Category::Color)?;
+        small_img.fill_plane_with_value(image::Plane::Y, 128)?;
+        small_img.fill_plane_with_value(image::Plane::U, 128)?;
+        small_img.fill_plane_with_value(image::Plane::V, 128)?;
+        let small_png = temp_dir.path().join("64x64.png");
+        PngWriter::default()
+            .write_frame(&mut std::fs::File::create(&small_png).unwrap(), &small_img)?;
+        let small_avif = temp_dir.path().join("small_fail.avif");
+        assert!(matches!(
+            main_impl(
+                [
+                    "crabbyavif",
+                    "--speed",
+                    "10",
+                    "--grid",
+                    "2x1",
+                    small_png.to_str().unwrap(),
+                    small_avif.to_str().unwrap(),
+                ]
+                .iter(),
+            ),
+            Err(AvifError::InvalidImageGrid(_))
+        ));
+        Ok(())
+    }
+
+    #[cfg(all(feature = "aom", feature = "jpeg"))]
+    #[test]
+    fn encode_grid() -> AvifResult<()> {
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+        let input_path = get_test_file("seine_sdr_gainmap_srgb.jpg");
+        let non_grid_path = temp_dir.path().join("single.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                input_path.as_str(),
+                non_grid_path.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let non_grid_bytes = std::fs::read(&non_grid_path).unwrap();
+        assert!(!non_grid_bytes.windows(4).any(|w| w == b"grid"));
+
+        let encoded_path = temp_dir.path().join("grid.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                "--grid",
+                "2x2",
+                input_path.as_str(),
+                encoded_path.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let grid_bytes = std::fs::read(&encoded_path).unwrap();
+        assert!(grid_bytes.windows(4).any(|w| w == b"grid"));
+        assert_ne!(grid_bytes, non_grid_bytes);
+
+        let mut decoder = decoder::Decoder::default();
+        decoder.settings.image_content_to_decode = decoder::ImageContentType::All;
+        decoder.set_io_file(&encoded_path.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        decoder.next_image()?;
+        let parsed = decoder.image().expect("parsed image was none");
+        assert_eq!((parsed.width, parsed.height), (400, 300));
+        assert!(decoder.gainmap_present());
+        assert_eq!(
+            (
+                decoder.gainmap().image.width,
+                decoder.gainmap().image.height
+            ),
+            (400, 300)
+        );
         Ok(())
     }
 }
