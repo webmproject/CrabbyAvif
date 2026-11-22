@@ -279,15 +279,17 @@ struct CommandLineArgs {
     #[arg(long)]
     dimension_limit: Option<u32>,
 
-    /// AVIF Decode only: If the input file contains embedded Exif metadata, ignore it (no-op if
-    /// absent)
+    /// If the input file contains embedded Exif metadata, ignore it (no-op if absent)
     #[arg(long, default_value = "false")]
     ignore_exif: bool,
 
-    /// AVIF Decode only: If the input file contains embedded XMP metadata, ignore it (no-op if
-    /// absent)
+    /// If the input file contains embedded XMP metadata, ignore it (no-op if absent)
     #[arg(long, default_value = "false")]
     ignore_xmp: bool,
+
+    /// If the input file contains an embedded ICC color profile, ignore it (no-op if absent)
+    #[arg(long, default_value = "false")]
+    ignore_icc: bool,
 
     /// AVIF Encode only: Add irot property (rotation), in 0..3. Makes (90 * ANGLE) degree rotation
     /// anti-clockwise
@@ -788,7 +790,7 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
     let mut output_file = File::create(output_filename).or(Err(AvifError::UnknownError(
         "Could not open output file".into(),
     )))?;
-    let cropped_image = if image.clap.is_some() {
+    let mut cropped_image = if image.clap.is_some() {
         if let Ok(cropped_image) = image.cropped_image() {
             Some(cropped_image)
         } else {
@@ -798,13 +800,23 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
     } else {
         None
     };
-    writer.write_frame(
-        &mut output_file,
+    let mut cloned_for_icc;
+    let image_to_write = if args.ignore_icc && !image.icc.is_empty() {
+        if let Some(cropped) = &mut cropped_image {
+            cropped.icc.clear();
+            cropped
+        } else {
+            cloned_for_icc = image.try_deep_clone()?;
+            cloned_for_icc.icc.clear();
+            &cloned_for_icc
+        }
+    } else {
         match &cropped_image {
             Some(cropped_image) => cropped_image,
             None => image,
-        },
-    )?;
+        }
+    };
+    writer.write_frame(&mut output_file, image_to_write)?;
     println!(
         "Wrote image at index {} to output {}",
         args.index.unwrap_or(0),
@@ -828,10 +840,19 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
     let reader_config = Config {
         yuv_format: args.yuv_format,
         depth: args.depth,
+        ignore_icc: args.ignore_icc || args.icc.is_some(),
+        ignore_exif: args.ignore_exif || args.exif.is_some(),
+        ignore_xmp: args.ignore_xmp || args.xmp.is_some(),
         allow_sample_transform: args.allow_sample_transform,
         ..Default::default()
     };
     let (mut image, mut duration_ms, mut gainmap) = reader.read_frame(&reader_config)?;
+    if args.ignore_icc {
+        image.icc.clear();
+        if let Some(gainmap) = &mut gainmap {
+            gainmap.alt_icc.clear();
+        }
+    }
     if args.irot_angle.is_some() {
         image.irot_angle = args.irot_angle;
     }
@@ -937,6 +958,9 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
                 break;
             }
             (image, duration_ms, _) = reader.read_frame(&reader_config)?;
+            if args.ignore_icc {
+                image.icc.clear();
+            }
         }
     } else if args.progressive {
         // Encode the base layer with very low quality.

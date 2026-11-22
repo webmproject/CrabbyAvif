@@ -332,4 +332,120 @@ mod decode_tests {
         assert_eq!(parsed.xmp, xmp_bytes);
         Ok(())
     }
+
+    #[cfg(all(feature = "aom", feature = "jpeg"))]
+    #[test]
+    fn encode_jpeg_ignore_exif_and_xmp() -> AvifResult<()> {
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+        let input_path = get_test_file("paris_exif_xmp_icc.jpg");
+
+        // Positive control: Exif, XMP, and ICC are preserved by default.
+        let preserved_path = temp_dir.path().join("preserved.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                input_path.as_str(),
+                preserved_path.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&preserved_path.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        let parsed = decoder.image().expect("parsed image was none");
+        assert!(!parsed.exif.is_empty());
+        assert!(!parsed.xmp.is_empty());
+        assert!(!parsed.icc.is_empty());
+
+        let encoded_path = temp_dir.path().join("ignored.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                "--ignore-exif",
+                "--ignore-xmp",
+                input_path.as_str(),
+                encoded_path.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&encoded_path.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        let parsed = decoder.image().expect("parsed image was none");
+        assert!(parsed.exif.is_empty());
+        assert!(parsed.xmp.is_empty());
+        assert!(!parsed.icc.is_empty());
+
+        // --yuv 400 on a color JPEG with ICC fails without --ignore-icc or --icc, and succeeds
+        // with --icc or --ignore-icc.
+        let yuv400_fail = temp_dir.path().join("yuv400_fail.avif");
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                "--yuv",
+                "400",
+                input_path.as_str(),
+                yuv400_fail.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+
+        let yuv400_ignore_icc = temp_dir.path().join("yuv400_ignore_icc.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                "--yuv",
+                "400",
+                "--ignore-icc",
+                input_path.as_str(),
+                yuv400_ignore_icc.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&yuv400_ignore_icc.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        assert!(decoder
+            .image()
+            .expect("parsed image was none")
+            .icc
+            .is_empty());
+
+        let dummy_icc = temp_dir.path().join("dummy.icc");
+        std::fs::write(&dummy_icc, b"test_icc").unwrap();
+        let yuv400_override_icc = temp_dir.path().join("yuv400_override_icc.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                "--yuv",
+                "400",
+                "--icc",
+                dummy_icc.to_str().unwrap(),
+                input_path.as_str(),
+                yuv400_override_icc.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&yuv400_override_icc.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        assert_eq!(
+            decoder.image().expect("parsed image was none").icc,
+            b"test_icc"
+        );
+        Ok(())
+    }
 }

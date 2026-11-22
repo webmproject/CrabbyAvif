@@ -61,12 +61,11 @@ impl UFraction {
         }
     }
 
-    #[cfg(feature = "jpeg")]
     fn from_f64(v: f64, max_n: u32) -> Option<Self> {
         if v.is_nan() || v < 0.0 || v > max_n as f64 {
             return None;
         }
-        let max_d = if v <= 1.0 { u32::MAX } else { (max_n as f64 / v).floor() as u32 };
+        let max_d = if v == 0.0 { u32::MAX } else { (max_n as f64 / v).floor() as u32 };
 
         // Find the best approximation of v as a fraction using continued fractions:
         // https://en.wikipedia.org/wiki/Continued_fraction
@@ -98,21 +97,24 @@ impl UFraction {
     }
 }
 
-#[cfg(feature = "jpeg")]
 impl From<f32> for UFraction {
     fn from(v: f32) -> Self {
         UFraction::from_f64(v as f64, u32::MAX).unwrap_or_default()
     }
 }
 
-#[cfg(feature = "jpeg")]
 impl From<f64> for UFraction {
     fn from(v: f64) -> Self {
         UFraction::from_f64(v, u32::MAX).unwrap_or_default()
     }
 }
 
-#[cfg(feature = "jpeg")]
+impl From<f32> for Fraction {
+    fn from(v: f32) -> Self {
+        Fraction::from(v as f64)
+    }
+}
+
 impl From<f64> for Fraction {
     fn from(v: f64) -> Self {
         match UFraction::from_f64(v.abs(), i32::MAX as u32) {
@@ -240,5 +242,29 @@ impl IFraction {
             .ok_or(AvifError::UnknownError("".into()))?;
         self.simplify();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fraction_from_float_edge_cases() {
+        assert_eq!(UFraction::from(0.0f32), UFraction(0, 1));
+        assert_eq!(UFraction::from(0.0f64), UFraction(0, 1));
+        assert_eq!(UFraction::from(-1.0f64), UFraction(0, 0));
+        assert_eq!(UFraction::from(f64::NAN), UFraction(0, 0));
+        assert_eq!(UFraction::from(f64::INFINITY), UFraction(0, 0));
+        assert_eq!(Fraction::from(0.0f64), Fraction(0, 1));
+        assert_eq!(Fraction::from(-1.5f32), Fraction(-3, 2));
+        assert_eq!(Fraction::from(-1.5f64), Fraction(-3, 2));
+        let log2_1_9 = Fraction::from(1.9f64.log2());
+        assert!(log2_1_9.0 > 0 && log2_1_9.1 > 0);
+        assert!(((log2_1_9.0 as f64 / log2_1_9.1 as f64) - 1.9f64.log2()).abs() < 1e-9);
+        let near_neg_one = Fraction::from(-(2_147_483_648.0 / 2_147_483_649.0));
+        assert!(near_neg_one.0 < 0 && near_neg_one.1 > 0);
+        assert_eq!(Fraction::from(f64::NAN), Fraction(0, 0));
+        assert_eq!(Fraction::from(f64::NEG_INFINITY), Fraction(0, 0));
     }
 }

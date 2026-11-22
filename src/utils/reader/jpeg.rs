@@ -60,16 +60,37 @@ impl Reader for JpegReader {
         }
         let width = info.width as u32;
         let height = info.height as u32;
-        let icc = decoder.icc_profile().unwrap_or_default();
-        let exif = match &info.exif_data {
-            Some(data) => data.try_clone()?,
-            None => Vec::new(),
+        let yuv_format = config.yuv_format.unwrap_or(PixelFormat::Yuv420);
+        let icc = if config.ignore_icc {
+            Vec::new()
+        } else {
+            let icc = decoder.icc_profile().unwrap_or_default();
+            if !icc.is_empty() && yuv_format == PixelFormat::Yuv400 {
+                return Err(AvifError::UnknownError(
+                    "Image contains an ICC profile that is incompatible with the requested output. Pass --ignore-icc to discard the ICC profile"
+                        .into(),
+                ));
+            }
+            icc
         };
-        let xmp = match &info.xmp_data {
-            Some(data) => data.try_clone()?,
-            None => Vec::new(),
+        let (exif, irot_angle, imir_axis) = if config.ignore_exif {
+            (Vec::new(), None, None)
+        } else {
+            let exif = match &info.exif_data {
+                Some(data) => data.try_clone()?,
+                None => Vec::new(),
+            };
+            let (irot_angle, imir_axis) = exif::get_orientation(&exif)?;
+            (exif, irot_angle, imir_axis)
         };
-        let (irot_angle, imir_axis) = exif::get_orientation(&exif)?;
+        let xmp = if config.ignore_xmp {
+            Vec::new()
+        } else {
+            match &info.xmp_data {
+                Some(data) => data.try_clone()?,
+                None => Vec::new(),
+            }
+        };
         let rgb_bytes = decoder
             .decode()
             .map_err(|e| AvifError::UnknownError(format!("jpeg decode error: {e:?}")))?;
@@ -86,7 +107,7 @@ impl Reader for JpegReader {
             width,
             height,
             depth: config.depth.unwrap_or(8),
-            yuv_format: config.yuv_format.unwrap_or(PixelFormat::Yuv420),
+            yuv_format,
             yuv_range: YuvRange::Full,
             matrix_coefficients: config
                 .matrix_coefficients
@@ -105,7 +126,7 @@ impl Reader for JpegReader {
         ) {
             if let Ok(aux_images) = extract_aux_images(mpf_data, u32_from_u64(mpf_offset)?) {
                 let mut file = File::open(&self.filename).map_err(AvifError::map_unknown_error)?;
-                gainmap = get_gainmap(&mut file, &aux_images, &yuv)?;
+                gainmap = get_gainmap(&mut file, &aux_images, &yuv.exif)?;
             }
         }
         if let Some(gainmap) = &mut gainmap {
@@ -203,7 +224,7 @@ fn extract_aux_images(mpf_data: &[u8], mpf_offset: u32) -> AvifResult<Vec<(u32, 
 fn get_gainmap(
     file: &mut File,
     aux_images: &[(u32, u32)],
-    base_image: &Image,
+    base_exif: &[u8],
 ) -> AvifResult<Option<GainMap>> {
     for &(offset, size) in aux_images {
         file.seek(SeekFrom::Start(offset as u64))
@@ -224,7 +245,7 @@ fn get_gainmap(
         if let Some(xmp) = &info.xmp_data {
             if let Ok((mut metadata, is_apple)) = xmp::parse_gainmap_metadata(xmp) {
                 if is_apple && metadata.alternate_hdr_headroom.0 == 0 {
-                    match exif::apple_headroom(&base_image.exif) {
+                    match exif::apple_headroom(base_exif) {
                         Ok(Some(headroom)) if headroom > 0.0 => {
                             metadata.alternate_hdr_headroom = headroom.into();
                             metadata.max = [headroom.into(); 3];

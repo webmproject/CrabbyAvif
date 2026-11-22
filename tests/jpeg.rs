@@ -103,3 +103,49 @@ fn read_apple_jpeg_with_gain_map(filename: &str) -> AvifResult<()> {
     assert_eq!(gainmap.metadata, expected_metadata);
     Ok(())
 }
+
+#[test]
+fn reader_ignore_metadata_and_icc_yuv400() -> AvifResult<()> {
+    // ignore_exif clears exif and suppresses irot/imir extraction.
+    let mut reader = JpegReader::create(&get_test_file("paris_exif_orientation_5.jpg"))?;
+    let (image, _, _) = reader.read_frame(&Config {
+        ignore_exif: true,
+        ..Default::default()
+    })?;
+    assert!(image.exif.is_empty());
+    assert_eq!(image.irot_angle, None);
+    assert_eq!(image.imir_axis, None);
+
+    // Ignoring metadata on a gain map JPEG preserves gain map detection while clearing icc/exif/xmp
+    // and alt_icc.
+    let mut reader = JpegReader::create(&get_test_file("seine_sdr_gainmap_srgb.jpg"))?;
+    let (image, _, gainmap) = reader.read_frame(&Config {
+        ignore_icc: true,
+        ignore_exif: true,
+        ignore_xmp: true,
+        ..Default::default()
+    })?;
+    assert!(image.icc.is_empty());
+    assert!(image.exif.is_empty());
+    assert!(image.xmp.is_empty());
+    let gainmap = gainmap.expect("expected gain map");
+    assert!(gainmap.alt_icc.is_empty());
+
+    // Color ICC profile with Yuv400 is rejected unless ignore_icc is set.
+    let mut reader = JpegReader::create(&get_test_file("seine_sdr_gainmap_srgb.jpg"))?;
+    assert!(reader
+        .read_frame(&Config {
+            yuv_format: Some(PixelFormat::Yuv400),
+            ..Default::default()
+        })
+        .is_err());
+    let mut reader = JpegReader::create(&get_test_file("seine_sdr_gainmap_srgb.jpg"))?;
+    let (image, _, _) = reader.read_frame(&Config {
+        yuv_format: Some(PixelFormat::Yuv400),
+        ignore_icc: true,
+        ..Default::default()
+    })?;
+    assert_eq!(image.yuv_format, PixelFormat::Yuv400);
+    assert!(image.icc.is_empty());
+    Ok(())
+}

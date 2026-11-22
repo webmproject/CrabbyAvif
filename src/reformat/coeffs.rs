@@ -43,9 +43,8 @@ impl ColorPrimaries {
         }
     }
 
-    #[cfg(feature = "png")]
-    pub(crate) fn values(&self) -> Option<[f32; 8]> {
-        // return values in this order: rX, rY, gX, gY, bX, bY, wX, wY
+    /// Returns chromaticity coordinates in `[rX, rY, gX, gY, bX, bY, wX, wY]` order.
+    pub fn values(&self) -> Option<[f32; 8]> {
         match self {
             Self::Srgb => Some([0.64, 0.33, 0.3, 0.6, 0.15, 0.06, 0.3127, 0.329]),
             Self::Bt470m => Some([0.67, 0.33, 0.21, 0.71, 0.14, 0.08, 0.310, 0.316]),
@@ -154,5 +153,16 @@ mod tests {
             &calculate_yuv_coefficients(ColorPrimaries::Unknown, MatrixCoefficients::Smpte240),
             &[0.212f32, 1f32 - 0.212 - 0.087, 0.087f32], // Kr,Kg,Kb as https://en.wikipedia.org/wiki/YCbCr#SMPTE_240M_conversion
         );
+    }
+
+    #[test]
+    fn color_primaries_values() {
+        assert_eq!(
+            ColorPrimaries::Srgb.values(),
+            Some([0.64, 0.33, 0.3, 0.6, 0.15, 0.06, 0.3127, 0.329])
+        );
+        assert!(ColorPrimaries::Bt2020.values().is_some());
+        assert_eq!(ColorPrimaries::Unspecified.values(), None);
+        assert_eq!(ColorPrimaries::Unknown.values(), None);
     }
 }
