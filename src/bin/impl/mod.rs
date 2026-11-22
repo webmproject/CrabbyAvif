@@ -950,20 +950,14 @@ fn add_image_single_or_grid(
 }
 
 #[cfg(feature = "encoder")]
-fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifResult<()> {
-    const DEFAULT_ENCODE_QUALITY: f32 = 90.0;
-    let mut reader = <dyn Reader>::create(input_file)?;
-    let reader_config = Config {
-        yuv_format: args.yuv_format,
-        depth: args.depth,
-        ignore_icc: args.ignore_icc || args.icc.is_some(),
-        ignore_exif: args.ignore_exif || args.exif.is_some(),
-        ignore_xmp: args.ignore_xmp || args.xmp.is_some(),
-        allow_sample_transform: args.allow_sample_transform,
-        ..Default::default()
-    };
-    let (mut image, mut duration_ms, mut gainmap) = reader.read_frame(&reader_config)?;
-    apply_read_ignore_flags(args, &mut image, gainmap.as_mut());
+const DEFAULT_ENCODE_QUALITY: f32 = 90.0;
+
+#[cfg(feature = "encoder")]
+fn apply_encode_overrides(
+    args: &CommandLineArgs,
+    image: &mut image::Image,
+    gainmap: Option<&mut crabby_avif::gainmap::GainMap>,
+) -> AvifResult<()> {
     if args.irot_angle.is_some() {
         image.irot_angle = args.irot_angle;
     }
@@ -1008,7 +1002,7 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
         image.color_primaries = ColorPrimaries::Srgb;
         image.transfer_characteristics = TransferCharacteristics::Srgb;
     }
-    if let Some(gainmap) = &mut gainmap {
+    if let Some(gainmap) = gainmap {
         if gainmap.alt_icc.is_empty() && gainmap.alt_color_primaries == ColorPrimaries::Unspecified
         {
             gainmap.alt_color_primaries = image.color_primaries;
@@ -1017,6 +1011,11 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
             gainmap.alt_clli = alt_clli;
         }
     }
+    Ok(())
+}
+
+#[cfg(feature = "encoder")]
+fn create_encoder_settings(args: &CommandLineArgs, output_file: &str) -> encoder::Settings {
     let codec_choice = match args.codec {
         CodecChoice::Auto => match get_extension(output_file).as_str() {
             "avif" => CodecChoice::Auto, // CodecChoice::Auto maps to AV1 only. Keep it.
@@ -1057,8 +1056,54 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
             vertical: scaling_mode,
         };
     }
+    settings
+}
+
+#[cfg(feature = "encoder")]
+fn write_encoded_avif(mut encoder: Encoder, output_file: &str) -> AvifResult<()> {
+    let encoded_data = encoder.finish()?;
+    let mut file = File::create(output_file).expect("file creation failed");
+    file.write_all(&encoded_data).expect("file writing failed");
+    println!("Write output AVIF: {output_file}");
+    Ok(())
+}
+
+#[cfg(feature = "encoder")]
+fn encode_single_image_to_avif(
+    args: &CommandLineArgs,
+    image: &image::Image,
+    gainmap: Option<&crabby_avif::gainmap::GainMap>,
+    output_file: &str,
+) -> AvifResult<()> {
+    let mut settings = create_encoder_settings(args, output_file);
+    settings.extra_layer_count = 0;
     let mut encoder = Encoder::create_with_settings(&settings)?;
-    if reader.has_more_frames() {
+    add_image_single_or_grid(&mut encoder, image, gainmap, args.grid)?;
+    write_encoded_avif(encoder, output_file)
+}
+
+#[cfg(feature = "encoder")]
+fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifResult<()> {
+    let mut reader = <dyn Reader>::create(input_file)?;
+    let reader_config = Config {
+        yuv_format: args.yuv_format,
+        depth: args.depth,
+        ignore_icc: args.ignore_icc || args.icc.is_some(),
+        ignore_exif: args.ignore_exif || args.exif.is_some(),
+        ignore_xmp: args.ignore_xmp || args.xmp.is_some(),
+        allow_sample_transform: args.allow_sample_transform,
+        ..Default::default()
+    };
+    let (mut image, mut duration_ms, mut gainmap) = reader.read_frame(&reader_config)?;
+    apply_read_ignore_flags(args, &mut image, gainmap.as_mut());
+    apply_encode_overrides(args, &mut image, gainmap.as_mut())?;
+    let has_more_frames = reader.has_more_frames();
+    if !has_more_frames && !args.progressive {
+        return encode_single_image_to_avif(args, &image, gainmap.as_ref(), output_file);
+    }
+    let mut settings = create_encoder_settings(args, output_file);
+    let mut encoder = Encoder::create_with_settings(&settings)?;
+    if has_more_frames {
         if args.progressive {
             println!("Automatic progressive encoding can only have one input image.");
             return Err(AvifError::InvalidArgument);
@@ -1076,7 +1121,7 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
             (image, duration_ms, _) = reader.read_frame(&reader_config)?;
             apply_read_ignore_flags(args, &mut image, None);
         }
-    } else if args.progressive {
+    } else {
         // Encode the base layer with very low quality.
         settings.mutable.quality = 2.0;
         encoder.update_settings(&settings.mutable)?;
@@ -1085,16 +1130,9 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
         settings.mutable.quality = args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY);
         encoder.update_settings(&settings.mutable)?;
         encoder.add_image(&image)?;
-    } else {
-        add_image_single_or_grid(&mut encoder, &image, gainmap.as_ref(), args.grid)?;
     }
 
-    let encoded_data = encoder.finish()?;
-    let output_file = args.output_file.as_ref().unwrap();
-    let mut file = File::create(output_file).expect("file creation failed");
-    file.write_all(&encoded_data).expect("file writing failed");
-    println!("Write output AVIF: {output_file}");
-    Ok(())
+    write_encoded_avif(encoder, output_file)
 }
 
 #[cfg(not(feature = "encoder"))]
