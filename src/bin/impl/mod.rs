@@ -794,7 +794,36 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
     } else {
         decoder.image().unwrap()
     };
+    let mut owned_image = if image.clap.is_some() {
+        match image.cropped_image() {
+            Ok(cropped_image) => Some(cropped_image),
+            Err(_) => {
+                println!("Warning: clap was invalid. So writing whole image.");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let strip_icc = args.ignore_icc && !image.icc.is_empty();
+    let strip_alpha = args.ignore_alpha && (image.alpha_present || image.has_alpha());
+    if strip_icc || strip_alpha {
+        let target = match &mut owned_image {
+            Some(img) => img,
+            None => owned_image.insert(image.try_deep_clone()?),
+        };
+        if strip_icc {
+            target.icc.clear();
+        }
+        if strip_alpha {
+            clear_alpha(target);
+        }
+    }
+    let image_to_write = owned_image.as_ref().unwrap_or(image);
     let extension = get_extension(output_filename);
+    if can_encode(output_filename) {
+        return write_decoded_avif(args, image, owned_image, output_filename);
+    }
     let mut writer: Box<dyn Writer> = match extension.as_str() {
         "y4m" | "yuv" => {
             if !image.icc.is_empty() || !image.exif.is_empty() || !image.xmp.is_empty() {
@@ -820,39 +849,6 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
     let mut output_file = File::create(output_filename).or(Err(AvifError::UnknownError(
         "Could not open output file".into(),
     )))?;
-    let mut cropped_image = if image.clap.is_some() {
-        if let Ok(cropped_image) = image.cropped_image() {
-            Some(cropped_image)
-        } else {
-            println!("Warning: clap was invalid. So writing whole image.");
-            None
-        }
-    } else {
-        None
-    };
-    let strip_icc = args.ignore_icc && !image.icc.is_empty();
-    let strip_alpha = args.ignore_alpha && (image.alpha_present || image.has_alpha());
-    let mut cloned_for_ignore;
-    let image_to_write = if strip_icc || strip_alpha {
-        let target = if let Some(cropped) = &mut cropped_image {
-            cropped
-        } else {
-            cloned_for_ignore = image.try_deep_clone()?;
-            &mut cloned_for_ignore
-        };
-        if strip_icc {
-            target.icc.clear();
-        }
-        if strip_alpha {
-            clear_alpha(target);
-        }
-        &*target
-    } else {
-        match &cropped_image {
-            Some(cropped_image) => cropped_image,
-            None => image,
-        }
-    };
     writer.write_frame(&mut output_file, image_to_write)?;
     println!(
         "Wrote image at index {} to output {}",
@@ -860,6 +856,61 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
         output_filename,
     );
     Ok(())
+}
+
+#[cfg(feature = "encoder")]
+fn write_decoded_avif(
+    args: &CommandLineArgs,
+    image: &image::Image,
+    mut owned_image: Option<image::Image>,
+    output_filename: &str,
+) -> AvifResult<()> {
+    let src = owned_image.as_ref().unwrap_or(image);
+    let converted = convert_image_format_and_depth(src, args.yuv_format, args.depth)?;
+    let needs_metadata_fixup = src.clap.is_some()
+        || (src.icc.is_empty()
+            && src.color_primaries == ColorPrimaries::Unspecified
+            && src.transfer_characteristics == TransferCharacteristics::Unspecified);
+    let mut target = converted.or_else(|| owned_image.take());
+    let image_for_avif = if target.is_some() || needs_metadata_fixup {
+        let img = match &mut target {
+            Some(img) => img,
+            None => target.insert(image.try_deep_clone()?),
+        };
+        // decode() already applied or ignored clap, so do not re-emit stale clap on the encoded AVIF.
+        img.clap = None;
+        if img.icc.is_empty()
+            && img.color_primaries == ColorPrimaries::Unspecified
+            && img.transfer_characteristics == TransferCharacteristics::Unspecified
+        {
+            img.color_primaries = ColorPrimaries::Srgb;
+            img.transfer_characteristics = TransferCharacteristics::Srgb;
+        }
+        &*img
+    } else {
+        image
+    };
+    // decode() uses args.codec to choose the decoder; pick the encoder codec from output_filename.
+    let codec_choice = encoder_codec_choice_for_output(CodecChoice::Auto, output_filename);
+    encode_single_image_to_avif(args, codec_choice, image_for_avif, None, output_filename)?;
+    println!(
+        "Wrote image at index {} to output {}",
+        args.index.unwrap_or(0),
+        output_filename,
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "encoder"))]
+fn write_decoded_avif(
+    _args: &CommandLineArgs,
+    _image: &image::Image,
+    _owned_image: Option<image::Image>,
+    _output_filename: &str,
+) -> AvifResult<()> {
+    Err(AvifError::UnknownError(
+        "AVIF output requires building with the encoder feature".into(),
+    ))
 }
 
 fn clear_alpha(image: &mut image::Image) {
@@ -1015,8 +1066,8 @@ fn apply_encode_overrides(
 }
 
 #[cfg(feature = "encoder")]
-fn create_encoder_settings(args: &CommandLineArgs, output_file: &str) -> encoder::Settings {
-    let codec_choice = match args.codec {
+fn encoder_codec_choice_for_output(args_codec: CodecChoice, output_file: &str) -> CodecChoice {
+    match args_codec {
         CodecChoice::Auto => match get_extension(output_file).as_str() {
             "avif" => CodecChoice::Auto, // CodecChoice::Auto maps to AV1 only. Keep it.
             #[cfg(feature = "jpegxl")]
@@ -1024,7 +1075,11 @@ fn create_encoder_settings(args: &CommandLineArgs, output_file: &str) -> encoder
             _ => unreachable!(), // See can_encode().
         },
         explicit_codec_choice => explicit_codec_choice,
-    };
+    }
+}
+
+#[cfg(feature = "encoder")]
+fn create_encoder_settings(args: &CommandLineArgs, codec_choice: CodecChoice) -> encoder::Settings {
     let quality = args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY);
     let mut settings = encoder::Settings {
         extra_layer_count: if args.progressive { 1 } else { 0 },
@@ -1071,15 +1126,102 @@ fn write_encoded_avif(mut encoder: Encoder, output_file: &str) -> AvifResult<()>
 #[cfg(feature = "encoder")]
 fn encode_single_image_to_avif(
     args: &CommandLineArgs,
+    codec_choice: CodecChoice,
     image: &image::Image,
     gainmap: Option<&crabby_avif::gainmap::GainMap>,
     output_file: &str,
 ) -> AvifResult<()> {
-    let mut settings = create_encoder_settings(args, output_file);
+    let mut settings = create_encoder_settings(args, codec_choice);
     settings.extra_layer_count = 0;
     let mut encoder = Encoder::create_with_settings(&settings)?;
     add_image_single_or_grid(&mut encoder, image, gainmap, args.grid)?;
     write_encoded_avif(encoder, output_file)
+}
+
+#[cfg(feature = "encoder")]
+fn try_clone_bytes(src: &[u8]) -> AvifResult<Vec<u8>> {
+    let mut dst = Vec::new();
+    dst.try_reserve_exact(src.len())
+        .map_err(|_| AvifError::OutOfMemory)?;
+    dst.extend_from_slice(src);
+    Ok(dst)
+}
+
+#[cfg(feature = "encoder")]
+fn convert_image_format_and_depth(
+    src: &image::Image,
+    yuv_format: Option<PixelFormat>,
+    depth: Option<u8>,
+) -> AvifResult<Option<image::Image>> {
+    if !matches!(src.depth, 8 | 10 | 12 | 16) {
+        return Err(AvifError::NotImplemented);
+    }
+    let target_format = yuv_format.unwrap_or(src.yuv_format);
+    let target_depth = depth.unwrap_or_else(|| src.depth.min(12));
+    if !src.icc.is_empty()
+        && ((src.yuv_format == PixelFormat::Yuv400) != (target_format == PixelFormat::Yuv400))
+    {
+        return Err(AvifError::UnknownError(
+            "Image contains an ICC profile that is incompatible with the requested output. Pass --ignore-icc to discard the ICC profile"
+                .into(),
+        ));
+    }
+    if target_format == src.yuv_format && target_depth == src.depth {
+        return Ok(None);
+    }
+    let mut rgb = reformat::rgb::Image::create_from_yuv(src);
+    match src.matrix_coefficients {
+        MatrixCoefficients::YcgcoRe => {
+            if !matches!(src.depth, 10 | 12) {
+                return Err(AvifError::NotImplemented);
+            }
+            rgb.depth = src.depth - 2;
+        }
+        MatrixCoefficients::YcgcoRo => return Err(AvifError::NotImplemented),
+        _ => {}
+    }
+    rgb.premultiply_alpha = src.has_alpha() && src.alpha_premultiplied;
+    rgb.format = if src.has_alpha() {
+        reformat::rgb::Format::Rgba
+    } else {
+        reformat::rgb::Format::Rgb
+    };
+    rgb.allocate()?;
+    rgb.convert_from_yuv(src)?;
+    let dst_matrix_coefficients = match src.matrix_coefficients {
+        MatrixCoefficients::Identity if target_format != PixelFormat::Yuv444 => {
+            MatrixCoefficients::Bt601
+        }
+        MatrixCoefficients::YcgcoRe
+            if target_depth != src.depth || target_format == PixelFormat::Yuv400 =>
+        {
+            MatrixCoefficients::Bt601
+        }
+        mc => mc,
+    };
+    let mut dst = image::Image {
+        width: src.width,
+        height: src.height,
+        depth: target_depth,
+        yuv_format: target_format,
+        yuv_range: src.yuv_range,
+        alpha_present: src.has_alpha(),
+        alpha_premultiplied: src.has_alpha() && src.alpha_premultiplied,
+        color_primaries: src.color_primaries,
+        transfer_characteristics: src.transfer_characteristics,
+        matrix_coefficients: dst_matrix_coefficients,
+        clli: src.clli,
+        pasp: src.pasp,
+        clap: src.clap,
+        irot_angle: src.irot_angle,
+        imir_axis: src.imir_axis,
+        exif: try_clone_bytes(&src.exif)?,
+        icc: try_clone_bytes(&src.icc)?,
+        xmp: try_clone_bytes(&src.xmp)?,
+        ..Default::default()
+    };
+    rgb.convert_to_yuv(&mut dst)?;
+    Ok(Some(dst))
 }
 
 #[cfg(feature = "encoder")]
@@ -1098,10 +1240,17 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
     apply_read_ignore_flags(args, &mut image, gainmap.as_mut());
     apply_encode_overrides(args, &mut image, gainmap.as_mut())?;
     let has_more_frames = reader.has_more_frames();
+    let codec_choice = encoder_codec_choice_for_output(args.codec, output_file);
     if !has_more_frames && !args.progressive {
-        return encode_single_image_to_avif(args, &image, gainmap.as_ref(), output_file);
+        return encode_single_image_to_avif(
+            args,
+            codec_choice,
+            &image,
+            gainmap.as_ref(),
+            output_file,
+        );
     }
-    let mut settings = create_encoder_settings(args, output_file);
+    let mut settings = create_encoder_settings(args, codec_choice);
     let mut encoder = Encoder::create_with_settings(&settings)?;
     if has_more_frames {
         if args.progressive {
@@ -1185,9 +1334,9 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                 let output_filename = &args.output_file.as_ref().unwrap().as_str();
                 let extension = get_extension(output_filename);
                 if let Some(quality) = args.quality {
-                    if extension != "jpg" && extension != "jpeg" {
+                    if extension != "jpg" && extension != "jpeg" && !can_encode(output_filename) {
                         return Err(AvifError::UnknownError(
-                            "quality is only supported for jpeg output".into(),
+                            "quality is only supported for jpeg or avif output".into(),
                         ));
                     }
                     if !(0.0..=100.0).contains(&quality) {
@@ -1196,9 +1345,19 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                         ));
                     }
                 }
-                if args.depth.is_some() && extension != "png" {
+                if args.depth.is_some() && extension != "png" && !can_encode(output_filename) {
                     return Err(AvifError::UnknownError(
-                        "depth is only supported for png output".into(),
+                        "depth is only supported for png or avif output".into(),
+                    ));
+                }
+                if args.depth == Some(16) && can_encode(output_filename) {
+                    return Err(AvifError::UnknownError(
+                        "depth 16 is not supported for avif output".into(),
+                    ));
+                }
+                if args.yuv_format.is_some() && !can_encode(output_filename) {
+                    return Err(AvifError::UnknownError(
+                        "yuv is only supported for avif output".into(),
                     ));
                 }
                 if args.png_compress.is_some() && extension != "png" {

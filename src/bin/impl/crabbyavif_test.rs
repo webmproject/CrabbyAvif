@@ -1038,4 +1038,458 @@ mod decode_tests {
         );
         Ok(())
     }
+
+    #[cfg(feature = "aom")]
+    #[test]
+    fn extract_gainmap_to_avif() -> AvifResult<()> {
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+        let input_path = get_test_file("seine_sdr_gainmap_srgb.avif");
+
+        // Extract gainmap directly to AVIF.
+        let gm_avif = temp_dir.path().join("gainmap.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--extract-gainmap",
+                "--speed",
+                "10",
+                "-q",
+                "80",
+                input_path.as_str(),
+                gm_avif.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&gm_avif.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        decoder.next_image()?;
+        let gm_parsed = decoder.image().unwrap();
+        assert_eq!((gm_parsed.width, gm_parsed.height), (400, 300));
+        assert!(!decoder.gainmap_present());
+
+        // --progressive with --extract-gainmap still writes a valid single-frame AVIF.
+        let prog_gm_avif = temp_dir.path().join("prog_gainmap.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--progressive",
+                "--extract-gainmap",
+                "--speed",
+                "10",
+                input_path.as_str(),
+                prog_gm_avif.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&prog_gm_avif.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        decoder.next_image()?;
+        assert_eq!(
+            (
+                decoder.image().unwrap().width,
+                decoder.image().unwrap().height
+            ),
+            (400, 300)
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "aom")]
+    #[test]
+    fn decode_to_avif_options() -> AvifResult<()> {
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+        let input_path = get_test_file("seine_sdr_gainmap_srgb.avif");
+
+        // --crop to AVIF clears stale clap and writes cropped pixels cleanly.
+        let cropped_avif = temp_dir.path().join("cropped.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--crop",
+                "0,0,100,80",
+                "--speed",
+                "10",
+                input_path.as_str(),
+                cropped_avif.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&cropped_avif.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        decoder.next_image()?;
+        let parsed = decoder.image().unwrap();
+        assert_eq!((parsed.width, parsed.height), (100, 80));
+        assert!(parsed.clap.is_none());
+
+        // Reject --depth 16 on AVIF decode output.
+        let depth16_avif = temp_dir.path().join("depth16.avif");
+        assert_eq!(
+            main_impl(
+                [
+                    "crabbyavif",
+                    "-d",
+                    "16",
+                    "--crop",
+                    "0,0,64,64",
+                    input_path.as_str(),
+                    depth16_avif.to_str().unwrap(),
+                ]
+                .iter(),
+            ),
+            Err(AvifError::UnknownError(
+                "depth 16 is not supported for avif output".into()
+            ))
+        );
+
+        // Reject --yuv on non-AVIF decode output.
+        let yuv_y4m = temp_dir.path().join("yuv_fail.y4m");
+        assert_eq!(
+            main_impl(
+                [
+                    "crabbyavif",
+                    "--yuv",
+                    "420",
+                    input_path.as_str(),
+                    yuv_y4m.to_str().unwrap(),
+                ]
+                .iter(),
+            ),
+            Err(AvifError::UnknownError(
+                "yuv is only supported for avif output".into()
+            ))
+        );
+
+        // Converting alpha AVIF with --crop --yuv 420 -d 10 preserves alpha and decodes cleanly.
+        let mut src = image::Image {
+            width: 8,
+            height: 8,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv444,
+            alpha_present: true,
+            alpha_premultiplied: true,
+            matrix_coefficients: MatrixCoefficients::Bt601,
+            icc: b"fake_rgb_icc".to_vec(),
+            clap: Some(crabby_avif::utils::clap::CleanAperture::create_from(
+                &crabby_avif::utils::clap::CropRect {
+                    x: 0,
+                    y: 0,
+                    width: 4,
+                    height: 4,
+                },
+                8,
+                8,
+                PixelFormat::Yuv444,
+            )?),
+            ..Default::default()
+        };
+        src.allocate_planes(Category::Color)?;
+        src.allocate_planes(Category::Alpha)?;
+        src.fill_plane_with_value(image::Plane::Y, 64)?;
+        src.fill_plane_with_value(image::Plane::U, 128)?;
+        src.fill_plane_with_value(image::Plane::V, 128)?;
+        src.fill_plane_with_value(image::Plane::A, 128)?;
+        let alpha_src = temp_dir.path().join("alpha_src.avif");
+        let settings = crabby_avif::encoder::Settings {
+            speed: Some(10),
+            ..Default::default()
+        };
+        let mut enc = crabby_avif::encoder::Encoder::create_with_settings(&settings)?;
+        enc.add_image(&src)?;
+        std::fs::write(&alpha_src, enc.finish()?).unwrap();
+
+        // Decoding an AVIF with an embedded clap (without --crop/--target-size) applies clap and
+        // clears stale clap on the encoded AVIF.
+        let clap_out = temp_dir.path().join("clap_applied.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                alpha_src.to_str().unwrap(),
+                clap_out.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut clap_dec = decoder::Decoder::default();
+        clap_dec.set_io_file(&clap_out.to_string_lossy().into_owned())?;
+        clap_dec.parse()?;
+        clap_dec.next_image()?;
+        let clap_parsed = clap_dec.image().unwrap();
+        assert_eq!((clap_parsed.width, clap_parsed.height), (4, 4));
+        assert!(clap_parsed.clap.is_none());
+
+        #[cfg(feature = "dav1d")]
+        {
+            // Explicit decoder -c (dav1d) does not leak into the AVIF encoder settings.
+            let dav1d_out = temp_dir.path().join("dav1d_decoded.avif");
+            main_impl(
+                [
+                    "crabbyavif",
+                    "-c",
+                    "dav1d",
+                    "--speed",
+                    "10",
+                    alpha_src.to_str().unwrap(),
+                    dav1d_out.to_str().unwrap(),
+                ]
+                .iter(),
+            )?;
+            let mut dav1d_dec = decoder::Decoder::default();
+            dav1d_dec.set_io_file(&dav1d_out.to_string_lossy().into_owned())?;
+            dav1d_dec.parse()?;
+            dav1d_dec.next_image()?;
+            assert_eq!(
+                (
+                    dav1d_dec.image().unwrap().width,
+                    dav1d_dec.image().unwrap().height
+                ),
+                (4, 4)
+            );
+        }
+
+        // Color ICC -> Yuv400 fails without --ignore-icc and succeeds with --ignore-icc.
+        let mono_fail = temp_dir.path().join("mono_fail.avif");
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--crop",
+                "0,0,4,4",
+                "--yuv",
+                "400",
+                "--speed",
+                "10",
+                alpha_src.to_str().unwrap(),
+                mono_fail.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        let mono_ok = temp_dir.path().join("mono_ok.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--crop",
+                "0,0,4,4",
+                "--yuv",
+                "400",
+                "--ignore-icc",
+                "--speed",
+                "10",
+                alpha_src.to_str().unwrap(),
+                mono_ok.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut mono_dec = decoder::Decoder::default();
+        mono_dec.set_io_file(&mono_ok.to_string_lossy().into_owned())?;
+        mono_dec.parse()?;
+        mono_dec.next_image()?;
+        let mono_parsed = mono_dec.image().unwrap();
+        assert!(mono_parsed.icc.is_empty());
+        assert_eq!(mono_parsed.color_primaries, ColorPrimaries::Srgb);
+        assert_eq!(
+            mono_parsed.transfer_characteristics,
+            TransferCharacteristics::Srgb
+        );
+
+        let converted_avif = temp_dir.path().join("converted_420_10bit.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--crop",
+                "0,0,4,4",
+                "--yuv",
+                "420",
+                "-d",
+                "10",
+                "--speed",
+                "10",
+                alpha_src.to_str().unwrap(),
+                converted_avif.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut conv_dec = decoder::Decoder::default();
+        conv_dec.set_io_file(&converted_avif.to_string_lossy().into_owned())?;
+        conv_dec.parse()?;
+        conv_dec.next_image()?;
+        let conv_parsed = conv_dec.image().unwrap();
+        assert_eq!(conv_parsed.yuv_format, PixelFormat::Yuv420);
+        assert_eq!(conv_parsed.depth, 10);
+        assert!(conv_parsed.alpha_present);
+        assert!(conv_parsed.alpha_premultiplied);
+        let y_sample = conv_parsed.row16(image::Plane::Y, 0)?[0];
+        assert!(
+            y_sample < 320,
+            "expected premultiplied Y ~256, got {y_sample}"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "encoder")]
+    #[test]
+    fn convert_image_format_and_depth_edge_cases() -> AvifResult<()> {
+        let make_yuv = |depth: u8,
+                        yuv_format: PixelFormat,
+                        matrix_coefficients: MatrixCoefficients,
+                        chroma_sample_position: ChromaSamplePosition|
+         -> AvifResult<image::Image> {
+            let mut img = image::Image {
+                width: 4,
+                height: 4,
+                depth,
+                yuv_format,
+                yuv_range: image::YuvRange::Full,
+                chroma_sample_position,
+                matrix_coefficients,
+                ..Default::default()
+            };
+            img.allocate_planes(Category::Color)?;
+            img.fill_plane_with_value(image::Plane::Y, 64)?;
+            if yuv_format != PixelFormat::Yuv400 {
+                img.fill_plane_with_value(image::Plane::U, 128)?;
+                img.fill_plane_with_value(image::Plane::V, 128)?;
+            }
+            Ok(img)
+        };
+
+        // Unchanged format and depth returns Ok(None) without cloning planes.
+        let unchanged = make_yuv(
+            8,
+            PixelFormat::Yuv420,
+            MatrixCoefficients::Bt601,
+            ChromaSamplePosition::Vertical,
+        )?;
+        assert!(crate::r#impl::convert_image_format_and_depth(&unchanged, None, None)?.is_none());
+
+        // 32-bit float sample-transform images return NotImplemented instead of panicking.
+        let float_img = image::Image {
+            width: 4,
+            height: 4,
+            depth: 32,
+            yuv_format: PixelFormat::Yuv444,
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::r#impl::convert_image_format_and_depth(
+                &float_img,
+                Some(PixelFormat::Yuv420),
+                Some(8)
+            )
+            .err(),
+            Some(AvifError::NotImplemented)
+        );
+
+        // 16-bit input clamps default target depth to 12.
+        let img16 = make_yuv(
+            16,
+            PixelFormat::Yuv444,
+            MatrixCoefficients::Bt601,
+            ChromaSamplePosition::Unknown,
+        )?;
+        let clamped = crate::r#impl::convert_image_format_and_depth(&img16, None, None)?.unwrap();
+        assert_eq!(clamped.depth, 12);
+
+        // Identity falls back to Bt601 when converting away from Yuv444, and preserves Identity on
+        // Yuv444 depth change.
+        let id_img = make_yuv(
+            8,
+            PixelFormat::Yuv444,
+            MatrixCoefficients::Identity,
+            ChromaSamplePosition::Unknown,
+        )?;
+        let id_to_420 = crate::r#impl::convert_image_format_and_depth(
+            &id_img,
+            Some(PixelFormat::Yuv420),
+            None,
+        )?
+        .unwrap();
+        assert_eq!(id_to_420.matrix_coefficients, MatrixCoefficients::Bt601);
+        let id_to_400 = crate::r#impl::convert_image_format_and_depth(
+            &id_img,
+            Some(PixelFormat::Yuv400),
+            None,
+        )?
+        .unwrap();
+        assert_eq!(id_to_400.matrix_coefficients, MatrixCoefficients::Bt601);
+        let id_10 =
+            crate::r#impl::convert_image_format_and_depth(&id_img, None, Some(10))?.unwrap();
+        assert_eq!(id_10.matrix_coefficients, MatrixCoefficients::Identity);
+
+        // YcgcoRe uses rgb.depth = src.depth - 2, preserves YcgcoRe when depth is unchanged and
+        // format is color, and falls back to Bt601 on depth change or Yuv400.
+        let ycgco_re_10 = make_yuv(
+            10,
+            PixelFormat::Yuv444,
+            MatrixCoefficients::YcgcoRe,
+            ChromaSamplePosition::Unknown,
+        )?;
+        let re_420 = crate::r#impl::convert_image_format_and_depth(
+            &ycgco_re_10,
+            Some(PixelFormat::Yuv420),
+            None,
+        )?
+        .unwrap();
+        assert_eq!(re_420.matrix_coefficients, MatrixCoefficients::YcgcoRe);
+        let re_8 =
+            crate::r#impl::convert_image_format_and_depth(&ycgco_re_10, None, Some(8))?.unwrap();
+        assert_eq!(re_8.matrix_coefficients, MatrixCoefficients::Bt601);
+        let re_400 = crate::r#impl::convert_image_format_and_depth(
+            &ycgco_re_10,
+            Some(PixelFormat::Yuv400),
+            None,
+        )?
+        .unwrap();
+        assert_eq!(re_400.matrix_coefficients, MatrixCoefficients::Bt601);
+
+        // Unsupported YcgcoRe depth (8) and YcgcoRo return NotImplemented.
+        let ycgco_re_8 = make_yuv(
+            8,
+            PixelFormat::Yuv444,
+            MatrixCoefficients::YcgcoRe,
+            ChromaSamplePosition::Unknown,
+        )?;
+        assert_eq!(
+            crate::r#impl::convert_image_format_and_depth(&ycgco_re_8, None, Some(10)).err(),
+            Some(AvifError::NotImplemented)
+        );
+        let ycgco_ro_10 = make_yuv(
+            10,
+            PixelFormat::Yuv444,
+            MatrixCoefficients::YcgcoRo,
+            ChromaSamplePosition::Unknown,
+        )?;
+        assert_eq!(
+            crate::r#impl::convert_image_format_and_depth(&ycgco_ro_10, None, Some(8)).err(),
+            Some(AvifError::NotImplemented)
+        );
+
+        // Reformatting through RGB resets chroma_sample_position to Unknown.
+        #[cfg(feature = "libyuv")]
+        {
+            let csp_img = make_yuv(
+                8,
+                PixelFormat::Yuv420,
+                MatrixCoefficients::Bt601,
+                ChromaSamplePosition::Vertical,
+            )?;
+            let reformatted = crate::r#impl::convert_image_format_and_depth(
+                &csp_img,
+                Some(PixelFormat::Yuv444),
+                None,
+            )?
+            .unwrap();
+            assert_eq!(
+                reformatted.chroma_sample_position,
+                ChromaSamplePosition::Unknown
+            );
+        }
+
+        Ok(())
+    }
 }
