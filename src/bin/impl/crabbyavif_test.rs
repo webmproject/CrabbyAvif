@@ -448,4 +448,293 @@ mod decode_tests {
         );
         Ok(())
     }
+
+    #[cfg(all(feature = "aom", feature = "jpeg"))]
+    #[test]
+    fn encode_jpeg_ignore_icc() -> AvifResult<()> {
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+        let input_path = get_test_file("paris_exif_xmp_icc.jpg");
+        let encoded_path = temp_dir.path().join("output.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                "--ignore-icc",
+                input_path.as_str(),
+                encoded_path.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&encoded_path.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        let parsed = decoder.image().expect("parsed image was none");
+        assert!(parsed.icc.is_empty());
+        assert_eq!(parsed.color_primaries, ColorPrimaries::Srgb);
+        assert_eq!(
+            parsed.transfer_characteristics,
+            TransferCharacteristics::Srgb
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "aom")]
+    fn make_alpha_image(yuv_format: PixelFormat) -> AvifResult<image::Image> {
+        let mut src = image::Image {
+            width: 8,
+            height: 8,
+            depth: 8,
+            yuv_format,
+            alpha_present: true,
+            ..Default::default()
+        };
+        src.allocate_planes(Category::Color)?;
+        src.allocate_planes(Category::Alpha)?;
+        src.fill_plane_with_value(image::Plane::Y, 128)?;
+        if yuv_format != PixelFormat::Yuv400 {
+            src.fill_plane_with_value(image::Plane::U, 128)?;
+            src.fill_plane_with_value(image::Plane::V, 128)?;
+        }
+        src.fill_plane_with_value(image::Plane::A, 100)?;
+        Ok(src)
+    }
+
+    #[cfg(all(feature = "aom", feature = "png"))]
+    fn encode_alpha_png_to_avif(
+        temp_dir: &std::path::Path,
+        prefix: &str,
+        yuv_format: PixelFormat,
+        extra_encode_args: &[&str],
+    ) -> AvifResult<std::path::PathBuf> {
+        use crabby_avif::utils::writer::png::PngWriter;
+        use crabby_avif::utils::writer::Writer;
+
+        let src = make_alpha_image(yuv_format)?;
+        let alpha_png = temp_dir.join(format!("{prefix}.png"));
+        PngWriter::default().write_frame(&mut std::fs::File::create(&alpha_png).unwrap(), &src)?;
+        let out_avif = temp_dir.join(format!("{prefix}.avif"));
+        let mut args = vec!["crabbyavif", "--speed", "10"];
+        args.extend_from_slice(extra_encode_args);
+        args.push(alpha_png.to_str().unwrap());
+        args.push(out_avif.to_str().unwrap());
+        main_impl(args.iter())?;
+        Ok(out_avif)
+    }
+
+    #[cfg(all(feature = "aom", feature = "png"))]
+    #[test]
+    fn encode_and_decode_png_ignore_icc() -> AvifResult<()> {
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+
+        // Test --ignore-icc on a PNG with embedded ICC (with positive control).
+        let icc_png = get_test_file("paris_icc_exif_xmp.png");
+        let with_icc_avif = temp_dir.path().join("with_icc.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                icc_png.as_str(),
+                with_icc_avif.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&with_icc_avif.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        assert!(!decoder.image().unwrap().icc.is_empty());
+
+        let no_icc_avif = temp_dir.path().join("no_icc.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                "--ignore-icc",
+                icc_png.as_str(),
+                no_icc_avif.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&no_icc_avif.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        let parsed = decoder.image().unwrap();
+        assert!(parsed.icc.is_empty());
+        assert_eq!(parsed.color_primaries, ColorPrimaries::Srgb);
+        assert_eq!(
+            parsed.transfer_characteristics,
+            TransferCharacteristics::Srgb
+        );
+
+        // Decode with_icc_avif to PNG without and with --ignore-icc to exercise strip_icc.
+        let decoded_with_icc = temp_dir.path().join("decoded_with_icc.png");
+        main_impl(
+            [
+                "crabbyavif",
+                with_icc_avif.to_str().unwrap(),
+                decoded_with_icc.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut reader = <dyn Reader>::create(decoded_with_icc.to_str().unwrap())?;
+        let (png_with_icc, _, _) = reader.read_frame(&Config::default())?;
+        assert!(!png_with_icc.icc.is_empty());
+
+        let decoded_no_icc = temp_dir.path().join("decoded_no_icc.png");
+        main_impl(
+            [
+                "crabbyavif",
+                "--ignore-icc",
+                with_icc_avif.to_str().unwrap(),
+                decoded_no_icc.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut reader = <dyn Reader>::create(decoded_no_icc.to_str().unwrap())?;
+        let (png_no_icc, _, _) = reader.read_frame(&Config::default())?;
+        assert!(png_no_icc.icc.is_empty());
+        Ok(())
+    }
+
+    #[cfg(all(feature = "aom", feature = "png"))]
+    #[test]
+    fn encode_png_ignore_alpha() -> AvifResult<()> {
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+
+        let with_alpha =
+            encode_alpha_png_to_avif(temp_dir.path(), "with_alpha", PixelFormat::Yuv444, &[])?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&with_alpha.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        assert!(decoder.image().unwrap().alpha_present);
+
+        let without_alpha = encode_alpha_png_to_avif(
+            temp_dir.path(),
+            "without_alpha",
+            PixelFormat::Yuv444,
+            &["--ignore-alpha"],
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&without_alpha.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        assert!(!decoder.image().unwrap().alpha_present);
+        Ok(())
+    }
+
+    #[cfg(feature = "aom")]
+    #[test]
+    fn encode_y4m_ignore_alpha() -> AvifResult<()> {
+        use crabby_avif::utils::writer::y4m::Y4MWriter;
+        use crabby_avif::utils::writer::Writer;
+
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+        let src = make_alpha_image(PixelFormat::Yuv444)?;
+        let alpha_y4m = temp_dir.path().join("in_alpha.y4m");
+        let mut y4m_file = std::fs::File::create(&alpha_y4m).unwrap();
+        Y4MWriter::create(false).write_frame(&mut y4m_file, &src)?;
+        drop(y4m_file);
+
+        let y4m_no_alpha_avif = temp_dir.path().join("y4m_no_alpha.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                "--ignore-alpha",
+                alpha_y4m.to_str().unwrap(),
+                y4m_no_alpha_avif.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut y4m_dec = decoder::Decoder::default();
+        y4m_dec.set_io_file(&y4m_no_alpha_avif.to_string_lossy().into_owned())?;
+        y4m_dec.parse()?;
+        assert!(!y4m_dec.image().unwrap().alpha_present);
+        Ok(())
+    }
+
+    #[cfg(all(feature = "aom", feature = "png"))]
+    #[test]
+    fn decode_ignore_alpha() -> AvifResult<()> {
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+
+        // Test decoding an alpha AVIF with --ignore-alpha to Y4M (no C444alpha header).
+        let with_alpha =
+            encode_alpha_png_to_avif(temp_dir.path(), "with_alpha", PixelFormat::Yuv444, &[])?;
+        let decoded_y4m = temp_dir.path().join("decoded_no_alpha.y4m");
+        main_impl(
+            [
+                "crabbyavif",
+                "--ignore-alpha",
+                with_alpha.to_str().unwrap(),
+                decoded_y4m.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut y4m_reader = <dyn Reader>::create(decoded_y4m.to_str().unwrap())?;
+        let (y4m_img, _, _) = y4m_reader.read_frame(&Config::default())?;
+        assert!(!y4m_img.alpha_present);
+        assert!(!y4m_img.has_alpha());
+
+        // Test decoding Yuv400 + alpha AVIF with --ignore-alpha and --crop to PNG (1-channel Gray).
+        let mono_avif = encode_alpha_png_to_avif(
+            temp_dir.path(),
+            "mono_alpha",
+            PixelFormat::Yuv400,
+            &["--yuv", "400"],
+        )?;
+        let mono_out_png = temp_dir.path().join("mono_no_alpha.png");
+        main_impl(
+            [
+                "crabbyavif",
+                "--ignore-alpha",
+                "--crop",
+                "0,0,4,4",
+                mono_avif.to_str().unwrap(),
+                mono_out_png.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut png_reader = <dyn Reader>::create(mono_out_png.to_str().unwrap())?;
+        let (mono_decoded, _, _) = png_reader.read_frame(&Config::default())?;
+        assert!(!mono_decoded.alpha_present);
+        assert!(!mono_decoded.has_alpha());
+        assert_eq!((mono_decoded.width, mono_decoded.height), (4, 4));
+        Ok(())
+    }
+
+    #[cfg(all(feature = "aom", feature = "png", feature = "libyuv"))]
+    #[test]
+    fn decode_ignore_alpha_target_size() -> AvifResult<()> {
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+        let with_alpha =
+            encode_alpha_png_to_avif(temp_dir.path(), "with_alpha", PixelFormat::Yuv444, &[])?;
+        let scaled_png = temp_dir.path().join("scaled_no_alpha.png");
+        main_impl(
+            [
+                "crabbyavif",
+                "--ignore-alpha",
+                "--target-size",
+                "4,4",
+                with_alpha.to_str().unwrap(),
+                scaled_png.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut scaled_reader = <dyn Reader>::create(scaled_png.to_str().unwrap())?;
+        let (scaled_decoded, _, _) = scaled_reader.read_frame(&Config::default())?;
+        assert!(!scaled_decoded.alpha_present);
+        assert!(!scaled_decoded.has_alpha());
+        assert_eq!((scaled_decoded.width, scaled_decoded.height), (4, 4));
+        Ok(())
+    }
 }

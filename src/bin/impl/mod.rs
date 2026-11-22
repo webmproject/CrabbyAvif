@@ -291,6 +291,10 @@ struct CommandLineArgs {
     #[arg(long, default_value = "false")]
     ignore_icc: bool,
 
+    /// If the input file contains an alpha channel, ignore it (no-op if absent)
+    #[arg(long, default_value = "false")]
+    ignore_alpha: bool,
+
     /// AVIF Encode only: Add irot property (rotation), in 0..3. Makes (90 * ANGLE) degree rotation
     /// anti-clockwise
     #[arg(long = "irot", value_parser = value_parser!(u8).range(0..=3))]
@@ -623,7 +627,13 @@ fn create_decoder_and_parse(args: &CommandLineArgs, input_file: &String) -> Avif
         } else if args.crop.is_some() || args.target_size.is_some() {
             // Region and scaled decodes cannot decode both the color image and the gain map. The
             // gain map is only written with --extract-gainmap anyway.
-            ImageContentType::ColorAndAlpha
+            if args.ignore_alpha {
+                ImageContentType::Color
+            } else {
+                ImageContentType::ColorAndAlpha
+            }
+        } else if args.ignore_alpha {
+            ImageContentType::ColorAndGainMap
         } else {
             ImageContentType::All
         },
@@ -800,16 +810,23 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
     } else {
         None
     };
-    let mut cloned_for_icc;
-    let image_to_write = if args.ignore_icc && !image.icc.is_empty() {
-        if let Some(cropped) = &mut cropped_image {
-            cropped.icc.clear();
+    let strip_icc = args.ignore_icc && !image.icc.is_empty();
+    let strip_alpha = args.ignore_alpha && (image.alpha_present || image.has_alpha());
+    let mut cloned_for_ignore;
+    let image_to_write = if strip_icc || strip_alpha {
+        let target = if let Some(cropped) = &mut cropped_image {
             cropped
         } else {
-            cloned_for_icc = image.try_deep_clone()?;
-            cloned_for_icc.icc.clear();
-            &cloned_for_icc
+            cloned_for_ignore = image.try_deep_clone()?;
+            &mut cloned_for_ignore
+        };
+        if strip_icc {
+            target.icc.clear();
         }
+        if strip_alpha {
+            clear_alpha(target);
+        }
+        &*target
     } else {
         match &cropped_image {
             Some(cropped_image) => cropped_image,
@@ -825,12 +842,37 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
     Ok(())
 }
 
+fn clear_alpha(image: &mut image::Image) {
+    // Match libavif behavior: drop the alpha plane and flags, leaving color planes as-is.
+    image.planes[image::Plane::A as usize] = None;
+    image.row_bytes[image::Plane::A as usize] = 0;
+    image.alpha_present = false;
+    image.alpha_premultiplied = false;
+}
+
 #[cfg(feature = "encoder")]
 fn read_file(filepath: &String) -> io::Result<Vec<u8>> {
     let mut file = File::open(filepath)?;
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
     Ok(buffer)
+}
+
+#[cfg(feature = "encoder")]
+fn apply_read_ignore_flags(
+    args: &CommandLineArgs,
+    image: &mut image::Image,
+    gainmap: Option<&mut crabby_avif::gainmap::GainMap>,
+) {
+    if args.ignore_icc {
+        image.icc.clear();
+        if let Some(gainmap) = gainmap {
+            gainmap.alt_icc.clear();
+        }
+    }
+    if args.ignore_alpha {
+        clear_alpha(image);
+    }
 }
 
 #[cfg(feature = "encoder")]
@@ -847,12 +889,7 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
         ..Default::default()
     };
     let (mut image, mut duration_ms, mut gainmap) = reader.read_frame(&reader_config)?;
-    if args.ignore_icc {
-        image.icc.clear();
-        if let Some(gainmap) = &mut gainmap {
-            gainmap.alt_icc.clear();
-        }
-    }
+    apply_read_ignore_flags(args, &mut image, gainmap.as_mut());
     if args.irot_angle.is_some() {
         image.irot_angle = args.irot_angle;
     }
@@ -958,9 +995,7 @@ fn encode(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifRe
                 break;
             }
             (image, duration_ms, _) = reader.read_frame(&reader_config)?;
-            if args.ignore_icc {
-                image.icc.clear();
-            }
+            apply_read_ignore_flags(args, &mut image, None);
         }
     } else if args.progressive {
         // Encode the base layer with very low quality.
