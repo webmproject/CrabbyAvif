@@ -102,7 +102,7 @@ impl PartialEq for GainMap {
 }
 
 impl GainMap {
-    pub(crate) fn try_deep_clone(&self) -> AvifResult<Self> {
+    pub fn try_deep_clone(&self) -> AvifResult<Self> {
         Ok(GainMap {
             image: self.image.try_deep_clone()?,
             metadata: self.metadata,

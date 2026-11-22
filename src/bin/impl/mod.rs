@@ -634,7 +634,11 @@ fn max_threads(jobs: &Option<u32>) -> u32 {
     }
 }
 
-fn create_decoder_and_parse(args: &CommandLineArgs, input_file: &String) -> AvifResult<Decoder> {
+fn create_decoder_and_parse(
+    args: &CommandLineArgs,
+    input_file: &String,
+    allow_progressive: bool,
+) -> AvifResult<Decoder> {
     let mut settings = decoder::Settings {
         source: if args.extract_thumbnail {
             decoder::Source::Thumbnail
@@ -659,7 +663,7 @@ fn create_decoder_and_parse(args: &CommandLineArgs, input_file: &String) -> Avif
         },
         codec_choice: args.codec,
         max_threads: max_threads(&args.jobs),
-        allow_progressive: args.progressive,
+        allow_progressive,
         ignore_exif: args.ignore_exif,
         ignore_xmp: args.ignore_xmp,
         allow_sample_transform: args.allow_sample_transform,
@@ -685,7 +689,7 @@ fn create_decoder_and_parse(args: &CommandLineArgs, input_file: &String) -> Avif
 }
 
 fn info(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
-    let mut decoder = create_decoder_and_parse(args, input_file)?;
+    let mut decoder = create_decoder_and_parse(args, input_file, args.progressive)?;
     println!("Image decoded: {}", input_file);
     print_image_info(&decoder);
     println!(
@@ -749,7 +753,7 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
         "Decoding with {max_threads} worker thread{}, please wait...",
         if max_threads == 1 { "" } else { "s" }
     );
-    let mut decoder = create_decoder_and_parse(args, input_file)?;
+    let mut decoder = create_decoder_and_parse(args, input_file, args.progressive)?;
     if args.extract_gainmap && !decoder.gainmap_present() {
         return Err(AvifError::UnknownError(
             "Input image does not contain a gain map".into(),
@@ -866,9 +870,18 @@ fn write_decoded_avif(
     output_filename: &str,
 ) -> AvifResult<()> {
     let src = owned_image.as_ref().unwrap_or(image);
-    let converted = convert_image_format_and_depth(src, args.yuv_format, args.depth)?;
+    let converted = convert_image_format_and_depth(
+        src,
+        args.yuv_format,
+        args.depth,
+        args.cicp.as_ref(),
+        false,
+        false,
+        args.cicp.is_none(),
+    )?;
     let needs_metadata_fixup = src.clap.is_some()
-        || (src.icc.is_empty()
+        || (args.cicp.is_none()
+            && src.icc.is_empty()
             && src.color_primaries == ColorPrimaries::Unspecified
             && src.transfer_characteristics == TransferCharacteristics::Unspecified);
     let mut target = converted.or_else(|| owned_image.take());
@@ -879,7 +892,8 @@ fn write_decoded_avif(
         };
         // decode() already applied or ignored clap, so do not re-emit stale clap on the encoded AVIF.
         img.clap = None;
-        if img.icc.is_empty()
+        if args.cicp.is_none()
+            && img.icc.is_empty()
             && img.color_primaries == ColorPrimaries::Unspecified
             && img.transfer_characteristics == TransferCharacteristics::Unspecified
         {
@@ -1026,8 +1040,12 @@ fn apply_encode_overrides(
             image.yuv_format,
         )?);
     }
-    image.pasp = args.pasp;
-    image.clli = args.clli;
+    if args.pasp.is_some() {
+        image.pasp = args.pasp;
+    }
+    if args.clli.is_some() {
+        image.clli = args.clli;
+    }
     if let Some(nclx) = &args.cicp {
         image.color_primaries = nclx.color_primaries;
         image.transfer_characteristics = nclx.transfer_characteristics;
@@ -1152,13 +1170,22 @@ fn convert_image_format_and_depth(
     src: &image::Image,
     yuv_format: Option<PixelFormat>,
     depth: Option<u8>,
+    target_cicp: Option<&Nclx>,
+    ignore_icc: bool,
+    ignore_alpha: bool,
+    allow_mc_fallback: bool,
 ) -> AvifResult<Option<image::Image>> {
     if !matches!(src.depth, 8 | 10 | 12 | 16) {
         return Err(AvifError::NotImplemented);
     }
     let target_format = yuv_format.unwrap_or(src.yuv_format);
     let target_depth = depth.unwrap_or_else(|| src.depth.min(12));
-    if !src.icc.is_empty()
+    let target_cp = target_cicp.map_or(src.color_primaries, |n| n.color_primaries);
+    let target_tc =
+        target_cicp.map_or(src.transfer_characteristics, |n| n.transfer_characteristics);
+    let mut target_mc = target_cicp.map_or(src.matrix_coefficients, |n| n.matrix_coefficients);
+    if !ignore_icc
+        && !src.icc.is_empty()
         && ((src.yuv_format == PixelFormat::Yuv400) != (target_format == PixelFormat::Yuv400))
     {
         return Err(AvifError::UnknownError(
@@ -1166,62 +1193,193 @@ fn convert_image_format_and_depth(
                 .into(),
         ));
     }
-    if target_format == src.yuv_format && target_depth == src.depth {
-        return Ok(None);
+    if target_mc == MatrixCoefficients::Identity && target_format != PixelFormat::Yuv444 {
+        if allow_mc_fallback {
+            target_mc = MatrixCoefficients::Bt601;
+        } else {
+            return Err(AvifError::UnknownError(
+                "Identity matrix requires YUV 4:4:4; pass --cicp to convert matrix coefficients"
+                    .into(),
+            ));
+        }
     }
-    let mut rgb = reformat::rgb::Image::create_from_yuv(src);
-    match src.matrix_coefficients {
+    if target_mc == MatrixCoefficients::YcgcoRe
+        && ((src.matrix_coefficients == MatrixCoefficients::YcgcoRe && target_depth != src.depth)
+            || target_format == PixelFormat::Yuv400)
+    {
+        if allow_mc_fallback {
+            target_mc = MatrixCoefficients::Bt601;
+        } else {
+            return Err(AvifError::UnknownError(
+                "YCgCo-Re requires matching depth and color YUV format; pass --cicp to convert matrix coefficients"
+                    .into(),
+            ));
+        }
+    }
+    if target_format == src.yuv_format
+        && target_depth == src.depth
+        && target_mc == src.matrix_coefficients
+        && (target_mc != MatrixCoefficients::ChromaDerivedNcl || target_cp == src.color_primaries)
+    {
+        if target_cp == src.color_primaries
+            && target_tc == src.transfer_characteristics
+            && (!ignore_icc || src.icc.is_empty())
+            && (!ignore_alpha || (!src.alpha_present && !src.has_alpha()))
+        {
+            return Ok(None);
+        }
+        let mut dst = src.try_deep_clone()?;
+        dst.color_primaries = target_cp;
+        dst.transfer_characteristics = target_tc;
+        if ignore_icc {
+            dst.icc.clear();
+        }
+        if ignore_alpha {
+            clear_alpha(&mut dst);
+        }
+        return Ok(Some(dst));
+    }
+    let rgb_depth = match src.matrix_coefficients {
         MatrixCoefficients::YcgcoRe => {
             if !matches!(src.depth, 10 | 12) {
                 return Err(AvifError::NotImplemented);
             }
-            rgb.depth = src.depth - 2;
+            src.depth - 2
         }
         MatrixCoefficients::YcgcoRo => return Err(AvifError::NotImplemented),
-        _ => {}
-    }
-    rgb.premultiply_alpha = src.has_alpha() && src.alpha_premultiplied;
-    rgb.format = if src.has_alpha() {
-        reformat::rgb::Format::Rgba
-    } else {
-        reformat::rgb::Format::Rgb
+        _ => src.depth,
     };
+    if matches!(
+        target_mc,
+        MatrixCoefficients::Reserved
+            | MatrixCoefficients::Bt2020Cl
+            | MatrixCoefficients::Smpte2085
+            | MatrixCoefficients::ChromaDerivedCl
+            | MatrixCoefficients::Ictcp
+    ) {
+        return Err(AvifError::NotImplemented);
+    }
+    if target_mc == MatrixCoefficients::Ycgco && src.yuv_range == image::YuvRange::Limited {
+        return Err(AvifError::NotImplemented);
+    }
+    if matches!(
+        target_mc,
+        MatrixCoefficients::YcgcoRe | MatrixCoefficients::YcgcoRo
+    ) {
+        let bit_offset = if target_mc == MatrixCoefficients::YcgcoRe { 2 } else { 1 };
+        if src.yuv_range == image::YuvRange::Limited
+            || target_depth.checked_sub(bit_offset) != Some(rgb_depth)
+        {
+            return Err(AvifError::NotImplemented);
+        }
+    }
+    let src_without_alpha;
+    let src = if ignore_alpha && src.has_alpha() {
+        let mut cloned = src.try_deep_clone()?;
+        clear_alpha(&mut cloned);
+        src_without_alpha = cloned;
+        &src_without_alpha
+    } else {
+        src
+    };
+    let has_alpha = src.has_alpha();
+    let mut rgb = reformat::rgb::Image::create_from_yuv(src);
+    rgb.depth = rgb_depth;
+    rgb.premultiply_alpha = has_alpha && src.alpha_premultiplied;
+    rgb.format = if has_alpha { reformat::rgb::Format::Rgba } else { reformat::rgb::Format::Rgb };
     rgb.allocate()?;
     rgb.convert_from_yuv(src)?;
-    let dst_matrix_coefficients = match src.matrix_coefficients {
-        MatrixCoefficients::Identity if target_format != PixelFormat::Yuv444 => {
-            MatrixCoefficients::Bt601
-        }
-        MatrixCoefficients::YcgcoRe
-            if target_depth != src.depth || target_format == PixelFormat::Yuv400 =>
-        {
-            MatrixCoefficients::Bt601
-        }
-        mc => mc,
-    };
     let mut dst = image::Image {
         width: src.width,
         height: src.height,
         depth: target_depth,
         yuv_format: target_format,
         yuv_range: src.yuv_range,
-        alpha_present: src.has_alpha(),
-        alpha_premultiplied: src.has_alpha() && src.alpha_premultiplied,
-        color_primaries: src.color_primaries,
-        transfer_characteristics: src.transfer_characteristics,
-        matrix_coefficients: dst_matrix_coefficients,
+        alpha_present: has_alpha,
+        alpha_premultiplied: has_alpha && src.alpha_premultiplied,
+        color_primaries: target_cp,
+        transfer_characteristics: target_tc,
+        matrix_coefficients: target_mc,
         clli: src.clli,
         pasp: src.pasp,
         clap: src.clap,
         irot_angle: src.irot_angle,
         imir_axis: src.imir_axis,
         exif: try_clone_bytes(&src.exif)?,
-        icc: try_clone_bytes(&src.icc)?,
+        icc: if ignore_icc { Vec::new() } else { try_clone_bytes(&src.icc)? },
         xmp: try_clone_bytes(&src.xmp)?,
         ..Default::default()
     };
     rgb.convert_to_yuv(&mut dst)?;
     Ok(Some(dst))
+}
+
+#[cfg(feature = "encoder")]
+fn reencode(args: &CommandLineArgs, input_file: &String, output_file: &str) -> AvifResult<()> {
+    let mut decoder = create_decoder_and_parse(args, input_file, false)?;
+    if args.progressive && decoder.gainmap_present() {
+        return Err(AvifError::UnknownError(
+            "Progressive encoding is not supported with gain maps".into(),
+        ));
+    }
+    if args.index.is_none() && decoder.image_count() > 1 {
+        return Err(AvifError::UnknownError(
+            "Re-encoding multi-frame AVIF sequences requires --index to select a frame".into(),
+        ));
+    }
+    decoder.nth_image(args.index.unwrap_or(0))?;
+    let src_image = decoder.image().ok_or(AvifError::NoContent)?;
+    let mut image = match convert_image_format_and_depth(
+        src_image,
+        args.yuv_format,
+        args.depth,
+        args.cicp.as_ref(),
+        args.ignore_icc || args.icc.is_some(),
+        args.ignore_alpha,
+        false,
+    )? {
+        Some(converted) => converted,
+        None => src_image.try_deep_clone()?,
+    };
+    let mut gainmap = if decoder.gainmap_present() {
+        Some(decoder.gainmap().try_deep_clone()?)
+    } else {
+        None
+    };
+    if args.ignore_icc {
+        if let Some(gainmap) = &mut gainmap {
+            gainmap.alt_icc.clear();
+        }
+    }
+    apply_encode_overrides(args, &mut image, gainmap.as_mut())?;
+    let encoder_arg_codec = match args.codec {
+        CodecChoice::Aom => CodecChoice::Aom,
+        #[cfg(feature = "avm")]
+        CodecChoice::Avm => CodecChoice::Avm,
+        #[cfg(feature = "jpegxl")]
+        CodecChoice::Libjxl => CodecChoice::Libjxl,
+        _ => CodecChoice::Auto,
+    };
+    let codec_choice = encoder_codec_choice_for_output(encoder_arg_codec, output_file);
+    if args.progressive {
+        let mut settings = create_encoder_settings(args, codec_choice);
+        let mut encoder = Encoder::create_with_settings(&settings)?;
+        settings.mutable.quality = 2.0;
+        encoder.update_settings(&settings.mutable)?;
+        encoder.add_image(&image)?;
+        settings.mutable.quality = args.quality.unwrap_or(DEFAULT_ENCODE_QUALITY);
+        encoder.update_settings(&settings.mutable)?;
+        encoder.add_image(&image)?;
+        return write_encoded_avif(encoder, output_file);
+    }
+    encode_single_image_to_avif(args, codec_choice, &image, gainmap.as_ref(), output_file)
+}
+
+#[cfg(not(feature = "encoder"))]
+fn reencode(_args: &CommandLineArgs, _input_file: &String, _output_file: &str) -> AvifResult<()> {
+    Err(AvifError::UnknownError(
+        "AVIF output requires building with the encoder feature".into(),
+    ))
 }
 
 #[cfg(feature = "encoder")]
@@ -1375,9 +1533,14 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                         "target-size is not supported with progressive decoding".into(),
                     ));
                 }
-                if args.grid.is_some() {
+                if args.grid.is_some() && !can_encode(output_filename) {
                     return Err(AvifError::UnknownError(
                         "grid is only supported when encoding".into(),
+                    ));
+                }
+                if args.grid.is_some() && args.progressive {
+                    return Err(AvifError::UnknownError(
+                        "grid is not supported with progressive encoding".into(),
                     ));
                 }
             }
@@ -1439,6 +1602,13 @@ where
         if can_decode(input_file) {
             if args.info {
                 info(&args, input_file)?;
+            } else if args.output_file.as_ref().is_some_and(|out| can_encode(out))
+                && !args.extract_gainmap
+                && !args.extract_thumbnail
+                && args.crop.is_none()
+                && args.target_size.is_none()
+            {
+                reencode(&args, input_file, args.output_file.as_ref().unwrap())?;
             } else {
                 decode(&args, input_file)?;
             }
