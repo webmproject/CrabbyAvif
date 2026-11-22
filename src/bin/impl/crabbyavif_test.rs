@@ -151,6 +151,105 @@ fn grid_parser_and_validation() {
     );
 }
 
+#[test]
+fn gainmap_info_rows_formatting_and_clli_regression() {
+    use crabby_avif::gainmap::GainMap;
+    use crabby_avif::gainmap::GainMapMetadata;
+    use crabby_avif::utils::Fraction;
+    use crabby_avif::utils::UFraction;
+
+    let gm = GainMap {
+        image: image::Image {
+            width: 100,
+            height: 50,
+            depth: 8,
+            yuv_format: PixelFormat::Yuv444,
+            clli: Some(ContentLightLevelInformation {
+                max_cll: 999,
+                max_pall: 333,
+            }),
+            ..Default::default()
+        },
+        metadata: GainMapMetadata {
+            base_hdr_headroom: UFraction(1, 2),
+            alternate_hdr_headroom: UFraction(0, 1),
+            min: [Fraction(i32::MIN, 2), Fraction(1, 0), Fraction(-3, 2)],
+            max: [Fraction(2, 1), Fraction(4, 1), Fraction(6, 1)],
+            base_offset: [Fraction(1, 64), Fraction(2, 64), Fraction(3, 64)],
+            alternate_offset: [Fraction(4, 64), Fraction(5, 64), Fraction(6, 64)],
+            gamma: [UFraction(1, 1), UFraction(2, 1), UFraction(0, 0)],
+            use_base_color_space: true,
+            ..Default::default()
+        },
+        alt_color_primaries: ColorPrimaries::Bt2020,
+        alt_transfer_characteristics: TransferCharacteristics::Pq,
+        alt_matrix_coefficients: MatrixCoefficients::Bt2020Ncl,
+        alt_plane_count: 3,
+        alt_plane_depth: 10,
+        alt_clli: ContentLightLevelInformation::default(),
+        ..Default::default()
+    };
+
+    // Regression: gm.image.clli set while alt_clli is zero must omit Alternate CLLI.
+    let rows_decoded = crate::r#impl::gainmap_info_rows(&gm, true);
+    fn val_of<'a>(rows: &'a [(usize, &'static str, String)], label: &str) -> Option<&'a str> {
+        rows.iter()
+            .find(|(_, k, _)| *k == label)
+            .map(|(_, _, v)| v.as_str())
+    }
+    assert_eq!(
+        val_of(&rows_decoded, "Gainmap"),
+        Some("100x50 pixels, 8 bit, Yuv444, Full Range, Matrix Coeffs. Unspecified, Base Image is HDR")
+    );
+    assert_eq!(
+        val_of(&rows_decoded, "Base headroom"),
+        Some("0.5 (as fraction: 1/2)")
+    );
+    assert_eq!(
+        val_of(&rows_decoded, "Alternate headroom"),
+        Some("0 (as fraction: 0/1)")
+    );
+    let min_row = val_of(&rows_decoded, "Gain Map Min").unwrap();
+    assert!(min_row.contains("-1073741824 (as fraction: -2147483648/2)"));
+    assert!(min_row.contains("0 (as fraction: 1/0)"));
+    assert!(min_row.contains("-1.5 (as fraction: -3/2)"));
+    assert_eq!(
+        val_of(&rows_decoded, "Gain Map Max").unwrap(),
+        format!(
+            "R {:<40} G {:<40} B {}",
+            "2 (as fraction: 2/1)", "4 (as fraction: 4/1)", "6 (as fraction: 6/1)"
+        )
+    );
+    assert_eq!(val_of(&rows_decoded, "Use Base Color Space"), Some("True"));
+    assert_eq!(val_of(&rows_decoded, "Bit Depth"), Some("10"));
+    assert_eq!(val_of(&rows_decoded, "Planes"), Some("3"));
+    assert_eq!(val_of(&rows_decoded, "CLLI"), None);
+
+    // Non-decoded HDR/SDR summary + alt_clli non-zero + use_base_color_space=false.
+    let mut gm_undecoded = GainMap {
+        metadata: GainMapMetadata {
+            use_base_color_space: false,
+            ..Default::default()
+        },
+        alt_clli: ContentLightLevelInformation {
+            max_cll: 1000,
+            max_pall: 400,
+        },
+        ..Default::default()
+    };
+    gm_undecoded.image.clli = None;
+    let rows_undecoded = crate::r#impl::gainmap_info_rows(&gm_undecoded, false);
+    assert_eq!(
+        val_of(&rows_undecoded, "Gainmap"),
+        Some("Present (not decoded), Base Image is SDR")
+    );
+    assert_eq!(
+        val_of(&rows_undecoded, "Use Base Color Space"),
+        Some("False")
+    );
+    assert_eq!(val_of(&rows_undecoded, "CLLI"), Some("1000, 400"));
+}
+
 // The tests below decode images, so they require an AV1 decoder.
 #[cfg(any(
     feature = "dav1d",
@@ -2153,6 +2252,48 @@ mod decode_tests {
             ]
             .iter(),
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn info_gainmap_metadata_rows() -> AvifResult<()> {
+        let input_path = get_test_file("seine_sdr_gainmap_srgb.avif");
+        main_impl(["crabbyavif", "--info", input_path.as_str()].iter())?;
+
+        let mut decoder = decoder::Decoder::default();
+        decoder.settings.image_content_to_decode = decoder::ImageContentType::All;
+        decoder.set_io_file(&input_path)?;
+        decoder.parse()?;
+        let rows = crate::r#impl::gainmap_info_rows(decoder.gainmap(), true);
+        let val_of = |label: &str| {
+            rows.iter()
+                .find(|(_, k, _)| *k == label)
+                .map(|(_, _, v)| v.as_str())
+        };
+        assert_eq!(
+            val_of("Gainmap"),
+            Some(
+                "400x300 pixels, 8 bit, Yuv444, Full Range, Matrix Coeffs. Bt601, Base Image is SDR"
+            )
+        );
+        assert_eq!(val_of("Base headroom"), Some("0 (as fraction: 0/1)"));
+        assert_eq!(
+            val_of("Alternate headroom"),
+            Some("1.3 (as fraction: 13/10)")
+        );
+        assert!(val_of("Gain Map Min").unwrap().contains("-256907/1000000"));
+        assert!(val_of("Gain Map Max").unwrap().contains("1277177/1000000"));
+        assert!(val_of("Base Offset")
+            .unwrap()
+            .contains("0.015625 (as fraction: 1/64)"));
+        assert!(val_of("Alternate Offset")
+            .unwrap()
+            .contains("0.015625 (as fraction: 1/64)"));
+        assert!(val_of("Gain Map Gamma").unwrap().contains("119223/125000"));
+        assert_eq!(val_of("Use Base Color Space"), Some("True"));
+        assert_eq!(val_of("Bit Depth"), Some("8"));
+        assert_eq!(val_of("Planes"), Some("3"));
+        assert_eq!(val_of("CLLI"), None);
         Ok(())
     }
 }

@@ -447,6 +447,125 @@ fn print_vec(data: &[u8]) -> String {
     }
 }
 
+fn format_fraction_parts(num: i64, den: u32) -> String {
+    let val = if den != 0 { num as f64 / f64::from(den) } else { 0.0 };
+    format!("{val} (as fraction: {num}/{den})")
+}
+
+fn format_fraction_parts_triplet(fractions: [(i64, u32); 3]) -> String {
+    let [r, g, b] = fractions.map(|(num, den)| format_fraction_parts(num, den));
+    format!("R {r:<40} G {g:<40} B {b}")
+}
+
+fn format_fraction_triplet(fractions: [crabby_avif::utils::Fraction; 3]) -> String {
+    format_fraction_parts_triplet(fractions.map(|f| (i64::from(f.0), f.1)))
+}
+
+fn gainmap_info_rows(
+    gainmap: &crabby_avif::gainmap::GainMap,
+    gainmap_decoded: bool,
+) -> Vec<(usize, &'static str, String)> {
+    let gainmap_image = &gainmap.image;
+    let base_image = if gainmap.metadata.base_hdr_headroom.0 == 0 { "SDR" } else { "HDR" };
+    vec![
+        (
+            0,
+            "Gainmap",
+            if gainmap_decoded {
+                format!(
+                    "{}x{} pixels, {} bit, {:#?}, {:#?} Range, Matrix Coeffs. {:#?}, Base Image is {}",
+                    gainmap_image.width,
+                    gainmap_image.height,
+                    gainmap_image.depth,
+                    gainmap_image.yuv_format,
+                    gainmap_image.yuv_range,
+                    gainmap_image.matrix_coefficients,
+                    base_image,
+                )
+            } else {
+                format!("Present (not decoded), Base Image is {base_image}")
+            },
+        ),
+        (
+            1,
+            "Base headroom",
+            format_fraction_parts(
+                i64::from(gainmap.metadata.base_hdr_headroom.0),
+                gainmap.metadata.base_hdr_headroom.1,
+            ),
+        ),
+        (
+            1,
+            "Alternate headroom",
+            format_fraction_parts(
+                i64::from(gainmap.metadata.alternate_hdr_headroom.0),
+                gainmap.metadata.alternate_hdr_headroom.1,
+            ),
+        ),
+        (
+            1,
+            "Gain Map Min",
+            format_fraction_triplet(gainmap.metadata.min),
+        ),
+        (
+            1,
+            "Gain Map Max",
+            format_fraction_triplet(gainmap.metadata.max),
+        ),
+        (
+            1,
+            "Base Offset",
+            format_fraction_triplet(gainmap.metadata.base_offset),
+        ),
+        (
+            1,
+            "Alternate Offset",
+            format_fraction_triplet(gainmap.metadata.alternate_offset),
+        ),
+        (
+            1,
+            "Gain Map Gamma",
+            format_fraction_parts_triplet(gainmap.metadata.gamma.map(|f| (i64::from(f.0), f.1))),
+        ),
+        (
+            1,
+            "Use Base Color Space",
+            if gainmap.metadata.use_base_color_space { "True" } else { "False" }.to_string(),
+        ),
+        (0, "Alternate image", "".to_string()),
+        (
+            1,
+            "Color Primaries",
+            format!("{:#?}", gainmap.alt_color_primaries),
+        ),
+        (
+            1,
+            "Transfer Characteristics",
+            format!("{:#?}", gainmap.alt_transfer_characteristics),
+        ),
+        (
+            1,
+            "Matrix Coefficients",
+            format!("{:#?}", gainmap.alt_matrix_coefficients),
+        ),
+        (1, "ICC Profile", print_vec(&gainmap.alt_icc)),
+        (1, "Bit Depth", format!("{}", gainmap.alt_plane_depth)),
+        (1, "Planes", format!("{}", gainmap.alt_plane_count)),
+        if gainmap.alt_clli.max_cll != 0 || gainmap.alt_clli.max_pall != 0 {
+            (
+                1,
+                "CLLI",
+                format!(
+                    "{}, {}",
+                    gainmap.alt_clli.max_cll, gainmap.alt_clli.max_pall
+                ),
+            )
+        } else {
+            (1, "", "".into())
+        },
+    ]
+}
+
 fn print_image_info(decoder: &Decoder) {
     let image = decoder.image().unwrap();
     let mut image_data = vec![
@@ -548,58 +667,12 @@ fn print_image_info(decoder: &Decoder) {
         image_data.push((0, "CLLI", format!("{}, {}", clli.max_cll, clli.max_pall)));
     }
     if decoder.gainmap_present() {
-        let gainmap = decoder.gainmap();
-        let gainmap_image = &gainmap.image;
-        let base_image = if gainmap.metadata.base_hdr_headroom.0 == 0 { "SDR" } else { "HDR" };
         // The dimensions and format of the gain map image are only set if the gain map is decoded.
         let gainmap_decoded = matches!(
             decoder.settings.image_content_to_decode,
             ImageContentType::GainMap | ImageContentType::ColorAndGainMap | ImageContentType::All
         );
-        image_data.extend_from_slice(&[
-            (
-                0,
-                "Gainmap",
-                if gainmap_decoded {
-                    format!(
-                        "{}x{} pixels, {} bit, {:#?}, {:#?} Range, Matrix Coeffs. {:#?}, Base Image is {}",
-                        gainmap_image.width,
-                        gainmap_image.height,
-                        gainmap_image.depth,
-                        gainmap_image.yuv_format,
-                        gainmap_image.yuv_range,
-                        gainmap_image.matrix_coefficients,
-                        base_image,
-                    )
-                } else {
-                    format!("Present (not decoded), Base Image is {base_image}")
-                },
-            ),
-            (0, "Alternate image", "".to_string()),
-            (
-                1,
-                "Color Primaries",
-                format!("{:#?}", gainmap.alt_color_primaries),
-            ),
-            (
-                1,
-                "Transfer Characteristics",
-                format!("{:#?}", gainmap.alt_transfer_characteristics),
-            ),
-            (
-                1,
-                "Matrix Coefficients",
-                format!("{:#?}", gainmap.alt_matrix_coefficients),
-            ),
-            (1, "ICC Profile", print_vec(&gainmap.alt_icc)),
-            (1, "Bit Depth", format!("{}", gainmap.alt_plane_depth)),
-            (1, "Planes", format!("{}", gainmap.alt_plane_count)),
-            if let Some(clli) = gainmap_image.clli {
-                (1, "CLLI", format!("{}, {}", clli.max_cll, clli.max_pall))
-            } else {
-                (1, "", "".into())
-            },
-        ])
+        image_data.extend(gainmap_info_rows(decoder.gainmap(), gainmap_decoded));
     } else {
         // TODO: b/394162563 - check if we need to report the present but ignored case.
         image_data.push((0, "Gainmap", "Absent".to_string()));
