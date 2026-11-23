@@ -108,6 +108,13 @@ pub(crate) trait TxLanes:
         (self.mul(ka) + b.mul(kb)).rnd(12)
     }
 
+    /// `Round2(a * ka + b * kb, 12)`, saturating to the lane width on
+    /// overflow (never wrapping modulo 2^16 on `S16`).
+    #[inline(always)]
+    fn m2_sat(self, ka: i32, b: Self, kb: i32) -> Self {
+        self.m2(ka, b, kb)
+    }
+
     /// Same result as [`Self::m2`]; only a codegen hint, see
     /// [`Self::m1_h0`].
     #[inline(always)]
@@ -802,6 +809,10 @@ impl<const N: usize> TxLanes for S16<N> {
         if let Some(r) = dot_rnd12_wrap::<N, 2, false>([self.0, b.0], [ka, kb]) {
             return S16(r);
         }
+        self.m2_sat(ka, b, kb)
+    }
+    #[inline(always)]
+    fn m2_sat(self, ka: i32, b: Self, kb: i32) -> Self {
         if let Some(r) = dot_rnd12_pmadd::<N, 2, false>([self.0, b.0], [ka, kb]) {
             return S16(r);
         }
@@ -2247,10 +2258,21 @@ fn idct8_tail<V: TxLanes>(
     ]
 }
 
+/// Computes `Round2(a * ka + b * kb, 12)` using wrapping (`WRAP == true`)
+/// or saturating (`WRAP == false`) 16-bit narrowing.
+#[inline(always)]
+fn m2_opt<V: TxLanes, const WRAP: bool>(a: V, ka: i32, b: V, kb: i32) -> V {
+    if WRAP {
+        a.m2_wrap(ka, b, kb)
+    } else {
+        a.m2_sat(ka, b, kb)
+    }
+}
+
 /// Stages 2..4 of the 8-point inverse ADST.
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-fn iadst8_tail<V: TxLanes>(
+fn iadst8_tail<V: TxLanes, const WRAP: bool>(
     v0: V,
     v1: V,
     v2: V,
@@ -2269,10 +2291,10 @@ fn iadst8_tail<V: TxLanes>(
     let v13 = r.apply(v3 - v7);
     let v14 = r.apply(v2 + v6);
     let v15 = r.apply(v2 - v6);
-    let v16 = v9.m2_wrap(1567, v11, -3784);
-    let v17 = v9.m2_wrap(3784, v11, 1567);
-    let v18 = v15.m2_wrap(3784, v13, -1567);
-    let v19 = v15.m2_wrap(1567, v13, 3784);
+    let v16 = m2_opt::<V, WRAP>(v9, 1567, v11, -3784);
+    let v17 = m2_opt::<V, WRAP>(v9, 3784, v11, 1567);
+    let v18 = m2_opt::<V, WRAP>(v15, 3784, v13, -1567);
+    let v19 = m2_opt::<V, WRAP>(v15, 1567, v13, 3784);
     let v20 = r.apply(v8 + v12);
     let v21 = r.apply(v8 - v12);
     let v22 = r.apply(v17 + v18);
@@ -2281,22 +2303,34 @@ fn iadst8_tail<V: TxLanes>(
     let v25 = r.apply(v10 - v14);
     let v26 = r.apply(v16 + v19);
     let v27 = r.apply(v16 - v19);
-    let v28 = v21.m2(2896, v25, -2896);
-    let v29 = v21.m2(2896, v25, 2896);
-    let v30 = v23.m2(2896, v27, -2896);
-    let v31 = v23.m2(2896, v27, 2896);
+    let m2_end = |a: V, kb: i32, b: V| {
+        if WRAP { a.m2(2896, b, kb) } else { a.m2_sat(2896, b, kb) }
+    };
+    let v28 = m2_end(v21, -2896, v25);
+    let v29 = m2_end(v21, 2896, v25);
+    let v30 = m2_end(v23, -2896, v27);
+    let v31 = m2_end(v23, 2896, v27);
     [v20, -v22, v31, -v29, v28, -v30, v26, -v24]
 }
 
 /// Runs the DCT or ADST of length `N` (4 or 8) on `t` (`L` lanes),
 /// given whether all inputs beyond the first 4 are zero (`le4`). Inlined
 /// on register arrays so small transforms keep all lanes in registers.
+///
+/// `WRAP_ADST` is false on the column pass so that 8-point ADST
+/// intermediates saturate to 16 bits rather than wrapping modulo 2^16 on
+/// non-conformant out-of-range inputs.
 // Not inlined with debug assertions (unoptimized and sanitizer builds),
 // where every inlined copy keeps its own stack slots and the frames of
 // the callers would exceed the default 2 MiB thread stack.
 #[cfg_attr(debug_assertions, inline(never))]
 #[cfg_attr(not(debug_assertions), inline(always))]
-fn dct_adst_small<V: TxLanes, const N: usize>(kind: Tx1d, le4: bool, t: &mut [V; N], c: Clamp<V>) {
+fn dct_adst_small<V: TxLanes, const N: usize, const WRAP_ADST: bool>(
+    kind: Tx1d,
+    le4: bool,
+    t: &mut [V; N],
+    c: Clamp<V>,
+) {
     if N == 4 {
         let [i0, i1, i2, i3] = [t[0], t[1], t[2], t[3]];
         let o = if kind == Tx1d::Adst {
@@ -2352,7 +2386,7 @@ fn dct_adst_small<V: TxLanes, const N: usize>(kind: Tx1d, le4: bool, t: &mut [V;
                 c,
             )
         }
-        (true, true) => iadst8_tail(
+        (true, true) => iadst8_tail::<V, WRAP_ADST>(
             i0.m1(-4076),
             i0.m1(401),
             i2.m1(-3612),
@@ -2365,15 +2399,15 @@ fn dct_adst_small<V: TxLanes, const N: usize>(kind: Tx1d, le4: bool, t: &mut [V;
         ),
         (true, false) => {
             let [i4, i5, i6, i7] = [t[4], t[5], t[6], t[7]];
-            iadst8_tail(
-                i7.m2_wrap(401, i0, -4076),
-                i7.m2_wrap(4076, i0, 401),
-                i5.m2_wrap(1931, i2, -3612),
-                i5.m2_wrap(3612, i2, 1931),
-                i3.m2_wrap(3166, i4, -2598),
-                i3.m2_wrap(2598, i4, 3166),
-                i1.m2_wrap(3920, i6, -1189),
-                i1.m2_wrap(1189, i6, 3920),
+            iadst8_tail::<V, WRAP_ADST>(
+                m2_opt::<V, WRAP_ADST>(i7, 401, i0, -4076),
+                m2_opt::<V, WRAP_ADST>(i7, 4076, i0, 401),
+                m2_opt::<V, WRAP_ADST>(i5, 1931, i2, -3612),
+                m2_opt::<V, WRAP_ADST>(i5, 3612, i2, 1931),
+                m2_opt::<V, WRAP_ADST>(i3, 3166, i4, -2598),
+                m2_opt::<V, WRAP_ADST>(i3, 2598, i4, 3166),
+                m2_opt::<V, WRAP_ADST>(i1, 3920, i6, -1189),
+                m2_opt::<V, WRAP_ADST>(i1, 1189, i6, 3920),
                 c,
             )
         }
@@ -2410,7 +2444,7 @@ fn transform_add_8x8_sub4<T: Pixel, C: Coeff, const BD: u32>(
         let mut t = [S16::<4>::splat(0); 8];
         t[..4].copy_from_slice(&tile);
         if p.row_kind != Tx1d::Identity {
-            dct_adst_small(p.row_kind, true, &mut t, Clamp::bits(16));
+            dct_adst_small::<_, _, true>(p.row_kind, true, &mut t, Clamp::bits(16));
             for v in &mut t {
                 *v = v.rnd(1);
             }
@@ -2432,7 +2466,7 @@ fn transform_add_8x8_sub4<T: Pixel, C: Coeff, const BD: u32>(
             let mut t = [S16::<4>::splat(0); 8];
             t[..4].copy_from_slice(&tile);
             if p.row_kind != Tx1d::Identity {
-                dct_adst_small(p.row_kind, true, &mut t, Clamp::bits(16));
+                dct_adst_small::<_, _, true>(p.row_kind, true, &mut t, Clamp::bits(16));
                 for v in &mut t {
                     *v = v.rnd(1);
                 }
@@ -2456,7 +2490,7 @@ fn transform_add_8x8_sub4<T: Pixel, C: Coeff, const BD: u32>(
         add_rows16::<T, 8, 4, BD>(&mut dst[base..], stride, p, &r);
         return;
     }
-    dct_adst_small(p.col_kind, true, &mut c, Clamp::bits(16));
+    dct_adst_small::<_, _, false>(p.col_kind, true, &mut c, Clamp::bits(16));
     let r = amap(c, |v| v.rnd4_add());
     add_rows16::<T, 8, 8, BD>(dst, stride, p, &r);
 }
@@ -2474,7 +2508,7 @@ fn sub4_8x8_rows32<const BD: u32>(rows: [Simd<i32, 4>; 4], row_kind: Tx1d) -> [S
             *v = identity::<_, 8>(*v);
         }
     } else {
-        dct_adst_small(row_kind, true, &mut t, Clamp::bits(BD + 8));
+        dct_adst_small::<_, _, true>(row_kind, true, &mut t, Clamp::bits(BD + 8));
     }
     let col_clamp = Clamp::<Simd<i32, 4>>::bits(16);
     amap(t, |v| col_clamp.apply(v.rnd(1)).cast())
@@ -2607,13 +2641,13 @@ fn transform_add_4x4_fallback<T: Pixel, C: Coeff, const BD: u32>(
     let t16 = transpose_e(amap(rows, sat16));
     let t = if large::rows_fit_s16(t16) {
         let mut t = amap(t16, S16);
-        dct_adst_small(row_kind, true, &mut t, Clamp::bits(16));
+        dct_adst_small::<_, _, true>(row_kind, true, &mut t, Clamp::bits(16));
         amap(t, |v| v.0)
     } else {
         square_rows32::<BD, 4>(rows, row_kind)
     };
     let mut c = amap(transpose_e(t), S16);
-    dct_adst_small(col_kind, true, &mut c, Clamp::bits(16));
+    dct_adst_small::<_, _, false>(col_kind, true, &mut c, Clamp::bits(16));
     let r = amap(c, |v| v.rnd4_add());
     visit_rows::<T, 4, 4>(dst, stride, |y, d| add_row16::<T, 4, BD>(d, r[y]));
 }
@@ -2888,7 +2922,7 @@ fn transform_add_square<T: Pixel, C: Coeff, const BD: u32, const N: usize>(
         }
         return;
     }
-    dct_adst_small(p.col_kind, rows_le4, &mut c, Clamp::bits(16));
+    dct_adst_small::<_, _, false>(p.col_kind, rows_le4, &mut c, Clamp::bits(16));
     let r = amap(c, |v| v.rnd4_add());
     add_rows16::<T, N, N, BD>(dst, stride, p, &r);
 }
@@ -2907,7 +2941,7 @@ fn square_rows32<const BD: u32, const N: usize>(
     if row_kind == Tx1d::Identity {
         t = amap(t, identity::<_, N>);
     } else {
-        dct_adst_small(row_kind, cols_le4, &mut t, Clamp::bits(BD + 8));
+        dct_adst_small::<_, _, true>(row_kind, cols_le4, &mut t, Clamp::bits(BD + 8));
     }
     let col_clamp = Clamp::<Simd<i32, N>>::bits(16);
     amap(t, |v| col_clamp.apply(v.rnd(rshift)).cast())
@@ -2932,7 +2966,7 @@ fn square_rows16<const N: usize>(t16: [Simd<i16, N>; N], p: &Params) -> [Simd<i1
             t = amap(t, |v| v.m1(5793));
         }
     } else {
-        dct_adst_small(p.row_kind, cols_le4, &mut t, Clamp::bits(16));
+        dct_adst_small::<_, _, true>(p.row_kind, cols_le4, &mut t, Clamp::bits(16));
         if N == 8 {
             for v in &mut t {
                 *v = v.rnd(1);
@@ -3008,7 +3042,7 @@ fn transform_add_rect<T: Pixel, C: Coeff, const BD: u32, const W: usize, const H
         }
         return;
     }
-    dct_adst_small(p.col_kind, rows_le4, &mut c, Clamp::bits(16));
+    dct_adst_small::<_, _, false>(p.col_kind, rows_le4, &mut c, Clamp::bits(16));
     let r = amap(c, |v| v.rnd4_add());
     add_rows16::<T, W, H, BD>(dst, stride, p, &r);
 }
@@ -3034,7 +3068,7 @@ fn rect_rows16<const W: usize, const H: usize>(
         // rowShift = 0, so the clamp to 16 bits is the saturation.
         t = if W == 8 { amap(t, |v| v + v) } else { amap(t, |v| v.m1(5793)) };
     } else {
-        dct_adst_small(p.row_kind, cols_le4, &mut t, Clamp::bits(16));
+        dct_adst_small::<_, _, true>(p.row_kind, cols_le4, &mut t, Clamp::bits(16));
     }
     amap(t, |v| v.0)
 }
@@ -3061,7 +3095,7 @@ fn rect_rows32<const BD: u32, const W: usize, const H: usize>(
     if row_kind == Tx1d::Identity {
         t = amap(t, identity::<_, W>);
     } else {
-        dct_adst_small(row_kind, cols_le4, &mut t, Clamp::bits(BD + 8));
+        dct_adst_small::<_, _, true>(row_kind, cols_le4, &mut t, Clamp::bits(BD + 8));
     }
     let col_clamp = Clamp::<Simd<i32, H>>::bits(16);
     amap(t, |v| col_clamp.apply(v).cast())
@@ -4478,6 +4512,100 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// 10-bit 8-point ADST column passes with large (out-of-spec-range)
+    /// row-pass outputs must saturate rather than wrap modulo 2^16.
+    #[test]
+    fn adst8_col_pass_saturates_10bit() {
+        let coeffs: [i32; 64] = [
+            -280, 2054, 6320, 474, 158, -474, -316, 0, 632, -316, 1106, 1738, 2370, 474, -158, 0,
+            -632, 158, 474, -316, 72364, -948, -316, 0, 158, 474, 0, 1106, -948, 632, 474, 158, 0,
+            -158, 0, 0, -158, -158, -158, 158, 0, -316, 0, 158, 0, 316, -158, 0, 0, 474, 0, 0, 0,
+            158, 316, 0, 158, 158, 0, -158, 0, 0, 158, 0,
+        ];
+        let pred: [u16; 64] = [
+            156, 149, 142, 143, 143, 142, 141, 140, 156, 152, 147, 146, 145, 144, 143, 142, 152,
+            150, 147, 147, 146, 145, 144, 143, 147, 147, 146, 146, 146, 145, 145, 144, 138, 141,
+            141, 143, 144, 144, 144, 144, 136, 138, 139, 140, 141, 142, 143, 143, 138, 139, 139,
+            140, 141, 141, 142, 142, 146, 144, 143, 143, 143, 143, 143, 143,
+        ];
+        for (tx_size, w, h, eob) in [
+            (TxSize::Tx8x8, 8, 8, 63),
+            (TxSize::Tx16x8, 16, 8, 256),
+            (TxSize::Tx4x8, 4, 8, 32),
+        ] {
+            let mut src = vec![0i32; w * h];
+            for r in 0..8 {
+                for c in 0..w.min(8) {
+                    src[r * w + c] = coeffs[r * 8 + c];
+                }
+            }
+            let frame: Vec<u16> = (0..w * h)
+                .map(|i| pred[(i / w) * 8 + (i % w).min(7)])
+                .collect();
+            let mut want = frame.clone();
+            let mut c_want = src.clone();
+            portable::inv_txfm_add(
+                &mut want,
+                w,
+                &mut c_want,
+                tx_size,
+                TxType::ADST_ADST,
+                false,
+                eob,
+                10,
+            );
+            let mut got = frame;
+            let mut c_got = src;
+            inv_txfm_add_bd::<u16, 10>(
+                &mut got,
+                w,
+                &mut c_got,
+                tx_size,
+                TxType::ADST_ADST,
+                false,
+                eob,
+                10,
+            );
+            assert_eq!(got, want, "mismatch for {tx_size:?}");
+            assert!(c_got.iter().all(|&c| c == 0));
+        }
+
+        // Also drive |v21 ± v25| > 32767 in `iadst8_tail`'s final butterfly
+        // (`v28..v31`) so both stage 1/3 and stage 4 saturation are exercised.
+        let mut coeffs_tail = [0i32; 64];
+        for r in [0, 2, 4, 6] {
+            let s = if r == 0 || r == 4 { 60000 } else { -60000 };
+            coeffs_tail[r * 8] = s;
+            coeffs_tail[r * 8 + 2] = -s;
+        }
+        let mut want = pred.to_vec();
+        let mut c_want = coeffs_tail.to_vec();
+        portable::inv_txfm_add(
+            &mut want,
+            8,
+            &mut c_want,
+            TxSize::Tx8x8,
+            TxType::ADST_ADST,
+            false,
+            64,
+            10,
+        );
+        let mut got = pred.to_vec();
+        let mut c_got = coeffs_tail.to_vec();
+        inv_txfm_add_bd::<u16, 10>(
+            &mut got,
+            8,
+            &mut c_got,
+            TxSize::Tx8x8,
+            TxType::ADST_ADST,
+            false,
+            64,
+            10,
+        );
+        assert_eq!(got, want, "mismatch for v28..v31 overflow case");
+        assert!(c_got.iter().all(|&c| c == 0));
     }
 
     /// Rough timing (`cargo test --release --lib

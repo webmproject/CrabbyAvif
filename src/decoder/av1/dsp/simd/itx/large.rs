@@ -407,14 +407,14 @@ fn sub4_tail<U: RowLanes<4>, const W: usize, const H: usize, const CN: usize, co
         *d = s;
     }
     if W == 4 {
-        run_small::<U, 4>(
+        run_small::<U, 4, true>(
             row_kind,
             nz.min(4),
             t.first_chunk_mut::<4>().unwrap(),
             row_clamp,
         );
     } else if W == 8 {
-        run_small::<U, 8>(
+        run_small::<U, 8, true>(
             row_kind,
             nz.min(4),
             t.first_chunk_mut::<8>().unwrap(),
@@ -1049,7 +1049,12 @@ fn row_pass_identity16<
 // the callers would exceed the default 2 MiB thread stack.
 #[cfg_attr(debug_assertions, inline(never))]
 #[cfg_attr(not(debug_assertions), inline(always))]
-fn run_small<V: TxLanes, const N: usize>(kind: Tx1d, nz: usize, t: &mut [V; N], clamp: Clamp<V>) {
+fn run_small<V: TxLanes, const N: usize, const WRAP_ADST: bool>(
+    kind: Tx1d,
+    nz: usize,
+    t: &mut [V; N],
+    clamp: Clamp<V>,
+) {
     use kernels::*;
     debug_assert!(N == 4 || N == 8);
     if N == 4 {
@@ -1062,7 +1067,7 @@ fn run_small<V: TxLanes, const N: usize>(kind: Tx1d, nz: usize, t: &mut [V; N], 
         } else if nz <= 2 {
             idct4_nz2(t, clamp, &COS_TABLE);
         } else {
-            dct_adst_small(Tx1d::Dct, true, t, clamp);
+            dct_adst_small::<V, N, WRAP_ADST>(Tx1d::Dct, true, t, clamp);
         }
         return;
     }
@@ -1070,14 +1075,14 @@ fn run_small<V: TxLanes, const N: usize>(kind: Tx1d, nz: usize, t: &mut [V; N], 
         match nz {
             0 | 1 => iadst8_nz1(t, clamp, &COS_TABLE),
             2 => iadst8_nz2(t, clamp, &COS_TABLE),
-            3 | 4 => dct_adst_small(Tx1d::Adst, true, t, clamp),
-            _ => dct_adst_small(Tx1d::Adst, false, t, clamp),
+            3 | 4 => dct_adst_small::<V, N, WRAP_ADST>(Tx1d::Adst, true, t, clamp),
+            _ => dct_adst_small::<V, N, WRAP_ADST>(Tx1d::Adst, false, t, clamp),
         }
     } else {
         match nz {
             0..=2 => idct8_nz2(t, clamp, &COS_TABLE),
-            3 | 4 => dct_adst_small(Tx1d::Dct, true, t, clamp),
-            _ => dct_adst_small(Tx1d::Dct, false, t, clamp),
+            3 | 4 => dct_adst_small::<V, N, WRAP_ADST>(Tx1d::Dct, true, t, clamp),
+            _ => dct_adst_small::<V, N, WRAP_ADST>(Tx1d::Dct, false, t, clamp),
         }
     }
 }
@@ -1093,9 +1098,9 @@ fn run_col<V: TxLanes, const H: usize>(
     clamp: Clamp<V>,
 ) {
     if H == 4 {
-        run_small::<V, 4>(kind, nz, c.first_chunk_mut::<4>().unwrap(), clamp);
+        run_small::<V, 4, false>(kind, nz, c.first_chunk_mut::<4>().unwrap(), clamp);
     } else if H == 8 {
-        run_small::<V, 8>(kind, nz, c.first_chunk_mut::<8>().unwrap(), clamp);
+        run_small::<V, 8, false>(kind, nz, c.first_chunk_mut::<8>().unwrap(), clamp);
     } else {
         kernel(c, clamp, &COS_TABLE);
     }
