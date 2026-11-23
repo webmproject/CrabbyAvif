@@ -17,6 +17,7 @@
 
 #[cfg(test)]
 mod crabbyavif_test;
+mod gainmap;
 
 use clap::value_parser;
 use clap::Parser;
