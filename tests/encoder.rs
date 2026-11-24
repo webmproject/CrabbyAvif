@@ -628,6 +628,128 @@ fn single_image_after_sequence_frame() -> AvifResult<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum FirstImageFailure {
+    InvalidImage,
+    InvalidGainMap,
+    BitDepthExtensionWithGainMap,
+    InvalidExif,
+}
+
+#[test_case(FirstImageFailure::InvalidImage)]
+#[test_case(FirstImageFailure::InvalidGainMap)]
+#[test_case(FirstImageFailure::BitDepthExtensionWithGainMap)]
+#[test_case(FirstImageFailure::InvalidExif)]
+fn add_image_after_validation_failure(failure: FirstImageFailure) -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let settings = encoder::Settings {
+        speed: Some(10),
+        recipe: match failure {
+            FirstImageFailure::BitDepthExtensionWithGainMap => Recipe::Auto,
+            _ => Recipe::None,
+        },
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    let depth = match failure {
+        FirstImageFailure::BitDepthExtensionWithGainMap => 16,
+        _ => 8,
+    };
+    let mut image =
+        generate_gradient_image(64, 64, depth, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    match failure {
+        FirstImageFailure::InvalidImage => {
+            // Identity matrix coefficients require Yuv444.
+            image.matrix_coefficients = MatrixCoefficients::Identity;
+            assert_eq!(encoder.add_image(&image), Err(AvifError::InvalidArgument));
+        }
+        FirstImageFailure::InvalidGainMap => {
+            let mut bad_gainmap = GainMap {
+                image: generate_gradient_image(
+                    32,
+                    32,
+                    8,
+                    PixelFormat::Yuv420,
+                    YuvRange::Full,
+                    false,
+                )?,
+                metadata: gainmap_metadata(false),
+                ..Default::default()
+            };
+            // Gain map CICP must be Unspecified.
+            bad_gainmap.image.color_primaries = ColorPrimaries::Bt709;
+            assert_eq!(
+                encoder.add_image_gainmap(&image, &bad_gainmap),
+                Err(AvifError::InvalidArgument)
+            );
+        }
+        FirstImageFailure::BitDepthExtensionWithGainMap => {
+            let gainmap = GainMap {
+                image: generate_gradient_image(
+                    32,
+                    32,
+                    8,
+                    PixelFormat::Yuv420,
+                    YuvRange::Full,
+                    false,
+                )?,
+                metadata: gainmap_metadata(false),
+                ..Default::default()
+            };
+            assert_eq!(
+                encoder.add_image_gainmap(&image, &gainmap),
+                Err(AvifError::NotImplemented)
+            );
+        }
+        FirstImageFailure::InvalidExif => {
+            image.exif = vec![1, 2, 3];
+            assert_eq!(
+                encoder.add_image(&image),
+                Err(AvifError::InvalidExifPayload)
+            );
+        }
+    }
+    // Retrying with a valid image on the same encoder must succeed without panicking or observing
+    // stale state from the rejected first call.
+    let retry_image =
+        generate_gradient_image(64, 64, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    encoder.add_image(&retry_image)?;
+    let edata = encoder.finish()?;
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.parse()?;
+    assert_eq!(decoder.image_count(), 1);
+    assert!(!decoder.gainmap_present());
+    let decoded = decoder.image().expect("image was none");
+    assert_eq!(decoded.yuv_format, PixelFormat::Yuv444);
+    assert!(decoded.exif.is_empty());
+    Ok(())
+}
+
+#[test_matrix([false, true])]
+fn add_image_after_no_codec_available(use_grid: bool) -> AvifResult<()> {
+    let image = generate_gradient_image(64, 64, 8, PixelFormat::Yuv420, YuvRange::Full, false)?;
+    let settings = encoder::Settings {
+        codec_choice: CodecChoice::Dav1d,
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    let add = |encoder: &mut encoder::Encoder| {
+        if use_grid {
+            encoder.add_image_grid(2, 1, &[&image, &image])
+        } else {
+            encoder.add_image(&image)
+        }
+    };
+    assert_eq!(add(&mut encoder), Err(AvifError::NoCodecAvailable));
+    // Retrying must also return NoCodecAvailable instead of panicking or returning
+    // EncodeColorFailed from partial state left behind by the first call.
+    assert_eq!(add(&mut encoder), Err(AvifError::NoCodecAvailable));
+    Ok(())
+}
+
 #[test_matrix([0, 1, 65535], [0, 1, 65535])]
 fn clli(max_cll: u16, max_pall: u16) -> AvifResult<()> {
     if !HAS_ENCODER || !HAS_DECODER {

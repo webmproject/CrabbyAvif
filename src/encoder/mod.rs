@@ -592,6 +592,137 @@ impl Encoder {
         Ok(())
     }
 
+    fn reset_first_image_state(&mut self) {
+        let settings = self.settings;
+        let codec_specific_options = std::mem::take(&mut self.codec_specific_options);
+        *self = Self {
+            settings,
+            codec_specific_options,
+            ..Default::default()
+        };
+    }
+
+    fn initialize_first_image(
+        &mut self,
+        grid: Grid,
+        cell_images: &[&Image],
+        is_single_image: bool,
+        gainmaps: Option<&[&GainMap]>,
+        final_recipe: Recipe,
+    ) -> AvifResult<()> {
+        let first_image = *cell_images.first().ok_or(AvifError::InvalidArgument)?;
+        Self::validate_image_grid(&grid, cell_images, final_recipe)?;
+        let gainmap_info = if let Some(gainmaps) = gainmaps {
+            if gainmaps.len() != cell_images.len() {
+                return AvifError::invalid_image_grid("invalid number of gainmap images");
+            }
+            let first_gainmap = *gainmaps.first().ok_or(AvifError::InvalidArgument)?;
+            let first_gainmap_image = &first_gainmap.image;
+            let last_gainmap_image = &gainmaps.last().ok_or(AvifError::InvalidArgument)?.image;
+            let gainmap_grid = Grid {
+                rows: grid.rows,
+                columns: grid.columns,
+                width: checked_add!(
+                    checked_mul!(grid.columns - 1, first_gainmap_image.width)?,
+                    last_gainmap_image.width
+                )?,
+                height: checked_add!(
+                    checked_mul!(grid.rows - 1, first_gainmap_image.height)?,
+                    last_gainmap_image.height
+                )?,
+            };
+            Self::validate_gainmap_grid(&gainmap_grid, gainmaps)?;
+            Some((first_gainmap, gainmap_grid))
+        } else {
+            None
+        };
+        self.grid = Some(grid);
+        self.single_image = is_single_image;
+        self.image_metadata = first_image.shallow_clone();
+        self.image_metadata.exif = first_image.exif.try_clone()?;
+        self.image_metadata.xmp = first_image.xmp.try_clone()?;
+        self.image_metadata.icc = first_image.icc.try_clone()?;
+        if let Some((first_gainmap, _)) = gainmap_info {
+            self.gainmap_image_metadata = first_gainmap.image.shallow_clone();
+            self.copy_alt_image_metadata(first_gainmap, &grid)?;
+        }
+        let color_item_id = self.add_items(&grid, Category::Color, /*hidden=*/ false)?;
+        self.final_recipe = Some(final_recipe);
+        self.primary_item_id = color_item_id;
+        self.alpha_present = first_image.has_alpha()
+            && if is_single_image {
+                // When encoding a single image in which the alpha plane exists but is entirely
+                // opaque, skip writing an alpha payload. This does not apply to image
+                // sequences since subsequent frames may have a non-opaque alpha channel.
+                let mut all_opaque = true;
+                for image in cell_images {
+                    if !image.is_opaque()? {
+                        all_opaque = false;
+                        break;
+                    }
+                }
+                !all_opaque
+            } else {
+                true
+            };
+        self.image_metadata.alpha_present = self.alpha_present;
+
+        if self.alpha_present && !self.settings.codec_supports_native_alpha_channel() {
+            let alpha_item_id = self.add_items(&grid, Category::Alpha, /*hidden=*/ false)?;
+            let alpha_item = &mut self.items[alpha_item_id as usize - 1];
+            alpha_item.iref_type = Some(String::from("auxl"));
+            alpha_item.iref_to_id = Some(color_item_id);
+            if self.image_metadata.alpha_premultiplied {
+                let color_item = &mut self.items[color_item_id as usize - 1];
+                color_item.iref_type = Some(String::from("prem"));
+                color_item.iref_to_id = Some(alpha_item_id);
+            }
+        }
+        if let Some((first_gainmap, gainmap_grid)) = gainmap_info {
+            let tonemap_item_id = self.add_tmap_item(first_gainmap)?;
+            if !self.alternative_item_ids.is_empty() {
+                return AvifError::unknown_error("");
+            }
+            self.alternative_item_ids.try_push(tonemap_item_id)?;
+            self.alternative_item_ids.try_push(color_item_id)?;
+            let gainmap_item_id =
+                self.add_items(&gainmap_grid, Category::Gainmap, /*hidden=*/ true)?;
+            for item_id in [color_item_id, gainmap_item_id] {
+                self.items[item_id as usize - 1].dimg_from_id = Some(tonemap_item_id);
+            }
+        }
+
+        match final_recipe {
+            Recipe::Auto => unreachable!(),
+            Recipe::None => {}
+            Recipe::BitDepthExtension8b8b
+            | Recipe::BitDepthExtension12b4b
+            | Recipe::BitDepthExtension12b8bOverlap4b => {
+                if first_image.depth != 16 {
+                    return AvifError::invalid_argument();
+                }
+                if gainmaps.is_some() {
+                    return AvifError::not_implemented();
+                }
+                self.create_bit_depth_extension_items(&grid)?;
+            }
+            #[cfg(feature = "satofloat")]
+            Recipe::Float32b => {
+                if first_image.depth != 8 {
+                    return AvifError::invalid_argument();
+                }
+                if gainmaps.is_some() {
+                    return AvifError::not_implemented();
+                }
+                self.create_float_32b_items(&grid)?;
+            }
+        }
+
+        self.add_exif_item()?;
+        self.add_xmp_item()?;
+        Ok(())
+    }
+
     fn add_image_impl(
         &mut self,
         grid_columns: u32,
@@ -645,7 +776,6 @@ impl Encoder {
         }
         if self.items.is_empty() {
             assert!(self.final_recipe.is_none());
-            self.final_recipe = Some(final_recipe);
             let last_image = cell_images.last().ok_or(AvifError::InvalidArgument)?;
             let grid = Grid {
                 rows: grid_rows,
@@ -659,111 +789,16 @@ impl Encoder {
                     last_image.height
                 )?,
             };
-            Self::validate_image_grid(&grid, cell_images, final_recipe)?;
-            self.grid = Some(grid);
-            self.single_image = is_single_image;
-            self.image_metadata = first_image.shallow_clone();
-            self.image_metadata.exif = first_image.exif.try_clone()?;
-            self.image_metadata.xmp = first_image.xmp.try_clone()?;
-            self.image_metadata.icc = first_image.icc.try_clone()?;
-            if let Some(gainmaps) = gainmaps {
-                if gainmaps.len() != cell_images.len() {
-                    return AvifError::invalid_image_grid("invalid number of gainmap images");
-                }
-                let first_gainmap = *gainmaps.first().ok_or(AvifError::InvalidArgument)?;
-                self.gainmap_image_metadata = first_gainmap.image.shallow_clone();
-                self.copy_alt_image_metadata(first_gainmap, &grid)?;
+            if let Err(err) = self.initialize_first_image(
+                grid,
+                cell_images,
+                is_single_image,
+                gainmaps,
+                final_recipe,
+            ) {
+                self.reset_first_image_state();
+                return Err(err);
             }
-            let color_item_id = self.add_items(&grid, Category::Color, /*hidden=*/ false)?;
-            self.primary_item_id = color_item_id;
-            self.alpha_present = first_image.has_alpha()
-                && if is_single_image {
-                    // When encoding a single image in which the alpha plane exists but is entirely
-                    // opaque, skip writing an alpha payload. This does not apply to image
-                    // sequences since subsequent frames may have a non-opaque alpha channel.
-                    let mut all_opaque = true;
-                    for image in cell_images {
-                        if !image.is_opaque()? {
-                            all_opaque = false;
-                            break;
-                        }
-                    }
-                    !all_opaque
-                } else {
-                    true
-                };
-            self.image_metadata.alpha_present = self.alpha_present;
-
-            if self.alpha_present && !self.settings.codec_supports_native_alpha_channel() {
-                let alpha_item_id =
-                    self.add_items(&grid, Category::Alpha, /*hidden=*/ false)?;
-                let alpha_item = &mut self.items[alpha_item_id as usize - 1];
-                alpha_item.iref_type = Some(String::from("auxl"));
-                alpha_item.iref_to_id = Some(color_item_id);
-                if self.image_metadata.alpha_premultiplied {
-                    let color_item = &mut self.items[color_item_id as usize - 1];
-                    color_item.iref_type = Some(String::from("prem"));
-                    color_item.iref_to_id = Some(alpha_item_id);
-                }
-            }
-            if let Some(gainmaps) = gainmaps {
-                let first_gainmap = *gainmaps.first().ok_or(AvifError::InvalidArgument)?;
-                let first_gainmap_image = &first_gainmap.image;
-                let last_gainmap_image = &gainmaps.last().ok_or(AvifError::InvalidArgument)?.image;
-                let gainmap_grid = Grid {
-                    rows: grid_rows,
-                    columns: grid_columns,
-                    width: checked_add!(
-                        checked_mul!(grid_columns - 1, first_gainmap_image.width)?,
-                        last_gainmap_image.width
-                    )?,
-                    height: checked_add!(
-                        checked_mul!(grid_rows - 1, first_gainmap_image.height)?,
-                        last_gainmap_image.height
-                    )?,
-                };
-                Self::validate_gainmap_grid(&gainmap_grid, gainmaps)?;
-                let tonemap_item_id = self.add_tmap_item(first_gainmap)?;
-                if !self.alternative_item_ids.is_empty() {
-                    return AvifError::unknown_error("");
-                }
-                self.alternative_item_ids.try_push(tonemap_item_id)?;
-                self.alternative_item_ids.try_push(color_item_id)?;
-                let gainmap_item_id =
-                    self.add_items(&gainmap_grid, Category::Gainmap, /*hidden=*/ true)?;
-                for item_id in [color_item_id, gainmap_item_id] {
-                    self.items[item_id as usize - 1].dimg_from_id = Some(tonemap_item_id);
-                }
-            }
-
-            match final_recipe {
-                Recipe::Auto => unreachable!(),
-                Recipe::None => {}
-                Recipe::BitDepthExtension8b8b
-                | Recipe::BitDepthExtension12b4b
-                | Recipe::BitDepthExtension12b8bOverlap4b => {
-                    if first_image.depth != 16 {
-                        return AvifError::invalid_argument();
-                    }
-                    if gainmaps.is_some() {
-                        return AvifError::not_implemented();
-                    }
-                    self.create_bit_depth_extension_items(&grid)?;
-                }
-                #[cfg(feature = "satofloat")]
-                Recipe::Float32b => {
-                    if first_image.depth != 8 {
-                        return AvifError::invalid_argument();
-                    }
-                    if gainmaps.is_some() {
-                        return AvifError::not_implemented();
-                    }
-                    self.create_float_32b_items(&grid)?;
-                }
-            }
-
-            self.add_exif_item()?;
-            self.add_xmp_item()?;
         } else {
             if gainmaps.is_some() {
                 return AvifError::not_implemented();
