@@ -2560,4 +2560,305 @@ mod decode_tests {
         .is_err());
         Ok(())
     }
+
+    #[cfg(all(feature = "aom", feature = "jpeg", feature = "png", feature = "libyuv"))]
+    #[test]
+    fn combine_and_tonemap_cli() -> AvifResult<()> {
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+        let sdr_input = get_test_file("seine_sdr_gainmap_srgb.avif");
+        let hdr_input = get_test_file("seine_hdr_srgb.avif");
+        let jpg_icc_input = get_test_file("seine_sdr_gainmap_srgb.jpg");
+
+        // Combine SDR AVIF + HDR AVIF with --downscaling 2, --yuv-gain-map 400, --grid 2x2.
+        let combined = temp_dir.path().join("combined.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--combine",
+                "--speed",
+                "10",
+                "-q",
+                "80",
+                "--quality-gainmap",
+                "70",
+                "--downscaling",
+                "2",
+                "--yuv-gain-map",
+                "400",
+                "--depth-gain-map",
+                "10",
+                "--grid",
+                "2x2",
+                sdr_input.as_str(),
+                hdr_input.as_str(),
+                combined.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.settings.image_content_to_decode = decoder::ImageContentType::All;
+        decoder.set_io_file(&combined.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        decoder.next_image()?;
+        let parsed = decoder.image().unwrap();
+        assert_eq!((parsed.width, parsed.height), (400, 300));
+        assert!(decoder.gainmap_present());
+        let gm = decoder.gainmap();
+        assert_eq!((gm.image.width, gm.image.height), (200, 150));
+        assert_eq!(gm.image.depth, 10);
+        assert_eq!(gm.image.yuv_format, PixelFormat::Yuv400);
+
+        // Tonemap the combined image to HDR PNG.
+        let tonemapped_hdr = temp_dir.path().join("combined_hdr.png");
+        main_impl(
+            [
+                "crabbyavif",
+                "--tonemap",
+                "--headroom",
+                "2.0",
+                combined.to_str().unwrap(),
+                tonemapped_hdr.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        assert!(tonemapped_hdr.exists());
+
+        // JPEG with ICC fails without --ignore-icc and succeeds with --ignore-icc + --alt-cicp.
+        let combined_jpg = temp_dir.path().join("combined_jpg.avif");
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--combine",
+                "--speed",
+                "10",
+                jpg_icc_input.as_str(),
+                hdr_input.as_str(),
+                combined_jpg.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+
+        main_impl(
+            [
+                "crabbyavif",
+                "--combine",
+                "--speed",
+                "10",
+                "--ignore-icc",
+                "--ignore-alpha",
+                "--max-headroom",
+                "0.5",
+                "--cicp",
+                "1/13/6",
+                "--alt-cicp",
+                "9/16/9",
+                jpg_icc_input.as_str(),
+                hdr_input.as_str(),
+                combined_jpg.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.settings.image_content_to_decode = decoder::ImageContentType::All;
+        decoder.set_io_file(&combined_jpg.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        assert!(decoder.gainmap_present());
+        assert_eq!(
+            decoder.gainmap().alt_color_primaries,
+            ColorPrimaries::Bt2020
+        );
+        assert_eq!(
+            decoder.gainmap().metadata.alternate_hdr_headroom,
+            crabby_avif::utils::UFraction(1, 2)
+        );
+
+        // --yuv 400 -d 8 on base leaves 10bpc 3-plane alt_file intact (does not downgrade alt).
+        let base_gray_combined = temp_dir.path().join("base_gray_combined.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--combine",
+                "--speed",
+                "10",
+                "--yuv",
+                "400",
+                "-d",
+                "8",
+                "--ignore-icc",
+                "--cicp",
+                "1/13/6",
+                jpg_icc_input.as_str(),
+                hdr_input.as_str(),
+                base_gray_combined.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut dec_gray = decoder::Decoder::default();
+        dec_gray.settings.image_content_to_decode = decoder::ImageContentType::All;
+        dec_gray.set_io_file(&base_gray_combined.to_string_lossy().into_owned())?;
+        dec_gray.parse()?;
+        assert_eq!(dec_gray.gainmap().alt_plane_count, 3);
+        assert!(dec_gray.gainmap().alt_plane_depth > 8);
+
+        // JPEG + --cicp 1/13/0 and JPEG alt + --alt-cicp 1/13/0 succeed cleanly.
+        let id_combined = temp_dir.path().join("identity_combined.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--combine",
+                "--speed",
+                "10",
+                "--ignore-icc",
+                "--cicp",
+                "1/13/0",
+                "--alt-cicp",
+                "1/13/0",
+                jpg_icc_input.as_str(),
+                jpg_icc_input.as_str(),
+                id_combined.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        assert!(id_combined.exists());
+        let mut dec_id = decoder::Decoder::default();
+        dec_id.settings.image_content_to_decode = decoder::ImageContentType::All;
+        dec_id.set_io_file(&id_combined.to_string_lossy().into_owned())?;
+        dec_id.parse()?;
+        dec_id.next_image()?;
+        assert_eq!(
+            dec_id.image().unwrap().matrix_coefficients,
+            MatrixCoefficients::Identity
+        );
+        assert_eq!(
+            dec_id.gainmap().alt_matrix_coefficients,
+            MatrixCoefficients::Identity
+        );
+
+        // Negative validation tests: NaN --max-headroom, --progressive, --target-size,
+        // --icc, --crop, --clap, and mismatched/downscaled preexisting clap.
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--combine",
+                "--max-headroom",
+                "nan",
+                sdr_input.as_str(),
+                hdr_input.as_str(),
+                combined_jpg.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--combine",
+                "--progressive",
+                sdr_input.as_str(),
+                hdr_input.as_str(),
+                combined_jpg.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--combine",
+                "--target-size",
+                "100,100",
+                sdr_input.as_str(),
+                hdr_input.as_str(),
+                combined_jpg.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        let dummy_icc = temp_dir.path().join("dummy.icc");
+        std::fs::write(&dummy_icc, b"icc")
+            .map_err(|_| AvifError::UnknownError("Failed to write dummy icc".into()))?;
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--combine",
+                "--icc",
+                dummy_icc.to_str().unwrap(),
+                sdr_input.as_str(),
+                hdr_input.as_str(),
+                combined_jpg.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--combine",
+                "--crop",
+                "0,0,100,100",
+                sdr_input.as_str(),
+                hdr_input.as_str(),
+                combined_jpg.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--combine",
+                "--clap",
+                "100,1,100,1,0,1,0,1",
+                sdr_input.as_str(),
+                hdr_input.as_str(),
+                combined_jpg.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        let clap_avif = temp_dir.path().join("clap.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--speed",
+                "10",
+                "--clap",
+                "200,1,200,1,0,1,0,1",
+                sdr_input.as_str(),
+                clap_avif.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--combine",
+                "--speed",
+                "10",
+                clap_avif.to_str().unwrap(),
+                hdr_input.as_str(),
+                combined_jpg.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--combine",
+                "--speed",
+                "10",
+                "--downscaling",
+                "2",
+                clap_avif.to_str().unwrap(),
+                clap_avif.to_str().unwrap(),
+                combined_jpg.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        Ok(())
+    }
 }

@@ -63,6 +63,15 @@ fn depth_parser(s: &str) -> Result<u8, String> {
     }
 }
 
+fn gainmap_depth_parser(s: &str) -> Result<u8, String> {
+    match s.parse::<u8>() {
+        Ok(8) => Ok(8),
+        Ok(10) => Ok(10),
+        Ok(12) => Ok(12),
+        _ => Err("Value must be one of 8, 10 or 12".into()),
+    }
+}
+
 fn repetition_count_parser(s: &str) -> Result<RepetitionCount, String> {
     if s == "infinite" {
         Ok(RepetitionCount::Infinite)
@@ -425,13 +434,41 @@ struct CommandLineArgs {
     #[arg(long, value_parser = cicp_parser)]
     cicp_output: Option<Nclx>,
 
-    /// Input AVIF file
+    /// Combine two input images (base and alternate) into an AVIF with a gain map
+    #[arg(long, default_value = "false")]
+    combine: bool,
+
+    /// Downscaling factor for the gain map when using --combine
+    #[arg(long, value_parser = value_parser!(u32).range(1..), default_value = "1")]
+    downscaling: u32,
+
+    /// Output depth (8, 10, or 12) for the gain map when using --combine
+    #[arg(long, value_parser = gainmap_depth_parser, default_value = "8")]
+    depth_gain_map: u8,
+
+    /// Output format (444, 422, 420, or 400) for the gain map when using --combine
+    #[arg(long, value_parser = yuv_format_parser, default_value = "444")]
+    yuv_gain_map: PixelFormat,
+
+    /// Maximum value for HDR headrooms when using --combine (0 for no maximum)
+    #[arg(long, value_parser = value_parser!(f32), default_value = "4.0")]
+    max_headroom: f32,
+
+    /// CICP values (P/T/M) for the alternate image when using --combine
+    #[arg(long, value_parser = cicp_parser)]
+    alt_cicp: Option<Nclx>,
+
+    /// Input AVIF file (or base image when using --combine)
     #[arg(allow_hyphen_values = false)]
     input_file: Option<String>,
 
-    /// Output file
+    /// Output file (or alternate image when using --combine)
     #[arg(allow_hyphen_values = false)]
     output_file: Option<String>,
+
+    /// Output AVIF file when using --combine
+    #[arg(allow_hyphen_values = false)]
+    third_file: Option<String>,
 }
 
 fn print_data_as_columns(rows: &[(usize, &str, String)]) {
@@ -734,9 +771,9 @@ fn create_decoder_and_parse(
         strictness: if args.no_strict { Strictness::None } else { Strictness::All },
         image_content_to_decode: if args.extract_gainmap {
             ImageContentType::GainMap
-        } else if args.crop.is_some() || args.target_size.is_some() {
-            // Region and scaled decodes cannot decode both the color image and the gain map. The
-            // gain map is only written with --extract-gainmap anyway.
+        } else if args.combine || args.crop.is_some() || args.target_size.is_some() {
+            // Combine, region, and scaled decodes only need the main image (and alpha unless
+            // ignored), not any preexisting gain map.
             if args.ignore_alpha {
                 ImageContentType::Color
             } else {
@@ -1281,6 +1318,192 @@ fn clear_alpha(image: &mut image::Image) {
 }
 
 #[cfg(feature = "encoder")]
+fn apply_geometry_and_metadata_overrides(
+    args: &CommandLineArgs,
+    image: &mut image::Image,
+) -> AvifResult<()> {
+    if args.irot_angle.is_some() {
+        image.irot_angle = args.irot_angle;
+    }
+    if args.imir_axis.is_some() {
+        image.imir_axis = args.imir_axis;
+    }
+    if let Some(clap) = args.clap {
+        image.clap = Some(clap);
+    }
+    if let Some(crop) = args.crop {
+        image.clap = Some(CleanAperture::create_from(
+            &crop,
+            image.width,
+            image.height,
+            image.yuv_format,
+        )?);
+    }
+    if args.pasp.is_some() {
+        image.pasp = args.pasp;
+    }
+    if let Some(icc_path) = &args.icc {
+        image.icc = read_file(icc_path)
+            .map_err(|e| AvifError::UnknownError(format!("Failed to read icc file: {e}")))?;
+    }
+    if let Some(exif_path) = &args.exif {
+        image.exif = read_file(exif_path)
+            .map_err(|e| AvifError::UnknownError(format!("Failed to read exif file: {e}")))?;
+    }
+    if let Some(xmp_path) = &args.xmp {
+        image.xmp = read_file(xmp_path)
+            .map_err(|e| AvifError::UnknownError(format!("Failed to read xmp file: {e}")))?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "encoder")]
+fn combine(
+    args: &CommandLineArgs,
+    base_file: &str,
+    alt_file: &str,
+    output_file: &str,
+) -> AvifResult<()> {
+    let (mut base_image, _) = read_image_with_optional_gainmap(
+        args,
+        base_file,
+        if can_decode(base_file) { None } else { args.cicp.as_ref() },
+    )?;
+    let (mut alt_image, _) = read_image_with_optional_gainmap(
+        args,
+        alt_file,
+        if can_decode(alt_file) { None } else { args.alt_cicp.as_ref() },
+    )?;
+
+    if let Some(converted) = convert_image_format_and_depth(
+        &base_image,
+        args.yuv_format,
+        args.depth,
+        args.cicp.as_ref(),
+        args.ignore_icc,
+        args.ignore_alpha,
+        false,
+    )? {
+        base_image = converted;
+    }
+    if can_decode(alt_file) && args.alt_cicp.is_some() {
+        let alt_target_fmt = if args
+            .alt_cicp
+            .as_ref()
+            .is_some_and(|n| n.matrix_coefficients == MatrixCoefficients::Identity)
+            && alt_image.yuv_format != PixelFormat::Yuv444
+        {
+            Some(PixelFormat::Yuv444)
+        } else {
+            None
+        };
+        if let Some(converted) = convert_image_format_and_depth(
+            &alt_image,
+            alt_target_fmt,
+            None,
+            args.alt_cicp.as_ref(),
+            args.ignore_icc,
+            args.ignore_alpha,
+            false,
+        )? {
+            alt_image = converted;
+        }
+    }
+    if base_image.icc.is_empty()
+        && base_image.color_primaries == ColorPrimaries::Unspecified
+        && base_image.transfer_characteristics == TransferCharacteristics::Unspecified
+    {
+        base_image.color_primaries = ColorPrimaries::Srgb;
+        base_image.transfer_characteristics = TransferCharacteristics::Srgb;
+    }
+    if alt_image.icc.is_empty()
+        && alt_image.color_primaries == ColorPrimaries::Unspecified
+        && alt_image.transfer_characteristics == TransferCharacteristics::Unspecified
+    {
+        alt_image.color_primaries = ColorPrimaries::Srgb;
+        alt_image.transfer_characteristics = TransferCharacteristics::Srgb;
+    }
+    if !base_image.icc.is_empty() || !alt_image.icc.is_empty() {
+        println!("Combining images with ICC profiles is not supported; pass --ignore-icc");
+        return Err(AvifError::NotImplemented);
+    }
+    if base_image.width != alt_image.width || base_image.height != alt_image.height {
+        println!(
+            "Image dimensions don't match: {}x{} vs {}x{}",
+            base_image.width, base_image.height, alt_image.width, alt_image.height
+        );
+        return Err(AvifError::InvalidArgument);
+    }
+    if base_image.clap != alt_image.clap {
+        println!("Base and alternate images must have matching clean aperture (clap) properties");
+        return Err(AvifError::InvalidArgument);
+    }
+
+    let downscaling = u64::from(args.downscaling.max(1));
+    let rounding = downscaling / 2;
+    let gm_width = (u64::from(base_image.width).saturating_add(rounding) / downscaling)
+        .clamp(1, u64::from(u32::MAX)) as u32;
+    let gm_height = (u64::from(base_image.height).saturating_add(rounding) / downscaling)
+        .clamp(1, u64::from(u32::MAX)) as u32;
+    if let Some(clap) = base_image.clap {
+        if (gm_width, gm_height) != (base_image.width, base_image.height)
+            || CropRect::create_from(&clap, gm_width, gm_height, args.yuv_gain_map).is_err()
+        {
+            println!(
+                "Combining images with clap property and downscaling or incompatible gain map \
+                 chroma subsampling is not supported"
+            );
+            return Err(AvifError::NotImplemented);
+        }
+    }
+    println!("Creating a gain map of size {gm_width} x {gm_height}");
+
+    let mut gainmap = gainmap::compute_gainmap(
+        &base_image,
+        &alt_image,
+        gm_width,
+        gm_height,
+        args.depth_gain_map,
+        args.yuv_gain_map,
+    )?;
+
+    if args.max_headroom > 0.0 {
+        let max_h = f64::from(args.max_headroom);
+        if max_h * f64::from(gainmap.metadata.base_hdr_headroom.1)
+            < f64::from(gainmap.metadata.base_hdr_headroom.0)
+        {
+            gainmap.metadata.base_hdr_headroom = UFraction::from(max_h);
+        }
+        if max_h * f64::from(gainmap.metadata.alternate_hdr_headroom.1)
+            < f64::from(gainmap.metadata.alternate_hdr_headroom.0)
+        {
+            gainmap.metadata.alternate_hdr_headroom = UFraction::from(max_h);
+        }
+    }
+
+    if let Some(clli) = args.clli {
+        base_image.clli = Some(clli);
+    }
+    if let Some(alt_clli) = args.alt_clli {
+        gainmap.alt_clli = alt_clli;
+    }
+    apply_geometry_and_metadata_overrides(args, &mut base_image)?;
+    encode_avif_from_args_codec(args, &base_image, Some(&gainmap), output_file)
+}
+
+#[cfg(not(feature = "encoder"))]
+fn combine(
+    _args: &CommandLineArgs,
+    _base_file: &str,
+    _alt_file: &str,
+    _output_file: &str,
+) -> AvifResult<()> {
+    Err(AvifError::UnknownError(
+        "AVIF output requires building with the encoder feature".into(),
+    ))
+}
+
+#[cfg(feature = "encoder")]
 fn read_file(filepath: &String) -> io::Result<Vec<u8>> {
     let mut file = File::open(filepath)?;
     let mut buffer = Vec::new();
@@ -1367,26 +1590,7 @@ fn apply_encode_overrides(
     image: &mut image::Image,
     gainmap: Option<&mut crabby_avif::gainmap::GainMap>,
 ) -> AvifResult<()> {
-    if args.irot_angle.is_some() {
-        image.irot_angle = args.irot_angle;
-    }
-    if args.imir_axis.is_some() {
-        image.imir_axis = args.imir_axis;
-    }
-    if let Some(clap) = args.clap {
-        image.clap = Some(clap);
-    }
-    if let Some(crop) = args.crop {
-        image.clap = Some(CleanAperture::create_from(
-            &crop,
-            image.width,
-            image.height,
-            image.yuv_format,
-        )?);
-    }
-    if args.pasp.is_some() {
-        image.pasp = args.pasp;
-    }
+    apply_geometry_and_metadata_overrides(args, image)?;
     if args.clli.is_some() {
         image.clli = args.clli;
     }
@@ -1394,15 +1598,6 @@ fn apply_encode_overrides(
         image.color_primaries = nclx.color_primaries;
         image.transfer_characteristics = nclx.transfer_characteristics;
         image.matrix_coefficients = nclx.matrix_coefficients;
-    }
-    if let Some(icc) = &args.icc {
-        image.icc = read_file(icc).expect("failed to read icc file");
-    }
-    if let Some(exif) = &args.exif {
-        image.exif = read_file(exif).expect("failed to read exif file");
-    }
-    if let Some(xmp) = &args.xmp {
-        image.xmp = read_file(xmp).expect("failed to read xmp file");
     }
     if image.icc.is_empty()
         && args.cicp.is_none()
@@ -1889,6 +2084,48 @@ fn validate_output_encoding_flags(args: &CommandLineArgs, output_filename: &str)
 }
 
 fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
+    if args.combine {
+        if args.tonemap
+            || args.info
+            || args.extract_gainmap
+            || args.extract_thumbnail
+            || args.progressive
+            || args.crop.is_some()
+            || args.clap.is_some()
+            || args.icc.is_some()
+            || args.target_size.is_some()
+        {
+            return Err(AvifError::UnknownError(
+                "--combine cannot be combined with --tonemap, --info, --extract-gainmap, \
+                 --extract-thumbnail, --progressive, --crop, --clap, --icc, or --target-size"
+                    .into(),
+            ));
+        }
+        if !args.max_headroom.is_finite() || args.max_headroom < 0.0 {
+            return Err(AvifError::UnknownError(
+                "max-headroom must be finite and >= 0.0".into(),
+            ));
+        }
+        let (Some(_), Some(_), Some(output_filename)) =
+            (&args.input_file, &args.output_file, &args.third_file)
+        else {
+            return Err(AvifError::UnknownError(
+                "--combine requires <base_image> <alternate_image> <output_image.avif>".into(),
+            ));
+        };
+        if !can_encode(output_filename) {
+            return Err(AvifError::UnknownError(
+                "--combine output file must be an AVIF file".into(),
+            ));
+        }
+        validate_output_encoding_flags(args, output_filename)?;
+        return Ok(());
+    }
+    if args.third_file.is_some() {
+        return Err(AvifError::UnknownError(
+            "Unexpected third positional argument without --combine".into(),
+        ));
+    }
     if let Some(input_file) = &args.input_file {
         if args.tonemap {
             if args.info
@@ -2008,7 +2245,17 @@ where
     }
     validate_args(&args)?;
     if let Some(input_file) = &args.input_file {
-        if args.tonemap {
+        if args.combine {
+            let alt_file = args
+                .output_file
+                .as_deref()
+                .ok_or_else(|| AvifError::UnknownError("alternate_image is required".into()))?;
+            let out_file = args
+                .third_file
+                .as_deref()
+                .ok_or_else(|| AvifError::UnknownError("output_image is required".into()))?;
+            combine(&args, input_file, alt_file, out_file)?;
+        } else if args.tonemap {
             let output_file = args
                 .output_file
                 .as_deref()
