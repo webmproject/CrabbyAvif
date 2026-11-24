@@ -2861,4 +2861,190 @@ mod decode_tests {
         .is_err());
         Ok(())
     }
+
+    #[cfg(all(feature = "aom", feature = "jpeg"))]
+    #[test]
+    fn swap_base_cli() -> AvifResult<()> {
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+        let avif_input = get_test_file("seine_sdr_gainmap_srgb.avif");
+        let jpg_input = get_test_file("seine_sdr_gainmap_srgb.jpg");
+
+        // Swap base on AVIF input: new base becomes HDR PQ, alternate headroom becomes 0.
+        let swapped_avif = temp_dir.path().join("swapped.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--swap-base",
+                "--speed",
+                "10",
+                "-q",
+                "90",
+                "--quality-gainmap",
+                "90",
+                "--grid",
+                "2x2",
+                avif_input.as_str(),
+                swapped_avif.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.settings.image_content_to_decode = decoder::ImageContentType::All;
+        decoder.set_io_file(&swapped_avif.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        decoder.next_image()?;
+        let parsed = decoder.image().unwrap();
+        assert_eq!(parsed.transfer_characteristics, TransferCharacteristics::Pq);
+        assert!(decoder.gainmap_present());
+        let gm = decoder.gainmap();
+        assert_eq!(gm.metadata.alternate_hdr_headroom.0, 0);
+        assert!(gm.metadata.base_hdr_headroom.0 > 0);
+        assert!(!gm.metadata.use_base_color_space);
+        assert_eq!(
+            gm.alt_transfer_characteristics,
+            TransferCharacteristics::Srgb
+        );
+
+        // Swap base on JPEG with gainmap + ICC: errors without --ignore-icc, succeeds with it.
+        let swapped_jpg = temp_dir.path().join("swapped_from_jpg.avif");
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--swap-base",
+                "--speed",
+                "10",
+                jpg_input.as_str(),
+                swapped_jpg.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+
+        main_impl(
+            [
+                "crabbyavif",
+                "--swap-base",
+                "--ignore-icc",
+                "--ignore-alpha",
+                "--cicp",
+                "1/13/6",
+                "--alt-cicp",
+                "9/16/9",
+                "--clli",
+                "400,150",
+                "--alt-clli",
+                "1000,500",
+                "--speed",
+                "10",
+                jpg_input.as_str(),
+                swapped_jpg.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.settings.image_content_to_decode = decoder::ImageContentType::All;
+        decoder.set_io_file(&swapped_jpg.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        let parsed = decoder.image().unwrap();
+        assert_eq!(parsed.color_primaries, ColorPrimaries::Bt2020);
+        assert_eq!(parsed.transfer_characteristics, TransferCharacteristics::Pq);
+        assert_eq!(
+            parsed.clli,
+            Some(ContentLightLevelInformation {
+                max_cll: 1000,
+                max_pall: 500,
+            })
+        );
+        assert_eq!(decoder.gainmap().alt_color_primaries, ColorPrimaries::Srgb);
+        assert_eq!(
+            decoder.gainmap().alt_clli,
+            ContentLightLevelInformation {
+                max_cll: 400,
+                max_pall: 150,
+            }
+        );
+
+        // --swap-base --crop on AVIF decodes the gain map and emits cropped clap.
+        let swapped_cropped = temp_dir.path().join("swapped_cropped.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--swap-base",
+                "--crop",
+                "0,0,200,200",
+                "--speed",
+                "10",
+                avif_input.as_str(),
+                swapped_cropped.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut crop_dec = decoder::Decoder::default();
+        crop_dec.settings.image_content_to_decode = decoder::ImageContentType::All;
+        crop_dec.set_io_file(&swapped_cropped.to_string_lossy().into_owned())?;
+        crop_dec.parse()?;
+        assert!(crop_dec.gainmap_present());
+        assert!(crop_dec.image().unwrap().clap.is_some());
+
+        // --swap-base on JPEG without --cicp/--alt-cicp defaults to 10-bit Srgb/Pq base and
+        // Srgb alt.
+        let swapped_jpg_default = temp_dir.path().join("swapped_jpg_default.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--swap-base",
+                "--ignore-icc",
+                "--ignore-alpha",
+                "--speed",
+                "10",
+                jpg_input.as_str(),
+                swapped_jpg_default.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut def_dec = decoder::Decoder::default();
+        def_dec.settings.image_content_to_decode = decoder::ImageContentType::All;
+        def_dec.set_io_file(&swapped_jpg_default.to_string_lossy().into_owned())?;
+        def_dec.parse()?;
+        let def_img = def_dec.image().unwrap();
+        assert_eq!(def_img.depth, 10);
+        assert_eq!(def_img.color_primaries, ColorPrimaries::Srgb);
+        assert_eq!(
+            def_img.transfer_characteristics,
+            TransferCharacteristics::Pq
+        );
+        assert_eq!(def_dec.gainmap().alt_color_primaries, ColorPrimaries::Srgb);
+        assert_eq!(
+            def_dec.gainmap().alt_transfer_characteristics,
+            TransferCharacteristics::Srgb
+        );
+
+        // Negative validation tests: --combine --swap-base, --swap-base --target-size.
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--combine",
+                "--swap-base",
+                avif_input.as_str(),
+                avif_input.as_str(),
+                swapped_avif.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--swap-base",
+                "--target-size",
+                "100,100",
+                avif_input.as_str(),
+                swapped_avif.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        Ok(())
+    }
 }

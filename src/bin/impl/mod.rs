@@ -454,9 +454,13 @@ struct CommandLineArgs {
     #[arg(long, value_parser = value_parser!(f32), default_value = "4.0")]
     max_headroom: f32,
 
-    /// CICP values (P/T/M) for the alternate image when using --combine
+    /// CICP values (P/T/M) for the input alternate image (in --combine or --swap-base)
     #[arg(long, value_parser = cicp_parser)]
     alt_cicp: Option<Nclx>,
+
+    /// Swap the base and alternate images of an image with a gain map when encoding AVIF
+    #[arg(long, default_value = "false")]
+    swap_base: bool,
 
     /// Input AVIF file (or base image when using --combine)
     #[arg(allow_hyphen_values = false)]
@@ -771,7 +775,11 @@ fn create_decoder_and_parse(
         strictness: if args.no_strict { Strictness::None } else { Strictness::All },
         image_content_to_decode: if args.extract_gainmap {
             ImageContentType::GainMap
-        } else if args.combine || args.crop.is_some() || args.target_size.is_some() {
+        } else if args.combine
+            || (!args.swap_base
+                && !args.tonemap
+                && (args.crop.is_some() || args.target_size.is_some()))
+        {
             // Combine, region, and scaled decodes only need the main image (and alpha unless
             // ignored), not any preexisting gain map.
             if args.ignore_alpha {
@@ -1502,6 +1510,57 @@ fn combine(
         "AVIF output requires building with the encoder feature".into(),
     ))
 }
+#[cfg(feature = "encoder")]
+fn swap_base(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifResult<()> {
+    let is_decode = can_decode(input_file);
+    let (mut image, gainmap) =
+        read_image_with_optional_gainmap(args, input_file, args.cicp.as_ref())?;
+    if let Some(clli) = args.clli {
+        image.clli = Some(clli);
+    }
+    let mut gainmap = gainmap
+        .filter(|gm| gm.image.width > 0 && gm.image.height > 0)
+        .ok_or(AvifError::InvalidArgument)?;
+    if let Some(nclx) = &args.alt_cicp {
+        gainmap.alt_color_primaries = nclx.color_primaries;
+        gainmap.alt_transfer_characteristics = nclx.transfer_characteristics;
+        gainmap.alt_matrix_coefficients = nclx.matrix_coefficients;
+    }
+    if let Some(alt_clli) = args.alt_clli {
+        gainmap.alt_clli = alt_clli;
+    }
+    if !image.icc.is_empty() || !gainmap.alt_icc.is_empty() {
+        println!("Swapping base image with ICC profiles is not supported; pass --ignore-icc");
+        return Err(AvifError::NotImplemented);
+    }
+    let depth = args.depth.unwrap_or(if !is_decode {
+        if gainmap.metadata.alternate_hdr_headroom.0 != 0 {
+            10
+        } else {
+            8
+        }
+    } else if gainmap.alt_plane_depth != 0 {
+        gainmap.alt_plane_depth
+    } else {
+        image.depth.max(gainmap.image.depth)
+    });
+    let yuv_depth = if depth == 16 { 12 } else { depth };
+    let yuv_format = args.yuv_format.unwrap_or(if gainmap.alt_plane_count == 1 {
+        PixelFormat::Yuv400
+    } else {
+        PixelFormat::Yuv444
+    });
+    let (mut swapped, swapped_gm) = gainmap::change_base(&image, &gainmap, yuv_depth, yuv_format)?;
+    apply_geometry_and_metadata_overrides(args, &mut swapped)?;
+    encode_avif_from_args_codec(args, &swapped, Some(&swapped_gm), output_file)
+}
+
+#[cfg(not(feature = "encoder"))]
+fn swap_base(_args: &CommandLineArgs, _input_file: &str, _output_file: &str) -> AvifResult<()> {
+    Err(AvifError::UnknownError(
+        "AVIF output requires building with the encoder feature".into(),
+    ))
+}
 
 #[cfg(feature = "encoder")]
 fn read_file(filepath: &String) -> io::Result<Vec<u8>> {
@@ -2086,6 +2145,7 @@ fn validate_output_encoding_flags(args: &CommandLineArgs, output_filename: &str)
 fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
     if args.combine {
         if args.tonemap
+            || args.swap_base
             || args.info
             || args.extract_gainmap
             || args.extract_thumbnail
@@ -2096,8 +2156,9 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
             || args.target_size.is_some()
         {
             return Err(AvifError::UnknownError(
-                "--combine cannot be combined with --tonemap, --info, --extract-gainmap, \
-                 --extract-thumbnail, --progressive, --crop, --clap, --icc, or --target-size"
+                "--combine cannot be combined with --tonemap, --swap-base, --info, \
+                 --extract-gainmap, --extract-thumbnail, --progressive, --crop, --clap, --icc, or \
+                 --target-size"
                     .into(),
             ));
         }
@@ -2127,6 +2188,31 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
         ));
     }
     if let Some(input_file) = &args.input_file {
+        if args.swap_base {
+            if args.info
+                || args.extract_gainmap
+                || args.extract_thumbnail
+                || args.progressive
+                || args.tonemap
+                || args.target_size.is_some()
+            {
+                return Err(AvifError::UnknownError(
+                    "--swap-base cannot be combined with --info, --extract-gainmap, --extract-thumbnail, --progressive, --tonemap, or --target-size"
+                        .into(),
+                ));
+            }
+            let output_filename = args
+                .output_file
+                .as_ref()
+                .ok_or_else(|| AvifError::UnknownError("output_file is required".into()))?;
+            if !can_encode(output_filename) {
+                return Err(AvifError::UnknownError(
+                    "--swap-base output file must be an AVIF file".into(),
+                ));
+            }
+            validate_output_encoding_flags(args, output_filename)?;
+            return Ok(());
+        }
         if args.tonemap {
             if args.info
                 || args.extract_gainmap
@@ -2255,6 +2341,12 @@ where
                 .as_deref()
                 .ok_or_else(|| AvifError::UnknownError("output_image is required".into()))?;
             combine(&args, input_file, alt_file, out_file)?;
+        } else if args.swap_base {
+            let output_file = args
+                .output_file
+                .as_deref()
+                .ok_or_else(|| AvifError::UnknownError("output_file is required".into()))?;
+            swap_base(&args, input_file, output_file)?;
         } else if args.tonemap {
             let output_file = args
                 .output_file

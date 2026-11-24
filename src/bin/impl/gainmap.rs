@@ -13,21 +13,22 @@
 // limitations under the License.
 
 #![forbid(unsafe_code)]
-#![allow(dead_code)] // Used in follow-up CLI commands.
 
 use crabby_avif::gainmap::{GainMap, GainMapMetadata};
 use crabby_avif::image;
 use crabby_avif::reformat::rgb;
 use crabby_avif::utils::{Fraction, UFraction};
 use crabby_avif::{
-    AvifError, AvifResult, ColorPrimaries, ContentLightLevelInformation, MatrixCoefficients,
-    PixelFormat, TransferCharacteristics,
+    AvifError, AvifResult, ColorPrimaries, ContentLightLevelInformation, TransferCharacteristics,
 };
+#[cfg(any(test, feature = "encoder"))]
+use crabby_avif::{MatrixCoefficients, PixelFormat};
 
 const SDR_WHITE_NITS: f32 = 203.0;
 const PQ_MAX_NITS: f32 = 10000.0;
 const HLG_PEAK_LUMINANCE_NITS: f32 = 1000.0;
 const EPSILON_F64: f64 = 1e-12;
+#[cfg(any(test, feature = "encoder"))]
 const EPSILON_F32: f32 = 1e-10;
 
 fn try_alloc_vec<T: Clone>(elem: T, len: usize) -> AvifResult<Vec<T>> {
@@ -38,6 +39,7 @@ fn try_alloc_vec<T: Clone>(elem: T, len: usize) -> AvifResult<Vec<T>> {
     Ok(vec)
 }
 
+#[cfg(any(test, feature = "encoder"))]
 fn try_clone_bytes(src: &[u8]) -> AvifResult<Vec<u8>> {
     let mut dst = Vec::new();
     dst.try_reserve_exact(src.len())
@@ -437,6 +439,7 @@ fn convert_linear_rgb(rgb_pixel: &mut [f32; 3], coeffs: &[[f64; 3]; 3]) {
     rgb_pixel[2] = res[2] as f32;
 }
 
+#[cfg(any(test, feature = "encoder"))]
 fn compute_y_coeffs(cp: ColorPrimaries) -> AvifResult<[f32; 3]> {
     let p = primaries_or_default(cp)?;
     let (rx, ry, gx, gy, bx, by, wx, wy) = (p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
@@ -859,6 +862,7 @@ pub fn apply_gainmap(
     ))
 }
 
+#[cfg(any(test, feature = "encoder"))]
 fn find_min_max_without_outliers(values: &[f32]) -> AvifResult<(f32, f32)> {
     let Some((&first, rest)) = values.split_first() else {
         return Ok((0.0, 0.0));
@@ -924,6 +928,7 @@ fn find_min_max_without_outliers(values: &[f32]) -> AvifResult<(f32, f32)> {
     Ok((range_min, range_max))
 }
 
+#[cfg(any(test, feature = "encoder"))]
 fn choose_color_space_for_gainmap_math(
     base_cp: ColorPrimaries,
     alt_cp: ColorPrimaries,
@@ -949,6 +954,7 @@ fn choose_color_space_for_gainmap_math(
     Ok(if alt_min <= base_min { base_cp } else { alt_cp })
 }
 
+#[cfg(any(test, feature = "encoder"))]
 pub fn compute_gainmap(
     base_image: &image::Image,
     alt_image: &image::Image,
@@ -1230,6 +1236,7 @@ pub fn compute_gainmap(
     })
 }
 
+#[cfg(any(test, feature = "encoder"))]
 pub fn change_base(
     image: &image::Image,
     gainmap: &GainMap,
