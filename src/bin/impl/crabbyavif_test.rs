@@ -2296,4 +2296,268 @@ mod decode_tests {
         assert_eq!(val_of("CLLI"), None);
         Ok(())
     }
+
+    #[cfg(all(feature = "aom", feature = "png", feature = "jpeg"))]
+    #[test]
+    fn tonemap_gainmap_cli() -> AvifResult<()> {
+        let temp_dir = tempfile::tempdir()
+            .map_err(|_| AvifError::UnknownError("Failed to create temp dir".into()))?;
+        let avif_input = get_test_file("seine_sdr_gainmap_srgb.avif");
+
+        // Tonemap AVIF -> HDR AVIF at headroom 2.0.
+        let hdr_out = temp_dir.path().join("tonemapped_hdr.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--tonemap",
+                "--headroom",
+                "2.0",
+                "--speed",
+                "10",
+                "--cicp-output",
+                "9/16/6",
+                avif_input.as_str(),
+                hdr_out.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&hdr_out.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        decoder.next_image()?;
+        let parsed = decoder.image().unwrap();
+        assert_eq!((parsed.width, parsed.height), (400, 300));
+        assert_eq!(parsed.color_primaries, ColorPrimaries::Bt2020);
+        assert_eq!(parsed.transfer_characteristics, TransferCharacteristics::Pq);
+        assert!(parsed.clli.is_some());
+        assert!(!decoder.gainmap_present());
+        assert!(!parsed.exif.is_empty());
+        assert!(!parsed.xmp.is_empty());
+
+        // Tonemap AVIF -> SDR PNG ignoring EXIF/XMP.
+        let sdr_png = temp_dir.path().join("tonemapped_sdr.png");
+        main_impl(
+            [
+                "crabbyavif",
+                "--tonemap",
+                "--headroom",
+                "0.0",
+                "--ignore-exif",
+                "--ignore-xmp",
+                avif_input.as_str(),
+                sdr_png.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut sdr_png_reader = <dyn Reader>::create(sdr_png.to_str().unwrap())?;
+        let (sdr_png_img, _, _) = sdr_png_reader.read_frame(&Config::default())?;
+        assert_eq!(sdr_png_img.depth, 8);
+        assert!(sdr_png_img.exif.is_empty());
+        assert!(sdr_png_img.xmp.is_empty());
+
+        // JPEG with gainmap + ICC: errors without --ignore-icc, succeeds with --ignore-icc.
+        let jpg_input = get_test_file("seine_sdr_gainmap_srgb.jpg");
+        let jpg_hdr_out = temp_dir.path().join("from_jpg_hdr.avif");
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--tonemap",
+                "--headroom",
+                "2.0",
+                "--speed",
+                "10",
+                jpg_input.as_str(),
+                jpg_hdr_out.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+
+        main_impl(
+            [
+                "crabbyavif",
+                "--tonemap",
+                "--headroom",
+                "2.0",
+                "--ignore-icc",
+                "--ignore-alpha",
+                "--speed",
+                "10",
+                jpg_input.as_str(),
+                jpg_hdr_out.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut decoder = decoder::Decoder::default();
+        decoder.set_io_file(&jpg_hdr_out.to_string_lossy().into_owned())?;
+        decoder.parse()?;
+        assert_eq!(
+            decoder.image().unwrap().color_primaries,
+            ColorPrimaries::Srgb
+        );
+        assert_eq!(
+            decoder.image().unwrap().transfer_characteristics,
+            TransferCharacteristics::Pq
+        );
+        assert_eq!(
+            decoder.image().unwrap().matrix_coefficients,
+            MatrixCoefficients::Bt601
+        );
+
+        // -d 16 to PNG preserves 16-bit depth without clamping to 12.
+        let sdr_png16 = temp_dir.path().join("tonemapped_sdr_16.png");
+        main_impl(
+            [
+                "crabbyavif",
+                "--tonemap",
+                "--headroom",
+                "0.0",
+                "-d",
+                "16",
+                avif_input.as_str(),
+                sdr_png16.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut sdr_png16_reader = <dyn Reader>::create(sdr_png16.to_str().unwrap())?;
+        let (sdr_png16_img, _, _) = sdr_png16_reader.read_frame(&Config {
+            allow_sample_transform: true,
+            ..Default::default()
+        })?;
+        assert_eq!(sdr_png16_img.depth, 16);
+
+        // HDR-base -> SDR (--headroom 0.0) omits spurious CLLI on SDR output.
+        let mut sdr_dec = decoder::Decoder::default();
+        sdr_dec.settings.image_content_to_decode = decoder::ImageContentType::All;
+        sdr_dec.set_io_file(&avif_input)?;
+        sdr_dec.parse()?;
+        sdr_dec.next_image()?;
+        let (hdr_base, hdr_base_gm) = crate::r#impl::gainmap::change_base(
+            sdr_dec.image().unwrap(),
+            sdr_dec.gainmap(),
+            10,
+            PixelFormat::Yuv444,
+        )?;
+        let hdr_base_input = temp_dir.path().join("hdr_base.avif");
+        let mut hdr_enc = encoder::Encoder::create_with_settings(&encoder::Settings {
+            speed: Some(10),
+            ..Default::default()
+        })?;
+        hdr_enc.add_image_gainmap(&hdr_base, &hdr_base_gm)?;
+        std::fs::write(&hdr_base_input, hdr_enc.finish()?).unwrap();
+        let hdr_to_sdr_avif = temp_dir.path().join("hdr_to_sdr.avif");
+        main_impl(
+            [
+                "crabbyavif",
+                "--tonemap",
+                "--headroom",
+                "0.0",
+                "--speed",
+                "10",
+                hdr_base_input.to_str().unwrap(),
+                hdr_to_sdr_avif.to_str().unwrap(),
+            ]
+            .iter(),
+        )?;
+        let mut sdr_out_dec = decoder::Decoder::default();
+        sdr_out_dec.set_io_file(&hdr_to_sdr_avif.to_string_lossy().into_owned())?;
+        sdr_out_dec.parse()?;
+        assert_eq!(sdr_out_dec.image().unwrap().clli, None);
+
+        // Negative validation tests: NaN headroom, -d 10/12 PNG, unsupported --cicp-output, --crop, --target-size, --progressive.
+        for bad_depth in ["10", "12"] {
+            assert!(main_impl(
+                [
+                    "crabbyavif",
+                    "--tonemap",
+                    "--headroom",
+                    "0.0",
+                    "-d",
+                    bad_depth,
+                    avif_input.as_str(),
+                    sdr_png.to_str().unwrap(),
+                ]
+                .iter(),
+            )
+            .is_err());
+        }
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--tonemap",
+                "--headroom",
+                "2.0",
+                "--cicp-output",
+                "9/16/14",
+                avif_input.as_str(),
+                hdr_out.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--tonemap",
+                "--headroom",
+                "2.0",
+                "--yuv",
+                "420",
+                "--cicp-output",
+                "1/13/0",
+                avif_input.as_str(),
+                hdr_out.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--tonemap",
+                "--headroom",
+                "nan",
+                avif_input.as_str(),
+                sdr_png.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--tonemap",
+                "--crop",
+                "0,0,10,10",
+                avif_input.as_str(),
+                sdr_png.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--tonemap",
+                "--target-size",
+                "100,100",
+                avif_input.as_str(),
+                sdr_png.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        assert!(main_impl(
+            [
+                "crabbyavif",
+                "--tonemap",
+                "--progressive",
+                avif_input.as_str(),
+                hdr_out.to_str().unwrap(),
+            ]
+            .iter(),
+        )
+        .is_err());
+        Ok(())
+    }
 }

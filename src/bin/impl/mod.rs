@@ -413,6 +413,18 @@ struct CommandLineArgs {
     #[arg(short = 'g', long, value_parser = grid_parser)]
     grid: Option<GridSize>,
 
+    /// Tone map an image with a gain map to --headroom
+    #[arg(long, default_value = "false")]
+    tonemap: bool,
+
+    /// Target HDR headroom (log2(HDR/SDR), 0.0 means SDR) when using --tonemap
+    #[arg(long, value_parser = value_parser!(f32), default_value = "0.0")]
+    headroom: f32,
+
+    /// Override output CICP values (P/T/M) when using --tonemap
+    #[arg(long, value_parser = cicp_parser)]
+    cicp_output: Option<Nclx>,
+
     /// Input AVIF file
     #[arg(allow_hyphen_values = false)]
     input_file: Option<String>,
@@ -902,7 +914,23 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
     if can_encode(output_filename) {
         return write_decoded_avif(args, image, owned_image, output_filename);
     }
-    let mut writer: Box<dyn Writer> = match extension.as_str() {
+    write_non_avif_image(args, image_to_write, output_filename, &extension)?;
+    println!(
+        "Wrote image at index {} to output {}",
+        args.index.unwrap_or(0),
+        output_filename,
+    );
+    Ok(())
+}
+
+fn write_non_avif_image(
+    #[cfg_attr(not(any(feature = "png", feature = "jpeg")), allow(unused_variables))]
+    args: &CommandLineArgs,
+    image: &image::Image,
+    output_filename: &str,
+    extension: &str,
+) -> AvifResult<()> {
+    let mut writer: Box<dyn Writer> = match extension {
         "y4m" | "yuv" => {
             if !image.icc.is_empty() || !image.exif.is_empty() || !image.xmp.is_empty() {
                 println!("Warning: metadata dropped when saving to {extension}");
@@ -927,13 +955,256 @@ fn decode(args: &CommandLineArgs, input_file: &String) -> AvifResult<()> {
     let mut output_file = File::create(output_filename).or(Err(AvifError::UnknownError(
         "Could not open output file".into(),
     )))?;
-    writer.write_frame(&mut output_file, image_to_write)?;
-    println!(
-        "Wrote image at index {} to output {}",
-        args.index.unwrap_or(0),
-        output_filename,
-    );
-    Ok(())
+    writer.write_frame(&mut output_file, image)
+}
+
+fn read_image_with_optional_gainmap(
+    args: &CommandLineArgs,
+    input_file: &str,
+    cicp_override: Option<&Nclx>,
+) -> AvifResult<(image::Image, Option<crabby_avif::gainmap::GainMap>)> {
+    let (mut image, mut gainmap) = if can_decode(input_file) {
+        let input_string = input_file.to_string();
+        let mut decoder = create_decoder_and_parse(args, &input_string, false)?;
+        decoder.nth_image(args.index.unwrap_or(0))?;
+        let image = decoder
+            .image()
+            .ok_or(AvifError::NoContent)?
+            .try_deep_clone()?;
+        let gainmap = if decoder.gainmap_present() {
+            Some(decoder.gainmap().try_deep_clone()?)
+        } else {
+            None
+        };
+        (image, gainmap)
+    } else {
+        #[cfg(feature = "encoder")]
+        {
+            let mut reader = <dyn Reader>::create(input_file)?;
+            let reader_config = Config {
+                // Read at full native precision (4:4:4 for JPEG) instead of output --yuv/--depth.
+                yuv_format: match get_extension(input_file).as_str() {
+                    "jpg" | "jpeg" => Some(PixelFormat::Yuv444),
+                    _ => None,
+                },
+                depth: None,
+                matrix_coefficients: cicp_override.map(|n| n.matrix_coefficients),
+                ignore_icc: args.ignore_icc,
+                ignore_exif: args.ignore_exif,
+                ignore_xmp: args.ignore_xmp,
+                allow_sample_transform: args.allow_sample_transform,
+                ..Default::default()
+            };
+            let (image, _, gainmap) = reader.read_frame(&reader_config)?;
+            (image, gainmap)
+        }
+        #[cfg(not(feature = "encoder"))]
+        {
+            return Err(AvifError::NotImplemented);
+        }
+    };
+    apply_read_ignore_flags(args, &mut image, gainmap.as_mut());
+    if let Some(nclx) = cicp_override {
+        image.color_primaries = nclx.color_primaries;
+        image.transfer_characteristics = nclx.transfer_characteristics;
+        image.matrix_coefficients = nclx.matrix_coefficients;
+    } else if image.icc.is_empty()
+        && image.color_primaries == ColorPrimaries::Unspecified
+        && image.transfer_characteristics == TransferCharacteristics::Unspecified
+    {
+        image.color_primaries = ColorPrimaries::Srgb;
+        image.transfer_characteristics = TransferCharacteristics::Srgb;
+    }
+    Ok((image, gainmap))
+}
+
+fn tonemap(args: &CommandLineArgs, input_file: &str, output_file: &str) -> AvifResult<()> {
+    let (image, gainmap) = read_image_with_optional_gainmap(args, input_file, args.cicp.as_ref())?;
+    let gainmap = gainmap
+        .filter(|gm| gm.image.width > 0 && gm.image.height > 0)
+        .ok_or(AvifError::InvalidArgument)?;
+    if !image.icc.is_empty() || !gainmap.alt_icc.is_empty() {
+        println!("Tone mapping for images with ICC profiles is not supported; pass --ignore-icc");
+        return Err(AvifError::NotImplemented);
+    }
+    gainmap::validate_gainmap_metadata(&gainmap.metadata)?;
+
+    let headroom = args.headroom;
+    let tone_mapping_to_hdr = headroom > 0.0;
+    let base_headroom =
+        gainmap.metadata.base_hdr_headroom.0 as f32 / gainmap.metadata.base_hdr_headroom.1 as f32;
+    let alt_headroom = gainmap.metadata.alternate_hdr_headroom.0 as f32
+        / gainmap.metadata.alternate_hdr_headroom.1 as f32;
+    let tone_mapping_to_base = (headroom <= base_headroom && base_headroom <= alt_headroom)
+        || (headroom >= base_headroom && base_headroom >= alt_headroom);
+    let tone_mapping_to_alt = (headroom <= alt_headroom && alt_headroom <= base_headroom)
+        || (headroom >= alt_headroom && alt_headroom >= base_headroom);
+    let base_is_hdr = base_headroom != 0.0;
+
+    let (mut out_cp, mut out_tc, out_mc) = if let Some(nclx) = &args.cicp_output {
+        (
+            nclx.color_primaries,
+            nclx.transfer_characteristics,
+            nclx.matrix_coefficients,
+        )
+    } else if tone_mapping_to_base || (tone_mapping_to_hdr && base_is_hdr) {
+        (
+            image.color_primaries,
+            image.transfer_characteristics,
+            image.matrix_coefficients,
+        )
+    } else {
+        (
+            gainmap.alt_color_primaries,
+            gainmap.alt_transfer_characteristics,
+            gainmap.alt_matrix_coefficients,
+        )
+    };
+    if out_cp == ColorPrimaries::Unspecified {
+        out_cp = if gainmap.metadata.use_base_color_space
+            || gainmap.alt_color_primaries == ColorPrimaries::Unspecified
+        {
+            image.color_primaries
+        } else {
+            gainmap.alt_color_primaries
+        };
+    }
+    if out_tc == TransferCharacteristics::Unspecified {
+        out_tc = if tone_mapping_to_hdr {
+            TransferCharacteristics::Pq
+        } else {
+            TransferCharacteristics::Srgb
+        };
+    }
+
+    if !matches!(image.depth, 8 | 10 | 12 | 16) || !matches!(gainmap.image.depth, 8 | 10 | 12 | 16)
+    {
+        return Err(AvifError::NotImplemented);
+    }
+    let alt_depth = if matches!(gainmap.alt_plane_depth, 8 | 10 | 12 | 16) {
+        gainmap.alt_plane_depth
+    } else {
+        0
+    };
+    let requested_depth = args.depth.unwrap_or_else(|| {
+        let d = if tone_mapping_to_base {
+            image.depth
+        } else if tone_mapping_to_alt {
+            alt_depth
+        } else {
+            0
+        };
+        if d == 0 {
+            image.depth.max(gainmap.image.depth).max(alt_depth)
+        } else {
+            d
+        }
+    });
+    let out_depth = if can_encode(output_file) { requested_depth.min(12) } else { requested_depth };
+
+    let less_subsampled = if matches!(
+        (image.yuv_format, gainmap.image.yuv_format),
+        (PixelFormat::Yuv444, _) | (_, PixelFormat::Yuv444)
+    ) {
+        PixelFormat::Yuv444
+    } else if matches!(
+        (image.yuv_format, gainmap.image.yuv_format),
+        (PixelFormat::Yuv422, _) | (_, PixelFormat::Yuv422)
+    ) {
+        PixelFormat::Yuv422
+    } else if matches!(
+        (image.yuv_format, gainmap.image.yuv_format),
+        (PixelFormat::Yuv420, _) | (_, PixelFormat::Yuv420)
+    ) {
+        PixelFormat::Yuv420
+    } else {
+        PixelFormat::Yuv400
+    };
+    let yuv_format = args.yuv_format.unwrap_or(if tone_mapping_to_base {
+        image.yuv_format
+    } else if tone_mapping_to_alt && gainmap.alt_plane_count == 1 {
+        PixelFormat::Yuv400
+    } else {
+        less_subsampled
+    });
+    let mut out_mc = if out_mc == MatrixCoefficients::Unspecified {
+        MatrixCoefficients::Bt601
+    } else {
+        out_mc
+    };
+    let unsupported_mc = matches!(
+        out_mc,
+        MatrixCoefficients::Reserved
+            | MatrixCoefficients::Bt2020Cl
+            | MatrixCoefficients::Smpte2085
+            | MatrixCoefficients::ChromaDerivedCl
+            | MatrixCoefficients::Ictcp
+            | MatrixCoefficients::YcgcoRe
+            | MatrixCoefficients::YcgcoRo
+    ) || (out_mc == MatrixCoefficients::Ycgco
+        && image.yuv_range == image::YuvRange::Limited)
+        || (out_mc == MatrixCoefficients::Identity && yuv_format != PixelFormat::Yuv444);
+    if unsupported_mc {
+        if args.cicp_output.is_some() {
+            return Err(AvifError::NotImplemented);
+        }
+        out_mc = MatrixCoefficients::Bt601;
+    }
+
+    let (tm_rgb, computed_clli) =
+        gainmap::apply_gainmap(&image, &gainmap, headroom, out_cp, out_tc, out_depth)?;
+
+    let clli = if args.clli.is_some() {
+        args.clli
+    } else if tone_mapping_to_base
+        && image
+            .clli
+            .is_some_and(|c| c.max_cll != 0 || c.max_pall != 0)
+    {
+        image.clli
+    } else if tone_mapping_to_alt
+        && (gainmap.alt_clli.max_cll != 0 || gainmap.alt_clli.max_pall != 0)
+    {
+        Some(gainmap.alt_clli)
+    } else if tone_mapping_to_hdr && (computed_clli.max_cll != 0 || computed_clli.max_pall != 0) {
+        Some(computed_clli)
+    } else {
+        None
+    };
+
+    let has_alpha = image.has_alpha();
+    let mut tone_mapped = image::Image {
+        width: image.width,
+        height: image.height,
+        depth: out_depth,
+        yuv_format,
+        yuv_range: image.yuv_range,
+        chroma_sample_position: ChromaSamplePosition::Unknown,
+        alpha_present: has_alpha,
+        alpha_premultiplied: has_alpha && image.alpha_premultiplied,
+        color_primaries: out_cp,
+        transfer_characteristics: out_tc,
+        matrix_coefficients: out_mc,
+        clli,
+        pasp: image.pasp,
+        clap: image.clap,
+        irot_angle: image.irot_angle,
+        imir_axis: image.imir_axis,
+        exif: try_clone_bytes(&image.exif)?,
+        icc: Vec::new(),
+        xmp: try_clone_bytes(&image.xmp)?,
+        ..Default::default()
+    };
+    tm_rgb.convert_to_yuv(&mut tone_mapped)?;
+
+    let extension = get_extension(output_file);
+    if can_encode(output_file) {
+        encode_avif_from_args_codec(args, &tone_mapped, None, output_file)
+    } else {
+        write_non_avif_image(args, &tone_mapped, output_file, &extension)?;
+        println!("Wrote tone mapped image to output {output_file}");
+        Ok(())
+    }
 }
 
 #[cfg(feature = "encoder")]
@@ -1017,7 +1288,6 @@ fn read_file(filepath: &String) -> io::Result<Vec<u8>> {
     Ok(buffer)
 }
 
-#[cfg(feature = "encoder")]
 fn apply_read_ignore_flags(
     args: &CommandLineArgs,
     image: &mut image::Image,
@@ -1231,6 +1501,36 @@ fn encode_single_image_to_avif(
 }
 
 #[cfg(feature = "encoder")]
+fn encode_avif_from_args_codec(
+    args: &CommandLineArgs,
+    image: &image::Image,
+    gainmap: Option<&crabby_avif::gainmap::GainMap>,
+    output_file: &str,
+) -> AvifResult<()> {
+    let encoder_arg_codec = match args.codec {
+        CodecChoice::Aom => CodecChoice::Aom,
+        #[cfg(feature = "avm")]
+        CodecChoice::Avm => CodecChoice::Avm,
+        #[cfg(feature = "jpegxl")]
+        CodecChoice::Libjxl => CodecChoice::Libjxl,
+        _ => CodecChoice::Auto,
+    };
+    let codec_choice = encoder_codec_choice_for_output(encoder_arg_codec, output_file);
+    encode_single_image_to_avif(args, codec_choice, image, gainmap, output_file)
+}
+
+#[cfg(not(feature = "encoder"))]
+fn encode_avif_from_args_codec(
+    _args: &CommandLineArgs,
+    _image: &image::Image,
+    _gainmap: Option<&crabby_avif::gainmap::GainMap>,
+    _output_file: &str,
+) -> AvifResult<()> {
+    Err(AvifError::UnknownError(
+        "AVIF output requires building with the encoder feature".into(),
+    ))
+}
+
 fn try_clone_bytes(src: &[u8]) -> AvifResult<Vec<u8>> {
     let mut dst = Vec::new();
     dst.try_reserve_exact(src.len())
@@ -1541,8 +1841,80 @@ fn can_encode(filename: &str) -> bool {
     }
 }
 
+fn validate_output_encoding_flags(args: &CommandLineArgs, output_filename: &str) -> AvifResult<()> {
+    let extension = get_extension(output_filename);
+    if let Some(quality) = args.quality {
+        if extension != "jpg" && extension != "jpeg" && !can_encode(output_filename) {
+            return Err(AvifError::UnknownError(
+                "quality is only supported for jpeg or avif output".into(),
+            ));
+        }
+        if !(0.0..=100.0).contains(&quality) {
+            return Err(AvifError::UnknownError(
+                "quality must be between 0 and 100 inclusive".into(),
+            ));
+        }
+    }
+    if args.depth.is_some() && extension != "png" && !can_encode(output_filename) {
+        return Err(AvifError::UnknownError(
+            "depth is only supported for png or avif output".into(),
+        ));
+    }
+    if matches!(args.depth, Some(10 | 12)) && extension == "png" {
+        return Err(AvifError::UnknownError(
+            "depth 10 and 12 are not supported for png output".into(),
+        ));
+    }
+    if args.depth == Some(16) && can_encode(output_filename) {
+        return Err(AvifError::UnknownError(
+            "depth 16 is not supported for avif output".into(),
+        ));
+    }
+    if args.yuv_format.is_some() && !can_encode(output_filename) {
+        return Err(AvifError::UnknownError(
+            "yuv is only supported for avif output".into(),
+        ));
+    }
+    if args.png_compress.is_some() && extension != "png" {
+        return Err(AvifError::UnknownError(
+            "png-compress-level is only supported for png output".into(),
+        ));
+    }
+    if args.grid.is_some() && !can_encode(output_filename) {
+        return Err(AvifError::UnknownError(
+            "grid is only supported when encoding".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
     if let Some(input_file) = &args.input_file {
+        if args.tonemap {
+            if args.info
+                || args.extract_gainmap
+                || args.extract_thumbnail
+                || args.progressive
+                || args.crop.is_some()
+                || args.target_size.is_some()
+            {
+                return Err(AvifError::UnknownError(
+                    "--tonemap cannot be combined with --info, --extract-gainmap, --extract-thumbnail, --progressive, --crop, or --target-size"
+                        .into(),
+                ));
+            }
+            if !args.headroom.is_finite() || args.headroom < 0.0 {
+                return Err(AvifError::UnknownError(
+                    "headroom must be finite and >= 0.0".into(),
+                ));
+            }
+            let output_filename = args
+                .output_file
+                .as_ref()
+                .ok_or_else(|| AvifError::UnknownError("output_file is required".into()))?;
+            validate_output_encoding_flags(args, output_filename)?;
+            return Ok(());
+        }
         if can_decode(input_file) {
             if args.info {
                 if args.output_file.is_some()
@@ -1560,43 +1932,11 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                     ));
                 }
             } else {
-                if args.output_file.is_none() {
-                    return Err(AvifError::UnknownError("output_file is required".into()));
-                }
-                let output_filename = &args.output_file.as_ref().unwrap().as_str();
-                let extension = get_extension(output_filename);
-                if let Some(quality) = args.quality {
-                    if extension != "jpg" && extension != "jpeg" && !can_encode(output_filename) {
-                        return Err(AvifError::UnknownError(
-                            "quality is only supported for jpeg or avif output".into(),
-                        ));
-                    }
-                    if !(0.0..=100.0).contains(&quality) {
-                        return Err(AvifError::UnknownError(
-                            "quality must be between 0 and 100 inclusive".into(),
-                        ));
-                    }
-                }
-                if args.depth.is_some() && extension != "png" && !can_encode(output_filename) {
-                    return Err(AvifError::UnknownError(
-                        "depth is only supported for png or avif output".into(),
-                    ));
-                }
-                if args.depth == Some(16) && can_encode(output_filename) {
-                    return Err(AvifError::UnknownError(
-                        "depth 16 is not supported for avif output".into(),
-                    ));
-                }
-                if args.yuv_format.is_some() && !can_encode(output_filename) {
-                    return Err(AvifError::UnknownError(
-                        "yuv is only supported for avif output".into(),
-                    ));
-                }
-                if args.png_compress.is_some() && extension != "png" {
-                    return Err(AvifError::UnknownError(
-                        "png-compress-level is only supported for png output".into(),
-                    ));
-                }
+                let output_filename = args
+                    .output_file
+                    .as_deref()
+                    .ok_or_else(|| AvifError::UnknownError("output_file is required".into()))?;
+                validate_output_encoding_flags(args, output_filename)?;
                 if args.crop.is_some() && args.progressive {
                     return Err(AvifError::UnknownError(
                         "crop is not supported with progressive decoding".into(),
@@ -1605,11 +1945,6 @@ fn validate_args(args: &CommandLineArgs) -> AvifResult<()> {
                 if args.target_size.is_some() && args.progressive {
                     return Err(AvifError::UnknownError(
                         "target-size is not supported with progressive decoding".into(),
-                    ));
-                }
-                if args.grid.is_some() && !can_encode(output_filename) {
-                    return Err(AvifError::UnknownError(
-                        "grid is only supported when encoding".into(),
                     ));
                 }
                 if args.grid.is_some() && args.progressive {
@@ -1673,7 +2008,13 @@ where
     }
     validate_args(&args)?;
     if let Some(input_file) = &args.input_file {
-        if can_decode(input_file) {
+        if args.tonemap {
+            let output_file = args
+                .output_file
+                .as_deref()
+                .ok_or_else(|| AvifError::UnknownError("output_file is required".into()))?;
+            tonemap(&args, input_file, output_file)?;
+        } else if can_decode(input_file) {
             if args.info {
                 info(&args, input_file)?;
             } else if args.output_file.as_ref().is_some_and(|out| can_encode(out))
