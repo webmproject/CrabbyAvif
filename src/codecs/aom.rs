@@ -284,8 +284,6 @@ impl Encoder for Aom {
             // explicitly set to another value.
             use_tune_iq = self.previous_frame_used_tune_iq;
         }
-        // Remember the current tune option for the next frame.
-        self.previous_frame_used_tune_iq = use_tune_iq;
 
         let quantizer = aom_quality_to_quantizer(quality, use_tune_iq)?;
 
@@ -486,30 +484,12 @@ impl Encoder for Aom {
                     crabbyavif_default_tune_metric as i32,
                 )?;
             }
-            let codec_specific_options = config.codec_specific_options(category)?;
-            for &(key, value) in &codec_specific_options {
+            for &(key, value) in &options {
                 if key == "end-usage" {
                     // This key is already processed before initialization of the encoder.
                     continue;
                 }
-                let key_str =
-                    CString::new(key).map_err(|_| AvifError::InvalidCodecSpecificOption)?;
-                let value_str =
-                    CString::new(value).map_err(|_| AvifError::InvalidCodecSpecificOption)?;
-                let encoder = self.encoder.as_mut().ok_or(AvifError::InvalidArgument)?;
-                let encoder_ptr: *mut aom_codec_ctx_t = encoder;
-                let key_ptr = key_str.as_ptr();
-                let value_ptr = value_str.as_ptr();
-                // SAFETY: `encoder_ptr` points to an initialized `aom_codec_ctx_t`, and `key_ptr`
-                // and `value_ptr` are valid NUL-terminated C strings borrowed from `key_str` and
-                // `value_str` which outlive the call.
-                let err = unsafe { aom_codec_set_option(encoder_ptr, key_ptr, value_ptr) };
-                if err != aom_codec_err_t_AOM_CODEC_OK {
-                    return AvifError::unknown_error(format!(
-                        "Unable to set codec specific option: {key} to {value}: {}",
-                        Self::codec_error_string(encoder)
-                    ));
-                }
+                self.set_option(key, value)?;
             }
             let aom_version_3_15_2 = (3 << 16) | (15 << 8) | 2;
             if aom_version < aom_version_3_15_2 && image.depth == 12 {
@@ -520,6 +500,7 @@ impl Encoder for Aom {
             }
 
             self.aom_config = Some(aom_config);
+            self.previous_frame_used_tune_iq = use_tune_iq;
             self.config = Some(config.try_clone()?);
         } else if self.config.as_ref().ok_or(AvifError::InvalidArgument)? != config {
             let aom_config = self.aom_config.as_ref().ok_or(AvifError::InvalidArgument)?;
@@ -529,10 +510,16 @@ impl Encoder for Aom {
             }
             let rc_end_usage = aom_config.rc_end_usage;
             let last_config = self.config.as_ref().ok_or(AvifError::InvalidArgument)?;
+            if last_config.codec_specific_option(category, "end-usage")
+                != config.codec_specific_option(category, "end-usage")
+            {
+                return AvifError::cannot_change_setting();
+            }
             let quality_changed = last_config.quality != config.quality;
+            let tune_iq_changed = self.previous_frame_used_tune_iq != use_tune_iq;
             let tile_rows_changed = last_config.tile_rows_log2 != config.tile_rows_log2;
             let tile_cols_changed = last_config.tile_columns_log2 != config.tile_columns_log2;
-            if quality_changed {
+            if quality_changed || tune_iq_changed {
                 if use_tune_iq && quantizer == 0 {
                     // Lossless is incompatible with tune=iq.
                     return AvifError::invalid_argument();
@@ -573,6 +560,13 @@ impl Encoder for Aom {
                     config.tile_columns_log2 as u32,
                 )?;
             }
+            for &(key, value) in &options {
+                if key == "end-usage" {
+                    continue;
+                }
+                self.set_option(key, value)?;
+            }
+            self.previous_frame_used_tune_iq = use_tune_iq;
             self.config = Some(config.try_clone()?);
         }
         if self.current_layer > config.extra_layer_count {
@@ -736,6 +730,26 @@ impl Aom {
         if err != aom_codec_err_t_AOM_CODEC_OK {
             return AvifError::unknown_error(format!(
                 "aom_codec_control failed: {}",
+                Self::codec_error_string(encoder)
+            ));
+        }
+        Ok(())
+    }
+
+    fn set_option(&mut self, key: &str, value: &str) -> AvifResult<()> {
+        let key_str = CString::new(key).map_err(|_| AvifError::InvalidCodecSpecificOption)?;
+        let value_str = CString::new(value).map_err(|_| AvifError::InvalidCodecSpecificOption)?;
+        let encoder = self.encoder.as_mut().ok_or(AvifError::InvalidArgument)?;
+        let encoder_ptr: *mut aom_codec_ctx_t = encoder;
+        let key_ptr = key_str.as_ptr();
+        let value_ptr = value_str.as_ptr();
+        // SAFETY: `encoder_ptr` points to an initialized `aom_codec_ctx_t`, and `key_ptr` and
+        // `value_ptr` are valid NUL-terminated C strings borrowed from `key_str` and `value_str`
+        // which outlive the call.
+        let err = unsafe { aom_codec_set_option(encoder_ptr, key_ptr, value_ptr) };
+        if err != aom_codec_err_t_AOM_CODEC_OK {
+            return AvifError::unknown_error(format!(
+                "Unable to set codec specific option: {key} to {value}: {}",
                 Self::codec_error_string(encoder)
             ));
         }

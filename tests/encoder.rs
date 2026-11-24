@@ -628,6 +628,147 @@ fn single_image_after_sequence_frame() -> AvifResult<()> {
     Ok(())
 }
 
+#[test]
+fn sequence_codec_specific_option_change() -> AvifResult<()> {
+    if !HAS_ENCODER || !HAS_DECODER {
+        return Ok(());
+    }
+    let image = generate_gradient_image(64, 64, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    let mut image2 = image.try_deep_clone()?;
+    for y in 0..64 {
+        for p in image2.row_mut(Plane::Y, y)? {
+            *p = 255 - *p;
+        }
+    }
+    let mut image3 = image.try_deep_clone()?;
+    for y in 0..64 {
+        for p in image3.row_mut(Plane::Y, y)? {
+            *p = p.wrapping_add(128);
+        }
+    }
+    let mut settings = encoder::Settings {
+        speed: Some(10),
+        mutable: encoder::MutableSettings {
+            quality: 50.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_for_sequence(&image, 1)?;
+    // Codec-specific option changes apply to the next frames.
+    encoder.set_codec_specific_option(None, "lossless".into(), "1".into());
+    encoder.add_image_for_sequence(&image, 1)?;
+    // Updating quality while lossless=1 remains set must keep lossless=1 active.
+    settings.mutable.quality = 60.0;
+    encoder.update_settings(&settings.mutable)?;
+    encoder.add_image_for_sequence(&image2, 1)?;
+    encoder.set_codec_specific_option(None, "lossless".into(), "0".into());
+    encoder.add_image_for_sequence(&image3, 1)?;
+    let edata = encoder.finish()?;
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.set_io_vec(edata);
+    decoder.parse()?;
+    assert_eq!(decoder.image_count(), 4);
+    decoder.next_image()?;
+    assert!(!are_images_equal(
+        decoder.image().expect("image was none"),
+        &image
+    )?);
+    decoder.next_image()?;
+    assert!(are_images_equal(
+        decoder.image().expect("image was none"),
+        &image
+    )?);
+    decoder.next_image()?;
+    assert!(are_images_equal(
+        decoder.image().expect("image was none"),
+        &image2
+    )?);
+    decoder.next_image()?;
+    assert!(!are_images_equal(
+        decoder.image().expect("image was none"),
+        &image3
+    )?);
+    Ok(())
+}
+
+#[test]
+fn layered_codec_specific_option_change() -> AvifResult<()> {
+    if !HAS_ENCODER || !HAS_DECODER {
+        return Ok(());
+    }
+    let image = generate_gradient_image(64, 64, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    let settings = encoder::Settings {
+        speed: Some(10),
+        extra_layer_count: 1,
+        mutable: encoder::MutableSettings {
+            quality: 50.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.set_codec_specific_option(None, "tune".into(), "ssim".into());
+    encoder.add_image(&image)?;
+    encoder.set_codec_specific_option(None, "lossless".into(), "1".into());
+    encoder.add_image(&image)?;
+    let edata = encoder.finish()?;
+
+    let mut decoder = decoder::Decoder::default();
+    decoder.settings.allow_progressive = true;
+    decoder.set_io_vec(edata);
+    decoder.parse()?;
+    assert_eq!(decoder.image_count(), 2);
+    decoder.next_image()?;
+    assert!(!are_images_equal(
+        decoder.image().expect("image was none"),
+        &image
+    )?);
+    decoder.next_image()?;
+    assert!(are_images_equal(
+        decoder.image().expect("image was none"),
+        &image
+    )?);
+    Ok(())
+}
+
+#[test]
+fn sequence_codec_specific_option_rejects_invalid_changes() -> AvifResult<()> {
+    if !HAS_ENCODER {
+        return Ok(());
+    }
+    let image = generate_gradient_image(64, 64, 8, PixelFormat::Yuv444, YuvRange::Full, false)?;
+    // Switching tune to "iq" at lossless quality (100.0) on a subsequent frame must be rejected.
+    let settings = encoder::Settings {
+        speed: Some(10),
+        mutable: encoder::MutableSettings {
+            quality: 100.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.add_image_for_sequence(&image, 1)?;
+    encoder.set_codec_specific_option(None, "tune".into(), "iq".into());
+    assert_eq!(
+        encoder.add_image_for_sequence(&image, 1),
+        Err(AvifError::InvalidArgument)
+    );
+
+    // Changing end-usage after initialization must be rejected.
+    let mut encoder = encoder::Encoder::create_with_settings(&settings)?;
+    encoder.set_codec_specific_option(None, "end-usage".into(), "q".into());
+    encoder.add_image_for_sequence(&image, 1)?;
+    encoder.set_codec_specific_option(None, "end-usage".into(), "cbr".into());
+    assert_eq!(
+        encoder.add_image_for_sequence(&image, 1),
+        Err(AvifError::CannotChangeSetting)
+    );
+    Ok(())
+}
+
 #[test_matrix([0, 1, 65535], [0, 1, 65535])]
 fn clli(max_cll: u16, max_pall: u16) -> AvifResult<()> {
     if !HAS_ENCODER || !HAS_DECODER {
