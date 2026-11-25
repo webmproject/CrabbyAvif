@@ -483,7 +483,7 @@ impl Encoder {
         }
         // Deduplicate the property streams.
         let mut property_index_map = Vec::new();
-        let mut last_written_property_index = 0u8;
+        let mut last_written_property_index = 0usize;
         for i in 0..property_streams.len() {
             let current_data = &property_streams[i].data;
             match property_streams[0..i]
@@ -524,17 +524,19 @@ impl Encoder {
             stream.write_u16(item.id)?;
             // unsigned int(8) association_count;
             stream.write_u8(u8_from_usize(item.associations.len())?)?;
-            for (property_index, essential) in &item.associations {
+            for &(property_index, essential) in &item.associations {
                 // bit(1) essential;
-                stream.write_bool(*essential)?;
+                stream.write_bool(essential)?;
                 // property_index_map is 0-indexed whereas the index stored in item.associations is
                 // 1-indexed.
-                let index = property_index_map[*property_index as usize - 1];
+                let index = *property_index_map
+                    .get(checked_sub!(property_index, 1)?)
+                    .ok_or(AvifError::InvalidArgument)?;
                 if index >= (1 << 7) {
-                    return AvifError::unknown_error("");
+                    return AvifError::invalid_argument();
                 }
                 // unsigned int(7) property_index;
-                stream.write_bits(index.into(), 7)?;
+                stream.write_bits(index as u32, 7)?;
             }
         }
         stream.finish_box()?;
